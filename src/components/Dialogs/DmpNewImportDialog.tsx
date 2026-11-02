@@ -814,6 +814,8 @@ export default function DmpNewImportDialog({
     importSegment,
     withdrawImportedSections,
     withdrawInFlight,
+    withdrawalFailure,
+    clearWithdrawalFailure,
     importedCount,
     completion,
     carry,
@@ -3066,16 +3068,28 @@ export default function DmpNewImportDialog({
    */
   const exitBlocked = isImporting;
 
+  /** Leaving a confirmation also drops the reason its last removal failed: it
+   *  belongs to that dialog, and the next one asks afresh. */
+  const closeCancelConfirm = useCallback(() => {
+    setShowCancelConfirm(false);
+    clearWithdrawalFailure();
+  }, [clearWithdrawalFailure]);
+  const closeBackConfirm = useCallback(() => {
+    setShowBackConfirm(false);
+    clearWithdrawalFailure();
+  }, [clearWithdrawalFailure]);
+
   const handleCancel = useCallback(() => {
     if (isImporting) return;
     const count = importedCount();
     if (connections.length > 0 || count > 0) {
       setPendingWithdrawCount(count);
+      clearWithdrawalFailure();
       setShowCancelConfirm(true);
     } else {
       onCancel();
     }
-  }, [connections.length, onCancel, isImporting, importedCount]);
+  }, [connections.length, onCancel, isImporting, importedCount, clearWithdrawalFailure]);
 
   /** Close the wizard, first removing what it imported. */
   const handleCancelWithRemoval = useCallback(async () => {
@@ -3089,11 +3103,12 @@ export default function DmpNewImportDialog({
     const count = importedCount();
     if (connections.length > 0 || count > 0) {
       setPendingWithdrawCount(count);
+      clearWithdrawalFailure();
       setShowBackConfirm(true);
     } else {
       onBack();
     }
-  }, [connections.length, onBack, isImporting, importedCount]);
+  }, [connections.length, onBack, isImporting, importedCount, clearWithdrawalFailure]);
 
   /**
    * Back re-enters the flow at a step BEFORE anything was imported (zero-datum
@@ -3677,12 +3692,12 @@ export default function DmpNewImportDialog({
         // above all: it would close the wizard over a removal that still
         // completes, leaving the user looking at a project they chose to keep
         // sections in while those sections disappear behind them.
-        onClose={() => { if (!withdrawInFlight) setShowCancelConfirm(false); }}
+        onClose={() => { if (!withdrawInFlight) closeCancelConfirm(); }}
         data-testid="cancel-confirm-dialog"
         actions={
           <>
             <Button
-              onClick={() => setShowCancelConfirm(false)}
+              onClick={closeCancelConfirm}
               disabled={withdrawInFlight}
               className={importSecondaryButtonClass}
               data-testid="cancel-confirm-continue"
@@ -3719,6 +3734,13 @@ export default function DmpNewImportDialog({
             ? t('dialogs.dmpNewImport.cancelWizardMessage', { count: pendingWithdrawCount })
             : t('dialogs.dmpNewImport.cancelWizardNoImports')}
         </p>
+        {/* Why the removal did not happen, where the user asked for it (#576
+            NF-AN4-N2) - not in the panel behind this dialog. */}
+        {withdrawalFailure && (
+          <p className="mt-3 text-sm text-error" role="alert" data-testid="cancel-confirm-error">
+            {withdrawalFailure.message}
+          </p>
+        )}
       </AlertDialog>
 
       {/* Back confirmation. No "keep" here: the step Back returns to re-imports
@@ -3726,12 +3748,12 @@ export default function DmpNewImportDialog({
       <AlertDialog
         open={showBackConfirm}
         title={t('dialogs.dmpNewImport.backWizard')}
-        onClose={() => { if (!withdrawInFlight) setShowBackConfirm(false); }}
+        onClose={() => { if (!withdrawInFlight) closeBackConfirm(); }}
         data-testid="back-confirm-dialog"
         actions={
           <>
             <Button
-              onClick={() => setShowBackConfirm(false)}
+              onClick={closeBackConfirm}
               disabled={withdrawInFlight}
               className={importSecondaryButtonClass}
               data-testid="back-confirm-continue"
@@ -3756,6 +3778,11 @@ export default function DmpNewImportDialog({
             ? t('dialogs.dmpNewImport.backWizardMessage', { count: pendingWithdrawCount })
             : t('dialogs.dmpNewImport.backWizardNoImports')}
         </p>
+        {withdrawalFailure && (
+          <p className="mt-3 text-sm text-error" role="alert" data-testid="back-confirm-error">
+            {withdrawalFailure.message}
+          </p>
+        )}
       </AlertDialog>
     </DialogWrapper>
   );

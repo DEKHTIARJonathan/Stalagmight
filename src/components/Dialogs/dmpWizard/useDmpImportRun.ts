@@ -36,10 +36,22 @@ import {
 } from '../../../utils/overlapTreatment';
 
 /** The step of the run a failure belongs to. */
-export type DmpRunStep = 'anchor' | 'early' | 'late' | 'segment' | 'suggestions' | 'withdraw';
+export type DmpRunStep = 'anchor' | 'early' | 'late' | 'segment' | 'suggestions';
 
 export interface DmpRunFailure {
   kind: DmpRunStep;
+  message: string;
+}
+
+/**
+ * Why the Back/Cancel withdrawal did not complete: the backend refused the
+ * batch (or it threw), the write-through save failed, or the run's project is
+ * no longer the open one. Kept apart from `DmpRunFailure` (#576 NF-AN4-N2): it
+ * is shown inside the confirmation that asked for the removal, and it must not
+ * replace the import failure the wizard's panel (and its Retry) is about.
+ */
+export interface DmpWithdrawalFailure {
+  kind: 'withdraw' | 'withdrawSave' | 'wrongProject';
   message: string;
 }
 
@@ -387,6 +399,8 @@ export function useDmpImportRun({
    *  must not send a second batch for ids the first one is already deleting. */
   const withdrawInFlightRef = useRef(false);
   const [withdrawInFlight, setWithdrawInFlight] = useState(false);
+  const [withdrawalFailure, setWithdrawalFailure] = useState<DmpWithdrawalFailure | null>(null);
+  const clearWithdrawalFailure = useCallback(() => setWithdrawalFailure(null), []);
 
   /** The removal landed in memory but is not yet on disk. Survives a failed
    *  save so a second Remove click RETRIES THE SAVE instead of finding an empty
@@ -417,9 +431,10 @@ export function useDmpImportRun({
     // a saved state really can outlive its project. This is the refusal.
     const openProjectKey = useProjectStore.getState().project?.created_at ?? null;
     if (projectSwitched(projectKeyRef.current, openProjectKey)) {
-      fail('withdraw', t('dialogs.dmpNewImport.removeImportedWrongProject'));
+      setWithdrawalFailure({ kind: 'wrongProject', message: t('dialogs.dmpNewImport.removeImportedWrongProject') });
       return false;
     }
+    setWithdrawalFailure(null);
     withdrawInFlightRef.current = true;
     setWithdrawInFlight(true);
     setIsImporting(true);
@@ -454,7 +469,7 @@ export function useDmpImportRun({
             : []),
         ]);
         if (!result.success) {
-          fail('withdraw', result.error ?? t('dialogs.dmpNewImport.removeImportedFailed'));
+          setWithdrawalFailure({ kind: 'withdraw', message: result.error ?? t('dialogs.dmpNewImport.removeImportedFailed') });
           return false;
         }
 
@@ -496,21 +511,24 @@ export function useDmpImportRun({
       if (withdrawalNeedsSaveRef.current) {
         const saved = await useProjectStore.getState().saveProject();
         if (!saved.success) {
-          fail('withdraw', saved.error ?? t('dialogs.dmpNewImport.removeImportedSaveFailed'));
+          setWithdrawalFailure({
+            kind: 'withdrawSave',
+            message: saved.error ?? t('dialogs.dmpNewImport.removeImportedSaveFailed'),
+          });
           return false;
         }
         withdrawalNeedsSaveRef.current = false;
       }
       return true;
     } catch (e) {
-      fail('withdraw', importErrorMessage(e));
+      setWithdrawalFailure({ kind: 'withdraw', message: importErrorMessage(e) });
       return false;
     } finally {
       withdrawInFlightRef.current = false;
       setWithdrawInFlight(false);
       setIsImporting(false);
     }
-  }, [executeBatch, fail, selectionConfig.fileHash, selectionConfig.sectionHashes, t]);
+  }, [executeBatch, selectionConfig.fileHash, selectionConfig.sectionHashes, t]);
 
   /** How many sections the run has put in the project so far. */
   const importedCount = useCallback(() => importedSectionIdsRef.current.length, []);
@@ -542,6 +560,8 @@ export function useDmpImportRun({
     fail,
     clearFailure,
     withdrawInFlight,
+    withdrawalFailure,
+    clearWithdrawalFailure,
     /** DMP section index -> project section id, live (`buildBatchImport`'s `alreadyImported`). */
     earlyImported: earlyImportedRef.current,
     importedCount,

@@ -598,8 +598,9 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     fireEvent.click(screen.getByTestId('cancel-button'));
     fireEvent.click(screen.getByTestId('cancel-remove-button'));
 
+    // In the confirmation the user is looking at (#576 NF-AN4-N2), not behind it.
     await waitFor(() =>
-      expect(screen.getByTestId('wizard-error')).toHaveTextContent('FS_PERMISSION'),
+      expect(screen.getByTestId('cancel-confirm-dialog')).toHaveTextContent('FS_PERMISSION'),
     );
     expect(onCancel).not.toHaveBeenCalled();
     // The delete DID land - this is a disk failure, not a backend refusal.
@@ -694,7 +695,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
 
     await waitFor(() => expect(batches).toHaveLength(1));
     await waitFor(() =>
-      expect(screen.getByTestId('wizard-error')).toHaveTextContent(
+      expect(screen.getByTestId('cancel-confirm-dialog')).toHaveTextContent(
         'Section 7 is referenced by a closure',
       ),
     );
@@ -736,7 +737,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     fireEvent.click(screen.getByTestId('cancel-remove-button'));
 
     await waitFor(() =>
-      expect(screen.getByTestId('wizard-error')).toHaveTextContent(
+      expect(screen.getByTestId('cancel-confirm-dialog')).toHaveTextContent(
         'dialogs.dmpNewImport.removeImportedWrongProject',
       ),
     );
@@ -778,6 +779,95 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
       'dialogs.dmpNewImport.cancelWizardNoImports',
     );
     expect(screen.queryByTestId('cancel-remove-button')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * #576 NF-AN4-N2. A failed "remove imported sections" wrote its reason into the
+ * wizard's one shared error slot, which renders in the panel BEHIND the open
+ * Cancel/Back confirmation: the confirmation kept showing only its static copy.
+ * And because the slot was shared, "Continue editing" then showed the removal's
+ * error next to the late import's Retry - a button that re-runs the IMPORT.
+ */
+describe('DMP wizard: a failed removal is reported in the confirmation (#576 NF-AN4-N2)', () => {
+  const placedOnly = (overrides: Partial<SavedManualPlacingState> = {}) =>
+    savedState({
+      segmentQueue: [],
+      directPlacements: [
+        {
+          anchorSectionIndex: 0,
+          anchorStationIndex: 0,
+          placement: { type: 'manual', align_station_index: 0, offset: { x: 0, y: 0, z: 0 } },
+        },
+      ],
+      ...overrides,
+    });
+  let importResult: Record<string, unknown> | null;
+  let batchAnswer: Record<string, unknown>;
+
+  beforeEach(() => {
+    ipcOrder = [];
+    importResult = null;
+    batchAnswer = { success: false, error: 'Batch refused (test)', warnings: [] };
+    invokeIpcMock.mockReset();
+    invokeIpcMock.mockImplementation(async (cmd: string, args?: Record<string, unknown>) => {
+      ipcOrder.push(cmd);
+      if (cmd === 'import_sections') {
+        if (importResult) return importResult;
+        const configs = (args?.sections as unknown[] | undefined) ?? [];
+        return { success: true, section_ids: configs.map(() => 20), import_receipt: receipt(), warnings: [] };
+      }
+      if (cmd === 'execute_batch') return batchAnswer;
+      return null;
+    });
+    useUIStore.setState({ activeDialog: null, dialogData: {}, placementMode: null, importContext: null, toasts: [] });
+    useProjectStore.setState({ project: null });
+  });
+
+  it('Back shows the refusal inside its confirmation, not in the panel behind it', async () => {
+    const onBack = vi.fn();
+    renderWizard(
+      savedState({
+        segmentQueue: [[1]],
+        segmentAnchor: { sectionIndex: 1, stationIndex: 0 },
+        importedSectionIds: [7],
+      }),
+      { onBack, selected: [0, 1] },
+    );
+
+    fireEvent.click(screen.getByTestId('back-button'));
+    fireEvent.click(screen.getByTestId('confirm-back-button'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('back-confirm-dialog')).toHaveTextContent('Batch refused (test)'),
+    );
+    expect(screen.getByTestId('wizard-manual-placing')).not.toHaveTextContent('Batch refused (test)');
+    expect(onBack).not.toHaveBeenCalled();
+  });
+
+  it('Continue editing returns to the late-import failure and its Retry, not to the removal', async () => {
+    importResult = { success: false, error: 'Late refused (test)', section_ids: [], warnings: [] };
+    renderWizard(placedOnly({ importedSectionIds: [7] }), { selected: [0] });
+
+    await waitFor(() => expect(screen.getByTestId('wizard-placing')).toHaveTextContent('Late refused (test)'));
+    expect(screen.getByTestId('retry-button')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('cancel-button'));
+    fireEvent.click(screen.getByTestId('cancel-remove-button'));
+    await waitFor(() =>
+      expect(screen.getByTestId('cancel-confirm-dialog')).toHaveTextContent('Batch refused (test)'),
+    );
+
+    fireEvent.click(screen.getByTestId('cancel-confirm-continue'));
+
+    await waitFor(() => expect(screen.queryByTestId('cancel-confirm-dialog')).not.toBeInTheDocument());
+    // The Retry beside the error re-runs the late IMPORT, so the error beside it
+    // has to be the import's.
+    expect(screen.getByTestId('wizard-placing')).toHaveTextContent('Late refused (test)');
+    expect(screen.getByTestId('wizard-placing')).not.toHaveTextContent('Batch refused (test)');
+    importResult = null;
+    fireEvent.click(screen.getByTestId('retry-button'));
+    await waitFor(() => expect(ipcOrder.filter((c) => c === 'import_sections')).toHaveLength(2));
   });
 });
 

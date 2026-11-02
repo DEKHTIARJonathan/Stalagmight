@@ -134,6 +134,12 @@ test:
   hash is per-file, so a file also imported in an earlier session loses its
   file-level duplicate flag (its per-section flags stand).
 
+A removal that does not complete (the batch refused, the save failed, the run's
+project no longer open) is reported INSIDE the confirmation that asked for it
+(`cancel-confirm-error` / `back-confirm-error`), in a slot of its own
+(`DmpWithdrawalFailure`): the wizard's own failure - the late import's, say, with
+the Retry that re-runs it - is left as it was behind the dialog (#576 NF-AN4-N2).
+
 Two residues, both deliberate:
 
 * **Remove and close empties the project; the file itself stays where you
