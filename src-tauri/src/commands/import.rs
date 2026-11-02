@@ -8,7 +8,6 @@ use crate::commands::event_sink::tauri_sink;
 use crate::commands::import_runner::{
     guarded, run_file_import, ApplyPath, ConvertedImport, ImportKind,
 };
-use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::state::{AppState, VirtualShotMode};
 use crate::core::CommandResult;
 use crate::models::placement_suggest::{
@@ -347,67 +346,39 @@ pub fn execute_tml_import(
     selected_sections: Option<Vec<u32>>,
     root_placement: Option<TmlRootPlacement>,
 ) -> CommandResult {
-    tracing::info!(
-        path = ?path,
-        purpose = "import Ariane TML/TMLU",
-        "Executing TML import"
-    );
-
-    let mut emitter = ProgressEmitter::new_for_import(tauri_sink(app));
-
-    emitter.start_phase(LoadingPhase::ImportParsing);
-    let tml = match crate::parsers::tml::parse_tml(&path) {
-        Ok(tml) => tml,
-        Err(e) => {
-            tracing::error!(
-                path = ?path,
-                purpose = "import Ariane TML/TMLU",
-                reason = %e,
-                "Failed to parse TML/TMLU file for import"
-            );
-            return CommandResult::failure(format!("Failed to parse TML file: {e}"));
-        }
-    };
-    emitter.complete_phase(LoadingPhase::ImportParsing);
-
-    emitter.start_phase(LoadingPhase::ImportConverting);
     let opts = TmlImportOptions {
         include_excluded,
         comments_on_stations,
-        // `None` ⇒ import every section; `Some(list)` ⇒ only the chosen section
-        // indices (into the preview's `TmlFile::sections`, which the dialog
-        // lists 1:1). An empty list imports nothing and lands the empty
+        // `None` => import every section; `Some(list)` => only the chosen
+        // section indices (into the preview's `TmlFile::sections`, which the
+        // dialog lists 1:1). An empty list imports nothing and lands the empty
         // receipt, exactly like a file whose every shot was filtered out.
         selected_sections: selected_sections.map(|v| v.into_iter().collect()),
-        // `None` ⇒ the pre-#425 silent default (the file's GPS, else origin).
+        // `None` => the pre-#425 silent default (the file's GPS, else origin).
         root_placement,
     };
-    let (sections, closures, converter_warnings) =
-        match crate::parsers::tml::convert_tml_with_options(&tml, &opts) {
-            Ok(result) => result,
-            Err(e) => {
-                tracing::error!(
-                    path = ?path,
-                    purpose = "import Ariane TML/TMLU",
-                    reason = %e,
-                    "Failed to convert TML data to import configs"
-                );
-                return CommandResult::failure(format!("Failed to convert TML data: {e}"));
-            }
-        };
-    emitter.complete_phase(LoadingPhase::ImportConverting);
+    run_file_import(
+        state.inner(),
+        tauri_sink(app),
+        &TML_IMPORT,
+        &path,
+        file_hash,
+        virtual_shot_mode.unwrap_or_default(),
+        crate::parsers::tml::parse_tml,
+        |tml| convert_tml(tml, &opts),
+    )
+}
 
-    tracing::info!(
-        path = ?path,
-        section_count = sections.len(),
-        closure_count = closures.len(),
-        purpose = "import Ariane TML/TMLU",
-        "Converted TML to import configs, executing import"
-    );
+/// The Ariane importer as the runner names it.
+const TML_IMPORT: ImportKind = ImportKind {
+    receipt_label: "Ariane TML",
+    error_label: "TML",
+    purpose: "import Ariane TML/TMLU",
+};
 
-    let sections_found = tml.sections.len() as u32;
-    let unit_conversion = tml_unit_conversion_note(tml.unit);
-
+/// Ariane's convert step for [`run_file_import`].
+fn convert_tml(tml: &TmlFile, opts: &TmlImportOptions) -> anyhow::Result<ConvertedImport> {
+    let (sections, closures, warnings) = crate::parsers::tml::convert_tml_with_options(tml, opts)?;
     // Entrance elevation (#431): `firstStartAbsoluteElevation`, already
     // unit-converted. 0.0 is the file's no-data value (mirrors the export
     // side, which writes 0.0 when the project has none), so it does not
@@ -419,32 +390,14 @@ pub fn execute_tml_import(
     // no-clobber comparison ever sees it.
     let surface_elevation =
         crate::models::ariane_elevation_or_absent(tml.first_start_absolute_elevation);
-
-    emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let mut result = state.execute_tml_import_sections(
+    Ok(ConvertedImport {
         sections,
         closures,
-        file_hash,
-        Vec::new(),
-        Vec::new(),
-        virtual_shot_mode.unwrap_or_default(),
-        surface_elevation,
-    );
-    emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
-
-    decorate_receipt(
-        &mut result,
-        "Ariane TML",
-        &path,
-        sections_found,
-        unit_conversion,
-        converter_warnings,
-    );
-
-    emitter.start_phase(LoadingPhase::ImportFinalizing);
-    emitter.complete_phase(LoadingPhase::ImportFinalizing);
-
-    finalize_deferred_import(state.inner(), result)
+        warnings,
+        sections_found: tml.sections.len() as u32,
+        unit_conversion: tml_unit_conversion_note(tml.unit),
+        apply: ApplyPath::Ariane { surface_elevation },
+    })
 }
 
 /// Parse a Compass `.DAT`/`.MAK` file and return preview data for the import dialog.
@@ -1429,5 +1382,84 @@ mod receipt_tests {
             runner.import_receipt
         );
         assert_eq!(comparable(&runner), comparable(&legacy));
+    }
+
+    /// Ariane on the runner produces exactly the result the hand-written
+    /// command did, entrance elevation included.
+    #[test]
+    fn a_tml_import_on_the_runner_keeps_its_receipt() {
+        use crate::parsers::tml::test_helpers::{
+            tml_shot_xml_depth, tml_shot_xml_gps, wrap_xml_with,
+        };
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("synthetic.tmlu");
+        let shots = [
+            tml_shot_xml_gps(0, -1, "START", "Start", 20.5, -87.3),
+            tml_shot_xml_depth(1, 0, "REAL", "Main", 10.0, -1.0),
+            tml_shot_xml_depth(2, 1, "REAL", "Main", 12.0, -2.0),
+        ]
+        .join("\n");
+        fs::write(&path, wrap_xml_with("ft", 328.084, &shots)).expect("write the .tmlu");
+        let opts = || TmlImportOptions {
+            include_excluded: false,
+            comments_on_stations: false,
+            selected_sections: None,
+            root_placement: None,
+        };
+
+        let legacy_state = project_state();
+        let tml = crate::parsers::tml::parse_tml(&path).expect("parse");
+        let (sections, closures, warnings) =
+            crate::parsers::tml::convert_tml_with_options(&tml, &opts()).expect("convert");
+        let mut legacy = legacy_state.execute_tml_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+            crate::models::ariane_elevation_or_absent(tml.first_start_absolute_elevation),
+        );
+        decorate_receipt(
+            &mut legacy,
+            "Ariane TML",
+            &path,
+            tml.sections.len() as u32,
+            tml_unit_conversion_note(tml.unit),
+            warnings,
+        );
+        let legacy = finalize_deferred_import(&legacy_state, legacy);
+
+        let state = project_state();
+        let opts = opts();
+        let runner = run_file_import(
+            &state,
+            std::sync::Arc::new(RecordingSink::default()),
+            &TML_IMPORT,
+            &path,
+            None,
+            VirtualShotMode::Auto,
+            crate::parsers::tml::parse_tml,
+            |tml| convert_tml(tml, &opts),
+        );
+
+        assert!(runner.success, "{:?}", runner.error);
+        assert!(
+            runner
+                .import_receipt
+                .as_ref()
+                .is_some_and(|r| r.shot_count > 0 && r.unit_conversion.is_some()),
+            "premise: a receipt with shots and a unit note, got {:?}",
+            runner.import_receipt
+        );
+        assert_eq!(comparable(&runner), comparable(&legacy));
+        let elevation = |state: &AppState| {
+            state
+                .get_project_state()
+                .and_then(|p| p.surface_elevation)
+                .map(|e| (e * 1000.0).round())
+        };
+        assert_eq!(elevation(&state), Some(100_000.0), "328.084 ft is 100 m");
+        assert_eq!(elevation(&state), elevation(&legacy_state));
     }
 }
