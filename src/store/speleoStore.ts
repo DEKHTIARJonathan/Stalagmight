@@ -811,6 +811,17 @@ export const asPushKind = (kind: PushResult['kind']): PushKind => kind;
 export const asDoneKind = (kind: DoneResult['kind']): DoneKind => kind;
 
 /**
+ * Whether a Done finished the edit session with the work on the server: `released`,
+ * or `lock_held_elsewhere` (#576 RV2-R-13) - the same, except the lock was taken by
+ * another session of the account and so was left with it rather than released. The
+ * exit prompts and the Done dialog move on for both; every other kind left the work
+ * (or the lock) where a retry still needs it.
+ */
+export function doneFinished(kind: DoneKind | null | undefined): boolean {
+  return kind === 'released' || kind === 'lock_held_elsewhere';
+}
+
+/**
  * Exhaustiveness guard for the hand-off switches. Reached only if the backend
  * grows a variant the frontend has not been taught, so it is a COMPILE error at
  * the call site and, at runtime, changes no state at all - the conservative
@@ -1697,6 +1708,24 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               hasUnpushedEdits: false,
               unwound: false,
               lockHolder: null,
+              lockedByOther: false,
+              remoteState: 'up_to_date',
+              serverError: null,
+            },
+            chainTargetGeneration: state.chainTargetGeneration + 1,
+            divergence: null,
+            banner: null,
+          };
+        case 'lock_held_elsewhere':
+          // [#576 RV2-R-13] The edits are on the server and editing has ended here,
+          // as for `released` - but the lock was the account's from another session
+          // and stays with it, so the holder is NOT cleared (the poll keeps it fresh).
+          return {
+            link: {
+              ...state.link,
+              editState: 'read-only',
+              hasUnpushedEdits: false,
+              unwound: false,
               lockedByOther: false,
               remoteState: 'up_to_date',
               serverError: null,

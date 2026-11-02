@@ -179,6 +179,14 @@ middle of a push whose reply was lost, your own landed upload also reads as a
 conflict (the claim is in memory only); resolve it with "Take the SpeleoDB
 version" or "Save my version as a local copy".
 
+**Release (#576 RV2-R-13):** Done releases the lock only when this app session
+took it (the same in-memory claim). A session whose gate opened through the
+inherited-lock reopen - a second window or computer on the account, or this app
+after a restart - uploads its edits and ends editing locally, but leaves the lock
+with the account (`DoneResult::LockHeldElsewhere`) and says so. The same restart
+cost applies: a lock you took before restarting is not released by Done; release
+it from the held-lock prompt at sign-in or the SpeleoDB project dialog's Admin tab.
+
 **Mitigation (the notice):** `speleodb_open_project` checks the project's
 `active_mutex` at open time; if the lock is already held by **our own** account, a
 concurrent same-account session is live, and the open result carries

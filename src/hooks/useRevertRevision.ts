@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
-import { useSpeleoStore, asDoneKind } from '../store/speleoStore';
+import { asDoneKind, doneFinished, useSpeleoStore } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { useSpeleoActions } from './useSpeleoActions';
 import { useRestoreRevision } from './useRestoreRevision';
@@ -139,7 +139,7 @@ export function useRevertRevision() {
       // edits with no lock over them.
       if (result === null) return { kind: 'push_failed' };
       const kind = asDoneKind(result.kind);
-      if (kind === 'released') {
+      if (doneFinished(kind)) {
         showToast(t('speleodb.revert.done', { sha: shortSha }), TOAST_KEYS.SPELEODB_REVERT, 'success');
         return { kind: 'reverted' };
       }
@@ -396,7 +396,9 @@ export function useRevertRevision() {
         if (!dirty) {
           const resolved = await done(null);
           const kind = resolved ? asDoneKind(resolved.kind) : null;
-          lockHeld = !(kind === 'released' || kind === 'not_editing');
+          // A lock left with another session of the account (#576 RV2-R-13) is
+          // not held by THIS one either.
+          lockHeld = !(doneFinished(kind) || kind === 'not_editing');
         }
         if (unpushedLocalEdits(e)) return { kind: 'needs_discard', lockHeld };
         // [#258] After the unwind, not before it: the release must have HAPPENED, and

@@ -299,6 +299,23 @@ impl AppState {
                     );
                     return Ok(DoneResult::PushUnconfirmed);
                 }
+                // [#576 RV2-R-13] Release only a lock THIS app session took. The holder
+                // check above is per ACCOUNT, so a second window or computer on the
+                // same account - or this app after a restart, which forgets the
+                // in-memory claim - passes it, and a clean Done there used to release
+                // the lock the other session is editing under. Without the claim, finish
+                // here: editing off, nothing released, and say the lock stays with the
+                // account elsewhere.
+                if !self.speleodb_lock_acquired_here(&link.project_id) {
+                    self.set_edit_enabled(false);
+                    tracing::info!(
+                        project_id = %link.project_id,
+                        purpose = "release only a lock this app session acquired (#576 RV2-R-13)",
+                        "speleodb done: the lock is the account's but was not taken in this \
+                         session; editing ended here and the lock was left with the account"
+                    );
+                    return Ok(DoneResult::LockHeldElsewhere);
+                }
                 // Edits are safely on the server; release the lock and go
                 // read-only. Drop the edit gate only after a confirmed release -
                 // if release fails the lock is still held, so a retry of Done

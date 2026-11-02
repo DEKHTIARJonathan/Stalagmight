@@ -27,6 +27,60 @@ fn mark_unpushed(state: &super::AppState) {
         .expect("mark the copy un-pushed");
 }
 
+// --- RV2-R-13: Done releases only a lock this app session took ----------------
+
+#[test]
+fn done_never_releases_a_same_account_lock_this_session_did_not_take() {
+    // [#576 RV2-R-13] The holder check is per ACCOUNT. A second window (or this app
+    // after a restart) on the same account opens its edit gate through the
+    // inherited-lock reopen without taking the lock, passes that check, and a clean
+    // Done there released the lock the other session was editing under. Decided:
+    // release only when this app session acquired it; otherwise finish locally.
+    let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
+    let (_temp, state) = editing_fixture(&base);
+    // An inherited edit session: the gate is open, the lock is the account's, and
+    // this session holds no claim on it.
+    let _ = state.speleodb_forget_lock_acquired_for(REMOTE_ID);
+    assert!(state.edit_enabled() && !state.speleodb_lock_acquired_here(REMOTE_ID));
+
+    let result = state.speleodb_done(None);
+
+    let seen = lines(&seen);
+    let releases = seen.iter().filter(|r| r.contains("/release/")).count();
+    let outcome = format!("{result:?}");
+    println!(
+        "clean Done in a session that did not take u@x's lock -> {outcome}; release \
+         requests sent: {releases}; editing still on: {}",
+        state.edit_enabled()
+    );
+    assert_eq!(
+        releases, 0,
+        "a lock this session did not take is never released: {seen:?}"
+    );
+    assert_eq!(
+        outcome, "Ok(LockHeldElsewhere)",
+        "Done finishes here and says the lock stays with the account elsewhere"
+    );
+    assert!(!state.edit_enabled(), "editing has ended in this session");
+}
+
+#[test]
+fn done_still_releases_a_lock_this_session_took() {
+    // [#576 RV2-R-13] DO-NOT-REGRESS: with the claim, the lock is handed back.
+    let (base, _listener, seen) = recording_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
+    let (_temp, state) = editing_fixture(&base);
+    assert!(state.speleodb_lock_acquired_here(REMOTE_ID));
+
+    let result = state.speleodb_done(None).expect("done");
+
+    assert_eq!(format!("{result:?}"), "Released");
+    assert!(
+        lines(&seen).iter().any(|r| r.contains("/release/")),
+        "our own lock is released"
+    );
+    assert!(!state.edit_enabled());
+}
+
 // --- W2S-PUSH: Push applies Done's lost-lock rule ------------------------------
 
 #[test]

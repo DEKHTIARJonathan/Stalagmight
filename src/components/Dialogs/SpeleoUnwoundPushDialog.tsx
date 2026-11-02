@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
+import { doneFinished } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { getErrorMessage } from '../../utils/ipc';
 import { handBackProject, performQuit, readPendingExit } from '../../utils/quit';
@@ -114,7 +115,7 @@ export default function SpeleoUnwoundPushDialog() {
     // this would raise this same dialog again.
     if (!pendingExit) {
       const resolved = await done(message, { acceptOlderVersion: true });
-      if (resolved?.kind === 'released') {
+      if (doneFinished(resolved?.kind)) {
         trackDialogComplete('speleodb-unwound-push');
         closeDialog();
       } else {
@@ -125,7 +126,7 @@ export default function SpeleoUnwoundPushDialog() {
       return;
     }
     const resolved = await done(message, { acceptOlderVersion: true });
-    if (resolved?.kind === 'released') {
+    if (doneFinished(resolved?.kind)) {
       trackDialogComplete('speleodb-unwound-push');
       closeDialog();
       if (pendingExit.kind === 'quit') performQuit();

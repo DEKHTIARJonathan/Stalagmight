@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoStore, isUnwoundNotEdited } from '../../store/speleoStore';
+import { doneFinished, isUnwoundNotEdited, useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
@@ -114,7 +114,7 @@ export default function SpeleoCloseDialog() {
     // Project it may be standing in for) would be lost with this prompt, so the intent
     // goes with it and the confirmation completes it.
     const resolved = await done(null, { pendingExit: closeIntent });
-    if (resolved?.kind === 'released') {
+    if (doneFinished(resolved?.kind)) {
       closeDialog();
       await closeThen();
     }

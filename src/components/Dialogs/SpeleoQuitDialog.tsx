@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoStore, isUnwoundNotEdited } from '../../store/speleoStore';
+import { doneFinished, isUnwoundNotEdited, useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
@@ -126,7 +126,7 @@ export default function SpeleoQuitDialog() {
     // intent to the confirmation, which finishes the quit once the push actually releases
     // and puts this prompt back on Cancel.
     const resolved = await done(null, { pendingExit: { kind: 'quit' } });
-    if (resolved?.kind === 'released') {
+    if (doneFinished(resolved?.kind)) {
       closeDialog();
       performQuit();
     }
