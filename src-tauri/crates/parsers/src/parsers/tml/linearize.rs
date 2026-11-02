@@ -22,7 +22,7 @@ use std::collections::HashMap;
 
 use chrono::NaiveDate;
 
-use super::{RawShot, TmlSection, TmlShot, TmlShotType};
+use super::{survives_import, RawShot, TmlSection, TmlShot, TmlShotType};
 // Sections whose shot ids all fit the `section_id * FEATURE_ID_STRIDE + seq`
 // encode, as a COUNT (42_949). Shared with the import/merge boundary checks
 // (#555) so the cut budget below and the mint-time refusals cannot drift apart.
@@ -140,10 +140,11 @@ pub(super) fn join_contiguous_chains(
     let n = sections.len();
 
     // A seam is only a station if the import keeps the shot on both sides of
-    // it - same filter `convert_shots_to_shot_data` applies.
-    let survives_import = |shot: &TmlShot| shot.shot_type != TmlShotType::Closure && !shot.excluded;
-    let joinable_end = |s: &TmlSection| s.shots.last().is_some_and(survives_import);
-    let joinable_start = |s: &TmlSection| s.shots.first().is_some_and(survives_import);
+    // it whatever the include-excluded toggle says - the import's own filter,
+    // with the toggle off.
+    let kept = |shot: &TmlShot| survives_import(shot, false);
+    let joinable_end = |s: &TmlSection| s.shots.last().is_some_and(kept);
+    let joinable_start = |s: &TmlSection| s.shots.first().is_some_and(kept);
     let same_trip = |a: &TmlSection, b: &TmlSection| {
         a.surveyor == b.surveyor && a.date == b.date && a.color == b.color
     };
@@ -395,7 +396,7 @@ fn trip_of(shot: &TmlShot) -> Trip<'_> {
 /// id -> station index), so cutting after a shot the filter may drop would place
 /// the child at the origin whenever the toggle drops it.
 fn is_station_shot(shot: &TmlShot) -> bool {
-    shot.shot_type != TmlShotType::Closure && !shot.excluded
+    survives_import(shot, false)
 }
 
 /// The shot a run takes its surveyor, date and colour from: the first one that
@@ -647,7 +648,7 @@ pub(super) fn collapsed_trip_report(
         // one place the file lost a value, not a thousand.
         let mut collapsed_run: Option<Trip<'_>> = None;
         for shot in &section.shots {
-            if shot.shot_type == TmlShotType::Closure || (!include_excluded && shot.excluded) {
+            if !survives_import(shot, include_excluded) {
                 continue;
             }
             let surveyor = shot.explorer != section.surveyor;

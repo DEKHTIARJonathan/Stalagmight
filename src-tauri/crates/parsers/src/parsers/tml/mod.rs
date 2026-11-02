@@ -1396,7 +1396,7 @@ pub fn convert_tml_with_options(
             let eff = section
                 .shots
                 .iter()
-                .find(|s| s.shot_type != TmlShotType::Closure && !s.excluded)
+                .find(|s| survives_import(s, false))
                 .map(|s| s.from_id);
             // Only use as fallback if different from start_ariane_id
             eff.filter(|&id| id != section.start_ariane_id)
@@ -1928,6 +1928,22 @@ pub fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
     }
 }
 
+/// Whether the import builds `shot` - THE rule, used everywhere the importer
+/// decides which rows become shots (#576 E17). CLOSURE rows never do: they are
+/// loop-closure markers, not survey measurements, whatever tape reading they
+/// carry (our own exporter gives them the vertical gap between the two nodes
+/// they tie), and their topology is captured separately. Excluded rows do only
+/// when the user ticks "include excluded shots".
+///
+/// The import dialog's preview applies the same rule in TypeScript
+/// (`survivesImport`, src/utils/tmlImportStats.ts) so it can recompute on every
+/// toggle without a round trip; the two are pinned by the same truth table,
+/// here (`survives_import_truth_table`) and in
+/// src/utils/__tests__/tmlImportStats.test.ts.
+pub(crate) fn survives_import(shot: &TmlShot, include_excluded: bool) -> bool {
+    shot.shot_type != TmlShotType::Closure && (include_excluded || !shot.excluded)
+}
+
 /// Convert TML shots to `ShotData` for import.
 ///
 /// Depth handling: Ariane `DP` is absolute station depth (depth gauge reading).
@@ -1943,15 +1959,9 @@ fn convert_shots_to_shot_data(
         return Vec::new();
     }
 
-    // Filter out CLOSURE shots - they are loop-closure markers, not real survey
-    // measurements, whatever tape reading they carry (our own exporter gives them
-    // the vertical gap between the two nodes they tie, so `Length` is only zero on
-    // a loop that closes perfectly). Their topology is captured in TmlClosure.
-    // Also filter out excluded shots unless explicitly included.
     let real_shots: Vec<&TmlShot> = shots
         .iter()
-        .filter(|s| s.shot_type != TmlShotType::Closure)
-        .filter(|s| include_excluded || !s.excluded)
+        .filter(|s| survives_import(s, include_excluded))
         .collect();
 
     if real_shots.is_empty() {
@@ -7074,6 +7084,41 @@ mod tests {
             let slow_ms = start.elapsed().as_millis();
             assert_eq!(fast, slow);
             eprintln!("{n} sections on one cycle: bitmap {fast_ms} ms, contains scan {slow_ms} ms");
+        }
+    }
+
+    /// THE rule for which Ariane rows the import builds (#576 E17), as a truth
+    /// table: (type, excluded, include-excluded toggle) -> imported. The SAME
+    /// table pins the TypeScript mirror the import dialog previews with,
+    /// `survivesImport` in src/utils/__tests__/tmlImportStats.test.ts - change
+    /// one, change both.
+    #[test]
+    fn survives_import_truth_table() {
+        let table: &[(TmlShotType, bool, bool, bool)] = &[
+            (TmlShotType::Real, false, false, true),
+            (TmlShotType::Real, false, true, true),
+            (TmlShotType::Real, true, false, false),
+            (TmlShotType::Real, true, true, true),
+            (TmlShotType::Virtual, false, false, true),
+            (TmlShotType::Virtual, false, true, true),
+            (TmlShotType::Virtual, true, false, false),
+            (TmlShotType::Virtual, true, true, true),
+            (TmlShotType::Closure, false, false, false),
+            (TmlShotType::Closure, false, true, false),
+            (TmlShotType::Closure, true, false, false),
+            (TmlShotType::Closure, true, true, false),
+        ];
+        for &(shot_type, excluded, include_excluded, imported) in table {
+            let shot = TmlShot {
+                shot_type,
+                excluded,
+                ..sample_tml_shot()
+            };
+            assert_eq!(
+                survives_import(&shot, include_excluded),
+                imported,
+                "{shot_type:?} excluded={excluded} include_excluded={include_excluded}"
+            );
         }
     }
 }

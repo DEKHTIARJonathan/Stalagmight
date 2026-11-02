@@ -15,7 +15,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::{normalize_tml_shot, resolve_tml_depth_in, TmlSection, TmlShotType};
+use super::{normalize_tml_shot, resolve_tml_depth_in, survives_import, TmlSection, TmlShotType};
 use crate::models::{AzimuthReference, GpsCoordinates, ImportPlacement};
 
 /// Where the user asked the FIRST imported section to land.
@@ -355,7 +355,7 @@ fn dropped_lead_offset(
     let (mut east, mut north) = (0.0, 0.0);
     let mut prev_depth: Option<f64> = None;
     for shot in &section.shots {
-        if shot.shot_type != TmlShotType::Closure && (include_excluded || !shot.excluded) {
+        if survives_import(shot, include_excluded) {
             break;
         }
         if shot.shot_type == TmlShotType::Closure {
@@ -396,11 +396,8 @@ pub(super) fn build_selection_index(
         let selected = opts.includes_section(si);
         let mut import_shot_idx: u32 = 0;
         for shot in &section.shots {
-            if shot.shot_type == TmlShotType::Closure {
-                continue; // CLOSURE shots are excluded from import
-            }
-            if !opts.include_excluded && shot.excluded {
-                continue; // Excluded shots are filtered out by default
+            if !survives_import(shot, opts.include_excluded) {
+                continue;
             }
             if selected {
                 id_to_import_loc.insert(shot.id, (si as u32, import_shot_idx + 1));
