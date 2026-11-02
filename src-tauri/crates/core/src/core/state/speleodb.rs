@@ -7933,21 +7933,13 @@ mod tests {
 
     use crate::core::{AppState, Command};
     use crate::models::test_support::require_env;
-    use crate::models::ShotData;
+    use crate::models::{SectionData, ShotData, StationRef};
     use crate::speleodb::client;
     use crate::speleodb::{StartEditingResult, UpdateResult};
     use std::path::{Path, PathBuf};
 
     // Fixture paths are relative to THIS member's manifest dir
     // (src-tauri/crates/core), two levels below the old root crate's.
-    const ORCH_SEED: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../e2e/fixtures/fractal_plant_iter2.stalx"
-    );
-    const ORCH_SEED_V2: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../e2e/fixtures/fractal_plant_iter3.stalx"
-    );
     const ORCH_TML: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../tests/fixtures/test_simple.tml"
@@ -7987,37 +7979,112 @@ mod tests {
         }
     }
 
-    /// Create a fresh remote project seeded with `stalx` (lock released), returning
-    /// its id. The token owner is ADMIN on the new project.
-    fn orch_seed(url: &str, token: &str, name: &str, stalx: &str) -> String {
+    /// The `.stalx` the suite seeds the remote with, saved into `dir`: a synthetic
+    /// project of three sections, the second branching off the first and the third
+    /// off the second through station merges (#576 E13-D2). The suite used to read
+    /// `e2e/fixtures/fractal_plant_iter2.stalx`, which the repo does not carry, so
+    /// it could run on no clone but the maintainer's. `advanced` adds one shot to
+    /// the last section, so a second upload is a distinct commit.
+    fn orch_seed_stalx(dir: &Path, advanced: bool) -> PathBuf {
+        let shot = |length: f64, azimuth: f64| ShotData {
+            length,
+            azimuth_in: azimuth,
+            azimuth_out: (azimuth + 180.0) % 360.0,
+            depth_in: 3.0,
+            depth_out: 3.0,
+            ..Default::default()
+        };
+        let mut tip = vec![shot(4.0, 200.0), shot(4.0, 210.0)];
+        if advanced {
+            tip.push(shot(2.5, 220.0));
+        }
+        let mut project = Project::new("CaveA".to_owned(), None);
+        let mut ids = Vec::new();
+        for (name, shots) in [
+            ("A", vec![shot(5.0, 0.0), shot(5.0, 10.0), shot(5.0, 20.0)]),
+            ("B", vec![shot(3.0, 90.0), shot(3.0, 100.0)]),
+            ("C", tip),
+        ] {
+            let section = project.add_section(SectionData {
+                name: Some(name.to_owned()),
+                color: "#4ecdc4".to_owned(),
+                shots,
+                ..Default::default()
+            });
+            ids.push(section.id);
+        }
+        for (from, to) in [((ids[0], 2), (ids[1], 0)), ((ids[1], 1), (ids[2], 0))] {
+            project
+                .merge_stations(StationRef::new(from.0, from.1), StationRef::new(to.0, to.1))
+                .expect("merge the seed's branches");
+        }
+        let path = dir.join(if advanced {
+            "seed-v2.stalx"
+        } else {
+            "seed.stalx"
+        });
+        let mut db = Database::open(&path).expect("create the seed .stalx");
+        db.save_project(&project).expect("save the seed project");
+        path
+    }
+
+    /// Not ignored: the live suite's seed is built on every run, so a seed that no
+    /// longer opens fails here, on any clone, rather than on the dev box.
+    #[test]
+    fn the_live_suite_seed_opens_with_its_branches_and_its_advanced_twin_differs() {
+        let dir = TempDir::new().expect("seed tempdir");
+        let seed = orch_seed_stalx(dir.path(), false);
+        let advanced = orch_seed_stalx(dir.path(), true);
+        let load = |path: &Path| {
+            Database::open_existing(path)
+                .expect("the seed opens")
+                .load_project()
+                .expect("the seed loads")
+        };
+        let (project, next) = (load(&seed), load(&advanced));
+        let shots =
+            |p: &Project| -> Vec<usize> { p.sections.iter().map(|s| s.shots.len()).collect() };
+        assert_eq!(shots(&project), [3, 2, 2]);
+        assert_eq!(project.station_merges.len(), 2, "both branches are merged");
+        assert_eq!(
+            shots(&next),
+            [3, 2, 3],
+            "the advanced seed has one more shot"
+        );
+        assert_ne!(
+            std::fs::read(&seed).expect("read seed"),
+            std::fs::read(&advanced).expect("read advanced seed"),
+            "so its upload is a distinct commit"
+        );
+    }
+
+    /// Create a fresh remote project seeded with the synthetic `.stalx` (lock
+    /// released), returning its id. The token owner is ADMIN on the new project.
+    fn orch_seed(url: &str, token: &str, name: &str) -> String {
+        let seed_dir = TempDir::new().expect("seed tempdir");
+        let stalx = orch_seed_stalx(seed_dir.path(), false);
         let id = client::create_project(url, token, false, name)
             .expect("create project")
             .id;
         client::acquire_lock(url, token, false, &id).expect("acquire seed lock");
-        client::upload_auto(
-            url,
-            token,
-            false,
-            &id,
-            Path::new(stalx),
-            Path::new(ORCH_TML),
-            "seed",
-        )
-        .expect("seed upload");
+        client::upload_auto(url, token, false, &id, &stalx, Path::new(ORCH_TML), "seed")
+            .expect("seed upload");
         client::release_lock(url, token, false, &id).expect("release seed lock");
         id
     }
 
-    /// Advance the remote tip with a DISTINCT upload (a different fixture → a new
-    /// commit), simulating another writer moving HEAD forward after our open.
-    fn orch_advance_tip(url: &str, token: &str, id: &str, stalx: &str) {
+    /// Advance the remote tip with a DISTINCT upload (the seed plus one shot → a
+    /// new commit), simulating another writer moving HEAD forward after our open.
+    fn orch_advance_tip(url: &str, token: &str, id: &str) {
+        let seed_dir = TempDir::new().expect("seed tempdir");
+        let stalx = orch_seed_stalx(seed_dir.path(), true);
         client::acquire_lock(url, token, false, id).expect("acquire advance lock");
         client::upload_auto(
             url,
             token,
             false,
             id,
-            Path::new(stalx),
+            &stalx,
             Path::new(ORCH_TML),
             "advance tip",
         )
@@ -8103,7 +8170,7 @@ mod tests {
     fn live_orch_start_editing_edit_done_advances_base() {
         let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-roundtrip", ORCH_SEED);
+        let id = orch_seed(&url, &token, "orch-roundtrip");
         let _cleanup = OrchCleanup {
             url: url.clone(),
             token: token.clone(),
@@ -8199,7 +8266,7 @@ mod tests {
     fn live_orch_push_then_edit_then_done_does_not_self_conflict() {
         let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-push-twice", ORCH_SEED);
+        let id = orch_seed(&url, &token, "orch-push-twice");
         let _cleanup = OrchCleanup {
             url: url.clone(),
             token: token.clone(),
@@ -8309,7 +8376,7 @@ mod tests {
     fn live_orch_stale_poll_snapshot_does_not_report_our_own_push_as_conflict() {
         let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-stale-poll", ORCH_SEED);
+        let id = orch_seed(&url, &token, "orch-stale-poll");
         let _cleanup = OrchCleanup {
             url: url.clone(),
             token: token.clone(),
@@ -8360,7 +8427,7 @@ mod tests {
     fn live_orch_release_current_lock_closes_the_edit_gate() {
         let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-release-gate", ORCH_SEED);
+        let id = orch_seed(&url, &token, "orch-release-gate");
         let _cleanup = OrchCleanup {
             url: url.clone(),
             token: token.clone(),
@@ -8391,7 +8458,7 @@ mod tests {
     fn live_orch_update_up_to_date_on_fresh_open() {
         let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-update-utd", ORCH_SEED);
+        let id = orch_seed(&url, &token, "orch-update-utd");
         let _cleanup = OrchCleanup {
             url: url.clone(),
             token: token.clone(),
@@ -8420,7 +8487,7 @@ mod tests {
     fn live_orch_update_diverges_when_dirty_and_tip_moved() {
         let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-diverge", ORCH_SEED);
+        let id = orch_seed(&url, &token, "orch-diverge");
         let _cleanup = OrchCleanup {
             url: url.clone(),
             token: token.clone(),
@@ -8432,7 +8499,7 @@ mod tests {
         // Local un-pushed edits...
         state.mark_remote_dirty();
         // ...AND the tip moved underneath us -> a genuine fork, never an overwrite.
-        orch_advance_tip(&url, &token, &id, ORCH_SEED_V2);
+        orch_advance_tip(&url, &token, &id);
 
         let r = state.speleodb_update().expect("update");
         assert!(
@@ -8451,7 +8518,7 @@ mod tests {
     fn live_orch_open_flags_concurrent_same_account_lock() {
         let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-concurrent", ORCH_SEED);
+        let id = orch_seed(&url, &token, "orch-concurrent");
         let _cleanup = OrchCleanup {
             url: url.clone(),
             token: token.clone(),
@@ -8493,7 +8560,7 @@ mod tests {
         // just took, not strand it.
         let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-se-diverge", ORCH_SEED);
+        let id = orch_seed(&url, &token, "orch-se-diverge");
         let _cleanup = OrchCleanup {
             url: url.clone(),
             token: token.clone(),
@@ -8543,7 +8610,7 @@ mod tests {
         // through the explicit, confirmed, lock-held Unwind.
         let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-undo", ORCH_SEED);
+        let id = orch_seed(&url, &token, "orch-undo");
         let _cleanup = OrchCleanup {
             url: url.clone(),
             token: token.clone(),
@@ -8665,7 +8732,7 @@ mod tests {
         // error. Needs the second collaborator account.
         let ((url, owner_email, owner_pw), (email2, pw2)) = (orch_env(), orch_env2());
         let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
-        let id = orch_seed(&url, &owner, "orch-lockedby", ORCH_SEED);
+        let id = orch_seed(&url, &owner, "orch-lockedby");
         let _cleanup = OrchCleanup {
             url: url.clone(),
             token: owner.clone(),
@@ -8709,7 +8776,7 @@ mod tests {
         // case is a client-local vacuum concern covered by vacuum_snapshot_under_wal_mode.
         let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-dump", ORCH_SEED);
+        let id = orch_seed(&url, &token, "orch-dump");
         let _cleanup = OrchCleanup {
             url: url.clone(),
             token: token.clone(),
@@ -8806,7 +8873,7 @@ mod tests {
         // are exactly that deterministic render, intact through the round-trip.)
         let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-tmlstable", ORCH_SEED);
+        let id = orch_seed(&url, &token, "orch-tmlstable");
         let _cleanup = OrchCleanup {
             url: url.clone(),
             token: token.clone(),
@@ -8872,7 +8939,7 @@ mod tests {
         // upload) yet still release the lock back to read-only - no empty commit.
         let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-noedit", ORCH_SEED);
+        let id = orch_seed(&url, &token, "orch-noedit");
         let _cleanup = OrchCleanup {
             url: url.clone(),
             token: token.clone(),
@@ -8932,7 +8999,7 @@ mod tests {
         // StayDirty) while reusing a live-opened project for the real flush/snapshot.
         let (url, email, password) = orch_env();
         let token = client::login(&url, false, &email, &password).expect("login");
-        let id = orch_seed(&url, &token, "orch-ambig", ORCH_SEED);
+        let id = orch_seed(&url, &token, "orch-ambig");
         let _cleanup = OrchCleanup {
             url: url.clone(),
             token: token.clone(),
@@ -9000,7 +9067,7 @@ mod tests {
         use crate::speleodb::Permission;
         let ((url, owner_email, owner_pw), (email2, _pw2)) = (orch_env(), orch_env2());
         let owner = client::login(&url, false, &owner_email, &owner_pw).expect("owner login");
-        let id = orch_seed(&url, &owner, "orch-admin", ORCH_SEED);
+        let id = orch_seed(&url, &owner, "orch-admin");
         let _cleanup = OrchCleanup {
             url: url.clone(),
             token: owner.clone(),

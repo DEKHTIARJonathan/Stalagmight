@@ -401,10 +401,37 @@ mod live_tests {
         )
     }
 
-    const SEED_FIXTURE: &str = concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../e2e/fixtures/fractal_plant_iter2.stalx"
-    );
+    /// The `.stalx` the upload tests seed with: a small synthetic project saved
+    /// into `dir` (#576 E13-D2). The suite used to read
+    /// `e2e/fixtures/fractal_plant_iter2.stalx`, which the repo does not carry, so
+    /// it could run on no clone but the maintainer's.
+    #[expect(clippy::expect_used, reason = "ignored live integration test helper")]
+    fn seed_stalx(dir: &std::path::Path) -> std::path::PathBuf {
+        let path = dir.join("seed.stalx");
+        let mut db = stalagmight_persistence::persistence::Database::open(&path)
+            .expect("create the seed .stalx");
+        db.save_project(&build_render_project(None))
+            .expect("save the seed project");
+        path
+    }
+
+    /// Not ignored: the seed the live tests upload is built on every run, so a
+    /// seed that no longer opens fails here, on any clone, not on the dev box.
+    #[test]
+    #[expect(
+        clippy::expect_used,
+        reason = "test: a failed setup step is the failure"
+    )]
+    fn the_live_seed_opens_as_a_project() {
+        let dir = tempfile::tempdir().expect("seed tempdir");
+        let project =
+            stalagmight_persistence::persistence::Database::open_existing(&seed_stalx(dir.path()))
+                .expect("the seed opens")
+                .load_project()
+                .expect("the seed loads");
+        assert_eq!(project.sections.len(), 1);
+        assert_eq!(project.sections.first().map(|s| s.shots.len()), Some(2));
+    }
 
     /// A **real** Ariane `.tml` (a ZIP archive - verified live: the server's
     /// `ArianeTMLFileProcessor` 400s a non-zip with "File is not a zip file").
@@ -509,8 +536,8 @@ mod live_tests {
         // 3. Seed a known-good .stalx (+ a tiny .tml sidecar so the production
         //    two-`artifact` upload_auto path is exercised): acquire, upload,
         //    release. The returned Project's latest_commit.id is the new hexsha.
-        let fixture = std::path::Path::new(SEED_FIXTURE);
-        assert!(fixture.exists(), "seed fixture missing: {SEED_FIXTURE}");
+        let seed_dir = tempfile::tempdir().expect("seed tempdir");
+        let fixture = &seed_stalx(seed_dir.path());
         let tml_dir = tempfile::tempdir().expect("tml tempdir");
         let tml_sidecar = tml_dir.path().join("ariane.tml");
         std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
@@ -623,7 +650,8 @@ mod live_tests {
         };
         // Seed a real .stalx (+ .tml sidecar) so the only thing stopping the
         // download is permission.
-        let fixture = std::path::Path::new(SEED_FIXTURE);
+        let seed_dir = tempfile::tempdir().expect("seed tempdir");
+        let fixture = &seed_stalx(seed_dir.path());
         let tml_dir = tempfile::tempdir().expect("tml tempdir");
         let tml_sidecar = tml_dir.path().join("ariane.tml");
         std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
@@ -910,11 +938,8 @@ mod live_tests {
         };
         client::acquire_lock(url, token, false, &cleanup.id).expect("acquire mutex");
         let tml_dir = tempfile::tempdir().expect("tml tempdir");
-        (
-            cleanup,
-            std::path::Path::new(SEED_FIXTURE).to_path_buf(),
-            tml_dir,
-        )
+        let seed = seed_stalx(tml_dir.path());
+        (cleanup, seed, tml_dir)
     }
 
     /// L12: a real `upload/auto` of a fresh change returns **200** with a body
@@ -1162,8 +1187,8 @@ mod live_tests {
 
         // Deliberately DO NOT acquire the mutex. Seed a real .stalx (+ .tml sidecar)
         // so the ONLY thing stopping the push is the missing lock.
-        let fixture = std::path::Path::new(SEED_FIXTURE);
-        assert!(fixture.exists(), "seed fixture missing: {SEED_FIXTURE}");
+        let seed_dir = tempfile::tempdir().expect("seed tempdir");
+        let fixture = &seed_stalx(seed_dir.path());
         let tml_dir = tempfile::tempdir().expect("tml tempdir");
         let tml_sidecar = tml_dir.path().join("ariane.tml");
         std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
@@ -1512,8 +1537,8 @@ mod live_tests {
             .expect("export georeferenced .tml");
 
         // The .stalx part is a stand-in (the render is driven entirely by the
-        // .tml); reuse the seed fixture, as the other upload tests do.
-        let stalx = std::path::Path::new(SEED_FIXTURE);
+        // .tml); reuse the synthetic seed, as the other upload tests do.
+        let stalx = &seed_stalx(dir.path());
         client::acquire_lock(&url, &token, false, &cleanup.id).expect("acquire mutex");
         let uploaded = client::upload_auto(
             &url,
@@ -1591,7 +1616,7 @@ mod live_tests {
         stalagmight_export::export::tml::export_tml_for_speleodb(&project, &tml)
             .expect("export un-georeferenced .tml");
 
-        let stalx = std::path::Path::new(SEED_FIXTURE);
+        let stalx = &seed_stalx(dir.path());
         client::acquire_lock(&url, &token, false, &cleanup.id).expect("acquire mutex");
         let uploaded = client::upload_auto(
             &url,
