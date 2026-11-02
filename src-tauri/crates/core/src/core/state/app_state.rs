@@ -845,11 +845,8 @@ impl AppState {
     }
 
     /// Per-station distance field for the distance-gradient overlay (#34),
-    /// computed on the closure-adjusted geometry. Takes ONE reconciled project
-    /// snapshot under `command_lock` (so the graph topology and the adjusted
-    /// coordinates come from the same version - no read-skew between two separate
-    /// state reads), and reuses the memoized adjusted-stations cache read-only
-    /// when it matches that snapshot (keeps re-root instant in the adjusted view).
+    /// computed on the MEASURED geometry of ONE settled project snapshot (taken
+    /// under `command_lock`, so never in the middle of a command, #576 RV5-4).
     pub fn distance_field(&self, from: Option<&StationRef>) -> Option<DistanceField> {
         self.distance_field_checked(from).ok().flatten()
     }
@@ -861,7 +858,9 @@ impl AppState {
         &self,
         from: Option<&StationRef>,
     ) -> Result<Option<DistanceField>, String> {
-        let Some(project) = self.project_snapshot() else {
+        // [#576 RV5-4] Settled: a plain snapshot taken while a command is between
+        // its mutation and its epilogue is a project no user ever sees.
+        let Some(project) = self.settled_snapshot() else {
             return Ok(None);
         };
         // Distance uses MEASURED geometry (surveyed shot lengths via the plain
@@ -896,7 +895,8 @@ impl AppState {
         gas_config: &GasConfig,
         stage_drop_overrides: &[Option<StationRef>],
     ) -> Option<GasReachField> {
-        let project = self.project_snapshot()?;
+        // [#576 RV5-4] Settled, like every IPC read of the project.
+        let project = self.settled_snapshot()?;
         Some(project.compute_gas_reach_field_with_overrides(
             origin,
             endpoint,
@@ -933,11 +933,13 @@ impl AppState {
         a: RulerEndpoint,
         b: RulerEndpoint,
     ) -> Result<Option<AlongLineResult>, String> {
-        let Some(project) = self.project_snapshot() else {
+        // [#576 RV5-4] Settled: the topology is read between commands, never in the
+        // middle of one.
+        let Some(project) = self.settled_snapshot() else {
             return Ok(None);
         };
         // `project` (topology) and `stations` (adjusted coords) are two independent
-        // locked reads, so a concurrent edit between them could yield a slightly
+        // settled reads, so an edit landing between them could yield a slightly
         // skewed snapshot. That's safe here - `along_line_between` looks everything
         // up by `StationRef` through guarded `idx.get(..)` and indexes coords only
         // via those resolved indices, so a mismatch drops an edge at worst (never

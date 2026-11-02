@@ -391,8 +391,9 @@ pub async fn export_dive_profile(
     let format = ProfileFormat::from_wire(&format).map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
+        // [#576 RV5-4] Settled: never a project caught in the middle of a command.
         let project = state
-            .project_snapshot()
+            .settled_snapshot()
             .ok_or_else(|| "No project open".to_string())?;
         let refuse = |path: &PathBuf| {
             tracing::warn!(
@@ -446,8 +447,9 @@ pub async fn render_dive_profile_text(
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
+        // [#576 RV5-4] Settled: never a project caught in the middle of a command.
         let project = state
-            .project_snapshot()
+            .settled_snapshot()
             .ok_or_else(|| "No project open".to_string())?;
         render_profile_for(&project, request, ProfileFormat::PlainText)
     })
@@ -472,8 +474,9 @@ pub async fn preview_svg_export(
         // Same config-wins rule as the export itself, so the preview cannot
         // disagree with the file it is previewing (#27).
         options.include_reference_legs = state.get_config().gas.include_reference_legs;
+        // [#576 RV5-4] Settled: never a project caught in the middle of a command.
         let project = state
-            .project_snapshot()
+            .settled_snapshot()
             .ok_or_else(|| "No project open".to_string())?;
         // Render from the memoized closure-adjusted solve so the preview matches
         // the on-screen (adjusted) map; falls back to measured coordinates when
