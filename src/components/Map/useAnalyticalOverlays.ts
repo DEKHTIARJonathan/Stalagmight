@@ -57,6 +57,17 @@ interface AnalyticalOverlaysOptions {
  * run before it: the tint only re-uploads the measure-path layer and the markers
  * only create DOM markers, so neither reads what the other writes.
  */
+/** What the overlays tell MapCanvas back. */
+export interface AnalyticalOverlaysState {
+  /**
+   * The last distance-field fetch failed (and no later one has succeeded): the field
+   * is not being computed, so MapCanvas does not show its "computing" cue while the
+   * error toast says it failed (#576 C7-CUE, decided: "Hide computing cue while the
+   * field has failed").
+   */
+  distanceFieldFailed: boolean;
+}
+
 export function useAnalyticalOverlays({
   map,
   surveyLayerRef,
@@ -82,7 +93,7 @@ export function useAnalyticalOverlays({
   gasPlanConfig,
   gasReachField,
   setGasReachField,
-}: AnalyticalOverlaysOptions): void {
+}: AnalyticalOverlaysOptions): AnalyticalOverlaysState {
   const originMarkerRef = useRef<maplibregl.Marker | null>(null);
   const gasOriginMarkerRef = useRef<maplibregl.Marker | null>(null);
   // Clear-on-failure flags for the analytical overlays (#34 distance / #38 gas):
@@ -345,4 +356,6 @@ export function useAnalyticalOverlays({
       gasOriginMarkerRef.current = null;
     };
   }, [showGasPlan, gasOrigin, activeStations, gpsOrigin, mapLoaded]);
+
+  return { distanceFieldFailed };
 }

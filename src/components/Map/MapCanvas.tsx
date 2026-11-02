@@ -911,7 +911,7 @@ function MapCanvas({ onReloadMap }: MapCanvasProps) {
   // The distance-gradient (#34) and gas-reach (#38) overlays: field fetches, the
   // apply effects, the Plan idle tint, the picked route and both origin markers
   // (useAnalyticalOverlays.ts).
-  useAnalyticalOverlays({
+  const { distanceFieldFailed } = useAnalyticalOverlays({
     map,
     surveyLayerRef,
     mapLoaded,
@@ -1576,8 +1576,9 @@ function MapCanvas({ onReloadMap }: MapCanvasProps) {
         <DistanceLegend max={distanceField.max_reachable} visible={showDistanceGradient} />
       )}
       {/* While the field is being (re)computed - first toggle / re-root - show a
-          lightweight cue so a slow closure solve doesn't look frozen. */}
-      {showDistanceGradient && !effectiveIssueSeverity && !distanceField && (
+          lightweight cue so a slow closure solve doesn't look frozen. Not once the
+          fetch has failed: nothing is being computed then (#576 C7-CUE). */}
+      {showDistanceGradient && !effectiveIssueSeverity && !distanceField && !distanceFieldFailed && (
         <div
           data-testid="distance-legend-loading"
           style={{
