@@ -121,5 +121,19 @@ export interface CellEdit {
   value: unknown;
 }
 
+/**
+ * What a bulk edit could not fully apply, for the host's notice (`onPasteReport`).
+ * `written` cells were committed and `skipped` were not; `clipped` fell past the
+ * grid's last row or column (paste only). A paste counts read-only targets as
+ * skipped too; a fill counts only values its target column REFUSED (parser or
+ * `validate`) - a locked cell it passes over is not news (#576 FILL-1).
+ */
+export interface BulkEditReport {
+  source: 'paste' | 'fill';
+  written: number;
+  clipped: number;
+  skipped: number;
+}
+
 export const DEFAULT_COL_WIDTH = 120;
 export const ROW_HEIGHT = 33;

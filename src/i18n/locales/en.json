@@ -1827,6 +1827,12 @@
       "skipped_one": "{{count}} skipped (read-only or invalid)",
       "skipped_other": "{{count}} skipped (read-only or invalid)"
     },
+    "fillReport": {
+      "written_one": "Filled {{count}} cell",
+      "written_other": "Filled {{count}} cells",
+      "skipped_one": "{{count}} skipped (invalid)",
+      "skipped_other": "{{count}} skipped (invalid)"
+    },
     "validation": {
       "nonPositiveLength": "Length must be greater than 0",
       "azimuthRange": "Azimuth must be between 0 and 360",

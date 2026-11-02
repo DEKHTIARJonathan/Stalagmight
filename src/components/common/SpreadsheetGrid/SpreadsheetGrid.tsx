@@ -19,6 +19,7 @@ import {
   type CellCoord,
   type CellEdit,
   type GridSelectRequest,
+  type BulkEditReport,
   ROW_HEIGHT,
 } from './types';
 import { parseLocaleNumber, parseTSV, serializeRangeToTSV } from './gridClipboard';
@@ -142,10 +143,12 @@ export interface SpreadsheetGridProps<Row> {
    *  selection the user still has rows for, and clear it BEFORE they answer a
    *  confirm about those very rows. */
   onDeleteRows?: (fromRow: number, toRow: number) => boolean | void;
-  /** Called after a paste that couldn't be applied in full: `written` cells were
+  /** Called after a paste that couldn't be applied in full (`written` cells were
    *  committed, `clipped` fell past the grid's last row/column, `skipped` landed
-   *  on read-only/unparseable cells. Let the host surface a notice. */
-  onPasteReport?: (info: { written: number; clipped: number; skipped: number }) => void;
+   *  on read-only/unparseable cells), and after a fill whose target column refused
+   *  some values (#576 FILL-1; see {@link BulkEditReport}). Let the host surface a
+   *  notice. */
+  onPasteReport?: (info: BulkEditReport) => void;
   /** Fired with the row index under the pointer (null on leave) - for host-level
    *  hover effects (e.g. highlighting the corresponding map feature). */
   onRowHover?: (rowIndex: number | null) => void;
@@ -970,7 +973,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       // Surface what the paste couldn't fully apply (out-of-bounds vs read-only/
       // unparseable), so the host can show a notice rather than silently dropping.
       if (clipped > 0 || written < targets.length) {
-        onPasteReport?.({ written, clipped, skipped: targets.length - written });
+        onPasteReport?.({ source: 'paste', written, clipped, skipped: targets.length - written });
       }
     },
     [rect, rowCount, colCount, colAt, cellEditable, coerce, transferValue, parseForColumn, cutRect, applyEdits, onPasteReport, markMissing, missKey, onClearMissing, pasteGrowsRows],
@@ -1040,6 +1043,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const commitFill = useCallback(
     (preview: Rect) => {
       const edits: CellEdit[] = [];
+      let refused = 0; // editable targets whose column refused the value (FILL-1)
       const srcH = rect.r1 - rect.r0 + 1;
       const srcW = rect.c1 - rect.c0 + 1;
       const pushEdit = (srcRow: number, srcCol: GridColumn<Row>, dstRow: number, dstCol: GridColumn<Row>) => {
@@ -1048,6 +1052,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         if (data === undefined) return;
         const value = transferValue(srcCol.getValue(data, srcRow), srcCol.key, dstCol, dstRow);
         if (value !== undefined) edits.push({ row: dstRow, colKey: dstCol.key, value });
+        else refused += 1;
       };
       const vertical = preview.r1 > rect.r1 || preview.r0 < rect.r0;
       if (vertical) {
@@ -1075,6 +1080,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         }
       }
       applyEdits(edits);
+      if (refused > 0) onPasteReport?.({ source: 'fill', written: edits.length, clipped: 0, skipped: refused });
       const a = colKeys[preview.c0];
       const f = colKeys[preview.c1];
       if (a !== undefined && f !== undefined) {
@@ -1085,12 +1091,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         });
       }
     },
-    [rect, colAt, cellEditable, transferValue, rows, applyEdits, colKeys],
+    [rect, colAt, cellEditable, transferValue, rows, applyEdits, colKeys, onPasteReport],
   );
 
   const doFill = useCallback(
     (down: boolean) => {
       const edits: CellEdit[] = [];
+      let refused = 0; // as in commitFill: refused by the column, not read-only
       for (const f of fillTargets(rect, down)) {
         const col = colAt(f.colIdx);
         const srcCol = colAt(f.srcColIdx);
@@ -1098,10 +1105,12 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         if (!col || !srcCol || data === undefined || !cellEditable(f.row, col)) continue;
         const value = transferValue(srcCol.getValue(data, f.srcRow), srcCol.key, col, f.row);
         if (value !== undefined) edits.push({ row: f.row, colKey: col.key, value });
+        else refused += 1;
       }
       applyEdits(edits);
+      if (refused > 0) onPasteReport?.({ source: 'fill', written: edits.length, clipped: 0, skipped: refused });
     },
-    [rect, colAt, rows, cellEditable, transferValue, applyEdits],
+    [rect, colAt, rows, cellEditable, transferValue, applyEdits, onPasteReport],
   );
 
   const doClear = useCallback(() => {

@@ -401,6 +401,38 @@ describe('SegmentsTable', () => {
         useUIStore.setState({ showToast: original });
       }
     });
+
+    it('reports a fill that meets a refused speed instead of dropping it silently (#576 FILL-1)', () => {
+      // A stored speed of 0, as only a hand-edited plan file can carry: Fill down copies it
+      // into the next two spans, whose column refuses it. Nothing is written - and now the
+      // diver is told, the way a paste would tell them.
+      useGasPlanStore.setState({
+        segments: [
+          { speed_m_per_min: 0, on_scooter: false },
+          { speed_m_per_min: 12, on_scooter: false },
+          { speed_m_per_min: 14, on_scooter: false },
+        ],
+      });
+      const toasts: { message: string; key: string; kind: string }[] = [];
+      const original = useUIStore.getState().showToast;
+      useUIStore.setState({
+        showToast: (message: string, key: string, kind: string) => toasts.push({ message, key, kind }),
+      });
+      try {
+        render(<SegmentsTable />);
+        fireEvent.mouseDown(screen.getByTestId('segment-cell-0-speed'));
+        fireEvent.mouseDown(screen.getByTestId('segment-cell-2-speed'), { shiftKey: true });
+        fireEvent.keyDown(scroller(), { key: 'd', ctrlKey: true });
+
+        expect(useGasPlanStore.getState().segments.map((s) => s.speed_m_per_min)).toEqual([0, 12, 14]);
+        expect(toasts).toHaveLength(1);
+        expect(toasts[0]?.key).toBe(TOAST_KEYS.PLAN_SEGMENTS_PASTE);
+        expect(toasts[0]?.kind).toBe('warning');
+        expect(toasts[0]?.message).toBe('2 skipped (invalid)');
+      } finally {
+        useUIStore.setState({ showToast: original });
+      }
+    });
   });
 
   describe('clear-to-inherit (#403, replacing the per-row Reset button)', () => {

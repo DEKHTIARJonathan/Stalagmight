@@ -7,6 +7,7 @@ import { useUIStore, type Selection } from '../../store/uiStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
 import { SpreadsheetGrid } from '../common/SpreadsheetGrid';
+import { useBulkEditReportToast } from '../common/useBulkEditReportToast';
 import { EntityBlob } from '../common/EntityBlob';
 import { ChevronDownIcon, ExpandIcon } from '../common/icons';
 import type { ProjectWarning } from '../../types/commands';
@@ -1050,19 +1051,8 @@ export default function DataTable({ sections }: DataTableProps) {
   );
 
   // Surface partially-applied pastes (only the non-zero parts).
-  const onShotPasteReport = useCallback(
-    ({ written, clipped, skipped }: { written: number; clipped: number; skipped: number }) => {
-      const parts: string[] = [];
-      if (written > 0) parts.push(t('dataTable.pasteReport.written', { count: written }));
-      if (clipped > 0) parts.push(t('dataTable.pasteReport.clipped', { count: clipped }));
-      if (skipped > 0) parts.push(t('dataTable.pasteReport.skipped', { count: skipped }));
-      if (parts.length > 0) {
-        const kind = clipped > 0 || skipped > 0 ? 'warning' : 'success';
-        showToast(parts.join(' · '), TOAST_KEYS.DATA_TABLE_PASTE, kind);
-      }
-    },
-    [t, showToast]
-  );
+  // Paste and fill outcomes (#576 FILL-1), the toast every grid shares.
+  const onShotPasteReport = useBulkEditReportToast(TOAST_KEYS.DATA_TABLE_PASTE);
 
   // Delete on a gutter-selected range (or the context menu's "Delete rows"):
   // draft rows in the range are discarded outright (the end draft resets, no
