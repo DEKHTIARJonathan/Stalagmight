@@ -409,7 +409,13 @@ pub fn parse_compass(path: PathBuf) -> Result<CompassFile, String> {
         purpose = "prepare Compass import preview",
         "Parsing Compass .DAT/.MAK file for import preview"
     );
-    let parsed = guarded(|| crate::parsers::compass::parse_compass(&path)).map_err(|e| {
+    // The preview is built from the file's data too, so it runs under the
+    // same guard as the parse (#576 RV3-R-12).
+    guarded(|| {
+        crate::parsers::compass::parse_compass(&path)
+            .map(|parsed| crate::parsers::compass::build_preview(&parsed))
+    })
+    .map_err(|e| {
         tracing::error!(
             path = ?path,
             purpose = "prepare Compass import preview",
@@ -417,8 +423,7 @@ pub fn parse_compass(path: PathBuf) -> Result<CompassFile, String> {
             "Failed to parse Compass file for import preview"
         );
         e.to_string()
-    })?;
-    Ok(crate::parsers::compass::build_preview(&parsed))
+    })
 }
 
 /// Parse a Compass file, convert to import configs, and execute the import.
@@ -731,7 +736,13 @@ pub fn parse_walls(path: PathBuf) -> Result<WallsFile, String> {
         purpose = "prepare Walls import preview",
         "Parsing Walls .WPJ/.SRV file for import preview"
     );
-    let parsed = guarded(|| crate::parsers::walls::parse_walls(&path)).map_err(|e| {
+    // The preview is built from the file's data too, so it runs under the
+    // same guard as the parse (#576 RV3-R-12).
+    guarded(|| {
+        crate::parsers::walls::parse_walls(&path)
+            .map(|parsed| crate::parsers::walls::build_preview(&parsed))
+    })
+    .map_err(|e| {
         tracing::error!(
             path = ?path,
             purpose = "prepare Walls import preview",
@@ -739,8 +750,7 @@ pub fn parse_walls(path: PathBuf) -> Result<WallsFile, String> {
             "Failed to parse Walls file for import preview"
         );
         e.to_string()
-    })?;
-    Ok(crate::parsers::walls::build_preview(&parsed))
+    })
 }
 
 /// Parse a Walls file, convert to import configs, and execute the import.

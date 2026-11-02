@@ -1282,7 +1282,11 @@ Added under a small, always-safe surface:
   directory (message, location, thread, `Backtrace::force_capture()`) and logs
   `PANIC: ...` to the ring. The marker is the durable signal (the file log layer
   can drop tail lines on abort). A thread panic leaves the app alive but the
-  marker is fatal regardless.
+  marker is fatal regardless. A panic the code catches on purpose - an
+  importer step under `import_runner::guarded`, which fails that import with
+  an error - is not a crash: it runs inside `panic_hook::catching`, writes no
+  marker, and logs `Caught panic: ...` at ERROR instead of `PANIC:` (#576
+  RV3-R-12), so the oracle sees an error line, not a fatal finding.
 - **Frontend global error capture** (`src/utils/globalErrorCapture.ts`):
   `window` `error` / `unhandledrejection` -> `console.error` with the
   `[unhandled-error]` / `[unhandled-rejection]` prefixes (the oracle contract),

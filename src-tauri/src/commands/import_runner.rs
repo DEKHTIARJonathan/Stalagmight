@@ -190,15 +190,20 @@ impl EventSink for SilentSink {
 /// that import rather than unwind out of the command. Only steps that touch
 /// nothing but the file's own data run here; the apply step holds the
 /// project's locks and is left to its own guards.
+///
+/// The panic is caught, so the panic hook records it as a caught panic, not a
+/// crash: no crash marker (#576 RV3-R-12, `panic_hook::catching`).
 pub(crate) fn guarded<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
-    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|payload| {
-        let detail = payload
-            .downcast_ref::<&str>()
-            .map(|s| (*s).to_string())
-            .or_else(|| payload.downcast_ref::<String>().cloned())
-            .unwrap_or_else(|| "no detail".to_string());
-        Err(anyhow!(
-            "the importer stopped on an internal error ({detail}); nothing was imported"
-        ))
-    })
+    crate::logging::panic_hook::catching(|| catch_unwind(AssertUnwindSafe(f))).unwrap_or_else(
+        |payload| {
+            let detail = payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "no detail".to_string());
+            Err(anyhow!(
+                "the importer stopped on an internal error ({detail}); nothing was imported"
+            ))
+        },
+    )
 }
