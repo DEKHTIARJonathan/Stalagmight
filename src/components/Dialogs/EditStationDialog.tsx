@@ -12,11 +12,13 @@ import {
   parseGps,
   detectFormat,
   gpsSwapHint,
+  validateCoordinates,
   type GpsFormat,
   type GpsParseError,
   type GpsParseResult,
 } from '../../utils/gps';
 import type { GpsCoordinates } from '../../types/project';
+import { MAX_DEPTH_REFERENCE_M } from '../../utils/gpsBounds';
 import type { StationRef } from '../../types/project';
 
 export default function EditStationDialog() {
@@ -63,6 +65,16 @@ export default function EditStationDialog() {
   const originalGpsInput = station?.gps_coordinates
     ? `${station.gps_coordinates.latitude}, ${station.gps_coordinates.longitude}`
     : '';
+  // [#576 B35(g)] A stored tie point is no longer necessarily valid: a finite but
+  // impossible one (latitude past the pole, a depth reference beyond the bound an
+  // older build did not enforce) opens as it is and the integrity banner sends the
+  // user HERE to correct it. So the stored value is not assumed good below, and
+  // Save rewrites it even when the coordinates in the box are unchanged.
+  const storedGps = station?.gps_coordinates;
+  const storedGpsInvalid =
+    !!storedGps &&
+    (!validateCoordinates(storedGps.latitude, storedGps.longitude).valid ||
+      !(Math.abs(storedGps.depth_reference) <= MAX_DEPTH_REFERENCE_M));
 
   // Show what parsing `value` gave. The badge names the format actually read
   // (or, for text that did not parse, the one it was read as / looks like).
@@ -94,11 +106,16 @@ export default function EditStationDialog() {
       if (station.gps_coordinates) {
         const result = parseGps(originalGpsInput);
         setGpsInput(originalGpsInput);
-        // A stored value is valid; if its plain text does not read back (a
-        // JS exponent such as "1e-7"), keep the stored value as before.
+        // A valid stored value whose plain text does not read back (a JS
+        // exponent such as "1e-7") keeps the stored value as before. An invalid
+        // one (#576 B35(g)) shows its parse error: it is what needs fixing.
+        const storedLatLonValid = validateCoordinates(
+          station.gps_coordinates.latitude,
+          station.gps_coordinates.longitude
+        ).valid;
         showGpsResult(
           originalGpsInput,
-          'coordinates' in result
+          'coordinates' in result || !storedLatLonValid
             ? result
             : { coordinates: station.gps_coordinates, format: 'DD', original: originalGpsInput }
         );
@@ -176,7 +193,7 @@ export default function EditStationDialog() {
         const oldLat = station.gps_coordinates?.latitude;
         const oldLon = station.gps_coordinates?.longitude;
 
-        if (gpsCoords.latitude !== oldLat || gpsCoords.longitude !== oldLon) {
+        if (gpsCoords.latitude !== oldLat || gpsCoords.longitude !== oldLon || storedGpsInvalid) {
           const result = await setZeroDatum(stationRef, {
             latitude: gpsCoords.latitude,
             longitude: gpsCoords.longitude,

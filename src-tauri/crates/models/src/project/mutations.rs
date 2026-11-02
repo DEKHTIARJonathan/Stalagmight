@@ -653,7 +653,7 @@ impl Project {
     /// Format a station reference for user display.
     /// Uses section name if available, otherwise "Section N" (0-indexed to match canonical IDs).
     /// Station index is displayed as 0-indexed to match UI format (e.g., "Section #0").
-    fn format_station_ref_for_display(&self, station_ref: StationRef) -> String {
+    pub(super) fn format_station_ref_for_display(&self, station_ref: StationRef) -> String {
         let section_label = self
             .sections
             .iter()
@@ -878,8 +878,22 @@ impl Project {
             return Err("Station does not exist".to_string());
         }
 
-        // Validate GPS coordinates
-        GpsCoordinates::validate(gps.latitude, gps.longitude, gps.depth_reference)?;
+        // [#576 B35(g)] Finite, but NOT range-checked: this copies a datum out of
+        // a loaded project as it is (its one caller is Merge Projects). A loaded
+        // project can hold a finite out-of-range point - the load keeps it and the
+        // integrity check flags it for the user to correct - and refusing it here
+        // refused the whole merge over a point the source project opens with. The
+        // merged project's integrity check flags it the same way. A non-finite
+        // value would poison the geometry, so that is still refused.
+        if !(gps.latitude.is_finite()
+            && gps.longitude.is_finite()
+            && gps.depth_reference.is_finite())
+        {
+            return Err(format!(
+                "GPS coordinates must be finite, got ({}, {}, {})",
+                gps.latitude, gps.longitude, gps.depth_reference
+            ));
+        }
 
         // Stable stored identity for this datum's station.
         let datum_key = self

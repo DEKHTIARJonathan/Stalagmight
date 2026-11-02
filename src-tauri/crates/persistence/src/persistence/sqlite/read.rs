@@ -639,6 +639,24 @@ impl Database {
 
             for zd_row in zd_rows {
                 let (section_id, station_index, lat, lon, depth) = zd_row?;
+                // [#576 B35(g)] A NON-finite coordinate (+/-Inf: SQLite cannot
+                // store NaN) would turn every coordinate this point positions into
+                // NaN, so it is dropped here and counted for the open's notice. A
+                // FINITE one is kept exactly as stored even when it is out of range
+                // (latitude 95, a depth reference beyond 11 km from a build before
+                // that bound): dropping it would move that part of the cave and
+                // clamping would invent a position, so the integrity check flags it
+                // (`invalid_zero_datum`) for the user to correct instead.
+                if !(lat.is_finite() && lon.is_finite() && depth.is_finite()) {
+                    tracing::warn!(
+                        section_id,
+                        station_index,
+                        purpose = "block corruption at the source",
+                        "Dropped a zero datum with a non-finite coordinate on load"
+                    );
+                    report.repairs.gps_points += 1;
+                    continue;
+                }
                 zero_datums.push(ZeroDatum {
                     station_ref: StationKey::positional(section_id, station_index),
                     gps: GpsCoordinates {

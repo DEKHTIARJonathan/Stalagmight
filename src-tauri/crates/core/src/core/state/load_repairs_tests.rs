@@ -6,6 +6,9 @@
 //!   an in-memory non-finite station offset too.
 //! - Every reset or dropped value is counted on the load result, so the
 //!   frontend can show one notice after the open.
+//! - A GPS tie point that is finite but impossible is kept and flagged by the
+//!   integrity check (and carried by a merge); a non-finite one is dropped and
+//!   counted.
 //!
 //! All data is synthetic, built in memory or written with SQL into a file this
 //! build saved. No fixture is read or written.
@@ -170,5 +173,139 @@ fn the_load_result_and_the_binary_envelope_carry_what_the_load_reset() {
             station_offsets: 2,
             gps_points: 0,
         }
+    );
+}
+
+/// [#576 B35(g)] A GPS tie point whose values are finite but impossible
+/// (latitude past the pole, longitude past 180, or a depth reference beyond
+/// 11 km, which builds before v0.5.0-rc5 allowed) opens AS IT IS - dropping it
+/// would move that part of the cave, clamping would invent a position - and the
+/// integrity check flags it, naming the station, so the user can correct it in
+/// the zero-datum dialog. It used to open silently and position the cave with it.
+#[test]
+fn a_finite_out_of_range_gps_tie_point_opens_as_it_is_and_is_flagged() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let path = damaged_file(
+        temp.path(),
+        "INSERT INTO zero_datums (section_id, station_index, latitude, longitude, depth_reference)
+         VALUES ({sid}, 0, 95.0, 190.0, 20000.0);",
+    );
+
+    let state = state_with_sink();
+    let loaded = state
+        .do_load_project_full(path)
+        .unwrap_or_else(|e| panic!("a file with an out-of-range tie point opens: {e:?}"));
+    let datums: Vec<_> = loaded
+        .project
+        .zero_datums
+        .iter()
+        .map(|zd| (zd.gps.latitude, zd.gps.longitude, zd.gps.depth_reference))
+        .collect();
+    println!("tie points after open: {datums:?}");
+    assert_eq!(
+        datums,
+        vec![(95.0, 190.0, 20000.0)],
+        "kept exactly as stored"
+    );
+    assert_eq!(
+        loaded.load_repairs.gps_points, 0,
+        "a finite point is not dropped"
+    );
+
+    let check = state.integrity_check();
+    println!("integrity messages: {:?}", check.messages);
+    let flagged: Vec<_> = check
+        .messages
+        .iter()
+        .filter(|m| m.contains("GPS tie point"))
+        .collect();
+    assert_eq!(
+        flagged.len(),
+        1,
+        "exactly one integrity message for the tie point"
+    );
+    assert!(
+        flagged[0].contains("\"SectionA\" #0") && flagged[0].contains("Edit Station"),
+        "the message names the station and where to fix it: {}",
+        flagged[0]
+    );
+    assert!(
+        !check.save_blocked,
+        "a flag, not a save block: the user can keep working and fix it"
+    );
+}
+
+/// [#576 B35(g)] A tie point with a NON-finite coordinate cannot be kept: it
+/// would turn every coordinate it positions into NaN. It is dropped at the load
+/// boundary and counted, so the open's notice says so.
+#[test]
+fn a_non_finite_gps_tie_point_is_dropped_and_reported() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let path = damaged_file(
+        temp.path(),
+        "INSERT INTO zero_datums (section_id, station_index, latitude, longitude, depth_reference)
+         VALUES ({sid}, 0, 9e999, 10.0, 0.0);",
+    );
+
+    let state = state_with_sink();
+    let loaded = state
+        .do_load_project_full(path)
+        .unwrap_or_else(|e| panic!("a file with a non-finite tie point opens: {e:?}"));
+    println!(
+        "tie points after open: {}, reported dropped: {}",
+        loaded.project.zero_datums.len(),
+        loaded.load_repairs.gps_points
+    );
+    assert!(
+        loaded.project.zero_datums.is_empty(),
+        "a non-finite tie point must not reach the open project"
+    );
+    assert_eq!(loaded.load_repairs.gps_points, 1);
+}
+
+/// [#576 B35(g)] Merge copies a flagged (finite, out-of-range) tie point into the
+/// merged project instead of refusing the whole merge over it; the merged
+/// project's integrity check then flags it the same way.
+#[test]
+fn merging_a_project_with_a_flagged_tie_point_copies_it() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let flagged = damaged_file(
+        temp.path(),
+        "INSERT INTO zero_datums (section_id, station_index, latitude, longitude, depth_reference)
+         VALUES ({sid}, 0, 95.0, 10.0, 0.0);",
+    );
+    let other = temp.path().join("CaveB.stalx");
+    let mut db = Database::open(&other).unwrap();
+    db.save_project(&two_shot_project()).unwrap();
+    drop(db);
+
+    let state = AppState::new().unwrap();
+    let output = temp.path().join("Merged.stalx");
+    let result = state.merge_projects(
+        vec![flagged, other],
+        output.clone(),
+        "Merged".to_string(),
+        false,
+    );
+    println!("merge: success={} error={:?}", result.success, result.error);
+    assert!(result.success, "merge must not refuse: {:?}", result.error);
+
+    let merged = Database::open_existing(&output)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    let latitudes: Vec<f64> = merged
+        .zero_datums
+        .iter()
+        .map(|zd| zd.gps.latitude)
+        .collect();
+    println!("merged tie point latitudes: {latitudes:?}");
+    assert_eq!(
+        latitudes,
+        vec![95.0],
+        "the flagged point is carried as it is"
     );
 }

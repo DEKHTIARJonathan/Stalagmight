@@ -128,4 +128,31 @@ describe('EditStationDialog GPS field with a stored value (#576 R4 F8, F9)', () 
     expect(screen.getByTestId('station-gps-parsed')).toHaveTextContent('Lat: 0.000000, Lon: -87.300000');
     expect(q('station-gps-error')).not.toBeInTheDocument();
   });
+
+  // [#576 B35(g)] A stored tie point can now be finite but impossible: the load
+  // keeps it and the integrity banner sends the user here to correct it.
+  it('shows a stored out-of-range value as the error it is, not as parsed', () => {
+    setStation({ latitude: 95, longitude: 10, depth_reference: 0 });
+    render(<EditStationDialog />);
+
+    expect(screen.getByTestId('station-gps-input')).toHaveValue('95, 10');
+    expect(screen.getByTestId('station-gps-error')).toHaveTextContent('Latitude');
+    expect(q('station-gps-parsed')).not.toBeInTheDocument();
+  });
+
+  it('Save rewrites a stored point whose only problem is its depth reference', async () => {
+    // Latitude and longitude are fine; the depth reference (20 km, from a build
+    // before the bound) is not. Unchanged coordinates used to skip the write, so
+    // the flagged point could not be fixed here at all.
+    setStation({ latitude: 20.5, longitude: -87.3, depth_reference: 20000 });
+    render(<EditStationDialog />);
+
+    fireEvent.click(screen.getByTestId('edit-station-save'));
+    await vi.waitFor(() => {
+      expect(storeState.setZeroDatum).toHaveBeenCalledWith(
+        { section_id: 1, station_index: 0 },
+        { latitude: 20.5, longitude: -87.3, depth_reference: -3 },
+      );
+    });
+  });
 });
