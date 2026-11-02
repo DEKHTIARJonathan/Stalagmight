@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use tauri::{Manager, State};
 use ts_rs::TS;
 
-use crate::commands::write_path::{check_write_path, WriteTarget};
+use crate::commands::write_path::{check_load_path, check_write_path, WriteTarget};
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
@@ -360,6 +360,8 @@ pub async fn load_project_full(
     // transport + JS JSON.parse. The "load_project_full handler returning"
     // line lets us compute: js_total - rust_total ≈ serialize + parse.
     let t_start = std::time::Instant::now();
+    // [#576 RV4-R-M3] A load can rewrite the file and write a backup beside it.
+    check_load_path(&path).map_err(LoadError::internal)?;
     let result: Result<Result<LoadProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
             let state = app_handle.state::<AppState>();
@@ -395,6 +397,8 @@ pub async fn load_project_full_binary(
     path: PathBuf,
 ) -> Result<tauri::ipc::Response, LoadError> {
     let t_start = std::time::Instant::now();
+    // [#576 RV4-R-M3] A load can rewrite the file and write a backup beside it.
+    check_load_path(&path).map_err(LoadError::internal)?;
     let result: Result<Result<LoadProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
             let state = app_handle.state::<AppState>();

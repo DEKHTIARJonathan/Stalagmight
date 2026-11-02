@@ -116,7 +116,41 @@ pub(crate) fn check_write_path_with(
         let expected: Vec<String> = extensions.iter().map(|e| format!(".{e}")).collect();
         return refuse(format!("the file must end in {}", expected.join(" or ")));
     }
+    location_refusal(path, matches!(target, WriteTarget::Project), dirs).map_or(Ok(()), refuse)
+}
 
+/// [#576 RV4-R-M3] Check `path` before a load opens it. A load is not read-only:
+/// an older-schema project is upgraded IN PLACE and a `.pre-v<N>.backup` copy is
+/// written beside it, and every open writes SQLite's journal next to the file. So
+/// the location rules of [`check_write_path`] apply - not inside the app's own
+/// folders (the SpeleoDB managed-project cache excepted), not inside a system
+/// folder. The extension rule does not: the open dialog offers "All Files", and a
+/// load creates no file of the name it is handed.
+pub(crate) fn check_load_path(path: &Path) -> Result<(), String> {
+    check_load_path_with(path, &AppDirs::current())
+}
+
+/// [`check_load_path`] against given app directories (the testable core).
+pub(crate) fn check_load_path_with(path: &Path, dirs: &AppDirs) -> Result<(), String> {
+    let Some(why) = location_refusal(path, true, dirs) else {
+        return Ok(());
+    };
+    tracing::warn!(
+        path = ?path,
+        reason = %why,
+        purpose = "refuse a load that would write where the app does not (#576 RV4-R-M3)",
+        "Refused to open a project"
+    );
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    Err(format!("Refused to open {name}: {why}"))
+}
+
+/// Why `path` is in a place no command may write, or `None`. `project` lets a
+/// project live in the SpeleoDB managed-project cache.
+fn location_refusal(path: &Path, project: bool, dirs: &AppDirs) -> Option<String> {
     let forms = path_forms(path);
     let inside = |dir: &Path| {
         let dir_forms = path_forms(dir);
@@ -124,15 +158,14 @@ pub(crate) fn check_write_path_with(
             .iter()
             .any(|p| dir_forms.iter().any(|d| starts_with_dir(p, d)))
     };
-    let managed = matches!(target, WriteTarget::Project)
-        && dirs.managed_projects.as_deref().is_some_and(inside);
+    let managed = project && dirs.managed_projects.as_deref().is_some_and(inside);
     if !managed && dirs.internal.iter().any(|d| inside(d)) {
-        return refuse("that is inside the app's own settings, data or cache folder".to_owned());
+        return Some("that is inside the app's own settings, data or cache folder".to_owned());
     }
     if system_dirs().iter().any(|d| inside(d)) {
-        return refuse("that is inside a system folder".to_owned());
+        return Some("that is inside a system folder".to_owned());
     }
-    Ok(())
+    None
 }
 
 /// The forms of `path` to compare: as given (made absolute), and with its deepest
