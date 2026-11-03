@@ -33,10 +33,9 @@ vi.mock('../../../utils/telemetry', async () =>
   (await import('../../../test/factories/telemetry')).telemetryWith({ setSource: vi.fn() }),
 );
 
-const invokeIpcMock = vi.fn();
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: (...args: unknown[]) => invokeIpcMock(...args),
-}));
+import { invokeIpcMock } from '../../../test/factories/ipc';
+
+vi.mock('../../../utils/ipc');
 
 import DmpNewImportDialog from '../DmpNewImportDialog';
 import { useUIStore } from '../../../store/uiStore';

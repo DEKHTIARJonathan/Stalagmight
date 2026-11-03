@@ -47,19 +47,7 @@ export const SCAN_DIRS = ['src', 'scripts', 'e2e/agent/lib', 'e2e/agent/os', 'e2
 export const EXTS = ['.ts', '.tsx', '.mts', '.cts'];
 export const IPC_MODULE = 'src/utils/ipc';
 
-const DMP_WIZARD =
-  'DMP wizard test, owned by the wizard package (W8-D4) while #576 E15 migrated the rest and left ' +
-  'on purpose: its invokeIpc forwards to a vi.fn declared without vi.hoisted. Move it to the shared ' +
-  'mock and drop this row';
-
 export const ALLOWLIST = {
-  'src/components/Dialogs/__tests__/DmpNewImportDialog.mergeOffset.test.tsx': DMP_WIZARD,
-  'src/components/Dialogs/__tests__/DmpNewImportDialog.northReference.test.tsx': DMP_WIZARD,
-  'src/components/Dialogs/__tests__/DmpNewImportDialog.overlapModeWrite.test.tsx': DMP_WIZARD,
-  'src/components/Dialogs/__tests__/DmpNewImportDialog.receiptCarry.test.tsx': DMP_WIZARD,
-  'src/components/Dialogs/__tests__/DmpNewImportDialog.runFailures.test.tsx': DMP_WIZARD,
-  'src/components/Dialogs/__tests__/DmpNewImportDialog.secondLateImport.test.tsx': DMP_WIZARD,
-  'src/components/Dialogs/__tests__/DmpNewImportDialog.transactionality.test.tsx': DMP_WIZARD,
   'src/hooks/__tests__/useInternalErrorEvent.pull.test.tsx':
     'its invokeIpc must be a plain function, not a vi.fn: a vi.fn marks the rejection it returns as ' +
     'handled, which hides the unhandled rejection this test is about (#576 E15)',

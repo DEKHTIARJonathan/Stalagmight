@@ -41,11 +41,10 @@ vi.mock('../../../utils/telemetry', async () =>
   (await import('../../../test/factories/telemetry')).telemetryWith({ setSource: vi.fn() }),
 );
 
-const invokeIpcMock = vi.fn();
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: (...args: unknown[]) => invokeIpcMock(...args),
-  getErrorMessage: (e: unknown, fallback?: string) => (e instanceof Error ? e.message : (fallback ?? String(e))),
-}));
+import { invokeIpcMock, stubGetErrorMessage } from '../../../test/factories/ipc';
+
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage((e, fallback) => (e instanceof Error ? e.message : (fallback ?? String(e))));
 
 import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';

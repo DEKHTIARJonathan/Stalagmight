@@ -331,8 +331,7 @@ shared IPC mock"). The specifier is resolved from the file, so `'../ipc'` in
 any other module does not. Comments and strings are skipped.
 
 A file that genuinely needs its own factory sits in the script's `ALLOWLIST`
-with its reason: today the DMP wizard tests (left out of the E15 migration
-while another package owned them), `useInternalErrorEvent.pull.test.tsx` (its
+with its reason: today `useInternalErrorEvent.pull.test.tsx` (its
 `invokeIpc` must not be a `vi.fn`) and the `vi.resetModules()` pair
 (`storeLoadOrder.test.ts` and the factory test that pins its idiom). A row
 whose file is gone or has no factory left fails the gate, so the list cannot

@@ -900,8 +900,8 @@ beforeEach(() => {
   would get a fresh `vi.fn` rather than the `invokeIpcMock` it scripted; a
   factory's result survives the reset (`storeLoadOrder.test.ts`).
 - Do not reintroduce `vi.hoisted(() => vi.fn())` plus a `vi.mock` factory for
-  `utils/ipc`. The exceptions on purpose: the DMP wizard tests (being rewritten),
-  and `useInternalErrorEvent.pull.test.tsx`, whose `invokeIpc` is a plain function
+  `utils/ipc`. The exception on purpose:
+  `useInternalErrorEvent.pull.test.tsx`, whose `invokeIpc` is a plain function
   because a `vi.fn` attaches a handler to the promises it returns and would hide
   the unhandled rejection that file watches for.
 
