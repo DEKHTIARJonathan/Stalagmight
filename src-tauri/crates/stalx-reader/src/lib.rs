@@ -33,6 +33,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
+use stalagmight_models::ClassifyScope;
 use stalagmight_persistence::persistence::{Database, SCHEMA_VERSION};
 
 pub use survey::{
@@ -149,7 +150,15 @@ pub fn read_bytes(bytes: &[u8], options: &ReadOptions) -> Result<Survey, ReadErr
     let max_value_bytes = i32::try_from(options.max_file_bytes).unwrap_or(i32::MAX);
     let db = Database::open_existing_untrusted(&copy, max_value_bytes, options.deadline)
         .map_err(invalid)?;
-    let project = db.load_project().map_err(invalid)?;
+    let mut project = db.load_project().map_err(invalid)?;
+    // The two post-load steps of the app's own open (`project_load.rs`) that
+    // change what this crate reports: re-derive drifted section offsets, and
+    // the one-shot Jump/Reference classification an old file's migration left
+    // pending. Both are in-memory only; the copy is discarded.
+    project.redrive_offsets_after_load();
+    if db.is_kind_classification_pending() {
+        project.classify_virtual_shots(&ClassifyScope::WholeProject);
+    }
     Ok(Survey::from_project(
         &project,
         schema_version,
@@ -180,6 +189,21 @@ fn inspect(path: &Path) -> Result<i32, ReadError> {
     if refused > 0 {
         return Err(ReadError::Invalid(format!(
             "the file defines {refused} view(s), trigger(s) or virtual table(s)"
+        )));
+    }
+    // A generated column evaluates file-chosen expressions on every read, and
+    // built-ins such as zeroblob stay allowed with trusted_schema off.
+    let generated: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master AS m, pragma_table_xinfo(m.name) AS c \
+             WHERE m.type = 'table' AND c.hidden IN (2, 3)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_err)?;
+    if generated > 0 {
+        return Err(ReadError::Invalid(format!(
+            "the file defines {generated} generated column(s)"
         )));
     }
 

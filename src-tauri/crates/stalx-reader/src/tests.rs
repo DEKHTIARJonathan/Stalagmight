@@ -358,3 +358,67 @@ fn a_dangling_cross_reference_is_dropped_and_counted() {
     assert!(survey.station_comments.is_empty());
     assert_eq!(survey.unresolved_references, 1);
 }
+
+#[test]
+fn generated_columns_are_refused() {
+    // 2 MiB per row from a tiny file; allowed with trusted_schema off.
+    let path = with_schema_sql(
+        "ALTER TABLE sections ADD COLUMN g TEXT
+           GENERATED ALWAYS AS (hex(zeroblob(1048576))) VIRTUAL;",
+    );
+
+    let err = read_file(&path).unwrap_err();
+
+    assert!(
+        matches!(&err, ReadError::Invalid(m) if m.contains("generated column")),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_pending_kind_classification_is_completed_like_the_app_does() {
+    // Without the loop closure, the Side section's Jump reaches real survey at one
+    // point only, which the classifier calls a Reference - but only when an old
+    // file's migration left the one-shot classification pending.
+    let path = with_schema_sql(
+        "DELETE FROM loop_closures;
+         INSERT INTO project_settings (key, value) VALUES ('pending_kind_classification', '1');",
+    );
+
+    let survey = read_file(&path).unwrap();
+
+    assert_eq!(survey.sections[1].shots[1].kind, ShotKind::Reference);
+}
+
+#[test]
+fn drifted_section_offsets_are_re_derived_before_positions() {
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &full_project());
+    let survey = read_file(&path).unwrap();
+    let (main, side) = (survey.sections[0].id, survey.sections[1].id);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE section_offsets SET offset_x = offset_x + 100 WHERE section_id = ?1",
+            [side],
+        )
+        .unwrap();
+
+    let survey = read_file_with(&path, &ReadOptions::default().with_stations(true)).unwrap();
+
+    let at = |section_id, index| {
+        survey
+            .stations
+            .as_ref()
+            .unwrap()
+            .iter()
+            .find(|s| s.station == StationId { section_id, index })
+            .copied()
+            .unwrap()
+    };
+    let (a, b) = (at(main, 2), at(side, 0));
+    assert!(
+        (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6,
+        "merged stations coincide: {a:?} vs {b:?}"
+    );
+}
