@@ -32,9 +32,15 @@
 //     (MESSAGE_ARG_CALLS below: that argument only, never the dedup key or kind)
 //   - the argument a message-named parameter of a function declared in the same
 //     file takes:                                fail('segment', 'Import failed')
-//     (MESSAGE_PARAM below; `useCallback((kind, message) => ...)` counts)
+//     (MESSAGE_PARAM below; `useCallback((kind, message) => ...)` counts), unless
+//     every use of that parameter is an argument of console.* - a debug trace is
+//     not UI (#576 RV6a-3)
 //   - every string a binding named as text holds: const FALLBACK_TEXT = { a: 'Failed' }
-//     (`..._TEXT`, `...Message`, `...Labels` - isTextName below; i18n keys excepted)
+//     (`..._TEXT`, `...Message`, `...Labels` - isTextName below; i18n keys and code
+//     tokens excepted: a lowercase identifier-like string with no space, such as
+//     'timeout', 'section-' or 'closureAdjusted', is a value the code switches on,
+//     not prose (#576 RV6a-3). Such a token is still reported where it is RENDERED
+//     in the file - `{reason}`, `title={label}` - by the sink rules above.)
 // Strings are followed through `a ? 'x' : 'y'`, `a && 'x'`, `a ?? 'x'`, `a || 'x'`,
 // `'a' + b`, parentheses, `as` casts and `String(...)`, and through the file's own
 // bindings: a `const`/`let` read where text is rendered (`{HEADING}`, a template
@@ -134,8 +140,15 @@ export const MESSAGE_PARAM = /^(?:message|msg|text|reason|label|title|descriptio
 const TEXT_NAME_WORDS = new Set([
   'text', 'texts', 'message', 'messages', 'label', 'labels', 'title', 'titles',
   'notice', 'notices', 'reason', 'reasons', 'caption', 'captions', 'heading', 'headings',
-  'tooltip', 'tooltips', 'placeholder', 'placeholders', 'hint', 'hints', 'copy',
+  'tooltip', 'tooltips', 'placeholder', 'placeholders', 'hint', 'hints',
 ]);
+// [#576 RV6a-3] `copy` is not in the set: `const copy = { ...o, mode: 'edit' }` is a
+// copy of a value far more often than UI copy.
+
+// [#576 RV6a-3] A code token: lowercase-led, identifier characters joined by
+// `-` `_` `.` `:` `/`, no space ('timeout', 'section-', 'closureAdjusted',
+// 'shot_kind'). The binding rule skips these; a rendered one is still reported.
+const CODE_TOKEN = /^[a-z][a-zA-Z0-9]*(?:[-_.:/][a-zA-Z0-9]*)*$/;
 export function isTextName(name) {
   const words = name
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -250,6 +263,43 @@ const calleeName = (call) =>
       ? call.expression.name.text
       : null;
 
+// `console.warn(...)` and every other `console.<method>(...)`.
+const isConsoleCall = (node) =>
+  ts.isCallExpression(node) &&
+  ts.isPropertyAccessExpression(node.expression) &&
+  ts.isIdentifier(node.expression.expression) &&
+  node.expression.expression.text === 'console';
+
+// [#576 RV6a-3] Whether the parameter `name` of `fn` only ever reaches console.*:
+// every read of it in the body sits inside the arguments of a console call (or it
+// is never read). Such a parameter carries a debug trace, not UI text. Syntax
+// only, by name, like the bindings above.
+function paramOnlyLogs(fn, name) {
+  let reaches = false;
+  const visit = (node) => {
+    if (reaches) return;
+    if (ts.isIdentifier(node) && node.text === name) {
+      const parent = node.parent;
+      const isName =
+        (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+        (ts.isPropertyAssignment(parent) && parent.name === node);
+      if (!isName) {
+        let inConsole = false;
+        for (let up = parent; up && up !== fn; up = up.parent) {
+          if (isConsoleCall(up) && up.arguments.some((arg) => arg.pos <= node.pos && node.end <= arg.end)) {
+            inConsole = true;
+            break;
+          }
+        }
+        if (!inConsole) reaches = true;
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  if (fn.body) visit(fn.body);
+  return !reaches;
+}
+
 // Findings in one file: [{file, line, kind, text}].
 export function analyzeSource(file, sourceText) {
   const kind = file.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
@@ -290,7 +340,9 @@ export function analyzeSource(file, sourceText) {
         // parameters take.
         for (const fn of ctx.functions.get(name)) {
           fn.parameters.forEach((param, i) => {
-            if (ts.isIdentifier(param.name) && MESSAGE_PARAM.test(param.name.text)) addAll(node.arguments[i], `${name}()`);
+            if (!ts.isIdentifier(param.name) || !MESSAGE_PARAM.test(param.name.text)) return;
+            if (paramOnlyLogs(fn, param.name.text)) return;
+            addAll(node.arguments[i], `${name}()`);
           });
         }
       }
@@ -308,7 +360,7 @@ export function analyzeSource(file, sourceText) {
       const strings = [...stringsIn(node.initializer, ctx), ...collectionStrings(node.initializer, null, (x) => stringsIn(x, ctx))];
       for (const s of strings) {
         const text = literalText(s, source);
-        if (!I18N_KEY.test(text)) add(s, what, text);
+        if (!I18N_KEY.test(text) && !CODE_TOKEN.test(text)) add(s, what, text);
       }
     }
     ts.forEachChild(node, visit);

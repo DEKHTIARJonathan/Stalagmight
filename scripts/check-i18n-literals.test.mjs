@@ -86,7 +86,7 @@ test('error / message setters are reported (the validation-error shape)', () => 
 // English past the zero gate.
 test('a literal passed to a local callback through a message-named parameter is reported, the other arguments are not', () => {
   const code = `const fail = useCallback((kind: Step, message: string) => setFailure({ kind, message }), []);
-    function report(reason: string) { console.warn(reason); }
+    function report(reason: string) { setError(reason); }
     const warn = (code: string, text: string) => code + text;
     fail('segment', 'Segment import failed: unresolved relative placement target');
     report('Could not read the file');
@@ -142,6 +142,34 @@ test('a binding that never reaches a sink, or reaches only a non-text one, is no
     const v = <div className={cls} data-testid={key}>{label}</div>;
     fail(kind, label);`;
   assert.deepEqual(texts(code), []);
+});
+
+// [#576 RV6a-3] The binding and local-callback rules reached ordinary non-UI code.
+// Each shape below is a code token or a debug trace, never shown to the user.
+test('a binding named copy/reason/label that holds code tokens is not reported', () => {
+  const code = `const copy = { ...o, mode: 'edit' };
+    const reason = t ? 'timeout' : 'user';
+    const label = 'section-' + id;
+    const cause = layer.getDisabledReason() ?? 'unknown';
+    const KIND_LABEL = { a: 'closureAdjusted', b: 'shot_kind' };`;
+  assert.deepEqual(texts(code), []);
+});
+
+test('a message-named parameter that only reaches console.* is not reported', () => {
+  const code = `const warn = (message: string) => console.warn(message);
+    function trace(text: string) { console.debug('[dmp]', text); console.error(\`at \${text}\`); }
+    warn('dev only trace');
+    trace('Segment import step started');`;
+  assert.deepEqual(texts(code), []);
+});
+
+test('the same shapes still report when the text reaches the user', () => {
+  const code = `const reason = t ? 'timeout' : 'user';
+    const STEP_LABEL = 'Review';
+    const warn = (message: string) => { console.warn(message); setError(message); };
+    warn('Could not read the file');
+    const v = <p title={reason}>{STEP_LABEL}</p>;`;
+  assert.deepEqual(texts(code), ['Review', 'Could not read the file', 'timeout', 'user']);
 });
 
 // --- must NOT report --------------------------------------------------------------
