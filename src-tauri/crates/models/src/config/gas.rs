@@ -95,9 +95,10 @@ pub enum ReservePreset {
 /// rather than magic literals. `stage_reserve_bar` is the gas held back in each stage under the
 /// **Half Minus** strategy (default 30 bar): a stage spends `(basis - reserve)/2` of its gauge on
 /// the way in - dropped at `fill - (basis - reserve)/2`, i.e. `(fill + reserve)/2` at or below
-/// rated - and the other half is breathed back down to `reserve` on the picked-up exit. The two `recalc_hold_*` constants are
-/// the back-gas held pressures (100 / 70 bar) for the Phase-2 return-leg recalc - carried now so
-/// the config shape is stable across phases; that compute path is not implemented yet.
+/// rated - and the other half is breathed back down to `reserve` on the picked-up exit. The two
+/// `recalc_hold_*` constants are the back-gas held pressures (100 / 70 bar) for the Phase-2
+/// return-leg recalc - carried now so the config shape is stable across phases; that compute path
+/// is not implemented yet.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, TS)]
 pub struct ReserveProfile {
     #[serde(default = "default_stage_reserve_bar")]

@@ -274,8 +274,9 @@ pub struct RouteProfilePoint {
 /// overlay: the back-gas turn pressure under the effective strategy's share of the gauge, and each
 /// counted stage's drop pressure. Every rule is a gauge rule (#576), and the budget credits exactly
 /// the gas between each cylinder's real fill and its turn or drop pressure, so gauge and map agree.
-/// Both honour the conservative cap + normalized reserve + stage-count fallback. `backgas_turn_bar` is `None` when the rig has no back gas;
-/// `stage_drop_bars` is empty for All-thirds / a fell-back staged strategy.
+/// Both honour the conservative cap + normalized reserve + stage-count fallback.
+/// `backgas_turn_bar` is `None` when the rig has no back gas; `stage_drop_bars` is empty for
+/// All-thirds / a fell-back staged strategy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct GasReachField {
     pub station_refs: Vec<StationRef>,

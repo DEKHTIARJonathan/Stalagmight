@@ -439,8 +439,9 @@ scooter park marker), `components/Map/GasLegend.tsx`, `utils/gasReach.ts` (the
 overlay ramp), and `utils/segmentColors.ts` + `utils/dpv.ts` (segment identity
 colors; the rig editor's Rust-mirroring helpers).
 
-Engine semantics are pinned by 112 tests in `gas/tests.rs`. Before changing it,
-read `gas_reach_field_no_waypoints_is_identical_to_the_plain_field`,
+Engine semantics are pinned by `gas/tests.rs` and the topic test modules beside
+it (`gas/*_tests.rs`); run them with `cargo test -p stalagmight-models --lib
+project::gas`. Before changing the engine, read `gas_reach_field_no_waypoints_is_identical_to_the_plain_field`,
 `gas_reach_field_out_of_budget_endpoint_turns_early_on_its_own_branch`,
 `gas_reach_field_override_to_default_station_is_a_no_op` and
 `gas_reach_field_drop_pinned_on_the_outbound_chain_cannot_inflate_the_budget` -
