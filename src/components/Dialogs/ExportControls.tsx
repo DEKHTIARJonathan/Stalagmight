@@ -673,14 +673,17 @@ export default function ExportControls({
       >
         <div className="space-y-3">
           {/* `bodyAllUnanchored`/`bodyPartial` (en.json) quote the station context menu's
-              zero-datum item by name; its label is `contextMenu.setZeroDatum`. Change the
-              two together. */}
+              zero-datum item, read from that item's own key (#576 NF-W8FE-1), so the
+              quote follows the menu label. */}
           <p>
             {tmlAllSectionsUnanchored
-              ? t('dialogs.tmlUnanchoredWarning.bodyAllUnanchored')
+              ? t('dialogs.tmlUnanchoredWarning.bodyAllUnanchored', {
+                  menuItem: t('contextMenu.setZeroDatum'),
+                })
               : t('dialogs.tmlUnanchoredWarning.bodyPartial', {
                   count: tmlUnanchoredSections.length,
                   total: tmlTotalSectionCount,
+                  menuItem: t('contextMenu.setZeroDatum'),
                 })}
           </p>
           <div className="rounded border border-border bg-panel p-3">

@@ -2254,9 +2254,9 @@
       "sectionLabel": "{{name}} (#{{id}})",
       "titleAllUnanchored": "No section is connected to a zero datum",
       "titlePartial": "Some sections aren't connected to a zero datum",
-      "bodyAllUnanchored": "No section in this project is connected to a zero datum, so the exported file will not be georeferenced - Ariane will not know where in the world the survey sits. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to anchor the survey, or continue to export without georeferencing.",
-      "bodyPartial_one": "{{count}} of {{total}} sections is not connected to a zero datum and will export without georeferencing. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect it, or continue to export as-is.",
-      "bodyPartial_other": "{{count}} of {{total}} sections are not connected to a zero datum and will export without georeferencing. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"Set Zero Datum\" to connect them, or continue to export as-is.",
+      "bodyAllUnanchored": "No section in this project is connected to a zero datum, so the exported file will not be georeferenced - Ariane will not know where in the world the survey sits. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"{{menuItem}}\" to anchor the survey, or continue to export without georeferencing.",
+      "bodyPartial_one": "{{count}} of {{total}} sections is not connected to a zero datum and will export without georeferencing. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"{{menuItem}}\" to connect it, or continue to export as-is.",
+      "bodyPartial_other": "{{count}} of {{total}} sections are not connected to a zero datum and will export without georeferencing. Nothing is discarded: every section and shot still exports. Cancel this dialog, then right-click a station in Survey mode and choose \"{{menuItem}}\" to connect them, or continue to export as-is.",
       "listHeading": "Sections without a zero datum connection",
       "sectionFallbackName": "Section {{id}}"
     },

@@ -455,9 +455,8 @@ export default function ContextMenu() {
 
       items.push({ labelKey: '', action: () => {}, separator: true });
       items.push({
-        // This label's text is quoted by ExportControls' TML-unanchored-warning dialog
-        // copy (dialogs.tmlUnanchoredWarning.* in en.json): change both together, in
-        // every locale.
+        // ExportControls' TML-unanchored-warning dialog quotes this label through
+        // this key ({{menuItem}} in dialogs.tmlUnanchoredWarning.*, #576 NF-W8FE-1).
         labelKey: 'contextMenu.setZeroDatum',
         action: () => {
           openDialog('edit-station', {
