@@ -2480,8 +2480,10 @@ manager honors it; locally the `engines` range is advisory - a newer node warns
 but does not block.
 
 TypeScript runs in strict mode with `noUncheckedIndexedAccess` and
-`exactOptionalPropertyTypes` on top of it; `tsconfig.json` is the source of truth
-and `pnpm tsc --noEmit` is a CI gate.
+`exactOptionalPropertyTypes` on top of it. The options live in
+`tsconfig.base.json`, which the app (`tsconfig.json`), Playwright and agent-harness
+programs all extend; `pnpm tsc --noEmit`, `pnpm typecheck:playwright` and
+`pnpm typecheck:agent` are CI gates.
 
 ### 18.3 Project Structure
 

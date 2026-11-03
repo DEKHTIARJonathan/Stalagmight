@@ -741,11 +741,13 @@ Some non-test files are ungoverned - `scripts/**/*.ts`, `vite.config.ts`, and
 `src-tauri/bindings/` are in no tsconfig's `include`. (The old ungated
 `tsconfig.e2e.json` went with the WDIO suite, #549.)
 
-Note the strictness difference: `tsconfig.playwright.json` is `strict`, but
-unlike the root config it does not set `noUncheckedIndexedAccess`,
-`exactOptionalPropertyTypes`, `noUnusedLocals`/`noUnusedParameters`,
-`noImplicitReturns`, or `noFallthroughCasesInSwitch`. "The specs are
-type-checked" is true but weaker than what `src/` gets.
+All three programs extend `tsconfig.base.json`, which holds the whole
+strictness set (`strict` plus `noUncheckedIndexedAccess`,
+`exactOptionalPropertyTypes`, the unused-code checks, `noImplicitReturns` and
+`noFallthroughCasesInSwitch`), so specs and harness code are checked exactly
+as strictly as `src/` (#576 E11). See
+[Linting: TypeScript, one shared base](linting.md#typescript-one-shared-base)
+for how to satisfy the two that bite in test code.
 
 The agent harness runs under `tsx`, which transpiles without type-checking, and
 it is exercised on demand only, so `typecheck:agent` (a CI `check` step) is the

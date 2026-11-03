@@ -2,8 +2,9 @@
 
 This repo runs a deliberately strict Rust lint + format policy whose primary job
 is to **catch AI-generated-code smells** before they land. Both gates run in the
-CI `check` job and must be green to merge. The frontend's ESLint gate is at the
-end: [Frontend: ESLint](#frontend-eslint).
+CI `check` job and must be green to merge. The frontend's gates are at the
+end: [Frontend: ESLint](#frontend-eslint) and the shared TypeScript compiler
+options, [TypeScript: one shared base](#typescript-one-shared-base).
 
 | Gate | Command | Config |
 |------|---------|--------|
@@ -336,3 +337,56 @@ while another package owned them), `useInternalErrorEvent.pull.test.tsx` (its
 (`storeLoadOrder.test.ts` and the factory test that pins its idiom). A row
 whose file is gone or has no factory left fails the gate, so the list cannot
 outlive its reason.
+
+## TypeScript: one shared base
+
+Every TypeScript program at the repo root extends `tsconfig.base.json`
+(#576 E11). Before it, the three configs restated their options with no
+`extends` and had drifted: the two test-automation trees, about 100k lines,
+were type-checked without six of the app's strictness flags.
+
+| Program | Config | Gate | Checks |
+|---------|--------|------|--------|
+| App | `tsconfig.json` | `pnpm tsc --noEmit` (CI `check`) | `src/` |
+| Playwright | `tsconfig.playwright.json` | `pnpm typecheck:playwright` (CI `smoke`) | `e2e-playwright/`, `playwright.config.ts`, and the `src/` files the specs import |
+| Agent harness | `tsconfig.agent.json` | `pnpm typecheck:agent` (CI `check`) | `e2e/agent/`, `e2e/lib/` (not the generated `e2e/agent/replays/`, #466) |
+
+**What lives where.** The base holds everything the programs share: the module
+settings (`ESNext`, `bundler`, `resolveJsonModule`, `isolatedModules`),
+`skipLibCheck`, `noEmit`, and all of the strictness - `strict` with its family
+spelled out, `noImplicitReturns`, `noFallthroughCasesInSwitch`,
+`noUnusedLocals`, `noUnusedParameters`, `exactOptionalPropertyTypes` and
+`noUncheckedIndexedAccess`. A program's own file keeps only what genuinely
+differs: `target`/`lib` (ES2020 for the app, ES2022 for the e2e trees), `jsx`,
+`types`, the interop flags the e2e trees need, `include`, and its own
+incremental cache (`node_modules/.cache/tsc/<config>.tsbuildinfo`). Do not
+set a strictness option in a program file: change it in the base, for every
+program at once, and fix what it finds in all three trees.
+
+**Fixing what the two strict index/optional flags find in test code.** Parity
+cost 25 unused-binding fixes, 34 `exactOptionalPropertyTypes` fixes and 286
+`noUncheckedIndexedAccess` fixes, all type-level: no spec or harness step
+behaves differently. The same rules apply to new code:
+
+- `noUncheckedIndexedAccess`: first a type that says what is already true - a
+  helper that waits for at least one item returns a non-empty tuple
+  (`waitForIpcCall`), a setup that throws unless it made N sections is
+  overloaded per N (reverse-section's `setup()`). Otherwise a non-null `!`
+  where the index is provably in range (a length assertion or a poll just
+  above, a loop bound, `arr.length ? arr[arr.length - 1] : ...`), with a short
+  reason when the proof is not on the same line; or an explicit `throw` where
+  the unguarded access would already have thrown (not where it carried on, as
+  a comparison, a spread or a value passed along does). Never a fallback such as
+  `?? 0`, `|| ''`, `?? []` or a new `?.`: in a test, a fallback turns a
+  failure into a pass.
+- `exactOptionalPropertyTypes`: when callers already pass `undefined` and the
+  receiver reads it as absent (`??`, `!== undefined`, JSON that drops it),
+  say so in the type, `prop?: T | undefined`, rather than reshaping the
+  values.
+
+**Not covered.** `telemetry-worker/tsconfig.json` does not extend the base: the
+worker is a standalone pnpm project with its own install, and
+`.github/workflows/telemetry-worker.yml` re-runs only on `telemetry-worker/**`
+changes, so a root file it depended on could change its result unseen.
+`vite.config.ts`, `scripts/**/*.ts` and `src-tauri/bindings/` are in no
+program at all (see [Testing recipes: Typecheck](testing-recipes.md#typecheck)).
