@@ -2929,6 +2929,11 @@
     "contextLost": {
       "reload": "Reload map"
     },
+    "renderFatal": {
+      "labels": "Map labels unavailable (font failed to load)",
+      "measurePath": "Measured-path highlight unavailable (GPU)",
+      "survey": "Survey rendering unavailable (WebGL2/GPU)"
+    },
     "attribution": {
       "expandAria": "Show map imagery sources",
       "collapsed": "by {{source}}"

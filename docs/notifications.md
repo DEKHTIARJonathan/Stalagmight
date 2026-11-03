@@ -62,10 +62,12 @@ toast (explicit kind, registered key, localized)
 
 ## Toast rules
 
-The one toast system is `showToast(message, key, kind)` on the UI store
+The one toast system is `showToast(message, key, kind, options?)` on the UI store
 (`src/store/uiStore.ts`), rendered by `src/components/common/ToastStack.tsx`
 (bottom-left stack, capacity-managed, hover pauses the stack, sr-only live
-regions). Read the comment blocks in those two files plus
+regions). `options` (`ToastOptions`) exists for the one sanctioned exception
+below - an `action` button and `persistent` - and nothing else passes it. Read
+the comment blocks in those two files plus
 `src/utils/toastCapacity.ts` for mechanics; this section is about usage.
 
 - **`kind` is mandatory.** Never rely on the `info` default. Severity mapping:
