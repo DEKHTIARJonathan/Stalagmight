@@ -174,7 +174,7 @@ fn a_write_made_for_one_copy_does_not_land_in_another_copy_of_the_same_file() {
     std::fs::copy(&path_a, &path_b).expect("copy the file");
 
     let state = AppState::new().expect("state");
-    assert!(state.open_project(path_a.clone()).success, "open copy A");
+    assert!(state.open_project(path_a).success, "open copy A");
     let made_for_a = wire_identity(&state.get_project_state().expect("A is open"));
     // The user opens copy B while A's write is still in flight.
     assert!(state.open_project(path_b.clone()).success, "open copy B");
@@ -224,10 +224,7 @@ fn a_write_made_just_before_a_save_as_still_lands_in_the_project() {
         .expect("write");
 
     let state = AppState::new().expect("state");
-    assert!(
-        state.open_project(path_a.clone()).success,
-        "open the project"
-    );
+    assert!(state.open_project(path_a).success, "open the project");
     let made_before = wire_identity(&state.get_project_state().expect("open"));
     let saved_as = state.save_project(Some(path_c.clone()));
     assert!(saved_as.success, "save as: {:?}", saved_as.error);

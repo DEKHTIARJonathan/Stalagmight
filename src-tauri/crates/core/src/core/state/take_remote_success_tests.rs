@@ -134,7 +134,7 @@ fn routing_stub(zip: Vec<u8>) -> (String, std::net::TcpListener, Arc<Mutex<Vec<S
 
 /// How long a child-process test body may run before it is killed and its test
 /// fails. Each takes well under a second; this is only ever a hang.
-pub(super) const CHILD_DEADLINE: Duration = Duration::from_secs(120);
+pub(super) const CHILD_DEADLINE: Duration = Duration::from_mins(2);
 
 /// [#576 RV8a-F1] `command`'s output, as `Command::output` gives it, except that a
 /// child still running after `limit` is killed and the test fails with what it

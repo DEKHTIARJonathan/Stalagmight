@@ -72,11 +72,7 @@ fn the_project_list_keeps_a_zero_datum_the_load_keeps() {
         .unwrap()
         .load_project()
         .unwrap();
-    let loaded: Vec<_> = project
-        .zero_datums
-        .iter()
-        .map(|zd| zd.gps.clone())
-        .collect();
+    let loaded: Vec<_> = project.zero_datums.iter().map(|zd| zd.gps).collect();
     let meta = Database::open_for_metadata(&path)
         .unwrap()
         .load_metadata(path.clone())
@@ -92,7 +88,7 @@ fn the_project_list_keeps_a_zero_datum_the_load_keeps() {
         Some((-87.25, 20.5)),
         "the recents card and the Global View marker are placed by the datum the load kept"
     );
-    let bounds = meta.gps_bounds.expect("bounds from the kept datum");
+    let bounds = meta.gps_bounds.unwrap();
     assert_eq!(
         (bounds.south, bounds.north, bounds.west, bounds.east),
         (20.5, 20.5, -87.25, -87.25)
@@ -123,7 +119,7 @@ fn the_project_list_positions_a_project_only_by_placeable_datums() {
         meta.gps_center, meta.gps_bounds
     );
     assert_eq!(meta.gps_center, Some((12.0, 45.0)));
-    let bounds = meta.gps_bounds.expect("bounds from the placeable datum");
+    let bounds = meta.gps_bounds.unwrap();
     assert_eq!((bounds.south, bounds.north), (45.0, 45.0));
 }
 
