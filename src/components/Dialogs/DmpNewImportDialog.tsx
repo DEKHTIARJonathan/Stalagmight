@@ -2,8 +2,6 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useLatest } from '../../hooks/useLatest';
 import { useTranslation } from 'react-i18next';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
-import { Button } from '../common/Button';
-import { CheckCircleIcon } from '../common/icons';
 import type { DmpFile, CrossSectionSuggestion, ImportSectionForSuggestion } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { Project, Station, ShotData } from '../../types/project';
@@ -11,7 +9,6 @@ import type { ImportPlacement } from '../../types/commands';
 import type { ZeroDatumConfigResult } from './ZeroDatumConfigDialog';
 import type { OverlapMode } from '../../types/config';
 import { DialogWrapper } from './DialogWrapper';
-import { AlertDialog } from './AlertDialog';
 import type { SegmentPlacementMode } from './SegmentPlacementModes';
 import { buildZeroDatumSectionConfig, DMP_AZIMUTH_REFERENCE } from '../../utils/importSectionConfig';
 import { ShotTableEditor } from '../common/ShotTableEditor';
@@ -40,8 +37,11 @@ import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useDmpImportRun } from './dmpWizard/useDmpImportRun';
 import { buildBatchImport } from './dmpWizard/buildBatchImport';
-import { SuggestingStep } from './dmpWizard/SuggestingStep';
-import { ManualPlacingStep } from './dmpWizard/ManualPlacingStep';
+import { SuggestingActions, SuggestingStep } from './dmpWizard/SuggestingStep';
+import { ManualPlacingActions, ManualPlacingStep } from './dmpWizard/ManualPlacingStep';
+import { ExitConfirmations } from './dmpWizard/ExitConfirmations';
+import { WizardFooter } from './dmpWizard/WizardFooter';
+import { LateImportRetryAction, StatusStep, SuggestionsFailedActions } from './dmpWizard/WizardStatus';
 import { targetDoublyAnchored } from './dmpWizard/doublyAnchored';
 import { useSectionEditor, type RowCountChange } from './dmpWizard/useSectionEditor';
 import { initialWizardState, segmentQueue, useWizardState, type SegmentChoices } from './dmpWizard/wizardState';
@@ -91,7 +91,6 @@ export default function DmpNewImportDialog({
   autoStartManualPlacement = false,
 }: DmpNewImportDialogProps) {
   const { t } = useTranslation();
-  const importSecondaryButtonClass = 'ring-1 ring-inset ring-border hover:bg-background-50';
 
 
   // Store selectors
@@ -134,6 +133,8 @@ export default function DmpNewImportDialog({
   const { phase } = wizard;
   const suggesting = phase.kind === 'suggesting' ? phase : null;
   const manual = phase.kind === 'manual_placing' ? phase : null;
+  /** The phases with no panel of their own: the status body shows them. */
+  const statusPhase = phase.kind === 'init' || phase.kind === 'placing' || phase.kind === 'done' ? phase : null;
   const currentSuggestion = suggesting?.suggestion ?? null;
   const alternatives = suggesting?.alternatives ?? [];
   const isCalculating = phase.kind === 'init' && phase.calculating;
@@ -144,27 +145,6 @@ export default function DmpNewImportDialog({
     saved ? new Set(saved.skippedIndices) : new Set()
   );
   const error = failure?.message ?? null;
-  // F8: registers this dialog's footer height with the toast stack for as long
-  // as the footer is mounted, so a lingering toast (e.g. the manual-placement
-  // hint, which fires just before this dialog closes and can still be on
-  // screen when it reopens) is raised above the footer instead of covering
-  // the Cancel/Back row.
-  const footerRef = useRef<HTMLDivElement | null>(null);
-  const registerToastBottomOffset = useUIStore((s) => s.registerToastBottomOffset);
-  const unregisterToastBottomOffset = useUIStore((s) => s.unregisterToastBottomOffset);
-  useEffect(() => {
-    const el = footerRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return undefined;
-    const owner = 'dmp-import-new-footer';
-    const report = () => registerToastBottomOffset(owner, el.getBoundingClientRect().height);
-    const ro = new ResizeObserver(report);
-    ro.observe(el);
-    report();
-    return () => {
-      ro.disconnect();
-      unregisterToastBottomOffset(owner);
-    };
-  }, [registerToastBottomOffset, unregisterToastBottomOffset]);
 
   // Overlap handling mode (persisted to config)
   const [overlapMode, setOverlapMode] = useState<OverlapMode>(
@@ -1355,11 +1335,6 @@ export default function DmpNewImportDialog({
   // (`withdrawImportedSections`, the run's one batched `delete_section` - one
   // undo entry for one user action).
 
-  /** How many sections the open confirmation is talking about. Taken when it
-   *  opens (the reducer's `exit`): the live count lives in a ref, and a ref does
-   *  not re-render the copy that quotes it. */
-  const pendingWithdrawCount = wizard.exit?.count ?? 0;
-
   /**
    * Neither exit may be OPENED while an import is in flight.
    *
@@ -1529,267 +1504,49 @@ export default function DmpNewImportDialog({
             selectedIndices={selectedIndices}
             sectionPalette={sectionPalette}
           />
-        ) : (
-          <div className="flex-1 flex flex-col items-center justify-center p-6 min-h-0 overflow-auto">
-            {/* Init/Importing zero datum */}
-            {phase.kind === 'init' && isImporting && (
-              <div className="text-center" data-testid="wizard-importing-zero-datum">
-                <div className="text-lg mb-2">{t('dialogs.dmpNewImport.importingZeroDatum')}</div>
-                <div className="animate-pulse text-text-secondary">...</div>
-              </div>
-            )}
+        ) : statusPhase ? (
+          <StatusStep
+            phase={statusPhase}
+            isImporting={isImporting}
+            failure={failure}
+            placingCount={connectedIndices.size}
+            allPlaced={placedCount === totalSelected}
+          />
+        ) : null}
 
-            {/* A failed step with no panel of its own - the anchor import in
-                `init` above all, which used to leave this body blank (#576
-                NF-AN4-N1). `placing` shows its failure below, with its Retry. */}
-            {phase.kind !== 'placing' && error && !isImporting && !isCalculating && (
-              <div
-                className="text-center"
-                data-testid={failure?.kind === 'suggestions' ? 'wizard-suggestions-failed' : 'wizard-status-failed'}
-              >
-                <div className="text-lg mb-2 text-error" data-testid="wizard-error">{error}</div>
-              </div>
-            )}
-
-            {/* Calculating suggestions */}
-            {isCalculating && (
-              <div className="text-center" data-testid="wizard-calculating">
-                <div className="text-lg mb-2">{t('dialogs.dmpNewImport.calculating')}</div>
-                <div className="animate-pulse text-text-secondary">...</div>
-              </div>
-            )}
-
-            {/* Placing - batch import in progress or failed */}
-            {phase.kind === 'placing' && (
-              <div className="text-center" data-testid="wizard-placing">
-                {error && !isImporting ? (
-                  <>
-                    <div className="text-lg mb-2 text-error">{error}</div>
-                  </>
-                ) : (
-                  <>
-                    <div className="text-lg mb-2">{t('dialogs.dmpNewImport.placing', { count: connectedIndices.size })}</div>
-                    <div className="animate-pulse text-text-secondary">...</div>
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* Done - all placed */}
-            {phase.kind === 'done' && placedCount === totalSelected && (
-              <div className="text-center" data-testid="wizard-all-placed">
-                <CheckCircleIcon size={32} className="text-success mx-auto mb-2" />
-                <div className="text-lg">{t('dialogs.dmpNewImport.allPlaced')}</div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Footer */}
-        <div
-          ref={footerRef}
-          data-testid="dmp-import-dialog-footer"
-          className="px-4 py-3 border-t border-border flex justify-between items-center"
-        >
-          <div className="flex gap-2">
-            <Button
-              onClick={handleCancel}
-              disabled={exitBlocked}
-              className={importSecondaryButtonClass}
-              data-testid="cancel-button"
-            >
-              {t('common.actions.cancel')}
-            </Button>
-            <Button
-              onClick={handleBack}
-              disabled={exitBlocked}
-              className={importSecondaryButtonClass}
-              data-testid="back-button"
-            >
-              {t('common.actions.back')}
-            </Button>
-          </div>
-          <div className="flex gap-2" data-testid="wizard-suggestion-actions">
-            {suggesting && (
-              <>
-                <Button
-                  onClick={handleSkip}
-                  disabled={isImporting}
-                  className={importSecondaryButtonClass}
-                  data-testid="skip-button"
-                >
-                  {t('dialogs.dmpNewImport.skip')}
-                </Button>
-                <Button
-                  variant="primary"
-                  onClick={handleConfirm}
-                  disabled={isImporting}
-                  data-testid="confirm-button"
-                >
-                  {t('dialogs.dmpNewImport.confirm')}
-                </Button>
-              </>
-            )}
-            {manual && (
-              <>
-                {manual.queue.length > 1 && (
-                  <Button
-                    onClick={handleSegmentSkip}
-                    className={importSecondaryButtonClass}
-                    data-testid="segment-skip-button"
-                  >
-                    {t('dialogs.dmpNewImport.manualPlacing.skip')}
-                  </Button>
-                )}
-                <Button
-                  variant="primary"
-                  onClick={handleSegmentPlace}
-                  disabled={!isSegmentPlacementValid}
-                  data-testid="segment-place-button"
-                >
-                  {segmentPlacementMode === 'discard'
-                    ? t('dialogs.dmpNewImport.manualPlacing.next')
-                    : t('dialogs.dmpNewImport.manualPlacing.placeSegment')}
-                </Button>
-              </>
-            )}
-            {/* #576 D24: the suggestions failed - ask again, or place by hand. */}
-            {failure?.kind === 'suggestions' && !isCalculating && !isImporting && (
-              <>
-                <Button
-                  onClick={() => { void transitionToPlacingOrManual(); }}
-                  className={importSecondaryButtonClass}
-                  data-testid="suggestions-place-manually-button"
-                >
-                  {t('dialogs.dmpNewImport.placeManually')}
-                </Button>
-                <Button
-                  variant="primary"
-                  onClick={() => { void computeSuggestions(); }}
-                  data-testid="suggestions-retry-button"
-                >
-                  {t('common.actions.retry')}
-                </Button>
-              </>
-            )}
-            {phase.kind === 'placing' && error && !isImporting && (
-              <Button
-                variant="primary"
-                onClick={() => { void runLateImport(); }}
-                data-testid="retry-button"
-              >
-                {t('common.actions.retry')}
-              </Button>
-            )}
-          </div>
-        </div>
+        <WizardFooter exitBlocked={exitBlocked} onCancel={handleCancel} onBack={handleBack}>
+          {suggesting && <SuggestingActions busy={isImporting} onSkip={handleSkip} onConfirm={handleConfirm} />}
+          {manual && (
+            <ManualPlacingActions
+              canSkip={manual.queue.length > 1}
+              onSkip={handleSegmentSkip}
+              canPlace={isSegmentPlacementValid}
+              discarding={segmentPlacementMode === 'discard'}
+              onPlace={handleSegmentPlace}
+            />
+          )}
+          {/* #576 D24: the suggestions failed - ask again, or place by hand. */}
+          {failure?.kind === 'suggestions' && !isCalculating && !isImporting && (
+            <SuggestionsFailedActions
+              onPlaceManually={() => { void transitionToPlacingOrManual(); }}
+              onRetry={() => { void computeSuggestions(); }}
+            />
+          )}
+          {phase.kind === 'placing' && error && !isImporting && (
+            <LateImportRetryAction onRetry={() => { void runLateImport(); }} />
+          )}
+        </WizardFooter>
       </div>
 
-      {/* Cancel confirmation. Three actions once anything has been imported -
-          the exit is no longer just "close a dialog", it decides what happens to
-          sections that are already in the project. `confirm-cancel-button` keeps
-          its id and its meaning (close, change nothing on disk); the removal is
-          the new, additional action. */}
-      <AlertDialog
-        open={wizard.exit?.kind === 'cancel'}
-        title={t('dialogs.dmpNewImport.cancelWizard')}
-        // A delete is on the wire; every route out of this confirmation is shut
-        // until it lands, including Escape and the backdrop. "Keep and close"
-        // above all: it would close the wizard over a removal that still
-        // completes, leaving the user looking at a project they chose to keep
-        // sections in while those sections disappear behind them.
-        onClose={() => { if (!withdrawInFlight) closeExitConfirm(); }}
-        data-testid="cancel-confirm-dialog"
-        actions={
-          <>
-            <Button
-              onClick={closeExitConfirm}
-              disabled={withdrawInFlight}
-              className={importSecondaryButtonClass}
-              data-testid="cancel-confirm-continue"
-            >
-              {pendingWithdrawCount > 0
-                ? t('dialogs.dmpNewImport.cancelContinueEditing')
-                : t('common.actions.continue')}
-            </Button>
-            <Button
-              onClick={onCancel}
-              disabled={withdrawInFlight}
-              className={importSecondaryButtonClass}
-              data-testid="confirm-cancel-button"
-            >
-              {pendingWithdrawCount > 0
-                ? t('dialogs.dmpNewImport.cancelKeepAndClose')
-                : t('common.actions.cancel')}
-            </Button>
-            {pendingWithdrawCount > 0 && (
-              <Button
-                variant="danger"
-                disabled={withdrawInFlight}
-                onClick={() => { void handleCancelWithRemoval(); }}
-                data-testid="cancel-remove-button"
-              >
-                {t('dialogs.dmpNewImport.cancelRemoveAndClose')}
-              </Button>
-            )}
-          </>
-        }
-      >
-        <p data-testid="cancel-confirm-message">
-          {pendingWithdrawCount > 0
-            ? t('dialogs.dmpNewImport.cancelWizardMessage', { count: pendingWithdrawCount })
-            : t('dialogs.dmpNewImport.cancelWizardNoImports')}
-        </p>
-        {/* Why the removal did not happen, where the user asked for it (#576
-            NF-AN4-N2) - not in the panel behind this dialog. */}
-        {withdrawalFailure && (
-          <p className="mt-3 text-sm text-error" role="alert" data-testid="cancel-confirm-error">
-            {withdrawalFailure.message}
-          </p>
-        )}
-      </AlertDialog>
-
-      {/* Back confirmation. No "keep" here: the step Back returns to re-imports
-          from scratch on the way forward, so keeping would duplicate. */}
-      <AlertDialog
-        open={wizard.exit?.kind === 'back'}
-        title={t('dialogs.dmpNewImport.backWizard')}
-        onClose={() => { if (!withdrawInFlight) closeExitConfirm(); }}
-        data-testid="back-confirm-dialog"
-        actions={
-          <>
-            <Button
-              onClick={closeExitConfirm}
-              disabled={withdrawInFlight}
-              className={importSecondaryButtonClass}
-              data-testid="back-confirm-continue"
-            >
-              {t('common.actions.continue')}
-            </Button>
-            <Button
-              variant="danger"
-              disabled={withdrawInFlight}
-              onClick={() => { void handleBackWithRemoval(); }}
-              data-testid="confirm-back-button"
-            >
-              {pendingWithdrawCount > 0
-                ? t('dialogs.dmpNewImport.backRemoveAndGo')
-                : t('common.actions.back')}
-            </Button>
-          </>
-        }
-      >
-        <p data-testid="back-confirm-message">
-          {pendingWithdrawCount > 0
-            ? t('dialogs.dmpNewImport.backWizardMessage', { count: pendingWithdrawCount })
-            : t('dialogs.dmpNewImport.backWizardNoImports')}
-        </p>
-        {withdrawalFailure && (
-          <p className="mt-3 text-sm text-error" role="alert" data-testid="back-confirm-error">
-            {withdrawalFailure.message}
-          </p>
-        )}
-      </AlertDialog>
+      <ExitConfirmations
+        exit={wizard.exit}
+        withdrawInFlight={withdrawInFlight}
+        withdrawalFailure={withdrawalFailure}
+        onContinue={closeExitConfirm}
+        onKeepAndClose={onCancel}
+        onRemoveAndClose={() => { void handleCancelWithRemoval(); }}
+        onRemoveAndBack={() => { void handleBackWithRemoval(); }}
+      />
     </DialogWrapper>
   );
 }

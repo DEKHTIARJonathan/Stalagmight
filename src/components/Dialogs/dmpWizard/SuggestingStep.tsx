@@ -11,6 +11,7 @@
  */
 import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Button } from '../../common/Button';
 import { Select } from '../../common/Select';
 import type { CrossSectionSuggestion, DmpFile, DmpSection } from '../../../types/commands';
 import type { OverlapMode } from '../../../types/config';
@@ -37,6 +38,7 @@ import SectionPreview, {
 import { SuggestionSectionSettings } from '../SuggestionSectionSettings';
 import { usePreviewSize } from '../usePreviewSize';
 import { useSuggestionContext } from './useSuggestionContext';
+import { WIZARD_SECONDARY_BUTTON_CLASS as importSecondaryButtonClass } from './WizardFooter';
 
 /** The confidence badge's colors, by tier. */
 const confidenceColors: Record<string, string> = {
@@ -413,5 +415,30 @@ export function SuggestingStep({
       </div>
       )}
     </WizardScrollBody>
+  );
+}
+
+/** The suggestion step's footer actions: Skip and Confirm, shut while the run imports. */
+export function SuggestingActions({ busy, onSkip, onConfirm }: { busy: boolean; onSkip: () => void; onConfirm: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <Button
+        onClick={onSkip}
+        disabled={busy}
+        className={importSecondaryButtonClass}
+        data-testid="skip-button"
+      >
+        {t('dialogs.dmpNewImport.skip')}
+      </Button>
+      <Button
+        variant="primary"
+        onClick={onConfirm}
+        disabled={busy}
+        data-testid="confirm-button"
+      >
+        {t('dialogs.dmpNewImport.confirm')}
+      </Button>
+    </>
   );
 }

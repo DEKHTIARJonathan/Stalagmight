@@ -16,6 +16,7 @@ import type { SectionEditState } from '../../../utils/batchImportHelpers';
 import { type VirtualConnection, computeSegmentLayout } from '../../../utils/segmentContext';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
+import { Button } from '../../common/Button';
 import { SectionMetadataForm } from '../../common/SectionMetadataForm';
 import { WizardMapPanel } from '../WizardMapPanel';
 // The preview cap comes straight from layoutConstants (see DmpNewImportDialog):
@@ -30,6 +31,7 @@ import { buildFromExistingContext } from './fromExistingContext';
 import { adjustConnectionsForEdits, buildEffectiveDmpSection } from './effectiveSections';
 import type { ManualPlacingPhase, SegmentAnchor } from './wizardState';
 import type { SkippedSuggestionPlacement } from './wizardTypes';
+import { WIZARD_SECONDARY_BUTTON_CLASS as importSecondaryButtonClass } from './WizardFooter';
 
 export interface ManualPlacingStepProps {
   phase: ManualPlacingPhase;
@@ -292,5 +294,47 @@ export function ManualPlacingStep({
       </div>
       )}
     </WizardScrollBody>
+  );
+}
+
+/** The manual-placing step's footer actions: Skip segment (with more than one
+ *  queued) and Place - "Next" when the segment is being discarded. */
+export function ManualPlacingActions({
+  canSkip,
+  onSkip,
+  canPlace,
+  discarding,
+  onPlace,
+}: {
+  canSkip: boolean;
+  onSkip: () => void;
+  /** The chosen mode can be submitted (map placement goes through its own button). */
+  canPlace: boolean;
+  discarding: boolean;
+  onPlace: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {canSkip && (
+        <Button
+          onClick={onSkip}
+          className={importSecondaryButtonClass}
+          data-testid="segment-skip-button"
+        >
+          {t('dialogs.dmpNewImport.manualPlacing.skip')}
+        </Button>
+      )}
+      <Button
+        variant="primary"
+        onClick={onPlace}
+        disabled={!canPlace}
+        data-testid="segment-place-button"
+      >
+        {discarding
+          ? t('dialogs.dmpNewImport.manualPlacing.next')
+          : t('dialogs.dmpNewImport.manualPlacing.placeSegment')}
+      </Button>
+    </>
   );
 }
