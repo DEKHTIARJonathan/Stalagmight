@@ -695,12 +695,15 @@ impl AppState {
                 // the span's proof, the reload is the capture's method, and the restore -
                 // which re-reads the account AFTER the reload and reopens only through the
                 // identity-checked commit, under the span - is the reload's.
+                // [#576 NF-W10BE-2] And ONE span: the capture borrows `lock_ops` and the
+                // restore commits through that borrow, so the span cannot end (or be
+                // swapped for a fresh one) between them.
                 let lock_ops = self.speleodb_lock_ops_guard();
                 let capture = self.speleodb_capture_editing(&lock_ops, &link.project_id);
                 let local_path = capture
                     .fast_forward(self, &endpoint, &token, insecure_http, &link, tip)
                     .map_err(local_dto)?
-                    .restore(self, &lock_ops, &endpoint, &token, &link.project_id);
+                    .restore(self, &endpoint, &token, &link.project_id);
                 Ok(UpdateResult::FastForwarded { local_path })
             }
             // A fork, a moved tip our BASE isn't an ancestor of, OR a server
@@ -1533,6 +1536,12 @@ mod pre_push_save {
 /// shuts the gate, and a poll in that window clears the record), and the restore is the
 /// reload's ([`FastForwarded::restore`]): it re-reads the account AFTER the reload and
 /// reopens editing only through the identity-checked commit, under the span.
+///
+/// [#576 NF-W10BE-2] Under the capture's OWN span: the capture borrows the lock-ops
+/// span it was taken in, and the restore commits through that borrow rather than a
+/// span its caller hands it - so a fresh span opened between the capture and the
+/// restore (a logout or login landing in the gap) is a borrow error (E0505), not a
+/// reorder a reviewer has to spot. The `AdoptSettled` shape.
 mod update_restore {
     use super::super::speleodb_cache::LocalEditsPolicy;
     use super::super::speleodb_session::LockOpsHeld;
@@ -1540,17 +1549,18 @@ mod update_restore {
     use crate::speleodb::SpeleoDbError;
 
     /// The editing state as it stood BEFORE the reload: the last point the pre-reload
-    /// truth exists.
-    pub(super) struct EditingCapture {
+    /// truth exists. Borrows the span it was read in, which the restore commits under.
+    pub(super) struct EditingCapture<'s, 'g> {
+        span: &'s LockOpsHeld<'g>,
         /// A genuine lock-holding session: edit-enabled and NOT force-editing.
         was_editing: bool,
         had_lock_record: bool,
         had_resumed_record: bool,
     }
 
-    /// Proof the fast-forward reloaded in place, carrying the capture.
-    pub(super) struct FastForwarded {
-        capture: EditingCapture,
+    /// Proof the fast-forward reloaded in place, carrying the capture (and its span).
+    pub(super) struct FastForwarded<'s, 'g> {
+        capture: EditingCapture<'s, 'g>,
         local_path: String,
     }
 
@@ -1577,12 +1587,13 @@ mod update_restore {
         /// the gate from nothing but a matching holder email. Restoring the record from
         /// the gate would therefore mint provenance for a lock this process never took.
         /// Of the same kind: a resumed claim stays resumed (#576 RV4-R-S3).
-        pub(super) fn speleodb_capture_editing(
+        pub(super) fn speleodb_capture_editing<'s, 'g>(
             &self,
-            _lock_ops: &LockOpsHeld<'_>,
+            lock_ops: &'s LockOpsHeld<'g>,
             project_id: &str,
-        ) -> EditingCapture {
+        ) -> EditingCapture<'s, 'g> {
             EditingCapture {
+                span: lock_ops,
                 was_editing: self.edit_enabled() && !self.force_editing(),
                 had_lock_record: self.speleodb_lock_acquired_here(project_id),
                 had_resumed_record: self.speleodb_lock_resumed_here(project_id),
@@ -1590,7 +1601,7 @@ mod update_restore {
         }
     }
 
-    impl EditingCapture {
+    impl<'s, 'g> EditingCapture<'s, 'g> {
         /// The fast-forward itself (`Protect`: an update never discards local work).
         pub(super) fn fast_forward(
             self,
@@ -1600,7 +1611,7 @@ mod update_restore {
             insecure_http: bool,
             link: &crate::models::SpeleoLink,
             tip: Option<String>,
-        ) -> Result<FastForwarded, SpeleoDbError> {
+        ) -> Result<FastForwarded<'s, 'g>, SpeleoDbError> {
             let local_path = state.speleodb_fast_forward(
                 endpoint,
                 token,
@@ -1616,14 +1627,18 @@ mod update_restore {
         }
     }
 
-    impl FastForwarded {
-        /// A reload that captured `capture`, for the restore's own tests: production
-        /// reaches a `FastForwarded` only through [`EditingCapture::fast_forward`].
+    impl<'s, 'g> FastForwarded<'s, 'g> {
+        /// A reload that captured `capture` in `lock_ops`, for the restore's own tests:
+        /// production reaches a `FastForwarded` only through
+        /// [`EditingCapture::fast_forward`].
         #[cfg(test)]
-        pub(super) fn for_tests(state: &AppState, project_id: &str) -> Self {
-            let lock_ops = state.speleodb_lock_ops_guard();
+        pub(super) fn for_tests(
+            state: &AppState,
+            lock_ops: &'s LockOpsHeld<'g>,
+            project_id: &str,
+        ) -> Self {
             Self {
-                capture: state.speleodb_capture_editing(&lock_ops, project_id),
+                capture: state.speleodb_capture_editing(lock_ops, project_id),
                 local_path: String::new(),
             }
         }
@@ -1635,15 +1650,18 @@ mod update_restore {
         /// (`speleodb_forget`) takes no guard and can end the session during the
         /// reload. Then through the commit Start editing uses, which also refuses when
         /// the open project is no longer this one (a switch during the download).
+        ///
+        /// [#576 NF-W10BE-2] The commit runs under the capture's span, the one the
+        /// pre-reload state was read in: there is no span parameter to pass another.
         pub(super) fn restore(
             self,
             state: &AppState,
-            lock_ops: &LockOpsHeld<'_>,
             endpoint: &str,
             token: &str,
             project_id: &str,
         ) -> String {
             let EditingCapture {
+                span: lock_ops,
                 was_editing,
                 had_lock_record,
                 had_resumed_record,
@@ -1925,10 +1943,15 @@ mod update_restore_tests {
         let _ = state.speleodb_forget_lock_acquired_for(REMOTE_ID);
     }
 
-    /// The restore, as the update runs it, under the span.
-    fn restore(state: &AppState, captured: FastForwarded) {
+    /// The update's fast-forward arm as it runs: the capture, the reload (and `during`,
+    /// whatever lands in its window), and the restore, under ONE lock-ops span - the
+    /// capture's, which the restore commits through (#576 NF-W10BE-2).
+    fn fast_forward(state: &AppState, during: impl FnOnce(&AppState)) {
         let lock_ops = state.speleodb_lock_ops_guard();
-        let _ = captured.restore(state, &lock_ops, AT, TOKEN, REMOTE_ID);
+        let captured = FastForwarded::for_tests(state, &lock_ops, REMOTE_ID);
+        reload(state);
+        during(state);
+        let _ = captured.restore(state, AT, TOKEN, REMOTE_ID);
     }
 
     /// A force-editor (edit-enabled while holding NO lock) must not come back out of a
@@ -1937,14 +1960,10 @@ mod update_restore_tests {
     #[test]
     fn the_update_restores_a_lock_holding_session_and_not_a_force_edit_one() {
         let (_held_dir, held) = session(false, true);
-        let captured = FastForwarded::for_tests(&held, REMOTE_ID);
-        reload(&held);
-        restore(&held, captured);
+        fast_forward(&held, |_| {});
 
         let (_forced_dir, forced) = session(true, false);
-        let captured = FastForwarded::for_tests(&forced, REMOTE_ID);
-        reload(&forced);
-        restore(&forced, captured);
+        fast_forward(&forced, |_| {});
 
         println!(
             "lock-holding session -> editable {}; force-editor -> editable {}, forcing {}",
@@ -1966,14 +1985,10 @@ mod update_restore_tests {
     #[test]
     fn the_update_restores_the_acquisition_record_only_where_one_existed() {
         let (_owned_dir, owned) = session(false, true);
-        let captured = FastForwarded::for_tests(&owned, REMOTE_ID);
-        reload(&owned);
-        restore(&owned, captured);
+        fast_forward(&owned, |_| {});
 
         let (_inherited_dir, inherited) = session(false, false);
-        let captured = FastForwarded::for_tests(&inherited, REMOTE_ID);
-        reload(&inherited);
-        restore(&inherited, captured);
+        fast_forward(&inherited, |_| {});
 
         println!(
             "our lock -> editable {}, record {}; an inherited lock -> editable {}, record {}",
@@ -1996,10 +2011,7 @@ mod update_restore_tests {
     #[test]
     fn the_update_cannot_reopen_editing_for_a_session_that_ended_mid_reload() {
         let (_dir, state) = session(false, true);
-        let captured = FastForwarded::for_tests(&state, REMOTE_ID);
-        reload(&state);
-        state.speleodb_forget();
-        restore(&state, captured);
+        fast_forward(&state, AppState::speleodb_forget);
 
         println!(
             "signed out during the reload -> editable {}",
