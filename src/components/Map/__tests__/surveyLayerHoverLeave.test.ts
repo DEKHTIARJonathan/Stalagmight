@@ -16,6 +16,7 @@ vi.mock('maplibre-gl', () => ({ default: {} }));
 
 import SurveyLayer from '../SurveyLayer';
 import { makeFakeSurveyMap, type FakeSurveyMap } from './surveyLayerFakeMap';
+import { microtasks } from '../../../test/factories/async';
 
 /** The hit-test seam: candidate sections + the nearest-feature resolvers. */
 interface HitSeam {
@@ -29,10 +30,6 @@ interface HitSeam {
 let fake: FakeSurveyMap;
 let layer: SurveyLayer;
 const onStationHover = vi.fn();
-
-async function flushMicrotasks(): Promise<void> {
-  for (let i = 0; i < 3; i++) await Promise.resolve();
-}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -63,7 +60,7 @@ describe('SurveyLayer hover vs pointer leave', () => {
   it('hovers the station under the pointer one frame after a move (control)', async () => {
     fake.fire('mousemove', { point: { x: 5, y: 5 } });
     vi.advanceTimersByTime(50);
-    await flushMicrotasks();
+    await microtasks(3);
     expect(onStationHover).toHaveBeenLastCalledWith({ section_id: 1, station_index: 2 });
   });
 
@@ -72,7 +69,7 @@ describe('SurveyLayer hover vs pointer leave', () => {
     fake.fire('mousemove', { point: { x: 5, y: 5 } });
     fake.canvas.dispatchEvent(new Event('mouseleave'));
     vi.advanceTimersByTime(50);
-    await flushMicrotasks();
+    await microtasks(3);
 
     expect(onStationHover).not.toHaveBeenCalledWith({ section_id: 1, station_index: 2 });
   });
@@ -82,7 +79,7 @@ describe('SurveyLayer hover vs pointer leave', () => {
     fake.canvas.dispatchEvent(new Event('mouseleave'));
     fake.fire('mousemove', { point: { x: 6, y: 5 } });
     vi.advanceTimersByTime(50);
-    await flushMicrotasks();
+    await microtasks(3);
     expect(onStationHover).toHaveBeenLastCalledWith({ section_id: 1, station_index: 2 });
   });
 });

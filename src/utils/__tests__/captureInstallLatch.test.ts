@@ -11,7 +11,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const invokeMock = vi.hoisted(() => vi.fn((_cmd: string, _args?: unknown) => Promise.resolve()));
-vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCore(invokeMock));
 
 const originalConsole = { ...console };
 

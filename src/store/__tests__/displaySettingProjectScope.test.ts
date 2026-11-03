@@ -18,7 +18,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock, getErrorMessage: (e: unknown) => String(e) }));
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving(undefined));
 
 import { useUIStore } from '../uiStore';
 import { useProjectStore } from '../projectStore';

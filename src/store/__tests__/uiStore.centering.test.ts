@@ -6,9 +6,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock Tauri invoke to prevent noisy console warnings
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
 
 import { useUIStore } from '../uiStore';
 

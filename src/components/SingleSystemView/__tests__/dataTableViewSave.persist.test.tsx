@@ -36,13 +36,7 @@ import { defaultConfig } from '../../../types/config';
 import type { Config } from '../../../types/config';
 import { invokeIpcMock } from '../../../test/factories/ipc';
 import { NoopResizeObserver } from '../../../test/factories/dom';
-
-/** Advance past the microtask queue (fake timers fake setTimeout, not promise
- *  microtasks) so a settled invokeIpc promise's `.then`/`.catch` has run. */
-async function flushMicrotasks() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
+import { microtasks } from '../../../test/factories/async';
 
 function freshConfig(): Config {
   return structuredClone(defaultConfig) as Config;
@@ -92,7 +86,7 @@ describe('DataTable debounced view-save guards (#357 items 4 & 5)', () => {
     // Unmounting inside the window must flush the pending save rather than
     // dropping it (the old bug: cleanup was `clearTimeout` only).
     unmount();
-    await flushMicrotasks();
+    await microtasks(2);
 
     const calls = updateViewCalls();
     expect(calls).toHaveLength(1);
@@ -114,7 +108,7 @@ describe('DataTable debounced view-save guards (#357 items 4 & 5)', () => {
     fireEvent.click(checkbox);
 
     unmount();
-    await flushMicrotasks();
+    await microtasks(2);
 
     expect(updateViewCalls()).toHaveLength(0);
   });
@@ -134,7 +128,7 @@ describe('DataTable debounced view-save guards (#357 items 4 & 5)', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500);
     });
-    await flushMicrotasks();
+    await microtasks(2);
 
     // Half 1: the failure is visible.
     expect(updateViewCalls()).toHaveLength(1);
@@ -156,7 +150,7 @@ describe('DataTable debounced view-save guards (#357 items 4 & 5)', () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(500);
     });
-    await flushMicrotasks();
+    await microtasks(2);
 
     // If the rollback had not happened, the ref would still read "V1 already
     // saved" and this identical V1 would be silently treated as a no-op -

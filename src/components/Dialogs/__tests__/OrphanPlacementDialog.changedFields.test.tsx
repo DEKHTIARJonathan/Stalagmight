@@ -16,10 +16,7 @@ import userEvent from '@testing-library/user-event';
 // jsdom does not implement scrollIntoView; the Select component calls it on open.
 Element.prototype.scrollIntoView = vi.fn();
 vi.mock('../SectionPreview', () => ({ default: () => null }));
-vi.mock('../../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-}));
+vi.mock('../../../utils/telemetry', async () => (await import('../../../test/factories/telemetry')).telemetryWith());
 
 import OrphanPlacementDialog from '../OrphanPlacementDialog';
 import { useProjectStore } from '../../../store/projectStore';

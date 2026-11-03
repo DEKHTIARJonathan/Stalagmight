@@ -17,11 +17,9 @@ import { render, fireEvent } from '@testing-library/react';
 // at all. Same stand-in the SpreadsheetGrid suites use: every row is visible.
 vi.mock('@tanstack/react-virtual', () => import('../../../test/factories/virtualizer'));
 
-vi.mock('../../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-  setSource: vi.fn(),
-}));
+vi.mock('../../../utils/telemetry', async () =>
+  (await import('../../../test/factories/telemetry')).telemetryWith({ setSource: vi.fn() }),
+);
 
 import '../../../i18n';
 import ImportDialog from '../ImportDialog';

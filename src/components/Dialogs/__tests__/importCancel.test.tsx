@@ -27,11 +27,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-  setSource: vi.fn(),
-}));
+vi.mock('../../../utils/telemetry', async () =>
+  (await import('../../../test/factories/telemetry')).telemetryWith({ setSource: vi.fn() }),
+);
 // The TML dialog's map column pulls maplibre-gl (WebGL) at module load, which jsdom
 // cannot execute; nothing drawn matters here.
 vi.mock('../SectionPreview', async (importOriginal) => ({
@@ -68,6 +66,7 @@ import type {
 } from '../../../types/commands';
 import type { Project } from '../../../types/project';
 import { invokeIpcMock } from '../../../test/factories/ipc';
+import { deferred } from '../../../test/factories/async';
 
 // --- fully synthetic files, one importable shot / waypoint each ----------------
 
@@ -260,14 +259,6 @@ const cancelledResult = (format: string): CommandResult =>
 
 const okResult = (sectionIds: number[]): CommandResult =>
   ({ success: true, error: null, warnings: [], section_ids: sectionIds }) as CommandResult;
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-}
 
 let importMocks: Record<ImportAction, ReturnType<typeof vi.fn>>;
 let openDialog: ReturnType<typeof vi.fn>;

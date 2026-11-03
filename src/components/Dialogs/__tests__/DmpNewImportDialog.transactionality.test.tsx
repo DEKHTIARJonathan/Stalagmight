@@ -37,18 +37,10 @@ vi.mock('../WizardMapPanel', () => ({
 }));
 // Interpolation is kept, not swallowed: "how many sections are at stake" is the
 // whole point of the new confirmation copy, so the count has to be observable.
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({
-    t: (key: string, opts?: Record<string, unknown>) =>
-      opts ? `${key}:${JSON.stringify(opts)}` : key,
-  }),
-}));
-vi.mock('../../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-  setSource: vi.fn(),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).i18nKeys('keyAndOptions'));
+vi.mock('../../../utils/telemetry', async () =>
+  (await import('../../../test/factories/telemetry')).telemetryWith({ setSource: vi.fn() }),
+);
 
 const invokeIpcMock = vi.fn();
 vi.mock('../../../utils/ipc', () => ({

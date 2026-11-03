@@ -10,7 +10,7 @@
  * `.tsx` so vitest runs it under jsdom.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { act, renderHook } from '@testing-library/react';
+import { renderHook } from '@testing-library/react';
 import type { MutableRefObject } from 'react';
 
 vi.mock('../../../utils/ipc');
@@ -22,6 +22,7 @@ import { useAnalyticalOverlays } from '../useAnalyticalOverlays';
 import { useUIStore } from '../../../store/uiStore';
 import type { DistanceField } from '../../../types/project';
 import { invokeIpcMock } from '../../../test/factories/ipc';
+import { actMicrotasks } from '../../../test/factories/act';
 
 const FIELD = { stations: [], shots: [], max_distance: 0 } as unknown as DistanceField;
 
@@ -65,13 +66,6 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
-/** Let the fetch's rejection (or answer) and its handlers run. */
-async function flush(): Promise<void> {
-  await act(async () => {
-    for (let i = 0; i < 5; i += 1) await Promise.resolve();
-  });
-}
-
 const failureToasts = () =>
   showToast.mock.calls.filter((call) => call[1] === 'distance-gradient-failed');
 
@@ -82,7 +76,7 @@ describe('distance gradient: a field that cannot be computed (#576 C7-MSG)', () 
     const { rerender } = renderHook((props: Options) => useAnalyticalOverlays(props), {
       initialProps: options('t1', setDistanceField),
     });
-    await flush();
+    await actMicrotasks(5);
 
     // The existing clear-the-ramp behaviour stays.
     expect(setDistanceField).toHaveBeenLastCalledWith(null);
@@ -95,20 +89,20 @@ describe('distance gradient: a field that cannot be computed (#576 C7-MSG)', () 
 
     // An edit refetches, and it fails again: same burst, no second toast.
     rerender(options('t2', setDistanceField));
-    await flush();
+    await actMicrotasks(5);
     expect(invokeIpcMock).toHaveBeenCalledTimes(2);
     expect(failureToasts()).toHaveLength(1);
 
     // A success ends the burst...
     invokeIpcMock.mockResolvedValueOnce(FIELD);
     rerender(options('t3', setDistanceField));
-    await flush();
+    await actMicrotasks(5);
     expect(setDistanceField).toHaveBeenLastCalledWith(FIELD);
     expect(failureToasts()).toHaveLength(1);
 
     // ...so the next failure is a new one, and says so.
     rerender(options('t4', setDistanceField));
-    await flush();
+    await actMicrotasks(5);
     expect(failureToasts()).toHaveLength(2);
   });
 
@@ -118,13 +112,13 @@ describe('distance gradient: a field that cannot be computed (#576 C7-MSG)', () 
     const { rerender } = renderHook((props: Options) => useAnalyticalOverlays(props), {
       initialProps: options('t1', setDistanceField),
     });
-    await flush();
+    await actMicrotasks(5);
     expect(failureToasts()).toHaveLength(1);
 
     rerender(options('t1', setDistanceField, false));
-    await flush();
+    await actMicrotasks(5);
     rerender(options('t1', setDistanceField, true));
-    await flush();
+    await actMicrotasks(5);
     expect(failureToasts()).toHaveLength(2);
   });
 });

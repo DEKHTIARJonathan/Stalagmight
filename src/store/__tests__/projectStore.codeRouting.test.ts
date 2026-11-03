@@ -19,7 +19,7 @@ import type { CommandError } from '../../types/ipc/CommandError';
 import type { CommandErrorCode } from '../../types/ipc/CommandErrorCode';
 
 const invokeMock = vi.hoisted(() => vi.fn());
-vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCore(invokeMock));
 
 /** `command` rejects with `failure`; every other command answers nothing. */
 function refuse(command: string, failure: CommandError) {

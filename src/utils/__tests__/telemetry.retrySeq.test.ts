@@ -13,7 +13,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const invokeMock = vi.hoisted(() => vi.fn());
-vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCore(invokeMock));
 
 type TrackEventsArgs = { events: Record<string, number>; projectSeq: number };
 

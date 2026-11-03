@@ -36,6 +36,7 @@ import type { Section, Shot } from '../../../types/project';
 import { invokeIpcMock } from '../../../test/factories/ipc';
 import { NoopResizeObserver } from '../../../test/factories/dom';
 import { makeSection, makeShot } from '../../../test/factories/survey';
+import { actMicrotasks } from '../../../test/factories/act';
 
 const shot = (id: number, length: number): Shot =>
   makeShot({ id, azimuth_in: 10, azimuth_out: 10, length, depth_out: 1 });
@@ -55,19 +56,13 @@ function typeCell(row: number, colKey: string, value: string) {
   fireEvent.keyDown(editor, { key: 'Enter' });
 }
 
-async function settle() {
-  await act(async () => {
-    for (let i = 0; i < 5; i++) await Promise.resolve();
-  });
-}
-
 /** Fill the draft's four required fields; the last one completes it and starts the create. */
 async function completeDraft() {
   typeCell(DRAFT_ROW, 'length', '5');
   typeCell(DRAFT_ROW, AZIMUTH_AVG_KEY, '100');
   typeCell(DRAFT_ROW, 'depth_in', '1');
   typeCell(DRAFT_ROW, 'depth_out', '2');
-  await settle();
+  await actMicrotasks(5);
 }
 
 let createShot: ReturnType<typeof vi.fn>;
@@ -107,7 +102,7 @@ describe('DataTable draft row edited while its create is in flight (D39(f))', ()
     // Left, typed while create_shot is still on the wire.
     typeCell(DRAFT_ROW, 'left', '2.5');
     await act(async () => resolveCreate(created(4)));
-    await settle();
+    await actMicrotasks(5);
 
     expect(updateShot, 'the late Left value never reached the created shot').toHaveBeenCalledTimes(1);
     expect(updateShot).toHaveBeenCalledWith(1, 4, { left: 2.5 });
@@ -119,7 +114,7 @@ describe('DataTable draft row edited while its create is in flight (D39(f))', ()
     typeCell(DRAFT_ROW, 'length', '6');
     typeCell(DRAFT_ROW, 'comment', 'sump');
     await act(async () => resolveCreate(created(4)));
-    await settle();
+    await actMicrotasks(5);
 
     expect(updateShot).toHaveBeenCalledWith(1, 4, { length: 6, comment: 'sump' });
   });
@@ -128,7 +123,7 @@ describe('DataTable draft row edited while its create is in flight (D39(f))', ()
     render(<DataTable sections={[section]} />);
     await completeDraft();
     await act(async () => resolveCreate(created(4)));
-    await settle();
+    await actMicrotasks(5);
 
     expect(updateShot).not.toHaveBeenCalled();
   });
@@ -157,11 +152,11 @@ describe('DataTable section switch while a draft create is in flight (RV3-FE-4)'
     await act(async () => {
       useUIStore.setState({ selection: { type: 'section', sectionId: 2 } });
     });
-    await settle();
+    await actMicrotasks(5);
     typeCell(B_DRAFT_ROW, 'length', '7');
-    await settle();
+    await actMicrotasks(5);
     await act(async () => resolveCreate(created(4)));
-    await settle();
+    await actMicrotasks(5);
 
     expect(updateShot, "B's draft values were written into the shot created in A").not.toHaveBeenCalled();
     expect(screen.getByTestId(`grid-cell-${B_DRAFT_ROW}-length`).textContent, "B's draft was wiped").toContain('7');

@@ -33,15 +33,10 @@ vi.mock('../WizardMapPanel', () => ({
   MAP_PANEL_DEFAULT_WIDTH: 400,
   MAP_PANEL_MAX_WIDTH: 800,
 }));
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (key: string) => key }),
-}));
-vi.mock('../../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-  setSource: vi.fn(),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).i18nKeys());
+vi.mock('../../../utils/telemetry', async () =>
+  (await import('../../../test/factories/telemetry')).telemetryWith({ setSource: vi.fn() }),
+);
 
 const invokeIpcMock = vi.fn();
 vi.mock('../../../utils/ipc', () => ({

@@ -3,9 +3,7 @@ import { renderHook, act } from '@testing-library/react';
 
 // uiStore → telemetry → @tauri-apps/api/core; stub the IPC so importing the store
 // in jsdom doesn't hit Tauri. `.tsx` so this runs in the jsdom tier (renderHook).
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../../test/factories/tauri')).tauriCoreResolving({}));
 
 import { usePanelReveal } from '../usePanelReveal';
 import { useUIStore } from '../../../store/uiStore';

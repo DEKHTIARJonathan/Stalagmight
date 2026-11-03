@@ -12,7 +12,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCore(vi.fn()));
 
 import { useUIStore } from '../uiStore';
 import { useProjectStore } from '../projectStore';

@@ -60,6 +60,7 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
 
 import { useBeforeUnload } from '../useBeforeUnload';
 import { resetQuitConfirmationForTests } from '../../utils/quit';
+import { timerTurns } from '../../test/factories/async';
 
 function Harness({
   shouldBlock,
@@ -79,12 +80,6 @@ async function pressWindowX(): Promise<void> {
   for (const handler of [...tauri.handlers]) await handler();
 }
 
-/** Let pending timers, rejections and Node's unhandled-rejection check run. */
-async function settle() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
-
 let unhandled: string[] = [];
 const onUnhandled = (reason: unknown) => {
   unhandled.push(reason instanceof Error ? reason.message : String(reason));
@@ -93,7 +88,7 @@ const onUnhandled = (reason: unknown) => {
 beforeEach(async () => {
   // A registration the previous test left in flight resolves here, not inside the
   // next test's counters.
-  await settle();
+  await timerTurns(2);
   tauri.handlers.clear();
   tauri.listenCalls = 0;
   tauri.unlistenCalls = 0;
@@ -116,7 +111,7 @@ afterEach(() => {
 describe('useBeforeUnload - one close listener for the life of the hook', () => {
   it('a close request during a message change still reaches a listener', async () => {
     const { rerender } = render(<Harness shouldBlock={false} message="first" />);
-    await settle();
+    await timerTurns(2);
 
     // The message flips (an import started); the X lands before any new listen()
     // could have completed its round trip.
@@ -133,9 +128,9 @@ describe('useBeforeUnload - one close listener for the life of the hook', () => 
     const { rerender } = render(
       <Harness shouldBlock message="Import is in progress" onConfirm={firstCleanup} />,
     );
-    await settle();
+    await timerTurns(2);
     rerender(<Harness shouldBlock message="Dive plan has unsaved changes" onConfirm={latestCleanup} />);
-    await settle();
+    await timerTurns(2);
 
     expect(tauri.listenCalls, 'listen() calls').toBe(1);
     expect(tauri.unlistenCalls, 'unlisten() calls').toBe(0);
@@ -152,7 +147,7 @@ describe('useBeforeUnload - one close listener for the life of the hook', () => 
   it('the dev-mode beforeunload prompt carries the latest message', async () => {
     const added = vi.spyOn(window, 'addEventListener');
     const { rerender } = render(<Harness shouldBlock message="first" />);
-    await settle();
+    await timerTurns(2);
     rerender(<Harness shouldBlock message="second" />);
 
     // jsdom's Event.returnValue is the legacy boolean, so call the handler directly.
@@ -169,9 +164,9 @@ describe('useBeforeUnload - one close listener for the life of the hook', () => 
 
   it('still releases the listener on unmount', async () => {
     const { unmount } = render(<Harness shouldBlock={false} message="m" />);
-    await settle();
+    await timerTurns(2);
     unmount();
-    await settle();
+    await timerTurns(2);
 
     expect(tauri.unlistenCalls).toBe(1);
     expect(tauri.handlers.size).toBe(0);
@@ -184,9 +179,9 @@ describe('useBeforeUnload - a rejected unlisten() is handled', () => {
     tauri.unlistenResult = () => Promise.reject(new Error('unlisten failed on unmount'));
 
     const { unmount } = render(<Harness shouldBlock={false} message="m" />);
-    await settle();
+    await timerTurns(2);
     unmount();
-    await settle();
+    await timerTurns(2);
 
     expect(unhandled, 'unhandled rejections seen').toEqual([]);
     expect(warn).toHaveBeenCalledTimes(1);
@@ -197,9 +192,9 @@ describe('useBeforeUnload - a rejected unlisten() is handled', () => {
     tauri.unlistenResult = () => Promise.reject(new Error('unlisten failed after destroy'));
 
     render(<Harness shouldBlock={false} message="m" />);
-    await settle();
+    await timerTurns(2);
     await pressWindowX();
-    await settle();
+    await timerTurns(2);
 
     expect(destroyMock).toHaveBeenCalledTimes(1);
     expect(unhandled, 'unhandled rejections seen').toEqual([]);
@@ -214,7 +209,7 @@ describe('useBeforeUnload - a rejected unlisten() is handled', () => {
     const { unmount } = render(<Harness shouldBlock={false} message="m" />);
     unmount();
     tauri.pending.forEach((register) => register());
-    await settle();
+    await timerTurns(2);
 
     expect(tauri.unlistenCalls, 'the late listener is released').toBe(1);
     expect(unhandled, 'unhandled rejections seen').toEqual([]);
@@ -228,9 +223,9 @@ describe('useBeforeUnload - a rejected unlisten() is handled', () => {
     };
 
     const { unmount } = render(<Harness shouldBlock={false} message="m" />);
-    await settle();
+    await timerTurns(2);
     expect(() => unmount()).not.toThrow();
-    await settle();
+    await timerTurns(2);
 
     expect(unhandled).toEqual([]);
     expect(warn).toHaveBeenCalledTimes(1);

@@ -42,11 +42,9 @@ vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel?: (s: unknown) => unknown) => (sel ? sel(storeState) : storeState),
 }));
 
-vi.mock('../../../utils/telemetry', () => ({ trackDialogComplete: vi.fn() }));
+vi.mock('../../../utils/telemetry', async () => (await import('../../../test/factories/telemetry')).telemetryStubs());
 
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+vi.mock('../DialogWrapper', async () => (await import('../../../test/factories/components')).dialogWrapperStub());
 
 import EditStationDialog from '../EditStationDialog';
 import { lazyStationArray, surveyDataFromLegacy } from '../../../types/survey-data';

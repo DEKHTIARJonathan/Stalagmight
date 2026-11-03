@@ -30,13 +30,7 @@ import { InternalErrorBanner } from '../InternalErrorBanner';
 import { useInternalErrorEvent } from '../../../hooks/useInternalErrorEvent';
 import { useInternalErrorStore } from '../../../store/internalErrorStore';
 import { IPC_EVENTS } from '../../../utils/ipcEvents';
-
-/** Let the async listener registration settle. */
-async function settle() {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
-}
+import { actNextTimer } from '../../../test/factories/act';
 
 beforeEach(() => {
   listenState.handlers.clear();
@@ -54,7 +48,7 @@ describe('InternalErrorBanner (#576 A11)', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     const { unmount } = renderHook(() => useInternalErrorEvent());
     render(<InternalErrorBanner />);
-    await settle();
+    await actNextTimer();
 
     expect(screen.queryByTestId('internal-error-banner')).not.toBeInTheDocument();
     expect(IPC_EVENTS.INTERNAL_ERROR).toBe('internal-error');
@@ -82,7 +76,7 @@ describe('InternalErrorBanner (#576 A11)', () => {
     listenState.fail = true;
 
     renderHook(() => useInternalErrorEvent());
-    await settle();
+    await actNextTimer();
 
     expect(warn).toHaveBeenCalledWith(
       '[useInternalErrorEvent] internal-error listener not available:',

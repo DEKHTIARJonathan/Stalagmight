@@ -8,7 +8,7 @@
  * `.tsx` so vitest runs it under jsdom.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, renderHook } from '@testing-library/react';
+import { renderHook } from '@testing-library/react';
 
 const state = vi.hoisted(() => ({
   status: null as { cell: string } | null,
@@ -27,12 +27,7 @@ vi.mock('../../utils/ipc', () => ({
 
 import { useInternalErrorEvent } from '../useInternalErrorEvent';
 import { useInternalErrorStore } from '../../store/internalErrorStore';
-
-async function settle() {
-  await act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  });
-}
+import { actNextTimer } from '../../test/factories/act';
 
 beforeEach(() => {
   state.status = null;
@@ -49,14 +44,14 @@ describe('useInternalErrorEvent pull path (#576 RV5-PI-3)', () => {
     vi.spyOn(console, 'error').mockImplementation(() => {});
     state.status = { cell: 'project' };
     renderHook(() => useInternalErrorEvent());
-    await settle();
+    await actNextTimer();
     expect(state.asked).toBe(1);
     expect(useInternalErrorStore.getState()).toMatchObject({ raised: true, cell: 'project' });
   });
 
   it('raises nothing when the backend has nothing to report', async () => {
     renderHook(() => useInternalErrorEvent());
-    await settle();
+    await actNextTimer();
     expect(state.asked).toBe(1);
     expect(useInternalErrorStore.getState().raised).toBe(false);
   });

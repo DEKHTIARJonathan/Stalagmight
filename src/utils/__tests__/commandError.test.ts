@@ -21,7 +21,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import type { SpeleoLinkStatus } from '../../types/ipc.generated';
 
 const invokeMock = vi.hoisted(() => vi.fn());
-vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCore(invokeMock));
 
 const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   is_remote: true,

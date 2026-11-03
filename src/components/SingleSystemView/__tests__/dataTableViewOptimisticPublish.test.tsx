@@ -36,11 +36,7 @@ import type { Station } from '../../../types/project';
 import type { SurveyData } from '../../../types/survey-data';
 import { invokeIpcMock } from '../../../test/factories/ipc';
 import { NoopResizeObserver } from '../../../test/factories/dom';
-
-async function flushMicrotasks() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
+import { microtasks } from '../../../test/factories/async';
 
 function freshConfig(): Config {
   return structuredClone(defaultConfig) as Config;
@@ -123,7 +119,7 @@ describe('data-table view save vs cached adjusted geometry (#357 item 4)', () =>
     // ...and the success path's `loadConfig` re-sync must not drop it either.
     releaseSave?.();
     await act(async () => {
-      await flushMicrotasks();
+      await microtasks(2);
     });
     expect(useProjectStore.getState().stationsAdjusted).toBe(adjustedStations);
     expect(useProjectStore.getState().surveyDataAdjusted).toBe(adjustedSurvey);
@@ -136,7 +132,7 @@ describe('data-table view save vs cached adjusted geometry (#357 item 4)', () =>
     // timer - is what fires the save and the publish alongside it.
     toggleColumn('comment');
     unmount();
-    await flushMicrotasks();
+    await microtasks(2);
 
     expect(
       invokeIpcMock.mock.calls.filter(([command]) => command === 'update_data_table_view')

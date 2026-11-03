@@ -37,19 +37,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
-
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-}
-
-/** Let every already-queued microtask and promise callback run. */
-async function settle(): Promise<void> {
-  for (let i = 0; i < 10; i += 1) await Promise.resolve();
-}
+import { deferred, microtasks } from '../../test/factories/async';
 
 const SUMMARY: SpeleoProjectSummary = {
   id: 'p1',
@@ -111,7 +99,7 @@ describe('in-place SpeleoDB tree swaps wait for the edits queued before them (#5
     const action = issue().catch(() => undefined);
 
     try {
-      await settle();
+      await microtasks(10);
       // The verb must still be waiting: an edit ahead of it is mid-flight.
       expect(trace).toEqual(['edit starts']);
     } finally {
@@ -133,7 +121,7 @@ describe('afterQueuedEdits', () => {
       await verbInFlight.promise;
       trace.push('verb finishes');
     });
-    await settle();
+    await microtasks(10);
     // Issued while the verb runs: its own queue, not held behind the verb.
     await runSerialized(async () => {
       trace.push('edit during the swap');

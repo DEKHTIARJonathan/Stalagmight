@@ -2,9 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 // Importing the component module pulls in stores → telemetry → @tauri-apps/api/core;
 // stub the IPC so importing it in jsdom doesn't hit Tauri.
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../../test/factories/tauri')).tauriCoreResolving({}));
 
 import { relatedTargetWithin } from '../UndoHistoryDropdown';
 

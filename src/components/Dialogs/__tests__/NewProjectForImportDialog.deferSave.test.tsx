@@ -13,11 +13,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
-vi.mock('react-i18next', () => ({
-  useTranslation: () => ({
-    t: (key: string, opts?: Record<string, unknown>) => (opts ? `${key}:${JSON.stringify(opts)}` : key),
-  }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).translationStub('keyAndOptions'));
 
 const dialogData: {
   dmpFile?: { sections: Array<{ shots: Array<{ shot_type: string }> }> };
@@ -39,20 +35,11 @@ vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel: (s: unknown) => unknown) => sel({ createProject }),
 }));
 
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({ title, children }: { title: string; children: React.ReactNode }) => (
-    <div>
-      <div data-testid="dialog-title">{title}</div>
-      {children}
-    </div>
-  ),
-}));
+vi.mock('../DialogWrapper', async () =>
+  (await import('../../../test/factories/components')).dialogWrapperStub({ title: 'testid' }),
+);
 
-vi.mock('../../common/Button', () => ({
-  Button: ({ children, ...rest }: React.ComponentProps<'button'>) => (
-    <button {...rest}>{children}</button>
-  ),
-}));
+vi.mock('../../common/Button', async () => (await import('../../../test/factories/components')).buttonStub());
 
 import NewProjectForImportDialog from '../NewProjectForImportDialog';
 

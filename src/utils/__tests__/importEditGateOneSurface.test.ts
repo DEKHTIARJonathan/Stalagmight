@@ -21,7 +21,7 @@ vi.mock('../ipc', () => ({
   invokeIpc: invokeIpcMock,
   getErrorMessage: (e: unknown, fallback?: string) => (e as { message?: string })?.message ?? fallback ?? 'error',
 }));
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving(undefined));
 
 import { surfaceImportFailure, type ImportDialogUi } from '../saveFeedback';
 import { useProjectStore } from '../../store/projectStore';

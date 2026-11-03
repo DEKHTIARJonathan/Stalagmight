@@ -10,13 +10,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({
-    t: (key: string, opts?: Record<string, unknown>) =>
-      opts ? `${key}:${JSON.stringify(opts)}` : key,
-  }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).i18nKeys('keyAndOptions'));
 
 const store = {
   config: null,
@@ -28,11 +22,9 @@ vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel: (s: unknown) => unknown) => sel(store),
 }));
 
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({ children, 'data-testid': testId }: { children: React.ReactNode; 'data-testid'?: string }) => (
-    <div data-testid={testId}>{children}</div>
-  ),
-}));
+vi.mock('../DialogWrapper', async () =>
+  (await import('../../../test/factories/components')).dialogWrapperStub({ testId: true }),
+);
 
 import DmpSelectionDialog from '../DmpSelectionDialog';
 import type { DmpSection } from '../../../types/commands';

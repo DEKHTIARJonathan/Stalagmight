@@ -8,9 +8,7 @@ import { describe, it, expect, vi } from 'vitest';
 
 // useMapTools → stores/telemetry → @tauri-apps/api/core; stub the IPC so importing the real helper
 // here doesn't pull in live Tauri (mirrors useKeyboardShortcuts.test.ts).
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
 
 import { nearestReachableStationRef } from '../useMapTools';
 

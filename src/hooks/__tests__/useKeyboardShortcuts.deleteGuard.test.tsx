@@ -16,9 +16,7 @@ import { makeSpeleoLink } from '../../test/factories/speleo';
 
 // useKeyboardShortcuts pulls in telemetry/save helpers that ultimately call the
 // Tauri IPC bridge; stub it so importing the real hook here stays offline.
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
 
 const READ_ONLY_LINK: SpeleoLinkState = makeSpeleoLink({ lockHolder: 'someone-else', lockedByOther: true });
 

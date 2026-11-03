@@ -29,9 +29,7 @@ import type { MapMouseEvent } from 'maplibre-gl';
 vi.mock('../../utils/ipc');
 stubGetErrorMessage(messageOr('unknown error'));
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
 
 import { useMapTools } from '../useMapTools';
 import { useUIStore } from '../../store/uiStore';
@@ -41,6 +39,7 @@ import type { Project, Station } from '../../types/project';
 import type { AlongLineResult } from '../../types/ipc/AlongLineResult';
 import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factories/ipc';
 import { makeProject as projectOf, makeStation as stationOf } from '../../test/factories/survey';
+import { deferred } from '../../test/factories/async';
 
 function makeProject(overrides: Partial<Project> = {}): Project {
   return projectOf({ name: 'Test Cave', file_path: '/mock/a.stalx', next_section_id: 1, ...overrides });
@@ -55,22 +54,6 @@ const STATIONS: Station[] = [
   makeStation(1, 1, 10, 0),
   makeStation(1, 2, 20, 0),
 ];
-
-/** A manually-resolved stand-in for the IPC reply: the test decides exactly
- *  when the response "lands" (resolve OR reject), never a timer. */
-function deferred<T>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (reason?: unknown) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 /** Deep-clone a measure endpoint (including its nested `coords`, where
  *  present) so the clone is structurally equal but reference-distinct -

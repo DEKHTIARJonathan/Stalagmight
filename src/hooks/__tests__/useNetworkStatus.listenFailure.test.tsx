@@ -28,12 +28,7 @@ vi.mock('../../utils/ipc');
 import { useNetworkStatus } from '../useNetworkStatus';
 import { useNetworkStore } from '../../store/networkStore';
 import { invokeIpcMock } from '../../test/factories/ipc';
-
-/** Let pending rejections settle and Node's unhandled-rejection check run. */
-async function settle() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
+import { timerTurns } from '../../test/factories/async';
 
 let unhandled: string[] = [];
 const onUnhandled = (reason: unknown) => {
@@ -61,9 +56,9 @@ describe('useNetworkStatus listener registration', () => {
     listenState.impl = () => Promise.reject(new Error('event API unavailable'));
 
     const { unmount } = renderHook(() => useNetworkStatus());
-    await settle();
+    await timerTurns(2);
     unmount();
-    await settle();
+    await timerTurns(2);
 
     expect(unhandled, 'unhandled rejections seen').toEqual([]);
     expect(listenState.events).toEqual(['tile-transport-error', 'tile-transport-success']);
@@ -79,7 +74,7 @@ describe('useNetworkStatus listener registration', () => {
     };
 
     const { unmount } = renderHook(() => useNetworkStatus());
-    await settle();
+    await timerTurns(2);
 
     act(() => handlers.get('tile-transport-error')?.());
     expect(useNetworkStore.getState().isOnline).toBe(false);
@@ -88,7 +83,7 @@ describe('useNetworkStatus listener registration', () => {
     expect(useNetworkStore.getState().tileReloadGeneration).toBe(1);
 
     unmount();
-    await settle();
+    await timerTurns(2);
     expect(unlisten).toHaveBeenCalledTimes(2);
   });
 
@@ -100,15 +95,15 @@ describe('useNetworkStatus listener registration', () => {
     listenState.impl = async () => unlisten;
 
     const { unmount } = renderHook(() => useNetworkStatus());
-    await settle();
+    await timerTurns(2);
     unmount();
-    await settle();
+    await timerTurns(2);
 
     const pending: Array<(fn: () => Promise<never>) => void> = [];
     listenState.impl = () => new Promise((resolve) => { pending.push(resolve); });
     renderHook(() => useNetworkStatus()).unmount();
     pending.forEach((resolve) => resolve(unlisten));
-    await settle();
+    await timerTurns(2);
 
     expect(unhandled, 'unhandled rejections seen').toEqual([]);
     expect(warn).toHaveBeenCalledTimes(4);
@@ -124,7 +119,7 @@ describe('useNetworkStatus listener registration', () => {
     expect(unlisten).not.toHaveBeenCalled();
 
     pending.forEach((resolve) => resolve(unlisten));
-    await settle();
+    await timerTurns(2);
     expect(unlisten).toHaveBeenCalledTimes(2);
     expect(unhandled).toEqual([]);
   });

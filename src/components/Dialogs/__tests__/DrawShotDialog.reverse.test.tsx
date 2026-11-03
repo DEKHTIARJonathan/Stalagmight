@@ -61,17 +61,11 @@ vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel: (s: unknown) => unknown) => sel({ createShot, project, stations }),
 }));
 
-vi.mock('../../../utils/telemetry', () => ({ trackDialogComplete: vi.fn() }));
+vi.mock('../../../utils/telemetry', async () => (await import('../../../test/factories/telemetry')).telemetryStubs());
 
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+vi.mock('../DialogWrapper', async () => (await import('../../../test/factories/components')).dialogWrapperStub());
 
-vi.mock('../../common/Button', () => ({
-  Button: ({ children, ...rest }: React.ComponentProps<'button'>) => (
-    <button {...rest}>{children}</button>
-  ),
-}));
+vi.mock('../../common/Button', async () => (await import('../../../test/factories/components')).buttonStub());
 
 vi.mock('../../common/EntityBlob', () => ({
   EntityBlob: ({ children }: { children: React.ReactNode }) => <span>{children}</span>,

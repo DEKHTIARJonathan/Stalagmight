@@ -18,10 +18,7 @@ vi.mock('@tanstack/react-virtual', async () =>
   (await import('../../../test/factories/virtualizer')).fakeVirtualizer({ renderRows: false }),
 );
 
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (k: string) => k }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).i18nKeys());
 
 vi.mock('maplibre-gl', () => ({ default: {} }));
 vi.mock('../SectionPreview', () => ({ default: () => null }));
@@ -31,20 +28,11 @@ vi.mock('../../../store/projectStore', () => ({
 }));
 
 const mockDialogWrapperSpy = vi.fn();
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({
-    children,
-    isDirty,
-    ...props
-  }: {
-    children: React.ReactNode | ((p: { requestClose: () => void }) => React.ReactNode);
-    isDirty?: boolean;
-    [k: string]: unknown;
-  }) => {
-    mockDialogWrapperSpy({ isDirty, ...props });
-    return <div>{typeof children === 'function' ? children({ requestClose: () => {} }) : children}</div>;
-  },
-}));
+vi.mock('../DialogWrapper', async () =>
+  (await import('../../../test/factories/components')).dialogWrapperStub({
+    spy: (props) => mockDialogWrapperSpy(props),
+  }),
+);
 
 // Minimal stand-in: only the one control each test needs, wired to the real
 // callback props - everything else in the real form is irrelevant here.

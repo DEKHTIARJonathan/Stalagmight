@@ -20,11 +20,9 @@ import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import { startWorkspaceModeSync } from '../workspaceModeSync';
 import { invokeIpcMock } from '../../test/factories/ipc';
+import { nextTimer } from '../../test/factories/async';
 
 vi.mock('../../utils/ipc');
-
-/** Let every pending microtask and timer-free continuation run. */
-const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 let order: string[];
 let backendMode: string;
@@ -78,16 +76,16 @@ describe('entering Plan while a Survey edit is queued (RV2-FE-G1)', () => {
   it('sends the mode after the queued edit, which lands', async () => {
     slowFirstRefresh = true;
     const first = useProjectStore.getState().updateShot(1, 1, { length: 5 });
-    await tick();
+    await nextTimer();
     // Issued in Survey, queued behind the first edit's refresh.
     const second = useProjectStore.getState().updateShot(1, 2, { length: 6 });
-    await tick();
+    await nextTimer();
     useUIStore.getState().setAppMode('plan');
-    await tick();
+    await nextTimer();
     releaseRefresh();
     const secondResult = await second;
     await first;
-    await tick();
+    await nextTimer();
 
     expect(order).toEqual([
       'set_workspace_mode:survey',
@@ -102,7 +100,7 @@ describe('entering Plan while a Survey edit is queued (RV2-FE-G1)', () => {
   it('keeps an edit issued after the switch behind it, so the gate still refuses it', async () => {
     useUIStore.getState().setAppMode('plan');
     const late = await useProjectStore.getState().updateShot(1, 3, { length: 7 });
-    await tick();
+    await nextTimer();
 
     expect(order).toEqual(['set_workspace_mode:survey', 'set_workspace_mode:plan', 'update_shot:3@plan']);
     expect(late.success).toBe(false);

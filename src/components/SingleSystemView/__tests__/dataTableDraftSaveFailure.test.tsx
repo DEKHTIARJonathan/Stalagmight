@@ -14,7 +14,7 @@
  * renders every row), real stores, `createShot` replaced on the project store.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 
 vi.mock('@tanstack/react-virtual', async () =>
   (await import('../../../test/factories/virtualizer')).fakeVirtualizer({ headerOffset: 0 }),
@@ -33,6 +33,7 @@ import type { Section, Shot } from '../../../types/project';
 import { invokeIpcMock } from '../../../test/factories/ipc';
 import { NoopResizeObserver } from '../../../test/factories/dom';
 import { makeSection, makeShot } from '../../../test/factories/survey';
+import { actMicrotasks } from '../../../test/factories/act';
 
 const shot = (id: number, length: number): Shot =>
   makeShot({ id, azimuth_in: 10, azimuth_out: 10, length, depth_out: 1 });
@@ -59,21 +60,12 @@ function typeCell(row: number, colKey: string, value: string) {
 const cellText = (row: number, colKey: string) =>
   screen.getByTestId(`grid-cell-${row}-${colKey}`).textContent?.trim() ?? '';
 
-/** Let the createShot promise settle and its `.then`/`.finally` run. */
-async function settle() {
-  await act(async () => {
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-}
-
 async function fillDraft() {
   typeCell(DRAFT_ROW, 'length', '5');
   typeCell(DRAFT_ROW, '_azimuth_avg', '100');
   typeCell(DRAFT_ROW, 'depth_in', '1');
   typeCell(DRAFT_ROW, 'depth_out', '2');
-  await settle();
+  await actMicrotasks(3);
 }
 
 let createShot: ReturnType<typeof vi.fn>;
@@ -118,13 +110,13 @@ describe('DataTable draft row when create_shot fails (DRAFT-1)', () => {
     // A refresh (a new sections array, as after the failure path's
     // refreshProjectState) must not retry it silently.
     rerender(<DataTable sections={[{ ...section, shots: [...section.shots] }]} />);
-    await settle();
+    await actMicrotasks(3);
     expect(createShot).toHaveBeenCalledTimes(1);
 
     // Editing the row is the retry; this time the backend accepts it.
     createShot.mockResolvedValue(result(true));
     typeCell(DRAFT_ROW, 'length', '6');
-    await settle();
+    await actMicrotasks(3);
     expect(createShot).toHaveBeenCalledTimes(2);
     expect(createShot.mock.calls[1]?.[1]).toMatchObject({ length: 6, depth_in: 1, depth_out: 2 });
     // Success clears the row back to a blank end draft, as before.

@@ -56,7 +56,7 @@ const h = vi.hoisted(() => {
 vi.mock('maplibre-gl', () => ({
   default: { Map: h.FakeMap, addProtocol: h.state.addProtocol, removeProtocol: h.state.removeProtocol },
 }));
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../../test/factories/tauri')).tauriCore(vi.fn()));
 
 import { createSurveyMap, reloadSatelliteTiles, type SurveyMapOptions } from '../createSurveyMap';
 import { useNetworkStore } from '../../../store/networkStore';

@@ -11,19 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import { runSerialized } from '../store/mutationQueue';
 import { runProjectSwitch } from './projectTransition';
-
-function deferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-}
-
-/** Let every already-queued microtask and promise callback run. */
-async function settle(): Promise<void> {
-  for (let i = 0; i < 10; i += 1) await Promise.resolve();
-}
+import { deferred, microtasks } from '../test/factories/async';
 
 describe('runProjectSwitch', () => {
   it('starts only after the edits queued before it have finished', async () => {
@@ -43,7 +31,7 @@ describe('runProjectSwitch', () => {
     });
 
     try {
-      await settle();
+      await microtasks(10);
       // The switch must still be waiting: an edit ahead of it is mid-flight.
       expect(trace).toEqual(['edit starts on the old project']);
     } finally {
@@ -68,7 +56,7 @@ describe('runProjectSwitch', () => {
       await switchInFlight.promise;
       trace.push('switch finishes');
     });
-    await settle();
+    await microtasks(10);
 
     // An edit issued while the switch runs goes straight through its own queue -
     // the identity guards, not this ordering, keep it off the new project.

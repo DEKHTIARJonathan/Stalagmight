@@ -17,12 +17,14 @@ const trackAction = vi.hoisted(() => vi.fn());
 const setDwellState = vi.hoisted(() => vi.fn());
 const checkDialogCancel = vi.hoisted(() => vi.fn());
 const trackDialogComplete = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/telemetry', () => ({
-  trackAction,
-  setDwellState,
-  checkDialogCancel,
-  trackDialogComplete,
-}));
+vi.mock('../../utils/telemetry', async () =>
+  (await import('../../test/factories/telemetry')).telemetryStubs({
+    trackAction,
+    setDwellState,
+    checkDialogCancel,
+    trackDialogComplete,
+  }),
+);
 vi.mock('../../utils/ipc');
 stubGetErrorMessage((e: unknown) => (e as { message?: string })?.message ?? 'error');
 invokeIpcMock.mockImplementation(async () => null);

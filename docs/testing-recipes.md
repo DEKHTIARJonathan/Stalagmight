@@ -803,6 +803,11 @@ pasting a copy. Each module is imported by path (there is no barrel):
 | `globalViewMap.ts` | The fake `maplibre-gl` module and `GlobalSurveyLayer` the `GlobalViewMap` component tests run against |
 | `virtualizer.ts` | A `@tanstack/react-virtual` that renders every row (jsdom has no layout) |
 | `dom.ts` | `NoopResizeObserver`, for a component that measures itself but whose test never resizes it |
+| `i18n.ts` | `react-i18next` whose `t` echoes the key: `i18nKeys()` (the real module, `useTranslation` replaced) or `translationStub()` (`useTranslation` only); `'keyAndOptions'` appends the options as JSON |
+| `telemetry.ts` | `utils/telemetry` with `trackDialogComplete` silenced: `telemetryWith({ ...stubs })` (the real module) or `telemetryStubs({ ...stubs })` (nothing else) |
+| `tauri.ts` | `@tauri-apps/api/core` for code that calls `invoke` directly: `tauriCoreResolving(answer)` or `tauriCore(yourSpy)` |
+| `components.tsx` | `dialogWrapperStub({ title, testId, spy })` (the dialog frame as a plain `<div>`) and `buttonStub()` |
+| `async.ts` / `act.ts` | `deferred<T>()`, and exact waits: `microtasks(n)`, `nextTimer()`, `timerTurns(n)`; `actMicrotasks(n)`, `actNextTimer()` inside React's `act` |
 
 **Builders** return a complete object: every required field at a neutral
 default, overridden by the argument (a shallow merge), optional fields absent
@@ -824,7 +829,14 @@ relies on being impossible. It records `added`, `addCalls` (with `beforeId`),
 `on`/`off` listeners (`listeners(type)`, `emit(type, e)`). The virtualizer is a
 whole module: `vi.mock('@tanstack/react-virtual', () => import('<rel>/test/factories/virtualizer'))`,
 or `fakeVirtualizer({ headerOffset: 0 })` / `fakeVirtualizer({ renderRows: false })`
-behind an `async` factory for the other layouts.
+behind an `async` factory for the other layouts. The module stand-ins in
+`i18n.ts`, `telemetry.ts`, `tauri.ts` and `components.tsx` go behind one the
+same way (E15-NF1):
+`vi.mock('react-i18next', async () => (await import('<rel>/test/factories/i18n')).i18nKeys())`.
+A spy the factory takes is the test's own `vi.hoisted` one; a spy declared
+without `vi.hoisted` is passed as a forwarding arrow
+(`spy: (props) => mockSpy(props)`), because the factory runs before the file's
+own top-level statements.
 
 **The `utils/ipc` mock.** `src/utils/__mocks__/ipc.ts` is a manual mock: a
 `vi.mock` of `utils/ipc` with no factory loads it in place of the real module,

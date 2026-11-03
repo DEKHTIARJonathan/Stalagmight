@@ -7,9 +7,7 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
 
 // Spy on the picker so the read-only guard can be asserted without touching dialogs.
 const pickAndRouteMock = vi.fn();

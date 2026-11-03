@@ -18,10 +18,9 @@ vi.mock('../../../utils/ipc', () => ({
   getErrorMessage: (e: unknown, f?: string) => (e as { message?: string })?.message ?? f ?? 'e',
 }));
 const trackDialogCompleteMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/telemetry')>()),
-  trackDialogComplete: trackDialogCompleteMock,
-}));
+vi.mock('../../../utils/telemetry', async () =>
+  (await import('../../../test/factories/telemetry')).telemetryWith({ trackDialogComplete: trackDialogCompleteMock }),
+);
 
 import SpeleoDiscardChangesDialog from '../SpeleoDiscardChangesDialog';
 import { useSpeleoStore } from '../../../store/speleoStore';

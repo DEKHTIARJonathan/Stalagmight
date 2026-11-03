@@ -22,7 +22,7 @@ import { projectStateEnvelope } from '../../test/projectStateEnvelope';
 import type { CommandError } from '../../types/ipc/CommandError';
 
 const invokeMock = vi.hoisted(() => vi.fn());
-vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeMock }));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCore(invokeMock));
 
 /** What the pool answers for a body that panicked (`pool::run`'s `PanicReply`). */
 const CRASH: CommandError = {

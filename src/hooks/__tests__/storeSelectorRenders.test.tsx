@@ -25,9 +25,7 @@ import { Profiler, type ReactNode } from 'react';
 import { act, render, renderHook } from '@testing-library/react';
 import type maplibregl from 'maplibre-gl';
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue(null),
-}));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving(null));
 // maplibre-gl touches `window.URL.createObjectURL` at module init, which jsdom
 // lacks. The subjects import it for types only.
 vi.mock('maplibre-gl', () => ({ default: {} }));

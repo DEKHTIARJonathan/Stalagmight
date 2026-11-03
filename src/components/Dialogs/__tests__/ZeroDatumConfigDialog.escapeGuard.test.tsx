@@ -19,10 +19,7 @@ vi.mock('@tanstack/react-virtual', async () =>
   (await import('../../../test/factories/virtualizer')).fakeVirtualizer({ renderRows: false }),
 );
 
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (k: string) => k }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).i18nKeys());
 
 vi.mock('maplibre-gl', () => ({ default: {} }));
 vi.mock('../SectionPreview', () => ({ default: () => null }));

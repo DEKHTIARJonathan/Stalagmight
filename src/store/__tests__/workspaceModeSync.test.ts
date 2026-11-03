@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useUIStore } from '../uiStore';
 import { sendWorkspaceMode, startWorkspaceModeSync } from '../workspaceModeSync';
 import { invokeIpcMock } from '../../test/factories/ipc';
+import { nextTimer } from '../../test/factories/async';
 
 vi.mock('../../utils/ipc');
 
@@ -19,9 +20,6 @@ const sentModes = () =>
 
 /** Let the chained sends drain. */
 const settle = () => sendWorkspaceMode(useUIStore.getState().appMode);
-
-/** Run every queued microtask (and promise continuation) once, without waiting on a send. */
-const flushMicrotasks = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 describe('workspace mode sync', () => {
   let stop: () => void;
@@ -48,7 +46,7 @@ describe('workspace mode sync', () => {
     useUIStore.getState().setAppMode('plan');
     useUIStore.getState().setAppMode('export');
     useUIStore.getState().setAppMode('survey');
-    await flushMicrotasks();
+    await nextTimer();
 
     expect(sentModes(), 'a later mode was sent before the first send settled').toEqual(['survey']);
     releaseFirst();

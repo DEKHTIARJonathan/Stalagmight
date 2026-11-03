@@ -24,13 +24,7 @@ import '../../../i18n';
 
 vi.mock('maplibre-gl', () => ({ default: {} }));
 vi.mock('../SectionPreview', () => ({ default: () => null }));
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({
-    children,
-  }: {
-    children: React.ReactNode | ((p: { requestClose: () => void }) => React.ReactNode);
-  }) => <div>{typeof children === 'function' ? children({ requestClose: () => {} }) : children}</div>,
-}));
+vi.mock('../DialogWrapper', async () => (await import('../../../test/factories/components')).dialogWrapperStub());
 vi.mock('../../common/SectionMetadataForm', () => ({ SectionMetadataForm: () => null }));
 
 const captured = vi.hoisted(() => ({ props: null as unknown }));

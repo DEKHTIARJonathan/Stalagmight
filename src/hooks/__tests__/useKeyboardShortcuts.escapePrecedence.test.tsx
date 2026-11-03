@@ -13,9 +13,7 @@ import { useGasPlanStore } from '../../store/gasPlanStore';
 
 // useKeyboardShortcuts pulls in telemetry/save helpers that ultimately call the
 // Tauri IPC bridge; stub it so importing the real hook here stays offline.
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue({}),
-}));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
 
 function pressEscape(): void {
   window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));

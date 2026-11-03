@@ -18,11 +18,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-vi.mock('../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-  setSource: vi.fn(),
-}));
+vi.mock('../../utils/telemetry', async () =>
+  (await import('../../test/factories/telemetry')).telemetryWith({ setSource: vi.fn() }),
+);
 // SectionPreview and the map panel pull maplibre-gl (WebGL) at module load,
 // which jsdom cannot execute. What the map DRAWS is covered by
 // utils/__tests__/tmlPreviewLayout.test.ts, on the pure layout function.

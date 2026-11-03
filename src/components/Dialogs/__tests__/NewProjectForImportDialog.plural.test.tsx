@@ -63,20 +63,11 @@ vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel: (s: unknown) => unknown) => sel({ createProject }),
 }));
 
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({ title, children }: { title: string; children: React.ReactNode }) => (
-    <div>
-      <div data-testid="dialog-title">{title}</div>
-      {children}
-    </div>
-  ),
-}));
+vi.mock('../DialogWrapper', async () =>
+  (await import('../../../test/factories/components')).dialogWrapperStub({ title: 'testid' }),
+);
 
-vi.mock('../../common/Button', () => ({
-  Button: ({ children, ...rest }: React.ComponentProps<'button'>) => (
-    <button {...rest}>{children}</button>
-  ),
-}));
+vi.mock('../../common/Button', async () => (await import('../../../test/factories/components')).buttonStub());
 
 import NewProjectForImportDialog from '../NewProjectForImportDialog';
 

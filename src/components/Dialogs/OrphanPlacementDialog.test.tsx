@@ -19,10 +19,7 @@ import userEvent from '@testing-library/user-event';
 // execute. Stub it - this test is about completion wiring, not the preview.
 vi.mock('./SectionPreview', () => ({ default: () => null }));
 // Telemetry is fire-and-forget; keep it from reaching Tauri IPC under jsdom.
-vi.mock('../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-}));
+vi.mock('../../utils/telemetry', async () => (await import('../../test/factories/telemetry')).telemetryWith());
 
 import OrphanPlacementDialog from './OrphanPlacementDialog';
 import { useProjectStore } from '../../store/projectStore';

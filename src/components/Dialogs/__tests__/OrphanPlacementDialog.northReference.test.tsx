@@ -20,10 +20,7 @@ vi.mock('../SectionPreview', () => ({
     return null;
   },
 }));
-vi.mock('../../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-}));
+vi.mock('../../../utils/telemetry', async () => (await import('../../../test/factories/telemetry')).telemetryWith());
 
 import OrphanPlacementDialog from '../OrphanPlacementDialog';
 import { useProjectStore } from '../../../store/projectStore';

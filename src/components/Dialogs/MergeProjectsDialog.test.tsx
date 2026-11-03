@@ -15,11 +15,9 @@ vi.mock('../../utils/fileDialogs', () => ({
   PROJECT_EXTENSION: '.stalx',
 }));
 
-vi.mock('../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-  setProjectActionSource: vi.fn(),
-}));
+vi.mock('../../utils/telemetry', async () =>
+  (await import('../../test/factories/telemetry')).telemetryWith({ setProjectActionSource: vi.fn() }),
+);
 
 import MergeProjectsDialog from './MergeProjectsDialog';
 import { saveDialog } from '../../utils/fileDialogs';

@@ -32,22 +32,24 @@ vi.mock('./openOrImport', () => ({ routeOpenedFile: routeOpenedFileMock }));
 const setProjectActionSourceMock = vi.hoisted(() => vi.fn());
 // uiStore imports the tracking side of this module; stub the whole surface so
 // `openDialog` works without pulling telemetry's IPC in.
-vi.mock('./telemetry', () => ({
-  setProjectActionSource: setProjectActionSourceMock,
-  clearProjectActionSource: vi.fn(),
-  trackAction: vi.fn(),
-  trackDialogComplete: vi.fn(),
-  checkDialogCancel: vi.fn(),
-  trackDisplayState: vi.fn(),
-  setDwellState: vi.fn(),
-  advanceProjectSeq: vi.fn(),
-  trackNav: vi.fn(),
-  trackPanelToggle: vi.fn(),
-  trackPanelMode: vi.fn(),
-  trackSelect: vi.fn(),
-  trackSelectAdd: vi.fn(),
-  isPersistSuppressed: () => false,
-}));
+vi.mock('./telemetry', async () =>
+  (await import('../test/factories/telemetry')).telemetryStubs({
+    setProjectActionSource: setProjectActionSourceMock,
+    clearProjectActionSource: vi.fn(),
+    trackAction: vi.fn(),
+    trackDialogComplete: vi.fn(),
+    checkDialogCancel: vi.fn(),
+    trackDisplayState: vi.fn(),
+    setDwellState: vi.fn(),
+    advanceProjectSeq: vi.fn(),
+    trackNav: vi.fn(),
+    trackPanelToggle: vi.fn(),
+    trackPanelMode: vi.fn(),
+    trackSelect: vi.fn(),
+    trackSelectAdd: vi.fn(),
+    isPersistSuppressed: () => false,
+  }),
+);
 
 const listenMock = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }));

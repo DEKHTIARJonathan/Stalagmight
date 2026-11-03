@@ -14,10 +14,7 @@ import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 vi.mock('@tanstack/react-virtual', () => import('../../../test/factories/virtualizer'));
 import { render, screen, fireEvent } from '@testing-library/react';
 
-vi.mock('react-i18next', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('react-i18next')>()),
-  useTranslation: () => ({ t: (k: string) => k }),
-}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).i18nKeys());
 
 vi.mock('maplibre-gl', () => ({ default: {} }));
 vi.mock('../SectionPreview', () => ({ default: () => null }));
@@ -26,14 +23,7 @@ vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel: (s: unknown) => unknown) => sel({ project: null, config: null }),
 }));
 
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({
-    children,
-  }: {
-    children: React.ReactNode | ((p: { requestClose: () => void }) => React.ReactNode);
-    [k: string]: unknown;
-  }) => <div>{typeof children === 'function' ? children({ requestClose: () => {} }) : children}</div>,
-}));
+vi.mock('../DialogWrapper', async () => (await import('../../../test/factories/components')).dialogWrapperStub());
 
 vi.mock('../../common/SectionMetadataForm', () => ({ SectionMetadataForm: () => null }));
 

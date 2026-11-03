@@ -23,13 +23,10 @@ vi.mock('../../../store/uiStore', () => ({
 vi.mock('../../../store/projectStore', () => ({
   useProjectStore: (sel: (s: unknown) => unknown) => sel({ loadProject: vi.fn() }),
 }));
-vi.mock('../../../utils/telemetry', () => ({
-  trackDialogComplete: vi.fn(),
-  setProjectActionSource: vi.fn(),
-}));
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
+vi.mock('../../../utils/telemetry', async () =>
+  (await import('../../../test/factories/telemetry')).telemetryStubs({ setProjectActionSource: vi.fn() }),
+);
+vi.mock('../DialogWrapper', async () => (await import('../../../test/factories/components')).dialogWrapperStub());
 
 import '../../../i18n';
 import CorruptionRecoveryDialog from '../CorruptionRecoveryDialog';

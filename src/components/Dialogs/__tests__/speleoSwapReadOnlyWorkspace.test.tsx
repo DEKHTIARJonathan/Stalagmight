@@ -16,10 +16,9 @@ import userEvent from '@testing-library/user-event';
 vi.mock('../../../utils/ipc');
 stubGetErrorMessage(messageOr('e'));
 const trackDialogCompleteMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/telemetry')>()),
-  trackDialogComplete: trackDialogCompleteMock,
-}));
+vi.mock('../../../utils/telemetry', async () =>
+  (await import('../../../test/factories/telemetry')).telemetryWith({ trackDialogComplete: trackDialogCompleteMock }),
+);
 
 import i18n from '../../../i18n';
 import SpeleoDivergenceDialog from '../SpeleoDivergenceDialog';

@@ -17,6 +17,7 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import type { SpeleoProjectMetadata } from '../../types/ipc.generated';
 import { invokeIpcMock, stubGetErrorMessage, errorMessageOrString } from '../../test/factories/ipc';
+import { deferred } from '../../test/factories/async';
 
 const META: SpeleoProjectMetadata = {
   name: 'CaveA',
@@ -27,15 +28,6 @@ const META: SpeleoProjectMetadata = {
   longitude: null,
   exclude_geojson: false,
 };
-
-/** A metadata load the test resolves by hand. */
-function deferred() {
-  let resolve!: (m: SpeleoProjectMetadata) => void;
-  const promise = new Promise<SpeleoProjectMetadata>((r) => {
-    resolve = r;
-  });
-  return { promise, resolve };
-}
 
 beforeEach(() => {
   invokeIpcMock.mockReset();
@@ -158,8 +150,8 @@ describe('useSpeleoProjectMetadata reloads (#576 D26)', () => {
     const { result } = renderHook(() => useSpeleoProjectMetadata());
     await waitFor(() => expect(result.current.form?.name).toBe('CaveA'));
 
-    const older = deferred();
-    const newer = deferred();
+    const older = deferred<SpeleoProjectMetadata>();
+    const newer = deferred<SpeleoProjectMetadata>();
     invokeIpcMock.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
     let first!: Promise<void>;
     let second!: Promise<void>;
@@ -183,7 +175,7 @@ describe('useSpeleoProjectMetadata reloads (#576 D26)', () => {
   });
 
   it('applies nothing from a load that resolves after unmount', async () => {
-    const pending = deferred();
+    const pending = deferred<SpeleoProjectMetadata>();
     invokeIpcMock.mockReturnValueOnce(pending.promise);
     const { result, unmount } = renderHook(() => useSpeleoProjectMetadata());
     const before = result.current;

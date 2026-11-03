@@ -39,20 +39,11 @@ vi.mock('../../../store/projectStore', () => ({
 // the `isDirty` spy while it is here: the clean/dirty contract had never been
 // exercised against a PREFILLED dialog, which is exactly what this merge creates.
 const mockDialogWrapperSpy = vi.fn();
-vi.mock('../DialogWrapper', () => ({
-  DialogWrapper: ({
-    children,
-    isDirty,
-    ...props
-  }: {
-    children: React.ReactNode | ((p: { requestClose: () => void }) => React.ReactNode);
-    isDirty?: boolean;
-    [k: string]: unknown;
-  }) => {
-    mockDialogWrapperSpy({ isDirty, ...props });
-    return <div>{typeof children === 'function' ? children({ requestClose: () => {} }) : children}</div>;
-  },
-}));
+vi.mock('../DialogWrapper', async () =>
+  (await import('../../../test/factories/components')).dialogWrapperStub({
+    spy: (props) => mockDialogWrapperSpy(props),
+  }),
+);
 
 /** What the dialog last told DialogWrapper about its dirtiness. */
 function lastIsDirty(): boolean {

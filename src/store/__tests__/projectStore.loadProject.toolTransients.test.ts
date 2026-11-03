@@ -28,9 +28,7 @@ vi.mock('../../utils/loadProjectBinary', () => ({
   loadProjectFullBinary: loadBinaryMock,
 }));
 
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue(undefined),
-}));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving(undefined));
 
 describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
   beforeEach(() => {

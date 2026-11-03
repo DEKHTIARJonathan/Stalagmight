@@ -16,7 +16,7 @@ import { invokeIpcMock as invokeIpc } from '../../test/factories/ipc';
 
 vi.mock('../ipc');
 const invoke = vi.hoisted(() => vi.fn());
-vi.mock('@tauri-apps/api/core', () => ({ invoke }));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCore(invoke));
 
 const { fetchProjectStateBinary, loadProjectFullBinary } = await import('../loadProjectBinary');
 const { getPerfTimings } = await import('../memoryProbe');

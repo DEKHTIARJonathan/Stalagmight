@@ -30,10 +30,7 @@ vi.mock('../../utils/fileDialogs', () => ({
   ensureExtension: vi.fn((p: string) => p),
 }));
 
-vi.mock('../../utils/telemetry', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/telemetry')>()),
-  trackDialogComplete: vi.fn(),
-}));
+vi.mock('../../utils/telemetry', async () => (await import('../../test/factories/telemetry')).telemetryWith());
 
 import ExportControls from './ExportControls';
 import { useProjectStore } from '../../store/projectStore';

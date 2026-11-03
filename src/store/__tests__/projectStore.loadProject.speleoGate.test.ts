@@ -22,7 +22,7 @@ const loadBinaryMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../utils/ipc');
 vi.mock('../../utils/loadProjectBinary', () => ({ loadProjectFullBinary: loadBinaryMock }));
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving(undefined));
 
 const displaySettings: DisplaySettings = {
   showStations: true,

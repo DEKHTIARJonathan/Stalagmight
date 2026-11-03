@@ -29,11 +29,7 @@ import { defaultConfig } from '../../../types/config';
 import type { Config } from '../../../types/config';
 import { invokeIpcMock } from '../../../test/factories/ipc';
 import { NoopResizeObserver } from '../../../test/factories/dom';
-
-async function flushMicrotasks() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
+import { microtasks } from '../../../test/factories/async';
 
 function freshConfig(): Config {
   return structuredClone(defaultConfig) as Config;
@@ -101,7 +97,7 @@ describe('DataTable view save across a close/reopen inside the flush window (#35
     toggleColumn('comment');
     expect(updateViewCalls()).toHaveLength(0);
     first.unmount();
-    await flushMicrotasks();
+    await microtasks(2);
     expect(updateViewCalls()).toHaveLength(1);
     expect(updateViewCalls()[0]?.[1]).toMatchObject({
       hiddenColumns: ['comment', 'section_id', 'shot_id'],
@@ -116,7 +112,7 @@ describe('DataTable view save across a close/reopen inside the flush window (#35
     // the whole point: the one-shot seed will refuse to re-read it.
     releaseSave?.();
     await act(async () => {
-      await flushMicrotasks();
+      await microtasks(2);
     });
 
     // A further edit in the reopened table. Its payload is built from the state

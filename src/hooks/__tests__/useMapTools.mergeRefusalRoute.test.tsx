@@ -17,7 +17,7 @@ vi.mock('../../utils/ipc', () => ({
   invokeIpc: vi.fn().mockResolvedValue(undefined),
   getErrorMessage: (e: unknown, fallback?: string) => (e as { message?: string })?.message ?? fallback ?? 'error',
 }));
-vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue({}) }));
+vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
 
 import { useMapTools } from '../useMapTools';
 import { refusedMergeOffersClosure } from '../../utils/mergeConnectivity';
