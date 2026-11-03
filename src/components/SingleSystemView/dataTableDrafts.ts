@@ -20,8 +20,10 @@ import { AZIMUTH_AVG_KEY } from './dataTableEdits';
 export type DraftAnchor = { afterShotId: number } | { beforeShotId: number } | 'end';
 
 export interface ShotDraft {
-  /** Negative, unique per draft - doubles as the grid row id (real shot ids
-   *  are positive). The end draft is always {@link END_DRAFT_KEY}. */
+  /** Negative, unique per draft and never reused - doubles as the grid row id
+   *  (real shot ids are positive). Only the initial end draft, before the table's
+   *  key counter has run, is {@link END_DRAFT_KEY}; every later end draft takes a
+   *  fresh counter key like any other draft (#576 RV4-FE-FEA-3). */
   key: number;
   anchor: DraftAnchor;
   data: Partial<ShotData>;

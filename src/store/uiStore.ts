@@ -339,7 +339,6 @@ export function selectionsEqual(a: Selection, b: Selection): boolean {
  */
 export type ToastKind = 'info' | 'success' | 'warning' | 'error';
 
-/** One entry in the toast stack. Ordered oldest-first in `UIStore.toasts`. */
 /**
  * A toast's one action button. Toasts carry none by policy (docs/notifications.md);
  * the single sanctioned exception is the lost-WebGL-context toast's "Reload map"
@@ -364,6 +363,7 @@ export interface ToastOptions {
   persistent?: boolean;
 }
 
+/** One entry in the toast stack. Ordered oldest-first in `UIStore.toasts`. */
 export interface ToastItem {
   /** Process-unique, monotonically increasing. React key and timer identity. */
   id: number;

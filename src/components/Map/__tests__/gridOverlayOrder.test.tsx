@@ -84,7 +84,7 @@ afterEach(() => {
 
 describe('GridOverlay layer anchoring', () => {
   it('goes below the bottom-most survey layer, not on top of the survey', () => {
-    // initializeLayers adds the ghost shot hitbox first, so anchoring there puts
+    // addAuxiliaryLayers adds the ghost shot hitbox first, so anchoring there puts
     // the grid below the ghosts, the loop closures and the WebGL geometry alike.
     const { map, addLayer } = makeMap([
       'survey-ghost-shots-hitbox',

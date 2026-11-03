@@ -426,12 +426,6 @@ export type ImportFailure =
   | { phase: 'transport'; error: unknown; format: string };
 
 /**
- * The user-facing message for a failed import. Exported so a dialog that reports
- * the failure on a surface of its own (TmlImportDialog's empty-project prompt,
- * which has to ask about the project the failed import created) words it exactly
- * as this router would, instead of minting a second set of strings.
- */
-/**
  * Whether an import command's failure says the user cancelled it: the loading
  * overlay's Cancel stopped it before anything was applied (code `IMPORT_CANCELLED`,
  * the backend's import runner; #576 NF-FIX3A-2), so nothing was imported.
@@ -440,6 +434,12 @@ export function isImportCancelled(code: CommandErrorCode | null | undefined): bo
   return code === 'IMPORT_CANCELLED';
 }
 
+/**
+ * The user-facing message for a failed import. Exported so a dialog that reports
+ * the failure on a surface of its own (TmlImportDialog's empty-project prompt,
+ * which has to ask about the project the failed import created) words it exactly
+ * as this router would, instead of minting a second set of strings.
+ */
 export function importFailureMessage(failure: ImportFailure): string {
   switch (failure.phase) {
     case 'transport':
