@@ -571,93 +571,38 @@ impl AppState {
         // across a GET and a PATCH, which is the shape Start Editing already holds it
         // across - not across the download and import, which is why the acquire span
         // further up closes before them.
-        let (finalized, upload) = {
+        let (verdict, upload) = {
             let lock_ops = self.speleodb_lock_ops_guard();
-
             // Make sure the server project ends up typed `other`, and report whether it
             // did. Only after a landed push, which is the precondition either way:
             // flipping first leaves a project typed `other` whose only file is the Ariane
             // one that type says to disregard, openable by nobody. [#576 A8] By type: the
             // settle takes the hand-over's `AdoptLanded` and this span's proof.
-            let finalized = match &landed {
-                Some(landed) => self.adopt_finalize(
-                    &lock_ops,
-                    landed,
-                    &endpoint,
-                    &token,
-                    insecure_http,
-                    &project_id,
-                ),
-                None => AdoptFinalize::not_attempted(),
-            };
-
-            // Correct a release verdict the hand-over could only guess at. It reports
-            // `PushedLockHeld` whenever `speleodb_done` returned `Err` over a landed
-            // push - but that `Err` covers a release the server REFUSED and one whose
-            // success we failed to read alike, and the GET above has just asked the
-            // server outright. A mutex that is not ours means the release did land,
-            // whatever the transport said on the way back.
             //
-            // Only ever demotes, and only on a POSITIVE answer. There are two ways not
-            // to have one, and both keep the protective arm: a holder we could not read,
-            // and an identity of our own we could not establish. `lock_held_by_me`
-            // answers false for either, so testing `!lock_held_by_me(..)` alone would
-            // read "we do not know who we are" as "the lock is somebody else's" and drop
-            // the warning in exactly the case with least evidence for it - the same "we
-            // could not ask" becoming "the lock is free" that the holder side is guarded
-            // against. `my_email` is `None` on a poisoned session mutex as readily as on
-            // a sign-out, so this needs no race to reach.
-            let upload = match (upload, &finalized.holder) {
-                (AdoptUpload::PushedLockHeld, Some(holder))
-                    if my_email.is_some()
-                        && !lock_held_by_me(holder.as_deref(), my_email.as_deref()) =>
-                {
-                    tracing::info!(
-                        holder = ?holder,
-                        project_id,
-                        purpose = "correct a release that landed despite reporting an error",
-                        "speleodb_adopt_ariane: the write lock is not ours; the release did land"
-                    );
-                    // The claim says we hold a mutex the server has just told us we do
-                    // not. Left standing it outlives this call: the close teardown, the
-                    // janitor and the held-lock prompt all read it, and each would try to
-                    // hand back a lock that is either gone or, if another writer took it
-                    // in between, somebody else's.
-                    //
-                    // Scoped to THIS project. `speleodb_note_lock_acquired(None)` says
-                    // "the account holds nothing" and drops EVERY claim it owns -
-                    // including a lock deliberately kept on another project, whose
-                    // janitor retry pointer and authorship provenance would go with it,
-                    // over a call that established nothing about that project at all.
-                    //
-                    // And scoped to the account that TOOK it, for the same reason the
-                    // guard above compares against a captured identity: the plain
-                    // `speleodb_forget_lock_acquired_for` resolves the account from the
-                    // live session, which a sign-out or switch landing in here has
-                    // already moved. The claim would then outlive the demotion that
-                    // disproved it, and the reclaim check is account-blind - so it would
-                    // go on standing a later release down over a mutex the server has
-                    // told us is not ours.
-                    if let Some(email) = my_email.as_deref() {
-                        let _ = self.speleodb_forget_lock_acquired_as(
-                            &lock_ops,
-                            &project_id,
-                            &endpoint,
-                            email,
-                        );
-                    }
-                    AdoptUpload::Pushed
-                }
-                (upload, _) => upload,
-            };
-
-            (finalized, upload)
+            // [#576 NF-A8R-GAPS] Then the release-verdict correction, through the settle's
+            // own span: `AdoptSettled` borrows `lock_ops`, and only its
+            // `correct_release_verdict` makes the verdict the close takes.
+            self.adopt_settle(
+                &lock_ops,
+                landed.as_ref(),
+                &endpoint,
+                &token,
+                insecure_http,
+                &project_id,
+            )
+            .correct_release_verdict(
+                self,
+                upload,
+                my_email.as_deref(),
+                &project_id,
+                &endpoint,
+            )
         };
         // Hand the project back to the frontend to open, LAST - see `adopt_close`,
         // whose answer is the verb's.
         Ok(self.adopt_close(
             edit_gate,
-            finalized,
+            verdict,
             adopt_order::AdoptReport {
                 dest: &dest,
                 concurrent_session,
@@ -1297,7 +1242,9 @@ mod adopt_order {
     use super::super::speleodb::DumpAt;
     use super::super::speleodb_pull::{pull_dating, usable_tip, PullDating};
     use super::super::speleodb_session::{InSpan, LockOpsHeld};
-    use super::{AdoptFinalize, AdoptLock, AdoptionEditGate, AppState, ADOPT_COMMIT_MESSAGE};
+    use super::{
+        lock_held_by_me, AdoptFinalize, AdoptLock, AdoptionEditGate, AppState, ADOPT_COMMIT_MESSAGE,
+    };
     use crate::core::command::ImportReceipt;
     use crate::models::{SpeleoLink, UndoMode};
     use crate::speleodb::contract::{dto_for_error, Endpoint};
@@ -1884,6 +1831,129 @@ mod adopt_order {
         }
     }
 
+    /// [#576 NF-A8R-GAPS] The type settle's verdict, still inside the lock-ops span it
+    /// was reached in: it BORROWS that span. The release-verdict correction is its
+    /// method and clears a disproved claim through that same span, and the close takes
+    /// only what the correction returns ([`AdoptVerdict`]) - so a fresh span opened
+    /// between the settle and the clear is a borrow error (E0505), not a reorder a
+    /// reviewer has to spot. The RV8a-1 shape (`GatesDropped`, `Relocated`).
+    pub(super) struct AdoptSettled<'s, 'g> {
+        span: &'s LockOpsHeld<'g>,
+        verdict: AdoptFinalize,
+    }
+
+    /// The settled verdict after the correction: what the close reports.
+    pub(super) struct AdoptVerdict {
+        finalized: AdoptFinalize,
+    }
+
+    impl AppState {
+        /// Settle the server type inside `lock_ops`: flip it after a landed push
+        /// (`adopt_finalize`), or nothing when the push never landed.
+        pub(super) fn adopt_settle<'s, 'g>(
+            &self,
+            lock_ops: &'s LockOpsHeld<'g>,
+            landed: Option<&AdoptLanded>,
+            endpoint: &str,
+            token: &str,
+            insecure_http: bool,
+            project_id: &str,
+        ) -> AdoptSettled<'s, 'g> {
+            let verdict = match landed {
+                Some(landed) => self.adopt_finalize(
+                    lock_ops,
+                    landed,
+                    endpoint,
+                    token,
+                    insecure_http,
+                    project_id,
+                ),
+                None => AdoptFinalize::not_attempted(),
+            };
+            AdoptSettled {
+                span: lock_ops,
+                verdict,
+            }
+        }
+    }
+
+    impl AdoptSettled<'_, '_> {
+        /// The hand-over's release verdict, corrected by the holder the settle read,
+        /// with the disproved claim cleared in the settle's span. `my_email` is the
+        /// account that took the lock (captured inside the acquire span).
+        pub(super) fn correct_release_verdict(
+            self,
+            state: &AppState,
+            upload: AdoptUpload,
+            my_email: Option<&str>,
+            project_id: &str,
+            endpoint: &str,
+        ) -> (AdoptVerdict, AdoptUpload) {
+            // Correct a release verdict the hand-over could only guess at. It reports
+            // `PushedLockHeld` whenever `speleodb_done` returned `Err` over a landed
+            // push - but that `Err` covers a release the server REFUSED and one whose
+            // success we failed to read alike, and the GET above has just asked the
+            // server outright. A mutex that is not ours means the release did land,
+            // whatever the transport said on the way back.
+            //
+            // Only ever demotes, and only on a POSITIVE answer. There are two ways not
+            // to have one, and both keep the protective arm: a holder we could not read,
+            // and an identity of our own we could not establish. `lock_held_by_me`
+            // answers false for either, so testing `!lock_held_by_me(..)` alone would
+            // read "we do not know who we are" as "the lock is somebody else's" and drop
+            // the warning in exactly the case with least evidence for it - the same "we
+            // could not ask" becoming "the lock is free" that the holder side is guarded
+            // against. `my_email` is `None` on a poisoned session mutex as readily as on
+            // a sign-out, so this needs no race to reach.
+            let upload = match (upload, &self.verdict.holder) {
+                (AdoptUpload::PushedLockHeld, Some(holder))
+                    if my_email.is_some() && !lock_held_by_me(holder.as_deref(), my_email) =>
+                {
+                    tracing::info!(
+                        holder = ?holder,
+                        project_id,
+                        purpose = "correct a release that landed despite reporting an error",
+                        "speleodb_adopt_ariane: the write lock is not ours; the release did land"
+                    );
+                    // The claim says we hold a mutex the server has just told us we do
+                    // not. Left standing it outlives this call: the close teardown, the
+                    // janitor and the held-lock prompt all read it, and each would try to
+                    // hand back a lock that is either gone or, if another writer took it
+                    // in between, somebody else's.
+                    //
+                    // Scoped to THIS project. `speleodb_note_lock_acquired(None)` says
+                    // "the account holds nothing" and drops EVERY claim it owns -
+                    // including a lock deliberately kept on another project, whose
+                    // janitor retry pointer and authorship provenance would go with it,
+                    // over a call that established nothing about that project at all.
+                    //
+                    // And scoped to the account that TOOK it, for the same reason the
+                    // guard above compares against a captured identity: the plain
+                    // `speleodb_forget_lock_acquired_for` resolves the account from the
+                    // live session, which a sign-out or switch landing in here has
+                    // already moved. The claim would then outlive the demotion that
+                    // disproved it, and the reclaim check is account-blind - so it would
+                    // go on standing a later release down over a mutex the server has
+                    // told us is not ours.
+                    if let Some(email) = my_email {
+                        let _ = state.speleodb_forget_lock_acquired_as(
+                            self.span, project_id, endpoint, email,
+                        );
+                    }
+                    AdoptUpload::Pushed
+                }
+                (upload, _) => upload,
+            };
+
+            (
+                AdoptVerdict {
+                    finalized: self.verdict,
+                },
+                upload,
+            )
+        }
+    }
+
     /// The parts of the verb's answer the close passes through untouched.
     pub(super) struct AdoptReport<'a> {
         pub(super) dest: &'a Path,
@@ -1924,19 +1994,21 @@ mod adopt_order {
         /// non-landing arms keep it so a retry can recover, and the frontend re-opens
         /// this very project a moment later.
         ///
-        /// [#576 A8] Takes the verdict (`finalized`), so it cannot run before the
-        /// hand-over and the type settle, and the edit gate by value, which it lifts
-        /// after the close - the same order the end of the verb used to drop them in.
+        /// [#576 A8] Takes the verdict, so it cannot run before the hand-over, the
+        /// type settle and the release-verdict correction ([`AdoptVerdict`], made only
+        /// by [`AdoptSettled::correct_release_verdict`]), and the edit gate by value,
+        /// which it lifts after the close - the same order the end of the verb used to
+        /// drop them in.
         pub(super) fn adopt_close(
             &self,
             edit_gate: AdoptionEditGate<'_>,
-            finalized: AdoptFinalize,
+            verdict: AdoptVerdict,
             report: AdoptReport<'_>,
         ) -> AdoptClosed {
             self.close_project();
             let result = SpeleoAdoptResult {
                 local_path: report.dest.to_string_lossy().into_owned(),
-                type_flipped: finalized.type_flipped,
+                type_flipped: verdict.finalized.type_flipped,
                 concurrent_session: report.concurrent_session,
                 upload: report.upload,
                 import_receipt: report.import_receipt,
@@ -2808,6 +2880,84 @@ mod tests {
             seen.first().is_some_and(|line| line.starts_with("GET ")),
             "READ first"
         );
+    }
+
+    /// [#576 NF-A8R-GAPS] The release-verdict correction, driven through the settle's
+    /// span (`AdoptSettled::correct_release_verdict`). A `PushedLockHeld` over a mutex
+    /// the settle's GET shows is somebody else's is demoted to `Pushed`, and the claim
+    /// this account took on the project is cleared; a holder that is us, or an
+    /// identity of our own we could not establish, keeps the arm and the claim.
+    #[test]
+    fn the_release_verdict_correction_demotes_only_on_a_positive_answer() {
+        fn held_by_another(_line: &str) -> (u16, &'static str) {
+            (
+                200,
+                r#"{"id":"77777777-7777-7777-7777-777777777777","name":"Adopted","type":"other",
+                    "active_mutex":{"user":"other@x"}}"#,
+            )
+        }
+        fn held_by_us(_line: &str) -> (u16, &'static str) {
+            (
+                200,
+                r#"{"id":"77777777-7777-7777-7777-777777777777","name":"Adopted","type":"other",
+                    "active_mutex":{"user":"u@x"}}"#,
+            )
+        }
+        let cases: [(&str, fn(&str) -> (u16, &'static str), Option<&str>, bool); 3] = [
+            (
+                "held by another, we are u@x",
+                held_by_another,
+                Some("u@x"),
+                true,
+            ),
+            ("held by us", held_by_us, Some("u@x"), false),
+            (
+                "held by another, our identity unknown",
+                held_by_another,
+                None,
+                false,
+            ),
+        ];
+        for (case, route, my_email, demotes) in cases {
+            let (base, _listener, _seen) = routing_stub(route);
+            let state = AppState::new().expect("state");
+            *state.speleodb.lock() = authed_session_at(&base);
+            state.speleodb_note_lock_acquired(Some(GUARDED));
+            let lock_ops = state.speleodb_lock_ops_guard();
+            let (_verdict, upload) = state
+                .adopt_settle(
+                    &lock_ops,
+                    Some(&AdoptLanded::for_tests()),
+                    &base,
+                    "tok",
+                    true,
+                    GUARDED,
+                )
+                .correct_release_verdict(
+                    &state,
+                    AdoptUpload::PushedLockHeld,
+                    my_email,
+                    GUARDED,
+                    &base,
+                );
+            drop(lock_ops);
+            let claim_kept = state
+                .speleodb
+                .lock()
+                .locks_acquired_here
+                .iter()
+                .any(|claim| claim.project_id == GUARDED);
+            println!("{case}: upload {upload:?}, claim kept {claim_kept}");
+            assert_eq!(
+                matches!(upload, AdoptUpload::Pushed),
+                demotes,
+                "{case}: demoted only on a positive answer"
+            );
+            assert_eq!(
+                claim_kept, !demotes,
+                "{case}: the claim goes with the demotion"
+            );
+        }
     }
 
     /// [#258] Adoption classifies with its OWN matcher, so the resolver's dating never
