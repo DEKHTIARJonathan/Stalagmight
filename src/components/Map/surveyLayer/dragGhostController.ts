@@ -230,6 +230,12 @@ export class DragGhostController {
       if (gen !== this.dragGeneration) return; // superseded by a newer drag / teardown
       this.selfDisableScheduled = false;
       if (this.mode !== 'custom' || !this.set) return;
+      // The WebGL context was lost before this deferred fallback ran: there is no
+      // style to drop the layer from or build the stock ghost in, and getLayer
+      // reads the missing style and throws (#576 RV4-FE-MF-6, the NF-MAP-3 race).
+      // Leave the dead custom ghost in place: the restore's reattach() re-adds it,
+      // finds it disabled and runs this fallback again on a live style.
+      if (!hasLiveStyle(this.map)) return;
       if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
       this.layer = null;
       this.mode = 'stock';

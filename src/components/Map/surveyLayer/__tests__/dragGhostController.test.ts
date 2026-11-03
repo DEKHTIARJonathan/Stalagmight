@@ -257,6 +257,40 @@ describe('a carry cancelled while the WebGL context is lost (#576 NF-MAP-5)', ()
   });
 });
 
+describe('a context loss between a self-disable and its deferred fallback (#576 RV4-FE-MF-6)', () => {
+  it('the fallback does not read the missing style; the restore re-runs it on a live style', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fake = makeFakeMap();
+    const scheduled: (() => void)[] = [];
+    const ctrl = new DragGhostController(fake.map, makeOptions({ scheduleRestore: (fn) => scheduled.push(fn) }));
+    expect(ctrl.begin(SET)).toBe('custom');
+    ctrl.move(30, 10);
+
+    // A genuine GL error disables the ghost mid-render, then the context goes
+    // before the deferred fallback runs.
+    const ghost = h.layerState.last!;
+    (ghost as unknown as { disabled: boolean }).disabled = true;
+    ghost.onSelfDisable!('gl-error-0x505');
+    const m = fake.map as unknown as Record<string, unknown>;
+    const live = { style: m.style, getLayer: m.getLayer, addLayer: m.addLayer, removeLayer: m.removeLayer };
+    dropStyle(fake.map);
+    expect(() => scheduled[0]!()).not.toThrow();
+    expect(fake.sources.has(DRAG_PREVIEW_SOURCE)).toBe(false);
+
+    // The restore: MapLibre has a style again, and glContextRecovery re-adds the
+    // custom ghost, which is still disabled - so the fallback runs now, for real.
+    Object.assign(m, live);
+    fake.layers.delete(GHOST_ID);
+    ctrl.reattach(undefined);
+    expect(scheduled).toHaveLength(2);
+    scheduled[1]!();
+    expect(ctrl.isCustom()).toBe(false);
+    expect(fake.layers.has(GHOST_ID)).toBe(false);
+    expect(fake.sources.has(DRAG_PREVIEW_SOURCE)).toBe(true);
+    ctrl.end();
+  });
+});
+
 describe('a STOCK-ghost carry while the WebGL context is lost (#576 RV4-FE-SL2)', () => {
   it('move() and end() do not read the missing style', () => {
     // The custom ghost cannot initialize, so the carry runs on the stock ghost.
