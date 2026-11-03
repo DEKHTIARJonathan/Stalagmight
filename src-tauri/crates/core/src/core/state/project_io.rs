@@ -1062,8 +1062,9 @@ impl AppState {
     /// are `Option<Project>` / `Option<Database>` / the undo stack, and setting
     /// them to `None`/empty is precisely the recovery - there is no half-written
     /// state to protect. Skipping the drop, by contrast, is never safe: this
-    /// function is the pre-rename close that `close_project_if_open_at` relies on,
-    /// and it used to report `true` while still holding the live SQLite handle and
+    /// function's teardown (`close_open_project_locked`) is the pre-replace close
+    /// that `close_project_if_open_at_held` relies on (#576 RV9a-8), and it used to
+    /// report `true` while still holding the live SQLite handle and
     /// its 256 MB mmap, so the caller went on to rename a new file over it - the
     /// exact SIGBUS / `MoveFileEx`-denied hazard the guard exists to prevent.
     pub(super) fn close_project(&self) -> CommandResult {
