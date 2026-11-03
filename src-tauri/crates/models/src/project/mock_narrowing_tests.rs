@@ -15,10 +15,10 @@
 
 use chrono::Utc;
 
-use crate::config::GasConfig;
+use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset};
 use crate::{
-    ClosureStrategy, CylRole, Cylinder, Diver, LoopClosure, Project, SectionData, SectionId,
-    ShotData, StationMerge, StationRef, TankMaterial,
+    ClosureStrategy, CylRole, Cylinder, Diver, LoopClosure, PlanSegment, Project, SectionData,
+    SectionId, ShotData, StationMerge, StationRef, TankMaterial,
 };
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
@@ -210,4 +210,207 @@ fn turn_toward_endpoint_is_false_for_both_deepest_fallbacks() {
         !marooned.turn_toward_endpoint,
         "an endpoint in another passage: the fallback is not on the way there"
     );
+}
+
+fn plain_rig() -> DpvRig {
+    let unit = DpvUnit {
+        speed_m_per_min: 55.0,
+        burn_minutes: 100.0,
+    };
+    DpvRig {
+        primary: unit.clone(),
+        backup: unit,
+        range_reserve_fraction: 0.0,
+    }
+}
+
+fn span(speed: f64, on_scooter: bool) -> PlanSegment {
+    PlanSegment {
+        speed_m_per_min: Some(speed),
+        on_scooter,
+    }
+}
+
+/// The scooter park point is derived from the segment list: with a rig on board but no span
+/// ridden, nothing is parked anywhere, however many spans the plan has. (The existing tests
+/// cover a one-span plan, where the "last scootered span is the last span" rule hides this.)
+#[test]
+fn a_plan_with_no_scootered_span_parks_no_scooters() {
+    let mut project = Project::new("CaveA".to_string(), None);
+    let sec = descent(&mut project);
+    let entrance = StationRef::new(sec, 0);
+    let first_leg_end = StationRef::new(sec, 1);
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        dpv: Some(plain_rig()),
+        ..GasConfig::default()
+    };
+    let park = |segments: &[PlanSegment]| {
+        project
+            .compute_gas_reach_field_with_overrides(
+                Some(&entrance),
+                Some(&StationRef::new(sec, 3)),
+                &[first_leg_end],
+                segments,
+                &diver,
+                &[unlimited_backgas()],
+                &cfg,
+                &[],
+            )
+            .scooter_drop_ref
+    };
+
+    assert_eq!(
+        park(&[span(55.0, true), span(10.0, false)]),
+        Some(first_leg_end),
+        "premise: ride the first span, swim the second - the units wait at the way point"
+    );
+    assert_eq!(
+        park(&[span(10.0, false), span(10.0, false)]),
+        None,
+        "nothing ridden, nothing parked"
+    );
+}
+
+fn stage(fill_bar: f64, usable_gas_bar: f64) -> Cylinder {
+    Cylinder {
+        usable_gas_bar,
+        ..Cylinder::new(
+            11.0,
+            207.0,
+            fill_bar,
+            TankMaterial::Aluminium,
+            CylRole::Stage,
+            None,
+        )
+        .unwrap()
+    }
+}
+
+fn drop_bars(
+    project: &Project,
+    origin: StationRef,
+    preset: ReservePreset,
+    rig: &[Cylinder],
+) -> Vec<f64> {
+    let cfg = GasConfig {
+        default_reserve: preset,
+        ..GasConfig::default()
+    };
+    project
+        .compute_gas_reach_field(
+            Some(&origin),
+            None,
+            &Diver::new(20.0, None).unwrap(),
+            rig,
+            &cfg,
+        )
+        .stage_drop_bars
+}
+
+/// A staged preset drops the FIRST `required_stages` enabled stages in rig order; a spare stage
+/// after them is carried, not dropped. Only rigs with exactly the required stages were asserted,
+/// where first and last coincide.
+#[test]
+fn a_staged_preset_drops_its_first_stages_in_rig_order() {
+    let mut project = Project::new("CaveA".to_string(), None);
+    let sec = descent(&mut project);
+    let origin = StationRef::new(sec, 0);
+    let backgas = unlimited_backgas();
+    let full = stage(200.0, 0.0);
+    let low = stage(150.0, 0.0);
+    let one = ReservePreset::OneStage;
+
+    let full_only = drop_bars(&project, origin, one, &[backgas.clone(), full.clone()]);
+    let low_only = drop_bars(&project, origin, one, &[backgas.clone(), low.clone()]);
+    assert_eq!(full_only.len(), 1);
+    assert_ne!(
+        full_only, low_only,
+        "premise: the two stages drop at different gauges"
+    );
+
+    assert_eq!(
+        drop_bars(
+            &project,
+            origin,
+            one,
+            &[backgas.clone(), full.clone(), low.clone()]
+        ),
+        full_only,
+        "the first stage in rig order is the one dropped"
+    );
+    assert_eq!(
+        drop_bars(&project, origin, one, &[backgas, low, full]),
+        low_only
+    );
+}
+
+/// Free drops every enabled stage that has usable gas and skips one that has none.
+#[test]
+fn free_drops_only_the_stages_with_usable_gas() {
+    let mut project = Project::new("CaveA".to_string(), None);
+    let sec = descent(&mut project);
+    let origin = StationRef::new(sec, 0);
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::Free,
+        ..GasConfig::default()
+    };
+    let field = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &Diver::new(20.0, None).unwrap(),
+        &[unlimited_backgas(), stage(207.0, 40.0), stage(207.0, 0.0)],
+        &cfg,
+    );
+    assert_eq!(
+        field.stage_drop_bars.len(),
+        1,
+        "only the stage with usable gas drops"
+    );
+    assert_eq!(field.stage_drop_refs.len(), 1);
+    assert_eq!(field.stage_drop_distances_m.len(), 1);
+}
+
+/// `waypoint_gas_litres` is CUMULATIVE from the origin, not the cost of the leg into the way
+/// point: the second way point of a straight run costs what reaching it directly costs. With a
+/// single way point the two readings coincide, which is all the existing tests had.
+#[test]
+fn way_point_gas_is_cumulative_from_the_origin() {
+    let mut project = Project::new("CaveA".to_string(), None);
+    let sec = descent(&mut project);
+    let entrance = StationRef::new(sec, 0);
+    let (one, two) = (StationRef::new(sec, 1), StationRef::new(sec, 2));
+    let diver = Diver::new(20.0, None).unwrap();
+    let rig = [unlimited_backgas()];
+    let cfg = GasConfig::default();
+
+    let plain = project.compute_gas_reach_field(Some(&entrance), None, &diver, &rig, &cfg);
+    let direct = |r: StationRef| {
+        let i = plain.station_refs.iter().position(|s| *s == r).unwrap();
+        plain.gas_to_reach[i].unwrap()
+    };
+    let via = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        None,
+        &[one, two],
+        &[],
+        &diver,
+        &rig,
+        &cfg,
+        &[],
+    );
+    let at = |k: usize| via.waypoint_gas_litres[k].unwrap();
+    assert!(
+        (at(0) - direct(one)).abs() < 1e-6,
+        "{} vs {}",
+        at(0),
+        direct(one)
+    );
+    assert!(
+        (at(1) - direct(two)).abs() < 1e-6,
+        "the second way point reads the whole way in: {} vs {}",
+        at(1),
+        direct(two)
+    );
+    assert!(at(1) > at(0));
 }
