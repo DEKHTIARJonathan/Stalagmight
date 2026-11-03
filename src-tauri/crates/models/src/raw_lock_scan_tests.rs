@@ -12,12 +12,21 @@
 //! (docs/linting.md); this source scan is the guard instead, and runs with the
 //! workspace tests like every other tripwire.
 //!
-//! Scanned: `src-tauri/src` and every `src-tauri/crates/*/src`. Not scanned: test
-//! code - `*tests.rs` files, anything declared or defined under a
-//! `#[cfg(test)]` / `#[cfg(any(test, ..))]` / `#[cfg(all(test, ..))]` attribute
-//! (an inline module, a `mod x;` and the files under it, a single item) - and
-//! `poison_policy.rs`, which wraps the std type by design. Comments and string
-//! literals are blanked before matching, so prose that names the type is not a hit.
+//! Scanned: `src-tauri/src` and every `src-tauri/crates/*/src` - the code the app
+//! ships. Not scanned, on purpose (#576 RV6a-13):
+//! - test code: files named `tests.rs` or `*_tests.rs` (exactly those names - a
+//!   production `contests.rs` is scanned), and anything declared or defined under a
+//!   `#[cfg(test)]` / `#[cfg(any(test, ..))]` / `#[cfg(all(test, ..))]` attribute
+//!   (an inline module, a `mod x;` and the files under it, a single item);
+//! - build and tooling code outside `src/`: `build.rs`, `examples/` (the IPC type
+//!   generator, which keeps a std `Mutex` of its own), `benches/`, the `tests/`
+//!   integration tests and `vendor/`. None of it runs in the app;
+//! - `poison_policy.rs`, which wraps the std type by design.
+//!
+//! Comments and string literals are blanked before matching, so prose that names
+//! the type is not a hit, and `use` declarations are parsed as trees (see
+//! [`raw_locks`]), so a lock imported through a group, a glob or a module alias is
+//! found like the spelled-out path.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -233,38 +242,237 @@ fn child_paths(file: &Path, name: &str) -> [PathBuf; 2] {
     ]
 }
 
-/// Raw std lock types named in the code of `code` outside `skip`.
+/// A token of blanked code: an identifier or keyword, `::`, or any other single
+/// byte of punctuation. Numbers are dropped (nothing here needs them).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tok<'a> {
+    Ident(&'a str),
+    PathSep,
+    Punct(u8),
+}
+
+/// `text` (already through [`code_only`]) as tokens, each with its byte offset.
+fn tokens(text: &str) -> Vec<(usize, Tok<'_>)> {
+    let b = text.as_bytes();
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80;
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c.is_ascii_whitespace() {
+            i += 1;
+        } else if c.is_ascii_digit() {
+            while i < b.len() && word(b[i]) {
+                i += 1;
+            }
+        } else if word(c) {
+            let start = i;
+            while i < b.len() && word(b[i]) {
+                i += 1;
+            }
+            // A raw identifier (`r#name`) is the name.
+            if &text[start..i] == "r" && b.get(i) == Some(&b'#') {
+                let name = i + 1;
+                let mut j = name;
+                while j < b.len() && word(b[j]) {
+                    j += 1;
+                }
+                if j > name {
+                    out.push((start, Tok::Ident(&text[name..j])));
+                    i = j;
+                    continue;
+                }
+            }
+            out.push((start, Tok::Ident(&text[start..i])));
+        } else if c == b':' && b.get(i + 1) == Some(&b':') {
+            out.push((i, Tok::PathSep));
+            i += 2;
+        } else {
+            out.push((i, Tok::Punct(c)));
+            i += 1;
+        }
+    }
+    out
+}
+
+/// One leaf of a `use` tree: the path it imports (a leading `::` dropped), the
+/// name it binds there (`None` for a glob), and where it is.
+#[derive(Debug)]
+struct UseLeaf {
+    path: Vec<String>,
+    binding: Option<String>,
+    at: usize,
+}
+
+/// Parse the use tree at `toks[*i..]` under `prefix`, pushing its leaves.
+/// Stops at the end of the tree (before a `,`, `}` or `;`).
+fn use_tree(toks: &[(usize, Tok<'_>)], i: &mut usize, prefix: &[String], out: &mut Vec<UseLeaf>) {
+    let mut path = prefix.to_vec();
+    if matches!(toks.get(*i), Some((_, Tok::PathSep))) {
+        *i += 1;
+    }
+    loop {
+        match toks.get(*i) {
+            Some(&(at, Tok::Ident(name))) => {
+                *i += 1;
+                if matches!(toks.get(*i), Some((_, Tok::PathSep))) {
+                    path.push(name.to_owned());
+                    *i += 1;
+                    continue;
+                }
+                // `self` re-imports the module the path names.
+                let mut binding = if name == "self" {
+                    path.last().cloned()
+                } else {
+                    path.push(name.to_owned());
+                    Some(name.to_owned())
+                };
+                if matches!(toks.get(*i), Some((_, Tok::Ident("as")))) {
+                    if let Some(&(_, Tok::Ident(alias))) = toks.get(*i + 1) {
+                        binding = Some(alias.to_owned());
+                        *i += 2;
+                    }
+                }
+                out.push(UseLeaf { path, binding, at });
+                return;
+            }
+            Some(&(at, Tok::Punct(b'*'))) => {
+                *i += 1;
+                out.push(UseLeaf {
+                    path,
+                    binding: None,
+                    at,
+                });
+                return;
+            }
+            Some((_, Tok::Punct(b'{'))) => {
+                *i += 1;
+                loop {
+                    match toks.get(*i) {
+                        None | Some((_, Tok::Punct(b';'))) => return,
+                        Some((_, Tok::Punct(b'}'))) => {
+                            *i += 1;
+                            return;
+                        }
+                        Some((_, Tok::Punct(b','))) => *i += 1,
+                        _ => {
+                            let before = *i;
+                            use_tree(toks, i, &path, out);
+                            if *i == before {
+                                *i += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            _ => return,
+        }
+    }
+}
+
+const LOCKS: [&str; 2] = ["Mutex", "RwLock"];
+
+/// Raw std lock types named in the code of `code` outside `skip`, as
+/// `(line, "std::sync::<type>")`.
+///
+/// Every `use` declaration is parsed as a tree, so a lock imported through a
+/// nested group (`use std::{.., sync::{Arc, Mutex}}`), a glob (`use
+/// std::sync::*` and then a bare `Mutex`), or a module alias (`use std::sync;` /
+/// `use std::sync as s;` and then `sync::RwLock` / `s::RwLock`) is found like the
+/// spelled-out path. An explicit non-std import of the same name shadows a glob.
+/// Not resolved: `extern crate std as ..` and a re-export of std's types under a
+/// path of this crate's own - neither shape is used anywhere in the backend.
 fn raw_locks(code: &[u8], skip: &[(usize, usize)]) -> Vec<(usize, String)> {
     let text = String::from_utf8_lossy(code);
     let line_of = |at: usize| text[..at].matches('\n').count() + 1;
     let skipped = |at: usize| skip.iter().any(|&(a, b)| (a..b).contains(&at));
-    let word_after = |at: usize| {
-        text[at..]
-            .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .collect::<String>()
+    let toks = tokens(&text);
+    let std_sync = ["std".to_owned(), "sync".to_owned()];
+
+    // Every `use` declaration's leaves, and the tokens the declarations span (so
+    // the path scan below does not count an import twice).
+    let mut leaves = Vec::new();
+    let mut in_use = vec![false; toks.len()];
+    let mut i = 0;
+    while i < toks.len() {
+        if toks[i].1 == Tok::Ident("use") && !skipped(toks[i].0) {
+            let start = i;
+            i += 1;
+            use_tree(&toks, &mut i, &[], &mut leaves);
+            while i < toks.len() && toks[i].1 != Tok::Punct(b';') {
+                i += 1;
+            }
+            for flag in &mut in_use[start..i.min(toks.len())] {
+                *flag = true;
+            }
+        }
+        i += 1;
+    }
+
+    // Names bound to `std::sync` itself, then every leaf resolved through them.
+    let aliases: BTreeSet<String> = leaves
+        .iter()
+        .filter(|l| l.path == std_sync)
+        .filter_map(|l| l.binding.clone())
+        .collect();
+    let resolve = |path: &[String]| -> Vec<String> {
+        match path.split_first() {
+            Some((root, rest)) if aliases.contains(root) => {
+                std_sync.iter().chain(rest).cloned().collect()
+            }
+            _ => path.to_vec(),
+        }
     };
     let mut hits = Vec::new();
-    for (at, _) in text.match_indices("std::sync::") {
-        if skipped(at) {
-            continue;
-        }
-        let after = at + "std::sync::".len();
-        let named: Vec<String> = if text[after..].starts_with('{') {
-            let close = matching_close(code, after);
-            text[after + 1..close - 1]
-                .split(',')
-                .map(|s| s.split_whitespace().next().unwrap_or("").to_string())
-                .collect()
-        } else {
-            vec![word_after(after)]
-        };
-        for ty in named {
-            if ty == "Mutex" || ty == "RwLock" {
-                hits.push((line_of(at), format!("std::sync::{ty}")));
+    let mut glob = false;
+    let mut shadowed: BTreeSet<String> = BTreeSet::new();
+    for leaf in &leaves {
+        let path = resolve(&leaf.path);
+        match &leaf.binding {
+            None => glob |= path == std_sync,
+            Some(binding) => {
+                let lock =
+                    path.len() == 3 && path[..2] == std_sync && LOCKS.contains(&path[2].as_str());
+                if lock {
+                    hits.push((line_of(leaf.at), format!("std::sync::{}", path[2])));
+                } else {
+                    shadowed.insert(binding.clone());
+                }
             }
         }
     }
+
+    // Paths in the code: `std::sync::<lock>`, `<alias>::<lock>`, and - under a
+    // glob of std::sync - the bare name.
+    let ident = |k: usize| match toks.get(k) {
+        Some(&(_, Tok::Ident(name))) => Some(name),
+        _ => None,
+    };
+    let sep = |k: usize| matches!(toks.get(k), Some((_, Tok::PathSep)));
+    for (k, &(at, tok)) in toks.iter().enumerate() {
+        if in_use[k] || skipped(at) {
+            continue;
+        }
+        let Tok::Ident(name) = tok else {
+            continue;
+        };
+        let after_sep = k > 0 && sep(k - 1);
+        let after_dot = k > 0 && toks[k - 1].1 == Tok::Punct(b'.');
+        let lock_at = |n: usize| ident(n).filter(|t| LOCKS.contains(t));
+        let found = if name == "std" && sep(k + 1) && ident(k + 2) == Some("sync") && sep(k + 3) {
+            lock_at(k + 4)
+        } else if !after_sep && aliases.contains(name) && sep(k + 1) {
+            lock_at(k + 2)
+        } else if glob && !after_sep && !after_dot && !shadowed.contains(name) {
+            lock_at(k)
+        } else {
+            None
+        };
+        if let Some(lock) = found {
+            hits.push((line_of(at), format!("std::sync::{lock}")));
+        }
+    }
+    hits.sort();
     hits
 }
 
@@ -310,7 +518,8 @@ fn scan() -> (usize, Vec<String>) {
             };
             file == *t || file.starts_with(&module_dir)
         });
-        if name.ends_with("tests.rs")
+        if name == "tests.rs"
+            || name.ends_with("_tests.rs")
             || under_test_only
             || ALLOWED.iter().any(|(path, _)| rel == *path)
         {
@@ -357,4 +566,69 @@ fn the_scanner_sees_through_comments_strings_and_test_gates() {
     println!("planted production locks found: {f:?}; in comments/strings/tests: {i:?}");
     assert_eq!(f.len(), 3, "{f:?}");
     assert!(i.is_empty(), "{i:?}");
+}
+
+#[test]
+fn the_scanner_resolves_use_trees_globs_and_module_aliases() {
+    // [#576 RV6a-2] Synthetic sources, not files. Each `(source, expected hits)`:
+    // the import shapes that name a std lock without spelling `std::sync::Mutex`
+    // in one piece, and the look-alikes that name none.
+    let cases: &[(&str, usize)] = &[
+        // A nested tree under `std`.
+        ("use std::{collections::HashMap, sync::{Arc, Mutex}};\n", 1),
+        // A glob, then the bare names (each mention is a hit).
+        ("use std::sync::*;\nstatic A: Mutex<u8> = Mutex::new(0);\n", 2),
+        // The module imported, then used through it.
+        (
+            "use std::sync;\nstatic B: sync::RwLock<u8> = sync::RwLock::new(0);\n",
+            2,
+        ),
+        // `self` in a tree, and a renamed module.
+        ("use std::sync::{self, Arc};\nfn f(_: sync::Mutex<u8>) {}\n", 1),
+        ("use std::sync as s;\nuse s::RwLock;\n", 1),
+        // A leading `::`, a rename, a visibility, and spacing inside the path.
+        ("use ::std::sync::Mutex as M;\n", 1),
+        ("pub(crate) use std::sync::RwLock;\n", 1),
+        ("static C: std :: sync :: Mutex<u8> = make();\n", 1),
+        // Look-alikes: none of these is a std lock.
+        (
+            "use std::sync::*;\nstatic D: AtomicBool = AtomicBool::new(false);\n",
+            0,
+        ),
+        (
+            "use parking_lot::Mutex;\nstatic E: Mutex<u8> = Mutex::new(0);\n",
+            0,
+        ),
+        // An explicit import shadows the glob's name.
+        (
+            "use std::sync::*;\nuse parking_lot::Mutex;\nstatic F: Mutex<u8> = Mutex::new(0);\n",
+            0,
+        ),
+        (
+            "mod sync { pub struct Mutex; }\nstatic G: sync::Mutex = sync::Mutex;\n",
+            0,
+        ),
+        (
+            "use std::sync::atomic;\nstatic H: atomic::AtomicBool = atomic::AtomicBool::new(false);\n",
+            0,
+        ),
+        ("use crate::poison_policy::RecoveringMutex as Mutex;\n", 0),
+        // Test-gated: skipped like every other form.
+        ("#[cfg(test)]\nuse std::{sync::{Mutex}};\n", 0),
+    ];
+    let mut wrong = Vec::new();
+    for (src, expected) in cases {
+        let code = code_only(src);
+        let (ranges, _) = test_gated(&code);
+        let found = raw_locks(&code, &ranges);
+        println!(
+            "{:?}: {} hit(s) (expected {expected}) {found:?}",
+            src.trim_end(),
+            found.len()
+        );
+        if found.len() != *expected {
+            wrong.push((src.trim_end(), found.len(), *expected));
+        }
+    }
+    assert!(wrong.is_empty(), "(source, found, expected): {wrong:?}");
 }
