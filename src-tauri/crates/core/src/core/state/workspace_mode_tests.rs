@@ -17,25 +17,15 @@ use tempfile::TempDir;
 use super::tests::{probe_mutation_entrypoints, MUTATION_ENTRYPOINTS};
 use super::{AppState, WorkspaceMode};
 use crate::core::{Command, CommandError, CommandErrorCode};
-use crate::models::{Coordinates, Project, SectionData, SectionId, ShotData, ShotId, StationRef};
+use crate::models::{Coordinates, Project, SectionData, SectionId, ShotId, StationRef};
 use crate::persistence::Database;
+use crate::test_fixtures::shot;
 
 /// The entry points deliberately editable in Plan and Export: the project name
 /// and validation thresholds, and the project rename (ProjectSettingsDialog keeps
 /// them enabled in every mode). Everything else in `MUTATION_ENTRYPOINTS` is
 /// refused there.
 const WORKSPACE_ALLOWLIST: &[&str] = &["update_project_settings", "set_project_name_for_path"];
-
-fn shot(length: f64) -> ShotData {
-    ShotData {
-        azimuth_in: 45.0,
-        azimuth_out: 225.0,
-        length,
-        depth_in: 10.0,
-        depth_out: 11.0,
-        ..Default::default()
-    }
-}
 
 /// A LOCAL project (no SpeleoDB link, so the lock gate is open) saved to a temp
 /// `.stalx` and opened, so it has the file path the by-path rename gates on.

@@ -23,10 +23,10 @@ use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 use super::speleodb::{authed_session_at, REMOTE_ID};
-use super::AppState;
 use crate::core::Command;
 use crate::models::{Project, SectionData, ShotData, SpeleoLink, UndoMode};
 use crate::persistence::Database;
+use crate::test_fixtures::state_with_null_sink;
 
 /// The environment variable that lets the child-process body run.
 const CHILD_ENV: &str = "STALAGMIGHT_TAKE_REMOTE_CHILD";
@@ -130,16 +130,6 @@ fn routing_stub(zip: Vec<u8>) -> (String, std::net::TcpListener, Arc<Mutex<Vec<S
     (format!("http://127.0.0.1:{port}"), listener, seen)
 }
 
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
-
 #[test]
 fn take_remote_lands_the_server_tip_and_discards_the_local_edits() {
     let exe = std::env::current_exe().expect("this test binary");
@@ -203,8 +193,7 @@ fn take_remote_body_in_a_process_of_its_own() {
         }))
         .expect("link");
     let (base, _listener, seen) = routing_stub(dump_at_tip());
-    let state = AppState::new().expect("state");
-    state.set_event_sink(Arc::new(NoListener));
+    let state = state_with_null_sink();
     assert!(
         state.open_project(dest.clone()).success,
         "open the cache copy"

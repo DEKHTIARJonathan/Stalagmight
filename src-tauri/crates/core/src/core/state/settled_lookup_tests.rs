@@ -20,26 +20,15 @@ use super::settle_gate;
 use super::AppState;
 use crate::core::Command;
 use crate::models::{ShotData, ShotUpdates};
+use crate::test_fixtures::{state_with_project, straight_shot};
 
 fn shots(n: usize, azimuth: f64) -> Vec<ShotData> {
-    (0..n)
-        .map(|_| ShotData {
-            length: 5.0,
-            azimuth_in: azimuth,
-            azimuth_out: azimuth,
-            ..Default::default()
-        })
-        .collect()
+    (0..n).map(|_| straight_shot(azimuth, 5.0)).collect()
 }
 
 /// An open project with one section of `n` shots; its id.
 fn project_with_section(n: usize) -> (AppState, u32) {
-    let state = AppState::new().expect("state");
-    let created = state.execute(Command::CreateProject {
-        name: "CaveA".to_owned(),
-        location: None,
-    });
-    assert!(created.success, "{:?}", created.error);
+    let state = state_with_project("CaveA");
     let section = state.execute(Command::CreateSection {
         name: Some("SectionA".to_owned()),
         surveyor: None,

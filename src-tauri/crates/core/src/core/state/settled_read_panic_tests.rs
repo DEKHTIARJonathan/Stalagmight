@@ -15,18 +15,11 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use super::AppState;
 use crate::core::Command;
 use crate::models::ShotData;
+use crate::test_fixtures::state_with_project;
 
 /// An open project with one undoable edit on the stack.
 fn project_with_an_edit() -> AppState {
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "CaveA".to_string(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("CaveA");
     let created = state.execute(Command::CreateSection {
         name: Some("SectionA".to_string()),
         surveyor: None,

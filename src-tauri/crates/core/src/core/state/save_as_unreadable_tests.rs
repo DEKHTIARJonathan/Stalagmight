@@ -13,25 +13,17 @@
 
 use tempfile::TempDir;
 
-use super::AppState;
 use crate::core::Command;
 use crate::models::ShotData;
 use crate::persistence::ResolvedWarning;
+use crate::test_fixtures::state_with_project;
 
 #[test]
 fn a_save_as_away_from_an_unreadable_file_warns_about_the_side_tables() {
     let _cfg = crate::test_helpers::isolated_config();
     let dir = TempDir::new().expect("tempdir");
     let path = dir.path().join("CaveR.stalx");
-    let state = AppState::new().expect("state");
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "CaveR".to_string(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("CaveR");
     assert!(
         state
             .execute(Command::CreateSection {

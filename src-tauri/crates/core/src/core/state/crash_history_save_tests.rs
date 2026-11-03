@@ -18,6 +18,7 @@ use super::AppState;
 use crate::core::Command;
 use crate::models::poison_policy::LockCell;
 use crate::models::ShotData;
+use crate::test_fixtures::state_with_project;
 
 /// Poison `cell` the way a crash does: a thread panics while holding it.
 fn poison(cell: &dyn LockCell) {
@@ -33,15 +34,7 @@ fn poison(cell: &dyn LockCell) {
 /// A project with one section and one more shot added through `execute`, so the
 /// Undo stack holds two entries.
 fn edited_project() -> AppState {
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "CaveA".to_owned(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("CaveA");
     let created = state.execute(Command::CreateSection {
         name: Some("SectionA".to_owned()),
         surveyor: None,

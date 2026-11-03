@@ -809,6 +809,7 @@ use crate::models::{
 // what keeps these tests off other files; what it buys is ONE dir for the whole
 // test, whose path the test can name and hand to a worker thread
 // (`ConfigHandoff`). It is held for the whole test because the saves are.
+use crate::test_fixtures::state_with_project;
 use crate::test_helpers::isolated_config;
 
 // ===========================================================================
@@ -8121,15 +8122,7 @@ fn measure_adjusted_solve_determinism() {
     // `plan_adjustment_anchors` requires before it enters
     // `adjust_least_squares` at all. `Move` is not enough - it is applied
     // directly - so the strategy is named explicitly rather than drawn.
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "SolveDeterminism".to_string(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("SolveDeterminism");
     let mut rng = Rng::new(1);
     let section = |name: &str, count: usize, rng: &mut Rng| -> SectionId {
         let shots: Vec<ShotData> = (0..count).map(|_| random_shot(rng)).collect();

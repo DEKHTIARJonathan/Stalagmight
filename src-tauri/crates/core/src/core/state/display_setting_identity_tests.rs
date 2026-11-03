@@ -20,6 +20,7 @@ use super::AppState;
 use crate::core::{Command, CommandErrorCode};
 use crate::models::Project;
 use crate::persistence::Database;
+use crate::test_fixtures::state_with_project;
 
 /// The identity the frontend holds for `project`: its `created_at` as the wire
 /// carries it.
@@ -83,11 +84,7 @@ fn a_write_made_for_the_previous_project_does_not_land_in_the_one_now_open() {
 
 #[test]
 fn a_write_for_the_open_unsaved_project_lands_in_its_cache() {
-    let state = AppState::new().expect("state");
-    state.execute(Command::CreateProject {
-        name: "CaveA".to_string(),
-        location: None,
-    });
+    let state = state_with_project("CaveA");
     let project = state.get_project_state().expect("open project");
 
     state

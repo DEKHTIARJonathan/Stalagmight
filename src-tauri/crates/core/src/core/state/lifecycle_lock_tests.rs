@@ -19,25 +19,15 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
 
 use tempfile::TempDir;
 
 use super::AppState;
 use crate::core::Command;
 use crate::models::{Project, SectionData, ShotData, ShotUpdates};
+use crate::test_fixtures::state_with_null_sink;
 
 const ROUNDS: usize = 40;
-
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
 
 fn saved_project(dir: &Path, file: &str, name: &str) -> PathBuf {
     let path = dir.join(file);
@@ -79,8 +69,7 @@ fn rounds_with_a_foreign_entry(kind: &str, commit: impl Fn(&AppState, &Path, &Pa
         let temp = TempDir::new().unwrap();
         let a = saved_project(temp.path(), "a.stalx", "CaveA");
         let b = saved_project(temp.path(), "b.stalx", "CaveB");
-        let state = AppState::new().unwrap();
-        state.set_event_sink(Arc::new(NoListener));
+        let state = state_with_null_sink();
         assert!(state.open_project(a.clone()).success, "project A opens");
         let (section_id, shot_id) = {
             let project = state.get_project_state().unwrap();

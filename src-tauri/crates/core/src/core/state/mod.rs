@@ -549,7 +549,6 @@ mod session_commit_tests;
 mod settled_lookup_tests;
 #[cfg(test)]
 #[expect(
-    clippy::unwrap_used,
     clippy::panic,
     clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point, and the printed \

@@ -19,6 +19,7 @@ use crate::models::{
     GpsCoordinates, Project, SectionData, SectionId, ShotData, ShotId, ShotUpdates, StationMerge,
     StationRef, ZeroDatum,
 };
+use crate::test_fixtures::state_holding;
 
 /// A two-section loop (both ends of A merged onto both ends of B) anchored by a
 /// datum at each section's head: every shot is frozen. Returns the state, the
@@ -64,8 +65,7 @@ fn frozen_shot() -> (AppState, SectionId, ShotId, f64) {
         project.is_shot_frozen_by_id(a, shot_id),
         "precondition: the loop and its two datums freeze the shot"
     );
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
     (state, a, shot_id, azimuth)
 }
 

@@ -14,37 +14,23 @@ use super::command_import::VirtualShotMode;
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    ClosureStrategy, ImportPlacement, ImportSectionConfig, SectionId, ShotData, ShotId,
-    ShotUpdates, StationRef,
+    ClosureStrategy, ImportPlacement, ImportSectionConfig, SectionId, ShotId, ShotUpdates,
+    StationRef,
 };
-
-fn shot(length: f64, azimuth: f64) -> ShotData {
-    ShotData {
-        length,
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        ..Default::default()
-    }
-}
+use crate::test_fixtures::{state_with_project, straight_shot};
 
 /// A project with one five-shot section; returns its id and shot ids.
 fn fresh() -> (AppState, SectionId, Vec<ShotId>) {
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "CaveA".to_string(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("CaveA");
     let created = state.execute(Command::CreateSection {
         name: Some("SectionA".to_string()),
         surveyor: None,
         date: None,
         color: "#336699".to_string(),
         direction: None,
-        shots: (0..5).map(|i| shot(4.0, 30.0 * f64::from(i))).collect(),
+        shots: (0..5)
+            .map(|i| straight_shot(30.0 * f64::from(i), 4.0))
+            .collect(),
     });
     assert!(created.success, "{:?}", created.error);
     let section_id = created.section_id.unwrap();
@@ -167,7 +153,7 @@ fn every_forward_entry_point_runs_the_shared_epilogue() {
             None,
             "#993366".to_string(),
             None,
-            vec![shot(3.0, 90.0), shot(3.0, 100.0)],
+            vec![straight_shot(90.0, 3.0), straight_shot(100.0, 3.0)],
             0,
             StationRef::new(sid, 2),
             ClosureStrategy::Batch,
@@ -184,7 +170,7 @@ fn every_forward_entry_point_runs_the_shared_epilogue() {
                 color: "#222222".to_string(),
                 direction: None,
                 quality: 1.0,
-                shots: vec![shot(5.0, 200.0), shot(5.0, 210.0)],
+                shots: vec![straight_shot(200.0, 5.0), straight_shot(210.0, 5.0)],
                 station_comments: Vec::new(),
                 placement: ImportPlacement::Origin,
                 azimuth_reference: None,
@@ -236,7 +222,7 @@ fn every_forward_entry_point_runs_the_shared_epilogue() {
         date: None,
         color: "#445566".to_string(),
         direction: None,
-        shots: vec![shot(2.0, 45.0)],
+        shots: vec![straight_shot(45.0, 2.0)],
     });
     let single_id = single.section_id.unwrap();
     let single_shot = state

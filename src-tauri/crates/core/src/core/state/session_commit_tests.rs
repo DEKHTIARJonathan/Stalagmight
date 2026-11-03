@@ -20,7 +20,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
-use std::sync::Arc;
 
 use tempfile::TempDir;
 
@@ -29,22 +28,7 @@ use super::AppState;
 use crate::core::{Command, DepthLimit, UndoData};
 use crate::models::{Project, SectionData, ShotData, SpeleoLink, UndoMode};
 use crate::persistence::Database;
-
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
-
-fn state_with_sink() -> AppState {
-    let state = AppState::new().unwrap();
-    state.set_event_sink(Arc::new(NoListener));
-    state
-}
+use crate::test_fixtures::state_with_null_sink;
 
 fn one_section_project(name: &str) -> Project {
     let mut project = Project::new(name.to_string(), None);
@@ -220,7 +204,7 @@ fn check(
 ) -> bool {
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     dirty_previous_session(&state, temp.path());
     commit(&state, temp.path());
     let actual = read_cells(&state);
@@ -419,7 +403,7 @@ fn both_loads_record_whether_their_history_could_be_read() {
     let temp = TempDir::new().unwrap();
     for (kind, full_load) in [("load_project_full", true), ("open_project", false)] {
         for unreadable in [true, false] {
-            let state = state_with_sink();
+            let state = state_with_null_sink();
             state.set_history_discarded(!unreadable);
             let path = if unreadable {
                 unreadable_history_file(temp.path(), &format!("{kind}-broken.stalx"))

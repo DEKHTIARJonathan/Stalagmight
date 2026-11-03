@@ -16,6 +16,7 @@ use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, SectionUpdates, ShotData, ShotKind, ShotUpdates,
     StationRef,
 };
+use crate::test_fixtures::state_with_project;
 
 /// One instance of every `Command` variant, with the classification the base
 /// (3e450812) negative list gave it. The `match` in `variant_name` is
@@ -254,11 +255,7 @@ fn every_command_keeps_its_undo_classification() {
 /// replaced `_ => UndoData::None` kept it.
 #[test]
 fn commands_that_record_nothing_up_front_still_record_nothing() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "CaveA".to_string(),
-        location: None,
-    });
+    let state = state_with_project("CaveA");
     for (command, _) in every_command() {
         let none_up_front = matches!(
             command,

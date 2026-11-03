@@ -27,6 +27,7 @@ use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{CommandErrorCode, Project, SectionData, ShotData, ShotUpdates, SpeleoLink};
 use crate::persistence::{Database, ResolvedWarning, SAVE_PROJECT_TABLES};
+use crate::test_fixtures::state_with_null_sink;
 
 const DISPLAY_KEY: &str = "show_grid";
 const IGNORED_CODE: &str = "LONG_SHOT";
@@ -470,18 +471,6 @@ fn unreadable_project_settings_are_never_saved_over() {
     assert_eq!(stored_settings(dir.path(), &path), stored_before);
 }
 
-/// `do_load_project_full` reports progress through the installed sink; nobody is
-/// listening here.
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
-
 const ALL_THREE: [&str; 3] = [
     "validation",
     "surface_elevation",
@@ -497,8 +486,7 @@ fn the_open_reports_which_settings_could_not_be_read() {
     let dir = TempDir::new().unwrap();
     let path = file_with_unreadable_settings(dir.path());
 
-    let state = AppState::new().unwrap();
-    state.set_event_sink(std::sync::Arc::new(NoListener));
+    let state = state_with_null_sink();
     let loaded = state.do_load_project_full(path.clone()).unwrap();
     println!(
         "load_project_full: opened={} unreadable_project_settings={:?}",

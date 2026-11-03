@@ -8,17 +8,17 @@ use std::time::Instant;
 use crate::core::state::{AppState, VirtualShotMode};
 use crate::core::Command;
 use crate::models::{ImportPlacement, ImportSectionConfig, ShotData};
+use crate::test_fixtures::{state_with_project, straight_shot};
 
 /// A straight-ish synthetic passage of `len` shots.
 fn passage(seed: u32, len: usize) -> Vec<ShotData> {
     (0..len)
-        .map(|i| ShotData {
-            azimuth_in: f64::from((seed * 37 + i as u32 * 11) % 360),
-            azimuth_out: f64::from((seed * 37 + i as u32 * 11) % 360),
-            length: 3.0 + f64::from((seed + i as u32) % 5),
-            depth_in: 10.0,
-            depth_out: 10.0,
-            ..Default::default()
+        .map(|i| {
+            straight_shot(
+                f64::from((seed * 37 + i as u32 * 11) % 360),
+                3.0 + f64::from((seed + i as u32) % 5),
+            )
+            .with_depths(10.0, 10.0)
         })
         .collect()
 }
@@ -42,11 +42,7 @@ fn section_config(index: u32, shots: Vec<ShotData>) -> ImportSectionConfig {
 
 /// An open project holding `sections` sections of `shots_per_section` shots.
 pub(super) fn synthetic_state(sections: u32, shots_per_section: usize) -> AppState {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Probe".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Probe");
     let configs = (0..sections)
         .map(|i| section_config(i, passage(i, shots_per_section)))
         .collect();

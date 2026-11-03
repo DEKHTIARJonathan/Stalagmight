@@ -13,23 +13,12 @@
 //!
 //! All data is synthetic.
 
-use std::sync::Arc;
-
 use tempfile::TempDir;
 
 use super::save_sidecars::SIDE_TABLES_NOT_CARRIED_CODE;
 use super::AppState;
 use crate::core::Command;
-
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
+use crate::test_fixtures::{state_with_null_sink, state_with_project};
 
 /// The warning codes of `state`'s save to `dir/CaveF.stalx`.
 fn first_save_codes(state: &AppState, dir: &TempDir) -> Vec<String> {
@@ -44,15 +33,7 @@ fn first_save_codes(state: &AppState, dir: &TempDir) -> Vec<String> {
 fn the_first_save_of_a_project_created_in_memory_does_not_say_a_file_was_unreadable() {
     let _cfg = crate::test_helpers::isolated_config();
     let dir = TempDir::new().unwrap();
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "CaveF".to_owned(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("CaveF");
     let codes = first_save_codes(&state, &dir);
     println!("first save of an in-memory project (no file, no handle): warnings {codes:?}");
     assert!(
@@ -68,8 +49,7 @@ fn the_first_save_after_file_new_does_not_say_a_file_was_unreadable() {
     for deferred in [true, false] {
         let _cfg = crate::test_helpers::isolated_config();
         let dir = TempDir::new().unwrap();
-        let state = AppState::new().unwrap();
-        state.set_event_sink(Arc::new(NoListener));
+        let state = state_with_null_sink();
         let created = state.do_create_project_full(
             "CaveF".to_owned(),
             None,

@@ -19,26 +19,18 @@ use super::AppState;
 use crate::core::Command;
 use crate::models::{Project, SectionData, Shot, ShotData, ShotUpdates};
 use crate::persistence::Database;
+use crate::test_fixtures::bare_shot;
 
 /// A shot whose readings are not exactly representable as f32.
 fn exact_readings() -> ShotData {
-    ShotData {
-        azimuth_in: 123.4,
-        azimuth_out: 303.3,
-        length: 1.2,
-        depth_in: 10.1,
-        depth_out: 11.7,
-        pitch_in: Some(-3.3),
-        pitch_out: Some(3.1),
-        left: Some(0.7),
-        right: Some(1.3),
-        up: Some(0.2),
-        down: Some(2.9),
-        comment: Some("StationA1 lead".to_owned()),
-        marker_index: Some(4),
-        temperature: Some(21.3),
-        ..Default::default()
-    }
+    bare_shot(1.2)
+        .with_azimuths(123.4, 303.3)
+        .with_depths(10.1, 11.7)
+        .with_pitches(Some(-3.3), Some(3.1))
+        .with_lrud(Some(0.7), Some(1.3), Some(0.2), Some(2.9))
+        .with_comment("StationA1 lead")
+        .with_marker_index(4)
+        .with_temperature(21.3)
 }
 
 /// Every float reading of `shot` by name, as raw bits (`None` = not recorded).

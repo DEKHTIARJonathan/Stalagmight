@@ -23,31 +23,17 @@ use super::settle_gate;
 use super::AppState;
 use crate::core::Command;
 use crate::models::{Project, ShotData, ShotUpdates, StationRef};
+use crate::test_fixtures::{state_with_project, straight_shot};
 
 fn shots(n: usize, azimuth: f64) -> Vec<ShotData> {
-    (0..n)
-        .map(|_| ShotData {
-            length: 5.0,
-            azimuth_in: azimuth,
-            azimuth_out: azimuth,
-            ..Default::default()
-        })
-        .collect()
+    (0..n).map(|_| straight_shot(azimuth, 5.0)).collect()
 }
 
 /// An open project of two sections, SectionA's end merged onto SectionB's start,
 /// with no zero datum - so a length edit in SectionA moves SectionB only through
 /// the reconcile every geometry command settles with.
 fn merged_pair() -> (AppState, u32, u32) {
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "CaveA".to_string(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("CaveA");
     for (name, azimuth) in [("SectionA", 0.0), ("SectionB", 90.0)] {
         let created = state.execute(Command::CreateSection {
             name: Some(name.to_string()),

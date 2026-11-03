@@ -17,25 +17,7 @@
 use super::AppState;
 use crate::core::Command;
 use crate::models::{ShotData, StationRef};
-
-fn shot(length: f64) -> ShotData {
-    ShotData {
-        azimuth_in: 90.0,
-        azimuth_out: 90.0,
-        length,
-        ..Default::default()
-    }
-}
-
-fn state_with_project() -> AppState {
-    let state = AppState::new().expect("app state");
-    let created = state.execute(Command::CreateProject {
-        name: "CaveA".to_string(),
-        location: None,
-    });
-    assert!(created.success, "{:?}", created.error);
-    state
-}
+use crate::test_fixtures::{state_with_project, straight_shot};
 
 fn create_section(state: &AppState, name: &str, shots: Vec<ShotData>) -> u32 {
     let result = state.execute(Command::CreateSection {
@@ -56,8 +38,12 @@ fn create_section(state: &AppState, name: &str, shots: Vec<ShotData>) -> u32 {
 /// a zero divisor.
 #[test]
 fn a_shot_less_section_is_left_out_of_reversed_sections() {
-    let state = state_with_project();
-    let real = create_section(&state, "StationA1", vec![shot(10.0), shot(5.0)]);
+    let state = state_with_project("CaveA");
+    let real = create_section(
+        &state,
+        "StationA1",
+        vec![straight_shot(90.0, 10.0), straight_shot(90.0, 5.0)],
+    );
     let empty = create_section(&state, "Waypoint", Vec::new());
 
     let alone = state.execute(Command::ReverseSection {
@@ -101,10 +87,10 @@ fn a_shot_less_section_is_left_out_of_reversed_sections() {
 /// refusal, not a silent success, and it changes nothing.
 #[test]
 fn unmerging_a_pair_that_is_not_merged_is_refused() {
-    let state = state_with_project();
-    let a = create_section(&state, "A", vec![shot(10.0)]);
-    let b = create_section(&state, "B", vec![shot(8.0)]);
-    let c = create_section(&state, "C", vec![shot(6.0)]);
+    let state = state_with_project("CaveA");
+    let a = create_section(&state, "A", vec![straight_shot(90.0, 10.0)]);
+    let b = create_section(&state, "B", vec![straight_shot(90.0, 8.0)]);
+    let c = create_section(&state, "C", vec![straight_shot(90.0, 6.0)]);
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 1),
         station_b: StationRef::new(b, 0),
@@ -163,16 +149,16 @@ fn the_import_override_lands_virtual_shots_as_the_chosen_kind() {
     // A virtual shot bounded by real survey: the chain rule (Auto) calls it a Jump.
     let virtual_run = || {
         vec![
-            shot(5.0),
+            straight_shot(90.0, 5.0),
             ShotData {
                 kind: ShotKind::Jump,
-                ..shot(4.0)
+                ..straight_shot(90.0, 4.0)
             },
-            shot(6.0),
+            straight_shot(90.0, 6.0),
         ]
     };
     let kinds_after = |mode: VirtualShotMode| {
-        let state = state_with_project();
+        let state = state_with_project("CaveA");
         let imported = state.execute_import_sections(
             vec![config(virtual_run())],
             Vec::new(),
@@ -230,7 +216,7 @@ fn an_import_merges_a_dependent_section_and_counts_what_landed() {
         length: 10.0,
         ..Default::default()
     };
-    let state = state_with_project();
+    let state = state_with_project("CaveA");
     let result = state.execute_import_sections(
         vec![
             config(

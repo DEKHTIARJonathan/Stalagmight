@@ -12,25 +12,12 @@
 //! re-stamped as an older schema. No fixture is read or written.
 
 use std::path::Path;
-use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use super::AppState;
 use crate::models::{Project, SectionData, ShotData};
 use crate::persistence::Database;
-
-/// `do_load_project_full` reports progress through the installed sink; nobody
-/// is listening here.
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
+use crate::test_fixtures::state_with_null_sink;
 
 fn user_version(path: &Path) -> i64 {
     rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
@@ -67,8 +54,7 @@ fn an_older_project_whose_copy_cannot_be_written_is_refused_with_the_reason() {
         .unwrap();
     let original = std::fs::read(&path).unwrap();
 
-    let state = AppState::new().unwrap();
-    state.set_event_sink(Arc::new(NoListener));
+    let state = state_with_null_sink();
     std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o555)).unwrap();
     let premise = std::fs::File::create(folder.join("premise-probe"));
     let loaded = premise

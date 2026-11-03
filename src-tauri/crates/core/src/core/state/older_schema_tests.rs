@@ -10,31 +10,12 @@
 //! re-stamped as an older file. No fixture is read or written.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use super::AppState;
 use crate::models::{Project, SectionData, ShotData};
 use crate::persistence::Database;
-
-/// `do_load_project_full` reports progress through the installed sink; nobody
-/// is listening here.
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
-
-fn state_with_sink() -> AppState {
-    let state = AppState::new().unwrap();
-    state.set_event_sink(Arc::new(NoListener));
-    state
-}
+use crate::test_fixtures::state_with_null_sink;
 
 /// A current file with one section of two shots, then re-stamped by `surgery`.
 fn build_file(dir: &Path, name: &str, surgery: &str) -> PathBuf {
@@ -79,7 +60,7 @@ fn the_load_path_refuses_a_pre_release_file_with_its_own_code() {
     );
     let before = std::fs::read(&path).unwrap();
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     let Err(error) = state.do_load_project_full(path.clone()) else {
         panic!("a pre-release file must not open");
     };
@@ -124,7 +105,7 @@ fn the_load_path_keeps_a_copy_of_an_older_file_before_upgrading_it() {
     );
     let before = std::fs::read(&path).unwrap();
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     let loaded = state
         .do_load_project_full(path.clone())
         .unwrap_or_else(|e| panic!("a supported older file must open: {e:?}"));

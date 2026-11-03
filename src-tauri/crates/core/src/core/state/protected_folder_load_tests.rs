@@ -13,13 +13,12 @@
 //! re-stamped as an older file. No fixture is read or written.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use super::AppState;
 use crate::models::{CommandErrorCode, Project, SectionData, ShotData};
 use crate::persistence::{Database, UpgradeRefusal};
+use crate::test_fixtures::state_with_null_sink;
 
 const REFUSAL: &str = "CaveL.stalx was saved by an older version of Stalagmight (test refusal). \
                        Copy the project to a folder of your own and open the copy.";
@@ -36,24 +35,6 @@ fn refusal() -> UpgradeRefusal {
 }
 
 const OLDER_FORMAT: &str = "UPDATE project SET schema_version = 16; PRAGMA user_version = 16;";
-
-/// `do_load_project_full_with` reports progress through the installed sink;
-/// nobody is listening here.
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
-
-fn state_with_sink() -> AppState {
-    let state = AppState::new().expect("state");
-    state.set_event_sink(Arc::new(NoListener));
-    state
-}
 
 /// A current project file with one section of two shots, then re-stamped by
 /// `surgery` (empty: left current).
@@ -111,7 +92,7 @@ fn a_current_project_where_nothing_may_be_written_opens_and_is_not_written() {
     let path = write_project(dir.path(), "");
     let before = std::fs::read(&path).expect("read");
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     let loaded = state.do_load_project_full_with(path.clone(), Some(&refusal()));
     let after = std::fs::read(&path).expect("read");
     println!(
@@ -139,7 +120,7 @@ fn an_older_project_where_nothing_may_be_written_is_refused_untouched() {
     let path = write_project(dir.path(), OLDER_FORMAT);
     let before = std::fs::read(&path).expect("read");
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     let Err(error) = state.do_load_project_full_with(path.clone(), Some(&refusal())) else {
         panic!("an older file must not be upgraded there");
     };
@@ -174,7 +155,7 @@ fn without_a_refusal_the_same_older_project_is_upgraded_as_before() {
     let dir = TempDir::new().expect("dir");
     let path = write_project(dir.path(), OLDER_FORMAT);
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     let loaded = state.do_load_project_full_with(path, None);
     println!(
         "older-format project in a user folder: opened={}; folder: {:?}",
@@ -200,7 +181,7 @@ fn an_unstamped_project_where_nothing_may_be_written_is_not_called_older() {
     let path = write_project(dir.path(), UNSTAMPED);
     let before = std::fs::read(&path).expect("read");
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     let Err(error) = state.do_load_project_full_with(path.clone(), Some(&refusal())) else {
         panic!("an unstamped file is not completed in place there either");
     };
@@ -302,14 +283,14 @@ fn a_load_where_nothing_may_be_written_keeps_its_repairs_in_memory() {
         let control_dir = TempDir::new().expect("dir");
         let control = file_needing_a_repair(control_dir.path(), surgery);
         let control_before = std::fs::read(&control).expect("read");
-        let opened = state_with_sink().do_load_project_full_with(control.clone(), None);
+        let opened = state_with_null_sink().do_load_project_full_with(control.clone(), None);
         assert!(opened.is_ok(), "{what}: the control opens");
         let control_written = std::fs::read(&control).expect("read") != control_before;
 
         let dir = TempDir::new().expect("dir");
         let path = file_needing_a_repair(dir.path(), surgery);
         let before = std::fs::read(&path).expect("read");
-        let state = state_with_sink();
+        let state = state_with_null_sink();
         let loaded = state
             .do_load_project_full_with(path.clone(), Some(&refusal()))
             .unwrap_or_else(|e| panic!("{what}: it must open: {} {}", e.code, e.message));

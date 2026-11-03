@@ -30,21 +30,11 @@ use tempfile::TempDir;
 use super::{AppState, VirtualShotMode};
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    ImportPlacement, ImportSectionConfig, Project, SectionData, ShotData, FEATURE_ID_STRIDE,
+    ImportPlacement, ImportSectionConfig, Project, SectionData, FEATURE_ID_STRIDE,
     MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
 };
 use crate::persistence::Database;
-
-fn shot(length: f64) -> ShotData {
-    ShotData {
-        azimuth_in: 45.0,
-        azimuth_out: 225.0,
-        length,
-        depth_in: 10.0,
-        depth_out: 11.0,
-        ..Default::default()
-    }
-}
+use crate::test_fixtures::{shot, state_holding};
 
 /// A project whose id counter says `spent` ids have been handed out, with no
 /// sections to show for them. Everything under test reads the counter, not the
@@ -52,9 +42,7 @@ fn shot(length: f64) -> ShotData {
 fn state_with_spent_section_ids(spent: u32) -> AppState {
     let mut project = Project::new("Bound".to_string(), None);
     project.next_section_id = spent;
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
-    state
+    state_holding(project)
 }
 
 fn create_one_section(state: &AppState) -> CommandResult {
@@ -289,8 +277,7 @@ fn state_at_full_id_space_with_one_section(shots: usize) -> (AppState, Vec<u32>)
     });
     let shot_ids: Vec<u32> = project.sections[0].shots.iter().map(|s| s.id).collect();
     project.next_section_id = MAX_SECTIONS_IN_ID_SPACE as u32;
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
     (state, shot_ids)
 }
 
@@ -379,8 +366,7 @@ fn a_split_with_the_last_section_id_left_still_succeeds() {
     let section_id = project.sections[0].id;
     let split_at = project.sections[0].shots[2].id;
     project.next_section_id = MAX_SECTION_ID;
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
 
     let result =
         state.execute_delete_shot_and_split(section_id, split_at, "A".to_string(), "B".to_string());

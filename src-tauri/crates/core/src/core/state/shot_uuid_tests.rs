@@ -19,6 +19,7 @@ use crate::core::Command;
 use crate::export::tml::{export_tml, export_tml_for_speleodb};
 use crate::models::{Project, SectionData, ShotData, StationKey, StationRef};
 use crate::parsers::tml::{convert_tml_to_import_configs, parse_tml};
+use crate::test_fixtures::{state_with_null_sink, state_with_project};
 
 // ---------------------------------------------------------------------------
 // Synthetic Ariane XML
@@ -153,15 +154,6 @@ fn import_ariane_file(state: &AppState, path: &Path) {
     assert!(result.success, "import failed: {:?}", result.error);
 }
 
-fn state_with_project() -> AppState {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Synthetic".to_string(),
-        location: None,
-    });
-    state
-}
-
 /// Every shot UUID of section `index`, in section order. `None` becomes an empty
 /// string so a missing identity fails an equality assertion loudly rather than
 /// being skipped.
@@ -199,7 +191,7 @@ fn ariane_shot_uuids_survive_import_then_export_verbatim() {
             ]),
         );
 
-        let state = state_with_project();
+        let state = state_with_project("Synthetic");
         import_ariane_file(&state, &source);
 
         let project = state.get_project_state().unwrap();
@@ -252,7 +244,7 @@ fn a_single_covered_shot_keeps_its_id_and_the_others_get_fresh_ones() {
         ]),
     );
 
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     import_ariane_file(&state, &source);
 
     let project = state.get_project_state().unwrap();
@@ -293,7 +285,7 @@ fn a_repeated_uuid_inside_one_section_is_repaired_keeping_the_first() {
         ]),
     );
 
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     import_ariane_file(&state, &source);
 
     let project = state.get_project_state().unwrap();
@@ -342,7 +334,7 @@ fn the_import_reverse_carries_each_id_with_its_own_shot() {
         ]),
     );
 
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     let tml = parse_tml(&source).unwrap();
     let (mut sections, closures, _warnings) =
         convert_tml_to_import_configs(&tml, false, true).unwrap();
@@ -401,7 +393,7 @@ fn a_section_split_preserves_the_foreign_ids_and_the_cross_references_of_both_ha
         ]),
     );
 
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     import_ariane_file(&state, &source);
 
     let section_id = state.get_project_state().unwrap().sections[0].id;
@@ -665,8 +657,7 @@ fn adopting_the_same_ariane_file_twice_gives_the_same_shot_uuids() {
     let adopt_once = |attempt: &str| {
         let dest = dir.path().join(attempt).join("project.stalx");
         std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
-        let state = AppState::new().unwrap();
-        state.set_event_sink(std::sync::Arc::new(crate::core::events::NullEventSink));
+        let state = state_with_null_sink();
         let adopted = state.adopt_import_and_save(
             None,
             &source,
@@ -731,7 +722,7 @@ fn undo_restores_the_imported_identities_rather_than_minting_new_ones() {
         ]),
     );
 
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     import_ariane_file(&state, &source);
     let expected = IDS.map(String::from).to_vec();
     assert_eq!(
@@ -809,7 +800,7 @@ fn create_shot_cannot_name_an_existing_shots_identity() {
         ]),
     );
 
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     import_ariane_file(&state, &source);
 
     // Make the project ALREADY critical before the attack. `execute`'s
@@ -911,7 +902,7 @@ fn client_named_identities_are_stripped_at_every_command_door() {
         &cave_file_xml(&[Row::new(1, 0, Some(IDS[0])), Row::new(2, 1, Some(IDS[1]))]),
     );
 
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     import_ariane_file(&state, &source);
 
     let (section_id, victim_shot_id) = {
@@ -1069,7 +1060,7 @@ fn create_shot_cannot_move_an_existing_anchor_onto_a_new_shot() {
         ]),
     );
 
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     import_ariane_file(&state, &source);
 
     // Anchor a comment on the station AFTER shot index 1, i.e. keyed on IDS[1].
@@ -1154,7 +1145,7 @@ fn an_unstorable_foreign_uuid_falls_back_to_a_mint_and_the_export_stays_well_for
         ]),
     );
 
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     import_ariane_file(&state, &source);
 
     let project = state.get_project_state().unwrap();
@@ -1218,7 +1209,7 @@ fn a_nul_bearing_uuid_cannot_diverge_across_save_and_reload() {
     let xml = cave_file_xml(&[Row::new(1, 0, Some("aa\u{0}bb")), Row::new(2, 1, None)]);
     let source = write_tmlu(dir.path(), "nul.tmlu", &xml);
 
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     import_ariane_file(&state, &source);
     let saved = state.get_project_state().unwrap();
     let before = section_uuids(&saved, 0);
@@ -1265,7 +1256,7 @@ fn splitting_a_shot_at_distance_leaves_the_identity_on_the_tail_only() {
         &cave_file_xml(&[Row::new(1, 0, Some(IDS[0])), Row::new(2, 1, Some(IDS[1]))]),
     );
 
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     import_ariane_file(&state, &source);
 
     let (section_id, target) = {
@@ -1339,7 +1330,7 @@ fn an_empty_or_whitespace_uuid_element_means_no_identity() {
         ]),
     );
 
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     import_ariane_file(&state, &source);
 
     let project = state.get_project_state().unwrap();
@@ -1376,7 +1367,7 @@ fn the_same_uuid_in_two_sections_of_one_file_is_left_alone() {
         ),
     );
 
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     import_ariane_file(&state, &source);
 
     let project = state.get_project_state().unwrap();
@@ -1420,7 +1411,7 @@ fn an_entity_escaped_uuid_is_stored_whole_and_a_split_one_stays_exportable() {
         ]),
     );
 
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     import_ariane_file(&state, &source);
 
     let project = state.get_project_state().unwrap();
@@ -1488,7 +1479,7 @@ fn a_uuid_outside_the_xml_char_set_falls_back_to_a_mint() {
         ]),
     );
 
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     import_ariane_file(&state, &source);
 
     let project = state.get_project_state().unwrap();
@@ -1537,7 +1528,7 @@ fn a_uuid_outside_the_xml_char_set_falls_back_to_a_mint() {
 /// has an identity and a cross-reference can be anchored on it immediately.
 #[test]
 fn a_legacy_undo_entry_with_no_recorded_identity_restores_a_usable_shot() {
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     let section_id = state
         .execute(Command::CreateSection {
             name: Some("Legacy".to_string()),
@@ -1635,7 +1626,7 @@ fn a_legacy_undo_entry_with_no_recorded_identity_restores_a_usable_shot() {
 /// other insert path mints for.
 #[test]
 fn a_legacy_created_shot_redo_append_mints_an_identity() {
-    let state = state_with_project();
+    let state = state_with_project("Synthetic");
     let section_id = state
         .execute(Command::CreateSection {
             name: Some("LegacyRedoAppend".to_string()),

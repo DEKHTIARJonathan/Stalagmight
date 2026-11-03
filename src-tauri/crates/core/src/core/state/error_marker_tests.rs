@@ -19,8 +19,9 @@ use tempfile::TempDir;
 use super::AppState;
 use crate::core::undo::UndoData;
 use crate::core::{Command, CommandResult};
-use crate::models::{CommandErrorCode, Project, SectionData, ShotData, SpeleoLink};
+use crate::models::{CommandErrorCode, Project, SectionData, SpeleoLink};
 use crate::persistence::{Database, ResolvedWarning};
+use crate::test_fixtures::{bare_shot, state_holding};
 
 /// The marker spellings the backend used to prefix (and the codes that replaced
 /// them), as literals: the constants they were spelled with are gone.
@@ -177,13 +178,6 @@ impl Checks {
     }
 }
 
-fn shot(length: f64) -> ShotData {
-    ShotData {
-        length,
-        ..Default::default()
-    }
-}
-
 fn create_section() -> Command {
     Command::CreateSection {
         name: Some("SectionA".to_owned()),
@@ -191,7 +185,7 @@ fn create_section() -> Command {
         date: None,
         color: "#123456".to_owned(),
         direction: None,
-        shots: vec![shot(5.0)],
+        shots: vec![bare_shot(5.0)],
     }
 }
 
@@ -200,7 +194,7 @@ fn one_section_project() -> Project {
     project.add_section(SectionData {
         name: Some("SectionA".to_owned()),
         color: "#123456".to_owned(),
-        shots: vec![shot(5.0), shot(7.0)],
+        shots: vec![bare_shot(5.0), bare_shot(7.0)],
         ..Default::default()
     });
     project
@@ -208,9 +202,7 @@ fn one_section_project() -> Project {
 
 /// A local project open in memory (no file).
 fn local_state() -> AppState {
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(one_section_project());
-    state
+    state_holding(one_section_project())
 }
 
 fn link() -> SpeleoLink {

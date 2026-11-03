@@ -13,6 +13,7 @@ use crate::models::{
     Coordinates, DivePlanSnapshot, GpsCoordinates, ImportPlacement, ImportSectionConfig,
     MarkedPoint, Project, SectionId, SectionUpdates, ShotData, StationRef,
 };
+use crate::test_fixtures::{state_with_project, straight_shot};
 
 /// One expected [`ReversedSection`] entry, so the assertions below read as
 /// "section X, mirrored against N shots" rather than a struct literal each time.
@@ -20,17 +21,6 @@ fn reversed_entry(section_id: SectionId, shot_count: u32) -> ReversedSection {
     ReversedSection {
         section_id,
         shot_count,
-    }
-}
-
-fn shot(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
-    ShotData {
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        length,
-        depth_in,
-        depth_out,
-        ..Default::default()
     }
 }
 
@@ -54,31 +44,22 @@ fn assert_coords_close(a: Coordinates, b: Coordinates) {
 /// from every other shot's.
 ///
 /// Every field here is one a reverse must either move, mirror or negate, and all
-/// of them default to `None` - so a fixture built on `shot()` alone makes any
+/// of them default to `None` - so a fixture built on `straight_shot()` alone makes any
 /// assertion about them vacuously true (that is exactly how the import path's
 /// "left/right is never swapped" claim went unguarded). Neither LRUD nor pitch
 /// feeds the coordinate walk (`horizontal_length` is derived from `length` and
 /// the depth delta), so populating them cannot perturb the geometry assertions.
 fn shot_with_lrud(azimuth: f64, length: f64, depth_in: f64, depth_out: f64, n: f64) -> ShotData {
-    ShotData {
-        left: Some(n),
-        right: Some(n + 0.5),
-        up: Some(n + 1.0),
-        down: Some(n + 1.5),
-        pitch_in: Some(n + 2.0),
-        pitch_out: Some(-(n + 3.0)),
-        ..shot(azimuth, length, depth_in, depth_out)
-    }
+    straight_shot(azimuth, length)
+        .with_depths(depth_in, depth_out)
+        .with_lrud(Some(n), Some(n + 0.5), Some(n + 1.0), Some(n + 1.5))
+        .with_pitches(Some(n + 2.0), Some(-(n + 3.0)))
 }
 
 /// A project with one three-shot section that turns a corner and changes depth,
 /// so a botched reverse shows up as a moved station rather than a coincidence.
 fn state_with_section() -> (AppState, SectionId) {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Reverse".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Reverse");
     let created = state.execute(Command::CreateSection {
         name: Some("Main line".to_string()),
         surveyor: None,
@@ -322,11 +303,7 @@ fn reverse_works_on_a_datum_anchored_section_and_keeps_the_datum_in_place() {
 /// indices are given in the FILE's order and mirrored backend-side.
 #[test]
 fn import_reverse_applies_before_placement_and_comments_resolve() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Import".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Import");
 
     // Three shots; a comment on station 0 of the FINAL (reversed) section.
     let result = state.execute_import_sections(
@@ -395,17 +372,13 @@ fn import_reverse_applies_before_placement_and_comments_resolve() {
 #[test]
 fn import_reverse_lands_the_section_in_the_same_place() {
     let shots = vec![
-        shot(0.0, 10.0, 0.0, 2.0),
-        shot(90.0, 5.0, 2.0, 2.0),
-        shot(210.0, 7.5, 2.0, 1.0),
+        straight_shot(0.0, 10.0).with_depths(0.0, 2.0),
+        straight_shot(90.0, 5.0).with_depths(2.0, 2.0),
+        straight_shot(210.0, 7.5).with_depths(2.0, 1.0),
     ];
 
     let import = |reverse: bool, placement: ImportPlacement| {
-        let state = AppState::new().unwrap();
-        state.execute(Command::CreateProject {
-            name: "Import".to_string(),
-            location: None,
-        });
+        let state = state_with_project("Import");
         let result = state.execute_import_sections(
             vec![ImportSectionConfig {
                 section_index: 0,
@@ -469,9 +442,9 @@ fn import_reverse_lands_the_section_in_the_same_place() {
 /// up as a moved station rather than a coincidence.
 fn import_shots() -> Vec<ShotData> {
     vec![
-        shot(0.0, 10.0, 0.0, 2.0),
-        shot(90.0, 5.0, 2.0, 2.0),
-        shot(210.0, 7.5, 2.0, 1.0),
+        straight_shot(0.0, 10.0).with_depths(0.0, 2.0),
+        straight_shot(90.0, 5.0).with_depths(2.0, 2.0),
+        straight_shot(210.0, 7.5).with_depths(2.0, 1.0),
     ]
 }
 
@@ -483,11 +456,7 @@ fn import_shots() -> Vec<ShotData> {
 /// id: `FromExisting`/`ManualSnap` need a real station to attach to, and it fixes
 /// the world frame for both runs.
 fn import_one(reverse: bool, placement: fn(SectionId) -> ImportPlacement) -> Vec<Coordinates> {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Import".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Import");
     let anchor = state
         .execute(Command::CreateSection {
             name: Some("Anchor".to_string()),
@@ -495,7 +464,10 @@ fn import_one(reverse: bool, placement: fn(SectionId) -> ImportPlacement) -> Vec
             date: None,
             color: "#ff6b6b".to_string(),
             direction: None,
-            shots: vec![shot(0.0, 6.0, 0.0, 1.0), shot(90.0, 6.0, 1.0, 2.0)],
+            shots: vec![
+                straight_shot(0.0, 6.0).with_depths(0.0, 1.0),
+                straight_shot(90.0, 6.0).with_depths(1.0, 2.0),
+            ],
         })
         .section_id
         .unwrap();
@@ -625,11 +597,7 @@ fn import_two(
     import_station: u32,
     target_station_index: u32,
 ) -> (Vec<Coordinates>, Vec<Coordinates>) {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Import".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Import");
 
     let config =
         |section_index: u32, name: &str, shots: Vec<ShotData>, placement| ImportSectionConfig {
@@ -654,7 +622,10 @@ fn import_two(
                 "Branch",
                 // Its far end sits at the trunk's station-1 depth, so the
                 // connection below is clean in all three axes.
-                vec![shot(45.0, 8.0, 4.0, 3.0), shot(135.0, 4.0, 3.0, 2.0)],
+                vec![
+                    straight_shot(45.0, 8.0).with_depths(4.0, 3.0),
+                    straight_shot(135.0, 4.0).with_depths(3.0, 2.0),
+                ],
                 ImportPlacement::FromImporting {
                     import_station,
                     target_section_index: 0,
@@ -747,7 +718,10 @@ fn batched_multi_section_reverse_is_atomic_and_undoes_in_one_step() {
         date: None,
         color: "#ff6b6b".to_string(),
         direction: None,
-        shots: vec![shot(45.0, 8.0, 0.0, 1.0), shot(315.0, 6.0, 1.0, 3.0)],
+        shots: vec![
+            straight_shot(45.0, 8.0).with_depths(0.0, 1.0),
+            straight_shot(315.0, 6.0).with_depths(1.0, 3.0),
+        ],
     });
     let second_id = second.section_id.unwrap();
 
@@ -829,11 +803,7 @@ fn batched_multi_section_reverse_is_atomic_and_undoes_in_one_step() {
 /// it survives close/reopen). The entry must simply not be pushed.
 #[test]
 fn reversing_a_shotless_section_leaves_the_undo_stack_usable() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Waypoints".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Waypoints");
 
     // An ordinary, undoable edit first - this is what must stay reachable.
     let created = state.execute(Command::CreateSection {
@@ -842,7 +812,7 @@ fn reversing_a_shotless_section_leaves_the_undo_stack_usable() {
         date: None,
         color: "#4ecdc4".to_string(),
         direction: None,
-        shots: vec![shot(0.0, 10.0, 0.0, 2.0)],
+        shots: vec![straight_shot(0.0, 10.0).with_depths(0.0, 2.0)],
     });
     assert!(created.success);
 
@@ -885,11 +855,7 @@ fn reversing_a_shotless_section_leaves_the_undo_stack_usable() {
 /// fails `key_for_ref` and drops it.
 #[test]
 fn import_reverse_drops_an_out_of_range_station_comment() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Import".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Import");
 
     let result = state.execute_import_sections(
         vec![ImportSectionConfig {
@@ -900,7 +866,10 @@ fn import_reverse_drops_an_out_of_range_station_comment() {
             color: "#4ecdc4".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![shot(0.0, 10.0, 0.0, 2.0), shot(90.0, 5.0, 2.0, 2.0)],
+            shots: vec![
+                straight_shot(0.0, 10.0).with_depths(0.0, 2.0),
+                straight_shot(90.0, 5.0).with_depths(2.0, 2.0),
+            ],
             placement: ImportPlacement::Origin,
             // Two shots means stations 0..2; station 7 does not exist.
             station_comments: vec![(7, "nowhere".to_string()), (1, "the bend".to_string())],
@@ -953,19 +922,23 @@ fn reverse_re_emits_warnings_computed_from_the_reversed_geometry() {
 
     // Validation only WARNS on an out-of-range azimuth, so a project can carry
     // one; `reverse_shots` rem_euclid's both readings, so it cannot survive.
-    let mut out_of_range = shot(0.0, 10.0, 0.0, 0.0);
+    let mut out_of_range = straight_shot(0.0, 10.0).with_depths(0.0, 0.0);
     out_of_range.azimuth_in = 400.0;
     out_of_range.azimuth_out = 400.0;
     // A level shot recording an 80-degree descent: the implied inclination is 0,
     // so the two disagree by 80 - well past the 15-degree default threshold.
-    let mut mismatch = shot(90.0, 10.0, 1.0, 1.0);
+    let mut mismatch = straight_shot(90.0, 10.0).with_depths(1.0, 1.0);
     mismatch.pitch_in = Some(80.0);
     mismatch.pitch_out = Some(80.0);
 
     let section_id = project
         .add_section(crate::models::SectionData {
             name: Some("Main".to_string()),
-            shots: vec![out_of_range, shot(45.0, 8.0, 0.0, 1.0), mismatch],
+            shots: vec![
+                out_of_range,
+                straight_shot(45.0, 8.0).with_depths(0.0, 1.0),
+                mismatch,
+            ],
             ..Default::default()
         })
         .id;
@@ -1019,7 +992,10 @@ fn reversing_a_merge_anchored_section_moves_nothing_through_the_full_execute() {
             color: "#ff6b6b".to_string(),
             direction: None,
             // Starts at the main line's station-1 depth so the merge is clean.
-            shots: vec![shot(45.0, 8.0, 2.0, 2.0), shot(135.0, 4.0, 2.0, 3.0)],
+            shots: vec![
+                straight_shot(45.0, 8.0).with_depths(2.0, 2.0),
+                straight_shot(135.0, 4.0).with_depths(2.0, 3.0),
+            ],
         })
         .section_id
         .unwrap();
@@ -1208,7 +1184,10 @@ fn reverse_reports_every_renumbered_section_through_batch_undo_and_redo() {
             date: None,
             color: "#ff6b6b".to_string(),
             direction: None,
-            shots: vec![shot(45.0, 8.0, 0.0, 1.0), shot(135.0, 4.0, 1.0, 1.0)],
+            shots: vec![
+                straight_shot(45.0, 8.0).with_depths(0.0, 1.0),
+                straight_shot(135.0, 4.0).with_depths(1.0, 1.0),
+            ],
         })
         .section_id
         .unwrap();
@@ -1408,7 +1387,10 @@ fn batch_a_b_a_reports_only_b() {
             date: None,
             color: "#ff6b6b".to_string(),
             direction: None,
-            shots: vec![shot(45.0, 8.0, 0.0, 1.0), shot(135.0, 4.0, 1.0, 1.0)],
+            shots: vec![
+                straight_shot(45.0, 8.0).with_depths(0.0, 1.0),
+                straight_shot(135.0, 4.0).with_depths(1.0, 1.0),
+            ],
         })
         .section_id
         .unwrap();
@@ -1708,11 +1690,7 @@ fn the_gauge_survives_a_save_and_reload() {
 /// terminal plan anchor sits on, and about which end the least-squares gauge pins.
 #[test]
 fn importing_with_the_reverse_toggle_records_the_orientation() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Import reverse".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Import reverse");
 
     let result = state.execute_import_sections(
         vec![ImportSectionConfig {
@@ -1723,7 +1701,10 @@ fn importing_with_the_reverse_toggle_records_the_orientation() {
             color: "#4ecdc4".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![shot(0.0, 10.0, 0.0, 2.0), shot(90.0, 5.0, 2.0, 2.0)],
+            shots: vec![
+                straight_shot(0.0, 10.0).with_depths(0.0, 2.0),
+                straight_shot(90.0, 5.0).with_depths(2.0, 2.0),
+            ],
             placement: ImportPlacement::Origin,
             station_comments: Vec::new(),
             reverse: true,

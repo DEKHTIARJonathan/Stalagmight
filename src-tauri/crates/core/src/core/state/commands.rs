@@ -1381,25 +1381,16 @@ mod integrity_capability_tests {
 #[expect(clippy::unwrap_used)]
 mod update_shot_clear_undo_tests {
     use super::*;
+    use crate::test_fixtures::{state_with_project, straight_shot};
 
     fn shot_data(left: Option<f64>) -> ShotData {
-        ShotData {
-            azimuth_in: 10.0,
-            azimuth_out: 10.0,
-            length: 5.0,
-            depth_in: 0.0,
-            depth_out: 1.0,
-            left,
-            ..Default::default()
-        }
+        straight_shot(10.0, 5.0)
+            .with_depths(0.0, 1.0)
+            .with_lrud(left, None, None, None)
     }
 
     fn state_with_one_shot(left: Option<f64>) -> (AppState, SectionId, ShotId) {
-        let state = AppState::new().unwrap();
-        state.execute(Command::CreateProject {
-            name: "Clear".to_string(),
-            location: None,
-        });
+        let state = state_with_project("Clear");
         let section_id = state
             .execute(Command::CreateSection {
                 name: None,

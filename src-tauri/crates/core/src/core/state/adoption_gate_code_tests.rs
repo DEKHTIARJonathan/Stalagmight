@@ -10,21 +10,13 @@
 //! treats a gated refusal as "read-only, not a failure" keeps doing so (#576 C4:
 //! the code, not a marker in the message). All data is synthetic.
 
-use super::AppState;
 use crate::core::Command;
 use crate::models::{CommandErrorCode, ShotData};
+use crate::test_fixtures::state_with_project;
 
 #[test]
 fn an_edit_during_an_adoption_hand_over_carries_the_adoption_code() {
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "CaveA".to_owned(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("CaveA");
     state.speleodb_shut_gate_for_adoption();
     let refused = state.execute(Command::CreateSection {
         name: Some("SectionA".to_owned()),

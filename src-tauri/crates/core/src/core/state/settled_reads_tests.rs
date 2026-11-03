@@ -22,17 +22,10 @@ use super::AppState;
 use crate::config::GasConfig;
 use crate::core::Command;
 use crate::models::{Diver, RulerEndpoint, ShotData, ShotUpdates};
+use crate::test_fixtures::state_with_project;
 
 fn surveyed() -> (AppState, u32, u32) {
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "CaveA".to_owned(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("CaveA");
     let created = state.execute(Command::CreateSection {
         name: Some("SectionA".to_owned()),
         surveyor: None,

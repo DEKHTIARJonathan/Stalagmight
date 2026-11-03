@@ -11,23 +11,12 @@
 //! markers, then the link's table hand-narrowed so the row cannot be read.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use super::AppState;
 use crate::models::{Project, SectionData, ShotData, SpeleoLink};
 use crate::persistence::Database;
-
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
+use crate::test_fixtures::state_with_null_sink;
 
 /// A linked project with both undo-chain markers, whose link row then cannot be
 /// read (a column the SELECT names is renamed).
@@ -73,8 +62,7 @@ fn a_save_as_away_from_an_unreadable_link_sheds_the_undo_chain_markers() {
     let _cfg = crate::test_helpers::isolated_config();
     let dir = TempDir::new().unwrap();
     let path = file_with_markers_and_an_unreadable_link(dir.path());
-    let state = AppState::new().unwrap();
-    state.set_event_sink(Arc::new(NoListener));
+    let state = state_with_null_sink();
     let loaded = state.do_load_project_full(path).unwrap();
     assert!(
         loaded.speleo_link_unreadable,

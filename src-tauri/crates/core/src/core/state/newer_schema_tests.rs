@@ -12,7 +12,6 @@
 //! re-stamped one schema version above it. No fixture is read or written.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::SystemTime;
 
 use tempfile::TempDir;
@@ -22,6 +21,7 @@ use crate::core::{Command, CommandResult};
 use crate::models::CommandErrorCode;
 use crate::models::{Project, SectionData, ShotData, ShotUpdates};
 use crate::persistence::Database;
+use crate::test_fixtures::state_with_null_sink;
 
 /// Words the refusal must carry, so a user (and a log reader) learns WHY the
 /// edit was refused rather than the SpeleoDB "take the write lock" story.
@@ -119,24 +119,6 @@ fn assert_refused_as_newer(label: &str, r: &CommandResult) {
     );
 }
 
-/// `do_load_project_full` reports progress through the installed sink; nobody
-/// is listening here.
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
-
-fn state_with_sink() -> AppState {
-    let state = AppState::new().unwrap();
-    state.set_event_sink(Arc::new(NoListener));
-    state
-}
-
 /// THE regression guard for the open: neither load path may write a byte of
 /// a newer file - no migration, no undo purge, no load-time backfill - and its
 /// undo history and stamp stay exactly as the newer build left them.
@@ -149,7 +131,7 @@ fn opening_a_newer_file_writes_nothing_to_it() {
     assert_eq!(undo_rows(&path), 1, "the fixture must stage an undo entry");
 
     // The production load path...
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     let loaded = state.do_load_project_full(path.clone());
     let loaded = loaded.unwrap_or_else(|e| panic!("a newer file must still open: {e:?}"));
     assert_eq!(loaded.project.name, "CaveA");
@@ -193,7 +175,7 @@ fn a_newer_files_history_is_never_restored() {
     let temp = TempDir::new().unwrap();
     let (path, _) = build_newer_file(temp.path(), "newer.stalx");
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     state.do_load_project_full(path.clone()).unwrap();
     println!("after the full load: can_undo = {}", state.can_undo());
     assert!(
@@ -219,7 +201,7 @@ fn edits_to_a_newer_file_are_refused() {
     let (path, _) = build_newer_file(temp.path(), "newer.stalx");
     let before = snapshot(&path);
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     let loaded = state.do_load_project_full(path.clone()).unwrap();
     let section = &loaded.project.sections[0];
 
@@ -287,7 +269,7 @@ fn saving_a_newer_file_is_refused() {
     let before = snapshot(&path);
     let elsewhere = temp.path().join("copy.stalx");
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     state.do_load_project_full(path.clone()).unwrap();
 
     let in_place = state.save_project(None);
@@ -353,7 +335,7 @@ fn the_read_only_block_ends_with_the_newer_project() {
     db.save_project(&project).unwrap();
     drop(db);
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     state.do_load_project_full(newer_path).unwrap();
     assert!(state.close_project().success);
 
@@ -385,7 +367,7 @@ fn a_newer_file_cannot_start_a_speleodb_edit_session() {
     let temp = TempDir::new().unwrap();
     let (path, _) = build_newer_file(temp.path(), "newer.stalx");
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     state.do_load_project_full(path).unwrap();
 
     let start = state.speleodb_start_editing().map(|_| ()).unwrap_err();

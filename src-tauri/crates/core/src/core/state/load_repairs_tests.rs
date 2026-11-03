@@ -15,31 +15,13 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use tempfile::TempDir;
 
 use super::AppState;
 use crate::models::{Project, SectionData, ShotData, StationKey};
 use crate::persistence::Database;
-
-/// `do_load_project_full` reports progress through the installed sink; nobody
-/// is listening here.
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
-
-fn state_with_sink() -> AppState {
-    let state = AppState::new().unwrap();
-    state.set_event_sink(Arc::new(NoListener));
-    state
-}
+use crate::test_fixtures::state_with_null_sink;
 
 fn two_shot_project() -> Project {
     let mut project = Project::new("CaveA".to_string(), None);
@@ -146,7 +128,7 @@ fn the_load_result_and_the_binary_envelope_carry_what_the_load_reset() {
          VALUES ({sid}, 1, 9e999, 0.0, 0.0), ({sid}, 2, 0.0, -9e999, 0.0);",
     );
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     let loaded = state
         .do_load_project_full(path)
         .unwrap_or_else(|e| panic!("a damaged-but-readable file opens: {e:?}"));
@@ -192,7 +174,7 @@ fn a_finite_out_of_range_gps_tie_point_opens_as_it_is_and_is_flagged() {
          VALUES ({sid}, 0, 95.0, 190.0, 20000.0);",
     );
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     let loaded = state
         .do_load_project_full(path)
         .unwrap_or_else(|e| panic!("a file with an out-of-range tie point opens: {e:?}"));
@@ -249,7 +231,7 @@ fn a_non_finite_gps_tie_point_is_dropped_and_reported() {
          VALUES ({sid}, 0, 9e999, 10.0, 0.0);",
     );
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     let loaded = state
         .do_load_project_full(path)
         .unwrap_or_else(|e| panic!("a file with a non-finite tie point opens: {e:?}"));

@@ -12,29 +12,13 @@
 //! link row, then the row's table hand-narrowed so it cannot be read.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use tempfile::TempDir;
 
 use super::AppState;
 use crate::models::{Project, SectionData, ShotData, SpeleoLink};
 use crate::persistence::Database;
-
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
-
-fn state_with_sink() -> AppState {
-    let state = AppState::new().unwrap();
-    state.set_event_sink(Arc::new(NoListener));
-    state
-}
+use crate::test_fixtures::state_with_null_sink;
 
 /// A saved project with one shot and a SpeleoDB link row.
 fn linked_file(dir: &Path, name: &str) -> PathBuf {
@@ -102,7 +86,7 @@ fn opening_a_file_whose_link_cannot_be_read_reports_it() {
     let path = linked_file(temp.path(), "linked.stalx");
     make_link_unreadable(&path);
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     let (is_remote, unreadable) = envelope_flag(&state, path);
     let save = state.save_project(None);
     println!("open with an unreadable link: is_remote = {is_remote}, speleo_link_unreadable = {unreadable:?}");
@@ -132,7 +116,7 @@ fn a_readable_link_or_no_link_reports_nothing() {
         .unwrap();
     drop(db);
 
-    let state = state_with_sink();
+    let state = state_with_null_sink();
     assert_eq!(envelope_flag(&state, linked), (true, Some(false)));
     assert!(state.close_project().success);
     assert_eq!(envelope_flag(&state, local), (false, Some(false)));

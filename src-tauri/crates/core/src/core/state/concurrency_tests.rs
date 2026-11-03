@@ -90,6 +90,7 @@ use crate::models::{SectionId, ShotData, ShotId, ShotUpdates, StationRef};
 // what keeps these tests off other files; what it buys is ONE dir for the whole
 // test, whose path the test can name and hand to a worker thread
 // (`ConfigHandoff`). It is held for the whole test because the saves are.
+use crate::core::events::NullEventSink;
 use crate::test_helpers::isolated_config;
 
 // ===========================================================================
@@ -266,23 +267,11 @@ fn known_panic(_text: &str) -> Option<&'static str> {
 // The workers
 // ===========================================================================
 
-/// [#576 A1] The run's saved home file, which the lifecycle operations reopen, and a
-/// sink so the progress-reporting load and create can run without a host.
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
-
 /// Save the starting project to `<temp>/home.stalx` (every lifecycle operation
 /// below ends with a project open again, most of them by reopening this file) and
 /// give `state` a sink for the progress-reporting load and create.
 fn prepare_lifecycle(state: &AppState, temp: &std::path::Path) -> std::path::PathBuf {
-    state.set_event_sink(Arc::new(NoListener));
+    state.set_event_sink(Arc::new(NullEventSink));
     let home = temp.join("home.stalx");
     let saved = state.save_project(Some(home.clone()));
     assert!(saved.success, "the home file saves: {:?}", saved.error);

@@ -11,16 +11,12 @@ use tempfile::TempDir;
 use super::AppState;
 use crate::core::Command;
 use crate::models::{GpsCoordinates, ShotData, StationRef};
-use crate::test_fixtures::shot;
+use crate::test_fixtures::{shot, state_with_project};
 
 /// Export project to TML, re-import it, verify shot data matches exactly.
 #[test]
 fn test_tml_roundtrip_preserves_shot_data() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "TML Roundtrip".to_string(),
-        location: None,
-    });
+    let state = state_with_project("TML Roundtrip");
 
     let shot = ShotData {
         azimuth_in: 12.5,
@@ -112,11 +108,7 @@ fn test_tml_roundtrip_preserves_shot_data() {
 /// Export project to TML with multiple sections, re-import, verify section count and names.
 #[test]
 fn test_tml_roundtrip_preserves_multiple_sections() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Multi Section".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Multi Section");
     state.execute(Command::CreateSection {
         name: Some("Gallery A".to_string()),
         surveyor: None,
@@ -155,11 +147,7 @@ fn test_stalx_roundtrip_preserves_merges_closures_offsets() {
     let temp_dir = TempDir::new().unwrap();
     let save_path = temp_dir.path().join("full_roundtrip.stalx");
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Full Roundtrip".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Full Roundtrip");
 
     // Create two sections with 2 shots each
     let sec_a = state
@@ -278,11 +266,7 @@ fn test_stalx_roundtrip_preserves_merges_closures_offsets() {
 /// CSV export preserves precision for azimuths near 360/0 boundary.
 #[test]
 fn test_csv_export_preserves_azimuth_precision() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "CSV Precision".to_string(),
-        location: None,
-    });
+    let state = state_with_project("CSV Precision");
 
     let shot = ShotData {
         azimuth_in: 359.9,

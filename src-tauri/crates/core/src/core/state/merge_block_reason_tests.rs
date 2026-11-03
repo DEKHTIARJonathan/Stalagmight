@@ -13,26 +13,12 @@ use super::AppState;
 use crate::core::Command;
 use ts_rs::TS;
 
-use crate::models::{ConnectivityResult, GpsCoordinates, MergeBlockReason, ShotData, StationRef};
-
-fn shot(length: f64) -> ShotData {
-    ShotData {
-        azimuth_in: 45.0,
-        azimuth_out: 225.0,
-        length,
-        depth_in: 10.0,
-        depth_out: 11.0,
-        ..Default::default()
-    }
-}
+use crate::models::{ConnectivityResult, GpsCoordinates, MergeBlockReason, StationRef};
+use crate::test_fixtures::{shot, state_with_project};
 
 /// A project with two unconnected one-shot sections, A and B.
 fn two_sections(name: &str) -> (AppState, u32, u32) {
-    let state = AppState::new().expect("state");
-    state.execute(Command::CreateProject {
-        name: name.to_string(),
-        location: None,
-    });
+    let state = state_with_project(name);
     let mut ids = Vec::new();
     for (color, length) in [("#ff0000", 10.0), ("#00ff00", 5.0)] {
         let created = state.execute(Command::CreateSection {

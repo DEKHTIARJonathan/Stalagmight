@@ -8,23 +8,12 @@
 //! synthetic.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use tempfile::TempDir;
 
-use super::AppState;
 use crate::models::Project;
 use crate::persistence::Database;
-
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
+use crate::test_fixtures::state_with_null_sink;
 
 fn project_file(dir: &Path, name: &str) -> PathBuf {
     let path = dir.join(name);
@@ -36,8 +25,7 @@ fn project_file(dir: &Path, name: &str) -> PathBuf {
 
 /// The JSON the `load_project_full` command sends for `path`.
 fn load_json(path: PathBuf) -> serde_json::Value {
-    let state = AppState::new().expect("state");
-    state.set_event_sink(Arc::new(NoListener));
+    let state = state_with_null_sink();
     let loaded = state
         .do_load_project_full(path)
         .unwrap_or_else(|e| panic!("load failed: {e:?}"));

@@ -14,17 +14,10 @@
 use super::AppState;
 use crate::core::Command;
 use crate::models::{RulerEndpoint, ShotData};
+use crate::test_fixtures::state_with_project;
 
 fn with_project() -> (AppState, u32) {
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "CaveA".to_string(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("CaveA");
     let created = state.execute(Command::CreateSection {
         name: Some("SectionA".to_string()),
         surveyor: None,

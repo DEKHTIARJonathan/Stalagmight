@@ -19,15 +19,7 @@ use crate::core::Command;
 use crate::models::{
     AzimuthReference, CorrectionSource, GpsCoordinates, SectionId, ShotData, StationRef,
 };
-
-fn shot(azimuth: f64, length: f64) -> ShotData {
-    ShotData {
-        length,
-        azimuth_in: azimuth,
-        azimuth_out: (azimuth + 180.0) % 360.0,
-        ..Default::default()
-    }
-}
+use crate::test_fixtures::{heading_shot, state_with_project};
 
 fn magnetic(degrees: f64) -> AzimuthReference {
     AzimuthReference::magnetic(degrees, CorrectionSource::Manual)
@@ -59,18 +51,28 @@ fn set_datum(state: &AppState, station: StationRef, lat: f64, lon: f64) {
 /// the MIDDLE of SectionA; SectionC carries a second datum on C1. No section
 /// declares a north reference of its own.
 fn surveyed() -> (AppState, SectionId, SectionId, SectionId) {
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "CaveA".to_string(),
-                location: None,
-            })
-            .success
+    let state = state_with_project("CaveA");
+    let a = create_section(
+        &state,
+        "SectionA",
+        vec![
+            heading_shot(0.0, 10.0).with_depths(0.0, 0.0),
+            heading_shot(0.0, 10.0).with_depths(0.0, 0.0),
+        ],
     );
-    let a = create_section(&state, "SectionA", vec![shot(0.0, 10.0), shot(0.0, 10.0)]);
-    let b = create_section(&state, "SectionB", vec![shot(90.0, 5.0)]);
-    let c = create_section(&state, "SectionC", vec![shot(90.0, 10.0), shot(90.0, 10.0)]);
+    let b = create_section(
+        &state,
+        "SectionB",
+        vec![heading_shot(90.0, 5.0).with_depths(0.0, 0.0)],
+    );
+    let c = create_section(
+        &state,
+        "SectionC",
+        vec![
+            heading_shot(90.0, 10.0).with_depths(0.0, 0.0),
+            heading_shot(90.0, 10.0).with_depths(0.0, 0.0),
+        ],
+    );
     let merged = state.execute(Command::MergeStations {
         station_a: StationRef::new(a, 2),
         station_b: StationRef::new(b, 0),
