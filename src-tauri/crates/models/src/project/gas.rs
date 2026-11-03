@@ -14,6 +14,8 @@ mod pinned;
 mod scooter;
 
 #[cfg(test)]
+mod half_minus_gauge_tests;
+#[cfg(test)]
 #[expect(
     clippy::print_stdout,
     reason = "the printed plans are the evidence a run captures"

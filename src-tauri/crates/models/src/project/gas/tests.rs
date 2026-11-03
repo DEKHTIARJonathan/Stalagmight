@@ -966,15 +966,20 @@ fn gas_gauge_rules_never_credit_more_than_the_volume_rules_they_replaced() {
                     check(&format!("thirds margin {margin}"), new, old);
                 }
                 for reserve in [0.0, 30.0, 100.0_f64] {
-                    let new = penetration_budget(
-                        &[bg.clone(), stage.clone()],
-                        ReservePreset::OneStage,
-                        &profile(0.0, reserve),
-                        conservative,
-                    );
                     let drop = (0.5 * (basis + reserve)).clamp(0.0, basis);
-                    let old = 0.25 * d(basis, 12.0) + (d(basis, 11.0) - d(drop, 11.0)).max(0.0);
-                    check(&format!("one stage reserve {reserve}"), new, old);
+                    let stage_in = (d(basis, 11.0) - d(drop, 11.0)).max(0.0);
+                    // [#576 RV8c-3] TwoStage too: a sixth of the back gas and two counted stages.
+                    for (preset, frac, stages) in [
+                        (ReservePreset::OneStage, 0.25, 1),
+                        (ReservePreset::TwoStage, 1.0 / 6.0, 2),
+                    ] {
+                        let mut rig = vec![bg.clone()];
+                        rig.extend(std::iter::repeat_n(stage.clone(), stages));
+                        let new =
+                            penetration_budget(&rig, preset, &profile(0.0, reserve), conservative);
+                        let old = frac * d(basis, 12.0) + stages as f64 * stage_in;
+                        check(&format!("{preset:?} reserve {reserve}"), new, old);
+                    }
                 }
             }
         }
