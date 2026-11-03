@@ -8,10 +8,13 @@
 //! comparisons against copies of the old routines kept here as oracles), and
 //! that the work per call no longer scales with the section length.
 
+use super::crossing::{
+    crossing_prefilter_margin, placement_crossing_clearance_ok, straight_runs, CrossingIndex,
+    CrossingLane,
+};
 use super::{
-    best_merge_offset, crossing_prefilter_margin, placement_crossing_clearance_ok,
-    section_trace_points, station_context_multiplier, suggest_all_placements, try_match_sequence,
-    work, CrossSectionSuggestion, CrossingPrefilter, ExistingSection, ImportSectionForSuggestion,
+    best_merge_offset, section_trace_points, station_context_multiplier, suggest_all_placements,
+    try_match_sequence, work, CrossSectionSuggestion, ExistingSection, ImportSectionForSuggestion,
     MatchDirection, MatchShot, PlacementSuggestion, SuggestionConfidence, SuggestionConfig,
     TracePoint,
 };
@@ -284,12 +287,12 @@ fn placement_suggest_timing_probe() {
 /// The base (3e450812) matrix matcher, verbatim but for the work counter:
 /// the oracle the diagonal walk is compared against.
 mod oracle {
+    use super::super::crossing::{interpolate_depth, segment_intersection_params};
     use super::super::{
         cell_final_score, compute_exploratory_shot_score, ignored_crossing_pairs_for_suggestion,
-        interpolate_depth, merge_offset_pairs, merge_station_pair_for_offsets,
-        segment_intersection_params, sequence_match_passes_final_cutoffs, shot_weight,
-        station_context_multiplier, DpCell, MatchDirection, MatchShot, PlacementSuggestion,
-        SequenceMatch, SuggestionConfig, TracePoint,
+        merge_offset_pairs, merge_station_pair_for_offsets, sequence_match_passes_final_cutoffs,
+        shot_weight, station_context_multiplier, DpCell, MatchDirection, MatchShot,
+        PlacementSuggestion, SequenceMatch, SuggestionConfig, TracePoint,
     };
 
     fn oriented_existing_shots(
@@ -695,15 +698,19 @@ fn prefiltered_crossing_check_matches_the_exhaustive_one() {
                 )
             }
         };
-        let prefilter = CrossingPrefilter::build(&import_trace, &existing_trace);
-        prefiltered += usize::from(prefilter.is_some());
+        let index = CrossingIndex::build(
+            &import_trace,
+            &existing_trace,
+            &straight_runs(&import_trace),
+        );
+        prefiltered += usize::from(matches!(index.lanes[0], CrossingLane::Grid(_)));
         let import_station = (rng.next_u64() % (import_trace.len() as u64 + 1)) as usize;
         let existing_station = (rng.next_u64() % (existing_trace.len() as u64 + 1)) as usize;
         let ignored = random_ignored(&mut rng, import_trace.len(), existing_trace.len());
         let new = placement_crossing_clearance_ok(
             &import_trace,
             &existing_trace,
-            prefilter.as_ref(),
+            &index,
             import_station,
             existing_station,
             &ignored,
@@ -780,7 +787,11 @@ fn ranked_merge_offset_matches_the_fold() {
             &existing_match,
             &import_trace,
             &existing_trace,
-            CrossingPrefilter::build(&import_trace, &existing_trace).as_ref(),
+            &CrossingIndex::build(
+                &import_trace,
+                &existing_trace,
+                &straight_runs(&import_trace),
+            ),
             &suggestion,
             &config,
         );
@@ -857,6 +868,41 @@ fn straight_work(len: usize) -> u64 {
         "the straight scene must produce suggestions"
     );
     work::take()
+}
+
+/// [#576 NF-W4U-3] Collinear sections are the crossing check's worst case:
+/// every start index survives the matcher, and each surviving candidate used
+/// to walk the whole placed import through the grid, so the work grew with
+/// candidates x import length (10x the import, ~9x the work). Import segments
+/// provably parallel to every existing segment are now skipped, so a longer
+/// straight import costs no more crossing work than a short one.
+#[test]
+fn collinear_crossing_work_does_not_grow_with_the_import() {
+    let work_for = |import_len: usize| {
+        let existing_sections = vec![existing(1, &straight_run(200, 90.0))];
+        let imports = vec![import(0, straight_run(import_len, 90.0))];
+        work::take();
+        let all = suggest_all_placements(
+            &imports,
+            AzimuthReference::default(),
+            &existing_sections,
+            &PlacementSuggestionConfig::default(),
+        );
+        assert!(
+            !all.is_empty(),
+            "the collinear scene must produce suggestions"
+        );
+        work::take()
+    };
+    let short = work_for(20);
+    let long = work_for(200);
+    let ratio = long as f64 / short as f64;
+    println!("collinear work: 20-shot import {short}, 200-shot import {long}, ratio {ratio:.2}");
+    assert!(
+        ratio < 2.0,
+        "10x the straight import cost {ratio:.2}x the work ({short} -> {long} units); the \
+         crossing check is walking provably parallel segments again"
+    );
 }
 
 /// The pass makes a constant number of calls per start index, so total work

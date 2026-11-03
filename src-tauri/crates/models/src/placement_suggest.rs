@@ -5,6 +5,10 @@ use crate::config::PlacementSuggestionConfig;
 
 use super::{horizontal_length_from_slope, AzimuthReference, SectionId, Shot, ShotData};
 
+mod crossing;
+
+use crossing::{placement_crossing_clearance_ok, straight_runs, CrossingIndex};
+
 /// Direction of match between import and existing shots.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -515,353 +519,6 @@ fn section_trace_points(shots: &[MatchShot]) -> Vec<TracePoint> {
     points
 }
 
-/// Below this `|denominator|` [`segment_intersection_params`] calls two
-/// segments parallel and reports no crossing. Shared with
-/// [`crossing_prefilter_margin`], whose bound is derived from it.
-const PARALLEL_DENOM_EPS: f64 = 1e-9;
-
-fn segment_intersection_params(
-    a0: TracePoint,
-    a1: TracePoint,
-    b0: TracePoint,
-    b1: TracePoint,
-) -> Option<(f64, f64)> {
-    const ENDPOINT_EPS: f64 = 1e-6;
-
-    let ax = a1.x - a0.x;
-    let ay = a1.y - a0.y;
-    let bx = b1.x - b0.x;
-    let by = b1.y - b0.y;
-    let denom = ax * by - ay * bx;
-    if denom.abs() < PARALLEL_DENOM_EPS {
-        return None;
-    }
-
-    let cx = b0.x - a0.x;
-    let cy = b0.y - a0.y;
-    let t = (cx * by - cy * bx) / denom;
-    let u = (cx * ay - cy * ax) / denom;
-
-    if t > ENDPOINT_EPS && t < 1.0 - ENDPOINT_EPS && u > ENDPOINT_EPS && u < 1.0 - ENDPOINT_EPS {
-        Some((t, u))
-    } else {
-        None
-    }
-}
-
-fn interpolate_depth(a: TracePoint, b: TracePoint, t: f64) -> f64 {
-    a.depth + (b.depth - a.depth) * t
-}
-
-/// Does this (import, existing) segment pair cross with less than the minimum
-/// vertical clearance? The exact test, unchanged from the exhaustive loop.
-fn pair_crosses_too_close(
-    import_a: TracePoint,
-    import_b: TracePoint,
-    existing_a: TracePoint,
-    existing_b: TracePoint,
-    config: &SuggestionConfig,
-) -> bool {
-    let Some((import_t, existing_t)) =
-        segment_intersection_params(import_a, import_b, existing_a, existing_b)
-    else {
-        return false;
-    };
-    let import_depth = interpolate_depth(import_a, import_b, import_t);
-    let existing_depth = interpolate_depth(existing_a, existing_b, existing_t);
-    (import_depth - existing_depth).abs() < config.min_crossing_depth_clearance
-}
-
-/// The largest `|dx|` or `|dy|` of any one segment of `trace`.
-fn max_segment_extent(trace: &[TracePoint]) -> f64 {
-    trace.windows(2).fold(0.0, |acc: f64, w| {
-        acc.max((w[1].x - w[0].x).abs())
-            .max((w[1].y - w[0].y).abs())
-    })
-}
-
-fn trace_is_finite(trace: &[TracePoint]) -> bool {
-    trace.iter().all(|p| p.x.is_finite() && p.y.is_finite())
-}
-
-/// [#576 A2] How far apart two segments' bounding boxes may be while
-/// [`segment_intersection_params`] could STILL report them crossing, for
-/// segments whose `|dx|`, `|dy|` are at most `max_extent`; `None` when no such
-/// bound holds and every pair has to be tested.
-///
-/// Mathematically, segments with disjoint boxes cannot cross. The computed
-/// test can, though, when the two are nearly parallel: `t = N / D` with
-/// `|D| >= PARALLEL_DENOM_EPS`, and the rounding in `N` and `D` is relative to
-/// `|c||b|` and `|a||b|`. So the prefilter skips a pair only when its boxes
-/// are further apart than this margin, and the margin is a proven bound on
-/// what rounding can bridge - which is what makes the filtered loop return
-/// exactly what the exhaustive one did, bit for bit.
-///
-/// The bound. Let `L` bound every component of `a` and `b`, and let the boxes
-/// be `G` apart along some axis. The true crossing point `P` is within
-/// `dist(t, [0, 1]) * L` of `a`'s box and `dist(u, [0, 1]) * L` of `b`'s along
-/// that axis, and those two distances add to at least `G`, so one of the TRUE
-/// `t`, `u` is at least `G / (2L)` outside `[0, 1]`. The computed one lands
-/// inside `(0, 1)` only if rounding moved it that far. With `gamma` bounding
-/// the relative error of a product-difference (about `4u`; `16u` is used) and
-/// `|c| <= 2L + G` for boxes that close, `|D_hat - D| / |D_hat| <= r =
-/// 2 gamma L^2 / EPS` and `|N_hat - N| / |D_hat| <= gamma 2L (2L + G) / EPS`,
-/// so `|t_hat - t| <= (s + r + u) / (1 - r)`. Requiring that to reach
-/// `G / (2L)` gives `G <= (12 gamma L^3 / EPS + 2 L u) / (1 - 6 gamma L^2 /
-/// EPS)`, valid while the denominator stays positive. The returned margin is
-/// twice that, plus a micrometre for the rounding of the box arithmetic
-/// itself, and the bound is only used while `6 gamma L^2 / EPS <= 1/2`
-/// (segments up to ~216 m): past that, `None`.
-fn crossing_prefilter_margin(max_extent: f64) -> Option<f64> {
-    const UNIT_ROUNDOFF: f64 = f64::EPSILON / 2.0;
-    const GAMMA: f64 = 16.0 * UNIT_ROUNDOFF;
-    // A millimetre of slack: translating the import moves its endpoints by a
-    // rounding, so a placed segment can be a hair longer than measured here.
-    let l = max_extent + 1e-3;
-    if !l.is_finite() {
-        return None;
-    }
-    let shrink = 6.0 * GAMMA * l * l / PARALLEL_DENOM_EPS;
-    if shrink > 0.5 {
-        return None;
-    }
-    let bridgeable =
-        (12.0 * GAMMA * l.powi(3) / PARALLEL_DENOM_EPS + 2.0 * l * UNIT_ROUNDOFF) / (1.0 - shrink);
-    Some(2.0 * bridgeable + 1e-6)
-}
-
-/// `[min_x, max_x, min_y, max_y]` of a segment.
-fn segment_box(a: TracePoint, b: TracePoint) -> [f64; 4] {
-    [a.x.min(b.x), a.x.max(b.x), a.y.min(b.y), a.y.max(b.y)]
-}
-
-/// [#576 A2] An existing section's trace segments bucketed into a uniform
-/// grid, built once per (import, existing) section pair, so the crossing
-/// check visits the existing segments NEAR each placed import segment instead
-/// of all of them. The exhaustive loop tested every import segment against
-/// every existing one for every surviving candidate and merge offset; on two
-/// straight 2,000-shot sections that was 370 s.
-struct CrossingPrefilter {
-    /// See [`crossing_prefilter_margin`].
-    margin: f64,
-    origin_x: f64,
-    origin_y: f64,
-    cell: f64,
-    nx: usize,
-    ny: usize,
-    /// CSR buckets: the segments of cell `(cx, cy)` are
-    /// `entries[starts[cy * nx + cx]..starts[cy * nx + cx + 1]]`.
-    starts: Vec<usize>,
-    entries: Vec<usize>,
-    boxes: Vec<[f64; 4]>,
-}
-
-impl CrossingPrefilter {
-    /// `None` when the exact bound does not apply (non-finite coordinates, or
-    /// segments too long for [`crossing_prefilter_margin`]): the caller then
-    /// tests every pair.
-    fn build(import_trace: &[TracePoint], existing_trace: &[TracePoint]) -> Option<Self> {
-        if !trace_is_finite(import_trace) || !trace_is_finite(existing_trace) {
-            return None;
-        }
-        let extent = max_segment_extent(import_trace).max(max_segment_extent(existing_trace));
-        let margin = crossing_prefilter_margin(extent)?;
-        let boxes: Vec<[f64; 4]> = existing_trace
-            .windows(2)
-            .map(|w| segment_box(w[0], w[1]))
-            .collect();
-        let (origin_x, max_x, origin_y, max_y) = boxes.iter().fold(
-            (
-                f64::INFINITY,
-                f64::NEG_INFINITY,
-                f64::INFINITY,
-                f64::NEG_INFINITY,
-            ),
-            |(lx, hx, ly, hy), b| (lx.min(b[0]), hx.max(b[1]), ly.min(b[2]), hy.max(b[3])),
-        );
-        if boxes.is_empty() {
-            return None;
-        }
-        let (width, height) = (max_x - origin_x, max_y - origin_y);
-        // At least one segment's extent and both margins wide, so a query
-        // spans a handful of cells; and no finer than ~4 cells per segment
-        // over the trace's box, so the grid stays linear in the section.
-        let cell = extent
-            .max(2.0 * margin)
-            .max(1.0)
-            .max((width * height / (4.0 * boxes.len() as f64)).sqrt());
-        let nx = (width / cell).floor() as usize + 1;
-        let ny = (height / cell).floor() as usize + 1;
-        let mut grid = Self {
-            margin,
-            origin_x,
-            origin_y,
-            cell,
-            nx,
-            ny,
-            starts: vec![0; nx * ny + 1],
-            entries: Vec::new(),
-            boxes,
-        };
-        // Counting pass, then fill: two walks of the same cell ranges.
-        for b in &grid.boxes {
-            let (x0, x1, y0, y1) = grid.cell_range(b);
-            for cy in y0..=y1 {
-                for cx in x0..=x1 {
-                    grid.starts[cy * nx + cx + 1] += 1;
-                }
-            }
-        }
-        for i in 1..grid.starts.len() {
-            grid.starts[i] += grid.starts[i - 1];
-        }
-        let mut fill = grid.starts.clone();
-        grid.entries = vec![0; grid.starts[nx * ny]];
-        for (segment, b) in grid.boxes.iter().enumerate() {
-            let (x0, x1, y0, y1) = grid.cell_range(b);
-            for cy in y0..=y1 {
-                for cx in x0..=x1 {
-                    let slot = &mut fill[cy * nx + cx];
-                    grid.entries[*slot] = segment;
-                    *slot += 1;
-                }
-            }
-        }
-        Some(grid)
-    }
-
-    /// The cell column of `x`, clamped into the grid.
-    fn column(&self, x: f64) -> usize {
-        (((x - self.origin_x) / self.cell).floor().max(0.0) as usize).min(self.nx - 1)
-    }
-
-    fn row(&self, y: f64) -> usize {
-        (((y - self.origin_y) / self.cell).floor().max(0.0) as usize).min(self.ny - 1)
-    }
-
-    /// Inclusive cell ranges `(x0, x1, y0, y1)` a box covers, clamped.
-    fn cell_range(&self, b: &[f64; 4]) -> (usize, usize, usize, usize) {
-        (
-            self.column(b[0]),
-            self.column(b[1]),
-            self.row(b[2]),
-            self.row(b[3]),
-        )
-    }
-
-    /// Does any existing segment the prefilter cannot rule out cross the
-    /// placed import segment `(a, b)` too closely? Every existing segment
-    /// whose box comes within `margin` of the import segment's box is tested
-    /// exactly once; every other one is provably one the exact test would
-    /// pass (see [`crossing_prefilter_margin`]).
-    fn segment_violates(
-        &self,
-        existing_trace: &[TracePoint],
-        import_idx: usize,
-        a: TracePoint,
-        b: TracePoint,
-        ignored_pairs: &[(usize, usize)],
-        config: &SuggestionConfig,
-    ) -> bool {
-        let seg = segment_box(a, b);
-        let query = [
-            seg[0] - self.margin,
-            seg[1] + self.margin,
-            seg[2] - self.margin,
-            seg[3] + self.margin,
-        ];
-        let grid_hi_x = self.origin_x + self.cell * self.nx as f64;
-        let grid_hi_y = self.origin_y + self.cell * self.ny as f64;
-        if query[1] < self.origin_x
-            || query[0] > grid_hi_x
-            || query[3] < self.origin_y
-            || query[2] > grid_hi_y
-        {
-            return false;
-        }
-        let (x0, x1, y0, y1) = self.cell_range(&query);
-        for cy in y0..=y1 {
-            for cx in x0..=x1 {
-                let cell = cy * self.nx + cx;
-                for &existing_idx in &self.entries[self.starts[cell]..self.starts[cell + 1]] {
-                    charge_work(1);
-                    let e = &self.boxes[existing_idx];
-                    if e[0] > query[1] || e[1] < query[0] || e[2] > query[3] || e[3] < query[2] {
-                        continue;
-                    }
-                    // A segment spanning several cells is met in each; test it
-                    // only in the cell holding the low corner of the overlap,
-                    // which lies inside both boxes and so in exactly one
-                    // visited cell.
-                    if self.column(query[0].max(e[0])) != cx || self.row(query[2].max(e[2])) != cy {
-                        continue;
-                    }
-                    if ignored_pairs.contains(&(import_idx, existing_idx)) {
-                        continue;
-                    }
-                    if pair_crosses_too_close(
-                        a,
-                        b,
-                        existing_trace[existing_idx],
-                        existing_trace[existing_idx + 1],
-                        config,
-                    ) {
-                        return true;
-                    }
-                }
-            }
-        }
-        false
-    }
-}
-
-fn placement_crossing_clearance_ok(
-    import_trace: &[TracePoint],
-    existing_trace: &[TracePoint],
-    prefilter: Option<&CrossingPrefilter>,
-    import_station_index: usize,
-    existing_station_index: usize,
-    ignored_pairs: &[(usize, usize)],
-    config: &SuggestionConfig,
-) -> bool {
-    if import_station_index >= import_trace.len() || existing_station_index >= existing_trace.len()
-    {
-        return false;
-    }
-
-    let dx = existing_trace[existing_station_index].x - import_trace[import_station_index].x;
-    let dy = existing_trace[existing_station_index].y - import_trace[import_station_index].y;
-
-    // The placed import is translated on the fly - the same `translated`
-    // arithmetic, so the same coordinates - rather than copied per call.
-    for (import_idx, w) in import_trace.windows(2).enumerate() {
-        let import_a = w[0].translated(dx, dy);
-        let import_b = w[1].translated(dx, dy);
-        let violates = match prefilter {
-            Some(grid) => grid.segment_violates(
-                existing_trace,
-                import_idx,
-                import_a,
-                import_b,
-                ignored_pairs,
-                config,
-            ),
-            None => existing_trace
-                .windows(2)
-                .enumerate()
-                .any(|(existing_idx, e)| {
-                    charge_work(1);
-                    !ignored_pairs.contains(&(import_idx, existing_idx))
-                        && pair_crosses_too_close(import_a, import_b, e[0], e[1], config)
-                }),
-        };
-        if violates {
-            return false;
-        }
-    }
-
-    true
-}
 fn ignored_crossing_pairs_for_suggestion(
     suggestion: &PlacementSuggestion,
     import_shot_count: usize,
@@ -1543,7 +1200,7 @@ fn best_merge_offset(
     existing_match_shots: &[MatchShot],
     import_trace: &[TracePoint],
     existing_trace: &[TracePoint],
-    prefilter: Option<&CrossingPrefilter>,
+    crossing: &CrossingIndex,
     suggestion: &PlacementSuggestion,
     config: &SuggestionConfig,
 ) -> Option<(f64, usize)> {
@@ -1593,7 +1250,7 @@ fn best_merge_offset(
             let clear = placement_crossing_clearance_ok(
                 import_trace,
                 existing_trace,
-                prefilter,
+                crossing,
                 merge_import_station,
                 merge_existing_station,
                 &ignored_crossing_pairs,
@@ -1667,6 +1324,7 @@ fn suggest_placements_among<'a>(
         .map(|s| MatchShot::from_shot_data(s, import_reference))
         .collect();
     let import_trace = section_trace_points(&import_match_shots);
+    let import_runs = straight_runs(&import_trace);
 
     // Build import match shots for station N (last N shots, reversed)
     let import_from_n: Vec<MatchShot> = import_shots[import_shots.len().saturating_sub(max_ref)..]
@@ -1696,8 +1354,12 @@ fn suggest_placements_among<'a>(
             .iter()
             .map(|s| MatchShot::from_shot(s, existing.azimuth_reference))
             .collect();
-        let existing_trace = section_trace_points(&existing_match_shots);
-        let prefilter = CrossingPrefilter::build(&import_trace, &existing_trace);
+        // [#576 NF-W4U-3] The trace and its crossing index are pure functions
+        // of the two sections, needed only once a candidate reaches the
+        // crossing check - which most section pairs never produce - so they
+        // are built on that first candidate rather than for every pair.
+        let crossing_for_pair: std::cell::OnceCell<(Vec<TracePoint>, CrossingIndex)> =
+            std::cell::OnceCell::new();
 
         // Try from both leaves of the import section
         let leaf_configs: &[(&[MatchShot], usize)] =
@@ -1748,12 +1410,17 @@ fn suggest_placements_among<'a>(
                         existing_section_name: existing.name.clone(),
                     };
 
+                    let (existing_trace, crossing) = crossing_for_pair.get_or_init(|| {
+                        let trace = section_trace_points(&existing_match_shots);
+                        let index = CrossingIndex::build(&import_trace, &trace, &import_runs);
+                        (trace, index)
+                    });
                     let best_context = best_merge_offset(
                         &import_match_shots,
                         &existing_match_shots,
                         &import_trace,
-                        &existing_trace,
-                        prefilter.as_ref(),
+                        existing_trace,
+                        crossing,
                         &suggestion,
                         config,
                     );
@@ -2608,7 +2275,11 @@ mod tests {
             !placement_crossing_clearance_ok(
                 &import_trace,
                 &existing_trace,
-                CrossingPrefilter::build(&import_trace, &existing_trace).as_ref(),
+                &CrossingIndex::build(
+                    &import_trace,
+                    &existing_trace,
+                    &straight_runs(&import_trace)
+                ),
                 0,
                 0,
                 &[],
@@ -2660,7 +2331,11 @@ mod tests {
             placement_crossing_clearance_ok(
                 &import_trace,
                 &existing_trace,
-                CrossingPrefilter::build(&import_trace, &existing_trace).as_ref(),
+                &CrossingIndex::build(
+                    &import_trace,
+                    &existing_trace,
+                    &straight_runs(&import_trace)
+                ),
                 0,
                 0,
                 &[],
@@ -3014,7 +2689,11 @@ mod tests {
             placement_crossing_clearance_ok(
                 &import_trace,
                 &existing_trace,
-                CrossingPrefilter::build(&import_trace, &existing_trace).as_ref(),
+                &CrossingIndex::build(
+                    &import_trace,
+                    &existing_trace,
+                    &straight_runs(&import_trace)
+                ),
                 1,
                 16,
                 &[(0, 15)],

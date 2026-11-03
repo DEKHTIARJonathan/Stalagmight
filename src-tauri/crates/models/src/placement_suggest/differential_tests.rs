@@ -15,16 +15,24 @@
 //! crossing check alone must agree with the reference's on extra placements of
 //! every section pair, in and out of range, with and without ignored pairs.
 //!
+//! Both pipelines share the score sorts (`partial_cmp`, NaN as equal), which
+//! the standard sort may abort on when a NaN reading makes a score NaN; a
+//! scene both pipelines panic on after the same crossing checks counts as
+//! agreeing, and only one of them panicking is a difference.
+//!
 //! A failure names its seed. Replay it, or run more seeds, with
 //! `PLACEMENT_DIFF_SEED=<seed>` or `PLACEMENT_DIFF_SEEDS=<count>` (plus
 //! `PLACEMENT_DIFF_FIRST=<seed>`, `PLACEMENT_DIFF_MAX_LEN=<shots>`):
 //! `PLACEMENT_DIFF_SEEDS=20000 cargo test --release -p stalagmight-models --lib differential -- --nocapture`.
 
+use super::crossing::{
+    placement_crossing_clearance_ok, straight_runs, CrossingIndex, CrossingLane,
+};
 use super::{
-    crossing_log, ignored_crossing_pairs_for_suggestion, placement_crossing_clearance_ok,
-    section_trace_points, suggest_all_placements, CrossSectionSuggestion, CrossingPrefilter,
-    ExistingSection, ImportSectionForSuggestion, MatchDirection, MatchShot, PlacementSuggestion,
-    SuggestionConfidence, SuggestionConfig, TracePoint,
+    crossing_log, ignored_crossing_pairs_for_suggestion, section_trace_points,
+    suggest_all_placements, CrossSectionSuggestion, ExistingSection, ImportSectionForSuggestion,
+    MatchDirection, MatchShot, PlacementSuggestion, SuggestionConfidence, SuggestionConfig,
+    TracePoint,
 };
 use crate::config::PlacementSuggestionConfig;
 use crate::{AzimuthReference, SectionId, Shot, ShotData};
@@ -392,12 +400,19 @@ fn scene(seed: u64, max_len: usize) -> (&'static str, Scene) {
         "micro-noise" => {
             // Nearly straight, nearly parallel, at one depth: overlaid, the
             // traces cross each other again and again at near-zero angles,
-            // around the parallel cutoff of the segment test.
+            // around the parallel cutoff of the segment test. The scales
+            // straddle what a straight run tolerates (~2e-10 degrees on 5 m
+            // legs), what the parallel proof can certify (~1e-9) and where
+            // the segment test stops calling a pair parallel (~2e-9).
             let az = heading(b.rng);
             let st = step(b.rng);
             let depth = b.rng.range(5.0, 40.0);
-            let wobble = |rng: &mut Rng, len: usize| -> Vec<ShotData> {
-                let scale = 10f64.powf(rng.range(-12.0, -3.0));
+            let wobble = |rng: &mut Rng, len: usize, lo: f64, hi: f64| -> Vec<ShotData> {
+                let scale = if rng.chance(0.1) {
+                    0.0
+                } else {
+                    10f64.powf(rng.range(lo, hi))
+                };
                 (0..len)
                     .map(|_| {
                         shot(
@@ -411,12 +426,22 @@ fn scene(seed: u64, max_len: usize) -> (&'static str, Scene) {
             };
             for _ in 0..b.rng.between(1, 3) {
                 let len = b.rng.between(1, max_len);
-                let shots = wobble(b.rng, len);
+                let (lo, hi) = if b.rng.chance(0.8) {
+                    (-12.0, -6.0)
+                } else {
+                    (-6.0, -3.0)
+                };
+                let shots = wobble(b.rng, len, lo, hi);
                 b.existing(&shots);
             }
             for _ in 0..b.rng.between(1, 2) {
                 let len = b.rng.between(1, max_len);
-                let shots = wobble(b.rng, len);
+                let (lo, hi) = if b.rng.chance(0.7) {
+                    (-14.0, -9.0)
+                } else {
+                    (-9.0, -3.0)
+                };
+                let shots = wobble(b.rng, len, lo, hi);
                 b.import(shots);
             }
         }
@@ -689,26 +714,56 @@ struct Tally {
     rejected: usize,
     replayed: usize,
     replay_rejected: usize,
+    /// Section pairs indexed, and how much of them the speedup touched:
+    /// pairs with import segments proven parallel to every existing segment
+    /// (and how many such segments), and lanes over a subset of the grid.
+    pairs: usize,
+    pairs_cleared: usize,
+    segments_cleared: usize,
+    sparse_lanes: usize,
+    /// Replayed checks in which at least one chunk missed its lane's grid.
+    chunk_skips: usize,
+    /// Scenes both pipelines panicked on, identically.
+    panicked: usize,
 }
 
 /// The production crossing check for one section pair, as one closure over
-/// (import station, existing station, ignored pairs).
+/// (import station, existing station, ignored pairs) returning the verdict and
+/// whether a chunk was skipped whole (coverage).
 fn production_check<'a>(
     import_trace: &'a [TracePoint],
     existing_trace: &'a [TracePoint],
     config: &'a SuggestionConfig,
-) -> impl Fn(usize, usize, &[(usize, usize)]) -> bool + 'a {
-    let prefilter = CrossingPrefilter::build(import_trace, existing_trace);
+    tally: &mut Tally,
+) -> impl Fn(usize, usize, &[(usize, usize)]) -> (bool, bool) + 'a {
+    let index = CrossingIndex::build(import_trace, existing_trace, &straight_runs(import_trace));
+    let walked: usize = index.chunks.iter().map(|c| c.end - c.start).sum();
+    let cleared = import_trace.len().saturating_sub(1) - walked;
+    tally.pairs += 1;
+    tally.pairs_cleared += usize::from(cleared > 0);
+    tally.segments_cleared += cleared;
+    tally.sparse_lanes += index.lanes.len() - 1;
     move |import_station, existing_station, ignored| {
-        placement_crossing_clearance_ok(
+        // Coverage only: would any chunk be skipped whole at this placement?
+        let skips = import_station < import_trace.len()
+            && existing_station < existing_trace.len()
+            && index.chunks.iter().any(|chunk| {
+                let dx = existing_trace[existing_station].x - import_trace[import_station].x;
+                let dy = existing_trace[existing_station].y - import_trace[import_station].y;
+                let b = chunk.points_box;
+                matches!(&index.lanes[chunk.lane], CrossingLane::Grid(grid)
+                    if grid.misses(&grid.query([b[0] + dx, b[1] + dx, b[2] + dy, b[3] + dy])))
+            });
+        let clear = placement_crossing_clearance_ok(
             import_trace,
             existing_trace,
-            prefilter.as_ref(),
+            &index,
             import_station,
             existing_station,
             ignored,
             config,
-        )
+        );
+        (clear, skips)
     }
 }
 
@@ -762,7 +817,7 @@ fn replay_crossing_checks(seed: u64, kind: &str, scene: &Scene, rng: &mut Rng, t
             }
             let existing_trace = section_trace_points(target_match);
             let m = target_match.len();
-            let check = production_check(&import_trace, &existing_trace, &config);
+            let check = production_check(&import_trace, &existing_trace, &config, tally);
             let old_prefilter = reference::CrossingPrefilter::build(&import_trace, &existing_trace);
             for _ in 0..12 {
                 let near_leaf = rng.chance(0.7);
@@ -804,7 +859,8 @@ fn replay_crossing_checks(seed: u64, kind: &str, scene: &Scene, rng: &mut Rng, t
                         .map(|_| (rng.below(n), rng.below(m)))
                         .collect(),
                 };
-                let new = check(import_station, existing_station, &ignored);
+                let (new, skipped) = check(import_station, existing_station, &ignored);
+                tally.chunk_skips += usize::from(skipped);
                 let old = reference::placement_crossing_clearance_ok(
                     &import_trace,
                     &existing_trace,
@@ -829,27 +885,42 @@ fn replay_crossing_checks(seed: u64, kind: &str, scene: &Scene, rng: &mut Rng, t
     }
 }
 
+/// One pipeline run: its suggestions (`None` if it panicked) and the crossing
+/// checks it made, up to the panic if there was one.
+fn run_logged(
+    pipeline: impl FnOnce() -> Vec<CrossSectionSuggestion>,
+) -> (
+    Option<Vec<CrossSectionSuggestion>>,
+    Vec<crossing_log::Entry>,
+) {
+    crossing_log::start();
+    let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(pipeline)).ok();
+    (out, crossing_log::take())
+}
+
 /// Runs one seed's scene through both pipelines and the replay; panics, naming
-/// the seed, on the first difference.
+/// the seed, on the first difference. A scene both pipelines panic on (a NaN
+/// reading can make the shared score sort panic - see the module docs) counts
+/// as agreeing when they panic after the same crossing checks.
 fn compare_seed(seed: u64, max_len: usize, tally: &mut Tally) {
     let (kind, scene) = scene(seed, max_len);
 
-    crossing_log::start();
-    let new = suggest_all_placements(
-        &scene.imports,
-        scene.fallback,
-        &scene.existing,
-        &scene.config,
-    );
-    let new_log = crossing_log::take();
-    crossing_log::start();
-    let old = reference::suggest_all_placements(
-        &scene.imports,
-        scene.fallback,
-        &scene.existing,
-        &scene.config,
-    );
-    let old_log = crossing_log::take();
+    let (new, new_log) = run_logged(|| {
+        suggest_all_placements(
+            &scene.imports,
+            scene.fallback,
+            &scene.existing,
+            &scene.config,
+        )
+    });
+    let (old, old_log) = run_logged(|| {
+        reference::suggest_all_placements(
+            &scene.imports,
+            scene.fallback,
+            &scene.existing,
+            &scene.config,
+        )
+    });
 
     let at = first_difference(&new_log, &old_log);
     assert!(
@@ -862,6 +933,20 @@ fn compare_seed(seed: u64, max_len: usize, tally: &mut Tally) {
         new_log.get(at),
         old_log.get(at),
     );
+    assert!(
+        new.is_some() == old.is_some(),
+        "seed {seed:#018x} ({kind}): only the {} pipeline panicked. Replay with \
+         PLACEMENT_DIFF_SEED={seed:#x}",
+        if new.is_none() {
+            "optimised"
+        } else {
+            "reference"
+        }
+    );
+    let (Some(new), Some(old)) = (new, old) else {
+        tally.panicked += 1;
+        return;
+    };
     let (new_print, old_print) = (fingerprint(&new), fingerprint(&old));
     let at = first_difference(&new_print, &old_print);
     assert!(
@@ -906,14 +991,34 @@ fn optimised_pipeline_matches_the_reference_on_seeded_scenes() {
     let mut tally = Tally::default();
     let mut by_kind: Vec<Tally> = KINDS.iter().map(|_| Tally::default()).collect();
     for &seed in &seeds {
-        let kind = &mut by_kind[(seed % KINDS.len() as u64) as usize];
-        compare_seed(seed, max_len, kind);
+        let kind = (seed % KINDS.len() as u64) as usize;
+        // A panic inside either pipeline must still name its seed.
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            compare_seed(seed, max_len, &mut by_kind[kind]);
+        }));
+        assert!(
+            outcome.is_ok(),
+            "seed {seed:#018x} ({}) panicked (message above). Replay with \
+             PLACEMENT_DIFF_SEED={seed:#x}",
+            KINDS[kind]
+        );
     }
     for (kind, t) in KINDS.iter().zip(&by_kind) {
         println!(
             "  {kind:>16}: {:>5} scenes, {:>6} suggestions, {:>7} crossing checks ({:>6} \
-             rejected), {:>6} replayed ({:>5} rejected)",
-            t.scenes, t.suggestions, t.checks, t.rejected, t.replayed, t.replay_rejected
+             rejected), {:>6} replayed ({:>5} rejected); {:>5} pairs, {:>4} with cleared \
+             segments ({:>6}), {:>4} sparse lanes, {:>5} replays skipping a chunk",
+            t.scenes,
+            t.suggestions,
+            t.checks,
+            t.rejected,
+            t.replayed,
+            t.replay_rejected,
+            t.pairs,
+            t.pairs_cleared,
+            t.segments_cleared,
+            t.sparse_lanes,
+            t.chunk_skips
         );
         tally.scenes += t.scenes;
         tally.suggestions += t.suggestions;
@@ -921,10 +1026,18 @@ fn optimised_pipeline_matches_the_reference_on_seeded_scenes() {
         tally.rejected += t.rejected;
         tally.replayed += t.replayed;
         tally.replay_rejected += t.replay_rejected;
+        tally.pairs += t.pairs;
+        tally.pairs_cleared += t.pairs_cleared;
+        tally.segments_cleared += t.segments_cleared;
+        tally.sparse_lanes += t.sparse_lanes;
+        tally.chunk_skips += t.chunk_skips;
+        tally.panicked += t.panicked;
     }
     println!(
         "placement differential: {} scenes (seeds {:#x}..), {} suggestions, {} pipeline crossing \
-         checks ({} rejected), {} replayed checks ({} rejected), 0 mismatches",
+         checks ({} rejected), {} replayed checks ({} rejected); {} section pairs, {} with \
+         segments proven parallel to all ({} segments), {} sparse lanes, {} replays skipping a \
+         chunk; {} scenes both pipelines panicked on identically; 0 mismatches",
         tally.scenes,
         seeds.first().copied().unwrap_or(0),
         tally.suggestions,
@@ -932,20 +1045,33 @@ fn optimised_pipeline_matches_the_reference_on_seeded_scenes() {
         tally.rejected,
         tally.replayed,
         tally.replay_rejected,
+        tally.pairs,
+        tally.pairs_cleared,
+        tally.segments_cleared,
+        tally.sparse_lanes,
+        tally.chunk_skips,
+        tally.panicked,
     );
-    // The comparison must exercise both verdicts, not just agree on easy
-    // passes (skipped for a single replayed seed).
+    // The comparison must exercise both verdicts and every shortcut, not just
+    // agree on easy passes (skipped for a single replayed seed).
     if seeds.len() > 100 {
         assert!(
             tally.suggestions > 1000
                 && tally.rejected > 1000
                 && tally.checks > 2 * tally.rejected
-                && tally.replay_rejected > 1000,
-            "too little coverage: {} suggestions, {} checks, {} rejected, {} replay rejections",
+                && tally.replay_rejected > 1000
+                && tally.pairs_cleared > 100
+                && tally.sparse_lanes > 100
+                && tally.chunk_skips > 1000,
+            "too little coverage: {} suggestions, {} checks, {} rejected, {} replay rejections, \
+             {} pairs with cleared segments, {} sparse lanes, {} chunk skips",
             tally.suggestions,
             tally.checks,
             tally.rejected,
-            tally.replay_rejected
+            tally.replay_rejected,
+            tally.pairs_cleared,
+            tally.sparse_lanes,
+            tally.chunk_skips
         );
     }
 }
@@ -1047,6 +1173,16 @@ fn optimised_pipeline_matches_the_reference_at_worst_case_sizes() {
         vec![straight_section(0, 2000, 90.0)],
         vec![straight_import(0, 2000, 90.0 + 1e-7)],
     );
+    add(
+        "long straight 1 degree apart 2x2000 / 2x2000 (90 / 91 deg)",
+        (0..2).map(|i| straight_section(i, 2000, 90.0)).collect(),
+        (0..2).map(|i| straight_import(i, 2000, 91.0)).collect(),
+    );
+    add(
+        "long straight 1 degree apart 2x2000 / 2x2000 (37 / 38 deg)",
+        (0..2).map(|i| straight_section(i, 2000, 37.0)).collect(),
+        (0..2).map(|i| straight_import(i, 2000, 38.0)).collect(),
+    );
     let wobble = |rng: &mut Rng, len: usize, scale: f64| -> Vec<ShotData> {
         (0..len)
             .map(|_| shot(90.0 + scale * rng.range(-1.0, 1.0), 5.0, 10.0, 10.0))
@@ -1114,14 +1250,17 @@ fn optimised_pipeline_matches_the_reference_at_worst_case_sizes() {
 /// The base (b83b12de5) crossing pipeline, verbatim but for the work counter,
 /// the crossing log and the `pub(super)` the harness needs.
 mod reference {
+    use super::super::crossing::{
+        crossing_prefilter_margin, max_segment_extent, pair_crosses_too_close, segment_box,
+        trace_is_finite,
+    };
     use super::super::{
-        crossing_prefilter_margin, ignored_crossing_pairs_for_suggestion, log_crossing_check,
-        max_segment_extent, merge_offset_pairs, merge_station_pair_for_offsets,
-        pair_crosses_too_close, section_trace_points, segment_box, station_context_multiplier,
+        ignored_crossing_pairs_for_suggestion, log_crossing_check, merge_offset_pairs,
+        merge_station_pair_for_offsets, section_trace_points, station_context_multiplier,
         suppress_duplicate_endpoint_pairs, suppress_equivalent_single_front_reverses,
-        trace_is_finite, try_match_sequence, CrossSectionSuggestion, ExistingSection,
-        ImportSectionForSuggestion, MatchDirection, MatchShot, PlacementSuggestion,
-        SuggestionConfidence, SuggestionConfig, TargetType, TracePoint,
+        try_match_sequence, CrossSectionSuggestion, ExistingSection, ImportSectionForSuggestion,
+        MatchDirection, MatchShot, PlacementSuggestion, SuggestionConfidence, SuggestionConfig,
+        TargetType, TracePoint,
     };
     use crate::config::PlacementSuggestionConfig;
     use crate::{AzimuthReference, SectionId, Shot, ShotData};
