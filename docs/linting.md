@@ -273,7 +273,11 @@ late-bind it (`src/store/speleoStoreHandle.ts`); when only types cross, use
 `pnpm lint:i18n-literals:test`, CI `check` job) fails on hard-coded
 user-visible text in the dialog layer: every production file under
 `src/components/Dialogs/` and each `src/components/common/` module a dialog
-imports (Button, Select, Toggle, ...; derived from the imports on every run).
+imports (Button, Select, Toggle, ...; derived from the imports on every run),
+plus the shared UI with text of its own that no dialog imports, pinned in the
+script's `PINNED_COMMON` (the survey context menu, the panel error fallback and
+the entity link, #576 NF-W6-2). A pinned file that no longer exists fails the
+gate, so a rename cannot quietly drop it from scope.
 Zero tolerance (#576 D20): the dialogs carried ~470 such strings, including
 the Error / Confirm primitives, the unsaved-changes prompt every dialog frame
 shows and 13 validation errors, and they were moved to
@@ -286,9 +290,11 @@ user-facing JSX attributes (`title`, `label`, `placeholder`, `alt`,
 payloads, option lists), the argument of a `set...Error` /
 `...Message` / `...Warning` / `...Notice` setter, a `showToast` message, the
 argument a message-named parameter (`message`, `reason`, `...Text`) of a
-function declared in the same file takes (`fail(kind, message)`), and every
-string held by a binding named as text (`FALLBACK_TEXT`, `emptyMessage`,
-`STEP_LABELS`; i18n keys excepted). It follows the file's own `const`/`let`
+function declared in the same file takes (`fail(kind, message)`; not when every
+use of that parameter is an argument of `console.*`), and every string held by a
+binding named as text (`FALLBACK_TEXT`, `emptyMessage`, `STEP_LABELS`; i18n keys
+and lowercase code tokens such as `'timeout'` or `'section-'` excepted, #576
+RV6a-3 - a token is still caught where the file renders it). It follows the file's own `const`/`let`
 bindings into those places (`{HEADING}`, a template held in `msg`,
 `{NAMES[kind]}`) and through `String(...)` (#576 RV5-LS-1, RV5-LS-2). It never
 looks inside any other call, so `t('key')` is invisible to it, and a string with no letter left once

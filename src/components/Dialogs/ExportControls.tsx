@@ -672,10 +672,9 @@ export default function ExportControls({
         }
       >
         <div className="space-y-3">
-          {/* `bodyAllUnanchored`/`bodyPartial` (en.json) quote "Set Zero Datum" - the literal
-              English label at ContextMenu.tsx:426, which `iconForLabel` switches on by exact
-              string. Translating that menu item later will desync these quotes; update both
-              together. */}
+          {/* `bodyAllUnanchored`/`bodyPartial` (en.json) quote the station context menu's
+              zero-datum item by name; its label is `contextMenu.setZeroDatum`. Change the
+              two together. */}
           <p>
             {tmlAllSectionsUnanchored
               ? t('dialogs.tmlUnanchoredWarning.bodyAllUnanchored')
