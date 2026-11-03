@@ -13,10 +13,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { MapMouseEvent } from 'maplibre-gl';
 
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: vi.fn().mockResolvedValue(undefined),
-  getErrorMessage: (e: unknown, fallback?: string) => (e as { message?: string })?.message ?? fallback ?? 'error',
-}));
+import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factories/ipc';
+
+vi.mock('../../utils/ipc');
+invokeIpcMock.mockResolvedValue(undefined);
+stubGetErrorMessage(messageOr('error'));
 vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
 
 import { useMapTools } from '../useMapTools';

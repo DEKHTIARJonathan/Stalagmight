@@ -16,11 +16,10 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown, fallback?: string) => (e as { message?: string })?.message ?? fallback ?? 'error',
-}));
+import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factories/ipc';
+
+vi.mock('../ipc');
+stubGetErrorMessage(messageOr('error'));
 vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving(undefined));
 
 import { surfaceImportFailure, type ImportDialogUi } from '../saveFeedback';

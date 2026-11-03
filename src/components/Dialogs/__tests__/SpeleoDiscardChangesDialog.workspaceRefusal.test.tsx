@@ -12,11 +12,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown, f?: string) => (e as { message?: string })?.message ?? f ?? 'e',
-}));
+import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../../test/factories/ipc';
+
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage(messageOr('e'));
 const trackDialogCompleteMock = vi.hoisted(() => vi.fn());
 vi.mock('../../../utils/telemetry', async () =>
   (await import('../../../test/factories/telemetry')).telemetryWith({ trackDialogComplete: trackDialogCompleteMock }),

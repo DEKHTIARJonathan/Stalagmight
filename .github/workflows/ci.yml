@@ -189,6 +189,16 @@ jobs:
         run: |
           pnpm lint:i18n-literals:test
           pnpm lint:i18n-literals
+      # The shared vitest utils/ipc mock (#576 E15-NF2), zero tolerance: no
+      # vi.mock of src/utils/ipc with a factory (the copied vi.hoisted + factory
+      # idiom) outside the script's allowlist, each row with its reason; tests
+      # use vi.mock('<rel>/utils/ipc') + src/test/factories/ipc.ts. Seconds; the
+      # fixture test pins the specifier and factory shapes.
+      - name: vitest shared IPC mock
+        if: ${{ !cancelled() && steps.pnpm-install.outcome == 'success' }}
+        run: |
+          pnpm lint:vitest-ipc-mock:test
+          pnpm lint:vitest-ipc-mock
       # Agent-harness typecheck (tsconfig.agent.json covers e2e/agent + e2e/lib).
       # The harness runs via tsx, which transpiles WITHOUT type-checking, and it
       # is exercised on-demand only - this seconds-cheap step is its one

@@ -20,9 +20,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useProjectStore } from '../projectStore';
 import { projectStateEnvelope, type ProjectStateLike } from '../../test/projectStateEnvelope';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
+import { invokeIpcMock } from '../../test/factories/ipc';
+
 const loadBinaryMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../utils/ipc');
 vi.mock('../../utils/loadProjectBinary', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../utils/loadProjectBinary')>()),
   loadProjectFullBinary: loadBinaryMock,

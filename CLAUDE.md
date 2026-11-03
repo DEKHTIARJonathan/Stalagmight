@@ -76,6 +76,7 @@ pnpm lint:test-ids:test && pnpm lint:test-ids             # interactive UI test-
 pnpm lint:eslint:test && pnpm lint:eslint                 # ESLint over src + e2e trees, warnings ratcheted (eslint-baseline.json); smoke runs it too
 pnpm lint:import-cycles:test && pnpm lint:import-cycles   # no value-import cycle under src/ (import type is fine)
 pnpm lint:i18n-literals:test && pnpm lint:i18n-literals   # no hard-coded UI text in the dialogs (strings come from en.json)
+pnpm lint:vitest-ipc-mock:test && pnpm lint:vitest-ipc-mock   # no vi.mock of utils/ipc with a factory outside the allowlist (use the shared mock)
 pnpm typecheck:agent                                      # agent-harness typecheck
 ./scripts/test-release.sh                                 # release tooling, driven in throwaway clones
 pnpm lint:rust-file-size:test && pnpm lint:rust-file-size # Rust file-size ratchet

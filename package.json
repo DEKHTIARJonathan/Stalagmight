@@ -45,6 +45,8 @@
     "lint:import-cycles:test": "node scripts/check-import-cycles.test.mjs",
     "lint:i18n-literals": "node scripts/check-i18n-literals.mjs",
     "lint:i18n-literals:test": "node scripts/check-i18n-literals.test.mjs",
+    "lint:vitest-ipc-mock": "node scripts/check-vitest-ipc-mock.mjs",
+    "lint:vitest-ipc-mock:test": "node scripts/check-vitest-ipc-mock.test.mjs",
     "lint:prepush-checklist": "node scripts/check-prepush-checklist.mjs",
     "lint:prepush-checklist:test": "node scripts/check-prepush-checklist.test.mjs",
     "test:pw-timing": "node scripts/pw-timing-reporter.test.mjs && node scripts/pw-timing-summary.test.mjs",

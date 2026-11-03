@@ -308,3 +308,31 @@ URL placeholder - goes in `scripts/i18n-literals-allowlist.json` as an exact
 list cannot outlive its reason. The gate is a heuristic: bindings resolve by
 name within one file, so a string that arrives from another module, a prop or
 a helper's return value is invisible to it, which is what review is for.
+
+### vitest: the shared utils/ipc mock
+
+`pnpm lint:vitest-ipc-mock` (`scripts/check-vitest-ipc-mock.mjs`, fixtures in
+`pnpm lint:vitest-ipc-mock:test`, CI `check` job) fails on any `vi.mock` or
+`vi.doMock` of `src/utils/ipc` that passes a factory: the copied
+`vi.hoisted(() => vi.fn())` + `vi.mock('<rel>/utils/ipc', () => ({ invokeIpc,
+getErrorMessage }))` idiom, an `async` or `function` factory, a factory held in
+`vi.hoisted`, or an `() => import(...)` module. Zero tolerance, no baseline:
+#576 E15 replaced about 120 such copies with one manual mock, and six new ones
+had appeared within a wave when the gate landed (E15-NF2); they were moved to
+the shared mock first.
+
+Use the shared mock instead - `vi.mock('<rel>/utils/ipc')` with no factory,
+scripted through `invokeIpcMock` and `stubGetErrorMessage` from
+`src/test/factories/ipc.ts` (docs/testing-recipes.md, "Factories and the
+shared IPC mock"). The specifier is resolved from the file, so `'../ipc'` in
+`src/utils/__tests__/` counts, with or without an extension, root-relative
+(`'/src/utils/ipc'`) or in the typed `vi.mock(import('...'))` form; a mock of
+any other module does not. Comments and strings are skipped.
+
+A file that genuinely needs its own factory sits in the script's `ALLOWLIST`
+with its reason: today the DMP wizard tests (left out of the E15 migration
+while another package owned them), `useInternalErrorEvent.pull.test.tsx` (its
+`invokeIpc` must not be a `vi.fn`) and the `vi.resetModules()` pair
+(`storeLoadOrder.test.ts` and the factory test that pins its idiom). A row
+whose file is gone or has no factory left fails the gate, so the list cannot
+outlive its reason.

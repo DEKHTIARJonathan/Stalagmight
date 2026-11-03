@@ -17,8 +17,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+import { invokeIpcMock } from '../../../test/factories/ipc';
+
+vi.mock('../../../utils/ipc');
 
 import DataTable from '../DataTable';
 import { useProjectStore } from '../../../store/projectStore';
