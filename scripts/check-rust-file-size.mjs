@@ -38,12 +38,21 @@
 //     stop growing.
 // Anything at/above `WARN_LOC` that isn't a violation prints a non-fatal warning.
 //
+// Keeping the baseline complete (#576 NF-W9E1-2): a new file below its warn line
+// needs no row, so rows went missing (in Nov 2026 only 37 of 191 test files had
+// one) and shrunk files kept their old, larger rows - `--update` would have fixed
+// both but also RAISES every row whose file grew below warn, a loosening nobody
+// wants in an unrelated diff, so rows were hand-edited instead. `--tighten` is the safe refresh: it lowers a
+// row to its file's size, adds a row for an unrecorded file and prunes a row
+// whose file is gone, and never raises a row. Check mode notes unrecorded files.
+//
 // Runs in the `check` job (ci.yml) - which runs on `src-tauri/**` changes and is
 // NOT path-ignored (unlike `smoke`), so it actually sees Rust edits. The strip
 // heuristic is pinned by scripts/check-rust-file-size.test.mjs. Mirrors the
 // existing tripwire `scripts/check-e2e-parallel-safe.mjs`.
 //
 // Usage:  node scripts/check-rust-file-size.mjs            (pnpm lint:rust-file-size)
+//         node scripts/check-rust-file-size.mjs --tighten  (lower / add / prune rows; never raise)
 //         node scripts/check-rust-file-size.mjs --update   (regenerate the baseline)
 
 import * as fs from 'fs';
@@ -331,6 +340,27 @@ export function testLoc(text) {
   return maskNonCode(text.split('\n')).filter((l) => /\S/.test(l)).length;
 }
 
+// [#576 NF-W9E1-2] The rows `--tighten` writes for one section (`files` or
+// `test_files`): every measured file gets a row, its recorded size when that is
+// not larger than the measured one, else the measured size - so a row only ever
+// goes down. A file with no row is recorded at its size; a row whose file is gone
+// is dropped (it is not in `measured`). Pure, so the fixture test can pin it.
+export function tightenRows(recorded, measured) {
+  const rows = {};
+  for (const rel of Object.keys(measured).sort()) {
+    const was = recorded[rel];
+    rows[rel] = was === undefined ? measured[rel] : Math.min(Number(was), measured[rel]);
+  }
+  return rows;
+}
+
+// [#576 NF-W9E1-2] Measured files that have no baseline row, sorted.
+export function unrecordedFiles(recorded, measured) {
+  return Object.keys(measured)
+    .filter((rel) => recorded[rel] === undefined)
+    .sort();
+}
+
 function relPosix(full) {
   return path.relative(REPO_ROOT, full).split(path.sep).join('/');
 }
@@ -385,9 +415,9 @@ function writeBaseline({ prod, tests }) {
       'separate test_warn_loc/test_fail_loc. The *_loc keys echo the script constants (the ' +
       'script asserts they match). The CI `check` job runs the script in check mode: a file ' +
       'at/above its warn line is frozen (may shrink, not grow), no new file may be born ' +
-      'at/above it, and no new/grown file may cross its fail line. To move a baseline ' +
-      'deliberately (a split lowered it, or a real feature grew a file), run --update ' +
-      'and commit the diff.',
+      'at/above it, and no new/grown file may cross its fail line. To record new files ' +
+      'and lower shrunk rows without raising any, run --tighten; to move a baseline ' +
+      'deliberately (a real feature grew a frozen file), run --update. Commit the diff.',
     warn_loc: WARN_LOC,
     fail_loc: FAIL_LOC,
     test_warn_loc: TEST_WARN_LOC,
@@ -495,9 +525,31 @@ function main() {
     }
   }
 
+  // --tighten rewrites the baseline from the recorded rows, lowered / added /
+  // pruned by `tightenRows` - never raised - after the threshold echo above has
+  // been validated, so it cannot launder a tampered baseline.
+  if (process.argv.includes('--tighten')) {
+    const recordedProd = baseline.files ?? {};
+    const recordedTests = baseline.test_files ?? {};
+    const prod = tightenRows(recordedProd, measured.prod);
+    const tests = tightenRows(recordedTests, measured.tests);
+    const count = (recorded, rows) => ({
+      lowered: Object.keys(rows).filter((r) => recorded[r] !== undefined && rows[r] < Number(recorded[r])).length,
+      added: unrecordedFiles(recorded, rows).length,
+      pruned: Object.keys(recorded).filter((r) => rows[r] === undefined).length,
+    });
+    for (const [label, c] of [['production', count(recordedProd, prod)], ['test', count(recordedTests, tests)]]) {
+      console.log(`baseline tightened (${label}): ${c.lowered} row(s) lowered, ${c.added} added, ${c.pruned} pruned, none raised`);
+    }
+    writeBaseline({ prod, tests });
+    console.log(`wrote ${relPosix(BASELINE_PATH)}`);
+    return 0;
+  }
+
   const errors = [];
   const softWarnings = [];
   const stale = [];
+  const unrecorded = [];
   for (const [section, limits, recorded] of [
     [measured.prod, PROD_LIMITS, baseline.files ?? {}],
     [measured.tests, TEST_LIMITS, baseline.test_files ?? {}],
@@ -510,14 +562,25 @@ function main() {
     // Baselined files that no longer exist on disk (split/renamed/deleted) linger as
     // dead rows and mask whether a split actually shrank the tree. They don't affect
     // the gate (the loop above iterates `measured`), but flag them so a split PR
-    // runs --update to prune them.
+    // runs --tighten to prune them.
     stale.push(...Object.keys(recorded).filter((r) => section[r] === undefined));
+    // [#576 NF-W9E1-2] Files with no row pass below their warn line, so nothing
+    // made anyone record them; say so, the same way.
+    unrecorded.push(...unrecordedFiles(recorded, section));
   }
   if (stale.length > 0) {
     const shown = stale.slice(0, 5).join(', ');
     console.warn(
       `  ⚠ baseline: ${stale.length} recorded file(s) no longer exist ` +
-        `(${shown}${stale.length > 5 ? ', …' : ''}); run --update to prune.`,
+        `(${shown}${stale.length > 5 ? ', …' : ''}); run --tighten to prune.`,
+    );
+  }
+  if (unrecorded.length > 0) {
+    const shown = unrecorded.slice(0, 5).join(', ');
+    console.warn(
+      `  ⚠ baseline: ${unrecorded.length} measured file(s) have no row ` +
+        `(${shown}${unrecorded.length > 5 ? ', …' : ''}); run --tighten to record them ` +
+        `(it never raises a row).`,
     );
   }
 

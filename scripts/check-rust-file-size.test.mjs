@@ -16,6 +16,7 @@ import * as path from 'node:path';
 import {
   prodLoc, classify, markCfgTestItems, maskNonCode, discoverSrcRoots, discoverExtraRoots, WARN_LOC, FAIL_LOC,
   TEST_WARN_LOC, TEST_FAIL_LOC, TEST_LIMITS, TEST_FILE_RE, declaredUnderTestCfg, isTestModule, testLoc,
+  tightenRows, unrecordedFiles,
 } from './check-rust-file-size.mjs';
 
 let passed = 0;
@@ -253,6 +254,37 @@ test('discoverExtraRoots finds build.rs, examples, tests, the OS helper and slic
   } finally {
     fs.rmSync(base, { recursive: true, force: true });
   }
+});
+
+// --- --tighten: the refresh that never raises a row (#576 NF-W9E1-2) ----------
+
+test('tightenRows lowers a row to its shrunk file and never raises one', () => {
+  const recorded = { 'a.rs': 900, 'b.rs': 400, 'c.rs': 250 };
+  const measured = { 'a.rs': 700, 'b.rs': 520, 'c.rs': 250 };
+  // a shrank: lowered. b grew below warn: kept at 400 (--update would write
+  // 520 - the loosening this mode exists to avoid). c unchanged.
+  assert.deepEqual(tightenRows(recorded, measured), { 'a.rs': 700, 'b.rs': 400, 'c.rs': 250 });
+});
+
+test('tightenRows records an unrecorded file at its size and prunes a vanished one', () => {
+  const recorded = { 'gone.rs': 300, 'kept.rs': 100 };
+  const measured = { 'kept.rs': 100, 'new_tests.rs': 1234 };
+  assert.deepEqual(tightenRows(recorded, measured), { 'kept.rs': 100, 'new_tests.rs': 1234 });
+});
+
+test('tightenRows output is sorted and every row is <= the recorded one', () => {
+  const recorded = { 'z.rs': 10, 'm.rs': 5000, 'a.rs': 3 };
+  const measured = { 'z.rs': 12, 'm.rs': 4999, 'a.rs': 1, 'b.rs': 7 };
+  const rows = tightenRows(recorded, measured);
+  assert.deepEqual(Object.keys(rows), ['a.rs', 'b.rs', 'm.rs', 'z.rs']);
+  for (const [rel, loc] of Object.entries(rows)) {
+    if (recorded[rel] !== undefined) assert.ok(loc <= recorded[rel], `${rel} raised to ${loc}`);
+  }
+});
+
+test('unrecordedFiles names the measured files with no row, sorted', () => {
+  assert.deepEqual(unrecordedFiles({ 'b.rs': 1, 'gone.rs': 2 }, { 'c.rs': 1, 'b.rs': 1, 'a.rs': 1 }), ['a.rs', 'c.rs']);
+  assert.deepEqual(unrecordedFiles({ 'a.rs': 1 }, { 'a.rs': 9 }), []);
 });
 
 // --- report ------------------------------------------------------------------
