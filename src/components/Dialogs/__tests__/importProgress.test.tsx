@@ -24,10 +24,8 @@ vi.mock('../../../utils/telemetry', async (importOriginal) => ({
   trackDialogComplete: vi.fn(),
   setSource: vi.fn(),
 }));
-vi.mock('../../../utils/ipc', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/ipc')>()),
-  invokeIpc: vi.fn(async () => []),
-}));
+vi.mock('../../../utils/ipc');
+invokeIpcMock.mockImplementation(async () => []);
 
 import i18n from '../../../i18n';
 import CompassImportDialog from '../CompassImportDialog';
@@ -39,6 +37,7 @@ import { useUIStore } from '../../../store/uiStore';
 import type { CompassFile, GpxFile, WallsFile } from '../../../types/commands';
 import { accepted, type CommandOutcome } from '../../../store/commandResult';
 import type { ImportOutcome } from '../../../types/ipc/ImportOutcome';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 const OK = accepted<ImportOutcome>({ section_ids: [], import_receipt: null, warnings: [], remote_link: null });
 

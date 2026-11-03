@@ -13,11 +13,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown, f?: string) => (e as { message?: string })?.message ?? f ?? 'e',
-}));
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage(messageOr('e'));
 const trackDialogCompleteMock = vi.hoisted(() => vi.fn());
 vi.mock('../../../utils/telemetry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../utils/telemetry')>()),
@@ -30,6 +27,7 @@ import SpeleoUnwoundPushDialog from '../SpeleoUnwoundPushDialog';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
 import { TOAST_KEYS } from '../../../utils/toastKeys';
+import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../../test/factories/ipc';
 
 let closeDialog: ReturnType<typeof vi.fn>;
 let showToast: ReturnType<typeof vi.fn>;

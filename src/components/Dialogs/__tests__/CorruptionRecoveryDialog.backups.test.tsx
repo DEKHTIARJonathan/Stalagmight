@@ -11,8 +11,7 @@ import { fireEvent, render, screen } from '@testing-library/react';
 
 import type { BackupInfo } from '../../../types/ipc/BackupInfo';
 
-const invokeIpc = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc }));
+vi.mock('../../../utils/ipc');
 
 const closeDialog = vi.fn();
 vi.mock('../../../store/uiStore', () => ({
@@ -34,6 +33,7 @@ vi.mock('../DialogWrapper', () => ({
 
 import '../../../i18n';
 import CorruptionRecoveryDialog from '../CorruptionRecoveryDialog';
+import { invokeIpcMock as invokeIpc } from '../../../test/factories/ipc';
 
 function candidate(
   file: string,

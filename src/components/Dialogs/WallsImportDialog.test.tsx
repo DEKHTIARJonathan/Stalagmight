@@ -15,18 +15,13 @@ vi.mock('../../utils/telemetry', async (importOriginal) => ({
   trackDialogComplete: vi.fn(),
   setSource: vi.fn(),
 }));
-vi.mock('../../utils/ipc', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/ipc')>()),
-  invokeIpc: vi.fn(),
-}));
+vi.mock('../../utils/ipc');
 
 import WallsImportDialog from './WallsImportDialog';
-import { invokeIpc } from '../../utils/ipc';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { CommandResult, WallsFile } from '../../types/commands';
-
-const invokeIpcMock = vi.mocked(invokeIpc);
+import { invokeIpcMock } from '../../test/factories/ipc';
 
 // Fully synthetic: one resolved survey with one shot, nothing georeferenced.
 const wallsFile: WallsFile = {

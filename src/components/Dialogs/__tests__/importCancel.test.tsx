@@ -47,17 +47,13 @@ vi.mock('../WizardMapPanel', () => ({
 }));
 // The IPC boundary: `cancel_loading` is what the backend sees of a Cancel press,
 // and the orphan lookups after a successful import resolve to "nothing to offer".
-vi.mock('../../../utils/ipc', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/ipc')>()),
-  invokeIpc: vi.fn(),
-}));
+vi.mock('../../../utils/ipc');
 
 import TmlImportDialog from '../TmlImportDialog';
 import CompassImportDialog from '../CompassImportDialog';
 import WallsImportDialog from '../WallsImportDialog';
 import GpxSelectionDialog from '../GpxSelectionDialog';
 import GpxPlacementDialog from '../GpxPlacementDialog';
-import { invokeIpc } from '../../../utils/ipc';
 import { beginMoveCarry, refuseMutationDuringCarry } from '../../../store/moveCarry';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
@@ -71,8 +67,7 @@ import type {
   WallsFile,
 } from '../../../types/commands';
 import type { Project } from '../../../types/project';
-
-const invokeIpcMock = vi.mocked(invokeIpc);
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 // --- fully synthetic files, one importable shot / waypoint each ----------------
 

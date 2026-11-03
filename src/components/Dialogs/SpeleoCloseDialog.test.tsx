@@ -14,17 +14,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'the server said no',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(fallbackOr('the server said no'));
 
 import SpeleoCloseDialog from './SpeleoCloseDialog';
 import SpeleoUnwoundPushDialog from './SpeleoUnwoundPushDialog';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 
 // The real dialog actions, captured before `beforeEach` swaps in spies. The [#303]
 // hand-off at the bottom of this file moves the user BETWEEN two dialogs, so

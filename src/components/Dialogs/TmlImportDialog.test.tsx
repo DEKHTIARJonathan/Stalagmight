@@ -39,13 +39,9 @@ vi.mock('./WizardMapPanel', () => ({
 }));
 // invokeIpc is used here only for suggest_orphan_placements; mock it so the
 // orphan branch resolves and we can assert whether it ran.
-vi.mock('../../utils/ipc', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/ipc')>()),
-  invokeIpc: vi.fn(),
-}));
+vi.mock('../../utils/ipc');
 
 import TmlImportDialog from './TmlImportDialog';
-import { invokeIpc } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -53,8 +49,8 @@ import { refusedBy } from '../../store/commandResult';
 import type { CommandResult, TmlFile, TmlShot, ValidationWarning } from '../../types/commands';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 import type { Project } from '../../types/project';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.mocked(invokeIpc);
 const trackDialogCompleteMock = vi.mocked(trackDialogComplete);
 
 const SAVE_WARNING: ValidationWarning = {

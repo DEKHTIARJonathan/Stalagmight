@@ -23,16 +23,14 @@ async function pickOption(testId: string, value: string) {
   await userEvent.click(screen.getByTestId(`${testId}-option-${encodeURIComponent(value)}`));
 }
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
-}));
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage(errorMessageOrString);
 
 import { SpeleoCollaboratorsTab } from './SpeleoCollaboratorsTab';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
 import type { Permission, SpeleoCollaborators } from '../../../types/ipc.generated';
+import { invokeIpcMock, stubGetErrorMessage, errorMessageOrString } from '../../../test/factories/ipc';
 
 const ROSTER: SpeleoCollaborators = {
   users: [

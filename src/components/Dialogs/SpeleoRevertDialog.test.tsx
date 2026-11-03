@@ -8,17 +8,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown, f?: string) =>
-    (e as { message?: string })?.message ?? f ?? 'error',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(messageOr('error'));
 
 import SpeleoRevertDialog from './SpeleoRevertDialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
+import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factories/ipc';
 
 const LINK: SpeleoLinkState = {
   permission: 'READ_AND_WRITE',

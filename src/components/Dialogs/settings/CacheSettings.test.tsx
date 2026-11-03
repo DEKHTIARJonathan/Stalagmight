@@ -9,14 +9,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../../utils/ipc');
 
 import { CacheSettings } from './CacheSettings';
 import { defaultConfig } from '../../../types/config';
 import type { CacheStats } from '../../../types/cache';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 /** What `get_cache_stats` actually delivers: JSON numbers, never bigint. */
 function wireStats(tiles: number, bytes: number): CacheStats {

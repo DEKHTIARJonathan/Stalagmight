@@ -20,8 +20,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../../utils/ipc');
 
 import i18n from '../../../i18n';
 import { ProjectSettingsDialog as Dialog } from '../ProjectSettingsDialog';
@@ -31,6 +30,7 @@ import { useSpeleoStore } from '../../../store/speleoStore';
 import { defaultConfig } from '../../../types/config';
 import { TOAST_KEYS } from '../../../utils/toastKeys';
 import type { Project } from '../../../types/project';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 /** The backend's edit-gate refusal (#576 C4): a rejection with its code. */
 const LOCK_REFUSAL = {

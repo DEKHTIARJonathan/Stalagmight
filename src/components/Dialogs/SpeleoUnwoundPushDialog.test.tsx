@@ -15,11 +15,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown, f?: string) => (e as { message?: string })?.message ?? f ?? 'e',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(messageOr('e'));
 
 // [#303] The two exits this dialog can finish. Stubbed (the rest of utils/quit is real,
 // `holdsWriteLock` included) so the cases below can assert that the routes with NO exit
@@ -36,6 +33,7 @@ import SpeleoUnwoundPushDialog from './SpeleoUnwoundPushDialog';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factories/ipc';
 
 const open = () => {
   useUIStore.setState({

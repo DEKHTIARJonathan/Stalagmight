@@ -14,11 +14,8 @@ beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
 });
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
-}));
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage(errorMessageOrString);
 
 import { SpeleoCollaboratorsTab } from './SpeleoCollaboratorsTab';
 import { SpeleoDbGeneralTab } from './SpeleoDbGeneralTab';
@@ -31,6 +28,7 @@ import type {
   SpeleoCollaborators,
   SpeleoProjectMetadata,
 } from '../../../types/ipc.generated';
+import { invokeIpcMock, stubGetErrorMessage, errorMessageOrString } from '../../../test/factories/ipc';
 
 /** The value the backend sends for a label it does not know. */
 const UNKNOWN = 'UNKNOWN' as Permission;
