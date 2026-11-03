@@ -20,9 +20,8 @@
 //! only records something (`set_workspace_mode`) answers a `Result`: the frontend
 //! awaits such calls inside its edit queue (`runSerialized`), and a call that never
 //! answered held every later edit behind it, silently, for the rest of the session
-//! (#576 RV5-6). [`run_infallible`] - which re-raises the panic on the async task,
-//! so that call never resolves - is left for `get_config` alone, which the frontend
-//! reads outside that queue.
+//! (#576 RV5-6). No command re-raises a crash any more: `get_config`, the last one
+//! that did (and so never resolved), answers a `Result` too (#576 NF-W7E-5).
 //!
 //! What a body may read, and how, is the read-consistency rule in
 //! docs/architecture.md ("Where commands run"): a read of the project takes
@@ -112,28 +111,6 @@ where
     }
 }
 
-/// [`run`] for an answer with no failure shape: a panic is re-raised on the async
-/// task rather than fabricated into an answer, so that IPC call never resolves.
-///
-/// Only `get_config` (`commands/config.rs`) still answers this way. Its one caller,
-/// the frontend's `loadConfig`, runs at startup and after a settings or
-/// recent-projects change, never inside the edit queue, so a crash there leaves the
-/// settings unloaded rather than every later edit waiting on it. A new command answers a `Result` through [`run`]
-/// or [`run_stateless`] instead (#576 RV5-6).
-pub(crate) async fn run_infallible<R, T>(
-    app: AppHandle<R>,
-    f: impl FnOnce(&AppState) -> T + Send + 'static,
-) -> T
-where
-    R: Runtime,
-    T: Send + 'static,
-{
-    match spawn(move || f(app.state::<AppState>().inner())).await {
-        Ok(answer) => answer,
-        Err(crash) => reraise(crash),
-    }
-}
-
 /// Spawn `f` on the blocking pool.
 ///
 /// Test builds hand the calling thread's config-file resolution to the worker:
@@ -161,20 +138,6 @@ fn crash_message(crash: &tauri::Error) -> String {
     format!("The operation failed unexpectedly ({crash})")
 }
 
-fn reraise<T>(crash: tauri::Error) -> T {
-    tracing::error!(
-        reason = %crash,
-        purpose = "report a command that failed on the blocking pool",
-        "Command body did not complete"
-    );
-    match crash {
-        tauri::Error::JoinError(join) if join.is_panic() => {
-            std::panic::resume_unwind(join.into_panic())
-        }
-        other => std::panic::resume_unwind(Box::new(other.to_string())),
-    }
-}
-
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
@@ -193,7 +156,7 @@ mod tests {
     use tauri::test::mock_app;
 
     use crate::commands::command_tests::{h, run};
-    use crate::commands::{history, internal_error, launch, project, validation};
+    use crate::commands::{config, history, internal_error, launch, project, validation};
     use crate::core::{CommandError, CommandErrorCode, WorkspaceMode};
 
     fn assert_crash_answered<T>(command: &str, answer: Result<T, CommandError>) {
@@ -226,6 +189,14 @@ mod tests {
             "get_internal_error_status",
             run(internal_error::get_internal_error_status(h(&app))),
         );
+    }
+
+    /// [#576 NF-W7E-5] The settings read, which used to re-raise the crash so the
+    /// call never resolved.
+    #[test]
+    fn the_settings_read_answers_a_crash() {
+        let app = mock_app();
+        assert_crash_answered("get_config", run(config::get_config(h(&app))));
     }
 
     /// The same through [`super::run_stateless`]: the managed state a stateless

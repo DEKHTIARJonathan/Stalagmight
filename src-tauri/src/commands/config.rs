@@ -8,12 +8,17 @@ use crate::config::{
     normalize_column_widths, Config, ConfigPatch, ConfigSaveReport, GasConfig,
     DATA_TABLE_ANGLE_MODES,
 };
-use crate::core::AppState;
+use crate::core::CommandError;
 
-/// Get the current configuration
+/// Get the current configuration.
+///
+/// [#576 NF-W7E-5] A `Result` like every other read: a body that crashed on the
+/// pool answers `INTERNAL_ERROR` instead of re-raising, which left the call
+/// unresolved (the frontend's `loadConfig` catches the failure and keeps the
+/// settings it has).
 #[tauri::command]
-pub async fn get_config<R: Runtime>(app: AppHandle<R>) -> Config {
-    pool::run_infallible(app, AppState::get_config).await
+pub async fn get_config<R: Runtime>(app: AppHandle<R>) -> Result<Config, CommandError> {
+    pool::run(app, |state| Ok(state.get_config())).await
 }
 
 /// Update the configuration.

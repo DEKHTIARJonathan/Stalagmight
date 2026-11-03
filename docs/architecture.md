@@ -83,8 +83,9 @@ losslessly at the boundary. A command that cannot otherwise fail (`can_undo`,
 `check_project_integrity`, `set_workspace_mode`) answers a `Result` too, so a body that
 crashes on the pool still answers, with `INTERNAL_ERROR`: the frontend awaits such
 calls inside its edit queue, and one that never answered held every later edit behind
-it (#576 RV5-6). Two stay infallible: `get_config` (`pool::run_infallible`, read
-outside that queue) and `get_network_status` (a crash reads as offline). The settings
+it (#576 RV5-6). `get_config` does too (#576 NF-W7E-5; it used to re-raise the crash,
+so the call never resolved). One stays infallible: `get_network_status` (a crash reads
+as offline). The settings
 write commands in `commands/config.rs` still return `Result<_, String>` (rejected as a
 plain string).
 
@@ -115,8 +116,8 @@ the **main thread**: the window cannot repaint, scroll or deliver an event until
 returns, and every later IPC call - `cancel_loading` included - waits behind it. So
 no command does its work there (#576 C2). Every command is `async`, generic over the
 Tauri `Runtime`, takes the `AppHandle`, and hands its body to the blocking pool
-through `commands/pool.rs` (`pool::run` / `run_mutation`, `run_stateless` for a body that
-needs no `AppState`, and `run_infallible` for `get_config` alone); the main thread only
+through `commands/pool.rs` (`pool::run` / `run_mutation`, and `run_stateless` for a body
+that needs no `AppState`); the main thread only
 parses the arguments.
 The SpeleoDB commands do the same through their own `run_blocking`. A contract test
 (`app_contract_tests.rs`) fails when a registered command is not `async`.

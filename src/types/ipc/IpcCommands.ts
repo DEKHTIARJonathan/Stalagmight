@@ -160,7 +160,7 @@ export interface IpcCommands {
   get_along_line_distance: { args: { a: RulerEndpoint; b: RulerEndpoint }; result: AlongLineResult | null; error: CommandError };
   get_anchored_section_ids: { args: Record<string, never>; result: Array<number>; error: CommandError };
   get_cache_stats: { args: Record<string, never>; result: CacheStats; error: CommandError };
-  get_config: { args: Record<string, never>; result: Config; error: never };
+  get_config: { args: Record<string, never>; result: Config; error: CommandError };
   get_internal_error_status: { args: Record<string, never>; result: InternalErrorNotice | null; error: CommandError };
   get_memory_stats: { args: Record<string, never>; result: MemoryStats; error: CommandError };
   get_network_status: { args: Record<string, never>; result: boolean; error: never };

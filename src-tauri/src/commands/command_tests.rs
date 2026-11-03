@@ -65,7 +65,7 @@ pub(super) fn with_config_lock<T>(f: impl FnOnce() -> T) -> T {
 }
 
 fn with_restored_config<T>(app: &tauri::App<MockRuntime>, f: impl FnOnce() -> T) -> T {
-    let original = run(config::get_config(h(app)));
+    let original = run(config::get_config(h(app))).unwrap();
     let result = f();
     run(config::update_config(h(app), original)).expect("restore config");
     result
@@ -234,7 +234,7 @@ fn test_get_config_defaults_general_auto_save() {
     // holds when no user config (e.g. auto_save = false) is readable.
     with_config_lock(|| {
         let app = app_with_state();
-        let cfg = run(config::get_config(h(&app)));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert!(cfg.general.auto_save);
         assert_eq!(cfg.general.auto_save_interval_seconds, 30);
     });
@@ -310,7 +310,7 @@ fn test_update_data_table_view_roundtrip() {
             Some(BTreeMap::from([("_zeroDatum".to_string(), 140)])),
         ))
         .expect("update data-table view");
-        let cfg = run(config::get_config(h(&app)));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(
             cfg.panels.data_table_shot_column_order,
             vec!["length", "_azimuth_avg"]
@@ -356,6 +356,7 @@ fn test_update_data_table_view_roundtrip() {
         assert!(err.is_err());
         assert_eq!(
             run(config::get_config(h(&app)))
+                .unwrap()
                 .panels
                 .data_table_azimuth_mode,
             "inout"
@@ -374,7 +375,7 @@ fn test_update_new_section_view_roundtrip() {
             Some(BTreeMap::from([("length".to_string(), 180)])),
         ))
         .expect("update new-section view");
-        let cfg = run(config::get_config(h(&app)));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(
             cfg.panels.new_section_column_order,
             vec!["length", "_azimuth_avg"]
@@ -401,7 +402,7 @@ fn test_update_new_section_view_roundtrip() {
             None,
         ))
         .expect("update new-section view");
-        let cfg = run(config::get_config(h(&app)));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(cfg.panels.new_section_hidden_columns, vec!["left"]);
         assert_eq!(
             cfg.panels.new_section_column_order,
@@ -422,7 +423,7 @@ fn test_update_edit_section_view_roundtrip() {
             Some(BTreeMap::from([("length".to_string(), 190)])),
         ))
         .expect("update edit-section view");
-        let cfg = run(config::get_config(h(&app)));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(cfg.panels.edit_section_column_order, vec!["length"]);
         assert_eq!(cfg.panels.edit_section_hidden_columns, vec!["comment"]);
         assert_eq!(
@@ -447,6 +448,7 @@ fn test_update_edit_section_view_roundtrip() {
         .expect("update edit-section view");
         assert_eq!(
             run(config::get_config(h(&app)))
+                .unwrap()
                 .panels
                 .edit_section_column_widths,
             BTreeMap::from([("collapsed".to_string(), 40), ("runaway".to_string(), 2000),])
@@ -471,6 +473,7 @@ fn test_update_new_section_view_clamps_degenerate_widths() {
         .expect("update new-section view");
         assert_eq!(
             run(config::get_config(h(&app)))
+                .unwrap()
                 .panels
                 .new_section_column_widths,
             BTreeMap::from([
@@ -506,7 +509,7 @@ fn test_update_data_table_view_clamps_degenerate_widths() {
             Some(BTreeMap::from([("also_collapsed".to_string(), 3)])),
         ))
         .expect("update data-table view");
-        let cfg = run(config::get_config(h(&app)));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(
             cfg.panels.data_table_shot_column_widths,
             BTreeMap::from([
@@ -591,7 +594,7 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
             None,
         ))
         .expect("update data-table view");
-        let panels = run(config::get_config(h(&app))).panels;
+        let panels = run(config::get_config(h(&app))).unwrap().panels;
         assert_bounded(&panels.data_table_shot_column_order, "shot_column_order");
         assert_bounded(
             &panels.data_table_shot_hidden_columns,
@@ -627,7 +630,7 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
             None,
         ))
         .expect("update new-section view");
-        let panels = run(config::get_config(h(&app))).panels;
+        let panels = run(config::get_config(h(&app))).unwrap().panels;
         assert_bounded(&panels.new_section_column_order, "new_section_column_order");
         assert_bounded(
             &panels.new_section_hidden_columns,
@@ -641,7 +644,7 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
             None,
         ))
         .expect("update edit-section view");
-        let panels = run(config::get_config(h(&app))).panels;
+        let panels = run(config::get_config(h(&app))).unwrap().panels;
         assert_bounded(
             &panels.edit_section_column_order,
             "edit_section_column_order",
@@ -654,7 +657,7 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
         // Door 2: the whole-`Config` write, which does no per-field validation of
         // its own and so relies entirely on the normalize pass.
         with_restored_config(&app, || {
-            let mut cfg = run(config::get_config(h(&app)));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.panels.data_table_shot_column_order = hostile_order();
             cfg.panels.data_table_shot_hidden_columns = hostile_hidden();
             cfg.panels.data_table_station_column_order = hostile_order();
@@ -665,7 +668,7 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
             cfg.panels.edit_section_hidden_columns = hostile_hidden();
             run(config::update_config(h(&app), cfg)).expect("update config");
 
-            let panels = run(config::get_config(h(&app))).panels;
+            let panels = run(config::get_config(h(&app))).unwrap().panels;
             assert_bounded(&panels.data_table_shot_column_order, "shot_column_order");
             assert_bounded(
                 &panels.data_table_shot_hidden_columns,
@@ -727,12 +730,12 @@ fn test_update_config_repairs_invalid_angle_modes() {
                 "precondition: the partial command rejects 'sideways'"
             );
 
-            let mut cfg = run(config::get_config(h(&app)));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.panels.data_table_azimuth_mode = "sideways".to_string();
             cfg.panels.data_table_inclination_mode = String::new();
             run(config::update_config(h(&app), cfg)).expect("update config");
 
-            let panels = run(config::get_config(h(&app))).panels;
+            let panels = run(config::get_config(h(&app))).unwrap().panels;
             assert_eq!(
                 panels.data_table_azimuth_mode, "avg",
                 "an invalid azimuth mode must fall back to its documented default"
@@ -744,12 +747,12 @@ fn test_update_config_repairs_invalid_angle_modes() {
 
             // The repair must be a repair, not a reset: a VALID non-default mode
             // still has to survive the same door.
-            let mut cfg = run(config::get_config(h(&app)));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.panels.data_table_azimuth_mode = "inout".to_string();
             cfg.panels.data_table_inclination_mode = "avg".to_string();
             run(config::update_config(h(&app), cfg)).expect("update config");
 
-            let panels = run(config::get_config(h(&app))).panels;
+            let panels = run(config::get_config(h(&app))).unwrap().panels;
             assert_eq!(panels.data_table_azimuth_mode, "inout");
             assert_eq!(panels.data_table_inclination_mode, "avg");
         });
@@ -782,14 +785,14 @@ fn test_update_gas_config_normalizes_and_leaves_other_sections_alone() {
         ))
         .expect("update panel sizes");
 
-        let mut gas = run(config::get_config(h(&app))).gas;
+        let mut gas = run(config::get_config(h(&app))).unwrap().gas;
         gas.swim_speed_m_per_min = -1.0;
         // A valid change alongside it, so the test cannot pass by the command
         // being a no-op.
         gas.include_reference_legs = true;
         run(config::update_gas_config(h(&app), gas)).expect("update gas config");
 
-        let cfg = run(config::get_config(h(&app)));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(
             cfg.gas.swim_speed_m_per_min, 10.0,
             "a non-positive swim speed must be repaired to the default, not persisted"
@@ -810,7 +813,7 @@ fn test_get_config_defaults_validation() {
     // Same isolation as above: defaults must not depend on the real config.
     with_config_lock(|| {
         let app = app_with_state();
-        let cfg = run(config::get_config(h(&app)));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(cfg.validation.warn_shot_length_min, 0.3);
         assert_eq!(cfg.validation.warn_shot_length_max, 50.0);
     });
@@ -830,7 +833,7 @@ fn test_update_config_caps_general_collections() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let mut cfg = run(config::get_config(h(&app)));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.general.onboarding_completed_flows =
                 (0..100_000).map(|i| format!("flow-{i}")).collect();
             cfg.general.locale = "e".repeat(10_000);
@@ -845,7 +848,7 @@ fn test_update_config_caps_general_collections() {
                 .collect();
             run(config::update_config(h(&app), cfg)).expect("update config");
 
-            let general = run(config::get_config(h(&app))).general;
+            let general = run(config::get_config(h(&app))).unwrap().general;
             assert!(
                 general.onboarding_completed_flows.len() <= 256,
                 "100k flow ids reached the config: {}",
@@ -874,10 +877,10 @@ fn test_update_config_roundtrip_auto_save() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let mut cfg = run(config::get_config(h(&app)));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.general.auto_save = false;
             run(config::update_config(h(&app), cfg)).expect("update config");
-            let updated = run(config::get_config(h(&app)));
+            let updated = run(config::get_config(h(&app))).unwrap();
             assert!(!updated.general.auto_save);
         });
     });
@@ -888,10 +891,10 @@ fn test_update_config_roundtrip_recent_projects() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let mut cfg = run(config::get_config(h(&app)));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.general.recent_projects = vec![PathBuf::from("/tmp/example.stalx")];
             run(config::update_config(h(&app), cfg)).expect("update config");
-            let updated = run(config::get_config(h(&app)));
+            let updated = run(config::get_config(h(&app))).unwrap();
             assert_eq!(updated.general.recent_projects.len(), 1);
             assert!(updated
                 .general
@@ -909,7 +912,7 @@ fn test_update_panel_sizes_sections_only() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let before = run(config::get_config(h(&app)));
+            let before = run(config::get_config(h(&app))).unwrap();
             run(config::update_panel_sizes(
                 h(&app),
                 Some(333),
@@ -918,7 +921,7 @@ fn test_update_panel_sizes_sections_only() {
                 None,
             ))
             .unwrap();
-            let after = run(config::get_config(h(&app)));
+            let after = run(config::get_config(h(&app))).unwrap();
             assert_eq!(after.panels.sections_panel_width, 333);
             assert_eq!(
                 after.panels.detail_panel_width,
@@ -937,7 +940,7 @@ fn test_update_panel_sizes_detail_only() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let before = run(config::get_config(h(&app)));
+            let before = run(config::get_config(h(&app))).unwrap();
             run(config::update_panel_sizes(
                 h(&app),
                 None,
@@ -946,7 +949,7 @@ fn test_update_panel_sizes_detail_only() {
                 None,
             ))
             .unwrap();
-            let after = run(config::get_config(h(&app)));
+            let after = run(config::get_config(h(&app))).unwrap();
             assert_eq!(after.panels.detail_panel_width, 444);
             assert_eq!(
                 after.panels.sections_panel_width,
@@ -965,7 +968,7 @@ fn test_update_panel_sizes_data_only() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let before = run(config::get_config(h(&app)));
+            let before = run(config::get_config(h(&app))).unwrap();
             // IN-RANGE on purpose (`data_table_height` is clamped to 100..500).
             // This test is about the PARTIAL semantics - only the field passed is
             // touched - so it must not also be straddling the clamp. It used to
@@ -981,7 +984,7 @@ fn test_update_panel_sizes_data_only() {
                 None,
             ))
             .unwrap();
-            let after = run(config::get_config(h(&app)));
+            let after = run(config::get_config(h(&app))).unwrap();
             assert_eq!(after.panels.data_table_height, 400);
             assert_eq!(
                 after.panels.sections_panel_width,
@@ -1012,7 +1015,7 @@ fn test_update_panel_sizes_all() {
                 Some(600),
             ))
             .unwrap();
-            let after = run(config::get_config(h(&app)));
+            let after = run(config::get_config(h(&app))).unwrap();
             assert_eq!(after.panels.sections_panel_width, 200);
             assert_eq!(after.panels.detail_panel_width, 222);
             assert_eq!(after.panels.data_table_height, 333);
@@ -1042,7 +1045,7 @@ fn test_update_panel_sizes_clamps_out_of_range_values() {
                 Some(9999),
             ))
             .unwrap();
-            let after = run(config::get_config(h(&app)));
+            let after = run(config::get_config(h(&app))).unwrap();
             assert_eq!(after.panels.sections_panel_width, 150);
             assert_eq!(after.panels.data_table_height, 500);
             // The wizard map column clamps to 280..900, not 100..500.
@@ -1056,9 +1059,9 @@ fn test_update_panel_sizes_none_keeps_values() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let before = run(config::get_config(h(&app)));
+            let before = run(config::get_config(h(&app))).unwrap();
             run(config::update_panel_sizes(h(&app), None, None, None, None)).unwrap();
-            let after = run(config::get_config(h(&app)));
+            let after = run(config::get_config(h(&app))).unwrap();
             assert_eq!(
                 after.panels.sections_panel_width,
                 before.panels.sections_panel_width
@@ -1080,7 +1083,7 @@ fn test_update_panel_layout_partial() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let before = run(config::get_config(h(&app)));
+            let before = run(config::get_config(h(&app))).unwrap();
             // Update only the sections panel: close it + switch to hover.
             run(config::update_panel_layout(
                 h(&app),
@@ -1092,7 +1095,7 @@ fn test_update_panel_layout_partial() {
                 None,
             ))
             .unwrap();
-            let after = run(config::get_config(h(&app)));
+            let after = run(config::get_config(h(&app))).unwrap();
             assert!(!after.panels.sections_panel_open);
             assert_eq!(after.panels.sections_panel_mode, "hover");
             // Other panels untouched.
@@ -1121,7 +1124,7 @@ fn test_update_panel_layout_rejects_invalid_mode() {
             ));
             assert!(result.is_err());
             // A rejected mode must not have mutated config.
-            let after = run(config::get_config(h(&app)));
+            let after = run(config::get_config(h(&app))).unwrap();
             assert_eq!(after.panels.sections_panel_mode, "pin");
         });
     });
@@ -1620,7 +1623,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails() {
         let result = open_project(state(&app), project_path.clone());
         assert_success(&result);
 
-        let cfg = run(config::get_config(h(&app)));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(cfg.general.recent_projects.first(), Some(&project_path));
 
         let config_path = crate::config::Config::config_path().unwrap();
@@ -1674,7 +1677,7 @@ fn test_open_project_updates_recent_projects_when_config_save_fails_macos() {
         let result = open_project(state(&app), project_path.clone());
         assert_success(&result);
 
-        let cfg = run(config::get_config(h(&app)));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(cfg.general.recent_projects.first(), Some(&project_path));
 
         let config_path = crate::config::Config::config_path().unwrap();
@@ -1695,7 +1698,7 @@ fn test_open_project_updates_recent_projects_order_and_truncates() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let mut cfg = run(config::get_config(h(&app)));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.general.recent_projects_max = 2;
             cfg.general.recent_projects = Vec::new();
             run(config::update_config(h(&app), cfg)).expect("update config");
@@ -1719,14 +1722,14 @@ fn test_open_project_updates_recent_projects_order_and_truncates() {
             assert_success(&open_project(state(&app), path_b.clone()));
             assert_success(&open_project(state(&app), path_c.clone()));
 
-            let cfg = run(config::get_config(h(&app)));
+            let cfg = run(config::get_config(h(&app))).unwrap();
             assert_eq!(
                 cfg.general.recent_projects,
                 vec![path_c.clone(), path_b.clone()]
             );
 
             assert_success(&open_project(state(&app), path_b.clone()));
-            let cfg = run(config::get_config(h(&app)));
+            let cfg = run(config::get_config(h(&app))).unwrap();
             assert_eq!(cfg.general.recent_projects, vec![path_b, path_c]);
         });
     });
@@ -1833,7 +1836,7 @@ fn test_import_sections_persists_deferred_new_project() {
             project_path.exists(),
             "import must write the deferred project to disk"
         );
-        let cfg = run(config::get_config(h(&app)));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert_eq!(cfg.general.recent_projects.first(), Some(&project_path));
         assert!(
             !state(&app).initial_save_deferred(),
@@ -1930,7 +1933,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
 
         // No phantom: the never-written project must NOT appear in Recent Projects,
         // and it must remain deferred (still unsaved) so the app keeps prompting.
-        let cfg = run(config::get_config(h(&app)));
+        let cfg = run(config::get_config(h(&app))).unwrap();
         assert!(
             !cfg.general.recent_projects.contains(&project_path),
             "a project whose save failed must not be added to Recent Projects"
@@ -2342,6 +2345,7 @@ fn test_delete_project_partial_failure_still_prunes_recents() {
     // update the in-memory recents, so there is a real entry for the delete to prune.
     assert!(
         run(config::get_config(h(&app)))
+            .unwrap()
             .general
             .recent_projects
             .contains(&saved_path),
@@ -2377,6 +2381,7 @@ fn test_delete_project_partial_failure_still_prunes_recents() {
     );
     assert!(
         !run(config::get_config(h(&app)))
+            .unwrap()
             .general
             .recent_projects
             .contains(&saved_path),
@@ -2704,6 +2709,7 @@ fn test_delete_project_matches_an_alias_of_the_open_path() {
             // which is what the Windows delete depends on).
             assert!(
                 !run(config::get_config(h(&app)))
+                    .unwrap()
                     .general
                     .recent_projects
                     .contains(&saved_path),
@@ -2754,7 +2760,10 @@ fn test_delete_project_by_an_alias_prunes_the_recents_entry() {
             create_project(&app);
             let other_path = save_project_to_temp(&app, &other_dir);
 
-            let recents_before = run(config::get_config(h(&app))).general.recent_projects;
+            let recents_before = run(config::get_config(h(&app)))
+                .unwrap()
+                .general
+                .recent_projects;
             assert!(
                 recents_before.contains(&saved_path) && recents_before.contains(&other_path),
                 "precondition: both projects are in recents under their plain paths, \
@@ -2774,7 +2783,10 @@ fn test_delete_project_by_an_alias_prunes_the_recents_entry() {
 
             assert_success(&result);
             assert!(!saved_path.exists(), "the aliased .stalx should be trashed");
-            let recents_after = run(config::get_config(h(&app))).general.recent_projects;
+            let recents_after = run(config::get_config(h(&app)))
+                .unwrap()
+                .general
+                .recent_projects;
             assert!(
                 !recents_after.contains(&saved_path),
                 "an aliased delete must prune the recents row, or it becomes a \
@@ -2924,6 +2936,7 @@ fn test_delete_project_of_a_symlink_to_the_open_project_spares_the_referent() {
             );
             assert!(
                 run(config::get_config(h(&app)))
+                    .unwrap()
                     .general
                     .recent_projects
                     .contains(&saved_path),
@@ -2974,7 +2987,10 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
                 "precondition: the session was opened through the link, so its \
                  file_path IS the link"
             );
-            let recents_before = run(config::get_config(h(&app))).general.recent_projects;
+            let recents_before = run(config::get_config(h(&app)))
+                .unwrap()
+                .general
+                .recent_projects;
             assert!(
                 recents_before.contains(&link) && recents_before.contains(&real_path),
                 "precondition: both spellings have their own recents row (the save \
@@ -3014,7 +3030,10 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
                 read(history::get_undo_stack(h(&app))).len()
             );
 
-            let recents_after = run(config::get_config(h(&app))).general.recent_projects;
+            let recents_after = run(config::get_config(h(&app)))
+                .unwrap()
+                .general
+                .recent_projects;
             assert!(
                 !recents_after.contains(&link),
                 "the link's own row must be pruned - its file is gone, so it would be a \
@@ -3109,6 +3128,7 @@ fn test_delete_project_through_a_symlinked_parent_dir_matches_by_identity() {
             );
             assert!(
                 !run(config::get_config(h(&app)))
+                    .unwrap()
                     .general
                     .recent_projects
                     .contains(&saved_path),
@@ -5484,12 +5504,12 @@ fn test_update_config_persists_and_reload_restores() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let mut cfg = run(config::get_config(h(&app)));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             let original_auto_save = cfg.general.auto_save;
             cfg.general.auto_save = !original_auto_save;
             run(config::update_config(h(&app), cfg)).expect("update config");
 
-            let updated = run(config::get_config(h(&app)));
+            let updated = run(config::get_config(h(&app))).unwrap();
             assert_eq!(updated.general.auto_save, !original_auto_save);
 
             let reloaded = run(config::reload_config(h(&app))).expect("reload config");
@@ -5503,7 +5523,7 @@ fn test_reload_config_syncs_undo_history_limit() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            let mut cfg = run(config::get_config(h(&app)));
+            let mut cfg = run(config::get_config(h(&app))).unwrap();
             cfg.general.undo_history_limit = 42;
             run(config::update_config(h(&app), cfg)).expect("update config");
 
@@ -5511,7 +5531,7 @@ fn test_reload_config_syncs_undo_history_limit() {
             assert_eq!(reloaded.general.undo_history_limit, 42);
 
             // Verify the in-memory config also reflects the reloaded limit
-            let current = run(config::get_config(h(&app)));
+            let current = run(config::get_config(h(&app))).unwrap();
             assert_eq!(current.general.undo_history_limit, 42);
         });
     });
@@ -5892,6 +5912,7 @@ fn test_update_data_table_view_rejects_the_whole_payload_on_invalid_mode() {
     with_config_lock(|| {
         let app = app_with_state();
         let before = run(config::get_config(h(&app)))
+            .unwrap()
             .panels
             .data_table_shot_column_order;
         assert!(before.is_empty(), "test assumes the default is empty");
@@ -5909,7 +5930,7 @@ fn test_update_data_table_view_rejects_the_whole_payload_on_invalid_mode() {
         ));
         assert!(err.is_err(), "an invalid azimuth mode must be rejected");
 
-        let after = run(config::get_config(h(&app)));
+        let after = run(config::get_config(h(&app))).unwrap();
         assert!(
             after.panels.data_table_shot_column_order.is_empty(),
             "a valid field set in the SAME rejected call must not land either: {:?}",
