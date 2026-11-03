@@ -698,7 +698,7 @@ impl AppState {
                 let lock_ops = self.speleodb_lock_ops_guard();
                 let capture = self.speleodb_capture_editing(&lock_ops, &link.project_id);
                 let local_path = capture
-                    .fast_forward(self, &endpoint, &token, insecure_http, &link, tip.clone())
+                    .fast_forward(self, &endpoint, &token, insecure_http, &link, tip)
                     .map_err(local_dto)?
                     .restore(self, &lock_ops, &endpoint, &token, &link.project_id);
                 Ok(UpdateResult::FastForwarded { local_path })
@@ -1900,7 +1900,10 @@ mod redo_during_push_tests {
 /// so each rule is driven on a remote project as the reload leaves it: the gate shut,
 /// force-edit cleared, and - when a status poll lands in that window - the record gone.
 #[cfg(test)]
-#[expect(clippy::expect_used, reason = "unit test fixtures")]
+#[expect(
+    clippy::print_stdout,
+    reason = "the driven A8 tests print the values they observed, so a failure shows them"
+)]
 mod update_restore_tests {
     use super::update_restore::FastForwarded;
     use crate::core::state::speleodb::{authed_session_at, remote_readonly_fixture, REMOTE_ID};
@@ -2023,6 +2026,10 @@ mod update_restore_tests {
 /// snapshot; this drives the producer and reads the file it flushed.
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
+#[expect(
+    clippy::print_stdout,
+    reason = "the driven A8 tests print the values they observed, so a failure shows them"
+)]
 mod flush_for_snapshot_tests {
     use crate::core::state::AppState;
     use crate::core::Command;
@@ -2090,6 +2097,10 @@ mod flush_for_snapshot_tests {
 #[expect(
     clippy::panic,
     reason = "the crash is a panic while the command lock is held, which poisons it"
+)]
+#[expect(
+    clippy::print_stdout,
+    reason = "the driven A8 tests print the values they observed, so a failure shows them"
 )]
 mod crash_drop_report_tests {
     use super::report_dropped_history;

@@ -47,6 +47,9 @@ fn the_legacy_open_project_is_not_exposed_over_ipc() {
 
 /// `connect-src` in BOTH policies must admit Tauri's own IPC origin.
 ///
+/// [#576 A8] Not a source scan: it reads the shipped `tauri.conf.json` - the
+/// artefact itself, which no other test exercises - not Rust source text.
+///
 /// Every `invoke` is a `fetch` to `ipc://localhost/<cmd>` (macOS/Linux) or
 /// `http://ipc.localhost/<cmd>` (Windows) - see `ipc-protocol.js` in the `tauri`
 /// crate - so `connect-src` governs it, and Tauri does NOT add the origin back:
@@ -222,9 +225,17 @@ fn ok_type_of_command_result(ret: &str) -> Option<String> {
 /// answers through `pool::run` (or anything else) leaves `remote_link` at the
 /// `null` its outcome is built with, and the frontend - which applies the bits in
 /// one place and keeps no mirror - never learns the edit dirtied the copy. A
-/// source scan, like the tripwires above, of every `#[tauri::command]` in
-/// `src/commands/*.rs`, cross-checked against the generated command manifest so
-/// it cannot pass by seeing nothing.
+/// source scan of every `#[tauri::command]` in `src/commands/*.rs`, cross-checked
+/// against the generated command manifest so it cannot pass by seeing nothing.
+///
+/// A sanctioned site inventory (#576 A8-D2, docs/testing-recipes.md "Source
+/// scans"): "every command whose answer is a `MutationOutcome` routes through
+/// `run_mutation`" is a rule over the bodies `#[tauri::command]` wraps, and no type
+/// can state it - `pool::run` accepts any `Result<T, CommandError>`, and Rust has no
+/// negative bound to refuse a `MutationOutcome` there without a marker on every
+/// other reply type. Each file is cut at its trailing test region by the shared
+/// helper (`models::source_scan::test_module_start`), not by splitting on the bare
+/// attribute text.
 #[test]
 fn every_mutation_outcome_command_runs_through_run_mutation() {
     let outcomes = mutation_outcome_types();
@@ -261,8 +272,10 @@ fn every_mutation_outcome_command_runs_through_run_mutation() {
     let mut offenders: Vec<String> = Vec::new();
     for path in files {
         let text = std::fs::read_to_string(&path).expect("a command file reads");
-        // Production only: a file's own top-level test module ends it.
-        let prod = text.split("\n#[cfg(test)]").next().unwrap_or(&text);
+        // Production only: a file's own trailing test region ends it.
+        let prod = text
+            .get(..crate::models::source_scan::test_module_start(&text).unwrap_or(text.len()))
+            .unwrap_or(&text);
         let file = path.file_name().and_then(|n| n.to_str()).unwrap_or("?");
         for chunk in prod.split("#[tauri::command]").skip(1) {
             let after = &chunk[chunk.find("fn ").expect("a command is a fn") + 3..];
@@ -311,14 +324,16 @@ fn every_mutation_outcome_command_runs_through_run_mutation() {
     );
     assert_eq!(
         scanned, expected,
-        "the source scan and the generated manifest disagree on which commands answer a \
+        "RULE (every MutationOutcome command runs through run_mutation, #576 D22): the \
+         source scan and the generated manifest disagree on which commands answer a \
          MutationOutcome"
     );
     assert!(
         offenders.is_empty(),
-        "these {} of {} commands answer a MutationOutcome but do not run through \
-         `pool::run_mutation`, so their answer never carries the SpeleoDB link bits \
-         (#576 D22): {offenders:?}",
+        "RULE (every MutationOutcome command runs through run_mutation, #576 D22): these \
+         {} of {} commands answer a MutationOutcome but do not run through \
+         `pool::run_mutation`, so their answer never carries the SpeleoDB link bits: \
+         {offenders:?}",
         offenders.len(),
         scanned.len()
     );

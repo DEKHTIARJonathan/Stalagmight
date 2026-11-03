@@ -2083,7 +2083,7 @@ impl AppState {
                     &token,
                     insecure_http,
                     &link,
-                    tip.clone(),
+                    tip,
                     LocalEditsPolicy::Protect,
                 ) {
                     Ok(p) => p,
@@ -2306,7 +2306,7 @@ impl AppState {
             &token,
             insecure_http,
             &link,
-            tip.clone(),
+            tip,
             LocalEditsPolicy::Discard,
         );
         if result.is_err() {
@@ -2932,6 +2932,10 @@ pub(super) use tests::{
 #[expect(
     clippy::panic,
     reason = "one test POISONS a mutex, which requires panicking while its guard is held"
+)]
+#[expect(
+    clippy::print_stdout,
+    reason = "the driven A8 tests print the values they observed, so a failure shows them"
 )]
 mod tests {
     use super::{
@@ -5282,7 +5286,7 @@ mod tests {
             fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
                 self.0
                     .lock()
-                    .expect("the capture buffer is not poisoned")
+                    .map_err(|_| std::io::Error::other("the capture buffer is poisoned"))?
                     .extend_from_slice(bytes);
                 Ok(bytes.len())
             }

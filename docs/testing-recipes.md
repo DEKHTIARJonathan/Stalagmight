@@ -671,17 +671,38 @@ it. So it is allowed for one kind of rule only (#576 A8):
   value only the earlier step can produce (token passing - `Flushed` ->
   `PushSnapshot` in `speleodb_push.rs`, `Landed`, `Relocated`,
   `LocalEditsCleared`, `UnwindCleared` / `ChildPolicyChecked` / `CapturedRecord`
-  / `Reloaded` in `speleodb_revisions.rs`, `EditSessionOpen`), or a guard
-  wrapper the in-span step borrows (`LockOpsHeld`, like `CommandsHeld`). Put the
-  proof type and its producer in a small private module so nothing else can
-  construct it (a private field), and prove the conversion by writing the
-  forbidden reorder in a throwaway copy and capturing the compile error.
-  Behaviour a test can drive is driven: `do_load_project_full` and
-  `do_create_project_full` need only an event sink
+  / `Reloaded` in `speleodb_revisions.rs`, `EditSessionOpen`, the adoption's
+  `adopt_order` chain, Start Editing's `start_order`, the update's
+  `update_restore`, `PinnedDump`, `StoodDown`, `PrePushSave`), or a guard
+  wrapper the in-span step borrows (`LockOpsHeld`, like `CommandsHeld`; a value
+  read inside the span is an `InSpan`). When two steps must share ONE span, not
+  just each hold a span, the earlier step's proof borrows the span and the later
+  step takes only that proof (`GatesDropped` in logout, `Relocated` in publish):
+  dropping the span between them is then E0505. Put the proof type and its
+  producer in a small private module so nothing else can construct it (a private
+  field), and prove the conversion by writing the forbidden reorder in a
+  throwaway copy and capturing the compile error.
+- **Bypass:** a proof stops a reorder only if the raw step it guards cannot be
+  called without it. The guarded primitive takes the proof as a licence
+  argument - `client::download_dump*` (`DumpLicence`), `client::upload_auto`
+  (`UploadLicence`), `replace_cache_stalx_with` (`ReplaceLicence`), the
+  reclaim-checked release (`ReclaimRelease`) - implemented only by the proof
+  types and by a function-local marker in each flow whose step has no
+  precondition (named for why). A `#[cfg(test)]` constructor (`for_tests`) is
+  refused by a non-test build, and under `cargo test` by the site inventory
+  `no_production_code_reaches_a_test_only_proof_constructor`.
+- **Driven instead:** behaviour a test can reach is driven, not read.
+  `do_load_project_full` and `do_create_project_full` need only an event sink
   (`core::events::NullEventSink`), not an app handle; a check that needs the
   process-wide app directories goes in its own integration-test binary
-  (`crates/core/tests/`). Exhaustiveness is a lint, not a scan
-  (`#[deny(clippy::wildcard_enum_match_arm)]` on the match).
+  (`crates/core/tests/`) or a child process (`take_remote_success_tests.rs`). A
+  flow that needs a server runs against `routing_stub` (answers each request by
+  its first line) in `core::state::speleodb`'s tests; a decision buried in a
+  verb is extracted into a pure function and tested on its table
+  (`probe_verdict`, `unwind_keeps_lock`, `landed_despite_release_error`). A log
+  line is captured, not grepped: `logged_events(|| ..)` runs the closure under a
+  scoped `tracing` subscriber and returns the lines it logged. Exhaustiveness is
+  a lint, not a scan (`#[deny(clippy::wildcard_enum_match_arm)]` on the match).
 
 Every scan reads its file through `models::source_scan` (test-support):
 `prod_region(src, anchor)` cuts at the file's trailing test region - the

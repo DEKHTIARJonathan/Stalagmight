@@ -614,6 +614,10 @@ impl AppState {
     clippy::panic,
     reason = "unit test fixtures fail loudly on setup errors; the panic POISONS a mutex on purpose"
 )]
+#[expect(
+    clippy::print_stdout,
+    reason = "the driven A8 tests print the values they observed, so a failure shows them"
+)]
 mod tests {
     use super::AppState;
 

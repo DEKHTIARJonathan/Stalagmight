@@ -1010,6 +1010,11 @@ impl AppState {
     }
 
     /// [`Self::speleodb_adopt_ariane`]'s body, as the chain of `adopt_order` proofs.
+    #[expect(
+        clippy::result_large_err,
+        reason = "returns the SpeleoErrorDto every sibling SpeleoDB step returns; boxing it is a \
+                  repo-wide change outside #576 A8"
+    )]
     fn speleodb_adopt_ariane_chain(
         &self,
         project_id: String,
@@ -2983,6 +2988,10 @@ mod pull_guard {
 
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
+#[expect(
+    clippy::print_stdout,
+    reason = "the driven A8 tests print the values they observed, so a failure shows them"
+)]
 mod tests {
     use super::adopt_order::{
         landed_despite_release_error, AdoptFetched, AdoptLanded, AdoptLockGuard, AdoptedLink,

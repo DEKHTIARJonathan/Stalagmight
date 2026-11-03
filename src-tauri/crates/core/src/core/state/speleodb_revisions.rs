@@ -1075,6 +1075,10 @@ mod restore_order {
 
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
+#[expect(
+    clippy::print_stdout,
+    reason = "the driven A8 tests print the values they observed, so a failure shows them"
+)]
 mod tests {
     use super::{
         downloaded_revision_undo_mode, restore_order, revision_swap_base, unwind_discards_unpushed,
