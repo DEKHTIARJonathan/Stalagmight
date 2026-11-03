@@ -133,16 +133,9 @@ fn write_tmlu(dir: &Path, name: &str, xml: &str) -> std::path::PathBuf {
 }
 
 /// The full Ariane import as the app runs it: parse the file, convert it to
-/// import configs, execute the import.
-///
-/// Deliberately shaped after `speleodb_pull::adopt_build_into` down to the
-/// entry point (`execute_tml_import_sections`, not the generic
-/// `execute_import_sections`) and the surface-elevation derivation (#431), so
-/// the adoption-idempotence claim below is about the pipeline that actually
-/// ships. `adoption_still_builds_through_the_pipeline_the_idempotence_test_drives`
-/// is the tripwire that keeps the two from drifting - it has already caught one
-/// divergence, when #443/#452 moved the conversion into `adopt_convert` and the
-/// import onto the TML-specific entry point.
+/// import configs, execute the import (`execute_tml_import_sections`, with the
+/// surface-elevation derivation of #431). The adoption-idempotence test drives
+/// the adoption itself rather than this mirror of it (#576 A8).
 fn import_ariane_file(state: &AppState, path: &Path) {
     let tml = parse_tml(path).unwrap();
     let (sections, closures, _warnings) = convert_tml_to_import_configs(&tml, false, true).unwrap();
@@ -639,13 +632,12 @@ fn the_user_export_is_verbatim_while_the_speleodb_sidecar_canonicalises_or_drops
 /// before the file's `<UUID>` was read back every adoption re-identified every
 /// shot - the user-visible churn in the issue.
 ///
-/// The assertion runs the identity-deciding pipeline (`parse_tml` ->
-/// `convert_tml_to_import_configs` -> `execute_tml_import_sections`) twice on the
-/// same file. `adopt_build_into` itself cannot be called from a unit test: it
-/// goes through `do_create_project_full`, which requires a real `AppHandle`
-/// (`tauri::test::mock_app` yields a `MockRuntime` handle, which `AppState`
-/// cannot hold). The tripwire below therefore pins that adoption really is that
-/// pipeline, so this test cannot pass while the shipped path diverges from it.
+/// [#576 A8] Driven through the adoption's own local half,
+/// `adopt_import_and_save` (create, import, save, promote, reopen, stamp), with
+/// a null event sink: the create it runs needs a sink, not an `AppHandle`. It
+/// used to run a hand-built mirror of the pipeline, kept honest by a tripwire
+/// that read `adopt_build_into`'s source for the calls it made - which a change
+/// that kept those calls and still dropped the identity would have passed.
 ///
 /// Full `<UUID>` coverage is load-bearing: an uncovered row legitimately mints
 /// per adoption, so a mixed file could only be compared over its covered subset.
@@ -656,7 +648,9 @@ fn adopting_the_same_ariane_file_twice_gives_the_same_shot_uuids() {
         "eeeeeeee-0000-4000-8000-000000000002",
         "eeeeeeee-0000-4000-8000-000000000003",
     ];
+    const PROJECT_ID: &str = "eeeeeeee-0000-4000-8000-0000000000aa";
 
+    let _cfg = crate::test_helpers::isolated_config();
     let dir = tempfile::tempdir().unwrap();
     let source = write_tmlu(
         dir.path(),
@@ -668,14 +662,37 @@ fn adopting_the_same_ariane_file_twice_gives_the_same_shot_uuids() {
         ]),
     );
 
-    let adopt_once = || {
-        let state = state_with_project();
-        import_ariane_file(&state, &source);
+    let adopt_once = |attempt: &str| {
+        let dest = dir.path().join(attempt).join("project.stalx");
+        std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
+        let state = AppState::new().unwrap();
+        state.set_event_sink(std::sync::Arc::new(crate::core::events::NullEventSink));
+        let adopted = state.adopt_import_and_save(
+            None,
+            &source,
+            "ariane.tmlu",
+            &dest,
+            "CaveA".to_string(),
+            |undo_mode| crate::models::SpeleoLink {
+                endpoint: "http://speleodb.invalid/".to_string(),
+                project_id: PROJECT_ID.to_string(),
+                project_name: "CaveA".to_string(),
+                base_commit_sha: None,
+                has_unpushed_edits: true,
+                last_edit_at: Some("2026-07-27T10:00:00Z".to_string()),
+                last_verify_at: None,
+                undo_mode: Some(undo_mode),
+            },
+        );
+        assert!(
+            matches!(adopted, Ok((_, Ok(())))),
+            "the adoption's local half adopts and stamps"
+        );
         section_uuids(&state.get_project_state().unwrap(), 0)
     };
 
-    let first = adopt_once();
-    let second = adopt_once();
+    let first = adopt_once("first");
+    let second = adopt_once("second");
     assert_eq!(
         first,
         IDS.map(String::from).to_vec(),
@@ -684,55 +701,6 @@ fn adopting_the_same_ariane_file_twice_gives_the_same_shot_uuids() {
     assert_eq!(
         first, second,
         "re-adopting the same file must not re-identify its shots"
-    );
-}
-
-/// Tripwire for the test above: `adopt_build_into` must keep building the
-/// project through the calls `import_ariane_file` drives. If it grows its own
-/// import path, the idempotence claim stops being tested and this fails loudly
-/// instead - which is exactly what happened when #443/#452 moved the conversion
-/// behind `adopt_convert` and the import onto `execute_tml_import_sections`.
-///
-/// The conversion is asserted through BOTH bodies, since `adopt_convert` is the
-/// indirection that would otherwise let the chain be re-pointed without this
-/// noticing.
-#[test]
-fn adoption_still_builds_through_the_pipeline_the_idempotence_test_drives() {
-    let path = format!(
-        "{}/src/core/state/speleodb_pull.rs",
-        env!("CARGO_MANIFEST_DIR")
-    );
-    let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    let body_of = |name: &str| -> String {
-        // Anchor on a line-start definition, not a bare substring - a doc
-        // comment MENTIONING the fn name would otherwise shift the match
-        // earlier and make the assertions over-accept.
-        let needle = format!("\nfn {name}");
-        let start = src
-            .find(&needle)
-            .or_else(|| src.find(&format!("\npub fn {name}")))
-            .or_else(|| src.find(&format!("\n    fn {name}")))
-            .unwrap_or_else(|| panic!("{name} is still defined in speleodb_pull.rs"));
-        let rest = &src[start..];
-        rest[..rest.find("\n}\n").unwrap_or(rest.len())].to_owned()
-    };
-
-    let adopt = body_of("adopt_build_into");
-    for call in [
-        "parsers::tml::parse_tml",
-        "adopt_convert",
-        "execute_tml_import_sections",
-    ] {
-        assert!(
-            adopt.contains(call),
-            "adopt_build_into no longer calls {call}; the adoption-idempotence \
-             test is driving a pipeline the shipped path does not use"
-        );
-    }
-    assert!(
-        body_of("adopt_convert").contains("convert_tml_to_import_configs"),
-        "adopt_convert no longer runs the TML converter; the adoption-idempotence \
-         test is driving a pipeline the shipped path does not use"
     );
 }
 

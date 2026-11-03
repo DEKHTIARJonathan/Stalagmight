@@ -104,3 +104,21 @@ pub trait EventSink: Send + Sync + 'static {
     /// clones when a fallback path still needs the data.
     fn with_app_state(&self, f: Box<dyn FnOnce(&AppState) + Send>) -> bool;
 }
+
+/// [#576 A8] The sink a unit test installs to drive the load and create paths
+/// (`do_load_project_full`, `do_create_project_full`), which refuse to run without
+/// one: it delivers nothing and has no managed state to lend. With it those paths
+/// are ordinary unit-test entry points - a test that would otherwise pin their
+/// behaviour by reading their source text drives them instead.
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NullEventSink;
+
+#[cfg(any(test, feature = "test-support"))]
+impl EventSink for NullEventSink {
+    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
+
+    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
+        false
+    }
+}

@@ -875,29 +875,4 @@ mod tests {
             .speleodb_remove_link_at(junk.clone(), prompted_for(&junk, ID))
             .expect_err("a file that is not a Stalagmight project is reported, not half-edited");
     }
-
-    #[test]
-    fn the_production_load_refuses_a_managed_file_before_it_opens_the_database() {
-        // Guarded by ORDER in the source, the `the_pull_runs_the_local_guard_
-        // before_it_downloads_the_dump` idiom: a behavioural version would need a
-        // Wry AppHandle (`do_load_project_full` hard-requires one), which no unit
-        // test has. The ordering is what matters - the probe must run before
-        // `open_existing` migrates the file and quick_checks every page.
-        let src = include_str!("project_load.rs");
-        let start = src
-            .find("fn do_load_project_full")
-            .expect("the production load is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-        let probe = body
-            .find("self.foreign_link(")
-            .expect("the production load must run the canonical-storage probe");
-        let open = body
-            .find("Database::open_existing(")
-            .expect("the production load opens the database");
-        assert!(
-            probe < open,
-            "the canonical-storage refusal must run BEFORE open_existing, not after it"
-        );
-    }
 }

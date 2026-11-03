@@ -450,9 +450,8 @@ mod tests {
     /// the loader returning `Err`, and the Playwright specs drive a mock. Nothing joined
     /// "the loader failed" to "the user is told".
     ///
-    /// Goes through `open_project` because `do_load_project_full` needs an `AppHandle`
-    /// and has no unit entry point; the structural assertions below are what keep the two
-    /// paths from diverging.
+    /// [#576 A8] Through BOTH load paths: `do_load_project_full` needs only an event
+    /// sink, so it is driven here like `open_project` rather than pinned by its text.
     #[test]
     fn a_history_that_cannot_be_read_sets_the_discarded_flag() {
         with_isolated_config(|| {
@@ -485,12 +484,19 @@ mod tests {
                 .expect("insert hostile row");
             }
 
-            let state = state();
-            assert!(state.open_project(path).success, "the project still opens");
-            assert!(
-                state.history_discarded(),
-                "an unreadable history must be recorded, or the banner never appears"
-            );
+            for load in LOAD_PATHS {
+                let state = state();
+                assert!(
+                    load.run(&state, &path),
+                    "{}: the project still opens",
+                    load.name
+                );
+                assert!(
+                    state.history_discarded(),
+                    "{}: an unreadable history must be recorded, or the banner never appears",
+                    load.name
+                );
+            }
         });
     }
 
@@ -516,79 +522,129 @@ mod tests {
         });
     }
 
-    /// [#469, #473] Both load paths read the persisted history through the row-capped,
-    /// budget-sharing loader, resolve the cap before they read, and share ONE budget
-    /// across the two stacks.
+    /// One production load path, as these tests drive it.
+    struct LoadPath {
+        name: &'static str,
+        run: fn(&AppState, &std::path::Path) -> bool,
+    }
+
+    impl LoadPath {
+        fn run(&self, state: &AppState, path: &std::path::Path) -> bool {
+            (self.run)(state, path)
+        }
+    }
+
+    /// The plain open and the progress-reporting full load. The full load refuses to
+    /// run without an event sink, and needs nothing else (#576 A8).
+    const LOAD_PATHS: [LoadPath; 2] = [
+        LoadPath {
+            name: "open_project",
+            run: |state, path| state.open_project(path.to_path_buf()).success,
+        },
+        LoadPath {
+            name: "do_load_project_full",
+            run: |state, path| {
+                state.set_event_sink(std::sync::Arc::new(crate::core::events::NullEventSink));
+                state.do_load_project_full(path.to_path_buf()).is_ok()
+            },
+        },
+    ];
+
+    /// A history row whose gzip trailer declares more than any budget admits: refused
+    /// on the declared size alone, so a load that FETCHES it discards the history.
+    fn insert_hostile_history_row(path: &std::path::Path, table: &str, sequence: i64) {
+        let mut liar = vec![0x1f, 0x8b, 0x08, 0x00];
+        liar.extend_from_slice(&[0_u8; 8]);
+        liar.extend_from_slice(&u32::MAX.to_le_bytes());
+        let conn = rusqlite::Connection::open(path).expect("raw connection");
+        conn.execute(
+            &format!(
+                "INSERT INTO {table} (sequence, command_json, undo_data_json, executed_at) \
+                 VALUES (?1, ?2, ?3, ?4)"
+            ),
+            rusqlite::params![sequence, liar.clone(), liar, "2026-08-08T00:00:00+00:00"],
+        )
+        .expect("insert hostile row");
+    }
+
+    /// [#469] Both load paths read the history through the row cap, resolved BEFORE the
+    /// read, so the rows past it are never fetched at all - not fetched and then trimmed.
     ///
-    /// Structural because both failures are invisible in behaviour: an uncapped read
-    /// produces the same restored stack as a capped one - the trim afterwards sees to
-    /// that - and a per-stack budget produces the same stack as a shared one, on every
-    /// file except a hostile one. They differ only in how much of that hostile file
-    /// reaches memory. `do_load_project_full` needs an `AppHandle`, so it has no
-    /// unit-test entry point of its own; this is what keeps the two paths from drifting.
+    /// [#576 A8] Behavioural, where it used to be a source scan of `project_load.rs` on
+    /// the grounds that the difference is invisible. It is visible through the
+    /// inflation budget: the OLDEST row of each stack declares a size no budget admits,
+    /// so the history survives a load only if that row is never read. A cap of two
+    /// leaves it out; the cap of three in the second pass is the positive control that
+    /// the row is really there and really refused once fetched.
     #[test]
-    fn both_load_paths_read_the_history_under_a_cap() {
-        let src = include_str!("project_load.rs");
-        assert_eq!(
-            src.matches("load_undo_stack_with_timestamps_within(")
-                .count(),
-            2,
-            "both load paths read the undo table through the capped, budget-sharing loader"
-        );
-        assert_eq!(
-            src.matches("load_redo_stack_with_timestamps_within(")
-                .count(),
-            2,
-            "both load paths read the redo table through the capped, budget-sharing loader"
-        );
-        assert!(
-            !src.contains("load_undo_stack_with_timestamps()")
-                && !src.contains("load_redo_stack_with_timestamps()"),
-            "an unwindowed history read is exactly what #469 removed from this file"
-        );
-        // [#473] Exactly one budget per load path. Two would mean the undo and redo
-        // stacks each got a full one, bounding an open at 2x the constant while every
-        // comment says 1x - the defect this pins.
-        assert_eq!(
-            src.matches("Database::load_history_budget()").count(),
-            2,
-            "each load path creates ONE budget and hands it to both stacks"
-        );
+    fn both_load_paths_leave_the_rows_past_the_cap_unread() {
+        with_isolated_config(|| {
+            let temp_dir = TempDir::new().expect("temp dir");
+            let path = temp_dir.path().join("deep-history.stalx");
+            {
+                let mut db = Database::open(&path).expect("open database");
+                db.save_project(&crate::models::Project::new("Deep".to_owned(), None))
+                    .expect("save project");
+            }
+            {
+                // Two well-formed rows per stack (sequences 0 and 1, written the way the
+                // app writes them), the newest two...
+                let db = Database::open_existing(&path).expect("reopen database");
+                db.save_undo_stack(vec![
+                    (r#"{"c":1}"#.to_owned(), r#"{"u":1}"#.to_owned()),
+                    (r#"{"c":2}"#.to_owned(), r#"{"u":2}"#.to_owned()),
+                ])
+                .expect("seed undo");
+                db.save_redo_stack_with_timestamps(vec![
+                    (r#"{"c":3}"#.to_owned(), r#"{"u":3}"#.to_owned(), None),
+                    (r#"{"c":4}"#.to_owned(), r#"{"u":4}"#.to_owned(), None),
+                ])
+                .expect("seed redo");
+            }
+            // ...and one hostile row per stack, OLDER than both: past a cap of two.
+            for table in ["undo_stack", "redo_stack"] {
+                insert_hostile_history_row(&path, table, -1);
+            }
 
-        // [#473] Whether each project-slot commit writes the discarded-history flag is
-        // pinned BEHAVIOURALLY now (#576 A5), not by counting its spelling here: every
-        // commit goes through `commit_open_session`, and `session_commit_tests.rs` runs
-        // all of them - both loads, both creates, close - over a session whose flag is
-        // set, plus both loads over a history that cannot be read.
+            for load in LOAD_PATHS {
+                for (cap, fetches_the_hostile_row) in [(2, false), (3, true)] {
+                    let state = state();
+                    state.undo_stack.lock().set_history_limit(cap);
+                    assert!(load.run(&state, &path), "{}: the project opens", load.name);
+                    assert_eq!(
+                        state.history_discarded(),
+                        fetches_the_hostile_row,
+                        "{} with a row cap of {cap}: the row past the cap must never be \
+                         read (a load that reads the whole table and trims afterwards has \
+                         already paid for, and refused on, the row it then drops)",
+                        load.name
+                    );
+                }
+            }
+        });
+    }
 
-        for func in ["fn open_project", "pub fn do_load_project_full"] {
-            // Slice at the NEXT item in the `impl AppState` block rather than at the end
-            // of the file. Both are 4-space-indented methods, so the next `///`, `pub` or
-            // `fn` at that indent ends this one. Without the cut, `open_project`'s slice
-            // ran through `do_load_project_full` and would have passed on ITS cap and read
-            // even if `open_project` had lost both - the check has to be scoped to one
-            // function to mean anything.
-            let start = src
-                .find(func)
-                .unwrap_or_else(|| panic!("{func} is present"))
-                + func.len();
-            let rest = &src[start..];
-            let end = ["\n    /// ", "\n    pub ", "\n    pub(", "\n    fn "]
-                .iter()
-                .filter_map(|boundary| rest.find(boundary))
-                .min()
-                .unwrap_or(rest.len());
-            let body = &rest[..end];
-            let cap = body
-                .find("history_load_row_cap(")
-                .unwrap_or_else(|| panic!("{func} resolves a load cap"));
-            let read = body
-                .find("load_undo_stack_with_timestamps_within(")
-                .unwrap_or_else(|| panic!("{func} reads the undo table"));
-            assert!(
-                cap < read,
-                "{func} must resolve the cap BEFORE the read - the whole point is that \
-                 the rows past it are never fetched"
+    /// [#473] Each load path mints ONE inflation budget and hands it to both stacks.
+    ///
+    /// A sanctioned source scan (#576 A8-D2, docs/testing-recipes.md "Source scans"):
+    /// a per-stack budget changes only how much of a hostile file reaches memory, which
+    /// a test can observe only with a history big enough to fill the budget for real.
+    #[test]
+    fn each_load_path_mints_one_history_budget_for_both_stacks() {
+        use crate::models::source_scan::{fn_body, prod_region};
+        let src = prod_region(
+            include_str!("project_load.rs"),
+            "pub fn do_load_project_full_with(",
+        );
+        for signature in ["fn open_project_with(", "pub fn do_load_project_full_with("] {
+            assert_eq!(
+                fn_body(src, signature)
+                    .matches("Database::load_history_budget()")
+                    .count(),
+                1,
+                "RULE (#473, one history budget per open): `{signature}` must mint exactly \
+                 one inflation budget and share it between the undo and redo stacks - a \
+                 budget per stack doubles the ceiling every doc states"
             );
         }
     }

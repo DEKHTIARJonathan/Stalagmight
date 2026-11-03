@@ -3379,49 +3379,73 @@ mod tests {
         );
     }
 
-    /// The source-level half: the call site must not go back to discarding what the
-    /// conversion reported, and the receipt it now returns must be decorated by the
-    /// SAME helper the wizard-driven Ariane import uses - a hand-rolled one would be
-    /// free to drift from it, which is how the two imports of one format stop
-    /// agreeing about the file.
+    /// [#411] What the conversion reported reaches the adoption's receipt, decorated
+    /// the way the wizard-driven Ariane import decorates its own (`decorate_receipt`).
     ///
-    /// Reads the production text because the behavioural path needs an app handle -
-    /// `do_create_project_full` refuses without one - so `adopt_build_into` cannot be
-    /// driven offline at all.
+    /// [#576 A8] Driven through the adoption's local half (`adopt_import_and_save`)
+    /// with a null event sink. It used to read `adopt_build_into`'s source on the
+    /// grounds that `do_create_project_full` needs an app handle; it needs a sink.
     #[test]
-    fn the_adopt_call_site_does_not_discard_the_conversions_warnings() {
-        let src = prod_source();
-        let start = src
-            .find("fn adopt_build_into")
-            .expect("the conversion half is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+    fn the_adoption_receipt_carries_what_the_conversion_reported() {
+        let _cfg = crate::test_helpers::isolated_config();
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let shots: Vec<String> = (1..=3)
+            .map(|id| {
+                TripShot {
+                    id,
+                    from_id: if id == 1 { -1 } else { id - 1 },
+                    section: "SectionA",
+                    // One measurement the adopted project will not have.
+                    excluded: id == 3,
+                    ..TripShot::default()
+                }
+                .xml()
+            })
+            .collect();
+        let remote = temp.path().join("adopt-source.tmlu");
+        std::fs::write(&remote, wrap_xml(&shots.join("\n"))).expect("write remote file");
+        let dest = temp.path().join("project.stalx");
 
-        assert!(
-            !body.contains("_converter_warnings"),
-            "binding the converter's warnings to an underscore is how they were lost \
-             (#411); pass them on instead"
+        let state = AppState::new().expect("state");
+        state.set_event_sink(std::sync::Arc::new(crate::core::events::NullEventSink));
+        let (receipt, stamped) = state
+            .adopt_import_and_save(
+                None,
+                &remote,
+                "ariane.tml",
+                &dest,
+                "CaveA".to_owned(),
+                |undo_mode| crate::models::SpeleoLink {
+                    endpoint: "http://speleodb.invalid/".to_owned(),
+                    project_id: "55555555-5555-5555-5555-555555555555".to_owned(),
+                    project_name: "CaveA".to_owned(),
+                    base_commit_sha: None,
+                    has_unpushed_edits: true,
+                    last_edit_at: Some("2026-07-27T10:00:00Z".to_owned()),
+                    last_verify_at: None,
+                    undo_mode: Some(undo_mode),
+                },
+            )
+            .expect("the local half adopts");
+        assert!(stamped.is_ok(), "and stamps the link");
+
+        let receipt = receipt.expect("an adoption returns a receipt for the webview");
+        assert_eq!(
+            receipt.source_format, "Ariane TML",
+            "decorated as the Ariane import decorates its own"
         );
-        // The LITERAL call: `adopt_convert` both converts and counts, so there is no
-        // warning list for a caller to satisfy with an empty vec - the previous shape
-        // took one as an argument and this assertion passed over `(&tml, Vec::new())`.
-        assert!(
-            body.contains("let (sections, closures, warnings) = adopt_convert(&tml)?;"),
-            "the conversion and its warnings must come from ONE call, or the call site \
-             is free to keep the sections and drop the account of what they cost"
+        assert_eq!(
+            receipt.file_name, "ariane.tml",
+            "named after the entry inside the dump - the name the user recognises"
         );
+        assert_eq!(receipt.sections_found, 1);
         assert!(
-            !body.contains("convert_tml_to_import_configs("),
-            "converting directly here re-opens the seam `adopt_convert` closed: the \
-             excluded-shot count is not the converter's job and would be skipped"
-        );
-        let receipt = body
-            .find("adopt_receipt(")
-            .expect("the adoption builds its receipt through the helper that guarantees one");
-        assert!(
-            body[receipt..].contains("Ok(receipt)"),
-            "the receipt is what leaves this function - building one that is then \
-             dropped is the same silence with more steps"
+            receipt
+                .warnings
+                .iter()
+                .any(|w| w == "1 excluded shot in the remote file was not imported"),
+            "the conversion's account of what it dropped must reach the user, got {:?}",
+            receipt.warnings
         );
     }
 
