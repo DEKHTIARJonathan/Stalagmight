@@ -315,7 +315,15 @@ impl AppState {
         dest: &Path,
         undo: InheritedUndo,
     ) -> Result<HashMap<String, String>, SpeleoDbError> {
-        let preserved_view = preserved_display_settings(dest);
+        // [#576 RV6a-5] Read the view to carry over and close in ONE `command_lock`
+        // span. A display toggle writes through the open handle under that lock
+        // (`save_display_setting`), so it now lands wholly before the read or after
+        // the close - never between them, into the file about to be replaced.
+        let (preserved_view, closed) = {
+            let commands = self.hold_commands();
+            let view = preserved_display_settings(dest);
+            (view, self.close_project_if_open_at_held(&commands, dest))
+        };
         // Closing BEFORE the extract is the point (a live mmap must not survive into
         // the rename), so the failure path cannot simply reorder the two - it has to
         // undo the close. Left un-undone, a failed extract returned `Err` with the
@@ -324,7 +332,6 @@ impl AppState {
         // open". The extract stages to a sibling temp and renames, so on failure
         // `dest` is still the file we just closed and re-opening restores the
         // pre-call state (bar the undo history, which the close spent either way).
-        let closed = self.close_project_if_open_at(dest);
         let staged = sanitized_download_path(dest);
         let _ = std::fs::remove_file(&staged);
         match dump.extract_entry_to(entry, &staged) {

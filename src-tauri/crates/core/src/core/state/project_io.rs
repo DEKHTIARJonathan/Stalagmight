@@ -1158,6 +1158,17 @@ impl AppState {
     /// between, so a load finishing in that gap had ITS session torn down instead.
     pub(super) fn close_project_if_open_at(&self, dest: &Path) -> bool {
         let commands = self.hold_commands();
+        self.close_project_if_open_at_held(&commands, dest)
+    }
+
+    /// [`Self::close_project_if_open_at`] inside a `command_lock` span the caller
+    /// already holds - the cache replace's, which reads the display settings to
+    /// carry over in the same span (#576 RV6a-5).
+    pub(super) fn close_project_if_open_at_held(
+        &self,
+        commands: &CommandsHeld<'_>,
+        dest: &Path,
+    ) -> bool {
         let mut open = self.project.lock();
         let is_dest = open
             .as_ref()
@@ -1171,7 +1182,7 @@ impl AppState {
             purpose = "release the live handle before replacing the file",
             "Closing the open project because its .stalx is about to be replaced"
         );
-        self.close_open_project_locked(&commands, &mut open);
+        self.close_open_project_locked(commands, &mut open);
         true
     }
 }

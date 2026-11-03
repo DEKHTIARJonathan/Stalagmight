@@ -683,6 +683,14 @@ mod merge_source_read_only_tests;
 mod publish_save_losses_tests;
 #[cfg(test)]
 #[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              value is the evidence a run captures"
+)]
+mod pull_view_lock_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::indexing_slicing,
