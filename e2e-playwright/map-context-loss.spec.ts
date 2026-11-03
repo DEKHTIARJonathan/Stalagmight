@@ -296,6 +296,44 @@ test.describe('A WebGL context that does not come back (#576 D38-LOST)', () => {
     expect(errors).toEqual([]);
   });
 
+  // [#576 RV4-FE-MF-3] The rebuilt map took its center from the survey's bounding
+  // box (only the zoom came back), so a user zoomed in on one end of the cave
+  // landed somewhere else - possibly on empty ground.
+  test('survey map: Reload map keeps the camera where it was', async ({ page }) => {
+    await openSeededAndZoom(page, 'Context Lost Camera');
+    const camera = () =>
+      page.evaluate(() => {
+        const m = (window as unknown as {
+          __stalagmight_map__: { getCenter: () => { lng: number; lat: number }; getZoom: () => number };
+        }).__stalagmight_map__;
+        const c = m.getCenter();
+        return { lng: c.lng, lat: c.lat, zoom: m.getZoom() };
+      });
+    // Look at the far end of the survey, away from its bounding-box center.
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        __stalagmight_map__: { jumpTo: (o: { center: [number, number] }) => void };
+        __stalagmight_geometry__: () => { stations: Array<{ lngLat: [number, number] }> };
+      };
+      const east = w.__stalagmight_geometry__().stations.reduce((a, b) => (b.lngLat[0] > a.lngLat[0] ? b : a));
+      w.__stalagmight_map__.jumpTo({ center: east.lngLat });
+    });
+    const before = await camera();
+    await tagMap(page, '__stalagmight_map__');
+
+    await loseContext(page);
+    const toast = page.locator(LOST_TOAST);
+    await expect(toast).toBeVisible({ timeout: 10000 });
+    await toast.getByTestId('map-context-lost-reload').click();
+    await expect.poll(() => mapIsRebuilt(page, '__stalagmight_map__'), { timeout: 10000 }).toBe(true);
+    await waitForDrawnShots(page, 3);
+
+    const after = await camera();
+    expect(after.lng).toBeCloseTo(before.lng, 6);
+    expect(after.lat).toBeCloseTo(before.lat, 6);
+    expect(after.zoom).toBeCloseTo(before.zoom, 6);
+  });
+
   test('survey map: the toast clears itself when the context comes back after all', async ({ page }) => {
     const errors = collectErrors(page);
     await openSeededAndZoom(page, 'Context Back Late');

@@ -155,15 +155,23 @@ const MAP_CANVAS_UI_KEYS = [
 
 const selectMapCanvasUI = (s: UIStoreState) => pickUIKeys(s, MAP_CANVAS_UI_KEYS);
 
+/** A map center in the map's own coordinates. */
+type MapCenter = [number, number];
+
 interface MapCanvasProps {
-  /** Rebuild the map on a new WebGL context (the lost-context toast's action). */
-  onReloadMap: () => void;
+  /** Rebuild the map on a new WebGL context (the lost-context toast's action),
+   *  handing over the camera center the rebuilt map starts from. */
+  onReloadMap: (center: MapCenter | null) => void;
+  /** Where a rebuilt map starts (#576 RV4-FE-MF-3); null: the survey's center. */
+  initialCenter: MapCenter | null;
 }
 
-function MapCanvas({ onReloadMap }: MapCanvasProps) {
+function MapCanvas({ onReloadMap, initialCenter }: MapCanvasProps) {
   const precision = useDecimalPrecision();
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
+  // Read once, by the map-creation effect (empty deps, like every input it reads).
+  const initialCenterRef = useRef(initialCenter);
   const surveyLayerRef = useRef<SurveyLayer | null>(null);
   const mapInteractionSequenceRef = useRef(0);
   const scaleControlRef = useRef<maplibregl.ScaleControl | null>(null);
@@ -714,7 +722,9 @@ function MapCanvas({ onReloadMap }: MapCanvasProps) {
           },
         ],
       },
-      center: mapCenter,
+      // A map rebuilt by "Reload map" keeps the camera it had (#576 RV4-FE-MF-3):
+      // its zoom comes back through the store below, its center through the host.
+      center: initialCenterRef.current ?? mapCenter,
       // Read at creation time rather than subscribed: this effect has an empty
       // dep array, so a subscription could never deliver a newer value here and
       // would only re-render MapCanvas on every 'zoomend' (#430).
@@ -817,7 +827,11 @@ function MapCanvas({ onReloadMap }: MapCanvasProps) {
 
   // A WebGL context that is lost and does not come back within a few seconds
   // leaves the survey blank for good: say so, and offer the rebuild (#576 D38-LOST).
-  useContextLossToast(map, mapLoaded, onReloadMap);
+  const reloadMapKeepingCamera = useCallback(() => {
+    const center = map.current?.getCenter();
+    onReloadMap(center ? [center.lng, center.lat] : null);
+  }, [onReloadMap]);
+  useContextLossToast(map, mapLoaded, reloadMapKeepingCamera);
 
   // Expose map instance for E2E testing and keyboard shortcuts
   useEffect(() => {
@@ -1783,13 +1797,20 @@ const MemoMapCanvas = memo(MapCanvas);
 /**
  * Owns the map's generation: "Reload map" on the lost-WebGL-context toast bumps
  * it, which remounts MapCanvas - map.remove() on the dead context, then a fresh
- * map (new canvas, new context) built from the stores (#576 D38-LOST). In-flight
- * transient state (a measurement, a move carry) does not survive the rebuild.
+ * map (new canvas, new context) built from the stores (#576 D38-LOST), at the
+ * camera the old one had (#576 RV4-FE-MF-3). In-flight transient state (a
+ * measurement, a move carry) does not survive the rebuild.
  */
 function MapCanvasHost() {
-  const [generation, setGeneration] = useState(0);
-  const reloadMap = useCallback(() => setGeneration((g) => g + 1), []);
-  return <MemoMapCanvas key={generation} onReloadMap={reloadMap} />;
+  const [rebuild, setRebuild] = useState<{ generation: number; center: MapCenter | null }>({
+    generation: 0,
+    center: null,
+  });
+  const reloadMap = useCallback(
+    (center: MapCenter | null) => setRebuild((r) => ({ generation: r.generation + 1, center })),
+    [],
+  );
+  return <MemoMapCanvas key={rebuild.generation} onReloadMap={reloadMap} initialCenter={rebuild.center} />;
 }
 
 // Memoized: MapCanvas takes no props from its parent and drives itself from the
