@@ -1,4 +1,3 @@
-import { usePreviewSize } from './usePreviewSize';
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useLatest } from '../../hooks/useLatest';
 import { useTranslation } from 'react-i18next';
@@ -11,24 +10,15 @@ import type { Project, Station, ShotData } from '../../types/project';
 import type { ImportPlacement } from '../../types/commands';
 import type { ZeroDatumConfigResult } from './ZeroDatumConfigDialog';
 import type { OverlapMode } from '../../types/config';
-import { WizardMapPanel } from './WizardMapPanel';
-// The preview-square cap comes straight from layoutConstants rather than
-// through WizardMapPanel's re-export: two component tests mock that module, and
-// a mocked module cannot supply a plain number the render arithmetic needs.
-import { WIZARD_MAP_PANEL_MAX_WIDTH as MAP_PANEL_MAX_WIDTH } from '../SingleSystemView/layoutConstants';
-import { WizardScrollBody } from './WizardScrollBody';
-import SectionPreview, { type ContextSectionGeometry } from './SectionPreview';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
-import { SectionMetadataForm } from '../common/SectionMetadataForm';
-import { SegmentPlacementModes, type SegmentPlacementMode } from './SegmentPlacementModes';
+import type { SegmentPlacementMode } from './SegmentPlacementModes';
 import { buildZeroDatumSectionConfig, DMP_AZIMUTH_REFERENCE } from '../../utils/importSectionConfig';
 import { ShotTableEditor } from '../common/ShotTableEditor';
 import { useProjectStore } from '../../store/projectStore';
 import { convertToEditableShots, editableShotToShotData } from '../../utils/shotConversion';
 import { computeMergeOptions, defaultMergeOffset } from '../../utils/overlapHelpers';
 import { type VirtualConnection, computeUnreachableSegments, computeSegmentLayout } from '../../utils/segmentContext';
-import { buildFromExistingContext } from './dmpWizard/fromExistingContext';
 import { sectionColorPalette } from '../../utils/colors';
 import { debugLog } from '../../utils/debugLog';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
@@ -51,6 +41,7 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useDmpImportRun } from './dmpWizard/useDmpImportRun';
 import { buildBatchImport } from './dmpWizard/buildBatchImport';
 import { SuggestingStep } from './dmpWizard/SuggestingStep';
+import { ManualPlacingStep } from './dmpWizard/ManualPlacingStep';
 import { targetDoublyAnchored } from './dmpWizard/doublyAnchored';
 import { useSectionEditor, type RowCountChange } from './dmpWizard/useSectionEditor';
 import { initialWizardState, segmentQueue, useWizardState, type SegmentChoices } from './dmpWizard/wizardState';
@@ -102,18 +93,6 @@ export default function DmpNewImportDialog({
   const { t } = useTranslation();
   const importSecondaryButtonClass = 'ring-1 ring-inset ring-border hover:bg-background-50';
 
-  // Responsive preview - fills the available column so it never overflows the
-  // fullscreen dialog on short windows (#93 review) and never leaves the column
-  // half empty on wide ones (#567). One per flow.
-  // The map column's width, dragged by the divider between it and the settings.
-  // One value for both side-by-side blocks (suggestion and manual placing), so
-  // the wizard does not change shape as it steps between them - and store-owned
-  // since #404, so it also survives the dialog closing and the session ending
-  // (WizardMapPanel persists it on divider release).
-  const mapPanelWidth = useUIStore((s) => s.wizardMapPanelWidth);
-  const setMapPanelWidth = useUIStore((s) => s.setWizardMapPanelWidth);
-  const manualBodyRef = useRef<HTMLDivElement | null>(null);
-  const [manualPreviewRef, manualPreviewSize] = usePreviewSize(MAP_PANEL_MAX_WIDTH);
 
   // Store selectors
   const config = useProjectStore((s) => s.config);
@@ -932,10 +911,6 @@ export default function DmpNewImportDialog({
     [setDmpImportWizardPhase]
   );
 
-  // Project sections and merges for "From Existing" dropdown + preview
-  const projectSections = useProjectStore((s) => s.project?.sections ?? []);
-  const projectMerges = useProjectStore((s) => s.project?.station_merges ?? []);
-  const projectDefault = useProjectStore((s) => s.project?.default_azimuth_reference);
 
   // The manual_placing phase's mode and From Existing pick
   const segmentPlacementMode = manual?.mode ?? 'manual';
@@ -954,57 +929,6 @@ export default function DmpNewImportDialog({
     [dispatch],
   );
 
-  // Get target section stations for "From Existing" mode
-  const fromExistingTargetSection = useMemo(() => {
-    if (fromExistingSectionId == null) return null;
-    return projectSections.find(s => s.id === fromExistingSectionId) ?? null;
-  }, [fromExistingSectionId, projectSections]);
-
-  const fromExistingStationCount = useMemo(() => {
-    if (!fromExistingTargetSection) return 0;
-    return fromExistingTargetSection.shots.length + 1;
-  }, [fromExistingTargetSection]);
-
-  // Compute segment preview for manual_placing.
-  // Uses effective (post-treatment) sections so the preview reflects deleted
-  // shots and interpolated values - matching what will be imported.
-  const segmentPreviewSections = useMemo(() => {
-    if (!currentSegment) return null;
-
-    // Build effective DmpSections with edits applied
-    const effectiveSections = dmpFile.sections.map((sec, idx) =>
-      buildEffectiveDmpSection(sec, sectionEditsRef.current.get(idx)),
-    );
-    // Adjust connection station indices to match post-deletion geometry
-    const effectiveConns = adjustConnectionsForEdits(connections, sectionEditsRef.current);
-    const layout = computeSegmentLayout(currentSegment, effectiveConns, effectiveSections);
-
-    return layout.map((entry) => {
-      const section = effectiveSections[entry.sectionIndex];
-      if (!section) return null;
-      const edits = sectionEditsRef.current.get(entry.sectionIndex);
-      const selectedPos = selectedIndices.indexOf(entry.sectionIndex);
-      const sectionColor = (edits?.color || null) ?? sectionPalette[(selectedPos >= 0 ? selectedPos : entry.sectionIndex) % sectionPalette.length] ?? '#95a5a6';
-      return {
-        section,
-        color: sectionColor,
-        sectionIndex: entry.sectionIndex,
-        offsetX: entry.offsetX,
-        offsetY: entry.offsetY,
-      };
-    }).filter((x): x is NonNullable<typeof x> => x !== null);
-  }, [currentSegment, connections, dmpFile.sections, sectionPalette]);
-
-  // Compute target segment context for "From Existing" preview (shows the target section's
-  // connected segment as dimmed lines behind the import segment preview)
-  const fromExistingContextSections = useMemo((): ContextSectionGeometry[] | null => {
-    if (segmentPlacementMode !== 'fromExisting' || fromExistingSectionId == null) return null;
-    if (!segmentAnchor || !segmentPreviewSections || segmentPreviewSections.length === 0) return null;
-    return buildFromExistingContext({
-      fromExistingSectionId, fromExistingStationIdx, projectSections, projectMerges, projectDefault,
-      anchorSectionIndex: segmentAnchor.sectionIndex, emittedAnchorStation: emittedAnchorStation(segmentAnchor), segmentPreviewSections,
-    });
-  }, [segmentPlacementMode, fromExistingSectionId, fromExistingStationIdx, projectSections, projectMerges, projectDefault, segmentAnchor, segmentPreviewSections, emittedAnchorStation]);
 
   // Current segment's skipped suggestion (if any section in the segment had one)
   const segmentSkippedSuggestion = useMemo(() => {
@@ -1107,13 +1031,6 @@ export default function DmpNewImportDialog({
     dispatch({ type: 'segmentSkipped', choices: segmentChoices() });
   }, [currentSegment, dispatch, segmentChoices]);
 
-  // Station click handler for segment preview. The index arrives in the
-  // preview's own (emitted) numbering - see the note on the two spaces.
-  const handleSegmentStationClick = useCallback((stationIndex: number, sectionIndex?: number) => {
-    const idx = sectionIndex ?? (currentSegment && currentSegment.length > 0 ? currentSegment[0]! : null);
-    if (idx == null) return;
-    commitSegmentAnchor({ sectionIndex: idx, stationIndex: visibleAnchorStation(idx, stationIndex) });
-  }, [currentSegment, commitSegmentAnchor, visibleAnchorStation]);
 
   const buildSegmentPlacementPayload = useCallback(
     (segment: number[], anchor: { sectionIndex: number; stationIndex: number }) => {
@@ -1519,11 +1436,6 @@ export default function DmpNewImportDialog({
   const skippedCount = skippedIndices.size;
 
 
-  // Section names in current segment (for display)
-  const segmentSectionNames = useMemo(() => {
-    if (!currentSegment) return [];
-    return currentSegment.map(idx => dmpFile.sections[idx]?.name ?? t('dialogs.dmpNewImport.sectionFallbackName', { id: idx }));
-  }, [currentSegment, dmpFile.sections, t]);
 
   // Whether current placement mode is valid for submission
   const isSegmentPlacementValid = useMemo(() => {
@@ -1595,123 +1507,28 @@ export default function DmpNewImportDialog({
             sectionPalette={sectionPalette}
           />
         ) : manual ? (
-          <WizardScrollBody
-            bodyRef={manualBodyRef}
+          <ManualPlacingStep
+            phase={manual}
+            segmentSkippedSuggestion={segmentSkippedSuggestion}
+            onModeChange={setSegmentPlacementMode}
+            onCommitAnchor={commitSegmentAnchor}
+            onAnchorSectionHover={handleAnchorSectionHover}
+            onAnchorStationHover={handleAnchorStationHover}
+            onFromExistingSectionChange={setFromExistingSectionId}
+            onFromExistingStationChange={setFromExistingStationIdx}
+            onPlaceOnMap={handlePlaceOnMapClick}
+            emittedAnchorStation={emittedAnchorStation}
+            visibleAnchorStation={visibleAnchorStation}
+            error={error}
+            editState={editState}
+            onMetadataChange={handleMetadataChange}
             table={shotTable}
-          >
-            {(bandHeight) => (
-            <div className="flex" style={{ minHeight: bandHeight }}>
-            <WizardMapPanel
-              width={mapPanelWidth}
-              onWidthChange={setMapPanelWidth}
-              bodyRef={manualBodyRef} panelRef={manualPreviewRef} height={bandHeight}
-            >
-              <SectionPreview
-                segmentSections={segmentPreviewSections}
-                contextSections={fromExistingContextSections}
-                size={manualPreviewSize.width}
-                height={manualPreviewSize.height}
-                onStationClick={handleSegmentStationClick}
-                selectedStationIndex={emittedAnchorStation(manual.previewAnchor)}
-                selectedSectionIndex={manual.previewAnchor.sectionIndex}
-              />
-            </WizardMapPanel>
-
-            {/* Right column: Placement configuration */}
-            <div className="flex-1 min-w-0 p-5 space-y-4" data-testid="wizard-manual-placing">
-              {/* Segment header */}
-              <div>
-                <div className="text-sm font-medium">
-                  {t('dialogs.dmpNewImport.manualPlacing.segmentHeader', {
-                    current: manual.queue.length > 0 ? 1 : 0,
-                    total: manual.queue.length,
-                  })}
-                </div>
-                <div className="text-xs text-text-secondary mt-0.5">
-                  {t('dialogs.dmpNewImport.manualPlacing.sections')}: {segmentSectionNames.join(', ')}
-                </div>
-              </div>
-
-              {/* Error - at the top, where the screen opens: a segment import that
-                  failed after a drop on the map lands here (#576 D13), and below
-                  the section settings it was out of view. */}
-              {error && (
-                <div className="text-sm text-error" role="alert" data-testid="wizard-error">
-                  {error}
-                </div>
-              )}
-
-              {/* Placement mode radio group */}
-              <SegmentPlacementModes
-                segmentSkippedSuggestion={segmentSkippedSuggestion}
-                placementMode={segmentPlacementMode}
-                onPlacementModeChange={setSegmentPlacementMode}
-                currentSegment={currentSegment}
-                segmentAnchor={segmentAnchor}
-                onCommitSegmentAnchor={commitSegmentAnchor}
-                sectionEdits={sectionEditsRef.current}
-                dmpSections={dmpFile.sections}
-                onAnchorSectionHover={handleAnchorSectionHover}
-                onAnchorStationHover={handleAnchorStationHover}
-                projectSections={projectSections}
-                fromExistingSectionId={fromExistingSectionId}
-                onFromExistingSectionChange={setFromExistingSectionId}
-                fromExistingStationIdx={fromExistingStationIdx}
-                onFromExistingStationChange={setFromExistingStationIdx}
-                fromExistingStationCount={fromExistingStationCount}
-                onPlaceOnMap={handlePlaceOnMapClick}
-              />
-
-              {/* Section settings (same editing surface as section connection / zero datum flows) */}
-              {/* #61 embedding slot: section-edit surface goes here later. Do not refactor. */}
-              {editState && (
-                <>
-                  <div className="space-y-2" data-testid="wizard-manual-section-settings">
-                    <div className="border-t border-border" />
-                    <div className="text-sm font-medium">
-                      {t('dialogs.dmpNewImport.sectionSettings')}
-                    </div>
-                    <div>
-                      <label className="block text-sm text-text-secondary mb-1">
-                        {t('common.labels.name')}
-                      </label>
-                      <input
-                        type="text"
-                        value={editState.name}
-                        onChange={(e) => handleMetadataChange('name', e.target.value)}
-                        className="w-full px-3 py-2 bg-background border border-border rounded"
-                        placeholder={t('sectionMetadata.placeholders.name')}
-                        data-testid="section-name-input"
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-4" data-testid="wizard-manual-editable-rest">
-                    <SectionMetadataForm
-                      name={editState.name}
-                      surveyor={editState.surveyor}
-                      date={editState.date}
-                      color={editState.color}
-                      direction={editState.direction}
-                      quality={editState.quality}
-                      onNameChange={(v) => handleMetadataChange('name', v)}
-                      onSurveyorChange={(v) => handleMetadataChange('surveyor', v)}
-                      onDateChange={(v) => handleMetadataChange('date', v)}
-                      onColorChange={(v) => handleMetadataChange('color', v)}
-                      onDirectionChange={(v) => handleMetadataChange('direction', v)}
-                      onQualityChange={(v) => handleMetadataChange('quality', v)}
-                      reverse={editState.reverse}
-                      onReverseChange={(v) => handleMetadataChange('reverse', v)}
-                      showName={false}
-                      showDirection
-                      showReverse
-                    />
-                  </div>
-                </>
-              )}
-            </div>
-            </div>
-            )}
-          </WizardScrollBody>
+            sectionEditsRef={sectionEditsRef}
+            connections={connections}
+            dmpFile={dmpFile}
+            selectedIndices={selectedIndices}
+            sectionPalette={sectionPalette}
+          />
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center p-6 min-h-0 overflow-auto">
             {/* Init/Importing zero datum */}
