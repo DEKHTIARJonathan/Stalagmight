@@ -383,6 +383,20 @@ impl AppState {
     /// is "has any session in this process claimed this mutex?" - which means a
     /// stale claim is exactly the shape that stands a later detached close or
     /// delete release down, leaving a mutex held that nothing will now free.
+    /// [`Self::speleodb_forget_lock_acquired_for`] for `AppState::delete_project`,
+    /// which must clear its own claim while the `project` guard that decided the
+    /// file's identity is still held: after the guard drops, a successor Start Editing
+    /// on the same remote project can mint a claim of its own, and a later clear
+    /// cannot tell ours from it (F8). `_slot` is that guard's slot - so the clear
+    /// cannot be written outside the guard's block.
+    pub(super) fn speleodb_forget_lock_acquired_under(
+        &self,
+        _slot: &super::project_slot::ProjectSlot,
+        project_id: &str,
+    ) -> Option<super::speleodb_session::LockClaim> {
+        self.speleodb_forget_lock_acquired_inner(project_id, None)
+    }
+
     pub(super) fn speleodb_forget_lock_acquired_as(
         &self,
         _lock_ops: &super::speleodb_session::LockOpsHeld<'_>,
@@ -641,34 +655,72 @@ mod tests {
         );
     }
 
+    /// Whether a failure was LOGGED is not observable from the return value (both arms
+    /// are `None`), and silence is the whole defect: an operator looking at why a project
+    /// stayed locked forever had nothing to go on. A link row that cannot be read is a
+    /// real failure and must warn; a project with no link at all, or a signed-out
+    /// session, is the ordinary no-op and stays quiet.
+    ///
+    /// [#576 A8] Was a source scan counting the body's `warn!`s; the reads now fail
+    /// for real under a captured subscriber. (The token read's own warn arm is not
+    /// reachable today: `SpeleoDbSession::active_token` answers only
+    /// `NotAuthenticated`, the ordinary no-op.)
     #[test]
-    fn both_release_param_reads_log_their_real_failures() {
-        // Whether a failure was LOGGED is not observable from the return value (both
-        // arms are `None`), and silence is the whole defect: an operator looking at why
-        // a project stayed locked forever had nothing to go on. Guard it at the source -
-        // neither read may be a bare `.ok()?` again, and each must have a `warn!`.
-        let src = include_str!("speleodb_lock_release.rs");
-        let start = src
-            .find("fn speleodb_lock_release_params")
-            .expect("the shared body is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-        // Matched on the CALLS, not on a bare `.ok()?` needle - the body's own comment
-        // quotes that spelling while explaining why it is gone.
-        for call in [
-            "self.speleodb_open_link().ok()",
-            "self.speleodb_active_token().ok()",
-        ] {
-            assert!(
-                !body.contains(call),
-                "`{call}` collapses a real failure into the ordinary no-op; match the \
-                 error and warn instead"
-            );
-        }
-        assert_eq!(
-            body.matches("tracing::warn!").count(),
-            2,
-            "both the link read and the token read must warn on an unexpected failure"
+    fn an_unreadable_link_is_logged_and_an_ordinary_no_op_is_not() {
+        use crate::core::state::speleodb::{logged_events, remote_readonly_fixture};
+        let (temp, broken) = remote_readonly_fixture();
+        rusqlite::Connection::open(temp.path().join("remote.stalx"))
+            .expect("open the fixture's file")
+            .execute_batch("ALTER TABLE speleo_link RENAME COLUMN project_name TO project_title;")
+            .expect("break the link row");
+        broken.set_edit_enabled(true);
+        let mut unreadable = Some(LockReleaseProbe::NotRun);
+        let unreadable_logs = logged_events(|| {
+            unreadable = Some(LockReleaseProbe::of(
+                broken.speleodb_held_lock_release_params(),
+            ));
+        });
+
+        let (_signed_out_dir, signed_out) = remote_readonly_fixture();
+        signed_out.set_edit_enabled(true);
+        let mut ordinary = Some(LockReleaseProbe::NotRun);
+        let ordinary_logs = logged_events(|| {
+            ordinary = Some(LockReleaseProbe::of(
+                signed_out.speleodb_abandon_lock_release_params(),
+            ));
+        });
+        println!(
+            "unreadable link -> {unreadable:?}, logged {unreadable_logs:?}; signed out -> \
+             {ordinary:?}, logged {ordinary_logs:?}"
         );
+        assert_eq!(unreadable, Some(LockReleaseProbe::NoRelease));
+        assert!(
+            unreadable_logs.iter().any(|line| line.contains("WARN")
+                && line.contains("could not read the open project's link")),
+            "a link the release cannot read is a real failure, and it must say so"
+        );
+        assert_eq!(ordinary, Some(LockReleaseProbe::NoRelease));
+        assert!(
+            !ordinary_logs.iter().any(|line| line.contains("WARN")),
+            "signed out is the ordinary no-op, not a failure to report"
+        );
+    }
+
+    /// What a release-params read answered, for the assertions above.
+    #[derive(Debug, PartialEq, Eq)]
+    enum LockReleaseProbe {
+        NotRun,
+        NoRelease,
+        Release,
+    }
+
+    impl LockReleaseProbe {
+        fn of(params: Option<super::LockReleaseParams>) -> Self {
+            if params.is_some() {
+                Self::Release
+            } else {
+                Self::NoRelease
+            }
+        }
     }
 }

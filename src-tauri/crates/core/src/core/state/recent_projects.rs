@@ -430,9 +430,10 @@ impl AppState {
                 // the session is closed, so the poll's catch-alls never see it,
                 // and the no-project janitor has nothing to retry. See the
                 // trash-failure return, which puts it back.
+                // [#576 A8] Under the guard by type: the clear takes its slot.
                 cleared_claim = held_lock
                     .as_ref()
-                    .and_then(|p| self.speleodb_forget_lock_acquired_for(&p.project_id));
+                    .and_then(|p| self.speleodb_forget_lock_acquired_under(&open, &p.project_id));
                 tracing::info!(
                     path = ?path,
                     purpose = "release the live handle before deleting the file",
