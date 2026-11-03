@@ -7,16 +7,12 @@
  * Regression coverage for the "isMapReadOnly composed without speleoReadOnly"
  * bug class documented in the #275 audit.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { makeSpeleoLink } from '../../test/factories/speleo';
-
-// useKeyboardShortcuts pulls in telemetry/save helpers that ultimately call the
-// Tauri IPC bridge; stub it so importing the real hook here stays offline.
-vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
 
 const READ_ONLY_LINK: SpeleoLinkState = makeSpeleoLink({ lockHolder: 'someone-else', lockedByOther: true });
 

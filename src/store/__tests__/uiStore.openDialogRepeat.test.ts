@@ -17,8 +17,6 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
-
 const trackActionMock = vi.hoisted(() => vi.fn());
 const trackDialogCompleteMock = vi.hoisted(() => vi.fn());
 const checkDialogCancelMock = vi.hoisted(() => vi.fn());

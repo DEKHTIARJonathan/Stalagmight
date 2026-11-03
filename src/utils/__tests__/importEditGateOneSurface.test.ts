@@ -20,7 +20,6 @@ import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factor
 
 vi.mock('../ipc');
 stubGetErrorMessage(messageOr('error'));
-vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving(undefined));
 
 import { surfaceImportFailure, type ImportDialogUi } from '../saveFeedback';
 import { useProjectStore } from '../../store/projectStore';

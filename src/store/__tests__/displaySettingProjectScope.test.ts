@@ -25,7 +25,6 @@ import { invokeIpcMock, stubGetErrorMessage, stringOfError } from '../../test/fa
 
 vi.mock('../../utils/ipc');
 stubGetErrorMessage(stringOfError);
-vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving(undefined));
 
 import { useUIStore } from '../uiStore';
 import { useProjectStore } from '../projectStore';

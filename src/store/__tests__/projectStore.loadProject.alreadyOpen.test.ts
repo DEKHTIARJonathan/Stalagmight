@@ -27,7 +27,6 @@ const loadBinaryMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../utils/ipc');
 vi.mock('../../utils/loadProjectBinary', () => ({ loadProjectFullBinary: loadBinaryMock }));
-vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving(undefined));
 
 /** An editing link for a project we hold the lock on, with work not yet pushed. */
 const EDITING_LINK: SpeleoLinkState = makeSpeleoLink({

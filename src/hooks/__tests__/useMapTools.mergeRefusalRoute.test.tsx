@@ -18,7 +18,6 @@ import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factor
 vi.mock('../../utils/ipc');
 invokeIpcMock.mockResolvedValue(undefined);
 stubGetErrorMessage(messageOr('error'));
-vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
 
 import { useMapTools } from '../useMapTools';
 import { refusedMergeOffersClosure } from '../../utils/mergeConnectivity';

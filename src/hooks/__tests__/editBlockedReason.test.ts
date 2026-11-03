@@ -3,9 +3,7 @@
  * the canonical editing gate that applies, the one the user cannot lift from the
  * current screen first - and null exactly when the gate is open.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
-
-vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { editBlockedReasonNow, isEditingBlockedNow } from '../useEditingBlocked';
 import { useUIStore } from '../../store/uiStore';

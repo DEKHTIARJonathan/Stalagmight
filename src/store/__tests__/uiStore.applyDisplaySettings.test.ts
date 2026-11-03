@@ -7,9 +7,7 @@
  * won over the saved one. These tests pin the restore and the no-bleed behavior.
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-
-vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
+import { describe, it, expect, beforeEach } from 'vitest';
 
 import { useUIStore } from '../uiStore';
 import { DISPLAY_DEFAULTS } from '../displaySelectors';

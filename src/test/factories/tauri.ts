@@ -2,7 +2,9 @@
  * `@tauri-apps/api/core` stand-ins (#576 E15-NF1). The app reaches the backend
  * through `utils/ipc` (faked by the shared mock, see `./ipc.ts`), but a few
  * modules (telemetry, the binary loader, ...) call `invoke` directly, and a test
- * that loads them mocks the Tauri module too:
+ * that drives one of those calls, or asserts on them, mocks the Tauri module too.
+ * Merely importing such a module needs no stub - the real one loads fine and only
+ * fails when `invoke` is called (#576 E15T-NF1):
  *
  *     vi.mock('@tauri-apps/api/core', async () => (await import('<rel>/test/factories/tauri')).tauriCoreResolving({}));
  *

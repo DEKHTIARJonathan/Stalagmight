@@ -28,7 +28,6 @@ vi.mock('../../utils/loadProjectBinary', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../utils/loadProjectBinary')>()),
   loadProjectFullBinary: loadBinaryMock,
 }));
-vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving(undefined));
 
 function state(name: string, createdAt: string): ProjectStateLike {
   return {

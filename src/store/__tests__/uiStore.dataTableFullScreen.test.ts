@@ -3,9 +3,7 @@
  * session-only (never persisted) and owns the raw-table selection used by
  * the fullscreen raw sqlite viewer.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-
-vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
+import { describe, it, expect, beforeEach } from 'vitest';
 
 import { useUIStore } from '../uiStore';
 

@@ -1,6 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
-
-vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
+import { describe, it, expect, beforeEach } from 'vitest';
 
 import { useExportStore, DEFAULT_IMAGE_OPTIONS } from '../exportStore';
 import { useUIStore } from '../uiStore';

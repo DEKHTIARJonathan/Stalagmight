@@ -8,8 +8,6 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
-
 const openMock = vi.fn();
 vi.mock('@tauri-apps/plugin-dialog', () => ({
   open: (...args: unknown[]) => openMock(...args),

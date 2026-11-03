@@ -14,7 +14,6 @@ import { renderHook } from '@testing-library/react';
 
 const runFileShortcutAction = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/fileShortcutActions', () => ({ runFileShortcutAction }));
-vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
 
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
 import { useGlobalViewShortcuts } from '../useGlobalViewShortcuts';

@@ -29,8 +29,6 @@ import type { MapMouseEvent } from 'maplibre-gl';
 vi.mock('../../utils/ipc');
 stubGetErrorMessage(messageOr('unknown error'));
 
-vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
-
 import { useMapTools } from '../useMapTools';
 import { useUIStore } from '../../store/uiStore';
 import type { MeasureEndpoint } from '../../store/uiStore';

@@ -4,11 +4,7 @@
  * dots, e.g. low RMV / lots of gas, or with stations hidden) snaps to the nearest reachable station.
  */
 
-import { describe, it, expect, vi } from 'vitest';
-
-// useMapTools → stores/telemetry → @tauri-apps/api/core; stub the IPC so importing the real helper
-// here doesn't pull in live Tauri (mirrors useKeyboardShortcuts.test.ts).
-vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/tauri')).tauriCoreResolving({}));
+import { describe, it, expect } from 'vitest';
 
 import { nearestReachableStationRef } from '../useMapTools';
 
