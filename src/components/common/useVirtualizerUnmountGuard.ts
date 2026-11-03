@@ -18,6 +18,12 @@ import type { Virtualizer } from '@tanstack/react-virtual';
  * that branch: with no measured element the virtualizer is not in dynamic mode,
  * so the frame verifies in place, and its retry path does check `targetWindow`.
  * The instance is discarded with the component, so nothing reads the cache again.
+ *
+ * Only a measured list that reveals rows needs it: `scrollToIndex` is the one
+ * caller of `targetWindow.requestAnimationFrame` in virtual-core 3.13. The
+ * Sections panel reveals rows and uses it. DetailPanel's warnings list is
+ * measured too but never reveals a row, so it has no such frame (#576 RV9b-8);
+ * a list that starts calling `scrollToIndex` takes this hook with it.
  */
 export function useVirtualizerUnmountGuard<S extends Element | Window, I extends Element>(
   virtualizer: Virtualizer<S, I>,
