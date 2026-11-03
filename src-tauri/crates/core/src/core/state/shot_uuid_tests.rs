@@ -620,7 +620,7 @@ fn the_user_export_is_verbatim_while_the_speleodb_sidecar_canonicalises_or_drops
 // ---------------------------------------------------------------------------
 
 /// Adopting the same Ariane file twice must give the same shot identities.
-/// `speleodb_pull::adopt_build_into` re-imports `ariane.tml` from scratch, so
+/// `speleodb_adopt::adopt_build_into` re-imports `ariane.tml` from scratch, so
 /// before the file's `<UUID>` was read back every adoption re-identified every
 /// shot - the user-visible churn in the issue.
 ///

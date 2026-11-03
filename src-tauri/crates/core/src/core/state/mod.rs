@@ -28,6 +28,7 @@ pub mod settle_gate;
 mod settled_adjusted;
 mod speleodb;
 mod speleodb_admin;
+mod speleodb_adopt;
 mod speleodb_cache;
 mod speleodb_credentials;
 mod speleodb_foreign;

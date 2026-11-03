@@ -410,7 +410,7 @@ hands the mutex back if the conversion fails before the push can use it.
 
 Offline coverage: the typed-signal seams are unit-tested (`dto_for_error(
 AdoptAriane) → Adopt`; the dump classifier's adopt arm carries the `ariane.tml`
-path), the ordering above is pinned by source tripwires in `speleodb_pull.rs`
+path), the ordering above is pinned by source tripwires in `speleodb_adopt.rs`
 (lock before read, guard spanning the conversion, flip after push, close last),
 the guard's arm/disarm behaviour is a unit test, and the FE
 confirm→adopt→reload flow has a component test

@@ -80,7 +80,7 @@ pub struct TmlFile {
     ///
     /// `convert_tml_to_import_configs` copies it verbatim into the import
     /// warnings, which reach the receipt on the import-wizard path. The
-    /// SpeleoDB adoption path in `core::state::speleodb_pull` calls the same
+    /// SpeleoDB adoption path in `core::state::speleodb_adopt` calls the same
     /// converter but discards its warnings, so this one is invisible there too -
     /// a pre-existing gap, not one this field introduces.
     #[serde(default, skip_serializing_if = "Option::is_none")]

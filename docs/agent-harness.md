@@ -253,7 +253,7 @@ children). That default is a deliberate trade, not inertia.
 - Every `debug_assert!` in a live path - `core/state/command_comment.rs:71`,
   four in `core/loading.rs`, `models/project/reverse.rs:379`,
   `models/project/classify.rs:244`, `core/state/undo_restore.rs:264`,
-  `core/state/speleodb_pull.rs:1685`, `persistence/sqlite.rs:519`. Each is an
+  `core/state/speleodb_adopt.rs:936`, `persistence/sqlite.rs:519`. Each is an
   invariant check the app performs on itself during exactly the mutations a
   fuzzer drives.
 - `Project::debug_assert_merge_alignment` (`models/project/offsets.rs:546`), whose

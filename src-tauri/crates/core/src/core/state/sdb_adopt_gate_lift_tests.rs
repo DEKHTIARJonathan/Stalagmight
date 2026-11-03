@@ -23,7 +23,7 @@
 
 use std::panic::{catch_unwind, AssertUnwindSafe};
 
-use super::speleodb_pull::AdoptionEditGate;
+use super::speleodb_adopt::AdoptionEditGate;
 use super::AppState;
 use crate::core::Command;
 
