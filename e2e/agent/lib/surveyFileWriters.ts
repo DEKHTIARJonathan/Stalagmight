@@ -116,7 +116,7 @@ export interface DmpSectionSpec {
    * Ignored when it does not name an earlier section (no cycles, no forward
    * references - the resolution is a single left-to-right pass).
    */
-  sameContentAs?: number;
+  sameContentAs?: number | undefined;
 }
 
 /** Token-stream mangling applied after the byte stream has been rendered. */
@@ -147,7 +147,7 @@ export interface DmpSpec {
    * mNemo exports are signed, which makes this the higher-fidelity shape.
    */
   signedTokens?: boolean;
-  tokens?: DmpTokenTweaks;
+  tokens?: DmpTokenTweaks | undefined;
 }
 
 function byte(value: number): number {

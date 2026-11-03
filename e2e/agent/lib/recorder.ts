@@ -41,7 +41,7 @@ export interface ActionRecord {
   resolved?: unknown;
   outcome: { ok: boolean; durationMs: number; error?: string };
   result?: unknown;
-  artifacts?: { screenshot?: string; stateSnapshot?: string };
+  artifacts?: { screenshot?: string; stateSnapshot?: string } | undefined;
   post?: unknown;
 }
 

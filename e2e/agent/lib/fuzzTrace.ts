@@ -675,7 +675,7 @@ export class TraceRecorder {
     stream: string;
     failure: { message: string } | null;
     /** Episode indices that ran with no project open; omitted when none did. */
-    noProjectEpisodes?: readonly number[];
+    noProjectEpisodes?: readonly number[] | undefined;
   }): FuzzTrace {
     return {
       v: TRACE_VERSION,

@@ -354,7 +354,7 @@ const SEVERITY_RANK: Record<Severity, number> = { warning: 1, error: 2, fatal: 3
 export async function runSweep(
   target: OracleTarget,
   state: OracleState,
-  opts: { full?: boolean; recorder?: RecorderLike } = {},
+  opts: { full?: boolean; recorder?: RecorderLike | undefined } = {},
 ): Promise<SweepResult> {
   const findings = opts.full ? await fullSweep(target, state) : await cheapSweep(target, state);
   const newFindings: Finding[] = [];

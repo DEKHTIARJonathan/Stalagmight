@@ -434,8 +434,8 @@ export function stampStaleReasons(
     distIndexHash: string;
     /** Canonical path of the checkout this start runs from. */
     repoRoot: string;
-    mode?: AgentBuildMode;
-    features?: string;
+    mode?: AgentBuildMode | undefined;
+    features?: string | undefined;
   },
 ): string[] {
   if (!stamp) {

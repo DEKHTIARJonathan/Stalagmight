@@ -5,11 +5,11 @@ import { dispatchMapPointer } from './controls';
 export interface MapFeatureClickRequest {
   featureType: 'shot' | 'station';
   sectionId: number;
-  shotId?: number;
-  stationIndex?: number;
-  button?: 'left' | 'right';
+  shotId?: number | undefined;
+  stationIndex?: number | undefined;
+  button?: 'left' | 'right' | undefined;
   /** Disable for tools whose click intentionally does not update selection. */
-  verifySelection?: boolean;
+  verifySelection?: boolean | undefined;
 }
 
 export interface ResolvedMapFeatureClick {

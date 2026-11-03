@@ -45,8 +45,8 @@ export function getScenario(name: string): Scenario | undefined {
 }
 
 export interface RunScenarioOpts {
-  seed?: number;
-  iterations?: number;
+  seed?: number | undefined;
+  iterations?: number | undefined;
   log?: (message: string) => void;
 }
 

@@ -4,28 +4,28 @@ import { evalInApp } from './page';
 import { cssStringLiteral, testIdSelector } from '../../../scripts/lib/test-id-selector.mjs';
 
 export interface ElementTarget {
-  testid?: string;
-  selector?: string;
+  testid?: string | undefined;
+  selector?: string | undefined;
 }
 
 export interface DragRequest {
-  fromTestid?: string;
-  fromSelector?: string;
-  fromX?: number;
-  fromY?: number;
-  toTestid?: string;
-  toSelector?: string;
-  toX?: number;
-  toY?: number;
-  button?: 'left' | 'right' | 'middle';
-  durationMs?: number;
+  fromTestid?: string | undefined;
+  fromSelector?: string | undefined;
+  fromX?: number | undefined;
+  fromY?: number | undefined;
+  toTestid?: string | undefined;
+  toSelector?: string | undefined;
+  toX?: number | undefined;
+  toY?: number | undefined;
+  button?: 'left' | 'right' | 'middle' | undefined;
+  durationMs?: number | undefined;
 }
 
 export interface ScrollRequest extends ElementTarget {
-  deltaX?: number;
-  deltaY?: number;
-  block?: ScrollLogicalPosition;
-  inline?: ScrollLogicalPosition;
+  deltaX?: number | undefined;
+  deltaY?: number | undefined;
+  block?: ScrollLogicalPosition | undefined;
+  inline?: ScrollLogicalPosition | undefined;
 }
 
 export interface SelectOptionRequest extends ElementTarget {
@@ -130,10 +130,10 @@ export async function hoverElement(browser: Browser, target: ElementTarget): Pro
 }
 
 export async function dragPointer(browser: Browser, request: DragRequest): Promise<{
-  fromSelector?: string;
-  toSelector?: string;
-  fromPoint?: { x: number; y: number };
-  toPoint?: { x: number; y: number };
+  fromSelector?: string | undefined;
+  toSelector?: string | undefined;
+  fromPoint?: { x: number; y: number } | undefined;
+  toPoint?: { x: number; y: number } | undefined;
 }> {
   const fromSelector = targetSelector({ testid: request.fromTestid, selector: request.fromSelector });
   const toSelector = targetSelector({ testid: request.toTestid, selector: request.toSelector });

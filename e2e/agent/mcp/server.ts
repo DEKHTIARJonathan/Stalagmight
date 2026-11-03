@@ -66,7 +66,7 @@ async function record<T>(
   tool: string,
   params: unknown,
   fn: (seq: number) => Promise<RunOutput<T>>,
-  opts: { digest?: boolean; mutates?: boolean } = {},
+  opts: { digest?: boolean | undefined; mutates?: boolean } = {},
 ): Promise<T> {
   const start = Date.now();
   const seq = session.hasRecorder ? session.recorder.nextSeq() : 0;

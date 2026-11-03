@@ -26,7 +26,7 @@ export interface JourneyCheck {
   label: string;
   ok: boolean;
   /** Shown on failure: what was expected vs observed. */
-  detail?: string;
+  detail?: string | undefined;
 }
 
 export interface JourneyContext extends ScenarioContext {
