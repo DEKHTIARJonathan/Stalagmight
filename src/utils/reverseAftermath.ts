@@ -143,15 +143,20 @@ export function remapPlanPins(): Promise<void> {
 }
 
 /**
- * Compose a `CommandResult.reversed_sections` log into one transform per section.
+ * Compose a renumbering log into one transform per section: a forward edit's
+ * `reversed_sections` (`ReverseOutcome`, `BatchOutcome`) or an undo/redo's
+ * `reversed_steps` (`HistoryOutcome`).
  *
  * Taken from the backend rather than inferred from the geometry: a reverse keeps
  * every station's world position, so a section that was reversed AND moved in
  * the same action matches NEITHER arrangement afterwards and a position diff
  * reports nothing for it, leaving its pins on the opposite end.
  *
- * The entries arrive in step order and WITH REPEATS, each carrying the shot count
- * in force AT ITS STEP. `m_c(i) = c - i`, so over counts `c1..ck` the composition
+ * The entries arrive in step order, each carrying the shot count in force AT ITS
+ * STEP. A forward edit names a section at most once (the backend nets a batch's
+ * repeats by parity, `Command::reversed_section_ids`); a multi-step undo/redo
+ * names it once per step that reversed it, and those steps' counts can differ.
+ * `m_c(i) = c - i`, so over counts `c1..ck` the composition
  * is `i -> A + s*i` with `s = (-1)^k` and `A_m = c_m - A_(m-1)` (`A_0 = 0`). Two
  * equal counts collapse to the exact identity; two different ones (a `CreateShot`
  * undone between two reverses of the same section) leave a pure shift, which is
