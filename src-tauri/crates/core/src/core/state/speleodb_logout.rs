@@ -349,44 +349,6 @@ impl AppState {
         self.speleodb.lock().forget_reporting()
     }
 
-    /// The gate half of [`Self::speleodb_logout`]: surrender the write lock if one is
-    /// held, and drop the edit / force-edit gates.
-    ///
-    /// A held write lock exists only on a remote EDIT session (`edit_enabled` + a
-    /// remote link); a read-only open or a local project holds none. The gates are
-    /// dropped independently of whether the token still resolves - a logged-out
-    /// session must not keep editing a project it can never push.
-    ///
-    /// **The caller must hold `speleodb_lock_ops`**, and hold it until the
-    /// credential is gone. Logout is a SpeleoDB lock operation - it ends an edit
-    /// session and hands its mutex back - and being unsynchronized is what let it
-    /// land INSIDE a Start Editing, between that flow's token read and its
-    /// commit. The guard lives in [`Self::speleodb_logout`] rather than here
-    /// because the span has to outlast this function: see there for what a
-    /// gate-half-only span left open.
-    ///
-    /// [#576 A8 RV8a-1] Returns the proof the credential forget takes, borrowing the
-    /// caller's span - so the forget runs in this span, not merely in a span.
-    fn speleodb_logout_drop_gates<'s>(
-        &self,
-        lock_ops: &'s super::speleodb_session::LockOpsHeld<'s>,
-    ) -> logout_span::GatesDropped<'s> {
-        // A session boundary even though the project slot never moves (footgun
-        // 5.8): the token an in-flight Start Editing would commit a claim over is
-        // being forgotten, so the commit guard must see this. Bumped under a brief
-        // `project` acquisition per the `speleodb_session` rule; taken and dropped
-        // before the gates/lock work below, none of which needs it. Bumped even on
-        // the read-only early return: the boundary is the LOGOUT, not the release.
-        {
-            let _proj_guard = self.project.lock();
-            self.bump_speleodb_session();
-        }
-        if self.edit_enabled() {
-            self.speleodb_logout_release_and_drop_gates();
-        }
-        logout_span::GatesDropped::in_span(lock_ops)
-    }
-
     /// The edit-session half of [`Self::speleodb_logout_drop_gates`].
     fn speleodb_logout_release_and_drop_gates(&self) {
         match self.speleodb_open_link() {
@@ -428,16 +390,53 @@ impl AppState {
 /// ran in: the credential forget takes it, so the two cannot be split across spans.
 mod logout_span {
     use super::super::speleodb_session::LockOpsHeld;
+    use super::AppState;
 
-    /// Proof the gate half ran inside the span it borrows.
+    /// Proof the gate half ran inside the span it borrows. Made only by
+    /// [`AppState::speleodb_logout_drop_gates`] below.
     pub(super) struct GatesDropped<'s> {
         _span: &'s LockOpsHeld<'s>,
     }
 
-    impl<'s> GatesDropped<'s> {
-        /// Made only by the gate half, with the span it ran in.
-        pub(super) fn in_span(span: &'s LockOpsHeld<'s>) -> Self {
-            Self { _span: span }
+    impl AppState {
+        /// The gate half of [`AppState::speleodb_logout`]: surrender the write lock if one is
+        /// held, and drop the edit / force-edit gates.
+        ///
+        /// A held write lock exists only on a remote EDIT session (`edit_enabled` + a
+        /// remote link); a read-only open or a local project holds none. The gates are
+        /// dropped independently of whether the token still resolves - a logged-out
+        /// session must not keep editing a project it can never push.
+        ///
+        /// **The caller must hold `speleodb_lock_ops`**, and hold it until the
+        /// credential is gone. Logout is a SpeleoDB lock operation - it ends an edit
+        /// session and hands its mutex back - and being unsynchronized is what let it
+        /// land INSIDE a Start Editing, between that flow's token read and its
+        /// commit. The guard lives in [`AppState::speleodb_logout`] rather than here
+        /// because the span has to outlast this function: see there for what a
+        /// gate-half-only span left open.
+        ///
+        /// [#576 A8 RV8a-1] Returns the proof the credential forget takes, borrowing the
+        /// caller's span - so the forget runs in this span, not merely in a span.
+        /// [#576 RV9a-3] The proof's only producer: it lives in this module, whose field
+        /// nothing outside can fill, so no gate-less proof can be made for a fresh span.
+        pub(super) fn speleodb_logout_drop_gates<'s>(
+            &self,
+            lock_ops: &'s LockOpsHeld<'s>,
+        ) -> GatesDropped<'s> {
+            // A session boundary even though the project slot never moves (footgun
+            // 5.8): the token an in-flight Start Editing would commit a claim over is
+            // being forgotten, so the commit guard must see this. Bumped under a brief
+            // `project` acquisition per the `speleodb_session` rule; taken and dropped
+            // before the gates/lock work below, none of which needs it. Bumped even on
+            // the read-only early return: the boundary is the LOGOUT, not the release.
+            {
+                let _proj_guard = self.project.lock();
+                self.bump_speleodb_session();
+            }
+            if self.edit_enabled() {
+                self.speleodb_logout_release_and_drop_gates();
+            }
+            GatesDropped { _span: lock_ops }
         }
     }
 }

@@ -1798,10 +1798,7 @@ impl AppState {
         // teardown landing inside the network window refuses instead of committing
         // onto a torn-down world (F7). See `speleodb_session`.
         let (entry_gen, link) = self.speleodb_session_snapshot(&lock_ops)?;
-        let account = lock_ops
-            .read(|| self.speleodb_active_token())
-            .transpose()
-            .map_err(local_dto)?;
+        let account = lock_ops.read_account().transpose().map_err(local_dto)?;
         let (endpoint, token) = account.get().clone();
         let insecure_http = self.speleodb_insecure_http();
 

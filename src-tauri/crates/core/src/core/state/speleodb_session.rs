@@ -201,6 +201,7 @@ impl LockClaim {
 /// outside this module can build a [`LockOpsHeld`] from a guard of its own.
 mod lock_ops_span {
     use super::AppState;
+    use crate::speleodb::SpeleoDbError;
 
     /// [#576 A8] Proof that the holder owns `speleodb_lock_ops`, the span every SpeleoDB
     /// lock operation serializes on (the acquire -> commit of Start Editing, the captured
@@ -210,20 +211,50 @@ mod lock_ops_span {
     /// by [`AppState::speleodb_lock_ops_guard`].
     pub(in crate::core::state) struct LockOpsHeld<'a> {
         _guard: std::sync::MutexGuard<'a, ()>,
+        /// The state whose span this is: the reads below are ITS reads.
+        state: &'a AppState,
     }
 
-    /// [#576 A8] A value read INSIDE the lock-ops span. Made only by
-    /// [`LockOpsHeld::read`], so a step that takes one cannot be handed a value read
-    /// before the span opened - the account a lock operation acts for, or the holder it
-    /// decides on, is then the span's fact rather than an earlier one.
+    /// [#576 A8] A value read INSIDE the lock-ops span. Made only by the span's own
+    /// reads ([`LockOpsHeld::read_account`], [`LockOpsHeld::read_holder`]), so a step
+    /// that takes one cannot be handed a value read before the span opened - the
+    /// account a lock operation acts for, or the holder it decides on, is then the
+    /// span's fact rather than an earlier one.
+    ///
+    /// [#576 RV9a-3] The reads are the span's methods, not a closure it runs: a
+    /// generic `read(|| v)` wrapped whatever `v` was, so an account read BEFORE the
+    /// span could be laundered into one.
     pub(in crate::core::state) struct InSpan<T> {
         value: T,
     }
 
     impl LockOpsHeld<'_> {
-        /// Read `f` while this span is held.
-        pub(in crate::core::state) fn read<T>(&self, f: impl FnOnce() -> T) -> InSpan<T> {
-            InSpan { value: f() }
+        /// The signed-in account (endpoint, token), read while this span is held.
+        pub(in crate::core::state) fn read_account(
+            &self,
+        ) -> InSpan<Result<(String, String), SpeleoDbError>> {
+            InSpan {
+                value: self.state.speleodb_active_token(),
+            }
+        }
+
+        /// Who holds `project_id`'s write mutex, asked with the account this span
+        /// read, while this span is held.
+        pub(in crate::core::state) fn read_holder(
+            &self,
+            account: &InSpan<(String, String)>,
+            insecure_http: bool,
+            project_id: &str,
+        ) -> InSpan<Result<Option<String>, SpeleoDbError>> {
+            let (endpoint, token) = account.get();
+            InSpan {
+                value: self.state.speleodb_lock_holder_checked(
+                    endpoint,
+                    token,
+                    insecure_http,
+                    project_id,
+                ),
+            }
         }
     }
 
@@ -251,6 +282,7 @@ mod lock_ops_span {
         pub(in crate::core::state) fn speleodb_lock_ops_guard(&self) -> LockOpsHeld<'_> {
             LockOpsHeld {
                 _guard: self.speleodb_lock_ops.lock(),
+                state: self,
             }
         }
     }

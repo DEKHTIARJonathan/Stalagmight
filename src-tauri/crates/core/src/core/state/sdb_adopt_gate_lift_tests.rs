@@ -37,7 +37,7 @@ fn gate_shut_by_an_adoption() -> AppState {
 
 /// The adoption's shape: the guard first, then a step that may fail early.
 fn adoption_like(state: &AppState, fail: bool) -> Result<(), String> {
-    let _edit_gate = AdoptionEditGate(state);
+    let _edit_gate = AdoptionEditGate::for_tests(state);
     if fail {
         return Err("the hand-over failed".to_string());
     }
@@ -56,7 +56,7 @@ fn the_adoption_guard_lifts_the_gate_on_every_exit() {
 
     let crashed = gate_shut_by_an_adoption();
     let panicked = catch_unwind(AssertUnwindSafe(|| {
-        let _edit_gate = AdoptionEditGate(&crashed);
+        let _edit_gate = AdoptionEditGate::for_tests(&crashed);
         panic!("synthetic panic inside an adoption (#576 RV5-F4-6 test)");
     }));
     let after_panic = crashed.speleodb_adoption_holds_gate();

@@ -53,15 +53,8 @@ const ADOPT_COMMIT_MESSAGE: &str = "Adopt into Stalagmight";
 /// candidate.
 const ADOPT_STAGING_PREFIX: &str = "adopt-staging-";
 
-/// [#576 NF-W4C-3-EDIT] Lifts an adoption's hold on the edit gate (see
-/// `AppState::speleodb_shut_gate_for_adoption`) when the adoption returns.
-pub(super) struct AdoptionEditGate<'a>(pub(super) &'a AppState);
-
-impl Drop for AdoptionEditGate<'_> {
-    fn drop(&mut self) {
-        self.0.speleodb_open_gate_after_adoption();
-    }
-}
+#[cfg(test)]
+pub(super) use adopt_order::AdoptionEditGate;
 
 /// This process's staging filename. Per-process, so two instances adopting the same
 /// project cannot delete each other's work in progress.
@@ -297,16 +290,13 @@ impl AppState {
         // - for as long as an import takes.
         //
         // [#576 A8] Both halves by type. Everything the lock decision rests on is read
-        // INSIDE the span (`InSpan`, made only by `LockOpsHeld::read`), and the decision
+        // INSIDE the span (`InSpan`, made only by the span's own reads), and the decision
         // consumes the span (`adopt_take_lock` takes the guard by value): the account
         // read and the probe cannot drift above it, and the download - a method of the
         // guard armed from that decision - cannot drift into it.
         let (endpoint, token, insecure_http, my_email, concurrent_session, decision) = {
             let lock_ops = self.speleodb_lock_ops_guard();
-            let account = lock_ops
-                .read(|| self.speleodb_active_token())
-                .transpose()
-                .map_err(local_dto)?;
+            let account = lock_ops.read_account().transpose().map_err(local_dto)?;
             let insecure_http = self.speleodb_insecure_http();
 
             // Concurrent same-account session notice (mirrors the pull, #193 b8), read
@@ -328,10 +318,7 @@ impl AppState {
             // editing until its next push 403s. Another ACCOUNT's lock is safe either way -
             // the server answers that acquire with the 400 - so it is only our own that
             // needs the probe to be honest about not knowing.
-            let holder = lock_ops.read(|| {
-                let (endpoint, token) = account.get();
-                self.speleodb_lock_holder_checked(endpoint, token, insecure_http, &project_id)
-            });
+            let holder = lock_ops.read_holder(&account, insecure_http, &project_id);
             // The account whose token takes the mutex below, captured HERE rather than
             // re-read later. The release verdict at the end of this function compares
             // the server's holder against it, and a sign-out or account switch landing
@@ -486,13 +473,12 @@ impl AppState {
         // [#576 NF-W4C-3] Built here, STAMPED inside `adopt_import_and_save`, as the
         // last step of the one `command_lock` span that builds, saves, promotes and
         // reopens the copy - see that function for what a separate stamp let in.
-        // [#576 NF-W4C-3-EDIT] Lifts the edit gate the local span shuts, when this
-        // adoption returns - on every path, early or not. [#576 A8] By type: the span
-        // borrows it and the close consumes it, so it is bound to a name for the whole
-        // call and cannot be dropped early.
-        let edit_gate = AdoptionEditGate(self);
+        // [#576 NF-W4C-3-EDIT] The local span hands back the guard that lifts the edit
+        // gate it shuts, when this adoption returns - on every path, early or not.
+        // [#576 A8] By type: the close consumes it, so it is bound to a name for the
+        // whole call and cannot be dropped early; [RV9a-3] and only the local span
+        // makes one (`AdoptionEditGate`), so none can be built inline and dropped early.
         let adopt = self.adopt_local_span(
-            &edit_gate,
             guard_local_edits_of,
             &tml_scratch,
             &tml_entry,
@@ -505,7 +491,7 @@ impl AppState {
         // [#411] What the conversion actually did, carried to the return below rather
         // than dropped here: the call site was the last place it existed, so a pulled
         // Ariane project lost its excluded shots and every parse anomaly in silence.
-        let (import_receipt, stamped) = adopt?;
+        let (edit_gate, import_receipt, stamped) = adopt?;
         if let Err(e) = &stamped {
             tracing::warn!(
                 error = %e,
@@ -1256,9 +1242,7 @@ mod adopt_order {
     use super::super::speleodb::DumpAt;
     use super::super::speleodb_pull::{pull_dating, usable_tip, PullDating};
     use super::super::speleodb_session::{InSpan, LockOpsHeld};
-    use super::{
-        lock_held_by_me, AdoptFinalize, AdoptLock, AdoptionEditGate, AppState, ADOPT_COMMIT_MESSAGE,
-    };
+    use super::{lock_held_by_me, AdoptFinalize, AdoptLock, AppState, ADOPT_COMMIT_MESSAGE};
     use crate::core::command::ImportReceipt;
     use crate::models::{SpeleoLink, UndoMode};
     use crate::speleodb::contract::{dto_for_error, Endpoint};
@@ -1612,11 +1596,36 @@ mod adopt_order {
         }
     }
 
+    /// [#576 NF-W4C-3-EDIT] Lifts an adoption's hold on the edit gate (see
+    /// `AppState::speleodb_shut_gate_for_adoption`) when the adoption returns.
+    ///
+    /// [#576 RV9a-3] Made only by [`AppState::adopt_local_span`], the step whose span
+    /// shuts the gate (the field is private to this module): a guard built inline
+    /// elsewhere and dropped would lift the hold mid-hand-over.
+    pub(in crate::core::state) struct AdoptionEditGate<'a> {
+        state: &'a AppState,
+    }
+
+    impl Drop for AdoptionEditGate<'_> {
+        fn drop(&mut self) {
+            self.state.speleodb_open_gate_after_adoption();
+        }
+    }
+
+    #[cfg(test)]
+    impl<'a> AdoptionEditGate<'a> {
+        /// The guard on its own, for the tests of its drop.
+        pub(in crate::core::state) fn for_tests(state: &'a AppState) -> Self {
+            Self { state }
+        }
+    }
+
     impl AppState {
         /// The adoption's local half as the verb runs it
-        /// ([`AppState::adopt_import_and_save`]): while `_edit_gate` holds the edit gate
-        /// shut, stamping the link [`AdoptedLink`] builds. A stamp that lands returns
-        /// the [`DirtyStamped`] the hand-over needs.
+        /// ([`AppState::adopt_import_and_save`]): the span shuts the edit gate, and this
+        /// returns the guard that lifts it ([`AdoptionEditGate`], made first so every
+        /// exit from here lifts it too), with the link [`AdoptedLink`] builds stamped.
+        /// A stamp that lands returns the [`DirtyStamped`] the hand-over needs.
         #[expect(
             clippy::result_large_err,
             reason = "returns the SpeleoErrorDto every sibling SpeleoDB step returns; boxing it is a \
@@ -1624,15 +1633,21 @@ mod adopt_order {
         )]
         pub(super) fn adopt_local_span(
             &self,
-            _edit_gate: &AdoptionEditGate<'_>,
             guard_local_edits_of: Option<&str>,
             tml_path: &Path,
             entry_name: &str,
             dest: &Path,
             project_name: String,
             link: AdoptedLink,
-        ) -> Result<(Option<ImportReceipt>, Result<DirtyStamped, SpeleoDbError>), SpeleoErrorDto>
-        {
+        ) -> Result<
+            (
+                AdoptionEditGate<'_>,
+                Option<ImportReceipt>,
+                Result<DirtyStamped, SpeleoDbError>,
+            ),
+            SpeleoErrorDto,
+        > {
+            let edit_gate = AdoptionEditGate { state: self };
             let (receipt, stamped) = self.adopt_import_and_save(
                 guard_local_edits_of,
                 tml_path,
@@ -1641,7 +1656,11 @@ mod adopt_order {
                 project_name,
                 |undo_mode| link.stamped_at_now(undo_mode),
             )?;
-            Ok((receipt, stamped.map(|()| DirtyStamped { _stamped: () })))
+            Ok((
+                edit_gate,
+                receipt,
+                stamped.map(|()| DirtyStamped { _stamped: () }),
+            ))
         }
 
         /// Hand the just-converted project to SpeleoDB over the lock this adoption is
