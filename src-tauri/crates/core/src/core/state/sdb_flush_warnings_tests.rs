@@ -78,6 +78,22 @@ fn the_pre_push_save_hands_back_its_warnings() {
 /// own (as `take_remote_success_tests` does).
 #[test]
 fn a_crash_during_the_upload_reaches_the_push_answer_as_a_dropped_history() {
+    run_crash_during_upload_body(200);
+}
+
+/// [#576 RV9a-8] The 304 arm (the tree already matched: the documented recovery
+/// re-uploads a landing whose answer was lost) concludes the landing through the same
+/// cleanup, so a crash in the upload's window drops the history there too, and the
+/// push answer must say so just the same. The body of the 200 test, with the stub
+/// answering the upload 304 Not Modified.
+#[test]
+fn a_crash_during_an_upload_answered_304_reaches_the_push_answer_as_a_dropped_history() {
+    run_crash_during_upload_body(304);
+}
+
+/// Runs [`crash_during_upload_body`] in a process of its own, its stub answering the
+/// upload with `put_status`.
+fn run_crash_during_upload_body(put_status: u16) {
     const BODY: &str = "core::state::sdb_flush_warnings_tests::crash_during_upload_body";
     let exe = std::env::current_exe().expect("this test binary");
     let output = super::take_remote_success_tests::output_within(
@@ -89,7 +105,7 @@ fn a_crash_during_the_upload_reaches_the_push_answer_as_a_dropped_history() {
                 "--nocapture",
                 "--test-threads=1",
             ])
-            .env(CRASH_CHILD_ENV, "1"),
+            .env(CRASH_CHILD_ENV, put_status.to_string()),
         super::take_remote_success_tests::CHILD_DEADLINE,
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -102,7 +118,8 @@ fn a_crash_during_the_upload_reaches_the_push_answer_as_a_dropped_history() {
     assert!(stdout.contains("1 passed"), "the body ran: {stdout}");
 }
 
-/// The environment variable that lets [`crash_during_upload_body`] run.
+/// The environment variable that lets [`crash_during_upload_body`] run: the status its
+/// stub answers the upload with (`200` or `304`).
 const CRASH_CHILD_ENV: &str = "STALAGMIGHT_CRASH_UPLOAD_CHILD";
 
 #[test]
@@ -112,10 +129,13 @@ fn crash_during_upload_body() {
     use std::io::{Read as _, Write as _};
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    if std::env::var_os(CRASH_CHILD_ENV).is_none() {
+    let Some(put_status) = std::env::var(CRASH_CHILD_ENV)
+        .ok()
+        .and_then(|status| status.parse::<u16>().ok())
+    else {
         println!("not in the child process ({CRASH_CHILD_ENV} unset): nothing to do");
         return;
-    }
+    };
     let _cfg = crate::test_helpers::isolated_config();
     let dirs = TempDir::new().expect("app dirs");
     crate::app_dirs::init_paths(
@@ -184,7 +204,7 @@ fn crash_during_upload_body() {
                     .next()
                     .unwrap_or_default()
                     .to_owned();
-                let body = if line.starts_with("PUT ") {
+                let (status, body) = if line.starts_with("PUT ") {
                     // The crash, in the window the upload holds no lock.
                     std::thread::scope(|crash| {
                         let _ = crash
@@ -194,22 +214,32 @@ fn crash_during_upload_body() {
                             })
                             .join();
                     });
-                    format!(
-                        r#"{{"hexsha":"{}","project":{{"id":"{}","name":"Remote"}}}}"#,
-                        "f00d".repeat(10),
-                        super::speleodb::REMOTE_ID
-                    )
+                    if put_status == 304 {
+                        ("304 Not Modified", String::new())
+                    } else {
+                        (
+                            "200 OK",
+                            format!(
+                                r#"{{"hexsha":"{}","project":{{"id":"{}","name":"Remote"}}}}"#,
+                                "f00d".repeat(10),
+                                super::speleodb::REMOTE_ID
+                            ),
+                        )
+                    }
                 } else {
-                    format!(
-                        r#"{{"id":"{}","name":"Remote"}}"#,
-                        super::speleodb::REMOTE_ID
+                    (
+                        "200 OK",
+                        format!(
+                            r#"{{"id":"{}","name":"Remote"}}"#,
+                            super::speleodb::REMOTE_ID
+                        ),
                     )
                 };
                 if let Ok(mut lines) = seen.lock() {
                     lines.push(line);
                 }
                 let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
                      Connection: close\r\n\r\n",
                     body.len()
                 );
@@ -227,8 +257,8 @@ fn crash_during_upload_body() {
     let codes: Vec<&str> = warnings.iter().map(|w| w.code.as_str()).collect();
     let requests = seen.lock().expect("request log").clone();
     println!(
-        "upload answered 200 after a crash in its window -> {:?}; push answer warnings \
-         {codes:?}; requests {requests:?}",
+        "upload answered {put_status} after a crash in its window -> {:?}; push answer \
+         warnings {codes:?}; requests {requests:?}",
         answer
             .as_ref()
             .map(|_| "landed")
