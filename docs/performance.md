@@ -294,7 +294,8 @@ What is left:
   (2x2000 at 90 / 91 degrees: 1.5 s before, 0.1 s after), diagonal ones do not
   (37 / 38 degrees: 2.2 s before, 0.9 s after). Cutting those needs a different
   exact argument - a separating line with its own rounding bound - not more of
-  this one.
+  this one. That 0.9 s for two 2,000-shot diagonal sections 1 degree apart is
+  accepted as it stands (#576 NF-W9PERF-2).
 
 Real surveys rarely look like any of these scenes: a random 2,000-shot pair
 takes about a millisecond.
