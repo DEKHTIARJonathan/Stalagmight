@@ -27,14 +27,7 @@ import { defaultConfig } from '../../../types/config';
 import type { Config } from '../../../types/config';
 import type { PanelsConfig } from '../../../types/ipc/PanelsConfig';
 import { invokeIpcMock } from '../../../test/factories/ipc';
-
-/** jsdom has no ResizeObserver; DataTable's chrome-offset measurement effect
- *  needs the constructor to exist, but this suite never depends on it firing. */
-class NoopResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
+import { NoopResizeObserver } from '../../../test/factories/dom';
 
 /** A config as an older backend would answer `get_config`: the data-table view
  *  fields simply absent, not empty. `Partial` because the generated
@@ -53,6 +46,8 @@ function legacyConfig(): Config {
 }
 
 beforeEach(() => {
+  // jsdom has no ResizeObserver; DataTable's chrome-offset measurement effect
+  // needs the constructor to exist, but this suite never depends on it firing.
   vi.stubGlobal('ResizeObserver', NoopResizeObserver);
   vi.useFakeTimers();
   invokeIpcMock.mockReset();

@@ -28,14 +28,7 @@ import { useUIStore } from '../../../store/uiStore';
 import { defaultConfig } from '../../../types/config';
 import type { Config } from '../../../types/config';
 import { invokeIpcMock } from '../../../test/factories/ipc';
-
-/** jsdom has no ResizeObserver; DataTable's chrome-offset measurement effect
- *  needs the constructor to exist, but this suite never depends on it firing. */
-class NoopResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
+import { NoopResizeObserver } from '../../../test/factories/dom';
 
 async function flushMicrotasks() {
   await Promise.resolve();
@@ -56,6 +49,8 @@ let backendView: Record<string, unknown> = {};
 let releaseSave: (() => void) | null = null;
 
 beforeEach(() => {
+  // jsdom has no ResizeObserver; DataTable's chrome-offset measurement effect
+  // needs the constructor to exist, but this suite never depends on it firing.
   vi.stubGlobal('ResizeObserver', NoopResizeObserver);
   vi.useFakeTimers();
   backendView = {};

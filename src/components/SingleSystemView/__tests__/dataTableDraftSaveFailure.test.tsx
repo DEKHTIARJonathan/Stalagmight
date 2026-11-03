@@ -16,14 +16,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 
-vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({ index, key: index, start: index * 33, size: 33 })),
-    getTotalSize: () => count * 33,
-    scrollToIndex: vi.fn(),
-  }),
-}));
+vi.mock('@tanstack/react-virtual', async () =>
+  (await import('../../../test/factories/virtualizer')).fakeVirtualizer({ headerOffset: 0 }),
+);
 
 vi.mock('../../../utils/ipc');
 
@@ -36,12 +31,7 @@ import type { Config } from '../../../types/config';
 import type { CommandResult } from '../../../types/commands';
 import type { Section, Shot } from '../../../types/project';
 import { invokeIpcMock } from '../../../test/factories/ipc';
-
-class NoopResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
+import { NoopResizeObserver } from '../../../test/factories/dom';
 
 const shot = (id: number, length: number): Shot => ({
   id,

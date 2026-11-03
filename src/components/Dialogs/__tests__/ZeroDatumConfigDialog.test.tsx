@@ -27,19 +27,7 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from 'vitest';
 import { useState } from 'react';
 
-vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: index,
-        start: 33 + index * 33,
-        size: 33,
-      })),
-    getTotalSize: () => count * 33,
-    scrollToIndex: () => {},
-  }),
-}));
+vi.mock('@tanstack/react-virtual', () => import('../../../test/factories/virtualizer'));
 import { render, screen, fireEvent } from '@testing-library/react';
 
 // Real i18n: the station options ("Station N") and the parsed-GPS line

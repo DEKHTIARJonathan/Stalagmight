@@ -16,19 +16,7 @@ import userEvent from '@testing-library/user-event';
 // The grid is virtualized and jsdom gives the virtualizer no layout to measure, so without
 // this mock it renders zero rows and every cell query fails - the same shim the grid's own
 // component tests use.
-vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: index,
-        start: 33 + index * 33,
-        size: 33,
-      })),
-    getTotalSize: () => count * 33,
-    scrollToIndex: () => {},
-  }),
-}));
+vi.mock('@tanstack/react-virtual', () => import('../../test/factories/virtualizer'));
 
 import type { TFunction } from 'i18next';
 import { SegmentsTable } from './SegmentsTable';
@@ -40,6 +28,7 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
 import { defaultConfig } from '../../types/config';
 import { segmentColor } from '../../utils/segmentColors';
 import type { DpvRig, GasReachField } from '../../types/ipc.generated';
+import { NoopResizeObserver } from '../../test/factories/dom';
 
 const A = { section_id: 1, station_index: 2 };
 const B = { section_id: 1, station_index: 5 };
@@ -88,11 +77,7 @@ function fakeField(overrides: Partial<GasReachField> = {}): GasReachField {
 beforeAll(() => {
   // jsdom has no ResizeObserver; the grid measures its scroller with one.
   if (typeof ResizeObserver === 'undefined') {
-    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = class {
-      observe() {}
-      unobserve() {}
-      disconnect() {}
-    };
+    (globalThis as { ResizeObserver?: unknown }).ResizeObserver = NoopResizeObserver;
   }
 });
 

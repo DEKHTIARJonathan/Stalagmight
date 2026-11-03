@@ -15,19 +15,7 @@ import { render, fireEvent } from '@testing-library/react';
 
 // jsdom measures every box as 0 tall, so the real virtualizer renders no rows
 // at all. Same stand-in the SpreadsheetGrid suites use: every row is visible.
-vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: ({ count }: { count: number }) => ({
-    getVirtualItems: () =>
-      Array.from({ length: count }, (_, index) => ({
-        index,
-        key: index,
-        start: 33 + index * 33,
-        size: 33,
-      })),
-    getTotalSize: () => count * 33,
-    scrollToIndex: vi.fn(),
-  }),
-}));
+vi.mock('@tanstack/react-virtual', () => import('../../../test/factories/virtualizer'));
 
 vi.mock('../../../utils/telemetry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../utils/telemetry')>()),

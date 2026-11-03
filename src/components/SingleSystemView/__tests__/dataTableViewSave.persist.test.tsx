@@ -35,14 +35,7 @@ import { useUIStore } from '../../../store/uiStore';
 import { defaultConfig } from '../../../types/config';
 import type { Config } from '../../../types/config';
 import { invokeIpcMock } from '../../../test/factories/ipc';
-
-/** jsdom has no ResizeObserver; DataTable's chrome-offset measurement effect
- *  needs the constructor to exist, but this suite never depends on it firing. */
-class NoopResizeObserver {
-  observe() {}
-  unobserve() {}
-  disconnect() {}
-}
+import { NoopResizeObserver } from '../../../test/factories/dom';
 
 /** Advance past the microtask queue (fake timers fake setTimeout, not promise
  *  microtasks) so a settled invokeIpc promise's `.then`/`.catch` has run. */
@@ -56,6 +49,8 @@ function freshConfig(): Config {
 }
 
 beforeEach(() => {
+  // jsdom has no ResizeObserver; DataTable's chrome-offset measurement effect
+  // needs the constructor to exist, but this suite never depends on it firing.
   vi.stubGlobal('ResizeObserver', NoopResizeObserver);
   vi.useFakeTimers();
   invokeIpcMock.mockReset();
