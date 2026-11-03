@@ -207,6 +207,38 @@ pub(super) struct LockOpsHeld<'a> {
     _guard: std::sync::MutexGuard<'a, ()>,
 }
 
+/// [#576 A8] A value read INSIDE the lock-ops span. Made only by
+/// [`LockOpsHeld::read`], so a step that takes one cannot be handed a value read
+/// before the span opened - the account a lock operation acts for, or the holder it
+/// decides on, is then the span's fact rather than an earlier one.
+pub(super) struct InSpan<T> {
+    value: T,
+}
+
+impl LockOpsHeld<'_> {
+    /// Read `f` while this span is held.
+    pub(super) fn read<T>(&self, f: impl FnOnce() -> T) -> InSpan<T> {
+        InSpan { value: f() }
+    }
+}
+
+impl<T> InSpan<T> {
+    pub(super) fn get(&self) -> &T {
+        &self.value
+    }
+
+    pub(super) fn into_inner(self) -> T {
+        self.value
+    }
+}
+
+impl<T, E> InSpan<Result<T, E>> {
+    /// A fallible read: the error, or the value still marked as read in the span.
+    pub(super) fn transpose(self) -> Result<InSpan<T>, E> {
+        self.value.map(|value| InSpan { value })
+    }
+}
+
 impl AppState {
     /// Record a session boundary. Call ONLY while holding the `project` mutex
     /// (rule 1 above); every call site takes a `_proj_guard`-shaped local or

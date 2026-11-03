@@ -2768,8 +2768,8 @@ impl AppState {
 // cuts the file at its first top-level `#[cfg(test)]` still sees all of it.
 #[cfg(test)]
 pub(super) use tests::{
-    authed_session_at, editing_fixture, recording_stub, remote_readonly_fixture,
-    FREE_MUTEX_AT_BASE_BODY, HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY,
+    authed_session_at, editing_fixture, logged_events, recording_stub, remote_readonly_fixture,
+    routing_stub, FREE_MUTEX_AT_BASE_BODY, HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY,
     HELD_BY_SAME_ACCOUNT_AT_BASE_BODY, REMOTE_ID,
 };
 
@@ -5269,6 +5269,94 @@ mod tests {
             }
         });
         (format!("http://127.0.0.1:{port}"), listener, seen)
+    }
+
+    /// [#576 A8] A loopback stub that answers each request by its first line
+    /// (`METHOD /path HTTP/1.1`): `route` returns the status and the JSON body. Records
+    /// every request line, like [`recording_stub`], for a flow whose calls must each
+    /// get their own answer - a probe that succeeds, an acquire that is refused, a
+    /// history read that 401s. Keep the listener bound for the whole test.
+    pub(in crate::core::state) fn routing_stub(
+        route: fn(&str) -> (u16, &'static str),
+    ) -> (
+        String,
+        std::net::TcpListener,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let accept_on = listener.try_clone().expect("clone listener");
+        let log = std::sync::Arc::clone(&seen);
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = accept_on.accept() {
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
+                let mut req = Vec::new();
+                let mut chunk = vec![0u8; 8 * 1024];
+                while let Ok(n) = stream.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    req.extend_from_slice(&chunk[..n]);
+                }
+                let line = String::from_utf8_lossy(&req)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
+                let (status, body) = route(&line);
+                if let Ok(mut lines) = log.lock() {
+                    lines.push(line);
+                }
+                let resp = format!(
+                    "HTTP/1.1 {status} STUB\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), listener, seen)
+    }
+
+    /// [#576 A8] Every event `f` logs on this thread, one `LEVEL target: message
+    /// fields` line each, through a scoped `tracing` subscriber - so a test can pin
+    /// that a failure is LOGGED (a log line is not observable from a return value)
+    /// instead of reading the source for a `warn!`.
+    pub(in crate::core::state) fn logged_events(f: impl FnOnce()) -> Vec<String> {
+        #[derive(Clone)]
+        struct Captured(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+        impl std::io::Write for Captured {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0
+                    .lock()
+                    .expect("the capture buffer is not poisoned")
+                    .extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let buffer = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let writer = Captured(std::sync::Arc::clone(&buffer));
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(move || writer.clone())
+            .with_ansi(false)
+            .without_time()
+            .with_max_level(tracing::Level::TRACE)
+            .finish();
+        tracing::subscriber::with_default(subscriber, f);
+        let bytes = buffer
+            .lock()
+            .expect("the capture buffer is not poisoned")
+            .clone();
+        String::from_utf8_lossy(&bytes)
+            .lines()
+            .map(str::to_owned)
+            .collect()
     }
 
     /// [`recording_stub`] that FAILS the bare project GET - `speleodb_start_editing`'s

@@ -26,7 +26,7 @@ use crate::core::command::{CommandResult, ImportReceipt};
 use crate::models::{ImportClosure, ImportSectionConfig};
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
-use crate::speleodb::models::{AdoptUpload, DoneResult, StartEditingResult};
+use crate::speleodb::models::AdoptUpload;
 use crate::speleodb::models::{SpeleoDumpCandidate, SpeleoProjectSummary};
 use crate::speleodb::{client, sync};
 use crate::speleodb::{SpeleoAdoptResult, SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult};
@@ -219,78 +219,6 @@ impl AdoptFinalize {
             type_flipped: false,
             holder: None,
         }
-    }
-}
-
-/// Hands an adoption's write lock back if the adoption never gets far enough to use
-/// it.
-///
-/// Adoption takes the mutex FIRST - so no other writer can land a revision under the
-/// conversion - and only then does a long, fallible stretch of work: resolve, download,
-/// classify, extract, guard, import, save. Any step of it can return, and every one of
-/// those exits is a way to strand the project locked for every other editor until the
-/// server-side timeout. A hand-back written at each exit is a list, and a list goes
-/// stale the first time an arm is added; this is the same duty expressed once, so an
-/// arm added later inherits it for free.
-///
-/// [`Self::disarm`] passes the duty on to the hand-over once there is a converted
-/// project for the lock to be about. From that point [`AppState::speleodb_done`] owns
-/// it, and its rules are the ones that apply: released when the push lands, kept when
-/// a retry could still recover the work.
-struct AdoptLockGuard<'a> {
-    state: &'a AppState,
-    endpoint: &'a str,
-    token: &'a str,
-    insecure_http: bool,
-    project_id: &'a str,
-    /// False when there is nothing to hand back - either no lock was taken, or the
-    /// hand-over has taken over responsibility for it.
-    armed: bool,
-}
-
-impl<'a> AdoptLockGuard<'a> {
-    fn new(
-        state: &'a AppState,
-        endpoint: &'a str,
-        token: &'a str,
-        insecure_http: bool,
-        project_id: &'a str,
-        armed: bool,
-    ) -> Self {
-        Self {
-            state,
-            endpoint,
-            token,
-            insecure_http,
-            project_id,
-            armed,
-        }
-    }
-
-    /// Stop guarding: the lock now belongs to the hand-over.
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for AdoptLockGuard<'_> {
-    fn drop(&mut self) {
-        if !self.armed {
-            return;
-        }
-        tracing::info!(
-            project_id = self.project_id,
-            purpose = "hand back the lock an adoption took but never used",
-            "speleodb_adopt_ariane: releasing the write lock after a failed conversion"
-        );
-        // Best-effort, and it drops the acquisition claim whether or not the POST
-        // lands - the same sink every other abort arm releases through.
-        self.state.speleodb_release_best_effort(
-            self.endpoint,
-            self.token,
-            self.insecure_http,
-            self.project_id,
-        );
     }
 }
 
@@ -1060,6 +988,9 @@ impl AppState {
     /// `discard_local == true` waives the un-pushed-edits guard below, for the ONE
     /// caller that arrives having already had that loss confirmed - see the command
     /// wrapper.
+    ///
+    /// [#576 A8] The steps' order is the types' (`adopt_order`): the verb's answer is
+    /// made only by its last step, the close.
     pub fn speleodb_adopt_ariane(
         &self,
         project_id: String,
@@ -1068,6 +999,25 @@ impl AppState {
         discard_local: bool,
         entry_path: Option<String>,
     ) -> Result<SpeleoAdoptResult, SpeleoErrorDto> {
+        self.speleodb_adopt_ariane_chain(
+            project_id,
+            project_name,
+            latest_commit_sha,
+            discard_local,
+            entry_path,
+        )
+        .map(adopt_order::AdoptClosed::into_result)
+    }
+
+    /// [`Self::speleodb_adopt_ariane`]'s body, as the chain of `adopt_order` proofs.
+    fn speleodb_adopt_ariane_chain(
+        &self,
+        project_id: String,
+        project_name: String,
+        latest_commit_sha: Option<String>,
+        discard_local: bool,
+        entry_path: Option<String>,
+    ) -> Result<adopt_order::AdoptClosed, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
 
         // THE LOCK-OPS SPAN OPENS FIRST, BEFORE THE ACCOUNT IS READ.
@@ -1085,9 +1035,18 @@ impl AppState {
         // acquire → commit, which is seconds; adoption's download-and-convert is not,
         // and a span held across it would block logout - and every other lock operation
         // - for as long as an import takes.
-        let (endpoint, token, insecure_http, my_email, concurrent_session, lock) = {
+        //
+        // [#576 A8] Both halves by type. Everything the lock decision rests on is read
+        // INSIDE the span (`InSpan`, made only by `LockOpsHeld::read`), and the decision
+        // consumes the span (`adopt_take_lock` takes the guard by value): the account
+        // read and the probe cannot drift above it, and the download - a method of the
+        // guard armed from that decision - cannot drift into it.
+        let (endpoint, token, insecure_http, my_email, concurrent_session, decision) = {
             let lock_ops = self.speleodb_lock_ops_guard();
-            let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+            let account = lock_ops
+                .read(|| self.speleodb_active_token())
+                .transpose()
+                .map_err(local_dto)?;
             let insecure_http = self.speleodb_insecure_http();
 
             // Concurrent same-account session notice (mirrors the pull, #193 b8), read
@@ -1109,8 +1068,10 @@ impl AppState {
             // editing until its next push 403s. Another ACCOUNT's lock is safe either way -
             // the server answers that acquire with the 400 - so it is only our own that
             // needs the probe to be honest about not knowing.
-            let holder =
-                self.speleodb_lock_holder_checked(&endpoint, &token, insecure_http, &project_id);
+            let holder = lock_ops.read(|| {
+                let (endpoint, token) = account.get();
+                self.speleodb_lock_holder_checked(endpoint, token, insecure_http, &project_id)
+            });
             // The account whose token takes the mutex below, captured HERE rather than
             // re-read later. The release verdict at the end of this function compares
             // the server's holder against it, and a sign-out or account switch landing
@@ -1119,7 +1080,10 @@ impl AppState {
             // stranger's identity, or against no identity at all.
             let my_email = self.speleodb_my_email();
             let concurrent_session = my_email.as_deref().is_some_and(|me| {
-                sync::concurrent_session_notice(holder.as_ref().ok().and_then(Option::as_deref), me)
+                sync::concurrent_session_notice(
+                    holder.get().as_ref().ok().and_then(Option::as_deref),
+                    me,
+                )
             });
 
             // THE LOCK COMES FIRST - before the head resolve, before the download.
@@ -1139,165 +1103,45 @@ impl AppState {
             // READ_ONLY member and an offline machine both converted their project before
             // this flow existed, and both still do - the copy simply stays local, stamped
             // with un-pushed edits, which is exactly what it is.
-            let lock = self.adopt_take_lock(
-                &lock_ops,
-                &endpoint,
-                &token,
-                insecure_http,
-                &project_id,
-                holder,
-            );
+            let decision =
+                self.adopt_take_lock(lock_ops, &account, insecure_http, &project_id, holder);
+            let (endpoint, token) = account.into_inner();
             (
                 endpoint,
                 token,
                 insecure_http,
                 my_email,
                 concurrent_session,
-                lock,
+                decision,
             )
         };
 
         // Arms the hand-back for every way the stretch below can return early. Disarmed
         // once there is a converted project for the lock to be about - see the guard.
-        let mut lock_guard = AdoptLockGuard::new(
+        let lock_guard = adopt_order::AdoptLockGuard::arm(
             self,
             &endpoint,
             &token,
             insecure_http,
             &project_id,
-            matches!(lock, AdoptLock::Held),
+            decision,
         );
 
-        // [#258] Resolve the head BEFORE the download and fetch that commit by hash,
-        // for the reason the pull does: two requests mean a push can land between
-        // them, and a tree fetched at A but dated B would let a choice recorded here
-        // be recalled against a dump it never described. Best-effort - an unresolvable
-        // head just means the bytes are undatable, which is what `None` says, and
-        // adoption then asks again through the picker it already hosts.
-        //
-        // DIRECTLY, not via `speleodb_server_head`, which wraps the same call in
-        // `speleodb_handle_auth`. That handler `forget()`s the token on a 401 - keychain
-        // entry included - and because this failure is deliberately swallowed and
-        // `token` was captured above, routing it there let a spurious 401 delete the
-        // user's stored credential while the adopt went on to succeed: signed out with
-        // no signal and nothing to sign back in with. The pull states the rule for this
-        // exact shape of call, and this function restates it 150 lines down for the type
-        // flip; only the resolve was routed through the drop.
-        let adopt_at = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
-            Ok(history) => usable_tip(
-                sync::tip_of(&history.commits).map(str::to_owned),
-                &project_id,
-            ),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    project_id = %project_id,
-                    purpose = "date a remembered Ariane pick on adopt",
-                    "speleodb_adopt_ariane: could not resolve server HEAD; re-asking instead \
-                     of honouring an undatable choice"
-                );
-                None
-            }
-        };
-        // Download the dump (routed through the auth handler like the pull, so a dead
-        // token forces re-login).
-        /// [#576 A8 NF-A8-BYPASS] The adoption's download licence. Local to this
-        /// function, so no other flow can borrow it.
-        struct AdoptionDownload;
-        impl client::DumpLicence for AdoptionDownload {}
-        let zip = self
-            .speleodb_handle_auth(
-                Endpoint::DownloadDump,
-                match adopt_at.as_deref() {
-                    Some(sha) => client::download_dump_at_hash(
-                        &AdoptionDownload,
-                        &endpoint,
-                        &token,
-                        insecure_http,
-                        &project_id,
-                        sha,
-                    ),
-                    None => client::download_dump(
-                        &AdoptionDownload,
-                        &endpoint,
-                        &token,
-                        insecure_http,
-                        &project_id,
-                    ),
-                },
-            )
-            .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
+        // [#258] Resolve the head BEFORE the download and fetch that commit by hash -
+        // the guard's own method, so it runs after the lock decision by construction
+        // (see `AdoptLockGuard::fetch`).
+        let fetched = lock_guard.fetch()?;
 
         // Classify authoritatively. Only proceed for a genuine Ariane-only dump; if a
         // `.stalx` has since appeared (a stale `type_tag`, a TOCTOU race with another
         // writer), refuse and tell the user to reopen normally rather than clobber it.
-        let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
-        let names = dump.entry_paths().map_err(local_dto)?;
-        // [#258] A dump with several `ariane.tml` is ambiguous, and this is the flow
-        // that answers it: the picker's choice arrives here, checked for membership
-        // against THIS archive exactly like a `.stalx` pick. Without it the picker
-        // would re-raise the same question on every retry, because nothing else on
-        // this path can act on the answer.
-        // The picker's answer reaches this command either directly, or - when the
-        // ambiguity surfaced on the OPEN path, which refuses a `.tml` and routes
-        // here - through the entry that path recorded for this session. That hand-off
-        // is why `adopt_at` above is the TRUE HEAD and not the caller-supplied
-        // `latest_commit_sha`: the open recorded the answer against the topology tip,
-        // so reading it back against `max(authored_date)` would never match and the
-        // picker would re-ask forever.
-        //
-        // This classifier is adoption's own - it wants an Ariane entry and refuses a
-        // `.stalx` with its own message - so the resolver's dating does not reach it,
-        // and BOTH halves of that dating have to be repeated here or the whole
-        // guarantee stops at the `.stalx` picker. An `ariane.tml` behaves exactly like
-        // a `.stalx` under a collaborator's push: the canonical file moves, every other
-        // entry stays where it was, so a backup chosen at A sails through membership at
-        // B - and adoption then imports it and stamps BASE at B.
-        let adopt_dump_at = DumpAt::from_sha(adopt_at.as_deref());
-        let remembered = self.speleodb_recalled_dump_entry(&project_id, adopt_dump_at);
-        let picked = entry_path
-            .as_deref()
-            // The fresh reply is gated exactly as the resolver gates one: honoured only
-            // while it answers the revision its candidates were offered for. The recall
-            // beside it is already dated, so a discarded reply correctly falls back to
-            // a remembered answer that IS about this tree, and otherwise to a re-offer.
-            .filter(|_| self.speleodb_dump_offer_answers(&project_id, adopt_dump_at))
-            .or(remembered.as_deref())
-            .filter(|chosen| {
-                dump::chosen_candidate(&names, chosen) == Some(dump::ChosenKind::Ariane)
-            });
-        let tml_entry = match (picked, dump::classify(&names)) {
-            (Some(chosen), _) => chosen.to_owned(),
-            (None, DumpClassification::AdoptAriane(tml)) => tml,
-            (None, DumpClassification::Stalx(_)) => {
-                return Err(local_dto(SpeleoDbError::Parse(
-                    "this project now has a Stalagmight file on the server; reopen it normally"
-                        .to_owned(),
-                )));
-            }
-            (None, DumpClassification::NothingToOpen) => {
-                return Err(local_dto(SpeleoDbError::EmptyDump))
-            }
-            // Both ambiguities record the offer, for the same reason the resolver does:
-            // these candidates are going to a user, and the reply arrives through a
-            // separate call that resolves the tip again. The `.stalx` set is no
-            // exception - the frontend routes it by kind to the OPEN verb, which reads
-            // this same record.
-            (None, DumpClassification::AmbiguousStalx(paths)) => {
-                self.speleodb_note_dump_offer(&project_id, adopt_dump_at);
-                return Err(local_dto(unopenable_to_error(
-                    UnopenableDump::AmbiguousStalx(paths),
-                    &mut dump,
-                )));
-            }
-            (None, DumpClassification::AmbiguousAriane(paths)) => {
-                self.speleodb_note_dump_offer(&project_id, adopt_dump_at);
-                return Err(local_dto(unopenable_to_error(
-                    UnopenableDump::AmbiguousAriane(paths),
-                    &mut dump,
-                )));
-            }
-        };
+        let mut dump = dump::Dump::open(fetched.zip()).map_err(local_dto)?;
+        let tml_entry = self.adopt_pick_entry(
+            &project_id,
+            &mut dump,
+            entry_path.as_deref(),
+            fetched.dump_at(),
+        )?;
 
         // Extract the `ariane.tml` to a scratch file beside the cache `.stalx`, import
         // it, then remove the scratch file. The importer needs a path on disk.
@@ -1345,7 +1189,16 @@ impl AppState {
         // Keeping the original sha instead means BASE is A, so if B did land the copy
         // is honestly behind: the fence sees a commit that is not ours and raises the
         // divergence prompt, which is the outcome the user can act on.
-        let PullDating { base: base_sha, .. } = pull_dating(adopt_at, latest_commit_sha);
+        //
+        // [#576 A8] By type: the link is built from the `AdoptFetched` the bytes came
+        // in (`AdoptedLink::new`), so no later lookup can reach BASE.
+        let link = adopt_order::AdoptedLink::new(
+            &fetched,
+            endpoint.clone(),
+            project_id.clone(),
+            project_name.clone(),
+            latest_commit_sha,
+        );
 
         // Stamp the hand-off link onto the project this call builds, through the
         // LIVE handle rather than a second connection over the same file: the
@@ -1374,24 +1227,18 @@ impl AppState {
         // last step of the one `command_lock` span that builds, saves, promotes and
         // reopens the copy - see that function for what a separate stamp let in.
         // [#576 NF-W4C-3-EDIT] Lifts the edit gate the local span shuts, when this
-        // adoption returns - on every path, early or not.
-        let _edit_gate = AdoptionEditGate(self);
-        let adopt = self.adopt_import_and_save(
+        // adoption returns - on every path, early or not. [#576 A8] By type: the span
+        // borrows it and the close consumes it, so it is bound to a name for the whole
+        // call and cannot be dropped early.
+        let edit_gate = AdoptionEditGate(self);
+        let adopt = self.adopt_local_span(
+            &edit_gate,
             guard_local_edits_of,
             &tml_scratch,
             &tml_entry,
             &dest,
-            project_name.clone(),
-            |undo_mode| crate::models::SpeleoLink {
-                endpoint: endpoint.clone(),
-                project_id: project_id.clone(),
-                project_name,
-                base_commit_sha: base_sha,
-                has_unpushed_edits: true,
-                last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
-                last_verify_at: None,
-                undo_mode: Some(undo_mode),
-            },
+            project_name,
+            link,
         );
         // Best-effort scratch cleanup regardless of import outcome.
         let _ = std::fs::remove_file(&tml_scratch);
@@ -1421,24 +1268,32 @@ impl AppState {
         // timeout. The documented "retry from the status button" is no recovery either:
         // that button reads the very link that failed to write. Only the next login's
         // held-lock prompt, which is server-derived, would ever find it.
-        if stamped.is_ok() {
-            lock_guard.disarm();
-        }
-
+        //
+        // [#576 A8] By type: `disarm` takes the stamp's proof, and only a disarmed guard
+        // hands a held lock to the hand-over (`HeldForHandOver`).
+        //
         // Upload the converted `.stalx` with its Ariane sidecar and hand the lock
         // back. Best-effort by construction: every failure arm leaves the adopted
         // project on disk, stamped dirty, and reports why - adoption that could not
         // reach the server is still an adoption.
-        let upload = match (stamped, lock) {
-            (Ok(()), AdoptLock::Held) => self.adopt_hand_over(&project_id),
-            (Ok(()), AdoptLock::NotTaken(why)) => why,
+        let (landed, upload) = match stamped {
+            Ok(stamped) => match lock_guard.disarm(&stamped) {
+                adopt_order::Disarmed::Held(held) => {
+                    let handed = self.adopt_hand_over(held, &project_id);
+                    (handed.landed(), handed.into_upload())
+                }
+                adopt_order::Disarmed::NotTaken(why) => (None, why),
+            },
             // Nothing to hand over: the push reads the link to decide whether to run at
             // all. Say so rather than letting `start_editing` discover it and report the
             // same thing one indirection later. The guard above is still armed, so the
             // lock this call took goes back on the way out.
-            (Err(e), _) => AdoptUpload::Failed {
-                message: format!("the converted project could not be linked to SpeleoDB: {e}"),
-            },
+            Err(e) => (
+                None,
+                AdoptUpload::Failed {
+                    message: format!("the converted project could not be linked to SpeleoDB: {e}"),
+                },
+            ),
         };
 
         // ONE lock-ops span over the whole read → decide → clear below, for the reason
@@ -1462,11 +1317,18 @@ impl AppState {
             // Make sure the server project ends up typed `other`, and report whether it
             // did. Only after a landed push, which is the precondition either way:
             // flipping first leaves a project typed `other` whose only file is the Ariane
-            // one that type says to disregard, openable by nobody.
-            let finalized = if matches!(upload, AdoptUpload::Pushed | AdoptUpload::PushedLockHeld) {
-                self.adopt_finalize(&endpoint, &token, insecure_http, &project_id)
-            } else {
-                AdoptFinalize::not_attempted()
+            // one that type says to disregard, openable by nobody. [#576 A8] By type: the
+            // settle takes the hand-over's `AdoptLanded` and this span's proof.
+            let finalized = match &landed {
+                Some(landed) => self.adopt_finalize(
+                    &lock_ops,
+                    landed,
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &project_id,
+                ),
+                None => AdoptFinalize::not_attempted(),
             };
 
             // Correct a release verdict the hand-over could only guess at. It reports
@@ -1531,35 +1393,101 @@ impl AppState {
 
             (finalized, upload)
         };
-        let type_flipped = finalized.type_flipped;
+        // Hand the project back to the frontend to open, LAST - see `adopt_close`,
+        // whose answer is the verb's.
+        Ok(self.adopt_close(
+            edit_gate,
+            finalized,
+            adopt_order::AdoptReport {
+                dest: &dest,
+                concurrent_session,
+                upload,
+                import_receipt,
+            },
+        ))
+    }
 
-        // Hand the project BACK to the frontend to open, instead of leaving it
-        // committed to `AppState` for a `loadProject` that then short-circuits.
+    /// [#258] Which `ariane.tml` of the dump adoption imports - the picker's answer,
+    /// dated, or the dump's own one - recording the offer when it has to ask.
+    ///
+    /// [#576 A8] Its own step so the dating rules are driven by tests rather than read
+    /// off the verb's source: `adopt_dump_at` is the revision the dump was fetched at
+    /// (`AdoptFetched::dump_at`).
+    #[expect(
+        clippy::result_large_err,
+        reason = "returns the SpeleoErrorDto every sibling SpeleoDB step returns; boxing it is a \
+                  repo-wide change outside #576 A8"
+    )]
+    pub(super) fn adopt_pick_entry(
+        &self,
+        project_id: &str,
+        dump: &mut dump::Dump<'_>,
+        entry_path: Option<&str>,
+        adopt_dump_at: DumpAt<'_>,
+    ) -> Result<String, SpeleoErrorDto> {
+        let names = dump.entry_paths().map_err(local_dto)?;
+        // [#258] A dump with several `ariane.tml` is ambiguous, and this is the flow
+        // that answers it: the picker's choice arrives here, checked for membership
+        // against THIS archive exactly like a `.stalx` pick. Without it the picker
+        // would re-raise the same question on every retry, because nothing else on
+        // this path can act on the answer.
+        // The picker's answer reaches this command either directly, or - when the
+        // ambiguity surfaced on the OPEN path, which refuses a `.tml` and routes
+        // here - through the entry that path recorded for this session. That hand-off
+        // is why the dating below is the TRUE HEAD and not the caller-supplied
+        // `latest_commit_sha`: the open recorded the answer against the topology tip,
+        // so reading it back against `max(authored_date)` would never match and the
+        // picker would re-ask forever.
         //
-        // `do_create_project_full` inside the import commits the adopted project
-        // unconditionally, so on return the backend held it open at `dest` - and
-        // `do_load_project_full` answers a load of the path it already has open with
-        // `ALREADY_OPEN`. The frontend reads that as "it is on screen already" (the
-        // only way a pull can produce it) and short-circuits to a view flip, so
-        // adoption finished with the view switched, no project in any store, and a
-        // success toast over an empty screen. Closing here makes the frontend's load
-        // an ordinary full load, which is how the pull path has always behaved: it
-        // runs `close_project_if_open_at` before it replaces a cache file, and the
-        // frontend's `loadProject` is what opens the result.
-        //
-        // LAST, because everything above needs the project open: the link stamp writes
-        // through the live handle, and the hand-over renders the sidecar from the open
-        // survey. A held lock is deliberately NOT released here - `speleodb_done`'s
-        // non-landing arms keep it so a retry can recover, and the frontend re-opens
-        // this very project a moment later.
-        self.close_project();
-
-        Ok(SpeleoAdoptResult {
-            local_path: dest.to_string_lossy().into_owned(),
-            type_flipped,
-            concurrent_session,
-            upload,
-            import_receipt,
+        // This classifier is adoption's own - it wants an Ariane entry and refuses a
+        // `.stalx` with its own message - so the resolver's dating does not reach it,
+        // and BOTH halves of that dating have to be repeated here or the whole
+        // guarantee stops at the `.stalx` picker. An `ariane.tml` behaves exactly like
+        // a `.stalx` under a collaborator's push: the canonical file moves, every other
+        // entry stays where it was, so a backup chosen at A sails through membership at
+        // B - and adoption then imports it and stamps BASE at B.
+        let remembered = self.speleodb_recalled_dump_entry(project_id, adopt_dump_at);
+        let picked = entry_path
+            // The fresh reply is gated exactly as the resolver gates one: honoured only
+            // while it answers the revision its candidates were offered for. The recall
+            // beside it is already dated, so a discarded reply correctly falls back to
+            // a remembered answer that IS about this tree, and otherwise to a re-offer.
+            .filter(|_| self.speleodb_dump_offer_answers(project_id, adopt_dump_at))
+            .or(remembered.as_deref())
+            .filter(|chosen| {
+                dump::chosen_candidate(&names, chosen) == Some(dump::ChosenKind::Ariane)
+            });
+        Ok(match (picked, dump::classify(&names)) {
+            (Some(chosen), _) => chosen.to_owned(),
+            (None, DumpClassification::AdoptAriane(tml)) => tml,
+            (None, DumpClassification::Stalx(_)) => {
+                return Err(local_dto(SpeleoDbError::Parse(
+                    "this project now has a Stalagmight file on the server; reopen it normally"
+                        .to_owned(),
+                )));
+            }
+            (None, DumpClassification::NothingToOpen) => {
+                return Err(local_dto(SpeleoDbError::EmptyDump))
+            }
+            // Both ambiguities record the offer, for the same reason the resolver does:
+            // these candidates are going to a user, and the reply arrives through a
+            // separate call that resolves the tip again. The `.stalx` set is no
+            // exception - the frontend routes it by kind to the OPEN verb, which reads
+            // this same record.
+            (None, DumpClassification::AmbiguousStalx(paths)) => {
+                self.speleodb_note_dump_offer(project_id, adopt_dump_at);
+                return Err(local_dto(unopenable_to_error(
+                    UnopenableDump::AmbiguousStalx(paths),
+                    dump,
+                )));
+            }
+            (None, DumpClassification::AmbiguousAriane(paths)) => {
+                self.speleodb_note_dump_offer(project_id, adopt_dump_at);
+                return Err(local_dto(unopenable_to_error(
+                    UnopenableDump::AmbiguousAriane(paths),
+                    dump,
+                )));
+            }
         })
     }
 
@@ -1588,7 +1516,10 @@ impl AppState {
     /// very next request too, so the drop is the correct response and the user is told
     /// to sign in again - the same reading `speleodb_start_editing` takes of its own
     /// acquire.
-    fn adopt_take_lock(
+    ///
+    /// [#576 A8] The span-held body of `adopt_order`'s `adopt_take_lock`, which reads
+    /// its inputs inside the span and ends the span with the decision.
+    fn adopt_acquire_in_span(
         &self,
         _lock_ops: &super::speleodb_session::LockOpsHeld<'_>,
         endpoint: &str,
@@ -1700,8 +1631,14 @@ impl AppState {
     /// above: this runs after the conversion is safely local and its failure is
     /// swallowed, so a spurious 401 here would drop the session - keychain entry
     /// included - over work that already landed.
+    ///
+    /// [#576 A8] Takes the verdict span's proof (the holder it reads and the claim
+    /// clear it decides are one act) and the hand-over's [`adopt_order::AdoptLanded`]
+    /// (the flip is only ever earned by a landed push).
     fn adopt_finalize(
         &self,
+        _lock_ops: &super::speleodb_session::LockOpsHeld<'_>,
+        _landed: &adopt_order::AdoptLanded,
         endpoint: &str,
         token: &str,
         insecure_http: bool,
@@ -1774,141 +1711,6 @@ impl AppState {
         AdoptFinalize {
             type_flipped,
             holder,
-        }
-    }
-
-    /// Hand the just-converted project to SpeleoDB over the lock this adoption is
-    /// already holding: open the edit session, push the `.stalx` with the Ariane
-    /// sidecar `speleodb_done` renders, release. The user's adoption is one click, so
-    /// its result should be a project that LIVES on the server - not a converted copy
-    /// sitting in a cache directory waiting for someone to remember to push it.
-    ///
-    /// Composed from the two ordinary verbs rather than a private upload, so the
-    /// fence, the ancestry recovery and the release rules are the ones already
-    /// audited for those paths. `speleodb_start_editing` reads our lock as INHERITED
-    /// (the account already holds it), which is exactly right: it opens the edit gate
-    /// without minting a second authorship claim over the one
-    /// [`Self::adopt_take_lock`] recorded.
-    ///
-    /// NEVER returns an error: the converted project is already on disk by the time
-    /// this runs, and no failure here should turn a finished local conversion into a
-    /// failed command. Each arm reports what happened so the webview can seed its
-    /// dirty bit honestly and say what is left to do.
-    fn adopt_hand_over(&self, expected_id: &str) -> AdoptUpload {
-        let outcome = self.adopt_hand_over_inner(expected_id);
-        // Logged HERE rather than at each arm, so no arm can be added without one. The
-        // outcomes that never reached the server all reach the user as the same "it
-        // stayed local" toast, deliberately - there is nothing they can do differently
-        // about a lock held versus a push that did not confirm - which makes this the
-        // only record of WHICH it was. Diagnosing the first of these without it meant
-        // reading the server's mutex table.
-        match &outcome {
-            AdoptUpload::Pushed => tracing::info!(
-                purpose = "confirm the adoption reached the server",
-                "speleodb_adopt_ariane: conversion pushed and the lock handed back"
-            ),
-            // Its OWN arm. Sharing the one above asserted the opposite of the server
-            // state - it says the lock came back, and this outcome is defined by its
-            // not having - and carried no `outcome` field to tell the two apart, so the
-            // trail for a stuck adoption read as a clean finish. Since the holder
-            // re-check this also covers "the release may have landed but we could not
-            // establish whose the mutex is", which is why the message does not assert
-            // that it is still ours.
-            AdoptUpload::PushedLockHeld => tracing::warn!(
-                outcome = ?outcome,
-                purpose = "report an adoption whose upload landed but whose lock did not come back",
-                "speleodb_adopt_ariane: conversion pushed; the write lock is still ours or \
-                 could not be confirmed released"
-            ),
-            other => tracing::warn!(
-                outcome = ?other,
-                purpose = "explain an adoption that converted but did not upload",
-                "speleodb_adopt_ariane: the conversion stayed local"
-            ),
-        }
-        outcome
-    }
-
-    /// [`Self::adopt_hand_over`] without the logging, so the arms stay readable.
-    ///
-    /// `expected_id` is the project this adoption converted, and the landed-but-locked
-    /// inference below is only sound about THAT project's link - see the arm.
-    fn adopt_hand_over_inner(&self, expected_id: &str) -> AdoptUpload {
-        match self.speleodb_start_editing() {
-            Ok(StartEditingResult::Editing) => {}
-            // Unreachable while the lock is ours - nobody can have advanced the tip
-            // since the download - but kept as arms rather than an `unreachable!`,
-            // because the thing making them unreachable is a mutex on another machine.
-            //
-            // A fast-forward is likewise impossible here (the fence reaches it only
-            // when the copy is clean, and this one is dirty by construction); folded in
-            // with the divergence because both mean the same thing to the caller: the
-            // server moved, so nothing was pushed.
-            Ok(StartEditingResult::FastForwarded { .. } | StartEditingResult::DivergenceNeeded) => {
-                return AdoptUpload::Diverged
-            }
-            Ok(StartEditingResult::LockedBy { email }) => return AdoptUpload::LockHeld { email },
-            Err(e) => return AdoptUpload::Failed { message: e.message },
-        }
-
-        match self.speleodb_done(Some(ADOPT_COMMIT_MESSAGE.to_owned())) {
-            Ok(DoneResult::Released) => AdoptUpload::Pushed,
-            // [#576 RV2-R-13] Landed, but the lock was the account's from another
-            // session (Start editing inherited it), so Done left it with that session.
-            Ok(DoneResult::LockHeldElsewhere) => AdoptUpload::PushedLockHeld,
-            Ok(DoneResult::DivergenceNeeded) => AdoptUpload::Diverged,
-            // Both mean the same thing to a caller with nothing left to retry with:
-            // the bytes did not land. The lock stays held, by `speleodb_done`'s own
-            // contract, so the user's retry from the status button can recover.
-            Ok(DoneResult::NotEditing | DoneResult::PushUnconfirmed) => AdoptUpload::Failed {
-                message: "the upload did not complete; the converted project is still local"
-                    .to_owned(),
-            },
-            // An error from Done does NOT mean the bytes did not land. Its last act on
-            // a landed push is to hand the lock back, and it reports a failure there by
-            // returning `Err` - AFTER the upload has been accepted and the dirty bit
-            // cleared. Reporting that as `Failed` told a user whose survey was safely on
-            // the server that it was "on this machine only", which is the most alarming
-            // way to be wrong about where someone's only copy is.
-            //
-            // The link is what tells the two apart, and it is already on disk: a push
-            // that landed clears `has_unpushed_edits`, and nothing else in this flow
-            // clears it. Read it back rather than guessing from the error, which cannot
-            // distinguish a release that failed from an upload that never happened.
-            //
-            // The link has to be the ADOPTED project's for any of that to follow.
-            // `speleodb_open_link` answers for whatever is open in `AppState`, not for a
-            // project id, so a load landing under an in-flight hand-over would have it
-            // read a stranger's link - and an unrelated CLEAN project then satisfies the
-            // predicate, reporting an upload that never happened and seeding the
-            // conversion clean over a copy that exists only in the cache. Nothing in this
-            // flow is supposed to permit that swap, which is exactly why a mismatch is
-            // logged as an error rather than absorbed: it means an invariant this
-            // inference rests on has gone, and the log is the only place that would say
-            // so. `Failed` is the fail-closed direction either way - it keeps the dirty
-            // seed and arms the quit guard.
-            Err(e) => match self.speleodb_open_link() {
-                Ok(link) if link.project_id != expected_id => {
-                    tracing::error!(
-                        expected = expected_id,
-                        found = %link.project_id,
-                        purpose = "prove the adoption's own push landed",
-                        "speleodb_adopt_ariane: the open link names a DIFFERENT project; \
-                         the open database changed under the hand-over"
-                    );
-                    AdoptUpload::Failed { message: e.message }
-                }
-                Ok(link) if !link.has_unpushed_edits => {
-                    tracing::warn!(
-                        error = %e.message,
-                        purpose = "report an adoption whose upload landed but whose lock did not come back",
-                        "speleodb_adopt_ariane: pushed, but the write lock is still held"
-                    );
-                    AdoptUpload::PushedLockHeld
-                }
-                // Still dirty, or unreadable: neither proves a landing.
-                _ => AdoptUpload::Failed { message: e.message },
-            },
         }
     }
 
@@ -2391,6 +2193,674 @@ impl AppState {
     }
 }
 
+/// [#576 A8] The Ariane adoption's chain as types. Each later step takes a value only
+/// the earlier one returns, and every proof is made only here:
+/// - the lock decision ([`LockDecision`]) is made from values read INSIDE the lock-ops
+///   span and ENDS it, so the account read and the probe cannot move above the span
+///   and the download cannot move into it;
+/// - the hand-back guard is armed from that decision, and the head resolve and the
+///   download are ITS method ([`AdoptLockGuard::fetch`]): nothing is read before the
+///   lock is decided, and every early return after it hands the lock back;
+/// - BASE is the commit the bytes were fetched at ([`AdoptedLink::new`] takes the
+///   [`AdoptFetched`]), and the stamped link is dirty and dated by construction;
+/// - the stamp's proof ([`DirtyStamped`]) disarms the guard, and only a disarmed guard
+///   hands a held lock over ([`HeldForHandOver`]);
+/// - only a hand-over that landed may settle the server type ([`AdoptLanded`]);
+/// - the close is the last step, and the verb's answer is made by it ([`AdoptClosed`]).
+mod adopt_order {
+    use std::path::Path;
+
+    use super::super::speleodb::DumpAt;
+    use super::super::speleodb_session::{InSpan, LockOpsHeld};
+    use super::{
+        pull_dating, usable_tip, AdoptFinalize, AdoptLock, AdoptionEditGate, AppState, PullDating,
+        ADOPT_COMMIT_MESSAGE,
+    };
+    use crate::core::command::ImportReceipt;
+    use crate::models::{SpeleoLink, UndoMode};
+    use crate::speleodb::contract::{dto_for_error, Endpoint};
+    use crate::speleodb::models::{AdoptUpload, DoneResult, StartEditingResult};
+    use crate::speleodb::{client, sync, SpeleoAdoptResult, SpeleoDbError, SpeleoErrorDto};
+
+    /// Proof the adoption decided whether it holds the project's write mutex, inside
+    /// the lock-ops span - which the decision ended.
+    pub(super) struct LockDecision {
+        lock: AdoptLock,
+    }
+
+    impl AppState {
+        /// Decide the adoption's write lock (see `adopt_acquire_in_span`) from the
+        /// account and the holder read inside `lock_ops`, and END the span here: the
+        /// download that follows must not run inside it (an import-long span would
+        /// block logout and every other lock operation for as long as it takes).
+        pub(super) fn adopt_take_lock(
+            &self,
+            lock_ops: LockOpsHeld<'_>,
+            account: &InSpan<(String, String)>,
+            insecure_http: bool,
+            project_id: &str,
+            holder: InSpan<Result<Option<String>, SpeleoDbError>>,
+        ) -> LockDecision {
+            let (endpoint, token) = account.get();
+            let lock = self.adopt_acquire_in_span(
+                &lock_ops,
+                endpoint,
+                token,
+                insecure_http,
+                project_id,
+                holder.into_inner(),
+            );
+            drop(lock_ops);
+            LockDecision { lock }
+        }
+    }
+
+    /// Hands an adoption's write lock back if the adoption never gets far enough to use
+    /// it.
+    ///
+    /// Adoption takes the mutex FIRST - so no other writer can land a revision under the
+    /// conversion - and only then does a long, fallible stretch of work: resolve, download,
+    /// classify, extract, guard, import, save. Any step of it can return, and every one of
+    /// those exits is a way to strand the project locked for every other editor until the
+    /// server-side timeout. A hand-back written at each exit is a list, and a list goes
+    /// stale the first time an arm is added; this is the same duty expressed once, so an
+    /// arm added later inherits it for free.
+    ///
+    /// [`AdoptLockGuard::disarm`] passes the duty on to the hand-over once there is a converted
+    /// project for the lock to be about. From that point [`AppState::speleodb_done`] owns
+    /// it, and its rules are the ones that apply: released when the push lands, kept when
+    /// a retry could still recover the work.
+    pub(super) struct AdoptLockGuard<'a> {
+        release: HandBack<'a>,
+        lock: AdoptLock,
+    }
+
+    /// The hand-back itself: released on drop while `armed`. Apart from the lock it
+    /// guards, so [`AdoptLockGuard::disarm`] can take the lock out by value.
+    struct HandBack<'a> {
+        state: &'a AppState,
+        endpoint: &'a str,
+        token: &'a str,
+        insecure_http: bool,
+        project_id: &'a str,
+        /// False when there is nothing to hand back - either no lock was taken, or the
+        /// hand-over has taken over responsibility for it.
+        armed: bool,
+    }
+
+    impl<'a> AdoptLockGuard<'a> {
+        /// Arm the hand-back from the lock decision: armed exactly when the lock was
+        /// taken.
+        pub(super) fn arm(
+            state: &'a AppState,
+            endpoint: &'a str,
+            token: &'a str,
+            insecure_http: bool,
+            project_id: &'a str,
+            decision: LockDecision,
+        ) -> Self {
+            Self {
+                release: HandBack {
+                    state,
+                    endpoint,
+                    token,
+                    insecure_http,
+                    project_id,
+                    armed: matches!(decision.lock, AdoptLock::Held),
+                },
+                lock: decision.lock,
+            }
+        }
+
+        /// A guard over a lock that was (`armed`) or was not taken, for the guard's own
+        /// tests: production arms one only from a [`LockDecision`].
+        #[cfg(test)]
+        pub(super) fn for_tests(
+            state: &'a AppState,
+            endpoint: &'a str,
+            token: &'a str,
+            insecure_http: bool,
+            project_id: &'a str,
+            armed: bool,
+        ) -> Self {
+            let lock = if armed {
+                AdoptLock::Held
+            } else {
+                AdoptLock::NotTaken(AdoptUpload::LockHeld { email: None })
+            };
+            Self::arm(
+                state,
+                endpoint,
+                token,
+                insecure_http,
+                project_id,
+                LockDecision { lock },
+            )
+        }
+
+        /// [#258] Resolve the head and download the dump AT it - the guard's own step,
+        /// so it can only run once the lock is decided and the hand-back armed.
+        ///
+        /// Fetched by hash for the reason the pull does: two requests mean a push can
+        /// land between them, and a tree fetched at A but dated B would let a choice
+        /// recorded here be recalled against a dump it never described. Best-effort -
+        /// an unresolvable head just means the bytes are undatable, which is what `None`
+        /// says, and adoption then asks again through the picker it already hosts.
+        ///
+        /// The resolve calls the client DIRECTLY, not via `speleodb_server_head`, which
+        /// wraps the same call in `speleodb_handle_auth`. That handler `forget()`s the
+        /// token on a 401 - keychain entry included - and because this failure is
+        /// deliberately swallowed and the token was captured before, routing it there
+        /// let a spurious 401 delete the user's stored credential while the adopt went
+        /// on to succeed: signed out with no signal and nothing to sign back in with.
+        /// The download, by contrast, IS routed through the auth handler like the pull's,
+        /// so a dead token forces re-login.
+        #[expect(
+            clippy::result_large_err,
+            reason = "returns the SpeleoErrorDto every sibling SpeleoDB step returns; boxing it is a \
+                      repo-wide change outside #576 A8"
+        )]
+        pub(super) fn fetch(&self) -> Result<AdoptFetched, SpeleoErrorDto> {
+            let HandBack {
+                state,
+                endpoint,
+                token,
+                insecure_http,
+                project_id,
+                ..
+            } = self.release;
+            let at = match client::get_revisions(endpoint, token, insecure_http, project_id) {
+                Ok(history) => usable_tip(
+                    sync::tip_of(&history.commits).map(str::to_owned),
+                    project_id,
+                ),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        project_id = %project_id,
+                        purpose = "date a remembered Ariane pick on adopt",
+                        "speleodb_adopt_ariane: could not resolve server HEAD; re-asking instead \
+                         of honouring an undatable choice"
+                    );
+                    None
+                }
+            };
+            let zip = state
+                .speleodb_handle_auth(
+                    Endpoint::DownloadDump,
+                    match at.as_deref() {
+                        Some(sha) => client::download_dump_at_hash(
+                            self,
+                            endpoint,
+                            token,
+                            insecure_http,
+                            project_id,
+                            sha,
+                        ),
+                        None => {
+                            client::download_dump(self, endpoint, token, insecure_http, project_id)
+                        }
+                    },
+                )
+                .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
+            Ok(AdoptFetched { zip, at })
+        }
+
+        /// Stop guarding: the lock now belongs to the hand-over. Takes the stamp's
+        /// proof - an unstamped project has no hand-over to give the lock TO - and
+        /// hands a held lock on only as [`HeldForHandOver`].
+        pub(super) fn disarm(self, _stamped: &DirtyStamped) -> Disarmed {
+            let Self { mut release, lock } = self;
+            release.armed = false;
+            match lock {
+                AdoptLock::Held => Disarmed::Held(HeldForHandOver { _held: () }),
+                AdoptLock::NotTaken(why) => Disarmed::NotTaken(why),
+            }
+        }
+    }
+
+    /// [#576 A8 NF-A8-BYPASS] The adoption's download licence: the armed (or
+    /// deliberately unarmed) guard, which exists only once the lock is decided.
+    impl client::DumpLicence for AdoptLockGuard<'_> {}
+
+    impl Drop for HandBack<'_> {
+        fn drop(&mut self) {
+            if !self.armed {
+                return;
+            }
+            tracing::info!(
+                project_id = self.project_id,
+                purpose = "hand back the lock an adoption took but never used",
+                "speleodb_adopt_ariane: releasing the write lock after a failed conversion"
+            );
+            // Best-effort, and it drops the acquisition claim whether or not the POST
+            // lands - the same sink every other abort arm releases through.
+            self.state.speleodb_release_best_effort(
+                self.endpoint,
+                self.token,
+                self.insecure_http,
+                self.project_id,
+            );
+        }
+    }
+
+    /// What disarming the guard hands on.
+    pub(super) enum Disarmed {
+        /// The adoption holds the lock: the hand-over may use it.
+        Held(HeldForHandOver),
+        /// It did not take it, and this is what the webview is told instead.
+        NotTaken(AdoptUpload),
+    }
+
+    /// Proof the guard was disarmed over a held lock - the hand-over's precondition.
+    pub(super) struct HeldForHandOver {
+        _held: (),
+    }
+
+    /// The dump adoption converts, with the commit it was fetched at (`None`: HEAD,
+    /// undatable).
+    pub(super) struct AdoptFetched {
+        zip: Vec<u8>,
+        at: Option<String>,
+    }
+
+    impl AdoptFetched {
+        pub(super) fn zip(&self) -> &[u8] {
+            &self.zip
+        }
+
+        /// The revision these bytes are - what dates the picker's answers.
+        pub(super) fn dump_at(&self) -> DumpAt<'_> {
+            DumpAt::from_sha(self.at.as_deref())
+        }
+
+        /// A fetch at `at`, for the tests of the steps that take one.
+        #[cfg(test)]
+        pub(super) fn for_tests(at: Option<&str>) -> Self {
+            Self {
+                zip: Vec::new(),
+                at: at.map(str::to_owned),
+            }
+        }
+    }
+
+    /// The hand-off link an adoption stamps, before the stamp.
+    pub(super) struct AdoptedLink {
+        endpoint: String,
+        project_id: String,
+        project_name: String,
+        base_commit_sha: Option<String>,
+    }
+
+    impl AdoptedLink {
+        /// BASE = the commit this project was actually built from, which is the one
+        /// `fetched` was downloaded at - NOT a second lookup.
+        ///
+        /// A second lookup reintroduces the window the by-hash download closed, and on
+        /// the worst possible side of it. The import between them is slow (parse the
+        /// `.tml`, build the project, save it), so a revision landing during it is not
+        /// exotic; the copy would then be A-derived content stamped BASE = B, and
+        /// stamped `has_unpushed_edits` too. Start editing reads BASE == tip and calls
+        /// it UpToDate, so nothing ever fast-forwards, and the push then reads base ==
+        /// tip and plans a plain Upload - putting A over B with no divergence raised.
+        ///
+        /// Keeping the original sha instead means BASE is A, so if B did land the copy
+        /// is honestly behind: the fence sees a commit that is not ours and raises the
+        /// divergence prompt, which is the outcome the user can act on. `advisory` (the
+        /// caller's sha) may stamp BASE when no tip resolved, and nothing else
+        /// ([`PullDating`]).
+        pub(super) fn new(
+            fetched: &AdoptFetched,
+            endpoint: String,
+            project_id: String,
+            project_name: String,
+            advisory: Option<String>,
+        ) -> Self {
+            let PullDating { base, .. } = pull_dating(fetched.at.clone(), advisory);
+            Self {
+                endpoint,
+                project_id,
+                project_name,
+                base_commit_sha: base,
+            }
+        }
+
+        /// The link as the stamp writes it, built AT the stamp.
+        ///
+        /// `has_unpushed_edits = true` because at this instant it is TRUE - the server
+        /// has never been given this `.stalx`. The hand-over clears it by pushing; every
+        /// path that does not push leaves it standing, which is what arms the quit guard
+        /// over a conversion that exists only in this cache.
+        ///
+        /// `last_edit_at` is stamped WITH it, and must be: a dirty bit with no edit time
+        /// is one a confirmed push can never clear. `edits_captured_by_push` reads a
+        /// missing timestamp as "unknown timing" and keeps the bit, so a link stamped
+        /// dirty-but-undated pushes successfully, stays dirty, reports
+        /// `PushUnconfirmed`, and holds the lock for a retry that will do the same thing
+        /// again. The conversion IS the edit and it happened just now, so `now` is both
+        /// true and the value that works: the push starts after the stamp, so
+        /// `last_edit_at <= push_start` and a landed push clears the bit.
+        pub(super) fn stamped_at_now(self, undo_mode: UndoMode) -> SpeleoLink {
+            SpeleoLink {
+                endpoint: self.endpoint,
+                project_id: self.project_id,
+                project_name: self.project_name,
+                base_commit_sha: self.base_commit_sha,
+                has_unpushed_edits: true,
+                last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
+                last_verify_at: None,
+                undo_mode: Some(undo_mode),
+            }
+        }
+    }
+
+    /// Proof the adopted copy is stamped with its dirty, dated link - the hand-over's
+    /// landed-but-locked inference rests on that bit being TRUE on entry.
+    pub(super) struct DirtyStamped {
+        _stamped: (),
+    }
+
+    #[cfg(test)]
+    impl DirtyStamped {
+        /// A stamp, for the tests of the guard's disarm.
+        pub(super) fn for_tests() -> Self {
+            Self { _stamped: () }
+        }
+    }
+
+    impl AppState {
+        /// The adoption's local half as the verb runs it
+        /// ([`AppState::adopt_import_and_save`]): while `_edit_gate` holds the edit gate
+        /// shut, stamping the link [`AdoptedLink`] builds. A stamp that lands returns
+        /// the [`DirtyStamped`] the hand-over needs.
+        #[expect(
+            clippy::result_large_err,
+            reason = "returns the SpeleoErrorDto every sibling SpeleoDB step returns; boxing it is a \
+                      repo-wide change outside #576 A8"
+        )]
+        pub(super) fn adopt_local_span(
+            &self,
+            _edit_gate: &AdoptionEditGate<'_>,
+            guard_local_edits_of: Option<&str>,
+            tml_path: &Path,
+            entry_name: &str,
+            dest: &Path,
+            project_name: String,
+            link: AdoptedLink,
+        ) -> Result<(Option<ImportReceipt>, Result<DirtyStamped, SpeleoDbError>), SpeleoErrorDto>
+        {
+            let (receipt, stamped) = self.adopt_import_and_save(
+                guard_local_edits_of,
+                tml_path,
+                entry_name,
+                dest,
+                project_name,
+                |undo_mode| link.stamped_at_now(undo_mode),
+            )?;
+            Ok((receipt, stamped.map(|()| DirtyStamped { _stamped: () })))
+        }
+
+        /// Hand the just-converted project to SpeleoDB over the lock this adoption is
+        /// already holding: open the edit session, push the `.stalx` with the Ariane
+        /// sidecar `speleodb_done` renders, release. The user's adoption is one click, so
+        /// its result should be a project that LIVES on the server - not a converted copy
+        /// sitting in a cache directory waiting for someone to remember to push it.
+        ///
+        /// Composed from the two ordinary verbs rather than a private upload, so the
+        /// fence, the ancestry recovery and the release rules are the ones already
+        /// audited for those paths. `speleodb_start_editing` reads our lock as INHERITED
+        /// (the account already holds it), which is exactly right: it opens the edit gate
+        /// without minting a second authorship claim over the one
+        /// [`Self::adopt_take_lock`] recorded.
+        ///
+        /// NEVER returns an error: the converted project is already on disk by the time
+        /// this runs, and no failure here should turn a finished local conversion into a
+        /// failed command. Each arm reports what happened so the webview can seed its
+        /// dirty bit honestly and say what is left to do.
+        ///
+        /// [#576 A8] Takes the disarmed guard's [`HeldForHandOver`], which only a guard
+        /// disarmed by the stamp's proof hands out, and returns the sealed [`HandedOver`]
+        /// whose [`HandedOver::landed`] is the type flip's precondition.
+        pub(super) fn adopt_hand_over(
+            &self,
+            _held: HeldForHandOver,
+            expected_id: &str,
+        ) -> HandedOver {
+            let outcome = self.adopt_hand_over_inner(expected_id);
+            // Logged HERE rather than at each arm, so no arm can be added without one. The
+            // outcomes that never reached the server all reach the user as the same "it
+            // stayed local" toast, deliberately - there is nothing they can do differently
+            // about a lock held versus a push that did not confirm - which makes this the
+            // only record of WHICH it was. Diagnosing the first of these without it meant
+            // reading the server's mutex table.
+            match &outcome {
+                AdoptUpload::Pushed => tracing::info!(
+                    purpose = "confirm the adoption reached the server",
+                    "speleodb_adopt_ariane: conversion pushed and the lock handed back"
+                ),
+                // Its OWN arm. Sharing the one above asserted the opposite of the server
+                // state - it says the lock came back, and this outcome is defined by its
+                // not having - and carried no `outcome` field to tell the two apart, so the
+                // trail for a stuck adoption read as a clean finish. Since the holder
+                // re-check this also covers "the release may have landed but we could not
+                // establish whose the mutex is", which is why the message does not assert
+                // that it is still ours.
+                AdoptUpload::PushedLockHeld => tracing::warn!(
+                    outcome = ?outcome,
+                    purpose = "report an adoption whose upload landed but whose lock did not come back",
+                    "speleodb_adopt_ariane: conversion pushed; the write lock is still ours or \
+                     could not be confirmed released"
+                ),
+                other => tracing::warn!(
+                    outcome = ?other,
+                    purpose = "explain an adoption that converted but did not upload",
+                    "speleodb_adopt_ariane: the conversion stayed local"
+                ),
+            }
+            HandedOver { upload: outcome }
+        }
+
+        /// [`Self::adopt_hand_over`] without the logging, so the arms stay readable.
+        ///
+        /// `expected_id` is the project this adoption converted, and the landed-but-locked
+        /// inference below is only sound about THAT project's link - see the arm.
+        fn adopt_hand_over_inner(&self, expected_id: &str) -> AdoptUpload {
+            match self.speleodb_start_editing() {
+                Ok(StartEditingResult::Editing) => {}
+                // Unreachable while the lock is ours - nobody can have advanced the tip
+                // since the download - but kept as arms rather than an `unreachable!`,
+                // because the thing making them unreachable is a mutex on another machine.
+                //
+                // A fast-forward is likewise impossible here (the fence reaches it only
+                // when the copy is clean, and this one is dirty by construction); folded in
+                // with the divergence because both mean the same thing to the caller: the
+                // server moved, so nothing was pushed.
+                Ok(
+                    StartEditingResult::FastForwarded { .. } | StartEditingResult::DivergenceNeeded,
+                ) => return AdoptUpload::Diverged,
+                Ok(StartEditingResult::LockedBy { email }) => {
+                    return AdoptUpload::LockHeld { email }
+                }
+                Err(e) => return AdoptUpload::Failed { message: e.message },
+            }
+
+            match self.speleodb_done(Some(ADOPT_COMMIT_MESSAGE.to_owned())) {
+                Ok(DoneResult::Released) => AdoptUpload::Pushed,
+                // [#576 RV2-R-13] Landed, but the lock was the account's from another
+                // session (Start editing inherited it), so Done left it with that session.
+                Ok(DoneResult::LockHeldElsewhere) => AdoptUpload::PushedLockHeld,
+                Ok(DoneResult::DivergenceNeeded) => AdoptUpload::Diverged,
+                // Both mean the same thing to a caller with nothing left to retry with:
+                // the bytes did not land. The lock stays held, by `speleodb_done`'s own
+                // contract, so the user's retry from the status button can recover.
+                Ok(DoneResult::NotEditing | DoneResult::PushUnconfirmed) => AdoptUpload::Failed {
+                    message: "the upload did not complete; the converted project is still local"
+                        .to_owned(),
+                },
+                // An error from Done does NOT mean the bytes did not land - see
+                // `landed_despite_release_error` for how the link tells the two apart.
+                Err(e) => {
+                    landed_despite_release_error(self.speleodb_open_link(), expected_id, e.message)
+                }
+            }
+        }
+    }
+
+    /// An error from Done does NOT mean the bytes did not land. Its last act on
+    /// a landed push is to hand the lock back, and it reports a failure there by
+    /// returning `Err` - AFTER the upload has been accepted and the dirty bit
+    /// cleared. Reporting that as `Failed` told a user whose survey was safely on
+    /// the server that it was "on this machine only", which is the most alarming
+    /// way to be wrong about where someone's only copy is.
+    ///
+    /// The link is what tells the two apart, and it is already on disk: a push
+    /// that landed clears `has_unpushed_edits`, and nothing else in this flow
+    /// clears it. Read it back rather than guessing from the error, which cannot
+    /// distinguish a release that failed from an upload that never happened.
+    ///
+    /// The link has to be the ADOPTED project's for any of that to follow.
+    /// `speleodb_open_link` answers for whatever is open in `AppState`, not for a
+    /// project id, so a load landing under an in-flight hand-over would have it
+    /// read a stranger's link - and an unrelated CLEAN project then satisfies the
+    /// predicate, reporting an upload that never happened and seeding the
+    /// conversion clean over a copy that exists only in the cache. Nothing in this
+    /// flow is supposed to permit that swap, which is exactly why a mismatch is
+    /// logged as an error rather than absorbed: it means an invariant this
+    /// inference rests on has gone, and the log is the only place that would say
+    /// so. `Failed` is the fail-closed direction either way - it keeps the dirty
+    /// seed and arms the quit guard.
+    pub(super) fn landed_despite_release_error(
+        open_link: Result<SpeleoLink, SpeleoDbError>,
+        expected_id: &str,
+        message: String,
+    ) -> AdoptUpload {
+        match open_link {
+            Ok(link) if link.project_id != expected_id => {
+                tracing::error!(
+                    expected = expected_id,
+                    found = %link.project_id,
+                    purpose = "prove the adoption's own push landed",
+                    "speleodb_adopt_ariane: the open link names a DIFFERENT project; \
+                     the open database changed under the hand-over"
+                );
+                AdoptUpload::Failed { message }
+            }
+            Ok(link) if !link.has_unpushed_edits => {
+                tracing::warn!(
+                    error = %message,
+                    purpose = "report an adoption whose upload landed but whose lock did not come back",
+                    "speleodb_adopt_ariane: pushed, but the write lock is still held"
+                );
+                AdoptUpload::PushedLockHeld
+            }
+            // Still dirty, or unreadable: neither proves a landing.
+            _ => AdoptUpload::Failed { message },
+        }
+    }
+
+    /// What the hand-over did, sealed: only [`AppState::adopt_hand_over`] makes one.
+    pub(super) struct HandedOver {
+        upload: AdoptUpload,
+    }
+
+    /// Proof the hand-over's push landed: the server type may be settled.
+    pub(super) struct AdoptLanded {
+        _landed: (),
+    }
+
+    impl HandedOver {
+        /// Landed exactly for the outcomes that mean the bytes are up. Claiming a flip
+        /// on a lock we could not take describes a project that does not exist.
+        pub(super) fn landed(&self) -> Option<AdoptLanded> {
+            matches!(
+                self.upload,
+                AdoptUpload::Pushed | AdoptUpload::PushedLockHeld
+            )
+            .then_some(AdoptLanded { _landed: () })
+        }
+
+        pub(super) fn into_upload(self) -> AdoptUpload {
+            self.upload
+        }
+
+        /// A hand-over that answered `upload`, for the tests of the landing gate.
+        #[cfg(test)]
+        pub(super) fn for_tests(upload: AdoptUpload) -> Self {
+            Self { upload }
+        }
+    }
+
+    #[cfg(test)]
+    impl AdoptLanded {
+        /// A landing, for the tests of the steps it gates.
+        pub(super) fn for_tests() -> Self {
+            Self { _landed: () }
+        }
+    }
+
+    /// The parts of the verb's answer the close passes through untouched.
+    pub(super) struct AdoptReport<'a> {
+        pub(super) dest: &'a Path,
+        pub(super) concurrent_session: bool,
+        pub(super) upload: AdoptUpload,
+        pub(super) import_receipt: Option<ImportReceipt>,
+    }
+
+    /// The verb's answer, made only by the close - so nothing can follow it.
+    pub(super) struct AdoptClosed {
+        result: SpeleoAdoptResult,
+    }
+
+    impl AdoptClosed {
+        pub(super) fn into_result(self) -> SpeleoAdoptResult {
+            self.result
+        }
+    }
+
+    impl AppState {
+        /// Hand the project BACK to the frontend to open, instead of leaving it
+        /// committed to `AppState` for a `loadProject` that then short-circuits.
+        ///
+        /// `do_create_project_full` inside the import commits the adopted project
+        /// unconditionally, so on return the backend held it open at `dest` - and
+        /// `do_load_project_full` answers a load of the path it already has open with
+        /// `ALREADY_OPEN`. The frontend reads that as "it is on screen already" (the
+        /// only way a pull can produce it) and short-circuits to a view flip, so
+        /// adoption finished with the view switched, no project in any store, and a
+        /// success toast over an empty screen. Closing here makes the frontend's load
+        /// an ordinary full load, which is how the pull path has always behaved: it
+        /// runs `close_project_if_open_at` before it replaces a cache file, and the
+        /// frontend's `loadProject` is what opens the result.
+        ///
+        /// LAST, because everything above needs the project open: the link stamp writes
+        /// through the live handle, and the hand-over renders the sidecar from the open
+        /// survey. A held lock is deliberately NOT released here - `speleodb_done`'s
+        /// non-landing arms keep it so a retry can recover, and the frontend re-opens
+        /// this very project a moment later.
+        ///
+        /// [#576 A8] Takes the verdict (`finalized`), so it cannot run before the
+        /// hand-over and the type settle, and the edit gate by value, which it lifts
+        /// after the close - the same order the end of the verb used to drop them in.
+        pub(super) fn adopt_close(
+            &self,
+            edit_gate: AdoptionEditGate<'_>,
+            finalized: AdoptFinalize,
+            report: AdoptReport<'_>,
+        ) -> AdoptClosed {
+            self.close_project();
+            let result = SpeleoAdoptResult {
+                local_path: report.dest.to_string_lossy().into_owned(),
+                type_flipped: finalized.type_flipped,
+                concurrent_session: report.concurrent_session,
+                upload: report.upload,
+                import_receipt: report.import_receipt,
+            };
+            drop(edit_gate);
+            AdoptClosed { result }
+        }
+    }
+}
+
 /// [#576 A8] The pull's fail-fast guard as a type: the dump download is a method of
 /// the proof the guard returns, made only here, so a download written above the
 /// guard - the order that buffers a whole dump only to refuse it - does not compile.
@@ -2460,16 +2930,21 @@ mod pull_guard {
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
+    use super::adopt_order::{
+        landed_despite_release_error, AdoptFetched, AdoptLanded, AdoptLockGuard, AdoptedLink,
+        DirtyStamped, HandedOver,
+    };
     use super::{
         adopt_convert, classify_dump_entry, probe_inputs_valid, pull_dating, resolve_dump_entry,
-        usable_tip, AdoptLockGuard, ArianeRoute, DumpAt, PullDating, StalxAmbiguity,
-        UnopenableDump,
+        usable_tip, ArianeRoute, DumpAt, PullDating, StalxAmbiguity, UnopenableDump,
     };
+    use crate::core::state::speleodb::{authed_session_at, logged_events, routing_stub};
     use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::core::state::AppState;
     use crate::parsers::tml::test_helpers::{parse_synthetic_tmlu, wrap_xml, TripShot};
     use crate::parsers::tml::{TmlFile, TmlSection, TmlShot, TmlShotType, TmlUnit};
     use crate::speleodb::dump::Dump;
+    use crate::speleodb::models::AdoptUpload;
     use crate::speleodb::SpeleoDbError;
 
     /// The revision the resolve tests pretend their dumps came from. Most of them
@@ -2731,45 +3206,6 @@ mod tests {
         );
     }
 
-    /// [#258] Adoption must resolve the server head ONCE and stamp BASE from that same
-    /// sha - the commit it downloaded by hash - rather than looking it up again after
-    /// the import.
-    ///
-    /// A second lookup reopens the window the by-hash download closed, on the worst
-    /// side of it. The import between them is slow (parse, build, save), so a revision
-    /// landing during it is ordinary; the copy is then A-derived content stamped
-    /// BASE = B and `has_unpushed_edits`. Start editing reads BASE == tip and calls it
-    /// UpToDate so nothing fast-forwards, and the push reads base == tip and plans a
-    /// plain Upload - putting A over B with no divergence raised, which silently
-    /// overwrites the very revision that landed during the import.
-    ///
-    /// Guarded by SOURCE, like the pull's guard-before-download ordering above and for
-    /// the same reason: reaching the real thing needs a server that can advance its
-    /// head mid-import. The live orchestration tests are where a behavioural version
-    /// would go.
-    #[test]
-    fn adoption_stamps_base_from_the_commit_it_downloaded_not_a_later_lookup() {
-        let src = prod_source();
-        let start = src
-            .find("fn speleodb_adopt_ariane")
-            .expect("the adoption verb is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-
-        assert_eq!(
-            body.matches("client::get_revisions(").count()
-                + body.matches("speleodb_server_head(").count(),
-            1,
-            "adoption must resolve the head exactly once; a second lookup after the \
-             import is what lets an A-derived project be stamped BASE = B"
-        );
-        assert!(
-            body.contains("pull_dating(adopt_at"),
-            "BASE must come from the sha adoption downloaded by hash, through the same \
-             split that keeps the advisory fallback off the choice dating"
-        );
-    }
-
     /// A project id for the lock-guard tests below. Any valid-looking id will do -
     /// nothing here reaches a server.
     const GUARDED: &str = "77777777-7777-7777-7777-777777777777";
@@ -2790,73 +3226,6 @@ mod tests {
         session.token_store = crate::speleodb::auth::TokenStore::from_in_memory_token("tok");
     }
 
-    /// `PushedLockHeld` is inferred from the link, and the inference is only sound
-    /// because the dirty bit is provably TRUE on entry - adoption stamps it before the
-    /// hand-over, and the only things that clear it are the push's own landed arms. A
-    /// stamp that stopped setting it would make every failed release read as a landed
-    /// push, telling a user their survey was on the server when it was not.
-    ///
-    /// Pinned by source because the behavioural version needs a server that accepts an
-    /// upload and then refuses a release. What it holds is the ordering the inference
-    /// rests on, and that the unreadable-link case falls to `Failed`.
-    #[test]
-    fn the_pushed_but_locked_inference_rests_on_a_dirty_bit_set_before_the_push() {
-        let body = adopt_body();
-        let stamp = body
-            .find("has_unpushed_edits: true")
-            .expect("adoption stamps the link dirty");
-        let hand_over = body
-            .find("self.adopt_hand_over(")
-            .expect("the hand-over follows it");
-        assert!(
-            stamp < hand_over,
-            "the dirty bit has to be set BEFORE the push, or a cleared bit afterwards \
-             proves nothing about whether anything landed"
-        );
-
-        let src = prod_source();
-        let start = src
-            .find("fn adopt_hand_over_inner")
-            .expect("the hand-over is present");
-        let inner = &src[start..];
-        let inner = &inner[..inner.find("\n    }\n").expect("fn body terminates")];
-        assert!(
-            inner.contains("Ok(link) if !link.has_unpushed_edits"),
-            "the inference reads the link, and only a CLEAN one may claim a landing"
-        );
-        assert!(
-            inner.contains("_ => AdoptUpload::Failed"),
-            "and the catch-all is what makes an unreadable link fall to `Failed` rather \
-             than claim a landing nobody can confirm"
-        );
-        assert!(
-            inner.contains("AdoptUpload::PushedLockHeld"),
-            "and reports the landed-but-locked outcome apart from a failure"
-        );
-
-        // The link is read from `AppState`, not by project id, so the clean bit only
-        // proves OUR push landed if the open link is still the adopted project's. A
-        // mismatch is an invariant failure, not an ordinary one: it is logged at error
-        // level precisely because nothing else in the flow would report it, and it
-        // falls to `Failed` so the conversion keeps its protective dirty seed.
-        let mismatch = inner
-            .find("link.project_id != expected_id")
-            .expect("the inference checks the link belongs to this adoption");
-        let clean = inner
-            .find("Ok(link) if !link.has_unpushed_edits")
-            .expect("checked above, so it is present");
-        assert!(
-            mismatch < clean,
-            "the identity check has to come BEFORE the dirty-bit read, or a stranger \
-             project's clean link satisfies the inference first"
-        );
-        assert!(
-            inner.contains("tracing::error!"),
-            "and a foreign link is surfaced as an error - it means the open database \
-             changed under the hand-over, which nothing else would report"
-        );
-    }
-
     /// The guard's whole purpose: an adoption that took the mutex and then failed
     /// before it had anything to push must not walk away still holding it. The
     /// acquisition claim is the observable half - `speleodb_release_best_effort` drops
@@ -2868,7 +3237,7 @@ mod tests {
         sign_in_unreachable(&state);
         state.speleodb_note_lock_acquired(Some(GUARDED));
 
-        drop(AdoptLockGuard::new(
+        drop(AdoptLockGuard::for_tests(
             &state,
             UNREACHABLE,
             "token",
@@ -2893,9 +3262,8 @@ mod tests {
         sign_in_unreachable(&state);
         state.speleodb_note_lock_acquired(Some(GUARDED));
 
-        let mut guard = AdoptLockGuard::new(&state, UNREACHABLE, "token", true, GUARDED, true);
-        guard.disarm();
-        drop(guard);
+        let guard = AdoptLockGuard::for_tests(&state, UNREACHABLE, "token", true, GUARDED, true);
+        drop(guard.disarm(&DirtyStamped::for_tests()));
 
         assert!(
             state.speleodb_lock_acquired_here(GUARDED),
@@ -2912,7 +3280,7 @@ mod tests {
         sign_in_unreachable(&state);
         state.speleodb_note_lock_acquired(Some(GUARDED));
 
-        drop(AdoptLockGuard::new(
+        drop(AdoptLockGuard::for_tests(
             &state,
             UNREACHABLE,
             "token",
@@ -2924,172 +3292,6 @@ mod tests {
         assert!(
             state.speleodb_lock_acquired_here(GUARDED),
             "no lock taken means no lock to release, and no claim to end"
-        );
-    }
-
-    /// The body of `speleodb_adopt_ariane`, for the ordering tripwires below.
-    ///
-    /// Sliced the same way the dating tripwire above slices it: to the first line that
-    /// is a closing brace at method indentation, which is the method's own.
-    fn adopt_body() -> &'static str {
-        let src = prod_source();
-        let start = src
-            .find("fn speleodb_adopt_ariane")
-            .expect("the adoption verb is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-        // The terminator is "a closing brace at method indentation", which is the
-        // method's own only as long as nothing inside the body is written at that
-        // indent. A refactor that introduces one truncates this slice - and the
-        // tripwires built on it include NEGATIVE assertions (`!body.contains(..)`),
-        // which then pass over an empty tail without anyone noticing. Anchoring on the
-        // verb's own return is what makes a short slice loud instead of silent.
-        assert!(
-            body.contains("Ok(SpeleoAdoptResult {"),
-            "the sliced body must reach the verb's return, or every tripwire built on \
-             it is measuring a fragment"
-        );
-        body
-    }
-
-    /// Adoption reads a tree and writes it straight back, so the whole span between
-    /// those two acts is a window in which another writer's push makes the converted
-    /// bytes stale. Fetching by hash closes the window between the two REQUESTS; it
-    /// does nothing about the one that spans the import, which is the slow part
-    /// (parse the `.tml`, build the project, save it). Taking the write mutex before
-    /// the first byte is what closes that one, and the ORDER is the entire mechanism -
-    /// a lock taken after the download protects nothing that was read before it.
-    ///
-    /// By source, because the real thing needs a server that can advance its head
-    /// mid-import. The live orchestration tests are where a behavioural version goes.
-    #[test]
-    fn adoption_takes_the_lock_before_it_reads_anything() {
-        let body = adopt_body();
-        let lock = body
-            .find("self.adopt_take_lock(")
-            .expect("adoption takes the write mutex");
-        let resolve = body
-            .find("client::get_revisions(")
-            .expect("adoption resolves the head");
-        let download = body
-            .find("download_dump")
-            .expect("adoption downloads the dump");
-
-        assert!(
-            lock < resolve && lock < download,
-            "the mutex must be taken BEFORE the head resolve and the download, or the \
-             tree adoption converts can be superseded while it is converting it"
-        );
-    }
-
-    /// The lock is taken before a long fallible stretch - resolve, download, classify,
-    /// extract, guard, import, save - and every `?` in it is a way to walk away holding
-    /// a mutex that blocks every other writer until the server-side timeout. One guard
-    /// covers them all, which is what stops the next arm added from having to remember.
-    ///
-    /// Pinned as an ordering because that is what makes it a guard rather than a
-    /// release: armed before the stretch, disarmed only once there is a converted
-    /// project for the lock to be about.
-    #[test]
-    fn the_lock_guard_spans_every_early_return_between_the_lock_and_the_conversion() {
-        let body = adopt_body();
-        let armed = body
-            .find("AdoptLockGuard::new(")
-            .expect("adoption arms the hand-back guard");
-        let disarmed = body
-            .find("lock_guard.disarm()")
-            .expect("adoption disarms it once the conversion exists");
-        let import = body
-            .find("self.adopt_import_and_save(")
-            .expect("adoption imports the .tml");
-
-        assert!(
-            armed < import && import < disarmed,
-            "the guard must be armed before the import and disarmed after it, so every \
-             early return in between hands the mutex back"
-        );
-        assert!(
-            body.find("self.adopt_hand_over(")
-                .is_some_and(|h| disarmed < h),
-            "the hand-over owns the lock from the disarm onwards - `speleodb_done`'s \
-             rules decide whether it is released or kept for a retry"
-        );
-    }
-
-    /// A project typed `other` whose only file is the Ariane one that type says to
-    /// disregard is openable by nobody: the dump classifies as adopt-Ariane, and the
-    /// flipped type is what tells the app not to trust it. Flipping only after the
-    /// `.stalx` is actually on the server means the failure mode is the honest one -
-    /// an un-flipped project that still offers Adopt.
-    #[test]
-    fn the_server_type_flips_only_after_the_stalx_lands() {
-        let body = adopt_body();
-
-        // The verb itself issues no PATCH: the flip lives in `adopt_finalize`,
-        // which reads before it writes. Two PATCHes was not merely wasteful - the push's
-        // own heal had already flipped it, and `type_flipped` was decided by the second
-        // request, so a transient failure there reported "the type could not be changed"
-        // about a project whose type had just been changed.
-        assert!(
-            !body.contains("client::patch_project("),
-            "the verb must not flip the type inline; it goes through the read-first helper"
-        );
-
-        let hand_over = body
-            .find("self.adopt_hand_over(")
-            .expect("adoption hands the conversion over");
-        let ensure = body
-            .find("self.adopt_finalize(")
-            .expect("adoption settles the project type");
-        assert!(
-            hand_over < ensure,
-            "the type is settled only after the push that earns it"
-        );
-        assert!(
-            body.contains("matches!(upload, AdoptUpload::Pushed | AdoptUpload::PushedLockHeld)"),
-            "and gated on the outcomes that mean the bytes landed - claiming a flip on a \
-             lock we could not take describes a project that does not exist"
-        );
-    }
-
-    /// The half the ordering tripwire cannot see: what the helper DOES.
-    ///
-    /// Adoption is the one caller that knows the project was Ariane - it just converted
-    /// it - so a type it cannot read is still a type it may set. Delegating that decision
-    /// to the generic push heal was a regression: the heal declines to act on an unknown
-    /// type, which is right when it might be someone's Compass project and wrong here,
-    /// and it turned one transient GET failure into a project left typed `ariane` with a
-    /// `.stalx` on it, still offering Adopt over a copy that already exists.
-    #[test]
-    fn an_unreadable_project_type_still_gets_flipped() {
-        let src = prod_source();
-        let start = src
-            .find("fn adopt_finalize")
-            .expect("the helper is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-
-        let get = body
-            .find("client::get_project(")
-            .expect("it reads the current type first");
-        let patch = body
-            .find("client::patch_project(")
-            .expect("it flips when it has to");
-        assert!(
-            get < patch,
-            "READ first: the common case is a type the push already flipped, and asking \
-             costs a GET where assuming costs a redundant PATCH"
-        );
-
-        // The `Err` arm must fall THROUGH to the flip, not return.
-        let err_arm = body.find("Err(e) => {").expect("the unreadable-type arm");
-        assert!(
-            err_arm < patch,
-            "a type we could not read must fall through to the flip, not skip it"
-        );
-        assert!(
-            body[err_arm..patch].contains("flipping anyway"),
-            "and it must say so, because silently not flipping is what the old shape did"
         );
     }
 
@@ -3570,224 +3772,32 @@ mod tests {
         );
     }
 
-    /// The acquire and the claim that records it have to be ONE act under the shared
-    /// lock-operations guard, the same span every other lock operation takes.
-    ///
-    /// Without it a logout can start while the acquire is in flight, see no acquisition
-    /// to hand back, finish clearing the session, and only then have our acquire succeed
-    /// with the token it captured beforehand - a server mutex held by a session that no
-    /// longer exists, with no local claim naming it, freed only by the server timeout.
-    ///
-    /// [#576 A8] That the ACQUIRE (and the claim it mints) runs inside the span, with
-    /// the span still held there, is the type's job now: `adopt_take_lock` takes the
-    /// span's `LockOpsHeld` proof, so an acquire outside it - or an early `drop` of the
-    /// guard - does not compile. What is left here is not converted yet: that the
-    /// account read and the holder probe sit inside the span too, and that the span
-    /// closes before the download (it must not swallow the conversion, which would
-    /// block logout for as long as an import takes).
-    #[test]
-    fn the_adopt_acquire_and_its_claim_share_the_lock_ops_span() {
-        let body = adopt_body();
-
-        let span = body
-            .find("self.speleodb_lock_ops_guard()")
-            .expect("the verb opens the shared lock-ops span");
-        let token = body
-            .find("self.speleodb_active_token()")
-            .expect("the account is read");
-        let probe = body
-            .find("self.speleodb_lock_holder_checked(")
-            .expect("the holder is probed");
-        let acquire = body
-            .find("self.adopt_take_lock(")
-            .expect("the mutex is taken");
-
-        // The ACCOUNT READ is inside the span, not just the acquire. A span that opens
-        // later leaves the token read and a whole network round trip outside it, and a
-        // logout completing in THAT window is the same failure with more steps: the
-        // acquire lands with a token captured beforehand and the claim is dropped for
-        // want of an account to stamp it with. The sibling path states the rule - the
-        // guard comes first, before the account is read.
-        assert!(
-            span < token && span < probe,
-            "the span must cover the account read and the probe, not only the acquire"
-        );
-
-        let closes = body[acquire..]
-            .find("\n        };")
-            .map(|at| acquire + at)
-            .expect("the span's block closes");
-        let resolve = body
-            .find("client::get_revisions(")
-            .expect("the head resolve follows it");
-        assert!(
-            closes < resolve,
-            "the span must shut before the download - holding it across the import would \
-             block logout for the length of one"
-        );
-    }
-
-    /// The release verdict's own span, and the same argument one stage later: reading
-    /// who holds the mutex and retiring the claim that says WE do are one act.
-    ///
-    /// Separated, a `speleodb_start_editing` for this project and account lands in
-    /// between, and `speleodb_record_claim` REPLACES the same-project entry rather than
-    /// appending - so by the time the clear runs there is one claim for that pair and it
-    /// is the new session's. The clear matches on project + account, retires that, and
-    /// leaves a live edit session holding a server mutex with no janitor retry pointer
-    /// and no authorship provenance.
-    ///
-    /// Structural for the same reason as the acquire span: reproducing it needs a second
-    /// edit session to interleave with an in-flight HTTP request.
-    ///
-    /// [#576 A8] The CLEAR's half is the type's job now: `speleodb_forget_lock_acquired_as`
-    /// takes the span's `LockOpsHeld` proof, so a clear outside the block, or after an
-    /// early `drop` of the guard, does not compile. What is left: the holder read
-    /// (`adopt_finalize`) opens inside the same span - not converted yet.
-    #[test]
-    fn the_release_verdict_and_its_claim_clear_share_a_lock_ops_span() {
-        let body = adopt_body();
-
-        // Located from the hand-over forward, not by `find` from the top - the acquire
-        // span above is the first occurrence and this assertion is not about it. That
-        // ordering is also what keeps this span legal: `adopt_hand_over` runs
-        // `speleodb_start_editing` and `speleodb_done`, which take this same
-        // non-reentrant guard, so opening any earlier is a self-deadlock.
-        let hand_over = body
-            .find("self.adopt_hand_over(")
-            .expect("the hand-over precedes the verdict");
-        let span = body[hand_over..]
-            .find("self.speleodb_lock_ops_guard()")
-            .map(|at| hand_over + at)
-            .expect("the verdict opens its own lock-ops span, after the hand-over");
-        let finalize = body
-            .find("self.adopt_finalize(")
-            .expect("the holder and type are read");
-        assert!(span < finalize, "the span must open before the holder read");
-    }
-
-    /// The counterpart to the span above: the helper it calls must NOT take the guard
-    /// itself. `std::sync::Mutex` is not reentrant, so a second acquisition inside the
-    /// caller's span is not a redundancy - it is a self-deadlock on the first adoption
-    /// anyone runs.
+    /// The adoption's lock decision runs INSIDE the lock-ops span (`adopt_take_lock`
+    /// takes the guard by value, the acquire under it takes its proof), so neither half
+    /// may take the guard itself. `std::sync::Mutex` is not reentrant, so a second
+    /// acquisition inside the span is not a redundancy - it is a self-deadlock on the
+    /// first adoption anyone runs.
     ///
     /// A sanctioned source scan (#576 A8-D2, docs/testing-recipes.md "Source scans"):
     /// "this function takes no guard of its own" is a site rule the type cannot state -
     /// the helper is HANDED the span's proof, which proves the span is held, not that
-    /// nothing inside reaches for it again.
+    /// nothing inside reaches for it again. (What else this used to read - that the
+    /// claim is minted under the span and that the conversion is not run inside it - is
+    /// the types' now: the conversion needs the `AdoptFetched` only the guard armed
+    /// from the decision can fetch.)
     #[test]
-    fn the_acquire_helper_does_not_retake_the_span_its_caller_holds() {
-        let src = prod_source();
-        let start = src
-            .find("fn adopt_take_lock")
-            .expect("the acquire helper is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-
-        assert!(
-            !body.contains("speleodb_lock_ops_guard()"),
-            "RULE (lock-ops is not reentrant): the caller holds the span across this call; \
-             retaking it self-deadlocks"
-        );
-        assert!(
-            body.contains("self.speleodb_note_lock_acquired("),
-            "and the claim is still minted here, inside the caller's span"
-        );
-        assert!(
-            !body.contains("adopt_import_and_save"),
-            "the helper must not perform the conversion; the span its caller holds is \
-             not one to keep across it"
-        );
-    }
-
-    /// Adoption is a caller that RELEASES on the way out, which is what makes the
-    /// difference between the two lock probes matter here.
-    ///
-    /// `speleodb_lock_holder` collapses "unheld" and "could not find out" into `None`
-    /// - right for the display probes it was written for, where both render as
-    /// unknown. Adoption reading a failed GET as unheld goes on to acquire, and an
-    /// acquire over a mutex OUR OWN ACCOUNT already holds is a server-side no-op: it
-    /// returns 200 and reports no collision, so nothing later in the flow can discover
-    /// one. The push then lands and `speleodb_done` hands the lock back out from under
-    /// the window that was actually using it, which goes on editing until its next
-    /// push 403s. Another account's lock is safe either way - the server answers that
-    /// acquire with the 400 this flow already handles - so it is only our own that
-    /// needs the probe to admit it does not know.
-    #[test]
-    fn adoption_reads_the_lock_probe_honestly_rather_than_as_unheld() {
-        let body = adopt_body();
-        assert!(
-            body.contains("self.speleodb_lock_holder_checked("),
-            "adoption must use the probe that keeps `unheld` and `unreadable` apart"
-        );
-        assert!(
-            !body.contains("self.speleodb_lock_holder("),
-            "and must not use the collapsing one: it reads a failed GET as unheld, \
-             which is how an adoption acquires - and later releases - a lock our own \
-             account is holding in another window"
-        );
-    }
-
-    /// A dirty bit with no edit time is one a confirmed push can NEVER clear:
-    /// `edits_captured_by_push` reads a missing timestamp as unknown timing and keeps
-    /// the bit, because an edit it cannot date might postdate the upload. Adoption
-    /// stamps `has_unpushed_edits: true` on a link it mints from nothing, so it is the
-    /// one place that can create that pairing - and it did, which made every adoption
-    /// push successfully, stay dirty, report `PushUnconfirmed` and hold the lock for a
-    /// retry that would do the same thing again.
-    ///
-    /// The same defect the v9→v10 migration had to backfill the epoch for. Pinned here
-    /// against the predicate itself, so the rule travels with its reason.
-    #[test]
-    fn the_adopted_link_is_dated_so_a_landed_push_can_clear_it() {
-        assert!(
-            !crate::speleodb::sync::edits_captured_by_push(None, Some("2026-07-31T00:00:00+00:00")),
-            "an undated dirty bit is never captured by a push - this is the trap"
-        );
-
-        let body = adopt_body();
-        assert!(
-            body.contains("has_unpushed_edits: true"),
-            "the adopted copy is un-pushed at the moment it is stamped"
-        );
-        assert!(
-            body.contains("last_edit_at: Some(chrono::Utc::now().to_rfc3339())"),
-            "and it must be DATED, or the hand-over's push lands and the bit survives \
-             it: the conversion is the edit, and it happened now"
-        );
-    }
-
-    /// `do_create_project_full` inside the import commits the adopted project into
-    /// `AppState`, so without this the backend held it open at the very path the
-    /// frontend was about to load - and `do_load_project_full` answers a load of the
-    /// path it already has open with `ALREADY_OPEN`. The frontend reads that as "it is
-    /// on screen already", which is true after a re-open and false after an adopt, so
-    /// adoption ended with the view flipped, nothing in any store, and a success toast
-    /// over an empty screen.
-    ///
-    /// LAST is load-bearing, not tidiness: the link stamp writes through the live
-    /// handle and the hand-over renders the sidecar from the open survey, so a close
-    /// anywhere earlier takes the project out from under both.
-    #[test]
-    fn adoption_hands_the_project_back_to_the_frontend_to_open() {
-        let body = adopt_body();
-        assert_eq!(
-            body.matches("self.close_project();").count(),
-            1,
-            "adoption must close the project it built exactly once, so the frontend's \
-             loadProject is a real load rather than an ALREADY_OPEN short-circuit"
-        );
-        let close = body
-            .find("self.close_project();")
-            .expect("counted above, so it is present");
-        let ensure = body
-            .find("self.adopt_finalize(")
-            .expect("adoption settles the project type");
-        assert!(
-            ensure < close,
-            "everything that needs the project open - the link stamp, the sidecar \
-             render, the hand-over and its verdict - has to run before the close"
-        );
+    fn the_lock_decision_does_not_retake_the_span_it_runs_in() {
+        use crate::models::source_scan::fn_body;
+        for signature in [
+            "pub(super) fn adopt_take_lock(",
+            "fn adopt_acquire_in_span(",
+        ] {
+            assert!(
+                !fn_body(prod_source(), signature).contains("speleodb_lock_ops_guard()"),
+                "RULE (lock-ops is not reentrant): `{signature}` runs inside the span; \
+                 retaking it self-deadlocks"
+            );
+        }
     }
 
     /// [#258] The tip that pins the by-hash download comes off the wire, and it lands
@@ -3970,38 +3980,6 @@ mod tests {
         assert!(!state.speleodb_dump_offer_answers(project, DumpAt::Revision(NEXT)));
         // ...and does answer A, so the ordinary confirmation is untouched.
         assert!(state.speleodb_dump_offer_answers(project, DumpAt::Revision(TIP)));
-    }
-
-    /// [#258] Adoption classifies with its OWN matcher - it wants an Ariane entry and
-    /// refuses a `.stalx` with its own message - so the resolver's dating never reaches
-    /// it and both halves have to be repeated there. Missing either restored the
-    /// overwrite for Ariane alone, which is exactly how it was missed the first time:
-    /// the `.stalx` picker was bound and this one silently was not.
-    ///
-    /// Structural because the behavioural version needs a server - the gate itself is
-    /// covered above, on the session state the two paths share.
-    #[test]
-    fn adoption_dates_its_own_picker_replies_too() {
-        let src = prod_source();
-        let start = src
-            .find("fn speleodb_adopt_ariane")
-            .expect("the adoption verb is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-
-        assert_eq!(
-            body.matches("speleodb_dump_offer_answers(").count(),
-            1,
-            "adoption must gate a FRESH `entry_path` on the revision its candidates \
-             were offered for, exactly as the resolver gates one"
-        );
-        assert_eq!(
-            body.matches("speleodb_note_dump_offer(").count(),
-            2,
-            "both ambiguities adoption reports - the Ariane set, and the `.stalx` set \
-             the frontend routes by kind to the OPEN verb - must record the revision \
-             they describe, or the reply has nothing to be measured against"
-        );
     }
 
     /// [#258 review] A View's answer must not evict the tip's. `speleodb_revisions`
@@ -4284,34 +4262,6 @@ mod tests {
         );
     }
 
-    /// [#258 review] Adoption's best-effort head resolve must not be able to delete the
-    /// user's credential. `speleodb_server_head` wraps the call in `speleodb_handle_auth`,
-    /// which `forget()`s the token on a 401 - keychain entry included - and this
-    /// failure is deliberately swallowed, so a spurious 401 signed the user out with no
-    /// signal while the adopt went on to succeed. The pull states the rule for exactly
-    /// this shape of call, and adoption itself restates it for the type flip.
-    #[test]
-    fn adoptions_best_effort_head_resolve_stays_off_the_auth_drop() {
-        let src = prod_source();
-        let start = src
-            .find("fn speleodb_adopt_ariane")
-            .expect("the adoption verb is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-
-        assert_eq!(
-            body.matches("speleodb_server_head(").count(),
-            0,
-            "the head resolve must not route through the 401 auto-drop: its failure is \
-             swallowed, so the drop is invisible and takes the keychain entry with it"
-        );
-        assert_eq!(
-            body.matches("client::get_revisions(").count(),
-            1,
-            "it calls the client directly instead, as the pull path does"
-        );
-    }
-
     /// The rule above is only worth anything if every landing path applies it, and
     /// "landed" is not the same set as "returned Confirmed". A source scan because
     /// reaching the real thing needs a server; the failure being guarded is someone
@@ -4524,6 +4474,376 @@ mod tests {
             ])
             .expect("stalx wins"),
             "misc/project.stalx"
+        );
+    }
+
+    // ---- [#576 A8] the adoption chain, driven -----------------------------------
+
+    /// A link for the hand-over inference below.
+    fn hand_over_link(project_id: &str, dirty: bool) -> crate::models::SpeleoLink {
+        crate::models::SpeleoLink {
+            endpoint: UNREACHABLE.to_owned(),
+            project_id: project_id.to_owned(),
+            project_name: "Adopted".to_owned(),
+            base_commit_sha: None,
+            has_unpushed_edits: dirty,
+            last_edit_at: None,
+            last_verify_at: None,
+            undo_mode: None,
+        }
+    }
+
+    /// `PushedLockHeld` is inferred from the link when `speleodb_done` returned `Err`
+    /// over a push, and only the ADOPTED project's link, read back CLEAN, proves the
+    /// bytes landed. A stamp that stopped setting the dirty bit would make every failed
+    /// release read as a landed push, telling a user their survey was on the server
+    /// when it was not; a stranger's clean link (a load landing under the hand-over)
+    /// would do the same.
+    ///
+    /// [#576 A8] Was a source scan of `adopt_hand_over_inner`'s arms. The arms are
+    /// driven here; that the bit is TRUE on entry is the types' job (the hand-over
+    /// takes a lock only a guard disarmed by the dirty stamp's proof hands out).
+    #[test]
+    fn a_release_error_reads_the_adopted_link_to_tell_a_landing_from_a_failure() {
+        let verdict = |open: Result<crate::models::SpeleoLink, SpeleoDbError>| {
+            landed_despite_release_error(open, GUARDED, "release refused".to_owned())
+        };
+        let clean = verdict(Ok(hand_over_link(GUARDED, false)));
+        let dirty = verdict(Ok(hand_over_link(GUARDED, true)));
+        let unreadable = verdict(Err(SpeleoDbError::NoRemoteProject));
+        let mut foreign = None;
+        let logs = logged_events(|| {
+            foreign = Some(verdict(Ok(hand_over_link(
+                "88888888-8888-8888-8888-888888888888",
+                false,
+            ))));
+        });
+        println!(
+            "own clean link -> {clean:?}; own dirty -> {dirty:?}; unreadable -> \
+             {unreadable:?}; a stranger's clean link -> {foreign:?}; logged {logs:?}"
+        );
+        assert!(
+            matches!(clean, AdoptUpload::PushedLockHeld),
+            "a clean link for the adopted project proves the push landed"
+        );
+        assert!(
+            matches!(dirty, AdoptUpload::Failed { ref message } if message == "release refused"),
+            "a still-dirty link proves nothing landed"
+        );
+        assert!(
+            matches!(unreadable, AdoptUpload::Failed { .. }),
+            "an unreadable link falls to Failed rather than claim a landing"
+        );
+        assert!(
+            matches!(foreign, Some(AdoptUpload::Failed { .. })),
+            "a stranger's CLEAN link proves nothing about our push"
+        );
+        assert!(
+            logs.iter()
+                .any(|line| line.contains("ERROR") && line.contains("DIFFERENT project")),
+            "and the swap is logged as an error - nothing else would report it"
+        );
+    }
+
+    /// A project typed `other` whose only file is the Ariane one that type says to
+    /// disregard is openable by nobody, so the type is settled only after a push that
+    /// LANDED. [#576 A8] Was a source scan of the verb's gate; the gate is the only
+    /// maker of `AdoptLanded`, which the settle takes.
+    #[test]
+    fn only_a_hand_over_whose_push_landed_may_settle_the_server_type() {
+        for (upload, lands) in [
+            (AdoptUpload::Pushed, true),
+            (AdoptUpload::PushedLockHeld, true),
+            (AdoptUpload::Diverged, false),
+            (AdoptUpload::LockHeld { email: None }, false),
+            (
+                AdoptUpload::Failed {
+                    message: "offline".to_owned(),
+                },
+                false,
+            ),
+        ] {
+            let landed = HandedOver::for_tests(upload.clone()).landed().is_some();
+            println!("{upload:?} -> may settle the type: {landed}");
+            assert_eq!(landed, lands, "{upload:?}");
+        }
+    }
+
+    /// BASE is the commit the converted bytes were fetched at, never a later lookup or
+    /// the caller's advisory sha while a tip resolved - and the link is DIRTY (the
+    /// server has never seen this `.stalx`) and DATED at the stamp: a dirty bit with no
+    /// edit time is one a confirmed push can never clear (`edits_captured_by_push`
+    /// keeps an undated one), which made every adoption push, stay dirty, report
+    /// `PushUnconfirmed` and hold the lock.
+    ///
+    /// [#576 A8] Was two source scans of the verb's link literal and its dating call.
+    #[test]
+    fn the_adopted_link_is_based_on_the_fetched_commit_and_stamped_dirty_and_dated() {
+        let link = AdoptedLink::new(
+            &AdoptFetched::for_tests(Some(TIP)),
+            UNREACHABLE.to_owned(),
+            GUARDED.to_owned(),
+            "Adopted".to_owned(),
+            Some(NEXT.to_owned()),
+        )
+        .stamped_at_now(crate::models::UndoMode::Full);
+        let push_start = chrono::Utc::now().to_rfc3339();
+        let undatable = AdoptedLink::new(
+            &AdoptFetched::for_tests(None),
+            UNREACHABLE.to_owned(),
+            GUARDED.to_owned(),
+            "Adopted".to_owned(),
+            Some(NEXT.to_owned()),
+        )
+        .stamped_at_now(crate::models::UndoMode::Full);
+        println!(
+            "fetched at TIP, advisory NEXT -> base {:?}, dirty {}, edited {:?}; fetched at \
+             HEAD -> base {:?}",
+            link.base_commit_sha,
+            link.has_unpushed_edits,
+            link.last_edit_at,
+            undatable.base_commit_sha
+        );
+        assert_eq!(
+            link.base_commit_sha.as_deref(),
+            Some(TIP),
+            "BASE names the commit the bytes came from"
+        );
+        assert!(link.has_unpushed_edits, "the conversion is un-pushed");
+        assert!(
+            crate::speleodb::sync::edits_captured_by_push(
+                link.last_edit_at.as_deref(),
+                Some(&push_start)
+            ),
+            "and dated, so a push that starts after the stamp clears it"
+        );
+        assert_eq!(
+            undatable.base_commit_sha.as_deref(),
+            Some(NEXT),
+            "with no tip, BASE falls back to the advisory sha"
+        );
+    }
+
+    /// The project as the server describes it to the settle: typed `other`, unlocked.
+    const ADOPTED_AS_OTHER: &str =
+        r#"{"id":"77777777-7777-7777-7777-777777777777","name":"Adopted","type":"other"}"#;
+
+    /// The settle's GET fails on every attempt; its PATCH lands.
+    fn the_type_cannot_be_read(line: &str) -> (u16, &'static str) {
+        if line.starts_with("GET ") {
+            (503, "")
+        } else {
+            (200, ADOPTED_AS_OTHER)
+        }
+    }
+
+    /// Adoption is the one caller that knows the project was Ariane - it just converted
+    /// it - so a type it cannot read is still a type it may set. Delegating that to
+    /// the push's heal (which declines an unknown type) turned one transient GET
+    /// failure into a project left typed `ariane` with a `.stalx` on it, still offering
+    /// Adopt. And the PATCH's echo is the only holder reading left, so it fills the
+    /// verdict's unknown.
+    ///
+    /// [#576 A8] Was a source scan of `adopt_finalize`'s arms.
+    #[test]
+    fn a_project_type_the_settle_cannot_read_is_flipped_anyway() {
+        let (base, _listener, seen) = routing_stub(the_type_cannot_be_read);
+        let state = AppState::new().expect("state");
+        let lock_ops = state.speleodb_lock_ops_guard();
+        let mut finalized = None;
+        let logs = logged_events(|| {
+            finalized = Some(state.adopt_finalize(
+                &lock_ops,
+                &AdoptLanded::for_tests(),
+                &base,
+                "tok",
+                true,
+                GUARDED,
+            ));
+        });
+        let finalized = finalized.expect("the settle ran");
+        let seen = seen.lock().expect("request log").clone();
+        println!(
+            "unreadable type -> flipped {}, holder {:?}; requests {seen:?}",
+            finalized.type_flipped, finalized.holder
+        );
+        assert!(
+            seen.iter().any(|line| line.starts_with("PATCH ")),
+            "a type the settle could not read is flipped, not skipped"
+        );
+        assert!(finalized.type_flipped, "and the flip is reported");
+        assert_eq!(
+            finalized.holder,
+            Some(None),
+            "the PATCH echo answers who holds the mutex when the GET could not"
+        );
+        assert!(
+            logs.iter().any(|line| line.contains("flipping anyway")),
+            "and it says so: {logs:?}"
+        );
+    }
+
+    /// The common case: the push's heal already flipped the type, so the settle READS
+    /// first and issues no write at all. Two PATCHes was not merely wasteful -
+    /// `type_flipped` was decided by the second, so a transient failure there reported
+    /// "the type could not be changed" about a project whose type had just changed.
+    #[test]
+    fn a_type_the_push_already_flipped_costs_one_get_and_no_patch() {
+        fn already_other(_line: &str) -> (u16, &'static str) {
+            (200, ADOPTED_AS_OTHER)
+        }
+        let (base, _listener, seen) = routing_stub(already_other);
+        let state = AppState::new().expect("state");
+        let lock_ops = state.speleodb_lock_ops_guard();
+        let finalized = state.adopt_finalize(
+            &lock_ops,
+            &AdoptLanded::for_tests(),
+            &base,
+            "tok",
+            true,
+            GUARDED,
+        );
+        let seen = seen.lock().expect("request log").clone();
+        println!(
+            "already other -> flipped {}, holder {:?}; requests {seen:?}",
+            finalized.type_flipped, finalized.holder
+        );
+        assert!(finalized.type_flipped);
+        assert_eq!(finalized.holder, Some(None));
+        assert!(
+            !seen.iter().any(|line| line.starts_with("PATCH ")),
+            "nothing to write"
+        );
+        assert!(
+            seen.first().is_some_and(|line| line.starts_with("GET ")),
+            "READ first"
+        );
+    }
+
+    /// [#258] Adoption classifies with its OWN matcher, so the resolver's dating never
+    /// reaches it and both halves are repeated there: a fresh picker reply is honoured
+    /// only while it answers the revision its candidates were offered for, and every
+    /// ambiguity it reports records the revision it describes.
+    ///
+    /// [#576 A8] Was a source scan counting the verb's two dating calls; the picker is
+    /// its own step now (`adopt_pick_entry`) and is driven here.
+    #[test]
+    fn adoption_honours_a_picker_reply_only_for_the_revision_it_was_offered_for() {
+        let state = AppState::new().expect("state");
+        let ariane = make_zip(&["one/ariane.tml", "two/ariane.tml"]);
+        let open = || Dump::open(&ariane).expect("open");
+
+        let offered = state.adopt_pick_entry(GUARDED, &mut open(), None, DumpAt::Revision(TIP));
+        let offer_recorded = state.speleodb_dump_offer_answers(GUARDED, DumpAt::Revision(TIP));
+        let answered = state.adopt_pick_entry(
+            GUARDED,
+            &mut open(),
+            Some("two/ariane.tml"),
+            DumpAt::Revision(TIP),
+        );
+        let stale = state.adopt_pick_entry(
+            GUARDED,
+            &mut open(),
+            Some("two/ariane.tml"),
+            DumpAt::Revision(NEXT),
+        );
+        let reoffer_recorded = state.speleodb_dump_offer_answers(GUARDED, DumpAt::Revision(NEXT));
+
+        let stalx_state = AppState::new().expect("state");
+        let stalx = make_zip(&["a/project.stalx", "b/project.stalx"]);
+        let stalx_offered = stalx_state.adopt_pick_entry(
+            GUARDED,
+            &mut Dump::open(&stalx).expect("open"),
+            None,
+            DumpAt::Revision(TIP),
+        );
+        let stalx_recorded =
+            stalx_state.speleodb_dump_offer_answers(GUARDED, DumpAt::Revision(TIP));
+        println!(
+            "ariane set at TIP -> {:?} (offer recorded: {offer_recorded}); reply at TIP -> \
+             {answered:?}; same reply at NEXT -> {:?} (re-offer recorded: \
+             {reoffer_recorded}); .stalx set -> {:?} (offer recorded: {stalx_recorded})",
+            offered.as_ref().err().map(|e| &e.message),
+            stale.as_ref().err().map(|e| &e.message),
+            stalx_offered.as_ref().err().map(|e| &e.message),
+        );
+        assert!(
+            offered.is_err() && offer_recorded,
+            "the Ariane set is offered for TIP"
+        );
+        assert_eq!(
+            answered.ok().as_deref(),
+            Some("two/ariane.tml"),
+            "a reply to the TIP offer is honoured at TIP"
+        );
+        assert!(
+            stale.is_err() && reoffer_recorded,
+            "the same reply does not answer NEXT: it is re-offered, for NEXT"
+        );
+        assert!(
+            stalx_offered.is_err() && stalx_recorded,
+            "the .stalx ambiguity records its revision too (the frontend routes it to OPEN)"
+        );
+    }
+
+    /// The adoption's flow against a server that 401s the history read and nothing
+    /// else: the probe sees no holder, the acquire is refused (someone else took it),
+    /// the head resolve gets the 401 and the dump is not found.
+    fn a_401_on_the_head_resolve(line: &str) -> (u16, &'static str) {
+        let path = line.split_whitespace().nth(1).unwrap_or_default();
+        if path.ends_with("/revisions/") {
+            (401, r#"{"detail":"Invalid token."}"#)
+        } else if path.ends_with("/acquire/") {
+            (400, r#"{"detail":"locked"}"#)
+        } else if path.contains("/download/dump/") {
+            (404, r#"{"detail":"Not found."}"#)
+        } else {
+            (
+                200,
+                r#"{"id":"77777777-7777-7777-7777-777777777777","name":"Adopted","type":"ariane"}"#,
+            )
+        }
+    }
+
+    /// [#258 review] Adoption's best-effort head resolve must not be able to delete the
+    /// user's credential. `speleodb_server_head` wraps the call in `speleodb_handle_auth`,
+    /// which `forget()`s the token on a 401 - keychain entry included - and this failure
+    /// is deliberately swallowed, so a spurious 401 signed the user out with no signal
+    /// while the adopt went on.
+    ///
+    /// [#576 A8] Was a source scan that the verb named no `speleodb_server_head`; the
+    /// verb now runs against a stub that 401s exactly that request.
+    #[test]
+    fn a_401_on_the_adoptions_head_resolve_keeps_the_credential() {
+        let _cfg = crate::test_helpers::isolated_config();
+        let (base, _listener, seen) = routing_stub(a_401_on_the_head_resolve);
+        let state = AppState::new().expect("state");
+        *state.speleodb.lock() = authed_session_at(&base);
+
+        let adopted = state.speleodb_adopt_ariane(
+            GUARDED.to_owned(),
+            "Adopted".to_owned(),
+            None,
+            false,
+            None,
+        );
+        let seen = seen.lock().expect("request log").clone();
+        let still_signed_in = state.speleodb_active_token().is_ok();
+        println!(
+            "adopt -> {:?}; still signed in: {still_signed_in}; requests {seen:?}",
+            adopted.as_ref().err().map(|e| &e.message)
+        );
+        assert!(
+            seen.iter().any(|line| line.contains("/revisions/")),
+            "precondition: the head resolve ran and got its 401"
+        );
+        assert!(
+            adopted.is_err(),
+            "precondition: the missing dump ends the adoption"
+        );
+        assert!(
+            still_signed_in,
+            "a swallowed 401 on a best-effort read must not sign the user out"
         );
     }
 }

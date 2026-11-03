@@ -9,12 +9,15 @@
 //! one) until the next session commit.
 //!
 //! Two halves, because reaching the verb's lift for real needs a server that
-//! accepts the lock, serves the dump and takes the push (the same reason the
-//! verb's other ordering rules are guarded by source in `speleodb_pull`'s tests):
+//! accepts the lock, serves the dump and takes the push:
 //!
-//! 1. the guard lifts the gate on a normal return, an early error return and a panic;
-//! 2. the verb binds that guard to a NAME (a `let _ =` would drop it on the spot)
-//!    before it calls `adopt_import_and_save`, and never drops it early.
+//! 1. the guard lifts the gate on a normal return, an early error return and a panic
+//!    (below);
+//! 2. the verb holds that guard from before its local span to its close - the
+//!    types' job since #576 A8 (it used to be a source scan here): the span
+//!    (`adopt_local_span`) borrows the guard and the close (`adopt_close`) consumes
+//!    it, so it must be bound to a name, built before the span, and cannot be dropped
+//!    early (a use after the move does not compile).
 //!
 //! All data is synthetic, built in memory.
 
@@ -72,50 +75,4 @@ fn the_adoption_guard_lifts_the_gate_on_every_exit() {
         panicked.is_err()
     );
     assert!(!after_return && !after_error && !after_panic);
-}
-
-/// The production half of `speleodb_pull.rs` (its test module follows it).
-fn pull_prod_source() -> &'static str {
-    crate::models::source_scan::prod_region(
-        include_str!("speleodb_pull.rs"),
-        "pub fn speleodb_adopt_ariane(",
-    )
-}
-
-#[test]
-fn the_adoption_verb_holds_the_guard_across_its_local_span() {
-    let src = pull_prod_source();
-    let start = src.find("pub fn speleodb_adopt_ariane(").unwrap();
-    let body = &src[start..];
-    let body = &body[..body.find("\n    }\n").unwrap()];
-
-    let guard = body.find("= AdoptionEditGate(self);");
-    let binding = guard.map(|at| {
-        let line_start = body[..at].rfind('\n').map_or(0, |n| n + 1);
-        body[line_start..at].trim().to_string()
-    });
-    let span = body.find("self.adopt_import_and_save(");
-    println!(
-        "speleodb_adopt_ariane: guard at {guard:?} bound as {binding:?}; local span at \
-         {span:?}; early drops of the guard: {}",
-        body.matches("drop(_edit_gate)").count()
-    );
-    let (Some(guard), Some(span)) = (guard, span) else {
-        panic!("the adoption verb must build an AdoptionEditGate and call the local span");
-    };
-    assert!(
-        guard < span,
-        "the guard is built before the span that shuts the gate"
-    );
-    let binding = binding.unwrap();
-    assert!(
-        binding.starts_with("let _") && binding != "let _",
-        "the guard is bound to a name for the whole call (`let _ =` drops it at once), \
-         got `{binding}`"
-    );
-    assert_eq!(
-        body.matches("drop(_edit_gate)").count(),
-        0,
-        "and is never dropped early"
-    );
 }
