@@ -987,6 +987,21 @@ moved - the convention `mulberry32`'s header states.
 The open findings it has produced are written up in the scenario file's header,
 each with the `reproduce:` line that still runs.
 
+Not bit-identical run to run (#576 NF-E12-2), and not because of the draws: the
+same seed draws the same moves and the same trace, and the rounded metrics
+match. Two observed values vary, both read off the live app rather than computed
+by the scenario. A RELATIVE map click is an offset from the map's current centre
+(`mapCentre()`, `map.getCenter()`), and the camera reaches its centre through the
+fit-to-bounds easing, whose last frame depends on frame timing - so the absolute
+point differs in the 14th significant digit (well below a pixel; the trace stores
+the absolute point, so a replay clicks exactly what the recording clicked). The
+`domNodes` metric counts `document.querySelectorAll('*')` after the episode's
+teardown, while toasts from the episode (5-9 s dwell) may or may not still be
+mounted - the observed 158 / 172 differ by about one toast's subtree (one
+toast adds 13 nodes in the browser tier; the 14 on the harness host was not
+broken down there). Neither is a rounding or ordering defect in the harness;
+compare runs on the trace and the rounded metrics, not on these two.
+
 ### export-roundtrip-fuzz
 
 The mirror image of `import-dialog-fuzz`: it drives survey data OUT of the app,
@@ -1159,10 +1174,15 @@ is the same failure rather than a lookalike. A replayed run says so in its
 
 The recording's ENVIRONMENT is part of the repro, so `--trace` restores the
 header's `STALAGMIGHT_*` knobs (fixture, tolerance, stream, the persistence
-ones) and prints what it restored. It has to happen before `./scenarios` is
-imported - the fuzz scenarios freeze those knobs into module-level constants at
-import time - which is why both `agent:scenario` and `agent:fuzz-shrink` import
-the registry dynamically. A trace recorded by a different scenario, or on a
+ones) and prints what it restored. Every knob is read at call time
+(`lib/fuzzKnobs.ts`), so the restore only has to precede the run; both
+`agent:scenario` and `agent:fuzz-shrink` still do it before importing the
+registry (dynamically), so a knob some module read at import time would not
+undo it. So are its SEED and ITERATION COUNT: `agent:scenario --trace` runs at
+the header's `seed` and `iterations` unless `--seed` / `--iterations` are given
+(#576 NF-E12-1; before, a 1-cycle undoPersistenceFuzz trace replayed 12 cycles,
+since each of its iterations replays the whole trace, and a seed-16 undoRedoFuzz
+trace ran and reported seed 1). A trace recorded by a different scenario, or on a
 different fixture, is REFUSED: the steps carry resolved section and shot ids, so
 replaying them against another project drives moves at ids that do not exist
 there and reports an invented failure (or none) while the operator believes they
