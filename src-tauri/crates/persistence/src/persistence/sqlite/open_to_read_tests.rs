@@ -108,7 +108,7 @@ fn a_current_file_opens_as_open_existing_opens_it() {
     );
     assert!(file_backed, "a current file is read in place, not copied");
     assert_eq!(shots, 2);
-    assert!(std::fs::read(&path).unwrap() == before);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
     assert_eq!(files_in(dir.path()), ["CaveR.stalx"]);
 }
 
@@ -130,5 +130,5 @@ fn a_pre_release_file_is_still_refused() {
     assert!(refused.err().is_some_and(|e| e
         .downcast_ref::<crate::persistence::PreReleaseFile>()
         .is_some()));
-    assert!(std::fs::read(&path).unwrap() == before);
+    assert_eq!(std::fs::read(&path).unwrap(), before);
 }

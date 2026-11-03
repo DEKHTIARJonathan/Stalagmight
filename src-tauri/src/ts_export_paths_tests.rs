@@ -87,9 +87,9 @@ fn top_level_items(text: &str) -> Vec<&str> {
     while i < text.len() {
         let rest = &text[i..];
         if rest.starts_with(['(', '[', '"']) {
-            i += if rest.starts_with('"') {
+            i += if let Some(string) = rest.strip_prefix('"') {
                 // A string on its own: close it like a one-character bracket pair.
-                rest[1..].find('"').map_or(rest.len(), |n| n + 2)
+                string.find('"').map_or(rest.len(), |n| n + 2)
             } else {
                 closing(rest).unwrap_or(rest.len())
             };

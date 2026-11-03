@@ -142,7 +142,7 @@ fn classify_candidate(stem: &str, name: &str) -> Option<(BackupKind, Option<u32>
 
 /// How long a restore check waits out a competing writer on the candidate: the
 /// 5000 ms every other open path has (`busy_timeout_tests`).
-const CANDIDATE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(5000);
+const CANDIDATE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl Database {
     /// [#576 NF-FIX5-3] Wrap a connection a restore check opened on a candidate,

@@ -41,12 +41,12 @@ fn survey(name: &str, shots: usize) -> String {
          FROM TO LENGTH BEARING INC LEFT UP DOWN RIGHT FLAGS COMMENTS\r\n\
          \r\n"
     );
-    for i in 1..=shots {
-        record.push_str(&format!(
+    record.extend((1..=shots).map(|i| {
+        format!(
             "{name}{i} {name}{} 10.00 90.00 0.00 1.00 2.00 3.00 4.00\r\n",
             i + 1
-        ));
-    }
+        )
+    }));
     record.push_str("\x0c\r\n");
     record
 }
