@@ -205,6 +205,36 @@ fn deleting_a_project_the_server_no_longer_has_counts_as_deleted() {
 }
 
 #[test]
+fn a_delete_of_a_project_on_another_server_sends_nothing() {
+    // [#576 RV4-R-S4-D2] The request would go to `base`, the session's server, but
+    // the project lives on another one: refused before the request, naming the
+    // project's server, whatever `base` would have answered.
+    let stub = KeepAliveStub::start(vec![Reply::Status {
+        status: 200,
+        len: 2,
+    }]);
+    let result = client::delete_project(
+        &stub.base,
+        "tok",
+        false,
+        PROJECT_ID,
+        "https://sdb.example.com/",
+    );
+    let requests = stub.requests();
+    println!("delete for a project on another server -> {result:?}; requests {requests:?}");
+    assert!(requests.is_empty(), "nothing was sent: {requests:?}");
+    assert!(
+        matches!(
+            &result,
+            Err(SpeleoDbError::Refused { code, message })
+                if *code == crate::models::CommandErrorCode::SpeleodbFatal
+                    && message.contains("This project lives on https://sdb.example.com/")
+        ),
+        "{result:?}"
+    );
+}
+
+#[test]
 fn a_delete_whose_reply_was_lost_is_retried_and_its_404_is_done() {
     // [#576 B5-D2] The lost-reply case end to end: the first DELETE reaches the
     // server and its reply never arrives; the automatic retry finds the project

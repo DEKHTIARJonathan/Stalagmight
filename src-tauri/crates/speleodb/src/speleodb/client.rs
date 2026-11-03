@@ -251,8 +251,8 @@ pub mod spec {
         Category::CreateProject,
         Retry::Once,
     );
-    /// `DELETE projects/{id}/`: idempotent, and a 404 from the project's own server
-    /// means it is already gone (#576 B5-D2, RV4-R-S4).
+    /// `DELETE projects/{id}/`: idempotent, and a 404 means it is already gone
+    /// (#576 B5-D2). Sent only to the project's own server (#576 RV4-R-S4).
     pub const DELETE_PROJECT: EndpointSpec = EndpointSpec::write(
         Endpoint::DeleteProject,
         Category::DeleteProject,
@@ -1214,12 +1214,14 @@ fn post_no_body_project(
 /// that 404 as a failure left the local copy linked to a project the server no
 /// longer has, because the caller only unlinks on success.
 ///
-/// [#576 RV4-R-S4] Only from the server the project LIVES on: `project_endpoint` is
-/// the deployment `project_id` belongs to (the open copy's link). The request goes
-/// to `base`, the server the session is signed in to, and a 404 from any other
-/// server says only that IT has no such project - the project may still exist where
-/// it lives. That 404 is refused with an error saying the session is signed in to
-/// another server, so the caller keeps the copy linked.
+/// [#576 RV4-R-S4, decision RV4-R-S4-D2] Only on the server the project LIVES on:
+/// `project_endpoint` is the deployment `project_id` belongs to (the open copy's
+/// link), and `base` is the server the session is signed in to. When the two differ
+/// (compared through [`super::auth::normalize_endpoint`]) the delete is refused
+/// BEFORE anything is sent: another server's 404 would say only that IT has no such
+/// project, and its 2xx would mean it deleted ITS project of that id. The refusal
+/// names the project's server, and the caller keeps the copy linked. So a 404 here
+/// always comes from the project's own server.
 pub fn delete_project(
     base: &str,
     token: &str,
@@ -1227,25 +1229,22 @@ pub fn delete_project(
     project_id: &str,
     project_endpoint: &str,
 ) -> Result<(), SpeleoDbError> {
+    if super::auth::normalize_endpoint(base) != super::auth::normalize_endpoint(project_endpoint) {
+        tracing::warn!(
+            project_id,
+            purpose =
+                "never send a delete to a server the project does not live on (#576 RV4-R-S4)",
+            "SpeleoDB project delete refused before sending: the session is on another server"
+        );
+        return Err(SpeleoDbError::refused(format!(
+            "This project lives on {project_endpoint}; sign in there to delete it."
+        )));
+    }
     let url = api_url(base, &format!("projects/{project_id}/"));
     let (status, body) = send(base, insecure_http, &spec::DELETE_PROJECT, || {
         bare(http::Method::DELETE, &url, token)
     })?;
     if status == 404 {
-        if super::auth::normalize_endpoint(base)
-            != super::auth::normalize_endpoint(project_endpoint)
-        {
-            tracing::warn!(
-                project_id,
-                purpose = "a 404 from another server is not the project's own (#576 RV4-R-S4)",
-                "SpeleoDB answered 404 to the project delete from a server the project is not linked to"
-            );
-            return Err(SpeleoDbError::refused(format!(
-                "{base} has no such project, but this project is on {project_endpoint}: you are \
-                 signed in to another server. Nothing was deleted and the project stays linked; \
-                 sign in to {project_endpoint} to delete it."
-            )));
-        }
         tracing::info!(
             project_id,
             purpose = "a DELETE whose project is already gone has done its job (#576 B5-D2)",

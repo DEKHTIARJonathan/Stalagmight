@@ -159,37 +159,46 @@ fn link_open_copy_to(state: &super::AppState, endpoint: &str) {
 }
 
 #[test]
-fn a_404_from_another_server_than_the_projects_does_not_count_as_deleted() {
-    // [#576 RV4-R-S4] The delete goes to the server the SESSION is signed in to,
-    // and nothing compared that with the server the open copy is linked to. A 404
-    // from another server only says that server has no such project - the project
-    // may well still exist where it lives - yet it was taken as "already deleted":
-    // the copy was unlinked and the user told the project was gone.
-    let (base, _listener, seen) = status_stub(404);
-    let (_temp, state) = editing_fixture(&base);
-    let linked_to = state.speleodb_open_link().expect("linked").endpoint;
+fn a_delete_with_the_session_on_another_server_is_refused_before_anything_is_sent() {
+    // [#576 RV4-R-S4, decision RV4-R-S4-D2] The delete goes to the server the
+    // SESSION is signed in to, and nothing compared that with the server the open
+    // copy is linked to. Another server answering 404 says only that IT has no such
+    // project; one answering 2xx deleted ITS project of that id - and either way the
+    // copy was unlinked and the user told the project was gone. Now the delete is
+    // refused before any request when the two servers differ, and the copy stays
+    // linked. Both servers here would accept a DELETE, so only the refusal keeps the
+    // request from going out.
+    let (session_server, _session_listener, session_seen) = status_stub(200);
+    let (copy_server, _copy_listener, copy_seen) = status_stub(200);
+    let (_temp, state) = editing_fixture(&session_server);
+    link_open_copy_to(&state, &format!("{copy_server}/"));
 
     let result = state.speleodb_delete_project();
 
-    let deletes = requests(&seen)
-        .iter()
-        .filter(|r| r.starts_with("DELETE "))
-        .count();
+    let sent_to_session = requests(&session_seen);
+    let sent_to_copy = requests(&copy_seen);
     let still_linked = state.speleodb_open_link().is_ok();
     println!(
-        "copy linked to {linked_to}, session signed in to {base}: delete answered 404 -> {:?}; \
-         local copy still linked: {still_linked} (expected an error and still linked)",
+        "copy linked to {copy_server}/, session signed in to {session_server}: delete -> {:?}; \
+         requests to the session's server {sent_to_session:?}, to the copy's server \
+         {sent_to_copy:?}; local copy still linked: {still_linked} (expected a refusal, no \
+         request, still linked)",
         result
             .as_ref()
             .map(|()| "Ok")
             .map_err(|e| (e.code, e.message.clone()))
     );
-    assert_eq!(deletes, 1, "the DELETE was sent to the session's server");
-    let err = result.expect_err("a 404 from another server is not a delete");
+    assert!(
+        sent_to_session.is_empty() && sent_to_copy.is_empty(),
+        "nothing is sent to either server: {sent_to_session:?} {sent_to_copy:?}"
+    );
+    let err = result.expect_err("a delete with the session on another server is refused");
     assert_eq!(err.code, crate::models::CommandErrorCode::SpeleodbFatal);
     assert!(
-        err.message.contains("signed in to another server"),
-        "the error says why: {}",
+        err.message.contains(&format!(
+            "This project lives on {copy_server}/; sign in there"
+        )),
+        "the error names the copy's server: {}",
         err.message
     );
     assert!(still_linked, "and the copy stays linked to its project");
