@@ -623,11 +623,17 @@ impl AppState {
         // taken on trust from the frontend. `discard_unpushed` is not a decision the FE
         // gets to make either - it only reports that the dialog showed the user what this
         // throws away; the guard still decides whether that matters.
-        if keep_undo_history {
-            self.speleodb_guard_unwind(&open_link, discard_unpushed, chain_forward)?;
-            // ...and check the direction the guard just branched on was the truth.
-            self.speleodb_verify_chain_target(&hexsha, chain_forward)?;
-        }
+        //
+        // [#576 A8] The download below is a method of the proof this returns, so the
+        // preconditions cannot move behind it (a check after the download would refuse
+        // a working copy that had already been replaced).
+        let unwind = self.speleodb_unwind_preconditions(
+            keep_undo_history,
+            &open_link,
+            discard_unpushed,
+            chain_forward,
+            &hexsha,
+        )?;
 
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
@@ -635,13 +641,7 @@ impl AppState {
         let zip = self
             .speleodb_handle_auth(
                 Endpoint::DownloadDump,
-                client::download_dump_at_hash(
-                    &endpoint,
-                    &token,
-                    insecure_http,
-                    &project_id,
-                    &hexsha,
-                ),
+                unwind.download(&endpoint, &token, insecure_http, &project_id, &hexsha),
             )
             .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
 
@@ -684,17 +684,8 @@ impl AppState {
         // the currently loaded parent may have the opposite setting. The affordance
         // checks this too, but the backend repeats it against the exact dump and entry
         // it is about to install so a stale or direct IPC call cannot bypass the rule.
-        if keep_undo_history && chain_forward {
-            let target_mode =
-                downloaded_revision_undo_mode(&mut dump, &entry, &dest).map_err(local_dto)?;
-            if !target_mode.pushes_history() {
-                return Err(local_dto(SpeleoDbError::refused(
-                    "the next revision did not publish undo history, so there is no forward \
-                     history step to load"
-                        .to_owned(),
-                )));
-            }
-        }
+        // [#576 A8] The replace below is a method of this check's proof.
+        let child_policy = unwind.check_child_policy(chain_forward, &mut dump, &entry, &dest)?;
         // Carry the user's local view toggles across the download-replace, same as a
         // re-pull (display_settings are stripped from the server copy), and drop the
         // live handle to this file first - the reload below re-opens it anyway, so
@@ -720,8 +711,9 @@ impl AppState {
         } else {
             LocalEditsPolicy::Protect
         };
-        let preserved_view = self
-            .replace_cache_stalx_with(
+        let preserved_view = child_policy
+            .replace(
+                self,
                 &mut dump,
                 &entry,
                 &dest,
@@ -830,25 +822,12 @@ impl AppState {
         // entry guards above already refused a force-editor and already required an
         // open gate, so the record alone cannot mint - it is only ever handed back to
         // a session that demonstrably had one on the way in.
-        let had_lock_record = self.speleodb_lock_acquired_here(&project_id);
-        // Of the same kind: a resumed claim stays resumed (#576 RV4-R-S3).
-        let had_resumed_record = self.speleodb_lock_resumed_here(&project_id);
-        self.close_project();
-        self.do_load_project_full(dest).map_err(|e| {
-            local_dto(SpeleoDbError::Io(format!(
-                "reload after restore failed: {e}"
-            )))
-        })?;
-        if restore {
-            self.set_edit_enabled(true);
-            if had_lock_record {
-                if had_resumed_record {
-                    self.speleodb_note_resumed_lock(&project_id);
-                } else {
-                    self.speleodb_note_lock_acquired(Some(&project_id));
-                }
-            }
-        }
+        //
+        // [#576 A8] As types: the reload is a method of the capture, and the hand-back
+        // and the chain position below are methods of what the reload returns.
+        let captured = self.speleodb_capture_lock_record(&project_id);
+        let reloaded = captured.reload(self, dest)?;
+        reloaded.reopen_for_restore(self, restore, &project_id);
         self.set_force_editing(false);
 
         // [#303] Record where the Unwind chain now stands - AFTER the reload, because the
@@ -859,21 +838,7 @@ impl AppState {
         // A plain View / Restore CLEARS it instead: the working copy is no longer where
         // the chain thought it was, so the next Unwind must restart from BASE rather than
         // continue a walk that no longer describes anything.
-        if keep_undo_history {
-            self.speleodb_set_unwound_from(Some(&hexsha));
-            // ...and mark the stack that just came back as INHERITED. Everything in it was
-            // authored in a commit the server already holds, so the next push must not
-            // record those operations again on top of whatever the user does from here.
-            // Stamped after the reload for the same reason as the pointer: the reload is
-            // what put these entries in the stack being measured.
-            self.speleodb_stamp_inherited_watermark();
-        } else {
-            self.speleodb_set_unwound_from(None);
-            // A plain View / Restore dropped the downloaded history (`InheritedUndo::Drop`),
-            // so nothing in the stack is inherited any more and a stale watermark here
-            // would cut the user's own work out of the next push.
-            self.speleodb_set_inherited_through(None);
-        }
+        reloaded.record_chain_position(self, keep_undo_history, &hexsha);
 
         Ok(SpeleoOpenResult {
             local_path,
@@ -882,11 +847,210 @@ impl AppState {
     }
 }
 
+/// [#576 A8] The revision swap's orderings as types. Each later step is a method of
+/// the proof the earlier one returns, and every proof is made only here:
+/// - the Unwind preconditions -> the download ([`UnwindCleared`]);
+/// - the forward step's child-policy check -> the replace ([`ChildPolicyChecked`]);
+/// - the acquisition-record capture -> the in-place reload ([`CapturedRecord`]);
+/// - the reload -> the record's hand-back and the chain position ([`Reloaded`]).
+mod restore_order {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+
+    use super::super::speleodb::local_dto;
+    use super::super::speleodb_cache::{InheritedUndo, LocalEditsPolicy};
+    use super::{downloaded_revision_undo_mode, AppState};
+    use crate::speleodb::{client, dump, SpeleoDbError, SpeleoErrorDto};
+
+    /// Proof that the Unwind's backend preconditions ran - or that this swap is no
+    /// Unwind and has none.
+    pub(super) struct UnwindCleared {
+        keep_undo_history: bool,
+    }
+
+    /// Proof that a forward Unwind step's child revision publishes history (or that
+    /// this is no forward step).
+    pub(super) struct ChildPolicyChecked {
+        _checked: (),
+    }
+
+    /// The acquisition record as it stood BEFORE the reload: the last point the
+    /// pre-reload truth exists.
+    pub(super) struct CapturedRecord {
+        had_lock_record: bool,
+        had_resumed_record: bool,
+    }
+
+    /// Proof that the swapped tree was reloaded in place, carrying the capture.
+    pub(super) struct Reloaded {
+        captured: CapturedRecord,
+    }
+
+    impl AppState {
+        /// [#303] The Unwind flavour's preconditions (`keep_undo_history`), enforced in
+        /// the backend: the guard, then the check that the direction it branched on was
+        /// the truth.
+        pub(super) fn speleodb_unwind_preconditions(
+            &self,
+            keep_undo_history: bool,
+            open_link: &crate::models::SpeleoLink,
+            discard_unpushed: bool,
+            chain_forward: bool,
+            hexsha: &str,
+        ) -> Result<UnwindCleared, SpeleoErrorDto> {
+            if keep_undo_history {
+                self.speleodb_guard_unwind(open_link, discard_unpushed, chain_forward)?;
+                // ...and check the direction the guard just branched on was the truth.
+                self.speleodb_verify_chain_target(hexsha, chain_forward)?;
+            }
+            Ok(UnwindCleared { keep_undo_history })
+        }
+
+        /// Capture the acquisition record (and whether it was a resumed one, #576
+        /// RV4-R-S3) before the reload shuts the gate.
+        pub(super) fn speleodb_capture_lock_record(&self, project_id: &str) -> CapturedRecord {
+            CapturedRecord {
+                had_lock_record: self.speleodb_lock_acquired_here(project_id),
+                had_resumed_record: self.speleodb_lock_resumed_here(project_id),
+            }
+        }
+    }
+
+    impl UnwindCleared {
+        /// Download the revision being checked out, by hash.
+        pub(super) fn download(
+            &self,
+            endpoint: &str,
+            token: &str,
+            insecure_http: bool,
+            project_id: &str,
+            hexsha: &str,
+        ) -> Result<Vec<u8>, SpeleoDbError> {
+            client::download_dump_at_hash(endpoint, token, insecure_http, project_id, hexsha)
+        }
+
+        /// A forward step loads the CHILD revision's stack, so the child's own policy
+        /// decides whether there is published history to continue with - checked
+        /// against the exact dump and entry about to be installed.
+        pub(super) fn check_child_policy(
+            &self,
+            chain_forward: bool,
+            dump: &mut dump::Dump<'_>,
+            entry: &str,
+            dest: &Path,
+        ) -> Result<ChildPolicyChecked, SpeleoErrorDto> {
+            if self.keep_undo_history && chain_forward {
+                let target_mode =
+                    downloaded_revision_undo_mode(dump, entry, dest).map_err(local_dto)?;
+                if !target_mode.pushes_history() {
+                    return Err(local_dto(SpeleoDbError::refused(
+                        "the next revision did not publish undo history, so there is no \
+                         forward history step to load"
+                            .to_owned(),
+                    )));
+                }
+            }
+            Ok(ChildPolicyChecked { _checked: () })
+        }
+    }
+
+    impl ChildPolicyChecked {
+        /// The download-replace of the working copy
+        /// ([`AppState::replace_cache_stalx_with`]).
+        pub(super) fn replace(
+            &self,
+            state: &AppState,
+            dump: &mut dump::Dump<'_>,
+            entry: &str,
+            dest: &Path,
+            project_id: &str,
+            policy: LocalEditsPolicy,
+            undo: InheritedUndo,
+        ) -> Result<HashMap<String, String>, SpeleoDbError> {
+            state.replace_cache_stalx_with(dump, entry, dest, project_id, policy, undo)
+        }
+    }
+
+    impl CapturedRecord {
+        /// Reopen the swapped tree in place (the close first, so the load's
+        /// already-open guard does not reject the same path).
+        pub(super) fn reload(
+            self,
+            state: &AppState,
+            dest: PathBuf,
+        ) -> Result<Reloaded, SpeleoErrorDto> {
+            state.close_project();
+            state.do_load_project_full(dest).map_err(|e| {
+                local_dto(SpeleoDbError::Io(format!(
+                    "reload after restore failed: {e}"
+                )))
+            })?;
+            Ok(Reloaded { captured: self })
+        }
+    }
+
+    impl Reloaded {
+        /// The reload's follow-ups, for their own tests: production reaches a
+        /// `Reloaded` only through [`CapturedRecord::reload`].
+        #[cfg(test)]
+        pub(super) fn for_tests(had_lock_record: bool, had_resumed_record: bool) -> Self {
+            Self {
+                captured: CapturedRecord {
+                    had_lock_record,
+                    had_resumed_record,
+                },
+            }
+        }
+
+        /// A Restore re-enables editing (the user holds the lock) and hands the
+        /// captured record back - only where one existed, so an inherited lock is
+        /// never given a provenance it did not have.
+        pub(super) fn reopen_for_restore(&self, state: &AppState, restore: bool, project_id: &str) {
+            if restore {
+                state.set_edit_enabled(true);
+                if self.captured.had_lock_record {
+                    if self.captured.had_resumed_record {
+                        state.speleodb_note_resumed_lock(project_id);
+                    } else {
+                        state.speleodb_note_lock_acquired(Some(project_id));
+                    }
+                }
+            }
+        }
+
+        /// [#303] Record where the Unwind chain now stands, AFTER the reload (it
+        /// replaced the file this writes into), or clear it for a plain View / Restore.
+        pub(super) fn record_chain_position(
+            &self,
+            state: &AppState,
+            keep_undo_history: bool,
+            hexsha: &str,
+        ) {
+            if keep_undo_history {
+                state.speleodb_set_unwound_from(Some(hexsha));
+                // ...and mark the stack that just came back as INHERITED. Everything in
+                // it was authored in a commit the server already holds, so the next push
+                // must not record those operations again on top of whatever the user does
+                // from here. Stamped after the reload for the same reason as the pointer:
+                // the reload is what put these entries in the stack being measured.
+                state.speleodb_stamp_inherited_watermark();
+            } else {
+                state.speleodb_set_unwound_from(None);
+                // A plain View / Restore dropped the downloaded history
+                // (`InheritedUndo::Drop`), so nothing in the stack is inherited any more
+                // and a stale watermark here would cut the user's own work out of the
+                // next push.
+                state.speleodb_set_inherited_through(None);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        downloaded_revision_undo_mode, revision_swap_base, unwind_discards_unpushed,
+        downloaded_revision_undo_mode, restore_order, revision_swap_base, unwind_discards_unpushed,
         validate_hexsha, AppState,
     };
     use crate::models::{Project, SpeleoLink, UndoMode};
@@ -1082,104 +1246,27 @@ mod tests {
         )
     }
 
-    /// [#303] Spec item 24: the Unwind's preconditions are enforced in the BACKEND, not
-    /// taken on trust from the frontend - it is the one action allowed to keep a
-    /// downloaded copy's undo history, and (from its second step) to waive the
-    /// un-pushed-edits guard.
-    ///
-    /// Structural, like its siblings in this module: the guard runs inside a verb whose
-    /// happy path needs a live cache dir and a server, so the unit-level seam is the
-    /// source. What it pins is that the three refusals exist and are reached BEFORE the
-    /// download - a check that ran after would have already replaced the working copy.
-    #[test]
-    fn unwind_preconditions_are_checked_before_the_download() {
-        let src = prod_source();
-        assert!(
-            src.contains("fn speleodb_guard_unwind"),
-            "the Unwind guard must exist as its own named function"
-        );
-        // Reached from the swap verb, and before the download it protects.
-        let restore = src
-            .split_once("pub fn speleodb_restore_revision")
-            .map(|(_, rest)| rest)
-            .expect("the swap verb is in this file");
-        let guard = restore
-            .find("self.speleodb_guard_unwind(")
-            .expect("the swap verb must call the Unwind guard");
-        let download = restore
-            .find("client::download_dump_at_hash(")
-            .expect("the swap verb downloads the revision");
-        assert!(
-            guard < download,
-            "the guard must run BEFORE the download - a check after it would refuse a \
-             working copy that had already been replaced"
-        );
-
-        // And the two refusals themselves: a non-empty stack, and unacknowledged dirt that
-        // no Unwind put there.
-        let body = src
-            .split_once("fn speleodb_guard_unwind")
-            .map(|(_, rest)| rest)
-            .and_then(|rest| rest.split("\n    /// ").next())
-            .expect("guard body precedes the next item's doc");
-        assert!(
-            body.contains("if !stack_empty"),
-            "a chain step over a non-empty stack would discard the un-walked steps"
-        );
-        // ...and which stack that is follows the direction of travel. Checking the undo
-        // stack for a forward step would let a half-redone copy jump a commit forward,
-        // silently dropping the operations still parked on the redo stack.
-        assert!(
-            body.contains("if chain_forward") && body.contains("s.redo_len() == 0"),
-            "a FORWARD step must require the redo stack empty, not the undo stack"
-        );
-        assert!(
-            body.contains("unwind_discards_unpushed("),
-            "the guard must decide with the SAME predicate the DTO reports, or the dialog's \
-             warning and the refusal can drift apart"
-        );
-        // The acknowledgement gates that refusal and nothing else: dropping the `!` would
-        // let any `keep_undo_history` caller discard un-pushed work silently, which is the
-        // invariant the flat refusal used to carry on its own.
-        assert!(
-            body.contains("if !discard_unpushed"),
-            "un-pushed work may only be discarded by a caller that acknowledged it"
-        );
-    }
-
     /// The target query and the destructive swap both enforce the same child-policy
     /// rule. The first keeps a useless forward action out of the UI; the second stops a
     /// stale or direct IPC call before it replaces the working copy.
+    ///
+    /// [#576 A8] The swap's half - checked BEFORE the replace - is the type's job now
+    /// (`restore_order::ChildPolicyChecked`). The affordance's half stays a sanctioned
+    /// source scan (docs/testing-recipes.md, "Source scans"): which policy a query
+    /// consults is a site rule over one function, and reaching it needs a server.
     #[test]
     fn forward_chain_steps_are_gated_by_the_downloaded_child_policy() {
-        let src = prod_source();
-        let target = src
-            .split_once("pub fn speleodb_rewind_target")
-            .map(|(_, rest)| rest)
-            .and_then(|rest| rest.split("\n    /// ").next())
-            .expect("rewind target body precedes the next item");
+        use crate::models::source_scan::fn_body;
+        let target = fn_body(prod_source(), "pub fn speleodb_rewind_target(");
         assert!(
             target.contains("downloaded_revision_undo_mode("),
-            "the affordance must inspect the child revision's own undo policy"
+            "RULE (a forward step is offered on the CHILD's policy, #303): the affordance \
+             must inspect the child revision's own undo policy"
         );
         assert!(
             !target.contains("self.undo_policy()"),
-            "the currently open parent policy cannot decide whether the child shipped history"
-        );
-
-        let restore = src
-            .split_once("pub fn speleodb_restore_revision")
-            .map(|(_, rest)| rest)
-            .expect("restore body follows its signature");
-        let policy = restore
-            .find("if keep_undo_history && chain_forward")
-            .expect("the forward restore must re-check the downloaded child policy");
-        let replace = restore
-            .find(".replace_cache_stalx_with(")
-            .expect("the restore replaces the working copy");
-        assert!(
-            policy < replace,
-            "the child-policy refusal must happen before the working copy is replaced"
+            "RULE (a forward step is offered on the CHILD's policy, #303): the currently \
+             open parent policy cannot decide whether the child shipped history"
         );
     }
 
@@ -1362,86 +1449,131 @@ mod tests {
         );
     }
 
-    /// [#303] The chain pointer is written AFTER the reload, and cleared by a plain
-    /// View / Restore.
+    /// [#303] Spec item 24: the Unwind's refusals, driven through the guard itself.
     ///
-    /// Ordering is the whole point: the reload replaces the very file the pointer is
-    /// written into (and the downloaded copy carries no chain row of its own, since it is
-    /// stripped from every push), so a write before it would be thrown away.
+    /// [#576 A8] That they run BEFORE the download is the type's job
+    /// (`restore_order::UnwindCleared`: the download is its method). What they decide is
+    /// behaviour, so it is driven here instead of read from the guard's source.
     #[test]
-    fn unwind_records_its_chain_position_after_the_reload() {
-        let restore = prod_source()
-            .split_once("pub fn speleodb_restore_revision")
-            .map(|(_, rest)| rest)
-            .expect("the swap verb is in this file");
-        let reload = restore
-            .find("self.do_load_project_full(")
-            .expect("the swap reloads in place");
-        let record = restore
-            .find("self.speleodb_set_unwound_from(Some(&hexsha));")
-            .expect("an Unwind must record where the chain now stands");
+    fn the_unwind_guard_refuses_unwalked_steps_and_unacknowledged_work() {
+        let (state, _temp) = linked_state();
+        let clean = state.speleodb_open_link().expect("linked fixture");
+        let step = || crate::core::Command::CreateProject {
+            name: "Step".to_owned(),
+            location: None,
+        };
+
+        // A backward step: the UNDO stack is what it would discard.
+        state.undo_stack.lock().push(step());
         assert!(
-            reload < record,
-            "the pointer is written after the reload - the reload replaces the file it \
-             lives in, so an earlier write would be discarded"
+            state.speleodb_guard_unwind(&clean, false, false).is_err(),
+            "a chain step over a non-empty undo stack would discard the un-walked steps"
+        );
+        let parked = state.undo_stack.lock().pop_undo().expect("the pushed step");
+        state.undo_stack.lock().push_redo(parked);
+        assert!(
+            state.speleodb_guard_unwind(&clean, false, false).is_ok(),
+            "a parked redo step is not what a backward step discards"
+        );
+
+        // A forward step: the REDO stack decides, not the undo stack.
+        assert!(
+            state.speleodb_guard_unwind(&clean, false, true).is_err(),
+            "a FORWARD step over a half-redone copy would drop the operations still parked \
+             on the redo stack"
+        );
+        let redone = state.undo_stack.lock().pop_redo().expect("the parked step");
+        state.undo_stack.lock().push_undo(redone);
+        assert!(
+            state.speleodb_guard_unwind(&clean, false, true).is_ok(),
+            "a forward step does not need the undo stack empty"
+        );
+        state.undo_stack.lock().clear();
+
+        // Un-pushed work no Unwind put there: refused unless the caller acknowledged it.
+        let dirty = SpeleoLink {
+            has_unpushed_edits: true,
+            last_edit_at: Some("2026-08-01T00:00:00+00:00".to_owned()),
+            ..clean
+        };
+        assert!(
+            state.speleodb_guard_unwind(&dirty, false, false).is_err(),
+            "un-pushed work may only be discarded by a caller that acknowledged it"
         );
         assert!(
-            restore.contains("self.speleodb_set_unwound_from(None);"),
-            "a plain View / Restore must CLEAR the pointer: the working copy is no longer \
-             where the chain thought it was"
+            state.speleodb_guard_unwind(&dirty, true, false).is_ok(),
+            "...and the acknowledgement is what lets it through"
         );
     }
 
+    /// After the in-place reload: a Restore reopens editing and hands the acquisition
+    /// record back ONLY where one was captured, and the Unwind chain pointer is written
+    /// (an Unwind) or cleared (a plain View / Restore).
+    ///
+    /// [#576 A8] That these run after the reload, and the capture before it, is the
+    /// types' job (`restore_order::CapturedRecord` / `Reloaded`); what they do is driven
+    /// here through the step itself, instead of read from the verb's source.
     #[test]
-    fn restore_hands_the_acquisition_record_back_across_its_reload() {
-        // The THIRD in-place reload site, and the one that was missed. A Restore is
-        // only reachable with the write lock genuinely held (its entry guards refuse a
-        // force-editor and require an open gate), yet it closes the project and
-        // reloads it - and a fresh load of a remote project is read-only, so the gate
-        // is shut for the length of that reload. A status poll landing in the window
-        // clears the acquisition record, and the `if restore` block reopened the GATE
-        // without it: the record was gone permanently, and our own next landed push
-        // came back as a Conflict.
-        //
-        // Structural for the same reason as its two siblings above: the reload
-        // resolves an app cache dir that only the env-gated live tests initialise, so
-        // there is no unit-level seam to observe the restore through.
-        let restore = prod_source()
-            .split_once("fn speleodb_restore_revision")
-            .map(|(_, rest)| rest)
-            .and_then(|rest| rest.split("\n    /// ").next())
-            .expect("speleodb_restore_revision body precedes the next item's doc");
+    fn after_the_reload_a_restore_hands_back_only_the_record_it_had() {
+        use super::super::speleodb::authed_session_at;
+        let fresh = || {
+            let (state, temp) = linked_state();
+            // A claim is stamped with the account that took it.
+            *state.speleodb.lock() = authed_session_at("http://x/");
+            // Where the reload leaves it: a fresh load of a remote project is read-only.
+            state.set_edit_enabled(false);
+            (state, temp)
+        };
+
+        let (state, _temp) = fresh();
+        restore_order::Reloaded::for_tests(true, false).reopen_for_restore(
+            &state,
+            true,
+            FIXTURE_PROJECT_ID,
+        );
+        assert!(state.edit_enabled(), "a Restore reopens editing");
         assert!(
-            restore.contains("let had_lock_record = self.speleodb_lock_acquired_here("),
-            "Restore must capture the acquisition record before its reload"
+            state.speleodb_lock_acquired_here(FIXTURE_PROJECT_ID),
+            "and hands back the record it captured, or our own next push reads as a conflict"
+        );
+
+        let (state, _temp) = fresh();
+        restore_order::Reloaded::for_tests(false, false).reopen_for_restore(
+            &state,
+            true,
+            FIXTURE_PROJECT_ID,
         );
         assert!(
-            restore.contains("self.speleodb_note_lock_acquired(Some(&project_id));"),
-            "and hand it back afterwards - reopening the gate alone leaves a lock we \
-             still hold with no provenance for the push we are about to make"
+            !state.speleodb_lock_acquired_here(FIXTURE_PROJECT_ID),
+            "no captured record, none handed back - re-recording unconditionally would MINT \
+             provenance for an inherited lock"
         );
-        let capture = restore
-            .find("let had_lock_record")
-            .expect("capture present (asserted above)");
-        let reload = restore
-            .find("self.do_load_project_full(")
-            .expect("the in-place reload is what shuts the gate");
-        let restore_back = restore
-            .find("self.speleodb_note_lock_acquired(Some(&project_id));")
-            .expect("re-record present (asserted above)");
-        assert!(
-            capture < reload && reload < restore_back,
-            "capture BEFORE the reload (it is the last point the pre-reload truth \
-             exists) and re-record AFTER it (a record written before the reload is \
-             what the poll in that window drops)"
+
+        let (state, _temp) = fresh();
+        restore_order::Reloaded::for_tests(true, false).reopen_for_restore(
+            &state,
+            false,
+            FIXTURE_PROJECT_ID,
         );
-        assert!(
-            restore.contains("if had_lock_record {"),
-            "and gate the hand-back on the captured record - re-recording \
-             unconditionally would MINT provenance for an inherited lock"
+        assert!(!state.edit_enabled(), "a View stays read-only");
+
+        let (state, _temp) = fresh();
+        restore_order::Reloaded::for_tests(false, false)
+            .record_chain_position(&state, true, "abc1234");
+        assert_eq!(
+            state.speleodb_unwound_from().as_deref(),
+            Some("abc1234"),
+            "an Unwind records where the chain now stands"
+        );
+        restore_order::Reloaded::for_tests(false, false)
+            .record_chain_position(&state, false, "abc1234");
+        assert_eq!(
+            state.speleodb_unwound_from(),
+            None,
+            "a plain View / Restore CLEARS the pointer: the copy is no longer where the \
+             chain thought it was"
         );
     }
-
     #[test]
     fn validate_hexsha_accepts_git_ids_rejects_traversal() {
         // #218 restore: a full 40-hex commit id and a shorter prefix both pass.
