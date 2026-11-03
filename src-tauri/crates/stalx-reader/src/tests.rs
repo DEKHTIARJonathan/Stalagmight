@@ -1,4 +1,8 @@
 #![expect(clippy::unwrap_used, reason = "test assertions")]
+#![expect(
+    clippy::float_cmp,
+    reason = "values must round-trip through SQLite exactly"
+)]
 
 use std::path::{Path, PathBuf};
 
