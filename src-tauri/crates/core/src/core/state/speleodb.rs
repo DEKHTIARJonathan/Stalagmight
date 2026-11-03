@@ -6338,15 +6338,16 @@ mod tests {
         // OPEN, still EDITING session on the same project is itself grounds to
         // stand down (`speleodb_live_session_accounts_for`), so a fixture that
         // skipped the close would model a world the real sequence never produces.
-        {
+        let cleared = {
             let commands = state.hold_commands();
             let mut open = state.project.lock();
-            state.speleodb_forget_lock_acquired_for(&params.project_id);
+            let cleared = state.speleodb_forget_lock_acquired_under(&open, &params.project_id);
             state.close_open_project_locked(&commands, &mut open);
-        }
+            cleared
+        };
 
         state
-            .speleodb_release_captured_lock(&params)
+            .speleodb_release_captured_lock(&cleared, &params)
             .expect("the stub answers 200");
 
         assert_eq!(
@@ -6422,13 +6423,16 @@ mod tests {
         let params = state
             .speleodb_delete_lock_release_params()
             .expect("precondition: the fixture holds a lock, so there is a snapshot");
-        state.speleodb_forget_lock_acquired_for(&params.project_id);
+        let cleared = {
+            let open = state.project.lock();
+            state.speleodb_forget_lock_acquired_under(&open, &params.project_id)
+        };
         // A successor Start Editing on the same remote project commits its claim
         // inside the gap between the snapshot and the deferred POST.
         state.speleodb_note_lock_acquired(Some(REMOTE_ID));
 
         state
-            .speleodb_release_captured_lock(&params)
+            .speleodb_release_captured_lock(&cleared, &params)
             .expect("standing down is a success - the lock is accounted for");
 
         assert_eq!(
@@ -6477,18 +6481,19 @@ mod tests {
         // The delete's own clear + teardown, as in the positive test above: the
         // deleted project's session must be GONE before the deferred POST, or
         // the round-5 live-session eye would (correctly) stand down for it.
-        {
+        let cleared = {
             let commands = state.hold_commands();
             let mut open = state.project.lock();
-            state.speleodb_forget_lock_acquired_for(&params.project_id);
+            let cleared = state.speleodb_forget_lock_acquired_under(&open, &params.project_id);
             state.close_open_project_locked(&commands, &mut open);
-        }
+            cleared
+        };
         // Exactly what a successful Start editing on the NEXT project does, in the
         // window `delete_project` opens by releasing the `project` mutex first.
         state.speleodb_note_lock_acquired(Some(GAP_ID));
 
         state
-            .speleodb_release_captured_lock(&params)
+            .speleodb_release_captured_lock(&cleared, &params)
             .expect("the stub answers 200");
 
         assert!(

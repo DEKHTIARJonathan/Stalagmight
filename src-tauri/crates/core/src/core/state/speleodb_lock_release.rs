@@ -45,6 +45,27 @@ use super::AppState;
 use crate::speleodb::client;
 use crate::speleodb::SpeleoDbError;
 
+/// [#576 NF-A8R-GAPS] Proof the delete cleared its own claim under the `project`
+/// guard that decided the file's identity. Made only by
+/// [`AppState::speleodb_forget_lock_acquired_under`] (the field is private to this
+/// module), and the delete's deferred release
+/// ([`AppState::speleodb_release_captured_lock`]) takes it: a delete that cleared
+/// through the plain [`AppState::speleodb_forget_lock_acquired_for`] instead - which
+/// stays, for the clears that run outside any slot - has nothing to hand that
+/// release, and does not compile. Carries the claim it removed, for the
+/// trash-failure path that puts it back.
+#[must_use = "the delete's deferred release takes this proof, and a failed trash puts its claim back"]
+pub(super) struct ClaimClearedUnderSlot {
+    claim: Option<super::speleodb_session::LockClaim>,
+}
+
+impl ClaimClearedUnderSlot {
+    /// The claim the clear removed, for the path that has to restore it.
+    pub(super) fn into_claim(self) -> Option<super::speleodb_session::LockClaim> {
+        self.claim
+    }
+}
+
 /// What one lock release needs: the server to talk to, the credential, the
 /// http-policy allowance, and which project's mutex to drop.
 ///
@@ -388,13 +409,16 @@ impl AppState {
     /// file's identity is still held: after the guard drops, a successor Start Editing
     /// on the same remote project can mint a claim of its own, and a later clear
     /// cannot tell ours from it (F8). `_slot` is that guard's slot - so the clear
-    /// cannot be written outside the guard's block.
+    /// cannot be written outside the guard's block - and the proof it returns is what
+    /// the delete's deferred release takes ([`ClaimClearedUnderSlot`]).
     pub(super) fn speleodb_forget_lock_acquired_under(
         &self,
         _slot: &super::project_slot::ProjectSlot,
         project_id: &str,
-    ) -> Option<super::speleodb_session::LockClaim> {
-        self.speleodb_forget_lock_acquired_inner(project_id, None)
+    ) -> ClaimClearedUnderSlot {
+        ClaimClearedUnderSlot {
+            claim: self.speleodb_forget_lock_acquired_inner(project_id, None),
+        }
     }
 
     pub(super) fn speleodb_forget_lock_acquired_as(
@@ -479,8 +503,12 @@ impl AppState {
     /// The same deferral is why the acquisition-record clear below is CONDITIONAL,
     /// unlike the one every other release verb makes - see
     /// [`AppState::speleodb_forget_lock_acquired_for`].
+    ///
+    /// [#576 NF-A8R-GAPS] `_cleared` is that clear's proof, so the release cannot be
+    /// reached by a delete that cleared any other way.
     pub(super) fn speleodb_release_captured_lock(
         &self,
+        _cleared: &ClaimClearedUnderSlot,
         params: &LockReleaseParams,
     ) -> Result<(), SpeleoDbError> {
         // The capturing session's own claim was already cleared - by

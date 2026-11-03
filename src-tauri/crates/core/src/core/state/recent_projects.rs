@@ -430,10 +430,11 @@ impl AppState {
                 // the session is closed, so the poll's catch-alls never see it,
                 // and the no-project janitor has nothing to retry. See the
                 // trash-failure return, which puts it back.
-                // [#576 A8] Under the guard by type: the clear takes its slot.
+                // [#576 A8] Under the guard by type: the clear takes its slot, and
+                // [NF-A8R-GAPS] the release below takes the proof it returns.
                 cleared_claim = held_lock
                     .as_ref()
-                    .and_then(|p| self.speleodb_forget_lock_acquired_under(&open, &p.project_id));
+                    .map(|p| self.speleodb_forget_lock_acquired_under(&open, &p.project_id));
                 tracing::info!(
                     path = ?path,
                     purpose = "release the live handle before deleting the file",
@@ -499,7 +500,7 @@ impl AppState {
                 // closed the session, so the poll's catch-alls will never run
                 // over it, and the deferred release below is not reached from
                 // here either.
-                self.speleodb_restore_lock_claim(cleared_claim);
+                self.speleodb_restore_lock_claim(cleared_claim.and_then(|c| c.into_claim()));
                 return CommandResult::failure(format!("Failed to delete {}: {e}", path.display()))
                     .with_session_closed(session_closed);
             }
@@ -560,8 +561,8 @@ impl AppState {
         // surfaced as a warning rather than only logged because the local end of that
         // lock no longer exists - nothing will retry it from this project, and the
         // user's only remaining route to the stranded mutex is the held-lock prompt.
-        if let Some(params) = held_lock {
-            if let Err(e) = self.speleodb_release_captured_lock(&params) {
+        if let (Some(params), Some(cleared)) = (held_lock, &cleared_claim) {
+            if let Err(e) = self.speleodb_release_captured_lock(cleared, &params) {
                 tracing::warn!(
                     error = %e,
                     purpose = "surrender the write lock of a project being deleted",
