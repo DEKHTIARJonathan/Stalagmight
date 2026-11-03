@@ -1264,7 +1264,7 @@ impl AppState {
     /// included - over work that already landed.
     fn speleodb_heal_managed_type(
         &self,
-        _landed: &Landed,
+        landed: &Landed,
         endpoint: &str,
         token: &str,
         insecure_http: bool,
@@ -1275,6 +1275,7 @@ impl AppState {
             return;
         }
         match client::patch_project(
+            landed,
             endpoint,
             token,
             insecure_http,

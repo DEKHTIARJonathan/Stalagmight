@@ -2882,6 +2882,9 @@ mod landing {
         _concluded: (),
     }
 
+    /// [#576 NF-A8R-4] The managed-type heal's PATCH follows a concluded landing.
+    impl crate::speleodb::client::PatchLicence for Landed {}
+
     impl Landed {
         /// What an arm that concluded a landing reports.
         pub(in crate::core::state) fn outcome(&self) -> PushOutcome {

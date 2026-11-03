@@ -685,7 +685,8 @@ it. So it is allowed for one kind of rule only (#576 A8):
 - **Bypass:** a proof stops a reorder only if the raw step it guards cannot be
   called without it. The guarded primitive takes the proof as a licence
   argument - `client::download_dump*` (`DumpLicence`), `client::upload_auto`
-  (`UploadLicence`), `replace_cache_stalx_with` (`ReplaceLicence`), the
+  (`UploadLicence`), `client::patch_project` (`PatchLicence`),
+  `replace_cache_stalx_with` (`ReplaceLicence`), the
   reclaim-checked release (`ReclaimRelease`) - implemented only by the proof
   types and by a function-local marker in each flow whose step has no
   precondition (named for why). A `#[cfg(test)]` constructor (`for_tests`) is

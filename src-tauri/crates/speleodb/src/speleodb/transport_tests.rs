@@ -181,8 +181,22 @@ fn a_write_never_travels_on_a_pooled_connection() {
     // connection even right after a read left one idle in the pool.
     let stub = KeepAliveStub::start(vec![ok_list()]);
     let _ = client::list_projects(&stub.base, "tok", false);
-    let _ = client::patch_project(&stub.base, "tok", false, PROJECT_ID, "{}");
-    let _ = client::patch_project(&stub.base, "tok", false, PROJECT_ID, "{}");
+    let _ = client::patch_project(
+        &client::TestWire,
+        &stub.base,
+        "tok",
+        false,
+        PROJECT_ID,
+        "{}",
+    );
+    let _ = client::patch_project(
+        &client::TestWire,
+        &stub.base,
+        "tok",
+        false,
+        PROJECT_ID,
+        "{}",
+    );
     let opened = stub.connections();
     println!("connections opened for one read then two writes: {opened} (expected 3)");
     assert_eq!(stub.requests().len(), 3);

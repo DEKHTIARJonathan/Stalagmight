@@ -1901,6 +1901,7 @@ mod live_tests {
 
         // Flip rendering OFF: the PATCH response reflects the new value...
         let patched = client::patch_project(
+            &client::TestWire,
             &url,
             &token,
             false,
@@ -1922,6 +1923,7 @@ mod live_tests {
 
         // The shipped Enable-rendering action: flip it back to false.
         let re_enabled = client::patch_project(
+            &client::TestWire,
             &url,
             &token,
             false,

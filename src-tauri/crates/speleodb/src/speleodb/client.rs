@@ -822,6 +822,15 @@ pub trait DumpLicence {}
 /// pre-push flush). Same rule - only that proof and [`TestWire`] implement it.
 pub trait UploadLicence {}
 
+/// [#576 NF-A8R-4] The licence of [`patch_project`]. Two of its callers may only
+/// run after a landed push - adoption's type flip (`AdoptLanded`) and the push's
+/// managed-type heal (`Landed`) - and those proofs implement it, so the PATCH cannot
+/// be written above the landing it follows. The user-initiated metadata edit has no
+/// precondition and passes a marker named for that (`speleodb_project`'s
+/// `UserMetadataEdit`). Same rule as [`DumpLicence`]: only those and [`TestWire`]
+/// implement it.
+pub trait PatchLicence {}
+
 /// The licence tests drive the wire calls with: they test the call, not the
 /// orchestration that earns one. Compiled only into test builds.
 #[cfg(any(test, feature = "test-support"))]
@@ -832,6 +841,9 @@ impl DumpLicence for TestWire {}
 
 #[cfg(any(test, feature = "test-support"))]
 impl UploadLicence for TestWire {}
+
+#[cfg(any(test, feature = "test-support"))]
+impl PatchLicence for TestWire {}
 
 /// `GET /api/v2/projects/{id}/download/dump/` - download the project's working
 /// tree (HEAD) as a ZIP. Returns the raw ZIP bytes for [`super::dump`] to handle.
@@ -1121,7 +1133,11 @@ pub fn release_all_locks(
 /// failure can't double-apply. Consumed by #200's Enable-rendering action (PATCH
 /// `exclude_geojson = false`); the server enforces permission (READ_AND_WRITE, no
 /// lock) on the metadata PATCH.
+///
+/// [#576 NF-A8R-4] Takes a [`PatchLicence`]: a call written without one does not
+/// compile.
 pub fn patch_project(
+    _licence: &impl PatchLicence,
     base: &str,
     token: &str,
     insecure_http: bool,

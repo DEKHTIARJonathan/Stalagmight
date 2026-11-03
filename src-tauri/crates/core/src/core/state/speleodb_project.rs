@@ -115,6 +115,12 @@ fn build_create_body(params: &SpeleoPublishParams) -> serde_json::Value {
     serde_json::Value::Object(body)
 }
 
+/// [#576 NF-A8R-4] The metadata PATCH's licence: a user-initiated edit of the
+/// project's metadata, which has no precondition - no lock (the edit lock governs
+/// only the survey file) and no landing; the server enforces the permission.
+struct UserMetadataEdit;
+impl client::PatchLicence for UserMetadataEdit {}
+
 impl AppState {
     /// Set the open project's server-side `exclude_geojson` flag (#200
     /// Enable-rendering): `PATCH /projects/{id}/`. The server enforces permission
@@ -134,7 +140,14 @@ impl AppState {
         let row = client::spec::PATCH_PROJECT.category;
         self.speleodb_handle_auth(
             row,
-            client::patch_project(&endpoint, &token, insecure_http, &link.project_id, &payload),
+            client::patch_project(
+                &UserMetadataEdit,
+                &endpoint,
+                &token,
+                insecure_http,
+                &link.project_id,
+                &payload,
+            ),
         )
         .map_err(|e| dto_for_error(row, &e))?;
         Ok(())
@@ -195,7 +208,14 @@ impl AppState {
         let updated = self
             .speleodb_handle_auth(
                 row,
-                client::patch_project(&endpoint, &token, insecure_http, &link.project_id, &payload),
+                client::patch_project(
+                    &UserMetadataEdit,
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &link.project_id,
+                    &payload,
+                ),
             )
             .map_err(|e| dto_for_error(row, &e))?;
 

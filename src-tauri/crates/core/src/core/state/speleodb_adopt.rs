@@ -898,7 +898,7 @@ impl AppState {
     fn adopt_finalize(
         &self,
         _lock_ops: &super::speleodb_session::LockOpsHeld<'_>,
-        _landed: &adopt_order::AdoptLanded,
+        landed: &adopt_order::AdoptLanded,
         endpoint: &str,
         token: &str,
         insecure_http: bool,
@@ -936,6 +936,7 @@ impl AppState {
         debug_assert!(needs_flip);
 
         let type_flipped = match client::patch_project(
+            landed,
             endpoint,
             token,
             insecure_http,
@@ -1849,6 +1850,9 @@ mod adopt_order {
     pub(super) struct AdoptLanded {
         _landed: (),
     }
+
+    /// [#576 NF-A8R-4] The type flip's PATCH is only ever earned by a landed push.
+    impl client::PatchLicence for AdoptLanded {}
 
     impl HandedOver {
         /// Landed exactly for the outcomes that mean the bytes are up. Claiming a flip
