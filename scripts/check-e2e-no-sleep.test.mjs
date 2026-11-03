@@ -76,6 +76,24 @@ test('a test-runner setTimeout or a timers/promises import counts; a settle anno
   assert.deepEqual(bad('// settle: proves the debounce never fires early\nawait new Promise((r) => setTimeout(r, 500));'), []);
 });
 
+// #576 RV4-FE-FEB-2: only a `setTimeout(` CALL used to count, so each of these passed.
+const RUNNER_TIMERS = {
+  'an aliased runner-side setTimeout counts': ['const st = setTimeout;\nawait new Promise((r) => st(r, 500));', [1]],
+  'a promisify(setTimeout) sleep counts': ["import { promisify } from 'node:util';\nconst sleep = promisify(setTimeout);\nawait sleep(500);", [2]],
+  'a runner-side setInterval sleep counts': ['await new Promise((r) => {\n  const h = setInterval(() => { clearInterval(h); r(); }, 500);\n});', [2]],
+};
+for (const [name, [text, lines]] of Object.entries(RUNNER_TIMERS)) {
+  test(name, () => assert.deepEqual(bad(text), lines));
+}
+
+test('a settle-annotated alias passes; an in-page setInterval and the test budget are not counted', () => {
+  assert.deepEqual(bad('// settle: proves the debounce never fires early\nconst st = setTimeout;\nawait new Promise((r) => st(r, 500));'), []);
+  assert.deepEqual(findSleeps('// settle: proves the debounce never fires early\nconst st = setTimeout;').map((s) => s.lineNo), [2], 'the alias is still a sleep, just an annotated one');
+  assert.deepEqual(bad('await page.evaluate(() => new Promise((r) => {\n  const h = setInterval(() => { clearInterval(h); r(); }, 5);\n}));'), []);
+  assert.deepEqual(bad('test.setTimeout(60000);\ntestInfo.setTimeout(30000);'), []);
+  assert.deepEqual(bad("const label = 'setInterval';\nclearInterval(h);\nconst mySetTimeout = 1;"), []);
+});
+
 test('a setTimeout the browser runs (evaluate, addInitScript, waitForFunction) or in the mock is not a sleep', () => {
   const inPage = [
     'await page.evaluate(async () => {',

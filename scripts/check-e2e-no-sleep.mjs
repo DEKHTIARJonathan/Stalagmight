@@ -11,7 +11,10 @@
 //     `page['waitForTimeout'](...)` and a call split across lines count;
 //   - a test-runner `setTimeout(` (`await new Promise((r) => setTimeout(r, 500))`),
 //     i.e. one that is not inside a callback the BROWSER runs (page.evaluate,
-//     addInitScript, waitForFunction, $eval, ...);
+//     addInitScript, waitForFunction, $eval, ...). Any bare reference to
+//     `setTimeout` or `setInterval` counts, not only a call, so an alias
+//     (`const st = setTimeout`), `promisify(setTimeout)` and a setInterval
+//     sleep do too (#576 RV4-FE-FEB-2);
 //   - an import of `timers/promises`, whose `setTimeout` is a sleep under any
 //     alias.
 //
@@ -28,7 +31,7 @@
 // helper from e2e-playwright/helpers/app.ts (waitForMapIdle, waitForActiveTool,
 // ...). See docs/testing-recipes.md, "Waiters".
 //
-// Out of scope by design: a `setTimeout` inside page.evaluate and friends, or
+// Out of scope by design: a timer inside page.evaluate and friends, or
 // anywhere under e2e-playwright/mocks/ (the IPC mock is serialized into the
 // page, so its timers are mock latency, not the test runner sleeping), and
 // Playwright's own `test.setTimeout` / `testInfo.setTimeout` (a budget, not a
@@ -56,9 +59,11 @@ export const MIN_REASON = 12;
 // destructure. `page['waitForTimeout']` is matched before strings are blanked.
 const SLEEP_RE = /\bwaitForTimeout\b/g;
 const SLEEP_BRACKET_RE = /\[\s*(['"`])waitForTimeout\1\s*\]/g;
-// A bare or global `setTimeout(`; `test.setTimeout(` / `testInfo.setTimeout(`
-// (budgets) are member calls on something else and do not match.
-const TIMER_RE = /(?:^|[^.\w$]|\b(?:globalThis|global)\.)setTimeout\s*\(/g;
+// A bare or global `setTimeout` / `setInterval` reference - a call, an alias,
+// an argument (`promisify(setTimeout)`); `test.setTimeout(` /
+// `testInfo.setTimeout(` (budgets) are members of something else and do not
+// match. Group 1 is the name.
+const TIMER_RE = /(?:^|[^.\w$]|\b(?:globalThis|global)\.)(setTimeout|setInterval)(?![\w$])/g;
 const TIMERS_PROMISES_RE = /(['"])(?:node:)?timers\/promises\1/g;
 // Calls whose callback runs in the page, where a timer is not a runner sleep.
 const BROWSER_CALL_RE = /\.(?:evaluate|evaluateHandle|evaluateAll|addInitScript|waitForFunction|\$eval|\$\$eval)\s*\(/g;
@@ -93,8 +98,11 @@ export function findSleeps(text, rel = '') {
   const code = stripped.map((c) => c.replace(STRING_RE, blank));
   const lineHits = new Map(); // 0-based line -> number of sleeps on it
   const hit = (i, n = 1) => lineHits.set(i, (lineHits.get(i) ?? 0) + n);
+  const timersPromisesLines = new Set();
   stripped.forEach((c, i) => {
-    const n = (c.match(SLEEP_BRACKET_RE) ?? []).length + (c.match(TIMERS_PROMISES_RE) ?? []).length;
+    const imports = (c.match(TIMERS_PROMISES_RE) ?? []).length;
+    if (imports) timersPromisesLines.add(i);
+    const n = (c.match(SLEEP_BRACKET_RE) ?? []).length + imports;
     if (n) hit(i, n);
   });
   code.forEach((c, i) => {
@@ -113,9 +121,12 @@ export function findSleeps(text, rel = '') {
     }
     TIMER_RE.lastIndex = 0;
     while ((m = TIMER_RE.exec(joined)) !== null) {
-      const at = m.index + m[0].indexOf('setTimeout');
+      const at = m.index + m[0].length - m[1].length;
       if (browser.some(([a, b]) => a < at && at < b)) continue;
-      hit(joined.slice(0, at).split('\n').length - 1);
+      const line = joined.slice(0, at).split('\n').length - 1;
+      // `import { setTimeout as sleep } from 'timers/promises'` names that
+      // module's export, and the line is already counted once above.
+      if (!timersPromisesLines.has(line)) hit(line);
     }
   }
   const out = [];
@@ -151,7 +162,7 @@ export function main(root = REPO_ROOT, log = console.log, err = console.error) {
     return 0;
   }
   err(`\n✗ e2e-playwright no-sleep check failed - ${violations.length + symlinks.length} issue(s):\n`);
-  for (const v of violations) err(`  ${v.rel}:${v.lineNo}  a sleep (waitForTimeout, a runner-side setTimeout or timers/promises) without a "// settle: <reason>" comment above it`);
+  for (const v of violations) err(`  ${v.rel}:${v.lineNo}  a sleep (waitForTimeout, a runner-side setTimeout/setInterval or timers/promises) without a "// settle: <reason>" comment above it`);
   for (const l of symlinks) err(`  ${l.rel}  is a symlink (-> ${l.target}); not followed, so not scanned - replace it with a regular file`);
   err(
     '\nWait for the condition instead (web-first assertion, expect.poll, toPass, or a helper\n' +
