@@ -119,11 +119,11 @@ describe('DMP selection: a failed duplicate check is said, not swallowed (#576 N
   });
 
   it('copy: only the section notice says duplicates are not flagged', () => {
-    const copy = en.dialogs.dmpSelection as Record<string, string>;
-    expect(copy['fileCheckFailed']).toBe('Could not check whether this file was imported before ({{reason}}).');
-    expect(copy['sectionCheckFailed']).toBe(
+    const copy = en.dialogs.dmpSelection;
+    expect(copy.fileCheckFailed).toBe('Could not check whether this file was imported before ({{reason}}).');
+    expect(copy.sectionCheckFailed).toBe(
       'Could not check for sections already in the project ({{reason}}) - duplicates are not flagged.',
     );
-    expect(copy['duplicateCheckFailed']).toBeUndefined();
+    expect('duplicateCheckFailed' in copy).toBe(false);
   });
 });
