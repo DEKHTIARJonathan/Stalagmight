@@ -1233,9 +1233,10 @@ impl AppState {
 /// it would mean running the whole chain on a narrowed handle that exposes only the
 /// steps above - a rewrite of the verb, not a proof type - so it is left to review.
 /// It is not behaviour-neutral (a close before the stamp leaves the stamp no live
-/// handle to write through), and no test drives the verb past the download yet: the
-/// verb needs a stub for the whole acquire / download / push / release exchange,
-/// which the single-request tests here do not model.
+/// handle to write through), and a close before the hand-over's Done is caught end to
+/// end (decision NF-A8R-GAPS-D1): `sdb_adopt_e2e_tests` drives the verb against a stub
+/// for the whole acquire / download / push / release / type-flip exchange, and fails
+/// when the conversion stays local, dirty and locked - what an early close leaves.
 mod adopt_order {
     use std::path::Path;
 

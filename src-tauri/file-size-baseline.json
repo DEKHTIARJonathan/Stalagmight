@@ -293,6 +293,7 @@
     "src-tauri/crates/core/src/core/state/save_as_unreadable_tests.rs": 58,
     "src-tauri/crates/core/src/core/state/save_history_cache_tests.rs": 91,
     "src-tauri/crates/core/src/core/state/save_sidecar_tests.rs": 577,
+    "src-tauri/crates/core/src/core/state/sdb_adopt_e2e_tests.rs": 260,
     "src-tauri/crates/core/src/core/state/sdb_adopt_edit_gate_tests.rs": 124,
     "src-tauri/crates/core/src/core/state/sdb_adopt_gate_lift_tests.rs": 38,
     "src-tauri/crates/core/src/core/state/sdb_adopt_guard_tests.rs": 132,
