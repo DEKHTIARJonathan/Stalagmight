@@ -14,10 +14,15 @@
 //! Here the route through the pins does not depend on the budget at all: only where the dive turns
 //! on it does, so less gas can only turn it earlier.
 //!
-//! The reach masks and the turn frontier stay the plain field's at the final budget
-//! ([`super::budget_view`]): this module only chooses the turnaround and the route to it.
+//! The reach overlay and the turn frontier follow the pinned dive too ("D4", decided "only where
+//! the dive goes"): a station is priced the way a way-point plan prices it - at its pass on the
+//! route through the pins, or after passing every pin - so the map paints only the stations a
+//! diver who drops at the pins can be at. Painting everything the pinned budget affords from the
+//! entrance lit passages the dive never goes up (RV8c scenario 12178: A:1, A:2 and C:1 for a dive
+//! that drops its stage at B:1). The cost, accepted with the decision: a pin on its own default
+//! station is a way point too, so it can change the overlay of an otherwise identical plan.
 
-use super::{path_to, waypoint_walk, BudgetView, ResolvedSegment, WaypointWalk};
+use super::{budget_view, path_to, waypoint_walk, BudgetView, ResolvedSegment, WaypointWalk};
 
 /// The walk a pinned plan flies, and where each pin sits on it.
 pub(super) struct PinnedWalk {
@@ -127,10 +132,13 @@ pub(super) fn pinned_walk(
     }
 }
 
-/// The pinned plan's view at the final budget: the plain field's masks (`plain`), with the
-/// turnaround and the route to it chosen on the pinned walk. Also returns the stations past the
+/// The pinned plan's view at the final budget: the reach masks priced on the pinned walk (D4),
+/// with the turnaround and the route to it chosen on that walk. Also returns the stations past the
 /// turnaround up to the last pin (and their route gas) when the dive turns before reaching it, so
 /// a drop it never reaches can still be named at its pin.
+///
+/// `plain` is the view on the plan's own walk, returned as it is when every pin is on the
+/// way-point chain (that walk already passes the pins).
 pub(super) fn pinned_view(
     pinned: &PinnedWalk,
     base: &WaypointWalk,
@@ -145,6 +153,14 @@ pub(super) fn pinned_view(
         return (plain, None);
     }
     let walk = pinned.walk(base);
+    // D4: the masks a way-point plan through the pins would show - pass-through gas on the route
+    // to the last pin, the after-pins price everywhere else - at the same final budget. Only the
+    // masks are read from this view; the turnaround below is the pinned walk's own rule. The pinned
+    // walk does not depend on the budget, so less gas can only take stations off the map. Its gas
+    // price for every station is at least the plain field's - the walk through the pins is one the
+    // plain field could fly too, and the pinned budget is never larger - so a pin cannot paint a
+    // station on gas that the plan without pins leaves dark.
+    let masks = budget_view(walk, endpoint, budget_litres, scooter_limit);
     let affordable =
         |i: usize| walk.chain_gas[i] <= budget_litres && walk.chain_scoot[i] <= scooter_limit;
     let last_pin = walk.chain.len() - 1;
@@ -156,7 +172,7 @@ pub(super) fn pinned_view(
         // cannot afford stalls it as it always has; otherwise the dive turns at the last station
         // of the route toward the pins that it can afford.
         if !affordable(pinned.legs_start) {
-            return (no_target(plain, walk), None);
+            return (no_target(masks, walk), None);
         }
         let mut turn = pinned.legs_start;
         while turn < last_pin && affordable(turn + 1) {
@@ -173,7 +189,7 @@ pub(super) fn pinned_view(
             scooter_bound: walk.chain_gas[next] <= budget_litres,
             turn_scoot: walk.chain_scoot[turn],
             turn_time: Some(walk.chain_time[turn]).filter(|t| t.is_finite()),
-            ..plain
+            ..masks
         };
         let beyond = (walk.chain[next..].to_vec(), walk.chain_gas[next..].to_vec());
         return (view, Some(beyond));
@@ -242,14 +258,14 @@ pub(super) fn pinned_view(
             .filter(|s| s.is_finite())
             .unwrap_or(0.0),
         turn_time: target.map(|t| walk.time_in[t]).filter(|t| t.is_finite()),
-        ..plain
+        ..masks
     };
     (view, None)
 }
 
 /// No turnaround: the way-point chain itself is unaffordable. The committed chain is kept for the
 /// map, exactly as the plain field does, so the diver can see which way point blew the gas.
-fn no_target(plain: BudgetView, walk: &WaypointWalk) -> BudgetView {
+fn no_target(masks: BudgetView, walk: &WaypointWalk) -> BudgetView {
     BudgetView {
         target: None,
         target_toward_endpoint: false,
@@ -259,7 +275,7 @@ fn no_target(plain: BudgetView, walk: &WaypointWalk) -> BudgetView {
         scooter_bound: false,
         turn_scoot: 0.0,
         turn_time: None,
-        ..plain
+        ..masks
     }
 }
 

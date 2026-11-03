@@ -7,6 +7,9 @@
 //! - D3 "Turn early, stage kept": a dive that runs out of gas (or scooter range) before the pin
 //!   turns where the gas says on the way there, carries the stage, and reports the drop as not
 //!   reached; whatever the pin strands stays stranded.
+//! - D4 "Only where the dive goes": the overlay paints only the stations the pinned dive can be
+//!   at, each priced at its pass on the route through the pins or after passing them, like a way
+//!   point; the turn dots are the stations it can END at, off the way to the last pin.
 //!
 //! The first two tests rebuild the independent review's repro scenes (RV8c: scenario 12178 of the
 //! cross-build dump, and the HEAD-only two-branch probe) and print the numbers the before/after
@@ -205,6 +208,176 @@ fn scenario_12178_a_pin_on_another_branch_takes_the_dive_there() {
         }
     }
     assert_within_pin_free(&pinned, &pin_free);
+}
+
+/// Stations as sorted names, so a set compares independent of the field's station order.
+fn names_of(v: &[StationRef]) -> Vec<String> {
+    let mut names: Vec<String> = v.iter().copied().map(name).collect();
+    names.sort();
+    names
+}
+
+/// RV8c scenario 12178's rig and config (see the test above).
+fn scenario_12178_plan(
+    project: &Project,
+    origin: StationRef,
+    pins: &[Option<StationRef>],
+) -> GasReachField {
+    let diver = Diver::new(20.0, None).unwrap();
+    let mut cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+    cfg.reserve_profile.all_thirds_safety_margin_bar = 10.0;
+    cfg.normalize();
+    let rig = [
+        Cylinder {
+            enabled: false,
+            ..cyl(5.7, 232.0, 232.0, CylRole::BackGas)
+        },
+        cyl(3.0, 207.0, 46.18, CylRole::BackGas),
+        cyl(15.0, 176.0, 228.472, CylRole::Stage),
+    ];
+    project.compute_gas_reach_field_with_overrides(
+        Some(&origin),
+        None,
+        &[],
+        &[],
+        &diver,
+        &rig,
+        &cfg,
+        pins,
+    )
+}
+
+#[test]
+fn scenario_12178_the_overlay_paints_only_where_the_pinned_dive_goes() {
+    // #576 RV8c-2-D4, decided "only where the dive goes". The same plan: the stage is dropped at
+    // B:1, and the dive turns there with 34.6 L of back gas left. The old overlay painted every
+    // station the 555.97 L budget affords FROM THE ENTRANCE - A:1, A:2 and C:1 up the two other
+    // branches - although a diver who has swum out to B:1 would need that gas again to come back
+    // past the entrance. Priced after passing the pin, as a way point prices it, nothing but the
+    // way to B:1 is in reach, and there is no other station the dive can end at.
+    let (project, origin, [a, b, c]) = three_branch_cave();
+    let pin = StationRef::new(b, 1);
+    let pinned = scenario_12178_plan(&project, origin, &[Some(pin)]);
+    let pin_free = scenario_12178_plan(&project, origin, &[]);
+    println!("RV8C-12178-D4 {}", describe("pinned B:1", &pinned));
+    println!(
+        "RV8C-12178-D4 turn dots [{}]",
+        names_of(&pinned.turn_frontier).join(" ")
+    );
+    for s in [
+        StationRef::new(a, 1),
+        StationRef::new(a, 2),
+        StationRef::new(c, 1),
+    ] {
+        assert!(
+            !is_reachable(&pinned, s),
+            "{} is painted for a dive that drops its stage at B:1",
+            name(s)
+        );
+        // Its price is the way back from the pin: out to B:1, back to the entrance, on to it.
+        let after_pin = 2.0 * gas_of(&pinned, pin) + gas_of(&pin_free, s);
+        assert!(
+            (gas_of(&pinned, s) - after_pin).abs() < 1e-6,
+            "{} priced {:.3} L, after the pin it costs {after_pin:.3} L",
+            name(s),
+            gas_of(&pinned, s)
+        );
+    }
+    let expected = [
+        StationRef::new(a, 0),
+        StationRef::new(b, 0),
+        StationRef::new(c, 0),
+        pin,
+    ];
+    assert_eq!(names_of(&reach_of(&pinned)), names_of(&expected));
+    assert!(
+        pinned.turn_frontier.is_empty(),
+        "turn dots [{}] for a dive that can only end at its pin",
+        names_of(&pinned.turn_frontier).join(" ")
+    );
+    // The way out is priced at its pass, exactly as the plain field prices it.
+    assert!((gas_of(&pinned, pin) - gas_of(&pin_free, pin)).abs() < 1e-9);
+    assert_within_pin_free(&pinned, &pin_free);
+}
+
+#[test]
+fn every_turn_dot_of_a_pinned_plan_is_a_station_the_pinned_dive_can_end_at() {
+    // D4 for the turn dots: a dot is a candidate endpoint, and clicking one re-plans with it as the
+    // endpoint (D2: through the pins first, then on to it). So each dot the pinned plan offers must
+    // be a station the plan with that endpoint really turns at - priced after passing the pins, not
+    // from the entrance - and painted. Swept over both test caves, rigs with more and less gas, no
+    // endpoint and each branch end, and every station as the pin.
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+    let (three, three_origin, _) = three_branch_cave();
+    let (two, two_origin, trunk_end, side_end) = two_branch_cave();
+    let caves = [
+        (&three, three_origin, None),
+        (&two, two_origin, None),
+        (&two, two_origin, Some(trunk_end)),
+        (&two, two_origin, Some(side_end)),
+    ];
+    let mut dots = 0usize;
+    let mut violations: Vec<String> = Vec::new();
+    for (project, origin, endpoint) in caves {
+        for (back_size, back_fill) in [(12.0, 60.0), (12.0, 120.0), (12.0, 232.0), (24.0, 232.0)] {
+            let rig = [
+                cyl(back_size, 232.0, back_fill, CylRole::BackGas),
+                cyl(11.0, 207.0, 207.0, CylRole::Stage),
+            ];
+            let plan = |end: Option<&StationRef>, pins: &[Option<StationRef>]| {
+                project.compute_gas_reach_field_with_overrides(
+                    Some(&origin),
+                    end,
+                    &[],
+                    &[],
+                    &diver,
+                    &rig,
+                    &cfg,
+                    pins,
+                )
+            };
+            let stations = plan(endpoint.as_ref(), &[]).station_refs;
+            for &pin in &stations {
+                let pins = [Some(pin)];
+                let pinned = plan(endpoint.as_ref(), &pins);
+                for &dot in &pinned.turn_frontier {
+                    dots += 1;
+                    let clicked = plan(Some(&dot), &pins);
+                    let label = format!(
+                        "back {back_size} L at {back_fill} end {:?} pin {}: dot {}",
+                        endpoint.map(name),
+                        name(pin),
+                        name(dot)
+                    );
+                    if !is_reachable(&pinned, dot) {
+                        violations.push(format!("{label} is not painted"));
+                    }
+                    if clicked.final_turn_ref != Some(dot) {
+                        violations.push(format!(
+                            "{label}: clicked, the dive turns at {:?}",
+                            clicked.final_turn_ref.map(name)
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    println!(
+        "D4 turn dots: {dots} dots over the pinned plans, {} not a place the pinned dive ends",
+        violations.len()
+    );
+    for v in violations.iter().take(8) {
+        println!("  {v}");
+    }
+    assert!(dots > 60, "the sweep must offer dots ({dots})");
+    assert!(violations.is_empty(), "{} turn dots lie", violations.len());
 }
 
 #[test]
@@ -417,7 +590,15 @@ fn a_pin_the_gas_does_not_reach_turns_the_dive_on_the_way_and_is_not_reached() {
     assert!(!reached(&pinned, 0), "the drop is past the turnaround");
     assert_eq!(pinned.stage_drop_over_reserve, vec![false]);
     assert!((pinned.budget_litres - pin_free.budget_litres).abs() < 1e-9);
-    assert_eq!(pinned.reachable, pin_free.reachable, "no extra reach");
+    // D4: the dive never passes the pin, so every station but the way to the turn is priced after
+    // a pin it cannot afford - the overlay is the route out to side 1 and nothing else (the
+    // pin-free plan also lit the trunk to trunk 3), and there is no station left to end at.
+    assert_eq!(
+        reach_of(&pinned),
+        vec![origin, StationRef::new(side, 0), StationRef::new(side, 1)],
+        "the overlay is the way to the turn"
+    );
+    assert!(pinned.turn_frontier.is_empty());
     assert_within_pin_free(&pinned, &pin_free);
     // Nothing to profile past the turnaround: the drop gets no profile point.
     assert!(pinned
@@ -770,7 +951,24 @@ fn a_pin_past_the_end_of_the_route_turns_the_dive_on_the_way_there() {
         );
         assert_eq!(f.final_turn_ref, plain.final_turn_ref, "{why}");
         assert_eq!(f.route, plain.route, "{why}");
-        assert_eq!(f.reachable, plain.reachable, "{why}");
+        // D4: only the way to the turn is painted - the side line the plain plan also lit is
+        // priced after a pin the dive never reaches.
+        let way_to_turn: Vec<StationRef> = (0..=3).map(|i| StationRef::new(north, i)).collect();
+        assert_eq!(
+            reach_of(&f)
+                .into_iter()
+                .filter(|s| s.section_id == north)
+                .collect::<Vec<_>>(),
+            way_to_turn,
+            "{why}"
+        );
+        assert!(
+            reach_of(&f)
+                .iter()
+                .all(|s| s.section_id == north || s.station_index == 0),
+            "{why}: a side station is painted"
+        );
+        assert_within_pin_free(&f, &plain);
         assert_eq!(f.stage_drop_refs, vec![pin], "{why}");
         assert!(
             f.stage_drop_route_indices[0] as usize > f.route.len(),

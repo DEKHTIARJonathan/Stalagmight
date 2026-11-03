@@ -115,7 +115,9 @@ impl Project {
     /// no reach (#576): no plan reaches further than the same plan without its moved drops. The
     /// pin decides the route (#576 RV8c-2): the dive passes it, doubling back to the endpoint if
     /// the pin is off its passage, and a dive whose gas runs out first turns on the way there and
-    /// reports the drop as not reached (`gas/pinned.rs`). Non-overridden
+    /// reports the drop as not reached (`gas/pinned.rs`). The reach overlay of a pinned plan shows
+    /// only where that dive goes: each station priced at its pass on the route through the pins, or
+    /// after passing them, as a way point prices it (RV8c-2-D4). Non-overridden
     /// downstream drops keep their safe pressure but shift position as the cumulative shifts; the
     /// back-gas turn pressure is independent of the stage drops and is unchanged. The reach math stays
     /// exact-litres (from the graph); only the moved drop's readout pressure is inverted from the Z
@@ -406,12 +408,13 @@ impl Project {
         // threshold exists (none for All-thirds / a fell-back staged rig / a Free rig with no stage
         // usable).
         //
-        // The reach masks and the turn frontier are the plain field's at the final budget, pins or
-        // not: a pin that strands gas shrinks them, and no pin can grow them. A pinned plan's route,
-        // turnaround and drop markers come from the pinned walk instead ([`pinned::pinned_view`]),
-        // including the dive that runs out of gas before a pin (#576 RV8c-2-D3): it turns where
-        // the gas says on the way there, and the drop it never reaches is reported past the
-        // turnaround (`full_route` keeps the stations up to the pin for exactly that).
+        // A pinned plan's masks, route, turnaround and drop markers all come from the pinned walk
+        // ([`pinned::pinned_view`]): the overlay paints only where the dive through the pins can be,
+        // each station priced at its pass or after the pins, as a way point prices it (#576
+        // RV8c-2-D4) - a pin that strands gas shrinks it, and no pin can grow it. That includes the
+        // dive that runs out of gas before a pin (#576 RV8c-2-D3): it turns where the gas says on
+        // the way there, and the drop it never reaches is reported past the turnaround
+        // (`full_route` keeps the stations up to the pin for exactly that).
         let plain_view = budget_view(&walk, endpoint_idx, budget_litres, scooter_limit);
         let (view, full_route) = match &pinned {
             Some(p) => pinned::pinned_view(
@@ -450,7 +453,9 @@ impl Project {
         //
         // Stations on the committed chain are excluded outright: the diver has already said they
         // are going to the way points, so a station on the way there is transit, not a
-        // destination. Picking one would route out past it to the way point and back.
+        // destination. Picking one would route out past it to the way point and back. A pinned
+        // plan's chain runs on through its pins (#576 RV8c-2-D4), so the way to a pin is transit
+        // too: picking a station on it routes out to the pin and back (D2).
         //
         // ⚠ That exclusion has to be settled across zero-cost ties, exactly like `reach_gas`. A
         // merge or an aligned closure holds ONE physical station as several graph nodes joined at
@@ -459,9 +464,10 @@ impl Project {
         // place with the same gas - and the twin is usually the one carrying the side passage, so
         // it borders the out-of-budget ground and lands on the frontier. The result is a turn dot
         // drawn on top of a committed route station, which is the bug this exclusion exists to stop.
+        let flown = pinned.as_ref().map_or(&walk, |p| p.walk(&walk));
         let mut on_chain = vec![false; n];
         let mut chain_queue: VecDeque<usize> = VecDeque::new();
-        for &node in &walk.chain {
+        for &node in &flown.chain {
             if !on_chain[node] {
                 on_chain[node] = true;
                 chain_queue.push_back(node);
