@@ -134,6 +134,11 @@ pub struct AppState {
     pub(super) force_editing: AtomicBool,
     /// In-memory display settings cache (used when no DB is open, e.g., new unsaved project)
     pub(super) display_settings_cache: RecoveringMutex<HashMap<String, String>>,
+    /// [#576 NF-W8FE-3] The file the open project was committed from (its
+    /// `file_path` at the project-slot commit; `None` for an unsaved project or no
+    /// project). Written by every commit; a Save / Save As does not move it. Part
+    /// of the identity a display-setting write is checked against.
+    pub(super) opened_from: RecoveringMutex<Option<PathBuf>>,
     /// Serialization lock for command execution.
     /// Held for the entire duration of execute(), undo(), and redo() to prevent
     /// concurrent commands from interleaving (especially with batch sub-commands).
@@ -346,6 +351,7 @@ impl AppState {
                 HashMap::new(),
                 &poison,
             ),
+            opened_from: RecoveringMutex::with_monitor("opened_from", None, &poison),
             command_lock: RecoveringMutex::with_monitor("command_lock", (), &poison),
             tile_cache: Arc::new(RecoveringMutex::with_monitor(
                 "tile_cache",

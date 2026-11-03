@@ -40,7 +40,7 @@ use stalagmight_lib::core::outcome::{
     BatchOutcome, DeleteProjectOutcome, EditOutcome, HistoryOutcome, ImportOutcome,
     ProjectFileOutcome, RemoteLinkBits, ReverseOutcome, SaveOutcome, SectionCreated, ShotCreated,
 };
-use stalagmight_lib::core::state::VirtualShotMode;
+use stalagmight_lib::core::state::{DisplaySettingTarget, VirtualShotMode};
 use stalagmight_lib::core::WorkspaceMode;
 use stalagmight_lib::export::{ColorMode, ExportImageOptions, ImageFormat};
 use stalagmight_lib::logging::{LogsSince, RingLogEntry};
@@ -204,6 +204,8 @@ fn main() {
     export::<InternalErrorNotice>(&out_dir);
     export::<LoadProjectFullResult>(&out_dir);
     export::<OpenFileFlags>(&out_dir);
+    // [#576 NF-W8FE-3] save_display_setting's identity of the project a write is for
+    export::<DisplaySettingTarget>(&out_dir);
     export::<CreateProjectFullResult>(&out_dir);
     export::<SpeleoManagedFile>(&out_dir);
 
@@ -505,6 +507,7 @@ fn main() {
         "InternalErrorNotice",
         "LoadProjectFullResult",
         "OpenFileFlags",
+        "DisplaySettingTarget",
         "CreateProjectFullResult",
         "SpeleoManagedFile",
         "Project",

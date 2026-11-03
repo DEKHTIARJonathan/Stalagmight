@@ -6,8 +6,10 @@
  * SETTINGS-ORDER a write of one key waits for the previous write of that key to
  * settle, so a burst of clicks in project A followed by opening project B could
  * send A's queued writes after B opened - into B's file. Now:
- *  - a write carries the identity (`created_at`) of the project it was made for,
- *    and the backend refuses it with PROJECT_CHANGED when another one is open;
+ *  - a write carries the identity of the project it was made for - its
+ *    `created_at` and, since NF-W8FE-3, the file it is open from (two copies of
+ *    one file share `created_at`) - and the backend refuses it with
+ *    PROJECT_CHANGED when another one is open;
  *  - a write still queued when the project is replaced is dropped, never sent;
  *  - that refusal is the design working, so it is not logged as a failure.
  *
@@ -27,6 +29,9 @@ import { useProjectStore } from '../projectStore';
 import type { Project } from '../../types/project';
 
 const CAVE_A = '2026-01-01T10:00:00Z';
+const CAVE_A_PATH = '/surveys/CaveA.stalx';
+/** What a write made in CaveA names. */
+const MADE_FOR_A = { createdAt: CAVE_A, filePath: CAVE_A_PATH };
 
 /** The display-setting writes sent, in send order. */
 let sent: Array<Record<string, unknown>>;
@@ -52,7 +57,7 @@ beforeEach(() => {
   });
   useUIStore.setState({ appMode: 'survey', gridSpacing: 10, geometryMode: 'measured' });
   useProjectStore.setState({
-    project: { name: 'CaveA', created_at: CAVE_A, sections: [] } as unknown as Project,
+    project: { name: 'CaveA', created_at: CAVE_A, file_path: CAVE_A_PATH, sections: [] } as unknown as Project,
     isClosing: false,
   });
 });
@@ -67,7 +72,36 @@ describe('display settings are scoped to their project (#576 RV6b-2)', () => {
     await until(() => sent.length === 1);
     releaseFirst?.();
     console.log('[RV6b-2] save_display_setting args:', JSON.stringify(sent[0]));
-    expect(sent[0]).toEqual({ key: 'gridSpacing', value: '20', projectCreatedAt: CAVE_A });
+    expect(sent[0]).toEqual({ key: 'gridSpacing', value: '20', madeFor: MADE_FOR_A });
+  });
+
+  it('a write names the copy it was made in, not only the project (#576 NF-W8FE-3)', async () => {
+    // Two copies of one project file share created_at: only the file tells the
+    // backend which one a write was made for.
+    useUIStore.getState().setGridSpacing(20);
+    await until(() => sent.length === 1);
+    releaseFirst?.();
+    const copyPath = '/surveys/CaveA copy.stalx';
+    useProjectStore.setState({
+      project: { name: 'CaveA', created_at: CAVE_A, file_path: copyPath, sections: [] } as unknown as Project,
+    });
+    useUIStore.getState().saveDisplaySetting('showGrid', true);
+    await until(() => sent.length === 2);
+    console.log('[NF-W8FE-3] writes made in CaveA, then in its copy:', JSON.stringify(sent));
+    expect(sent.map((args) => args.madeFor)).toEqual([
+      MADE_FOR_A,
+      { createdAt: CAVE_A, filePath: copyPath },
+    ]);
+  });
+
+  it('a never-saved project names no file', async () => {
+    useProjectStore.setState({
+      project: { name: 'CaveA', created_at: CAVE_A, file_path: null, sections: [] } as unknown as Project,
+    });
+    useUIStore.getState().setGridSpacing(20);
+    await until(() => sent.length === 1);
+    releaseFirst?.();
+    expect(sent[0]).toEqual({ key: 'gridSpacing', value: '20', madeFor: { createdAt: CAVE_A, filePath: null } });
   });
 
   it('a write still queued when the project closes is dropped, not sent to the next one', async () => {
@@ -92,8 +126,8 @@ describe('display settings are scoped to their project (#576 RV6b-2)', () => {
     // The geometry mode and the toggle had no write ahead of them, so they were
     // sent at once - with A's identity, for the backend to refuse once B is open.
     const queuedGrid = sent.filter((args) => args.key === 'gridSpacing');
-    expect(queuedGrid).toEqual([{ key: 'gridSpacing', value: '20', projectCreatedAt: CAVE_A }]);
-    expect(sent.every((args) => args.projectCreatedAt === CAVE_A)).toBe(true);
+    expect(queuedGrid).toEqual([{ key: 'gridSpacing', value: '20', madeFor: MADE_FOR_A }]);
+    expect(sent.every((args) => JSON.stringify(args.madeFor) === JSON.stringify(MADE_FOR_A))).toBe(true);
   });
 
   it("the backend's PROJECT_CHANGED refusal is not reported as a failure", async () => {

@@ -10,9 +10,11 @@
  * `projectTreeGeneration`, a refresh does not move it: refreshes of one session are
  * ordered against each other by their own sequence guard.
  *
- * Its own module, importing nothing, so the stores and utils can all read it
- * without an import cycle.
+ * Its own module, importing nothing but a type, so the stores and utils can all
+ * read it without an import cycle.
  */
+
+import type { DisplaySettingTarget } from '../types/ipc.generated';
 
 let epoch = 0;
 
@@ -27,18 +29,20 @@ export function noteProjectSessionChanged(): void {
 }
 
 /**
- * [#576 RV6b-2] The open project's identity as the backend knows it (`created_at`,
- * the key `projectSwitched` uses), or null with none open: what a per-project write
- * names so the backend can refuse it once another project is open. Late-bound like
- * `speleoStoreHandle`: projectStore registers its getter when it evaluates; before
- * that (a unit test that never loads it) there is no identity to give.
+ * [#576 RV6b-2] The open project's identity as the backend knows it, or null with
+ * none open: what a per-project write names so the backend can refuse it once
+ * another project is open. Its `created_at` (the key `projectSwitched` uses) and -
+ * [#576 NF-W8FE-3] - the file it is open from, because two copies of one project
+ * file share `created_at`. Late-bound like `speleoStoreHandle`: projectStore
+ * registers its getter when it evaluates; before that (a unit test that never
+ * loads it) there is no identity to give.
  */
-let identity: (() => string | null) | null = null;
+let identity: (() => DisplaySettingTarget | null) | null = null;
 
-export function registerOpenProjectIdentity(get: () => string | null): void {
+export function registerOpenProjectIdentity(get: () => DisplaySettingTarget | null): void {
   identity = get;
 }
 
-export function openProjectIdentity(): string | null {
+export function openProjectIdentity(): DisplaySettingTarget | null {
   return identity ? identity() : null;
 }

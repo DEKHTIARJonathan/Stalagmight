@@ -24,6 +24,7 @@
  */
 
 import { openProjectIdentity, projectSessionEpoch } from '../store/projectSession';
+import type { DisplaySettingTarget } from '../types/ipc.generated';
 
 const tails = new Map<string, Promise<void>>();
 
@@ -51,14 +52,15 @@ export function chainSettingWrite<T>(key: string, write: () => Promise<T>): Prom
  * into whichever project is open when the command runs. A write queued behind
  * another used to reach the backend after the user opened another project, and
  * land there. Now `write` gets the identity of the project open when the write was
- * MADE, to send for the backend to check (`save_display_setting` refuses another
- * project's with PROJECT_CHANGED), and a write whose turn comes after the project
- * was replaced (`store/projectSession.ts`) is dropped unsent: it resolves
+ * MADE (its `created_at` and the file it is open from, #576 NF-W8FE-3), to send for
+ * the backend to check (`save_display_setting` refuses another project's - or
+ * another copy's - with PROJECT_CHANGED), and a write whose turn comes after the
+ * project was replaced (`store/projectSession.ts`) is dropped unsent: it resolves
  * `undefined`.
  */
 export function chainProjectSettingWrite<T>(
   key: string,
-  write: (projectCreatedAt: string | null) => Promise<T>,
+  write: (madeFor: DisplaySettingTarget | null) => Promise<T>,
 ): Promise<T | undefined> {
   const session = projectSessionEpoch();
   const madeFor = openProjectIdentity();

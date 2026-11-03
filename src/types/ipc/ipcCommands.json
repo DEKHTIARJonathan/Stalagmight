@@ -2749,10 +2749,10 @@
           "optional": false
         },
         {
-          "name": "project_created_at",
-          "key": "projectCreatedAt",
-          "rust": "Option<String>",
-          "ts": "string | null",
+          "name": "made_for",
+          "key": "madeFor",
+          "rust": "Option<crate::core::state::DisplaySettingTarget>",
+          "ts": "DisplaySettingTarget | null",
           "optional": true
         }
       ],

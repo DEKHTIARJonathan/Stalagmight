@@ -644,6 +644,7 @@ mod tests_support;
 
 pub use app_state::AppState;
 pub use command_import::VirtualShotMode;
+pub use display_settings::DisplaySettingTarget;
 pub use settled_adjusted::SettledProject;
 pub use workspace_mode::WorkspaceMode;
 #[cfg(test)]

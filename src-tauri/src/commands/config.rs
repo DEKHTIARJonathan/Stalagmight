@@ -393,19 +393,19 @@ pub async fn load_display_settings<R: Runtime>(
 
 /// Save a display setting to the current project database
 ///
-/// [#576 RV6b-2] `project_created_at` names the project the setting was made for
-/// (the frontend's open project, `None` when it had none); a write for a project
-/// that is no longer open is refused with `PROJECT_CHANGED`
-/// (`AppState::save_display_setting_for`).
+/// [#576 RV6b-2] `made_for` names the project the setting was made for (the
+/// frontend's open project - its `created_at` and, since NF-W8FE-3, the file it is
+/// open from - `None` when it had none); a write for a project that is no longer
+/// open is refused with `PROJECT_CHANGED` (`AppState::save_display_setting_for`).
 #[tauri::command]
 pub async fn save_display_setting<R: Runtime>(
     app: AppHandle<R>,
     key: String,
     value: String,
-    project_created_at: Option<String>,
+    made_for: Option<crate::core::state::DisplaySettingTarget>,
 ) -> Result<(), CommandError> {
     pool::run(app, move |state| {
-        state.save_display_setting_for(project_created_at.as_deref(), &key, &value)
+        state.save_display_setting_for(made_for.as_ref(), &key, &value)
     })
     .await
 }

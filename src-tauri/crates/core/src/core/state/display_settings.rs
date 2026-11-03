@@ -1,9 +1,30 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
+use serde::Deserialize;
 use std::collections::HashMap;
+use std::path::PathBuf;
+use ts_rs::TS;
 
 use super::AppState;
 use crate::core::{CommandError, CommandErrorCode};
+
+/// [#576 RV6b-2, NF-W8FE-3] The open project a display-setting write was MADE
+/// for, as the frontend names it when it makes the write.
+///
+/// `created_at` alone used to be the whole identity, and two copies of one project
+/// file share it: a write still in flight when the user switched from one copy to
+/// the other landed in the other. The file the frontend has the project open from
+/// tells the copies apart.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(rename_all = "camelCase")]
+pub struct DisplaySettingTarget {
+    /// The project's `created_at`, in the RFC 3339 form the wire carries it in.
+    pub created_at: String,
+    /// The file the project is open from (`Project::file_path`); `None` for a
+    /// project that has never been saved.
+    pub file_path: Option<String>,
+}
 
 impl AppState {
     /// Load display settings from database or in-memory cache
@@ -35,8 +56,7 @@ impl AppState {
     }
 
     /// [#576 RV6b-2] [`Self::save_display_setting`] for the project the write was
-    /// MADE for, named by its `created_at` (RFC 3339, the frontend's identity of the
-    /// open project; `None` when it had none open).
+    /// MADE for ([`DisplaySettingTarget`]; `None` when the frontend had none open).
     ///
     /// A display setting belongs to one project, and the IPC carries no other
     /// identity: a write queued or still in flight when the user opened another
@@ -46,19 +66,32 @@ impl AppState {
     /// not the open project's; nothing is written then. The check and the write
     /// share one `command_lock` span, and every project-slot commit takes that
     /// lock, so no open can land between them.
+    ///
+    /// [#576 NF-W8FE-3] The same project means the same `created_at` AND the same
+    /// file: the path the open project was committed from, or the one it has now.
+    /// Either, because a Save / Save As moves the open project to another file
+    /// without a new open, and a write made just before it names the old one.
     pub fn save_display_setting_for(
         &self,
-        project_created_at: Option<&str>,
+        made_for: Option<&DisplaySettingTarget>,
         key: &str,
         value: &str,
     ) -> Result<(), CommandError> {
         let _between_commands = self.hold_commands();
-        let open = self.project.lock().as_ref().map(|p| p.created_at);
-        let made_for = project_created_at
-            .map(|raw| DateTime::parse_from_rfc3339(raw).map(|at| at.with_timezone(&Utc)));
+        let open = self
+            .project
+            .lock()
+            .as_ref()
+            .map(|p| (p.created_at, p.file_path.clone()));
         let same_project = match (made_for, open) {
             (None, None) => true,
-            (Some(Ok(made_for)), Some(open)) => made_for == open,
+            (Some(made_for), Some((open_created_at, open_path))) => {
+                let same_created_at = DateTime::parse_from_rfc3339(&made_for.created_at)
+                    .is_ok_and(|at| at.with_timezone(&Utc) == open_created_at);
+                let made_for_path = made_for.file_path.as_ref().map(PathBuf::from);
+                same_created_at
+                    && (made_for_path == open_path || made_for_path == *self.opened_from.lock())
+            }
             _ => false,
         };
         if !same_project {

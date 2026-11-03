@@ -2347,5 +2347,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 };
 });
 
-// [#576 RV6b-2] The identity a per-project setting write names (store/projectSession.ts).
-registerOpenProjectIdentity(() => useProjectStore.getState().project?.created_at ?? null);
+// [#576 RV6b-2, NF-W8FE-3] The identity a per-project setting write names
+// (store/projectSession.ts): the project's created_at and the file it is open from.
+registerOpenProjectIdentity(() => {
+  const project = useProjectStore.getState().project;
+  return project ? { createdAt: project.created_at, filePath: project.file_path ?? null } : null;
+});

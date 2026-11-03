@@ -192,6 +192,9 @@ impl AppState {
             recent,
         } = commit;
 
+        // [#576 NF-W8FE-3] The file this open is committed from, beside the slot:
+        // what a display-setting write made for it names (`save_display_setting_for`).
+        *self.opened_from.lock() = project.as_ref().and_then(|p| p.file_path.clone());
         slot.set(project);
         // A session boundary, bumped under the guard per the `speleodb_session` rule.
         self.bump_speleodb_session();

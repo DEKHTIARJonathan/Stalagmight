@@ -1063,11 +1063,11 @@ export function isScreenBusy(
  * which is that rule working, not a failure to report).
  */
 function persistDisplaySetting(key: string, value: string, failure: string): Promise<void> {
-  return chainProjectSettingWrite(SETTING_KEYS.displaySetting(key), (projectCreatedAt) =>
+  return chainProjectSettingWrite(SETTING_KEYS.displaySetting(key), (madeFor) =>
     invokeIpc(
       'save_display_setting',
       // Omitted with no project open: the backend reads an absent identity as none.
-      { key, value, ...(projectCreatedAt === null ? {} : { projectCreatedAt }) },
+      { key, value, ...(madeFor === null ? {} : { madeFor }) },
       { purpose: 'persist display setting', fields: { key } },
     ),
   ).then(
