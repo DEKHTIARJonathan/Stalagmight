@@ -456,17 +456,46 @@ impl SpeleoDbSession {
 /// The server `type` a project Stalagmight manages carries - the state adoption
 /// exists to leave behind. Compared case-insensitively for the same reason
 /// the Ariane project type is.
-const MANAGED_PROJECT_TYPE: &str = "other";
+///
+/// SpeleoDB generates a project's map only for types it has an exporter for, and
+/// `stalagmight` is the one it maps from the `.stalx` (via `stalx-reader`, #593).
+pub(super) const MANAGED_PROJECT_TYPE: &str = "stalagmight";
+
+/// The managed type before SpeleoDB had a Stalagmight type. Projects adopted or
+/// published under it still read as managed; the next landed push relabels them
+/// (`type_needs_managed_label`), because SpeleoDB never maps an `other` project.
+const LEGACY_MANAGED_PROJECT_TYPE: &str = "other";
+
+/// The PATCH body that labels a project as Stalagmight-managed.
+pub(super) fn managed_type_patch() -> String {
+    serde_json::json!({ "type": MANAGED_PROJECT_TYPE }).to_string()
+}
 
 /// Is the server already calling this a project we manage?
 ///
-/// The inverse of [`type_still_says_ariane`] only for the two types that flow
+/// The inverse of [`type_still_says_ariane`] only for the types that flow
 /// through adoption; deliberately NOT `!type_still_says_ariane`, which answers
 /// "yes" for `compass`, `therion` and anything the API grows next. Adoption used
 /// that inverse to decide it had nothing to do, so a project re-typed under it
 /// mid-run was reported as flipped with the server left untouched.
 pub(super) fn type_says_managed(server_kind: Option<&str>) -> bool {
-    server_kind.is_some_and(|kind| kind.trim().eq_ignore_ascii_case(MANAGED_PROJECT_TYPE))
+    server_kind.is_some_and(|kind| {
+        let kind = kind.trim();
+        kind.eq_ignore_ascii_case(MANAGED_PROJECT_TYPE)
+            || kind.eq_ignore_ascii_case(LEGACY_MANAGED_PROJECT_TYPE)
+    })
+}
+
+/// Should a push that just landed rewrite the server type to
+/// [`MANAGED_PROJECT_TYPE`]? Yes for an adoption that never finished (`ariane`)
+/// and for the legacy managed type (`other`); no for anything else, including an
+/// unreadable type (the next push reads it again).
+pub(super) fn type_needs_managed_label(server_kind: Option<&str>) -> bool {
+    super::speleodb_push::type_still_says_ariane(server_kind)
+        || server_kind.is_some_and(|kind| {
+            kind.trim()
+                .eq_ignore_ascii_case(LEGACY_MANAGED_PROJECT_TYPE)
+        })
 }
 impl AppState {
     /// Resolve the effective endpoint. Precedence: explicit dialog override →
@@ -2596,8 +2625,9 @@ impl AppState {
 mod tests {
     use super::{
         auth_error_drops_token, is_local_edits_refusal, local_dto, lock_held_by_me,
-        resolve_endpoint, reverify_due, type_says_managed, validate_project_id,
-        whoami_indicates_dead_token, Endpoint, SpeleoDbSession, REVERIFY_INTERVAL_SECS,
+        managed_type_patch, resolve_endpoint, reverify_due, type_needs_managed_label,
+        type_says_managed, validate_project_id, whoami_indicates_dead_token, Endpoint,
+        SpeleoDbSession, REVERIFY_INTERVAL_SECS,
     };
     // [#275] The push half now lives in `speleodb_push`; these tests still exercise it
     // from here (they share this module's fixtures), so they reach it by its new path.
@@ -2660,10 +2690,14 @@ mod tests {
     /// somebody else's format.
     #[test]
     fn only_the_managed_type_counts_as_already_adopted() {
-        assert!(type_says_managed(Some("other")));
+        assert!(type_says_managed(Some("stalagmight")));
         // Same case-insensitivity the Ariane side needs, and for the same reason.
+        assert!(type_says_managed(Some("STALAGMIGHT")));
+        assert!(type_says_managed(Some(" Stalagmight ")));
+        // The legacy managed type still counts, so a project adopted before the
+        // relabel is not offered Adopt again.
+        assert!(type_says_managed(Some("other")));
         assert!(type_says_managed(Some("OTHER")));
-        assert!(type_says_managed(Some(" Other ")));
 
         assert!(
             !type_says_managed(Some("ariane")),
@@ -2682,6 +2716,39 @@ mod tests {
             !type_says_managed(None),
             "a type we could not read is not a type we may call finished"
         );
+    }
+
+    /// What a landed push relabels to `stalagmight`: an unfinished adoption
+    /// (`ariane`) and the legacy managed type (`other`, which SpeleoDB never maps).
+    /// Already `stalagmight`, somebody else's format, or an unreadable type: no write.
+    #[test]
+    fn a_landed_push_relabels_ariane_and_legacy_other_only() {
+        assert!(type_needs_managed_label(Some("ariane")));
+        assert!(type_needs_managed_label(Some("ARIANE")));
+        assert!(type_needs_managed_label(Some("other")));
+        assert!(type_needs_managed_label(Some(" OTHER ")));
+
+        assert!(
+            !type_needs_managed_label(Some("stalagmight")),
+            "already right: every push after the first costs nothing"
+        );
+        assert!(!type_needs_managed_label(Some("STALAGMIGHT")));
+        assert!(
+            !type_needs_managed_label(Some("compass")),
+            "somebody else's format is not ours to re-type"
+        );
+        assert!(!type_needs_managed_label(Some("")));
+        assert!(
+            !type_needs_managed_label(None),
+            "a type we could not read must not be acted on"
+        );
+    }
+
+    /// The PATCH body names the managed type and nothing else.
+    #[test]
+    fn the_managed_type_patch_is_exactly_the_type_field() {
+        let body: serde_json::Value = serde_json::from_str(&managed_type_patch()).unwrap();
+        assert_eq!(body, serde_json::json!({ "type": "stalagmight" }));
     }
 
     /// The heal has to run on EVERY arm that concludes an upload landed, and "landed"
@@ -2703,7 +2770,7 @@ mod tests {
             "expected one definition plus the 200 and 304 landing arms"
         );
         // Never BEFORE a landing: flipping ahead of one recreates the state the flip
-        // exists to avoid - a project typed `other` whose only file is the Ariane one
+        // exists to avoid - a project typed `stalagmight` whose only file is the Ariane one
         // that type says to disregard. Checked arm by arm rather than once, so a heal
         // added ahead of its landing cannot hide behind an earlier well-formed pair.
         let src = push_prod_source();
