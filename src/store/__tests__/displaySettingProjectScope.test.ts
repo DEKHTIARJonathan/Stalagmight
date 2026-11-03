@@ -176,6 +176,43 @@ describe('display settings are scoped to their project (#576 RV6b-2)', () => {
     expect(sent).toEqual([{ key: 'gridSpacing', value: '20', madeFor: MADE_FOR_A }]);
   });
 
+  // [#576 RV9a-2] A Save As (or a never-saved project's first save) moves the open
+  // project to another file without a new session; the backend still takes a write
+  // made just before it (`opened_from`). Comparing files alone dropped it.
+  it.each([
+    ['a Save As', CAVE_A_PATH],
+    ["a never-saved project's first save", null],
+  ] as const)('a write queued across %s is still sent to the project', async (_what, openFrom) => {
+    const savedAs = '/surveys/CaveA renamed.stalx';
+    useProjectStore.setState({
+      project: { name: 'CaveA', created_at: CAVE_A, file_path: openFrom, sections: [] } as unknown as Project,
+    });
+    const fallback = invokeIpcMock.getMockImplementation();
+    invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) =>
+      cmd === 'save_project'
+        ? Promise.resolve({ success: true, saved_path: savedAs, warnings: [] })
+        : cmd === 'check_project_integrity'
+          ? Promise.resolve({ messages: [] })
+          : fallback!(cmd, args),
+    );
+    const { setGridSpacing } = useUIStore.getState();
+    setGridSpacing(20);
+    await until(() => sent.length === 1);
+    setGridSpacing(50);
+
+    const saved = await useProjectStore.getState().saveProject(savedAs);
+    expect(saved.success).toBe(true);
+    expect(useProjectStore.getState().project?.file_path).toBe(savedAs);
+    releaseFirst?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    console.log('[RV9a-2] writes across', _what, JSON.stringify(sent));
+    const madeFor = { createdAt: CAVE_A, filePath: openFrom };
+    expect(sent).toEqual([
+      { key: 'gridSpacing', value: '20', madeFor },
+      { key: 'gridSpacing', value: '50', madeFor },
+    ]);
+  });
+
   it("the backend's PROJECT_CHANGED refusal is not reported as a failure", async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     invokeIpcMock.mockImplementation((cmd: string) =>

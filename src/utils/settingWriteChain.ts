@@ -76,11 +76,19 @@ export function chainProjectSettingWrite<T>(
   );
 }
 
-/** Whether the project open now is the one a write was made in (see above). */
+/**
+ * Whether the project open now is the one a write was made in (see above): the
+ * same `created_at`, and either the same file or the same session. The session
+ * covers a Save As and a never-saved project's first save, which move the open
+ * project to another file without a new open (#576 RV9a-2) - the backend still
+ * takes such a write (`opened_from`). A switch to another copy is a new session
+ * on another file, so it is still dropped.
+ */
 function stillTheProjectItWasMadeIn(madeFor: DisplaySettingTarget | null, session: number): boolean {
   const open = openProjectIdentity();
-  if (madeFor === null || open === null) return madeFor === open && session === projectSessionEpoch();
-  return open.createdAt === madeFor.createdAt && open.filePath === madeFor.filePath;
+  const sameSession = session === projectSessionEpoch();
+  if (madeFor === null || open === null) return madeFor === open && sameSession;
+  return open.createdAt === madeFor.createdAt && (open.filePath === madeFor.filePath || sameSession);
 }
 
 /** Keys for the writers that share a command but not a setting. */
