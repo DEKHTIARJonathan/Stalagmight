@@ -219,6 +219,11 @@ mod undo_mode_gate {
 
     impl AppState {
         /// Changing what the next push ships needs an edit session.
+        #[expect(
+            clippy::result_large_err,
+            reason = "returns the SpeleoErrorDto every sibling SpeleoDB step returns; boxing it is a \
+                      repo-wide change outside #576 A8"
+        )]
         pub(super) fn speleodb_undo_mode_gate(&self) -> Result<EditSessionOpen, SpeleoErrorDto> {
             if !self.edit_enabled() {
                 return Err(super::super::speleodb::local_dto(SpeleoDbError::refused(
@@ -231,6 +236,11 @@ mod undo_mode_gate {
 
     impl EditSessionOpen {
         /// The policy, the dirty stamp and the chain clear, in one transaction.
+        #[expect(
+            clippy::result_large_err,
+            reason = "returns the SpeleoErrorDto every sibling SpeleoDB step returns; boxing it is a \
+                      repo-wide change outside #576 A8"
+        )]
         pub(super) fn write(
             &self,
             db: &Database,

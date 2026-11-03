@@ -890,6 +890,11 @@ mod restore_order {
         /// [#303] The Unwind flavour's preconditions (`keep_undo_history`), enforced in
         /// the backend: the guard, then the check that the direction it branched on was
         /// the truth.
+        #[expect(
+            clippy::result_large_err,
+            reason = "returns the SpeleoErrorDto every sibling SpeleoDB step returns; boxing it is a \
+                      repo-wide change outside #576 A8"
+        )]
         pub(super) fn speleodb_unwind_preconditions(
             &self,
             keep_undo_history: bool,
@@ -932,6 +937,11 @@ mod restore_order {
         /// A forward step loads the CHILD revision's stack, so the child's own policy
         /// decides whether there is published history to continue with - checked
         /// against the exact dump and entry about to be installed.
+        #[expect(
+            clippy::result_large_err,
+            reason = "returns the SpeleoErrorDto every sibling SpeleoDB step returns; boxing it is a \
+                      repo-wide change outside #576 A8"
+        )]
         pub(super) fn check_child_policy(
             &self,
             chain_forward: bool,
@@ -974,6 +984,11 @@ mod restore_order {
     impl CapturedRecord {
         /// Reopen the swapped tree in place (the close first, so the load's
         /// already-open guard does not reject the same path).
+        #[expect(
+            clippy::result_large_err,
+            reason = "returns the SpeleoErrorDto every sibling SpeleoDB step returns; boxing it is a \
+                      repo-wide change outside #576 A8"
+        )]
         pub(super) fn reload(
             self,
             state: &AppState,

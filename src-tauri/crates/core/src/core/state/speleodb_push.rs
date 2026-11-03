@@ -965,7 +965,7 @@ impl AppState {
                 // [#576 B35(d)] Under `command_lock`, like every link write of the push:
                 // an autosave copies the link at its start and renames a fresh file over
                 // the live one, so a write landing inside it was lost.
-                self.speleodb_adopt_tip_after_landing(&landed, tip.clone(), false)?;
+                self.speleodb_adopt_tip_after_landing(&landed, tip, false)?;
             }
             // Forward-compatible only (unreachable while push-start is unpersisted):
             // the prior push landed and no edit followed, so adopt the tip and clear
@@ -977,7 +977,7 @@ impl AppState {
                 // the adoption locally must not be what leaves it standing.
                 let landed = self.speleodb_revision_landed(project_id);
                 // [#576 B35(d)] Under `command_lock`; see the arm above.
-                self.speleodb_adopt_tip_after_landing(&landed, tip.clone(), true)?;
+                self.speleodb_adopt_tip_after_landing(&landed, tip, true)?;
                 return Ok(landed.outcome());
             }
             // A stranger's commit, a gap this session cannot prove it pushed (#576
@@ -1015,6 +1015,11 @@ impl AppState {
     /// link write of the push, and `clear_dirty` clears the dirty bit with it. It takes
     /// the [`Landed`] proof so the invalidation that landing implies cannot be put
     /// after this fallible write (#258).
+    #[expect(
+        clippy::result_large_err,
+        reason = "returns the SpeleoErrorDto every sibling SpeleoDB step returns; boxing it is a \
+                  repo-wide change outside #576 A8"
+    )]
     fn speleodb_adopt_tip_after_landing(
         &self,
         _landed: &Landed,
@@ -1523,6 +1528,11 @@ mod push_snapshot {
     impl AppState {
         /// [`AppState::speleodb_flush_before_push`] as the upload runs it: the save,
         /// and the [`Flushed`] proof the snapshot requires.
+        #[expect(
+            clippy::result_large_err,
+            reason = "returns the SpeleoErrorDto every sibling SpeleoDB step returns; boxing it is a \
+                      repo-wide change outside #576 A8"
+        )]
         pub(super) fn speleodb_flush_for_snapshot(
             &self,
         ) -> Result<(Flushed, Vec<ValidationWarning>), SpeleoErrorDto> {
@@ -1539,6 +1549,11 @@ mod push_snapshot {
     impl PushSnapshot {
         /// VACUUM the live file into `path`. Takes the flush's proof: a snapshot of a
         /// file the last edits never reached would upload without them.
+        #[expect(
+            clippy::result_large_err,
+            reason = "returns the SpeleoErrorDto every sibling SpeleoDB step returns; boxing it is a \
+                      repo-wide change outside #576 A8"
+        )]
         pub(super) fn take(
             _flushed: Flushed,
             live: &Path,
