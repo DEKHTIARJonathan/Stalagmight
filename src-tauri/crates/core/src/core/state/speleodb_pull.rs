@@ -13,7 +13,7 @@
 //!
 //! The replace chokepoint itself is `speleodb_cache`, which owns the un-pushed-edits
 //! guard. Note that the guard runs BEFORE the download on the pull path, so a
-//! refusal costs no bytes - a source-order test pins that.
+//! refusal costs no bytes - the download takes the guard's proof (#576 A8).
 
 use std::path::Path;
 
@@ -835,11 +835,11 @@ impl AppState {
         // large allocation spent to arrive at a decision we could have made
         // immediately. The call inside `replace_cache_stalx` stays as the backstop
         // that no call site can forget (and it is what the OTHER two replace flows
-        // rely on); this one is purely to fail fast.
-        if policy == LocalEditsPolicy::Protect {
-            self.guard_local_edits(&project_id, &dest)
-                .map_err(local_dto)?;
-        }
+        // rely on); this one is purely to fail fast. [#576 A8] The download below takes
+        // the proof this step returns, so it cannot move ahead of it.
+        let cleared = self
+            .speleodb_pull_guard(policy, &project_id, &dest)
+            .map_err(local_dto)?;
 
         // FRESHNESS-FOLD SEAM (D-B1, #189/#191): #185's get_project/list_projects
         // return the authoritative Project; the pull stamp (project_name +
@@ -889,19 +889,13 @@ impl AppState {
         let zip = self
             .speleodb_handle_auth(
                 Endpoint::DownloadDump,
-                match tip.as_deref() {
-                    Some(sha) => client::download_dump_at_hash(
-                        &endpoint,
-                        &token,
-                        insecure_http,
-                        &project_id,
-                        sha,
-                    ),
-                    // No resolvable tip (an empty repo, or a history call that failed):
-                    // take HEAD as before. What comes back is then genuinely undatable,
-                    // which `tip` being `None` already says.
-                    None => client::download_dump(&endpoint, &token, insecure_http, &project_id),
-                },
+                cleared.download(
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &project_id,
+                    tip.as_deref(),
+                ),
             )
             .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
 
@@ -2333,6 +2327,62 @@ impl AppState {
         // came from the server tip, not from a chain step, so nothing in it is inherited.
         self.speleodb_set_inherited_through(None);
         Ok(local_path)
+    }
+}
+
+/// [#576 A8] The pull's fail-fast guard as a type: the dump download is a method of
+/// the proof the guard returns, made only here, so a download written above the
+/// guard - the order that buffers a whole dump only to refuse it - does not compile.
+mod pull_guard {
+    use std::path::Path;
+
+    use super::AppState;
+    use crate::core::state::speleodb_cache::LocalEditsPolicy;
+    use crate::speleodb::{client, SpeleoDbError};
+
+    /// Proof that the pull's local un-pushed-edits guard has run (or that the caller
+    /// waived it with [`LocalEditsPolicy::Discard`]).
+    pub(super) struct LocalEditsCleared {
+        _guarded: (),
+    }
+
+    impl AppState {
+        /// The un-pushed-edits guard, BEFORE the download: purely local (the cached
+        /// copy's link row), so a refusal costs no bytes. A `Discard` caller has
+        /// confirmed losing those edits, so it is cleared without the check.
+        pub(super) fn speleodb_pull_guard(
+            &self,
+            policy: LocalEditsPolicy,
+            project_id: &str,
+            dest: &Path,
+        ) -> Result<LocalEditsCleared, SpeleoDbError> {
+            if policy == LocalEditsPolicy::Protect {
+                self.guard_local_edits(project_id, dest)?;
+            }
+            Ok(LocalEditsCleared { _guarded: () })
+        }
+    }
+
+    impl LocalEditsCleared {
+        /// Download the dump: by hash when the tip resolved, else HEAD. No resolvable
+        /// tip (an empty repo, or a history call that failed) takes HEAD as before;
+        /// what comes back is then genuinely undatable, which `tip` being `None`
+        /// already says.
+        pub(super) fn download(
+            &self,
+            endpoint: &str,
+            token: &str,
+            insecure_http: bool,
+            project_id: &str,
+            tip: Option<&str>,
+        ) -> Result<Vec<u8>, SpeleoDbError> {
+            match tip {
+                Some(sha) => {
+                    client::download_dump_at_hash(endpoint, token, insecure_http, project_id, sha)
+                }
+                None => client::download_dump(endpoint, token, insecure_http, project_id),
+            }
+        }
     }
 }
 
@@ -4380,37 +4430,6 @@ mod tests {
             include_str!("speleodb_pull.rs"),
             "pub fn speleodb_adopt_ariane(",
         )
-    }
-
-    #[test]
-    fn the_pull_runs_the_local_guard_before_it_downloads_the_dump() {
-        // The guard is purely LOCAL (it reads the cached copy's link row), but it ran
-        // only inside the replace - i.e. after `download_dump` had pulled the entire
-        // working tree over the wire and into memory, to be thrown away. That is a long
-        // wait and a large buffered allocation spent to reach a decision that was
-        // available before the first byte, and it costs more the larger the dump.
-        //
-        // Guarded by ORDER in the source: a behavioural version would have to latch the
-        // process-wide app dirs to resolve a cache path (`app_dirs::init_for_test`),
-        // which leaks into every other test in the binary. The in-replace call is
-        // deliberately left in place as the backstop no call site can forget, so an
-        // assertion on the outcome alone cannot distinguish the two orderings anyway.
-        let src = prod_source();
-        let start = src
-            .find("fn speleodb_pull_project")
-            .expect("the shared pull body is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-        let guard = body
-            .find("self.guard_local_edits(")
-            .expect("the pull must run the local guard itself, not only via the replace");
-        let download = body
-            .find("client::download_dump(")
-            .expect("the pull downloads the dump");
-        assert!(
-            guard < download,
-            "the local un-pushed-edits guard must run BEFORE the download, not after it"
-        );
     }
 
     #[test]
