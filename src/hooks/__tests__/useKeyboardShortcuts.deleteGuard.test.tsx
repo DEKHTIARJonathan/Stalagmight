@@ -12,6 +12,7 @@ import { renderHook } from '@testing-library/react';
 import { useKeyboardShortcuts } from '../useKeyboardShortcuts';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
+import { makeSpeleoLink } from '../../test/factories/speleo';
 
 // useKeyboardShortcuts pulls in telemetry/save helpers that ultimately call the
 // Tauri IPC bridge; stub it so importing the real hook here stays offline.
@@ -19,20 +20,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue({}),
 }));
 
-const READ_ONLY_LINK: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
-  editState: 'read-only',
-  lockHolder: 'someone-else',
-  lockedByOther: true,
-  hasUnpushedEdits: false,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-};
+const READ_ONLY_LINK: SpeleoLinkState = makeSpeleoLink({ lockHolder: 'someone-else', lockedByOther: true });
 
 const STATION_SELECTION = { type: 'station' as const, stationRef: { section_id: 0, station_index: 1 } };
 

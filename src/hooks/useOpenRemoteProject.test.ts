@@ -25,6 +25,7 @@ import { useUIStore } from '../store/uiStore';
 import { guardQuit } from '../utils/quit';
 import type { SpeleoProjectSummary } from '../types/ipc.generated';
 import { emptyBinaryRefresh, fallbackOr, invokeIpcMock, stubGetErrorMessage } from '../test/factories/ipc';
+import { makeSpeleoLink } from '../test/factories/speleo';
 
 // The genuine store action, captured before `beforeEach` swaps in the spy - so one
 // case can exercise the real seed end to end (seed -> guardQuit).
@@ -40,21 +41,8 @@ const SUMMARY: SpeleoProjectSummary = {
 };
 
 /** A settled link for whatever project is OPEN, for the entry-guard cases below. */
-const openLink = (o: Partial<SpeleoLinkState> = {}): SpeleoLinkState => ({
-  permission: 'READ_AND_WRITE',
-  editState: 'read-only',
-  lockHolder: null,
-  lockedByOther: false,
-  hasUnpushedEdits: false,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-  ...o,
-});
+const openLink = (o: Partial<SpeleoLinkState> = {}): SpeleoLinkState =>
+  makeSpeleoLink({ ...o });
 
 let loadProjectMock: ReturnType<typeof vi.fn>;
 let setLinkOnOpenMock: ReturnType<typeof vi.fn>;

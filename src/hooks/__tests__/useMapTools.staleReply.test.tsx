@@ -40,46 +40,14 @@ import { useProjectStore } from '../../store/projectStore';
 import type { Project, Station } from '../../types/project';
 import type { AlongLineResult } from '../../types/ipc/AlongLineResult';
 import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factories/ipc';
+import { makeProject as projectOf, makeStation as stationOf } from '../../test/factories/survey';
 
 function makeProject(overrides: Partial<Project> = {}): Project {
-  return {
-    name: 'Test Cave',
-    location: null,
-    created_at: '2026-01-01T00:00:00Z',
-    modified_at: '2026-01-01T00:00:00Z',
-    sections: [],
-    station_merges: [],
-    zero_datums: [],
-    loop_closures: [],
-    file_path: '/mock/a.stalx',
-    next_section_id: 1,
-    section_offsets: {},
-    imported_file_hashes: [],
-    imported_section_hashes: [],
-    next_closure_id: 1,
-    validation: {
-      warn_shot_length_min: 0,
-      warn_shot_length_max: 100,
-      warn_depth_change_per_shot_max: 100,
-      warn_azimuth_deviation_max: 45,
-      azimuth_diff_threshold: 5,
-      pitch_diff_threshold: 5,
-      inclination_depth_diff_threshold: 5,
-    },
-    surface_elevation: null,
-    ...overrides,
-  };
+  return projectOf({ name: 'Test Cave', file_path: '/mock/a.stalx', next_section_id: 1, ...overrides });
 }
 
 function makeStation(section_id: number, station_index: number, x: number, y: number): Station {
-  return {
-    station_ref: { section_id, station_index },
-    coordinates: { x, y, z: 0 },
-    is_zero_datum: false,
-    gps_coordinates: null,
-    merged_with: [],
-    closures_with: [],
-  };
+  return stationOf({ station_ref: { section_id, station_index }, coordinates: { x, y, z: 0 }, closures_with: [] });
 }
 
 const STATIONS: Station[] = [

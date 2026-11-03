@@ -26,13 +26,14 @@ import { applySpeleoTreeReplacement } from '../../utils/speleoTreeReplacement';
 import { projectStateEnvelope } from '../../test/projectStateEnvelope';
 import type { StationRef } from '../../types/project';
 import { invokeIpcMock } from '../../test/factories/ipc';
+import { stationRef } from '../../test/factories/survey';
 
 vi.mock('../../utils/ipc');
 const loadBinaryMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/loadProjectBinary', () => ({ loadProjectFullBinary: loadBinaryMock }));
 
 const SECTION = 1;
-const ref = (station_index: number): StationRef => ({ section_id: SECTION, station_index });
+const ref = (station_index: number): StationRef => stationRef(SECTION, station_index);
 
 function project() {
   return {

@@ -33,6 +33,7 @@ import { projectStateEnvelope } from '../../test/projectStateEnvelope';
 import { divePlanSnapshotOf } from '../../utils/divePlan';
 import type { StationRef } from '../../types/project';
 import { invokeIpcMock } from '../../test/factories/ipc';
+import { stationRef } from '../../test/factories/survey';
 
 const SECTION = 4;
 
@@ -58,7 +59,7 @@ function serveAnchors() {
   );
 }
 
-const at = (station_index: number): StationRef => ({ section_id: SECTION, station_index });
+const at = (station_index: number): StationRef => stationRef(SECTION, station_index);
 /** The index the station with id `id` currently sits at. */
 const indexOf = (id: string) => order.indexOf(id);
 

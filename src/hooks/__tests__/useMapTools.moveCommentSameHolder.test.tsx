@@ -28,56 +28,32 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import type { Project, Section, Station } from '../../types/project';
 import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factories/ipc';
+import { makeProject as projectOf, makeStation as stationOf } from '../../test/factories/survey';
 
 const SECTION_ID = 1;
 const SHOT_A = 1;
 const SHOT_B = 2;
 
 function makeStation(station_index: number, x: number, comment?: string): Station {
-  return {
+  return stationOf({
     station_ref: { section_id: SECTION_ID, station_index },
     coordinates: { x, y: 0, z: 0 },
-    is_zero_datum: false,
-    gps_coordinates: null,
-    merged_with: [],
     closures_with: [],
     ...(comment !== undefined ? { comment } : {}),
-  };
+  });
 }
 
 function makeProject(): Project {
   const shot = (id: number, comment: string | null) => ({ id, comment });
-  return {
-    name: 'CaveA',
-    location: null,
-    created_at: '2026-01-01T00:00:00Z',
-    modified_at: '2026-01-01T00:00:00Z',
+  return projectOf({
     sections: [
       {
         id: SECTION_ID,
         shots: [shot(SHOT_A, 'low airspace'), shot(SHOT_B, 'restriction')],
       } as unknown as Section,
     ],
-    station_merges: [],
-    zero_datums: [],
-    loop_closures: [],
     file_path: '/mock/a.stalx',
-    next_section_id: 2,
-    section_offsets: {},
-    imported_file_hashes: [],
-    imported_section_hashes: [],
-    next_closure_id: 1,
-    validation: {
-      warn_shot_length_min: 0,
-      warn_shot_length_max: 100,
-      warn_depth_change_per_shot_max: 100,
-      warn_azimuth_deviation_max: 45,
-      azimuth_diff_threshold: 5,
-      pitch_diff_threshold: 5,
-      inclination_depth_diff_threshold: 5,
-    },
-    surface_elevation: null,
-  };
+  });
 }
 
 // Station 1 and station 2 sit at the same map position (x = 10), both with a

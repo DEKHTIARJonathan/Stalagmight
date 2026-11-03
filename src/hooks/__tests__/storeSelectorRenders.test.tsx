@@ -43,6 +43,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { useGlobalViewStore } from '../../store/globalViewStore';
 import type { Project, Station } from '../../types/project';
+import { makeStation as stationOf } from '../../test/factories/survey';
 
 function makeProject(name: string): Project {
   return {
@@ -62,14 +63,11 @@ function makeProject(name: string): Project {
 }
 
 function makeStation(station_index: number, x: number): Station {
-  return {
+  return stationOf({
     station_ref: { section_id: 1, station_index },
     coordinates: { x, y: 0, z: 0 },
-    is_zero_datum: false,
-    gps_coordinates: null,
-    merged_with: [],
     closures_with: [],
-  };
+  });
 }
 
 const UNRELATED = 'renders after writes to fields it does not read (count before the writes on the right)';
