@@ -18,6 +18,7 @@ members = [
     "crates/parsers",
     "crates/persistence",
     "crates/speleodb",
+    "crates/stalx-reader",
     "crates/telemetry",
 ]
 resolver = "2"
