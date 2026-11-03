@@ -707,3 +707,11 @@ mod pull_view_lock_tests;
               answers are the evidence a run captures"
 )]
 mod settled_reads_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              answers are the evidence a run captures"
+)]
+mod take_remote_success_tests;
