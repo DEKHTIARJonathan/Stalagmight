@@ -285,8 +285,14 @@ pub struct GasReachField {
     pub max_reachable_gas: f64,
     pub budget_litres: f64,
     /// Ordered legs origin→target (for the route highlight); empty when nothing is reachable.
+    /// With a pinned stage drop the route passes the pin (#576 RV8c-2-D1): the way points, then
+    /// every pin, in drop order, then on to the endpoint - doubling back where a pin is off its
+    /// passage - or, with no endpoint, to the deepest station beyond the last pin.
     pub route: Vec<RouteLeg>,
-    /// Station where each stage's IN gas is exhausted, in stage order (staged strategies only).
+    /// Station where each stage's IN gas is exhausted, in stage order (staged strategies only), or
+    /// the station the diver pinned it to. A pinned drop the dive runs out of gas (or scooter
+    /// range) before is still named here, at its pin past the turnaround - see
+    /// `stage_drop_route_indices` for how to tell it is not reached.
     pub stage_drop_refs: Vec<StationRef>,
     /// The final turn - the route target station; `None` when nothing is reachable.
     pub final_turn_ref: Option<StationRef>,
@@ -311,11 +317,13 @@ pub struct GasReachField {
     /// pinned station - the UI flags it red. Every entry is `false` for the un-dragged default
     /// (and for All-thirds, which has no drops). The flag is a warning, not a block (the diver
     /// asked for it): the plan credits the stage no more than its default drop would, so an
-    /// over-reserve drop never extends the reach (#576).
+    /// over-reserve drop never extends the reach (#576). `false` for a drop the dive does not
+    /// reach: the stage is carried the whole dive, never breathed to the pin.
     pub stage_drop_over_reserve: Vec<bool>,
     /// Swum distance (metres) from the origin to each stage-drop station, aligned with
     /// `stage_drop_refs` / `stage_drop_bars`, for the Plan readout (#245). Same swum-distance basis
-    /// as `route_line_length_m`. Empty when there are no stage drops.
+    /// as `route_line_length_m`. Empty when there are no stage drops. For a drop the dive does not
+    /// reach, the distance along the planned route to its pin.
     pub stage_drop_distances_m: Vec<f64>,
     /// Per-cylinder penetration allowance (bar) the engine used, aligned 1:1 with the INPUT
     /// cylinder order (disabled tanks and non-budget roles are `0.0`) so the table can show a
@@ -364,6 +372,11 @@ pub struct GasReachField {
     /// `stage_drop_distances_m`, in `route_profile`'s outbound `route_index` space.
     /// `stage_drop_refs` alone cannot place a drop on a route that doubles back over a station - the
     /// ref names the station, not the pass - so the index is what a profile marker must be drawn at.
+    ///
+    /// An index PAST the route's last station (`> route.len()`, the number of legs) is a pinned
+    /// drop the dive does not reach (#576 RV8c-2-D3): the gas or the scooter range turns the dive
+    /// on the way there, the stage is carried the whole dive, and the index counts along the
+    /// planned route on toward the pin. Every default drop sits on the route.
     pub stage_drop_route_indices: Vec<u32>,
     /// Route index of each way point, aligned 1:1 with the `waypoints` input, in the same index space
     /// as `stage_drop_route_indices`. `None` from the first way point that stalls, matching

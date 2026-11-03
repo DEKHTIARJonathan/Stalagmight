@@ -1,0 +1,283 @@
+//! [#576 RV8c-2, decided D1-D3] A pinned stage drop decides the route.
+//!
+//! A drop pinned by the diver is a place the dive goes, so the route passes it the way it passes
+//! a way point: the way points first, then every pin the way-point chain does not already pass,
+//! in drop order, then on to the endpoint ("D2": backtracking from a pin to the endpoint's passage
+//! is charged like any other leg) or, with no endpoint, to the deepest station beyond the last pin
+//! ("D1"). When the gas runs out before a pin, the dive turns where the gas says on the way there,
+//! carries the stage, and the drop is reported as not reached ("D3").
+//!
+//! This replaces the earlier rule (#576 NF-PGAS3-1, "route computed without pins, then pins
+//! applied"). That rule priced a pin only when the pin-free route happened to pass it, so a change
+//! that moved the pin-free route - LESS gas, with no endpoint, sending the deepest station onto
+//! another branch - dropped a stranding pin, handed its stranded gas back, and reached further.
+//! Here the route through the pins does not depend on the budget at all: only where the dive turns
+//! on it does, so less gas can only turn it earlier.
+//!
+//! The reach masks and the turn frontier stay the plain field's at the final budget
+//! ([`super::budget_view`]): this module only chooses the turnaround and the route to it.
+
+use super::{path_to, waypoint_walk, BudgetView, ResolvedSegment, WaypointWalk};
+
+/// The walk a pinned plan flies, and where each pin sits on it.
+pub(super) struct PinnedWalk {
+    /// The way points, then the appended pins. `None` when every pin is already on the way-point
+    /// chain, so the plan's own walk is the pinned walk.
+    walk: Option<WaypointWalk>,
+    /// Stage `k`'s pin as an index into the pinned walk's `chain` - its first pass on the way-point
+    /// chain, or the end of its own appended leg. `None` for a stage without a usable pin.
+    pub(super) pin_chain_idx: Vec<Option<usize>>,
+    /// Index in `chain` the appended pin legs start from (the last way point, else the origin),
+    /// and whether there are any: with none, the walk's last leg starts at a way point, not a pin.
+    legs_start: usize,
+    ends_at_pin: bool,
+}
+
+impl PinnedWalk {
+    pub(super) fn walk<'a>(&'a self, base: &'a WaypointWalk) -> &'a WaypointWalk {
+        self.walk.as_ref().unwrap_or(base)
+    }
+}
+
+/// The pinned plan's walk, or `None` when no stage has a usable pin.
+///
+/// A pin is usable when it resolves to a station the plan's own walk reaches (same graph component
+/// as the last way point; a stalled way-point chain has no plan to pin anything on). Each usable
+/// pin gets its own leg after the last way point, in drop order, on the last segment's pace -
+/// unless the route already passes it before that leg starts: on the way-point chain (the diver's
+/// own constraint), or on the way to an earlier pin (a drop moved shallower than the one before
+/// it). Such a pin stays at that first pass, where the stage is dropped full (#246), rather than
+/// sending the dive back to it.
+pub(super) fn pinned_walk(
+    adj: &[Vec<(usize, f64)>],
+    lens: &[Vec<(usize, f64)>],
+    roots: &[usize],
+    waypoints: &[Option<usize>],
+    base: &WaypointWalk,
+    pins: &[Option<usize>],
+    segments: &[ResolvedSegment],
+    in_rmv: f64,
+) -> Option<PinnedWalk> {
+    let stage_pins: Vec<Option<usize>> = pins
+        .iter()
+        .map(|p| p.filter(|&si| base.gas_in.get(si).is_some_and(|g| g.is_finite())))
+        .collect();
+    if stage_pins.iter().all(Option::is_none) {
+        return None;
+    }
+    let legs_start = base.chain.len().saturating_sub(1);
+    let first_pass = |w: &WaypointWalk, si: usize| w.chain.iter().position(|&n| n == si);
+    let mut own_leg: Vec<bool> = stage_pins
+        .iter()
+        .map(|p| p.is_some_and(|si| first_pass(base, si).is_none()))
+        .collect();
+    // Each round either settles or takes one pin off its own leg, so this ends within the stage
+    // count.
+    loop {
+        let appended: Vec<usize> = stage_pins
+            .iter()
+            .zip(&own_leg)
+            .filter_map(|(&p, &own)| p.filter(|_| own))
+            .collect();
+        let walk = (!appended.is_empty()).then(|| {
+            let mut chain_points = waypoints.to_vec();
+            chain_points.extend(appended.iter().map(|&si| Some(si)));
+            waypoint_walk(adj, lens, roots, &chain_points, segments, in_rmv, false)
+        });
+        let w = walk.as_ref().unwrap_or(base);
+        let leg_end = |leg: usize| {
+            w.waypoint_chain_idx
+                .get(waypoints.len() + leg)
+                .copied()
+                .flatten()
+        };
+        let mut leg = 0usize;
+        let mut passed_before_its_leg = None;
+        let mut pin_chain_idx = Vec::with_capacity(stage_pins.len());
+        for (k, &pin) in stage_pins.iter().enumerate() {
+            let Some(si) = pin else {
+                pin_chain_idx.push(None);
+                continue;
+            };
+            if !own_leg[k] {
+                pin_chain_idx.push(first_pass(w, si));
+                continue;
+            }
+            let start = leg.checked_sub(1).map_or(Some(legs_start), leg_end);
+            if first_pass(w, si).zip(start).is_some_and(|(f, s)| f < s) {
+                passed_before_its_leg.get_or_insert(k);
+            }
+            pin_chain_idx.push(leg_end(leg));
+            leg += 1;
+        }
+        if let Some(k) = passed_before_its_leg {
+            own_leg[k] = false;
+            continue;
+        }
+        return Some(PinnedWalk {
+            walk,
+            pin_chain_idx,
+            legs_start,
+            ends_at_pin: !appended.is_empty(),
+        });
+    }
+}
+
+/// The pinned plan's view at the final budget: the plain field's masks (`plain`), with the
+/// turnaround and the route to it chosen on the pinned walk. Also returns the stations past the
+/// turnaround up to the last pin (and their route gas) when the dive turns before reaching it, so
+/// a drop it never reaches can still be named at its pin.
+pub(super) fn pinned_view(
+    pinned: &PinnedWalk,
+    base: &WaypointWalk,
+    plain: BudgetView,
+    endpoint: Option<usize>,
+    budget_litres: f64,
+    scooter_limit: f64,
+) -> (BudgetView, Option<(Vec<usize>, Vec<f64>)>) {
+    // Every pin on the way-point chain: the chain passes them, and the plan's own rule picks the
+    // turn after it - the plain view already is the pinned plan.
+    if !pinned.ends_at_pin {
+        return (plain, None);
+    }
+    let walk = pinned.walk(base);
+    let affordable =
+        |i: usize| walk.chain_gas[i] <= budget_litres && walk.chain_scoot[i] <= scooter_limit;
+    let last_pin = walk.chain.len() - 1;
+    // Usable endpoint: resolves, and the walk past the last pin reaches its component.
+    let endpoint = endpoint.filter(|&e| walk.gas_in.get(e).is_some_and(|g| g.is_finite()));
+
+    if !affordable(last_pin) {
+        // D3: the gas (or the scooter range) runs out on the way to a pin. A way point the plan
+        // cannot afford stalls it as it always has; otherwise the dive turns at the last station
+        // of the route toward the pins that it can afford.
+        if !affordable(pinned.legs_start) {
+            return (no_target(plain, walk), None);
+        }
+        let mut turn = pinned.legs_start;
+        while turn < last_pin && affordable(turn + 1) {
+            turn += 1;
+        }
+        let next = turn + 1;
+        let view = BudgetView {
+            target: Some(walk.chain[turn]),
+            target_toward_endpoint: endpoint.is_some(),
+            route: walk.chain[..=turn].to_vec(),
+            route_gas: walk.chain_gas[..=turn].to_vec(),
+            route_time: walk.chain_time[..=turn].to_vec(),
+            // The range, not the gas, stopped the walk when the next station is affordable on gas.
+            scooter_bound: walk.chain_gas[next] <= budget_litres,
+            turn_scoot: walk.chain_scoot[turn],
+            turn_time: Some(walk.chain_time[turn]).filter(|t| t.is_finite()),
+            ..plain
+        };
+        let beyond = (walk.chain[next..].to_vec(), walk.chain_gas[next..].to_vec());
+        return (view, Some(beyond));
+    }
+
+    // Every pin reached: on from the last pin, exactly as the plain field goes on from its last
+    // way point - but with no endpoint the target is the deepest station BEYOND that pin (D1), the
+    // passage the dive continues into, never a station only a backtrack reaches.
+    let can_end = |i: usize| {
+        walk.gas_in[i].is_finite()
+            && walk.gas_in[i] <= budget_litres
+            && walk.scoot_in[i] <= scooter_limit
+    };
+    let range_bound = |i: usize| {
+        walk.gas_in[i].is_finite()
+            && walk.gas_in[i] <= budget_litres
+            && walk.scoot_in[i] > scooter_limit
+    };
+    let beyond_pin = beyond_last_pin(walk);
+    let mut deepest: Option<usize> = None;
+    let mut deepest_gas = f64::NEG_INFINITY;
+    for (i, &g) in walk.gas_in.iter().enumerate() {
+        if beyond_pin[i] && can_end(i) && g > deepest_gas {
+            deepest_gas = g;
+            deepest = Some(i);
+        }
+    }
+    let deepest_range_bound = || {
+        (0..walk.gas_in.len())
+            .any(|i| beyond_pin[i] && range_bound(i) && walk.gas_in[i] > deepest_gas)
+    };
+    let (target, toward, scooter_bound) = match endpoint {
+        Some(e) if can_end(e) => (Some(e), true, false),
+        Some(e) => {
+            // Walk toward the endpoint from the last pin and keep the last station in budget; gas
+            // along the walk's shortest path is monotone, so that is where it runs out. The path
+            // starts at the last pin, which is affordable, so this always finds a station.
+            let path = path_to(&walk.pred, e);
+            let stopped = path.iter().position(|&n| !can_end(n));
+            match stopped.map_or(path.last().copied(), |p| p.checked_sub(1).map(|i| path[i])) {
+                Some(n) => (Some(n), true, stopped.is_some_and(|p| range_bound(path[p]))),
+                None => (deepest, false, deepest_range_bound()),
+            }
+        }
+        None => (deepest, false, deepest_range_bound()),
+    };
+    let mut route = walk.chain.clone();
+    let mut route_gas = walk.chain_gas.clone();
+    let mut route_time = walk.chain_time.clone();
+    if let Some(t) = target {
+        for &node in path_to(&walk.pred, t).iter().skip(1) {
+            route.push(node);
+            route_gas.push(walk.gas_in[node]);
+            route_time.push(walk.time_in[node]);
+        }
+    }
+    let view = BudgetView {
+        target,
+        target_toward_endpoint: toward,
+        route,
+        route_gas,
+        route_time,
+        scooter_bound,
+        turn_scoot: target
+            .map(|t| walk.scoot_in[t])
+            .filter(|s| s.is_finite())
+            .unwrap_or(0.0),
+        turn_time: target.map(|t| walk.time_in[t]).filter(|t| t.is_finite()),
+        ..plain
+    };
+    (view, None)
+}
+
+/// No turnaround: the way-point chain itself is unaffordable. The committed chain is kept for the
+/// map, exactly as the plain field does, so the diver can see which way point blew the gas.
+fn no_target(plain: BudgetView, walk: &WaypointWalk) -> BudgetView {
+    BudgetView {
+        target: None,
+        target_toward_endpoint: false,
+        route: walk.chain.clone(),
+        route_gas: walk.chain_gas.clone(),
+        route_time: walk.chain_time.clone(),
+        scooter_bound: false,
+        turn_scoot: 0.0,
+        turn_time: None,
+        ..plain
+    }
+}
+
+/// The stations the dive reaches by carrying on PAST the last pin rather than doubling back: those
+/// a shortest path from the previous chain point runs through the pin to, i.e. where going via the
+/// pin costs nothing extra. The pin itself (and its zero-cost merge twins) is among them.
+///
+/// Read off the two Dijkstras the walk already ran, compared with a relative tolerance: the two
+/// sums add the same edges in a different order, so a station exactly on a shortest path through
+/// the pin can come out a rounding error either side.
+fn beyond_last_pin(walk: &WaypointWalk) -> Vec<bool> {
+    let last_pin = walk.chain.last().copied();
+    let cum = walk.chain_gas.last().copied().unwrap_or(0.0);
+    let to_pin = last_pin
+        .and_then(|p| walk.last_leg_in.get(p).copied())
+        .unwrap_or(f64::INFINITY);
+    walk.gas_in
+        .iter()
+        .zip(&walk.last_leg_in)
+        .map(|(&g, &direct)| {
+            let via_pin = to_pin + (g - cum);
+            via_pin.is_finite() && via_pin <= direct + 1e-9 * direct.abs().max(1.0)
+        })
+        .collect()
+}

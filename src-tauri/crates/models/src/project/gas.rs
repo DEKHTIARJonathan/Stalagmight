@@ -10,8 +10,21 @@
 
 mod model;
 mod physics;
+mod pinned;
 mod scooter;
 
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "the printed plans are the evidence a run captures"
+)]
+mod pin_decides_route_tests;
+#[cfg(test)]
+#[expect(
+    clippy::print_stdout,
+    reason = "the printed sweep counts are the evidence a run captures"
+)]
+mod pin_monotone_tests;
 #[cfg(test)]
 #[expect(
     clippy::print_stdout,
@@ -97,8 +110,10 @@ impl Project {
     /// `[0, tank-empty]`. The penetration budget becomes `base + Σ(min(breathed, safe) - safe)`, so
     /// a drop dragged **shallower** strands surplus stage gas (budget shrinks → reach shortens) and
     /// one dragged **deeper** is shown where it was put, flagged `stage_drop_over_reserve`, but buys
-    /// no reach (#576): no plan reaches further than the same plan without its moved drops. A pin
-    /// the route does not pass is the same as no pin. Non-overridden
+    /// no reach (#576): no plan reaches further than the same plan without its moved drops. The
+    /// pin decides the route (#576 RV8c-2): the dive passes it, doubling back to the endpoint if
+    /// the pin is off its passage, and a dive whose gas runs out first turns on the way there and
+    /// reports the drop as not reached (`gas/pinned.rs`). Non-overridden
     /// downstream drops keep their safe pressure but shift position as the cumulative shifts; the
     /// back-gas turn pressure is independent of the stage drops and is unchanged. The reach math stays
     /// exact-litres (from the graph); only the moved drop's readout pressure is inverted from the Z
@@ -326,10 +341,7 @@ impl Project {
             })
             .collect();
 
-        // Base penetration budget (litres), then fold in the override deltas: the cumulative stage
-        // thresholds, per-drop readout bars, over-reserve flags, and the budget change all come out of
-        // one walk over the plans. `apply` returns the STRATEGY defaults untouched for an empty
-        // override list, so this stays byte-identical to the no-override field.
+        // Base penetration budget (litres): what the strategy alone credits, before any pin.
         let base_budget = penetration_budget(
             active,
             gas_config.default_reserve,
@@ -342,34 +354,41 @@ impl Project {
             self.resolve_key(&key)
                 .and_then(|sr| station_index.get(&sr).copied())
         });
-        // The un-overridden route: what the STRATEGY alone would fly, on the base budget. It serves
-        // two purposes for the override walk, and BOTH need a route rather than the global field:
-        //   - its drop positions are the "defaults" a release-in-place must reproduce, so a jiggle
-        //     stays a true no-op (#246);
-        //   - it is the basis a pinned drop is scored against. A drop is a position ALONG the route,
-        //     so the gas it has cost is the route's cumulative gas at that position - NOT
-        //     `gas_in[station]`, which is the cheapest way to reach that station after the way-point
-        //     chain and corresponds to no pass the diver actually makes once a route doubles back
-        //     (#298). Scoring against `gas_in` reads a return-leg drop as if it were made on the way
-        //     in, which inflates the budget: the unsafe direction (§6).
-        // Using the BASE route keeps the ordering acyclic - the final route depends on the budget,
-        // which depends on these very overrides - and the two coincide whenever the delta is 0.
-        let default_thresholds = cumulative(plans.iter().map(|p| p.safe_in_litres));
-        let base_view = budget_view(&walk, endpoint_idx, base_budget, scooter_limit);
-        let default_drop_nodes = default_drop_stations(&base_view, &default_thresholds);
-
-        let (thresholds, stage_drop_bars, stage_drop_over_reserve, budget_delta) =
-            apply_stage_drop_overrides(
-                &plans,
-                &resolved_overrides,
-                &base_view,
-                &default_drop_nodes,
-            );
+        // [#576 RV8c-2-D1, decided "pin decides the route"] A pinned drop is a point the dive
+        // passes, like a way point: the route flies the way points, then every pin they do not
+        // already pass, in drop order, then on to the endpoint - or, with none, to the deepest
+        // station beyond the last pin. `None` when no stage is pinned (or no pin resolves to a
+        // station the walk can reach): the plan is then the strategy's own, byte for byte.
+        //
+        // The pinned route does not depend on the budget - only where the dive TURNS on it does -
+        // so the gas each pin has cost is read off it before the budget exists, and the ordering
+        // stays acyclic: route, then arrival gas, then budget, then the turn.
+        let pinned = pinned::pinned_walk(
+            &adj,
+            &lens,
+            &roots,
+            &resolved_waypoints,
+            &walk,
+            &resolved_overrides,
+            &plan_segments,
+            in_rmv,
+        );
+        let no_pins = vec![None; plans.len()];
+        let (pin_chain_idx, pinned_chain_gas): (&[Option<usize>], &[f64]) = match &pinned {
+            Some(p) => (&p.pin_chain_idx, &p.walk(&walk).chain_gas),
+            None => (&no_pins, &[]),
+        };
+        // Fold the pins into the drops: the cumulative stage thresholds, per-drop readout bars,
+        // over-reserve flags and the budget change all come out of one walk over the plans. With no
+        // pin this returns the STRATEGY defaults untouched, so the field stays byte-identical to
+        // the no-override one.
+        let (thresholds, stage_drop_bars, over_at_pin, budget_delta) =
+            price_stage_drops(&plans, pin_chain_idx, pinned_chain_gas);
         // A pathological-but-valid cylinder (huge finite fill × volume) can overflow deliverable_gas
         // to a non-finite budget; treat that as all-unreachable (0.0) rather than leaking NaN/Inf to
         // the gauge readout. The staged paths already `.max(0.0)`-guard; this mirrors them. The
-        // override budget is always `≥ back-gas ≥ 0` (every contribution is `≥ 0`), so the `.max(0.0)`
-        // is only a finite-guard floor - a shallow drag can never drive the budget negative - and
+        // pinned budget is always `≥ back-gas ≥ 0` (every contribution is `≥ 0`), so the `.max(0.0)`
+        // is only a finite-guard floor - a shallow pin can never drive the budget negative - and
         // never above `base_budget` (each credit is capped at the stage's safe IN gas), so no pin
         // can reach further than the plan without it (#576).
         let budget_litres = base_budget + budget_delta;
@@ -385,18 +404,23 @@ impl Project {
         // threshold exists (none for All-thirds / a fell-back staged rig / a Free rig with no stage
         // usable).
         //
-        // [#576 NF-PGAS3-1, decided] The route is the PIN-FREE plan's: moved drops never choose
-        // where the dive goes. Pins that leave the budget alone (a deeper pin, a pin on the default
-        // station, no pin) leave the whole plan as the strategy drew it. A shallower pin strands
-        // gas and lowers the budget, and then the dive turns EARLIER ON THE SAME ROUTE - the last
-        // station of the pin-free route the lower budget still affords - instead of re-picking the
-        // deepest station anywhere, which with no endpoint could be on another branch, with the
-        // pinned marker re-placed there by its threshold. The reach masks are the final budget's,
-        // exactly as before: only the turnaround's choice changed.
-        let view = if budget_litres < base_budget {
-            budget_view_on_route(&walk, &base_view, budget_litres, scooter_limit)
-        } else {
-            base_view
+        // The reach masks and the turn frontier are the plain field's at the final budget, pins or
+        // not: a pin that strands gas shrinks them, and no pin can grow them. A pinned plan's route,
+        // turnaround and drop markers come from the pinned walk instead ([`pinned::pinned_view`]),
+        // including the dive that runs out of gas before a pin (#576 RV8c-2-D3): it turns where
+        // the gas says on the way there, and the drop it never reaches is reported past the
+        // turnaround (`full_route` keeps the stations up to the pin for exactly that).
+        let plain_view = budget_view(&walk, endpoint_idx, budget_litres, scooter_limit);
+        let (view, full_route) = match &pinned {
+            Some(p) => pinned::pinned_view(
+                p,
+                &walk,
+                plain_view,
+                endpoint_idx,
+                budget_litres,
+                scooter_limit,
+            ),
+            None => (plain_view, None),
         };
         let BudgetView {
             reachable,
@@ -409,6 +433,8 @@ impl Project {
             route_gas,
             route_time,
             scooter_bound: turn_on_scooter_range,
+            turn_scoot,
+            turn_time,
         } = view;
 
         // Turn frontier: stations the diver could END at that border one they could not (out of
@@ -456,16 +482,25 @@ impl Project {
 
         let route_refs: Vec<StationRef> = route_nodes.iter().map(|&i| station_refs[i]).collect();
         let final_turn_ref = route_target.map(|i| station_refs[i]);
-        // Drop indices along the route (not refs): a way-point route can revisit a station, so an
-        // index is the only unambiguous handle. No target means no plan, hence no drops.
+        // The stations a drop marker can stand on: the route, then - only when the dive turns
+        // before a pin (#576 RV8c-2-D3) - the rest of the way to the last pin, so a drop the dive
+        // never reaches is still named at the station it was pinned to, past the turnaround.
+        let (beyond_nodes, beyond_gas) = full_route.unwrap_or_default();
+        let marker_refs: Vec<StationRef> = route_refs
+            .iter()
+            .copied()
+            .chain(beyond_nodes.iter().map(|&i| station_refs[i]))
+            .collect();
+        // Drop indices along those stations (not refs): a way-point route can revisit a station,
+        // so an index is the only unambiguous handle. No target means no plan, hence no drops.
         let drop_indices: Vec<usize> = if route_target.is_some() {
-            place_stage_drops(&route_gas, &thresholds)
+            place_stage_drops(&route_gas, &beyond_gas, &thresholds, pin_chain_idx)
         } else {
             Vec::new()
         };
         let stage_drop_refs: Vec<StationRef> = drop_indices
             .iter()
-            .filter_map(|&j| route_refs.get(j).copied())
+            .filter_map(|&j| marker_refs.get(j).copied())
             .collect();
         // `place_stage_drops` only ever returns in-range indices, so the filter_map above cannot
         // drop one. Assert it loudly rather than let a future change silently shorten
@@ -476,6 +511,14 @@ impl Project {
             drop_indices.len(),
             "a stage drop fell off the route - refs would misalign with the gauges"
         );
+        // A drop past the turnaround is one the dive never reaches: the stage is carried the
+        // whole dive, so nothing is breathed into its reserve at the pin - the marker reads "not
+        // reached", never "over reserve".
+        let stage_drop_over_reserve: Vec<bool> = over_at_pin
+            .iter()
+            .zip(&drop_indices)
+            .map(|(&over, &j)| over && j < route_refs.len())
+            .collect();
         let leg_kinds = self.route_leg_kinds(&route_refs);
         let route = route_legs(&route_refs, &leg_kinds);
 
@@ -485,38 +528,42 @@ impl Project {
         // on-screen highlight length (a 2-D plan-view projection, and closure-adjusted in Plan) -
         // the two intentionally differ. `route_swim` excludes zero-distance merge/closure ties so a
         // loop closure's misclosure gap (never swum) doesn't inflate the distance or skew the depth.
-        let route_pts: Vec<Coordinates> = route_refs
+        let marker_pts: Vec<Coordinates> = marker_refs
             .iter()
             .filter_map(|r| station_index.get(r).map(|&i| coords[i]))
             .collect();
-        let route_swim: Vec<bool> = route_refs
+        let marker_swim: Vec<bool> = marker_refs
             .windows(2)
             .map(|w| is_swim_leg(&w[0], &w[1]))
             .collect();
-        // route_pts (one coord per ref) and route_swim (one flag per leg) must stay aligned, or
+        // marker_pts (one coord per ref) and marker_swim (one flag per leg) must stay aligned, or
         // route_metrics would apply a leg's flag to the wrong segment. The filter_map above can only
-        // drop a ref absent from station_index - impossible today (route_refs come from station_refs,
+        // drop a ref absent from station_index - impossible today (the refs come from station_refs,
         // which are station_index's keys) - so assert it loudly rather than silently mis-weighting if
         // a future graph change ever introduces a ref that isn't in the index.
         debug_assert_eq!(
-            route_pts.len(),
-            route_refs.len(),
+            marker_pts.len(),
+            marker_refs.len(),
             "route_pts dropped a route ref - the swim mask would misalign"
         );
+        let route_pts = &marker_pts[..route_refs.len().min(marker_pts.len())];
+        let route_swim = &marker_swim[..route_refs.len().saturating_sub(1).min(marker_swim.len())];
         let (route_line_length_m, route_max_depth_m, route_avg_depth_m) =
-            route_metrics(&route_pts, &route_swim);
+            route_metrics(route_pts, route_swim);
         // Per-stage drop DISTANCE (metres, swum from origin), aligned with `stage_drop_refs`, for the
         // Plan readout - same swum-distance basis as `route_line_length_m`. Read at the drop's route
         // INDEX, so a route that doubles back over a station reports the distance of the pass the
-        // drop actually sits on.
-        let cum_route_distance = cumulative_distances(&route_pts, &route_swim);
+        // drop actually sits on; a drop past the turnaround reads the distance along the way to it.
+        let cum_marker_distance = cumulative_distances(&marker_pts, &marker_swim);
+        let cum_route_distance = &cum_marker_distance[..route_pts.len()];
         let stage_drop_distances_m: Vec<f64> = drop_indices
             .iter()
-            .map(|&j| cum_route_distance.get(j).copied().unwrap_or(0.0))
+            .map(|&j| cum_marker_distance.get(j).copied().unwrap_or(0.0))
             .collect();
         // The same drop indices the distances above are read at, published so a profile marker can
         // be drawn on the right PASS of a route that doubles back (#299). `stage_drop_refs` names
-        // only the station, which is ambiguous there.
+        // only the station, which is ambiguous there. An index past the route's last station is a
+        // drop the dive does not reach (#576 RV8c-2-D3).
         let stage_drop_route_indices: Vec<u32> = drop_indices
             .iter()
             .map(|&j| u32::try_from(j).unwrap_or(u32::MAX))
@@ -577,9 +624,9 @@ impl Project {
                 .collect();
             build_route_profile(
                 &route_refs,
-                &route_pts,
+                route_pts,
                 &leg_kinds,
-                &cum_route_distance,
+                cum_route_distance,
                 &route_gas,
                 &route_time,
                 &ExitLegRates {
@@ -595,28 +642,11 @@ impl Project {
 
         // Scooter readouts (#317), read off the walk's riders AT THE ROUTE TARGET rather than
         // re-derived from the route's coordinates - the two would diverge the moment a route
-        // doubled back over a station.
-        //
-        // ⚠ Reading `scoot_in`/`time_in` here is right for every target, INCLUDING one that sits on
-        // the committed chain, and the reason is worth spelling out because the gas twin of this
-        // line is not interchangeable. `route_gas` has to mix `chain_gas` and `gas_in` because it
-        // reports a value per route node. These report only the TOTAL at the end of the route, and
-        // `scoot_in[t] = cum_scoot + last_leg_scoot[t]` is exactly that total in all three cases:
-        // the target is the final way point (last-leg cost 0, so the total is the chain's), an
-        // earlier chain station (the route really does fly back to it, and the last-leg cost is
-        // that return), or off-chain (chain plus tail). So no `chain_scoot` vector is needed HERE.
-        // The profile is the other case: it reports a value per route node, so it needs the
-        // per-node `chain_time` exactly as `route_gas` needs `chain_gas`.
-        let scooter_distance_m = route_target.map_or(0.0, |t| {
-            walk.scoot_in
-                .get(t)
-                .copied()
-                .filter(|s| s.is_finite())
-                .unwrap_or(0.0)
-        });
-        let route_runtime_min = route_target
-            .and_then(|t| walk.time_in.get(t).copied())
-            .filter(|t| t.is_finite());
+        // doubled back over a station. The view carries them ([`BudgetView::turn_scoot`]): the
+        // walk's after-chain totals for every target the plain field picks, the chain's own totals
+        // for a pinned dive that turns before its pin.
+        let scooter_distance_m = route_target.map_or(0.0, |_| turn_scoot);
+        let route_runtime_min = route_target.and(turn_time);
         // The park point is the boundary after the last scootered segment, so it is a way point by
         // construction. Resolving it through the ORIGINAL `waypoints` (not the graph) keeps it a
         // station the diver named.
@@ -787,7 +817,14 @@ struct WaypointWalk {
     /// precisely what made the chart and the `route_runtime_min` readout disagree (#317).
     chain: Vec<usize>,
     chain_gas: Vec<f64>,
+    /// The scooter-range twin of `chain_gas`: what a dive that turns ON the chain has spent
+    /// (#576 RV8c-2-D3, a pinned dive that turns before its pin).
+    chain_scoot: Vec<f64>,
     chain_time: Vec<f64>,
+    /// The Dijkstra gas of the leg that ENDED at the final way point, measured from that leg's
+    /// own start. Empty without way points. A pinned plan reads it to tell the passage beyond its
+    /// last pin from a backtrack ([`pinned::PinnedWalk`]).
+    last_leg_in: Vec<f64>,
     /// Cumulative gas at each way point, in order; `None` from the first one that stalls.
     waypoint_gas: Vec<Option<f64>>,
     /// Where each way point sits in `chain`, in order; `None` from the first one that stalls. The
@@ -821,17 +858,24 @@ fn waypoint_walk(
             pred: vec![usize::MAX; n],
             chain: Vec::new(),
             chain_gas: Vec::new(),
+            chain_scoot: Vec::new(),
             chain_time: Vec::new(),
+            last_leg_in: Vec::new(),
             waypoint_gas: vec![None; waypoints.len()],
             waypoint_chain_idx: vec![None; waypoints.len()],
         };
     }
-    // Leg `k` is flown on segment `k`. `resolve_segments` guarantees one segment per leg with a
-    // finite positive speed, so a missing entry is a bug rather than an input - but if one ever
-    // appears, price the leg at INFINITY (nothing beyond it is reachable) rather than at a speed of
-    // infinity, which would scale the leg's whole cost to ZERO and hand back free penetration.
+    // Leg `k` is flown on segment `k`. `resolve_segments` guarantees one segment per user way-point
+    // leg with a finite positive speed; the legs a pinned plan appends after the last way point
+    // (#576 RV8c-2-D1) are past it, so they fly the last segment. An empty list is a bug rather than
+    // an input - but if one ever appears, price the leg at INFINITY (nothing beyond it is reachable)
+    // rather than at a speed of infinity, which would scale the leg's whole cost to ZERO and hand
+    // back free penetration.
     let leg_scales = |k: usize| {
-        let Some(seg) = segments.get(k).copied() else {
+        let Some(seg) = segments
+            .get(k.min(segments.len().saturating_sub(1)))
+            .copied()
+        else {
             return (f64::INFINITY, [0.0, f64::INFINITY]);
         };
         let speed = seg.speed_m_per_min;
@@ -854,6 +898,7 @@ fn waypoint_walk(
     let mut waypoint_gas: Vec<Option<f64>> = Vec::with_capacity(waypoints.len());
     let mut waypoint_chain_idx: Vec<Option<usize>> = Vec::with_capacity(waypoints.len());
     let mut stalled = false;
+    let mut last_leg_in: Vec<f64> = Vec::new();
     for (k, w) in waypoints.iter().enumerate() {
         let reached = (!stalled)
             .then_some(*w)
@@ -881,7 +926,8 @@ fn waypoint_walk(
         // The loop above just pushed this way point's own node last, so the chain now ends on it.
         waypoint_chain_idx.push(chain.len().checked_sub(1));
         (cost_scale, rider_scales) = leg_scales(k + 1);
-        leg = Project::dijkstra_scaled_with_riders(adj, lens, &[w], cost_scale, rider_scales);
+        let next = Project::dijkstra_scaled_with_riders(adj, lens, &[w], cost_scale, rider_scales);
+        last_leg_in = std::mem::replace(&mut leg, next).0;
     }
     let (dist, riders, pred) = leg;
     let [leg_scoot, leg_time] = riders;
@@ -936,7 +982,9 @@ fn waypoint_walk(
         pred,
         chain,
         chain_gas,
+        chain_scoot,
         chain_time,
+        last_leg_in,
         waypoint_gas,
         waypoint_chain_idx,
     }
@@ -991,6 +1039,10 @@ struct BudgetView {
     /// answer depends on which rule picked the target. Surfaced as
     /// `GasReachField::turn_on_scooter_range`.
     scooter_bound: bool,
+    /// Scooter range spent and runtime at `target` (0 / `None` without one): the readouts the
+    /// field reports for the dive's own turn (`scooter_distance_m`, `route_runtime_min`).
+    turn_scoot: f64,
+    turn_time: Option<f64>,
 }
 
 /// Apply a budget to the walked field. Computed twice per field - once on the base budget to locate
@@ -1180,6 +1232,22 @@ fn budget_view(
             route_time.push(walk.time_in.get(node).copied().unwrap_or(0.0));
         }
     }
+    // ⚠ Reading `scoot_in`/`time_in` at the target is right for every target this view picks,
+    // INCLUDING one that sits on the committed chain, and the reason is worth spelling out because
+    // the gas twin of this line is not interchangeable. `route_gas` has to mix `chain_gas` and
+    // `gas_in` because it reports a value per route node. These report only the TOTAL at the end of
+    // the route, and `scoot_in[t] = cum_scoot + last_leg_scoot[t]` is exactly that total in all three
+    // cases: the target is the final way point (last-leg cost 0, so the total is the chain's), an
+    // earlier chain station (the route really does fly back to it, and the last-leg cost is that
+    // return), or off-chain (chain plus tail). The profile is the other case: it reports a value per
+    // route node, so it needs the per-node `chain_time` exactly as `route_gas` needs `chain_gas`.
+    let turn_scoot = target
+        .and_then(|t| walk.scoot_in.get(t).copied())
+        .filter(|s| s.is_finite())
+        .unwrap_or(0.0);
+    let turn_time = target
+        .and_then(|t| walk.time_in.get(t).copied())
+        .filter(|t| t.is_finite());
     BudgetView {
         reachable,
         can_end_at,
@@ -1191,43 +1259,9 @@ fn budget_view(
         route_gas,
         route_time,
         scooter_bound,
+        turn_scoot,
+        turn_time,
     }
-}
-
-/// [#576 NF-PGAS3-1] [`budget_view`] for a pinned plan whose moved drops LOWERED the budget,
-/// with the turnaround kept on the pin-free plan's route (`base`): the walk goes toward
-/// `base.target` and stops at the last station the lower budget affords, exactly as the plan
-/// does toward an endpoint it cannot reach. That route is a prefix of `base.route` (the same
-/// way-point chain, then a prefix of the same predecessor path), so every drop placed on it is
-/// on the pin-free route too. The masks are the plain budget's - only the target's choice is
-/// constrained - so the reach is exactly what the lower budget gives, never more.
-///
-/// The two flags keep their meaning: "on the way to the diver's endpoint" only when the pin-free
-/// target was; "the scooter turned the dive" is the pin-free answer while the turnaround did not
-/// move, and otherwise whichever cap stopped the walk.
-fn budget_view_on_route(
-    walk: &WaypointWalk,
-    base: &BudgetView,
-    budget_litres: f64,
-    scooter_limit: f64,
-) -> BudgetView {
-    let mut view = budget_view(walk, base.target, budget_litres, scooter_limit);
-    view.target_toward_endpoint &= base.target_toward_endpoint;
-    if view.target == base.target {
-        view.scooter_bound = base.scooter_bound;
-    }
-    view
-}
-
-/// Running sums of `values`, i.e. `[v0, v0+v1, …]`.
-fn cumulative(values: impl Iterator<Item = f64>) -> Vec<f64> {
-    let mut acc = 0.0_f64;
-    values
-        .map(|v| {
-            acc += v;
-            acc
-        })
-        .collect()
 }
 
 /// Place each stage's drop on the route: the first station whose cumulative route gas reaches the
@@ -1237,24 +1271,34 @@ fn cumulative(values: impl Iterator<Item = f64>) -> Vec<f64> {
 /// (you carry/drop it there), so EVERY threshold yields exactly one drop and the per-stage gauges
 /// stay aligned 1:1. Returns route INDICES, not refs: a way-point route can double back over a
 /// station, and only an index says which pass the drop is on.
-fn place_stage_drops(route_gas: &[f64], thresholds: &[f64]) -> Vec<usize> {
+///
+/// A PINNED stage (`pinned[k]` set) is the exception (#576 RV8c-2-D3): when the dive turns before
+/// its pin, `beyond_gas` carries the route on from the turnaround to the last pin, and the drop is
+/// placed there - past the turnaround, the index the field reports as "not reached" - instead of
+/// being clamped onto a station the diver never chose.
+fn place_stage_drops(
+    route_gas: &[f64],
+    beyond_gas: &[f64],
+    thresholds: &[f64],
+    pinned: &[Option<usize>],
+) -> Vec<usize> {
     let Some(last) = route_gas.len().checked_sub(1) else {
         return Vec::new();
     };
     thresholds
         .iter()
-        .map(|&t| route_gas.iter().position(|&g| g >= t).unwrap_or(last))
-        .collect()
-}
-
-/// The stations a strategy's un-overridden drops land on, for the pin-to-default no-op check.
-fn default_drop_stations(view: &BudgetView, thresholds: &[f64]) -> Vec<usize> {
-    if view.target.is_none() {
-        return Vec::new();
-    }
-    place_stage_drops(&view.route_gas, thresholds)
-        .iter()
-        .filter_map(|&j| view.route.get(j).copied())
+        .enumerate()
+        .map(|(k, &t)| {
+            let on_route = route_gas.iter().position(|&g| g >= t);
+            match (on_route, pinned.get(k).copied().flatten()) {
+                (Some(j), _) => j,
+                (None, Some(_)) if !beyond_gas.is_empty() => {
+                    let past = beyond_gas.iter().position(|&g| g >= t);
+                    route_gas.len() + past.unwrap_or(beyond_gas.len() - 1)
+                }
+                (None, _) => last,
+            }
+        })
         .collect()
 }
 
@@ -1354,92 +1398,76 @@ fn stage_drop_plans(
 /// (litres) - a slop floor against float noise once we've already excluded the default station.
 const OVER_RESERVE_EPS_LITRES: f64 = 1e-6;
 
-/// Fold the per-drop overrides (#246) into the drops, in ONE cumulative walk. Returns
+/// Fold the pinned drops (#246) into the drops, in ONE cumulative walk over the stages. Returns
 /// `(cumulative_thresholds, drop_bars, over_reserve, budget_delta_litres)`:
-/// - `cumulative_thresholds[k]` (litres) is where drop `k` lands on the route (fed to `staged_route`)
-///   - the pinned station for a pin, so the marker stays where the diver put it.
-/// - `drop_bars[k]` is the readout pressure - the strategy default, or (when overridden) the stage
+/// - `cumulative_thresholds[k]` (litres of route gas) is where drop `k` lands
+///   ([`place_stage_drops`]) - the pinned station for a pin, so the marker stays where the diver
+///   put it.
+/// - `drop_bars[k]` is the readout pressure - the strategy default, or (for a moved drop) the stage
 ///   gauge after breathing the litres consumed to the pinned station, inverted from the Z curve.
-/// - `over_reserve[k]` is true only for a drag DEEPER than the safe point (breathing into reserve).
+/// - `over_reserve[k]` is true only for a pin DEEPER than the safe point (breathing into reserve).
 /// - `budget_delta_litres` is `Σ(credited - safe)`, added to the base budget. Never positive.
 ///
-/// A pinned station's breathed gas is the gas the diver has burned by the time they reach it, minus
-/// the cumulative so far, hard-clamped to `[0, phys_cap]` - so dragging past tank-empty snaps the
-/// drop back to the empty point, and dragging a drop shallower than the one before it breathes 0
-/// (drops the stage full) rather than going negative. What the plan CREDITS for the stage is that,
-/// capped at the strategy's own safe IN gas (#576, decided "re-check pins, cap at default"): a
-/// shallower pin strands gas and shrinks the reach exactly as before, but a deeper one is shown -
-/// red, at its station, reading its real gauge - without buying any reach. Moving a drop can
-/// therefore never make a plan reach further than the same plan without it, whatever moved under
-/// a persisted pin since it was set. Uncapped, a pin left on what USED to be the default station
-/// turned into a deeper drag the moment an input change moved the default shallower, and credited
-/// the overshoot.
+/// `pin_chain_idx[k]` is stage `k`'s pin as an index into `chain_gas`, the pinned route's
+/// cumulative gas ([`pinned::PinnedWalk`]): the route passes every pin (#576 RV8c-2-D1), so the gas
+/// a pin has cost is the route's own at that pass - never `gas_in[S]`, which with way points is
+/// measured from the last one and, for a station passed on the way out, reports the cost of coming
+/// back to it. `None` keeps the strategy default.
 ///
-/// A pin the BASE route does not pass is the same as no pin: it falls through to the strategy
-/// default, as does an unresolvable / off-graph / non-finite one. That covers a station on another
-/// branch and one past the end of the route: neither is a position along the dive the plan flies,
-/// and pricing it from its own path folds a passage the plan never enters into the budget - the
-/// unsafe direction (§6). Reachable in normal use, since `.plnx` persists overrides and a plan
-/// reloaded after the survey, the endpoint, the way points or the rig changed can carry a pin the
-/// new route no longer passes.
+/// A pinned station's breathed gas is the route gas at the pin minus the cumulative so far,
+/// hard-clamped to `[0, phys_cap]` - so dragging past tank-empty snaps the drop back to the empty
+/// point, and dragging a drop shallower than the one before it breathes 0 (drops the stage full)
+/// rather than going negative. What the plan CREDITS for the stage is that, capped at the
+/// strategy's own safe IN gas (#576, decided "re-check pins, cap at default"): a shallower pin
+/// strands gas and shrinks the reach, but a deeper one is shown - red, at its station, reading its
+/// real gauge - without buying any reach. Moving a drop can therefore never make a plan reach
+/// further than the same plan without it, whatever moved under a persisted pin since it was set.
+/// Uncapped, a pin left on what USED to be the default station turned into a deeper drag the moment
+/// an input change moved the default shallower, and credited the overshoot.
 ///
-/// ⚠ "Gas burned by the time they reach it" is the ROUTE's cumulative gas at the drop, never
-/// `gas_in[S]`. `gas_in` is measured from the LAST way point, so for a station the diver passes on
-/// the way OUT to that way point it reports the cost of coming back to it afterwards - which on a
-/// cave whose return leg does not retrace the outbound can be far larger than what the diver had
-/// actually burned when they swam past. Reading the route is right by construction; the first pass
-/// is taken because a way-point route can double back over a station, and the earliest pass is the
-/// smallest figure.
+/// The price is the same whether or not the dive gets to the pin (#576 RV8c-2-D3, "no stranding
+/// forgiven"): a dive that runs out of gas on the way there turns early and carries the stage, and
+/// what the pin strands stays stranded.
 ///
-/// The route passed in is the BASE-budget one, which keeps the ordering acyclic: the final route
-/// depends on the budget, which depends on these very contributions. It is also the route the plan
-/// flies (#576 NF-PGAS3-1): the final route is this one, cut short where a budget lowered by a
-/// stranding pin runs out ([`budget_view_on_route`]), so a pin the walk honours never sends the
-/// dive - or its own marker - onto another branch. A pin past that earlier turnaround is still
-/// priced at its station; its marker clamps to the turnaround like any threshold past the end.
-///
-/// ⚠ Pin-to-the-default-station is a NO-OP. The default ▼ is rendered at the first route station
-/// whose route gas ≥ the stage's threshold, so that station's gas usually OVERSHOOTS the sub-station
-/// threshold; reading it as a fresh pin would fabricate an over-reserve flag (and, before the cap,
-/// extra reach) on a mere jiggle / release-in-place. `default_drop_nodes[k]` - stage `k`'s drop
-/// station on the UN-overridden route - recognises it exactly. (It replaces an earlier
-/// predecessor-tree heuristic, which could not stay exact once way points let a route double back
-/// over a station.)
-fn apply_stage_drop_overrides(
+/// ⚠ A pin ON its default station is the default. The default ▼ is rendered at the first route
+/// station whose route gas reaches the stage's threshold, so that station's gas usually OVERSHOOTS
+/// it; reading it as a fresh pin would fabricate an over-reserve flag out of a nudge back. So a pin
+/// at exactly the station where the threshold lands on the pinned route - the station before it
+/// short of `cum + safe`, the pin at or past it - reproduces the default. Only a REAL landing
+/// counts: a pin on the station a threshold past the end of the route was clamped to is a genuine
+/// pin, priced like any other (the stage is dropped there with gas left) - forgiving it as the
+/// default handed the stranded gas back (#576 RV8c-2).
+fn price_stage_drops(
     plans: &[StageDropPlan],
-    overrides: &[Option<usize>],
-    base: &BudgetView,
-    default_drop_nodes: &[usize],
+    pin_chain_idx: &[Option<usize>],
+    chain_gas: &[f64],
 ) -> (Vec<f64>, Vec<f64>, Vec<bool>, f64) {
-    let arrival_gas = |si: usize| -> Option<f64> {
-        let p = base.route.iter().position(|&n| n == si)?;
-        base.route_gas.get(p).copied().filter(|g| g.is_finite())
-    };
     let mut thresholds = Vec::with_capacity(plans.len());
     let mut bars = Vec::with_capacity(plans.len());
     let mut over = Vec::with_capacity(plans.len());
     let mut eff_cum = 0.0_f64;
     let mut delta = 0.0_f64;
     for (k, p) in plans.iter().enumerate() {
-        let pinned = overrides.get(k).copied().flatten();
-        let (breathed, bar, is_over) = match pinned {
-            // Pinned to the stage's OWN default drop station: reproduce the un-dragged default so a
-            // jiggle / release-in-place can't fabricate over-reserve.
-            Some(si) if default_drop_nodes.get(k) == Some(&si) => {
-                (p.safe_in_litres, p.default_bar, false)
+        // The pinned pass's route gas, and the route gas one station before it.
+        let pass = pin_chain_idx.get(k).copied().flatten().and_then(|j| {
+            let at = chain_gas.get(j).copied().filter(|g| g.is_finite())?;
+            let before = j
+                .checked_sub(1)
+                .and_then(|i| chain_gas.get(i).copied())
+                .unwrap_or(f64::NEG_INFINITY);
+            Some((before, at))
+        });
+        let default_threshold = eff_cum + p.safe_in_litres;
+        let (breathed, bar, is_over) = match pass {
+            Some((before, at)) if !(before < default_threshold && default_threshold <= at) => {
+                let breathed = (at - eff_cum).clamp(0.0, p.phys_cap_litres);
+                (
+                    breathed,
+                    drop_pressure_for_contribution(p, breathed),
+                    breathed > p.safe_in_litres + OVER_RESERVE_EPS_LITRES,
+                )
             }
-            Some(si) => match arrival_gas(si) {
-                Some(gas) => {
-                    let breathed = (gas - eff_cum).clamp(0.0, p.phys_cap_litres);
-                    (
-                        breathed,
-                        drop_pressure_for_contribution(p, breathed),
-                        breathed > p.safe_in_litres + OVER_RESERVE_EPS_LITRES,
-                    )
-                }
-                None => (p.safe_in_litres, p.default_bar, false),
-            },
-            None => (p.safe_in_litres, p.default_bar, false),
+            _ => (p.safe_in_litres, p.default_bar, false),
         };
         // Credit no more of the stage than its default drop would: a deeper pin buys no reach.
         delta += breathed.min(p.safe_in_litres) - p.safe_in_litres;
