@@ -771,11 +771,21 @@ test.describe('Visual Regression - Shortcuts', () => {
     await page.keyboard.press('Q');
     await waitForRecording(page, 'shortcut-primary-select', false);
 
-    // Add secondary binding
+    // Add secondary binding. [#576 RV6b-F3] Not Ctrl+Q: with the whole default Config
+    // that is quit's binding, so the recording was refused with the conflict error and
+    // the screenshot below showed the error state, not a customized one. Ctrl+Shift+Q is
+    // bound to nothing by default.
     const secondaryRecorder = page.locator('[data-testid="shortcut-secondary-select"]');
     await secondaryRecorder.click();
-    await page.keyboard.press('Control+Q');
+    await page.keyboard.press('Control+Shift+Q');
     await waitForRecording(page, 'shortcut-secondary-select', false);
+
+    // Both bindings took, and nothing was refused - the state the screenshot is named for.
+    await expect(page.locator('[data-testid="shortcut-error"]')).toHaveCount(0);
+    await expect(selectRecorder).toContainText('Q');
+    await expect(secondaryRecorder).toContainText(KEY.Ctrl);
+    await expect(secondaryRecorder).toContainText(KEY.Shift);
+    await expect(secondaryRecorder).toContainText('Q');
 
     // Take screenshot showing customized state
     await page.screenshot({
