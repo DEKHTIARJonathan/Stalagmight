@@ -361,10 +361,10 @@ mod tests {
     /// ahead of it. Structural, for the reason above.
     #[test]
     fn the_undo_mode_write_is_gated_before_it_mutates() {
-        let src = include_str!("undo_policy.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production region precedes the test module");
+        let src = crate::models::source_scan::prod_region(
+            include_str!("undo_policy.rs"),
+            "pub fn speleodb_set_undo_mode",
+        );
         let verb = src
             .split_once("pub fn speleodb_set_undo_mode")
             .map(|(_, rest)| rest)
@@ -608,54 +608,8 @@ mod tests {
     /// boundary so test code may keep using them. Still weaker than a compile error - it
     /// cannot see the other crates - but it covers every file a history reader would
     /// plausibly be added to.
-    /// Does this `#[cfg(test)]` gate a `mod`, rather than a gated `use` or fn?
     ///
-    /// `from` starts AT the attribute. Skips its own line, then any blank or attribute
-    /// lines, and answers on the first line that is neither. This crate puts `#[expect]`
-    /// lint waivers between the gate and the module, and those waivers are usually
-    /// MULTI-LINE, so the skip has to balance brackets rather than test for a `#[` prefix:
-    /// a waiver's continuation line (`clippy::unwrap_used,`) looks like ordinary code and
-    /// ended the scan early, which is what made a first version of this report every
-    /// `#[expect]`-waivered test module in the crate as production.
-    fn gates_a_module(from: &str) -> bool {
-        let bracket_delta = |line: &str| -> i32 {
-            let opens = i32::try_from(line.matches('[').count()).unwrap_or(0);
-            let closes = i32::try_from(line.matches(']').count()).unwrap_or(0);
-            opens - closes
-        };
-        let mut depth = 0_i32;
-        for line in from.lines().skip(1) {
-            if depth > 0 {
-                depth += bracket_delta(line);
-                continue;
-            }
-            let trimmed = line.trim_start();
-            // Blank, comment, or attribute lines all sit BETWEEN the gate and the module.
-            // The comment case is not hypothetical: `speleodb/sync.rs` explains its
-            // `#[expect]` waiver in three `//` lines between the two, and leaving them out
-            // meant that file was never cut - its whole test module counted as production,
-            // which both risks a false offender and inflates `production_bytes`, the one
-            // number that is supposed to notice a bad cut.
-            if trimmed.is_empty() || trimmed.starts_with("//") {
-                continue;
-            }
-            if trimmed.starts_with("#[") {
-                depth += bracket_delta(line);
-                continue;
-            }
-            // An INLINE module (`mod tests {`) ends the production region. A DECLARATION
-            // (`mod adversarial_tests;`) does not: its body is a separate file the walk
-            // visits on its own, while the rest of THIS file is still production.
-            // `core/state/mod.rs` opens with fourteen such declarations and closes with
-            // `pub use app_state::AppState;` - treating the first one as the boundary
-            // discarded every production line after it, in the module root of the very
-            // directory this guard exists to watch.
-            let is_mod = trimmed.starts_with("mod ") || trimmed.starts_with("pub mod ");
-            return is_mod && !trimmed.trim_end().ends_with(';');
-        }
-        false
-    }
-
+    /// [#576 A8] The cut is the shared `models::source_scan::test_module_start`.
     #[test]
     fn no_production_caller_mints_its_own_history_budget() {
         // The bare names. The trailing `(` in each form below separates them from the
@@ -748,10 +702,8 @@ mod tests {
                 // cut walks forward over any further attribute lines and requires a `mod`
                 // at the end of them. Anything else (a gated `use`, a gated fn) is not a
                 // module boundary and does not end the production region.
-                let production = text
-                    .match_indices("#[cfg(test)]")
-                    .find(|&(at, _)| gates_a_module(&text[at..]))
-                    .map_or(text.as_str(), |(at, _)| &text[..at]);
+                let production = crate::models::source_scan::test_module_start(&text)
+                    .map_or(text.as_str(), |at| &text[..at]);
                 scanned += 1;
                 production_bytes += production.len();
                 total_bytes += text.len();

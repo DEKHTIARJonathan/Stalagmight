@@ -78,10 +78,14 @@ fn speleodb_prod_sources() -> [(&'static str, &'static str); 13] {
         ("speleodb_session.rs", include_str!("speleodb_session.rs")),
     ]
     .map(|(name, src)| {
-        // Only the top-level test module ends production. `speleodb_push.rs` also has
-        // a test-only method, whose indented attribute must not truncate every source
-        // scan before the real push implementation.
-        (name, src.split("\n#[cfg(test)]").next().unwrap_or(src))
+        // [#576 A8 / E9(b)] Only the top-level test MODULE ends production: a gated
+        // `use`, the test-only method in `speleodb_push.rs`, or the attribute's text
+        // in a comment must not truncate every scan built on this before the real
+        // orchestration (`crate::models::source_scan::prod_region`).
+        (
+            name,
+            crate::models::source_scan::prod_region(src, "impl AppState {"),
+        )
     })
 }
 

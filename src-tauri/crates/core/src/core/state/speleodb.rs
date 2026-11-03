@@ -5042,10 +5042,7 @@ mod tests {
     /// The production region of this file, split out of the test module so the
     /// source-level tripwires below cannot match their own assertions.
     fn prod_source() -> &'static str {
-        include_str!("speleodb.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production region precedes the test module")
+        crate::models::source_scan::prod_region(include_str!("speleodb.rs"), "impl AppState {")
     }
 
     /// [#275] The same, for the push half after it moved to `speleodb_push.rs`.
@@ -5056,10 +5053,10 @@ mod tests {
     /// `speleodb.rs` they would not fail - they would stop finding the function at all
     /// and panic in `expect`, which reports the wrong thing entirely.
     fn push_prod_source() -> &'static str {
-        include_str!("speleodb_push.rs")
-            .split("\n#[cfg(test)]")
-            .next()
-            .expect("production region precedes the test module")
+        crate::models::source_scan::prod_region(
+            include_str!("speleodb_push.rs"),
+            "fn speleodb_upload(",
+        )
     }
 
     #[test]

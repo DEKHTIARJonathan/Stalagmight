@@ -1776,10 +1776,12 @@ mod tests {
 
     // ---- tripwires -------------------------------------------------------
 
-    /// Read a sibling source file of this module at test time.
+    /// The production region of a sibling source file of this module, read at test
+    /// time and cut by the shared `models::source_scan::prod_region` (#576 A8).
     fn state_source(name: &str) -> String {
         let path = format!("{}/src/core/state/{name}", env!("CARGO_MANIFEST_DIR"));
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"))
+        let src = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {path}: {e}"));
+        crate::models::source_scan::prod_region(&src, "fn ").to_owned()
     }
 
     #[test]
@@ -1810,7 +1812,8 @@ mod tests {
             // Production code only: this tree keeps test modules at the bottom of
             // the file, so truncating at the first test gate is enough for a
             // tripwire (fixtures write the slot freely and legitimately).
-            let src = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+            let src =
+                &src[..crate::models::source_scan::test_module_start(&src).unwrap_or(src.len())];
             if src.contains("self.bump_speleodb_session()") {
                 bumping.push(name.clone());
             }
@@ -1982,7 +1985,6 @@ mod tests {
         // release that can outlive the moment it was decided goes through the
         // reclaim check; this pins the one that had been left out.
         let src = state_source("speleodb_lock_release.rs");
-        let src = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
         let start = src
             .find("fn speleodb_spawn_lock_release")
             .expect("the detached release is present");
@@ -2012,7 +2014,6 @@ mod tests {
 
         // ...and the span it routes to does all three under one guard.
         let own = state_source("speleodb_session.rs");
-        let own = &own[..own.find("#[cfg(test)]").unwrap_or(own.len())];
         let start = own
             .find("fn speleodb_stand_down_and_release")
             .expect("the deferred-release span is present");
@@ -2046,7 +2047,6 @@ mod tests {
         // Production region only, like every other scan in this family - and here
         // it also keeps the search off the test-only wrapper whose name starts
         // with the same words.
-        let src = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
         let start = src
             .find("fn speleodb_logout(")
             .expect("the logout verb is present");

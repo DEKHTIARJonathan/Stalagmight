@@ -76,10 +76,10 @@ fn the_adoption_guard_lifts_the_gate_on_every_exit() {
 
 /// The production half of `speleodb_pull.rs` (its test module follows it).
 fn pull_prod_source() -> &'static str {
-    include_str!("speleodb_pull.rs")
-        .split("#[cfg(test)]")
-        .next()
-        .unwrap()
+    crate::models::source_scan::prod_region(
+        include_str!("speleodb_pull.rs"),
+        "pub fn speleodb_adopt_ariane(",
+    )
 }
 
 #[test]

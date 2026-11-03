@@ -24,6 +24,9 @@ pub mod project;
 mod raw_lock_scan_tests;
 pub mod section;
 pub mod shot;
+/// [#576 A8] The one way a test reads production source: see the module doc.
+#[cfg(any(test, feature = "test-support"))]
+pub mod source_scan;
 pub mod speleo_link;
 pub mod station;
 #[cfg(any(test, feature = "test-support"))]

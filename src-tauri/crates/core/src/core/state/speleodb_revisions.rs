@@ -1076,10 +1076,10 @@ mod tests {
     /// The production region of this file, split out of the test module so the
     /// source-level tripwire below cannot match its own assertions.
     fn prod_source() -> &'static str {
-        include_str!("speleodb_revisions.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production region precedes the test module")
+        crate::models::source_scan::prod_region(
+            include_str!("speleodb_revisions.rs"),
+            "pub fn speleodb_restore_revision(",
+        )
     }
 
     /// [#303] Spec item 24: the Unwind's preconditions are enforced in the BACKEND, not

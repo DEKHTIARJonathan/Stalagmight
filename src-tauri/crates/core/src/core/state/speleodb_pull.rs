@@ -4369,10 +4369,10 @@ mod tests {
     /// The production region of this file, split out of the test module so the
     /// source-level tripwire below cannot match its own assertions.
     fn prod_source() -> &'static str {
-        include_str!("speleodb_pull.rs")
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production region precedes the test module")
+        crate::models::source_scan::prod_region(
+            include_str!("speleodb_pull.rs"),
+            "pub fn speleodb_adopt_ariane(",
+        )
     }
 
     #[test]
