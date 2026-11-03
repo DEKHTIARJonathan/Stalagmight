@@ -57,6 +57,15 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
     return `2026-07-06T10:00:${String(mockDivePlanClock).padStart(2, '0')}Z`;
   };
 
+  // [#576 E3] What a spec says the gas engine answers on top of the canned field (see
+  // `compute_gas_reach_field`); null clears it.
+  let gasFieldPatch: Partial<MockReply<'compute_gas_reach_field'> & object> = {};
+  (window as unknown as Record<string, unknown>).__MOCK_SET_GAS_FIELD_PATCH__ = (
+    patch: Partial<MockReply<'compute_gas_reach_field'> & object> | null,
+  ) => {
+    gasFieldPatch = patch ?? {};
+  };
+
   (window as unknown as Record<string, unknown>).__MOCK_RESET_DIVE_PLANS__ = () => {
     mockDivePlans = [];
     mockDivePlanNextId = 1;
@@ -172,8 +181,10 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
         return refs satisfies MockReply<'plan_refs_for_anchors'>;
       }
       case 'compute_gas_reach_field': {
-        // Record every call's inputs so drag e2e can assert the dragged station was sent as a
-        // per-stage override (#246). Keyed on the camelCase arg the frontend actually invokes with.
+        // Record every call's inputs so a spec can assert what the plan sent: the drop
+        // overrides (#246), the endpoint and origin, the ordered way points (#298), the
+        // per-span speed + propulsion (#317) and the rig itself (#317), so disabling it can be
+        // proven at the REQUEST. Keyed on the camelCase args the frontend invokes with.
         {
           const win = window as unknown as Record<string, unknown>;
           const calls = (win.__MOCK_GAS_REACH_CALLS__ as unknown[]) ?? [];
@@ -181,24 +192,24 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
             stageDropOverrides: args?.stageDropOverrides ?? [],
             endpoint: args?.endpoint ?? null,
             origin: args?.origin ?? null,
-            // #298: the ordered way points, so an e2e can assert the pick reached the engine
-            // and in what order.
             waypoints: args?.waypoints ?? [],
-            // #317: the per-span speed + propulsion, so an e2e can assert a segment edit
-            // reached the engine rather than only re-rendering the table.
             segments: args?.segments ?? [],
-            // #317: the rig itself, so disabling it can be proven at the REQUEST - the
-            // readout that gates on it also gates on the client-side `hasDpvRig` flag, which
-            // flips a render tick before any recompute round-trips.
+            cylinders: args?.cylinders ?? [],
             dpv: (args?.gasConfig as { dpv?: unknown } | undefined)?.dpv ?? null,
           });
           win.__MOCK_GAS_REACH_CALLS__ = calls;
         }
-        // Gas reachable-frontier field (#38). No real graph in the mock -
-        // synthesize a field from each station's mock x-coordinate (origin at
-        // x=0) so the overlay + legend + turn markers have finite values to
-        // render. Diver/cylinders/gasConfig inputs are ignored; the budget is a
-        // fixed plausible value so far-enough stations fall outside it.
+        // [#576 E3] Canned. The field is a fixed placeholder over the open project's stations,
+        // whatever the plan sent: station i of a section (the mock's placeholder x = 10 i)
+        // costs 200 i litres against a 1500 L budget, the last station of the list is
+        // unconnected (null), and the route runs over the reachable stations to the last of
+        // them. Nothing below re-runs the engine: the reserve strategies and their fallback,
+        // the per-cylinder gauge rule, the stage drops and their over-reserve flag, the route
+        // metrics, the out-and-back profile, the segment speeds and the scooter range are the
+        // backend's (models project/gas tests, scooter.rs tests, pinned for #576 E3). A spec
+        // that needs the backend to answer something else - a stage drop, an over-reserve
+        // flag, a scooter range or park point - seeds it with
+        // `__MOCK_SET_GAS_FIELD_PATCH__({ ... })`, laid over this field on every reply.
         const state = ctx.invoke('get_project_state', args) as
           | {
               stations?: Array<{
@@ -208,451 +219,78 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
             }
           | null;
         const stations = state?.stations ?? [];
+        const refs = stations.map((s) => s.station_ref);
         const budget_litres = 1500;
-        const gas_to_reach: (number | null)[] = stations.map((s) => Math.abs(s.coordinates.x) * 20);
-        // #395: keep the LAST station genuinely UNCONNECTED (gas_to_reach null)
-        // BEFORE computing `reachable` - mirrors the real backend invariant
-        // (src-tauri/src/models/project/gas.rs: reachable requires g.is_finite())
-        // so a null gas_to_reach can never pair with reachable:true. Specs can
-        // then assert the three-way split: grey (unconnected, reachable:false,
-        // gas_to_reach:null) vs dimmed-but-colored (beyond gas range,
-        // reachable:false, gas_to_reach:non-null) vs reachable.
-        if (gas_to_reach.length > 0) {
-          gas_to_reach[gas_to_reach.length - 1] = null;
-        }
+        const gas_to_reach: (number | null)[] = stations.map((s, k) =>
+          k === stations.length - 1 ? null : Math.abs(s.coordinates.x) * 20,
+        );
         const reachable = gas_to_reach.map((g) => g !== null && g <= budget_litres);
-        let max_reachable_gas = 0;
-        for (let i = 0; i < gas_to_reach.length; i += 1) {
-          const g = gas_to_reach[i];
-          if (reachable[i] && g !== null && g !== undefined && g > max_reachable_gas) {
-            max_reachable_gas = g;
-          }
-        }
-        // Turn frontier: a reachable station whose next (by array order) is not
-        // reachable - enough for the marker layer to render in the smoke test.
-        const turn_frontier = stations
-          .filter((_s, i) => reachable[i] && i + 1 < stations.length && !reachable[i + 1])
-          .map((s) => s.station_ref);
-        // Staged-strategy drops + the readout gauges (Half-Minus). Mirror the backend: only the
-        // staged strategies carry drops, and only when the rig actually has enough Stage
-        // cylinders (else it falls back to All-thirds). The endpoint, when given + reachable, is
-        // the route target (else the deepest reachable station). Exact math is unit-tested in
-        // Rust; the mock just produces plausible, shape-correct values for the UI wiring.
-        const gasConfig = (args?.gasConfig ?? {}) as {
-          default_reserve?: string;
-          reserve_profile?: { stage_reserve_bar?: number; all_thirds_safety_margin_bar?: number };
-          conservative_tank_gas?: boolean;
-          swim_speed_m_per_min?: number;
-          survey_speed_m_per_min?: number | null;
-          dpv?: {
-            primary?: { speed_m_per_min?: number; burn_minutes?: number };
-            backup?: { speed_m_per_min?: number; burn_minutes?: number };
-            range_reserve_fraction?: number;
-          } | null;
-        };
-        const cylinders = (args?.cylinders ?? []) as Array<{
-          role?: string;
-          fill_bar?: number;
-          water_volume_l?: number;
-          rated_pressure_bar?: number;
-          enabled?: boolean;
-          usable_gas_bar?: number;
-        }>;
-        const requested = gasConfig.default_reserve ?? 'all_thirds';
-        // Disabled tanks (#245) are excluded from the gauges/drops, mirroring the engine.
-        const stageCyls = cylinders.filter((c) => c.role === 'stage' && c.enabled !== false);
-        const required = requested === 'two_stage' ? 2 : requested === 'one_stage' ? 1 : 0;
-        const effective = stageCyls.length >= required ? requested : 'all_thirds';
-        const dropCount = effective === 'two_stage' ? 2 : effective === 'one_stage' ? 1 : 0;
-        const reserve = gasConfig.reserve_profile?.stage_reserve_bar ?? 30;
-
-        const reachableRefs = stations
-          .filter((_s, i) => reachable[i])
-          .map((s) => s.station_ref);
-        let deepestIdx = -1;
-        let deepestGas = -1;
-        for (let i = 0; i < gas_to_reach.length; i += 1) {
-          const g = gas_to_reach[i];
-          if (reachable[i] && g !== null && g !== undefined && g > deepestGas) {
-            deepestGas = g;
-            deepestIdx = i;
-          }
-        }
-        const endpoint = (args?.endpoint ?? null) as {
-          section_id: number;
-          station_index: number;
-        } | null;
-        const endpointReachable =
-          endpoint != null &&
-          reachableRefs.some(
-            (r) =>
-              r.section_id === endpoint.section_id && r.station_index === endpoint.station_index,
-          );
-        const targetRef = endpointReachable
-          ? endpoint
-          : deepestIdx >= 0
-            ? stations[deepestIdx].station_ref
-            : null;
-        const final_turn_ref = targetRef;
-        // Mirrors the engine's own flag: true when the endpoint IS the target, false for the
-        // deepest-in-budget fallback (no endpoint set, or one that cannot be used). The mock has
-        // no partial walk toward an out-of-reach endpoint, so those two cases are all it can
-        // distinguish - enough to keep the panel's two messages apart.
-        const turn_toward_endpoint = endpointReachable && endpoint != null;
-        // Drop stages: staged presets drop their first `dropCount` enabled stages; Free drops
-        // every enabled stage with a positive usable (no cap). Each gets a ref, clamped to the
-        // turnaround when the route is shorter - mirroring the engine so refs/bars/distances align.
-        const dropSourceStages =
-          effective === 'free'
-            ? stageCyls.filter((c) => (c.usable_gas_bar ?? 0) > 0)
-            : stageCyls.slice(0, dropCount);
-        const stage_drop_refs = reachableRefs.length
-          ? dropSourceStages.map(
-              (_c, i) => reachableRefs[Math.min(i + 1, reachableRefs.length - 1)],
-            )
-          : [];
-        // Apply per-stage drop overrides (#246): pin a drop to its dragged station and flag it
-        // over-reserve when that station sits DEEPER (more gas-to-reach) than the strategy drop.
-        // ⚠ This is a DELIBERATELY simplified stand-in, NOT the engine's rule
-        // (`apply_stage_drop_overrides`, models/src/project/gas.rs): the engine takes the litres
-        // `breathed` to the pinned station (its route gas minus the cumulative at the previous drop,
-        // clamped to [0, tank-empty]), flags over-reserve on
-        // `breathed > safe_in_litres + OVER_RESERVE_EPS_LITRES` (with a pin-to-default no-op), and
-        // adds `breathed.min(safe_in_litres) - safe_in_litres` to the budget - so only a SHALLOWER
-        // pin shrinks the budget (and the reach), a deeper one is flagged but buys no reach, and the
-        // back-gas turn is untouched. The mock only moves the ref + sets a station-depth flag and
-        // keeps the budget fixed. So the e2e asserts UI WIRING (colour, reset, warning) only; the flag
-        // semantics + the recompute math are covered by the Rust unit tests, which are the source
-        // of truth. A pin-to-default is a no-op here too (same station ⇒ not deeper ⇒ not flagged).
-        const stageOverrides = (args?.stageDropOverrides ?? []) as Array<{
-          section_id: number;
-          station_index: number;
-        } | null>;
-        const gasAtRef = (r: { section_id: number; station_index: number }) => {
-          const idx = stations.findIndex(
-            (s) =>
-              s.station_ref.section_id === r.section_id &&
-              s.station_ref.station_index === r.station_index,
-          );
-          return idx >= 0 ? (gas_to_reach[idx] ?? 0) : 0;
-        };
-        const stage_drop_over_reserve = stage_drop_refs.map((defRef, i) => {
-          const ov = stageOverrides[i];
-          if (ov == null || defRef == null) return false;
-          const over = gasAtRef(ov) > gasAtRef(defRef);
-          stage_drop_refs[i] = ov;
-          return over;
-        });
-        // Route legs to the target (consecutive reachable stations; the real graph path is
-        // exercised in Rust). is_jump stays false - the seeded e2e sections carry no jumps.
-        const route =
-          targetRef != null
-            ? reachableRefs
-                .slice(0, -1)
-                .map((from, i) => ({ from, to: reachableRefs[i + 1], is_jump: false }))
-            : [];
-
-        // Route physical metrics (#236) over the route's stations, in order (origin→turnaround),
-        // derived from the route legs the mock returns - so it mirrors the backend's route_refs
-        // CHAIN, not the full reachable set. NOTE: the seeded e2e cave is a single linear section
-        // with no merge/closure ties, so this is an approximation for the linear seed, not a
-        // re-implementation of the backend's tie-aware shortest path (exact math is Rust-tested).
-        const coordByRef = new Map(
-          stations.map((s) => [
-            `${s.station_ref.section_id}:${s.station_ref.station_index}`,
-            s.coordinates,
-          ]),
-        );
-        const routeRefsOrdered =
-          route.length > 0
-            ? [route[0].from, ...route.map((leg) => leg.to)]
-            : targetRef != null
-              ? [targetRef]
-              : [];
-        const routePts = routeRefsOrdered
-          .map((r) => coordByRef.get(`${r.section_id}:${r.station_index}`))
-          .filter((c): c is { x: number; y: number; z: number } => c != null);
-        let route_line_length_m = 0;
-        let route_max_depth_m: number | null = null;
-        let route_avg_depth_m: number | null = null;
-        if (routePts.length > 0) {
-          route_max_depth_m = Math.max(...routePts.map((c) => c.z));
-          let depthLenSum = 0;
-          for (let i = 1; i < routePts.length; i += 1) {
-            const a = routePts[i - 1];
-            const b = routePts[i];
-            const seg = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
-            route_line_length_m += seg;
-            depthLenSum += seg * 0.5 * (a.z + b.z);
-          }
-          route_avg_depth_m =
-            route_line_length_m > 0 ? depthLenSum / route_line_length_m : routePts[0].z;
-        }
-
-        const margin = gasConfig.reserve_profile?.all_thirds_safety_margin_bar ?? 0;
-        const backCyls = cylinders.filter((c) => c.role === 'back_gas' && c.enabled !== false);
-        const sumWv = backCyls.reduce((s, c) => s + (c.water_volume_l ?? 0), 0);
-        const frac = effective === 'two_stage' ? 1 / 6 : effective === 'one_stage' ? 1 / 4 : 1 / 3;
-        // The engine's one per-cylinder gauge rule (gas.rs `in_usable_bar`, #576 A18(e)),
-        // without the Z derate: the bar a cylinder spends on the way in, a share of its
-        // conservative-capped basis read off its REAL gauge and clamped to [0, fill]. The
-        // turn gauge, the stage drops and the usable column all derive from it, so an
-        // overfilled tank reads as the engine reads it (11 L rated 207 filled 230 with a
-        // 30-bar reserve drops at 230 - 88.5 = 141.5, not on the capped scale at 118.5).
-        const inUsableBar = (c: (typeof cylinders)[number], stageCounted: boolean): number => {
-          if (c.role !== 'back_gas' && c.role !== 'stage') return 0;
-          const fill = c.fill_bar ?? 0;
-          const rated = c.rated_pressure_bar ?? fill;
-          const basis = gasConfig.conservative_tank_gas !== false ? Math.min(fill, rated) : fill;
-          const toFill = (bar: number) => Math.max(0, Math.min(bar, fill));
-          if (effective === 'free') return Math.max(0, Math.min(c.usable_gas_bar ?? 0, basis));
-          // ⅓ less the safety margin, for back gas and stages alike.
-          if (effective === 'all_thirds') return toFill(basis / 3 - margin);
-          if (c.role === 'back_gas') return toFill(frac * basis);
-          return stageCounted ? toFill(0.5 * (basis - reserve)) : 0;
-        };
-        // Turn gauge: the volume-weighted mean of each back-gas tank's `fill - usable`.
-        const backgas_turn_bar =
-          sumWv > 0
-            ? Math.max(
-                0,
-                backCyls.reduce(
-                  (s, c) => s + (c.water_volume_l ?? 0) * ((c.fill_bar ?? 0) - inUsableBar(c, false)),
-                  0,
-                ) / sumWv,
-              )
-            : null;
-        // A drop reads `fill - usable` on the stage's own gauge.
-        const stage_drop_bars = dropSourceStages.map((c) =>
-          Math.max(0, (c.fill_bar ?? 0) - inUsableBar(c, true)),
-        );
-        // Cumulative swum distance to each drop ref along the route (aligned with stage_drop_refs).
-        const cumDist: number[] = [];
-        {
-          let acc = 0;
-          for (let i = 0; i < routePts.length; i += 1) {
-            if (i > 0) {
-              const a = routePts[i - 1];
-              const b = routePts[i];
-              acc += Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
-            }
-            cumDist.push(acc);
-          }
-        }
-        const stage_drop_distances_m = stage_drop_refs.map((d) => {
-          const j = routeRefsOrdered.findIndex(
-            (r) => r.section_id === d.section_id && r.station_index === d.station_index,
-          );
-          return j >= 0 ? (cumDist[j] ?? 0) : 0;
-        });
-        // Per-row usable bar (#245), aligned 1:1 with INPUT cylinders (disabled/non-budget = 0):
-        // the same gauge rule as the turn and the drops. Half Minus counts only the first
-        // `required` enabled stages. Rust unit tests pin the exact (Z-derated) math.
-        let enabledStageI = 0;
-        const cylinder_usable_bars = cylinders.map((c) => {
-          if (c.enabled === false) return 0;
-          const counted = c.role === 'stage' && enabledStageI++ < required;
-          return inUsableBar(c, counted);
-        });
-        // Cumulative gas at each way point (#298). Like the drop math above this is a
-        // shape-correct stand-in, not the engine's multi-leg walk: it reports each way point's
-        // own gas-to-reach (null when the station is not in the field at all, which is what
-        // the panel's "unreachable" warning keys off) rather than accumulating the legs. The
-        // real accumulation is unit-tested in Rust; the e2e asserts UI wiring only.
-        const waypointArgs = (args?.waypoints ?? []) as Array<{
-          section_id: number;
-          station_index: number;
-        }>;
-        const waypoint_gas_litres = waypointArgs.map((w) => {
-          const idx = stations.findIndex(
-            (s) =>
-              s.station_ref.section_id === w.section_id &&
-              s.station_ref.station_index === w.station_index,
-          );
-          return idx >= 0 ? gas_to_reach[idx] : null;
-        });
-        // Round-trip dive profile (#299). Same standing as the metrics above: a shape-correct
-        // stand-in over the linear e2e seed, not the engine's tie-aware, asymmetrically-priced
-        // walk. It does honour the one property the UI is asserted on - the exit leg is swum at
-        // `swim_speed_m_per_min` while the way in uses the survey speed when one is set - so a
-        // spec can tell the two axes apart. The real engine additionally rides a SCOOTERED span
-        // out at the span's own pace (#317); no spec asserts the exit half's numbers, so this
-        // stand-in does not model that. The exact math is pinned by the Rust tests.
-        const inSpeed = gasConfig.survey_speed_m_per_min ?? gasConfig.swim_speed_m_per_min ?? 10;
-        const outSpeed = gasConfig.swim_speed_m_per_min ?? 10;
-        const routeGasAt = (r: { section_id: number; station_index: number }) => {
-          const idx = stations.findIndex(
-            (s) =>
-              s.station_ref.section_id === r.section_id &&
-              s.station_ref.station_index === r.station_index,
-          );
-          return idx >= 0 ? (gas_to_reach[idx] ?? 0) : 0;
-        };
-        const outboundProfile = routeRefsOrdered.map((r, i) => ({
-          route_index: i,
-          station_ref: r,
-          distance_m: cumDist[i] ?? 0,
-          depth_m: routePts[i]?.z ?? 0,
-          gas_l: routeGasAt(r),
-          elapsed_min: (cumDist[i] ?? 0) / inSpeed,
-          outbound: true,
-        }));
-        const turnPoint = outboundProfile[outboundProfile.length - 1];
-        const totalOut = turnPoint?.distance_m ?? 0;
-        const route_profile = [...outboundProfile];
-        if (turnPoint) {
-          let gas = turnPoint.gas_l;
-          let elapsed = turnPoint.elapsed_min;
-          for (let i = outboundProfile.length - 2; i >= 0; i -= 1) {
-            const seg = outboundProfile[i + 1].distance_m - outboundProfile[i].distance_m;
-            elapsed += seg / outSpeed;
-            // Re-swim the leg's outbound cost, scaled by the speed ratio: faster out means less
-            // time at depth, hence less gas. Enough for the UI, not the engine's real pricing.
-            gas +=
-              (outboundProfile[i + 1].gas_l - outboundProfile[i].gas_l) * (inSpeed / outSpeed);
-            route_profile.push({
-              ...outboundProfile[i],
-              distance_m: totalOut + (totalOut - outboundProfile[i].distance_m),
-              gas_l: gas,
-              elapsed_min: elapsed,
-              outbound: false,
-            });
-          }
-        }
-        // ⚠ Mock-only shortcut: a REF lookup, which is exactly the ambiguity the real engine's
-        // route indices exist to remove (a way-point route revisits stations, and `findIndex`
-        // matches the first pass). Adequate here because the seeded e2e cave is linear, so no
-        // station appears twice - but do not read this as a model of the backend.
-        // NOT filtered: the real engine maps `drop_indices` straight through, so this array is
-        // always the same length as `stage_drop_refs` / `stage_drop_over_reserve`, and the
-        // consumer indexes all three positionally. Dropping a miss would shift every later
-        // entry and silently pin an over-reserve flag to the wrong stage. A miss surfaces as a
-        // visibly wrong -1 instead, which is the direction a mock should fail in.
-        const stage_drop_route_indices = stage_drop_refs.map((d) =>
-          routeRefsOrdered.findIndex(
-            (r) => r.section_id === d.section_id && r.station_index === d.station_index,
-          ),
-        );
-        const waypoint_route_indices = waypointArgs.map((w) => {
-          const j = routeRefsOrdered.findIndex(
-            (r) => r.section_id === w.section_id && r.station_index === w.station_index,
-          );
-          return j >= 0 ? j : null;
-        });
-        // Scooter + per-segment readouts (#317). Same standing caveat as the drop math above:
-        // a shape-correct stand-in for UI wiring, NOT the engine's rule. In particular the mock
-        // does NOT enforce the range cap on `reachable` / `turn_frontier` - the engine ANDs it
-        // into both masks, and the Rust unit tests are the source of truth for that. So an e2e
-        // here may assert that the readout rows render the numbers it was handed; it may NOT
-        // assert which stations grey out under a rig.
-        //
-        // With no rig (`dpv: null`, which is what both mock config blocks ship) every value
-        // below is inert, so the 31 existing gas specs - all calibrated against the fixed
-        // 1500 L budget and `|x| * 20` field - are untouched.
-        const segmentArgs = (args?.segments ?? []) as Array<{
-          speed_m_per_min?: number | null;
-          on_scooter?: boolean;
-        }>;
-        const rig = gasConfig.dpv ?? null;
-        const unitRange = (u?: { speed_m_per_min?: number; burn_minutes?: number }) =>
-          (u?.speed_m_per_min ?? 0) * (u?.burn_minutes ?? 0);
-        // Twin of `MAX_DPV_RANGE_RESERVE_FRACTION` (src-tauri/src/config/gas.rs) and its
-        // frontend mirror (`MAX_DPV_RANGE_RESERVE_FRACTION` in GasSettings.tsx) - both clamp
-        // the reserve fraction to [0, 0.9] before applying it.
-        const clampedReserveFraction = Math.min(
-          0.9,
-          Math.max(0, rig?.range_reserve_fraction ?? 0),
-        );
-        const scooter_range_limit_m = rig
-          ? Math.max(
-              0,
-              Math.min(unitRange(rig.primary), unitRange(rig.backup)) *
-                (1 - clampedReserveFraction),
-            )
-          : null;
-        // Which segment each route leg belongs to: way points split the route, so leg j sits in
-        // the segment named by how many way points the route has already passed at that point.
+        const reachableRefs = refs.filter((_r, k) => reachable[k]);
+        const target = reachableRefs[reachableRefs.length - 1] ?? null;
+        const route = reachableRefs
+          .slice(0, -1)
+          .map((from, i) => ({ from, to: reachableRefs[i + 1]!, is_jump: false }));
+        const legs = reachableRefs.length;
         const routeIndexOf = (r: { section_id: number; station_index: number }) =>
-          routeRefsOrdered.findIndex(
+          reachableRefs.findIndex(
             (x) => x.section_id === r.section_id && x.station_index === r.station_index,
           );
-        const waypointRouteIdx = waypointArgs.map(routeIndexOf).filter((i) => i >= 0);
-        const segmentAtLeg = (legIdx: number) =>
-          waypointRouteIdx.filter((wi) => wi <= legIdx).length;
-        // Twin of `MIN_SEGMENT_SPEED_M_PER_MIN`/`MAX_SEGMENT_SPEED_M_PER_MIN` in gas/scooter.rs
-        // ([0.1, 1000] m/min) - the engine falls back to the plan speed outside this range
-        // rather than accepting whatever was stored, and the mock must refuse the same values
-        // or an e2e asserting an out-of-range speed's effect could pass against the mock while
-        // diverging from the backend.
-        const isSegmentSpeedInRange = (v: number | null | undefined): v is number =>
-          typeof v === 'number' && v >= 0.1 && v <= 1000;
-        let scooter_distance_m = 0;
-        let route_runtime_min: number | null = null;
-        if (routePts.length > 1) {
-          let minutes = 0;
-          for (let i = 1; i < routePts.length; i += 1) {
-            const a = routePts[i - 1];
-            const b = routePts[i];
-            const seg = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
-            const s = segmentArgs[segmentAtLeg(i - 1)];
-            // A span with no speed of its own is flown at the PLAN's speed, not a hardcoded
-            // one - mirroring `resolve_segments` (gas/scooter.rs). Getting this wrong is how
-            // the real engine once stopped honouring the configured swim speed entirely.
-            const speed = isSegmentSpeedInRange(s?.speed_m_per_min) ? s.speed_m_per_min : inSpeed;
-            minutes += seg / speed;
-            if (rig && s?.on_scooter) scooter_distance_m += seg;
-          }
-          route_runtime_min = minutes;
-        }
-        // The park point is DERIVED, never placed: the boundary after the last scootered
-        // segment. Null when nothing is scootered, and when the units are carried all the way
-        // to the turnaround (the last segment is scootered, so its boundary is the turn).
-        let scooter_drop_ref: { section_id: number; station_index: number } | null = null;
-        if (rig) {
-          let lastOn = -1;
-          for (let i = 0; i < segmentArgs.length; i += 1) {
-            if (segmentArgs[i]?.on_scooter) lastOn = i;
-          }
-          if (lastOn >= 0 && lastOn + 1 < segmentArgs.length) {
-            scooter_drop_ref = waypointArgs[lastOn] ?? null;
-          }
-        }
-        // NOT `scooter_distance_m > scooter_range_limit_m` - that is verbatim the naive
-        // per-route comparison `GasReachField::turn_on_scooter_range`'s own doc
-        // (models/project/gas/model.rs) says the UI must not re-derive: the route already
-        // stops at whichever cap bound first, so the two read as merely equal in exactly
-        // the case being asked about. No spec asserts this value; hardcoded false rather
-        // than guess at the real (cave-scoped) rule.
-        const turn_on_scooter_range = false;
-        return {
-          station_refs: stations.map((s) => s.station_ref),
+        const waypointArgs = (args?.waypoints ?? []) as Array<{ section_id: number; station_index: number }>;
+        const outbound = reachableRefs.map((station_ref, i) => ({
+          route_index: i,
+          station_ref,
+          distance_m: 10 * i,
+          depth_m: 0,
+          gas_l: 200 * i,
+          elapsed_min: i,
+          outbound: true,
+        }));
+        const back = outbound
+          .slice(0, -1)
+          .reverse()
+          .map((point, j) => ({
+            ...point,
+            distance_m: 10 * (legs - 1) + 10 * (j + 1),
+            gas_l: 200 * (legs - 1) + 100 * (j + 1),
+            elapsed_min: legs - 1 + (j + 1),
+            outbound: false,
+          }));
+        const field = {
+          station_refs: refs,
           gas_to_reach,
           reachable,
-          turn_frontier,
-          max_reachable_gas,
+          turn_frontier: target ? [target] : [],
+          max_reachable_gas: legs > 0 ? 200 * (legs - 1) : 0,
           budget_litres,
           route,
-          stage_drop_refs,
-          final_turn_ref,
-          turn_toward_endpoint,
-          backgas_turn_bar,
-          stage_drop_bars,
-          stage_drop_over_reserve,
-          stage_drop_distances_m,
-          cylinder_usable_bars,
-          route_line_length_m,
-          route_max_depth_m,
-          route_avg_depth_m,
-          waypoint_gas_litres,
-          route_profile,
-          stage_drop_route_indices,
-          waypoint_route_indices,
-          scooter_distance_m,
-          scooter_range_limit_m,
-          scooter_drop_ref,
-          route_runtime_min,
-          turn_on_scooter_range,
+          stage_drop_refs: [],
+          final_turn_ref: target,
+          turn_toward_endpoint: false,
+          backgas_turn_bar: 140,
+          stage_drop_bars: [],
+          stage_drop_over_reserve: [],
+          stage_drop_distances_m: [],
+          cylinder_usable_bars: ((args?.cylinders ?? []) as unknown[]).map(() => 0),
+          route_line_length_m: target ? 10 * (legs - 1) : 0,
+          route_max_depth_m: target ? 0 : null,
+          route_avg_depth_m: target ? 0 : null,
+          waypoint_gas_litres: waypointArgs.map((w) => {
+            const k = refs.findIndex((r) => r.section_id === w.section_id && r.station_index === w.station_index);
+            return k >= 0 ? gas_to_reach[k]! : null;
+          }),
+          route_profile: [...outbound, ...back],
+          stage_drop_route_indices: [],
+          waypoint_route_indices: waypointArgs.map((w) => {
+            const j = routeIndexOf(w);
+            return j >= 0 ? j : null;
+          }),
+          scooter_distance_m: 0,
+          scooter_range_limit_m: null,
+          scooter_drop_ref: null,
+          route_runtime_min: target ? legs - 1 : null,
+          turn_on_scooter_range: false,
         } satisfies MockReply<'compute_gas_reach_field'>;
+        return { ...field, ...gasFieldPatch } satisfies MockReply<'compute_gas_reach_field'>;
       }
 
       default:
