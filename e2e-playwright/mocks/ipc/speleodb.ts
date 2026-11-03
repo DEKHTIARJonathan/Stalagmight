@@ -8,7 +8,7 @@ import type { MockCommandFamily, MockReply } from './types';
  * may use only `ctx` and browser globals - never an import (type-only imports are erased).
  */
 export const speleodbCommands: MockCommandFamily = (ctx) => {
-  return (cmd, args) => {
+  return (cmd, _args) => {
     switch (cmd) {
       // SpeleoDB (#203/#204/#205): deterministic logged-out / local defaults so
       // the settings tab + browser render without a live server. No e2e spec

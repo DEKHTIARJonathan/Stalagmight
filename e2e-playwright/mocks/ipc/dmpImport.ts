@@ -8,7 +8,7 @@ import type { MockCommandFamily, MockReply } from './types';
  * may use only `ctx` and browser globals - never an import (type-only imports are erased).
  */
 export const dmpImportCommands: MockCommandFamily = (ctx) => {
-  return (cmd, args) => {
+  return (cmd, _args) => {
     switch (cmd) {
       case 'import_dmp': {
         return {

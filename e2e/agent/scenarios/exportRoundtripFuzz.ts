@@ -440,7 +440,6 @@ import { TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
 import { fuzzFixture } from '../lib/fuzzKnobs';
 import { MoveLog, openReplay, RERUN_WITH, writeRunTrace } from '../lib/fuzzHarness';
 import {
-  canonicalizeUuids,
   checkByteIdentity,
   checkConvergence,
   checkExportModeInvariants,
@@ -465,7 +464,6 @@ import {
   type ExportAttempt,
   type ExportFormat,
   type ExportRoute,
-  type ModeSnapshot,
   type OptionSnapshot,
   type PathShape,
   type ShotIdentity,

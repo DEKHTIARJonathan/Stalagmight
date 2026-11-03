@@ -404,7 +404,6 @@ import {
   ImportOracleError,
   leftoverTempNames,
   captureReceipt,
-  receiptClaimFrom,
   s4WorkStarted,
   type CountedProject,
   type FileHandoff,

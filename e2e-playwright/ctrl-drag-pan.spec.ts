@@ -385,8 +385,6 @@ test.describe('Ctrl+Drag Panning', () => {
       await page.keyboard.press('s');
       await waitForActiveTool(page, 'select');
 
-      const canvas = page.getByTestId('map-canvas');
-
       // Hold Ctrl
       await page.keyboard.down('Control');
       await page.waitForFunction(() => {

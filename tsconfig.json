@@ -5,10 +5,6 @@
     // The strictness flags below are app-only until the e2e programs reach
     // parity (#576 E11); each moves to tsconfig.base.json with its e2e fixes.
     "target": "ES2020",
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "exactOptionalPropertyTypes": true,
     "allowImportingTsExtensions": true,

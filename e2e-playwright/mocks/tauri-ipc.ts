@@ -3195,12 +3195,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       invoke: async (cmd: string, args?: Record<string, unknown>) => {
         return mockHandler(cmd, args);
       },
-      transformCallback: (callback: () => void, once?: boolean) => {
+      transformCallback: (callback: () => void, _once?: boolean) => {
         const id = Math.random().toString(36).substring(7);
         (window as unknown as Record<string, unknown>)[`_${id}`] = callback;
         return id;
       },
-      convertFileSrc: (filePath: string, protocol?: string) => {
+      convertFileSrc: (filePath: string, _protocol?: string) => {
         return `asset://localhost/${filePath}`;
       },
       // sep()/delimiter() in @tauri-apps/api/path read these synchronously.

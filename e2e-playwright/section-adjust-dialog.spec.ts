@@ -1,4 +1,4 @@
-import { test, expect, Page } from './fixtures/coverage';
+import { test, expect } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,

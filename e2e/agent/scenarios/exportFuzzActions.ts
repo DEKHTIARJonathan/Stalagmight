@@ -35,7 +35,6 @@ import type { ScenarioContext } from './framework';
 import {
   DATA_FORMATS,
   IMAGE_FORMATS,
-  naturalExtension,
   PATH_SHAPES,
   type ExportFormat,
   type ExportRoute,

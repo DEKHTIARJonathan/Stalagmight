@@ -56,7 +56,7 @@ import {
   type SurveyFormatFamily,
 } from '../lib/surveyFileSpecs';
 import { corruptSpec } from '../lib/surveyFileCorrupt';
-import { corpusFileId, discoverCorpus, type CorpusEntry } from '../lib/fixtureCorpus';
+import { corpusFileId, type CorpusEntry } from '../lib/fixtureCorpus';
 import { OVERLAP_MODES, VIRTUAL_SHOT_MODES, type ScreenId } from './importDialogModel';
 
 // ---------------------------------------------------------------------------

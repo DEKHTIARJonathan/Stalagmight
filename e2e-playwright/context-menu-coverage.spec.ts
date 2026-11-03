@@ -243,7 +243,7 @@ async function openContextMenu(page: Page, target: Record<string, unknown>) {
 
 test.describe('Context Menu Coverage', () => {
   test('shot menu sets the shot kind and routes delete dialogs', async ({ page }) => {
-    const { sectionId, shotIds, sectionName } = await setupProjectWithShots(page, 3);
+    const { sectionId, shotIds } = await setupProjectWithShots(page, 3);
 
     const [firstShotId, midShotId] = shotIds;
 
@@ -300,7 +300,7 @@ test.describe('Context Menu Coverage', () => {
   });
 
   test('station menu exposes add-shot options and merge tool', async ({ page }) => {
-    const { sectionId, stationRefs } = await setupProjectWithShots(page, 3);
+    const { stationRefs } = await setupProjectWithShots(page, 3);
     const firstStation = stationRefs[0];
     const lastStation = stationRefs[stationRefs.length - 1];
 

@@ -217,7 +217,7 @@ test.describe('Satellite Display', () => {
       await waitForMapLayer(page, 'satellite-tiles');
 
       // Check source attribution using polling
-      const attribution = await expect.poll(async () => {
+      await expect.poll(async () => {
         return await page.evaluate(() => {
           const map = (window as unknown as { __stalagmight_map__?: { getSource: (id: string) => { attribution?: string } | null } }).__stalagmight_map__;
           if (!map) return null;
