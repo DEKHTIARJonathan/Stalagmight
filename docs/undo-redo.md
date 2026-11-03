@@ -850,7 +850,12 @@ likewise only ever bumped while holding `project`; see the module doc in
   carries the code `HISTORY_STEP_FAILED` with `history_step` (step N of M, a
   single step reporting 1 of 1) and the `reversed_sections` that landed (#576 C4);
   the frontend marks the project dirty on that code, and takes the SpeleoDB bits
-  from the answer's `remote_link` (#576 D22) instead of mirroring them
+  from the answer's `remote_link` (#576 D22) instead of mirroring them. A single
+  undo or redo whose body crashed (`INTERNAL_ERROR`) is treated as having changed
+  the project too - the step may have half-run - and also marks it dirty (#576 C4);
+  a crashed jump (`undo_to` / `redo_to`) reports no failed step and keeps the
+  jump's rule. A crashed mutation still carries the link bits as the crash left
+  them (#576 RV7a-2): a single undo stamps the link before its geometry reconcile.
 - **Click button while open**: performs single undo/redo, refreshes the list, stays open
 - **Keyboard**: Arrow keys navigate, Enter selects, Escape closes
 - Actions are queued and processed sequentially (`actionQueueRef`)
