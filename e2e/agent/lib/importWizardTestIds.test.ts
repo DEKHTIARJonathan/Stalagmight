@@ -27,7 +27,7 @@ function renderedTestIds(): Set<string> {
       if (entry.isDirectory()) {
         if (entry.name !== '__tests__') walk(full);
       } else if (entry.name.endsWith('.tsx') && !entry.name.includes('.test.')) {
-        for (const m of fs.readFileSync(full, 'utf8').matchAll(/data-testid=["']([\w-]+)["']/g)) ids.add(m[1]);
+        for (const m of fs.readFileSync(full, 'utf8').matchAll(/data-testid=["']([\w-]+)["']/g)) ids.add(m[1]!); // group 1 always matches
       }
     }
   };
@@ -40,7 +40,7 @@ describe('import fuzzer wizard lookups (#576 NF-W8D4-1)', () => {
 
   it.each(LOOKUP_FILES)('%s looks up only wizard test ids the wizard renders', (file) => {
     const source = fs.readFileSync(path.join(repo, file), 'utf8');
-    const looked = [...source.matchAll(/['"`](wizard-[\w-]+)['"`]/g)].map((m) => m[1]);
+    const looked = [...source.matchAll(/['"`](wizard-[\w-]+)['"`]/g)].map((m) => m[1]!); // group 1 always matches
     expect(looked.length, `no wizard-* lookups read from ${file}: the pattern no longer matches`).toBeGreaterThan(0);
     expect([...new Set(looked)].filter((id) => !rendered.has(id))).toEqual([]);
   });

@@ -131,17 +131,17 @@ describe('distance gradient: a field that cannot be computed (#576 C7-MSG)', () 
     const { result, rerender } = renderHook((props: Options) => useAnalyticalOverlays(props), {
       initialProps: options('t1', setDistanceField),
     });
-    await flush();
+    await actMicrotasks(5);
     expect(result.current.distanceFieldFailed).toBe(true);
 
     rerender(options('t1', setDistanceField, false));
-    await flush();
+    await actMicrotasks(5);
     expect(result.current.distanceFieldFailed).toBe(false);
 
     // Re-enabled: the recompute is still in flight, and nothing has failed yet.
     invokeIpcMock.mockReturnValueOnce(new Promise(() => {}));
     rerender(options('t1', setDistanceField, true));
-    await flush();
+    await actMicrotasks(5);
     expect(invokeIpcMock).toHaveBeenCalledTimes(2);
     expect(result.current.distanceFieldFailed).toBe(false);
   });
