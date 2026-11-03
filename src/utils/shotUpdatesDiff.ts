@@ -21,6 +21,11 @@ type ShotFields = { readonly [K in keyof ShotUpdates]?: ShotUpdates[K] };
  * - `f32` ([#576 NF-W7F-1]): the same once rounded to f32, the precision the store
  *   holds. For values the user TYPED into an editor seeded with the store's value:
  *   1.20 typed over a stored 1.2 is the reading the user already had, not an edit.
+ *   By design a typed value that differs only beyond f32 precision (about the
+ *   8th significant digit: 12.3000001 over 12.3) is unchanged too: the store
+ *   cannot show that difference, so the editors cannot express it, and survey
+ *   readings never carry it ([#576 RV8b-2]). A difference at the 7th significant
+ *   digit (12.30001) is an edit.
  */
 export type ShotFieldCompare = 'exact' | 'f32';
 

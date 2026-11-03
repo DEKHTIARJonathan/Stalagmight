@@ -128,6 +128,25 @@ describe('Edit Shot shows each reading as entered (#576 NF-W7F-1)', () => {
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
     expect(updateShot.mock.calls[0]![2]).toEqual({ length: 1.25 });
   });
+
+  // [#576 RV8b-2] By design (shotUpdatesDiff.ts, the `f32` compare): the store holds
+  // f32, so a value that differs from it only beyond f32 precision is the same
+  // reading, and is not sent; a difference at the 7th significant digit is.
+  it('a value that differs only beyond f32 precision is not a change', async () => {
+    render(<EditShotDialog />);
+    fireEvent.change(screen.getByTestId('edit-shot-depth-in-input'), { target: { value: '10.1000001' } });
+    fireEvent.click(screen.getByTestId('edit-shot-save'));
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    expect(updateShot).not.toHaveBeenCalled();
+  });
+
+  it('a value that differs at the 7th significant digit is', async () => {
+    render(<EditShotDialog />);
+    fireEvent.change(screen.getByTestId('edit-shot-depth-in-input'), { target: { value: '10.10001' } });
+    fireEvent.click(screen.getByTestId('edit-shot-save'));
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    expect(updateShot.mock.calls[0]![2]).toEqual({ depth_in: 10.10001 });
+  });
 });
 
 describe('Edit Section (#576 NF-W7F-1)', () => {
