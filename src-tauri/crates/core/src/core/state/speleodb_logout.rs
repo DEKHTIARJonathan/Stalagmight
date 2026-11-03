@@ -311,8 +311,8 @@ impl AppState {
         // Nothing inside takes this guard again: the gate half no longer does,
         // and the release path (`speleodb_release_held_lock_best_effort`) posts
         // directly and touches only the session record.
-        let _lock_ops = self.speleodb_lock_ops_guard();
-        self.speleodb_logout_drop_gates();
+        let lock_ops = self.speleodb_lock_ops_guard();
+        self.speleodb_logout_drop_gates(&lock_ops);
 
         // Drop the session AND the persisted rehydrate seed FIRST, then report. The
         // ordering is load-bearing: an early return on the credential failure would
@@ -326,7 +326,7 @@ impl AppState {
         // operation, so a half-written session is exactly what it wants to clear -
         // the same reasoning as the config mutex above and the save pipeline's
         // project lock.
-        let cleared = self.speleodb.lock().forget_reporting();
+        let cleared = self.speleodb_forget_session_in_span(&lock_ops);
         // ONE save for both halves. Whether the sweep reported a failure or not, this
         // session no longer has a keychain entry it can claim, and recording no belief
         // is the safe direction: a surviving entry costs a sign-in, never a silent
@@ -335,6 +335,16 @@ impl AppState {
         // standing over an empty seed - or, worse, over the NEXT account's email.
         let seed_cleared = self.speleodb_write_account_record(None, None);
         logout_residue_error(cleared.err().map(|e| e.to_string()), seed_cleared.err())
+    }
+
+    /// [#576 A8] Drop the session (token, keychain entry, plaintext) - inside the
+    /// lock-ops span, which is what the borrow of `_lock_ops` enforces: a forget after
+    /// the span closed would let a Start Editing read the not-yet-forgotten token.
+    fn speleodb_forget_session_in_span(
+        &self,
+        _lock_ops: &super::speleodb_session::LockOpsHeld<'_>,
+    ) -> Result<(), crate::speleodb::auth::SecretStoreError> {
+        self.speleodb.lock().forget_reporting()
     }
 
     /// The gate half of [`Self::speleodb_logout`]: surrender the write lock if one is
@@ -352,7 +362,7 @@ impl AppState {
     /// commit. The guard lives in [`Self::speleodb_logout`] rather than here
     /// because the span has to outlast this function: see there for what a
     /// gate-half-only span left open.
-    fn speleodb_logout_drop_gates(&self) {
+    fn speleodb_logout_drop_gates(&self, _lock_ops: &super::speleodb_session::LockOpsHeld<'_>) {
         // A session boundary even though the project slot never moves (footgun
         // 5.8): the token an in-flight Start Editing would commit a claim over is
         // being forgotten, so the commit guard must see this. Bumped under a brief

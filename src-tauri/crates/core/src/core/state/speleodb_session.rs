@@ -197,6 +197,16 @@ impl LockClaim {
     }
 }
 
+/// [#576 A8] Proof that the holder owns `speleodb_lock_ops`, the span every SpeleoDB
+/// lock operation serializes on (the acquire -> commit of Start Editing, the captured
+/// and detached releases, logout, the adoption's acquire and verdict). A step that
+/// must run INSIDE that span takes one, so it cannot be called before the span opens
+/// or after it closes: the lock order is the type's, not a source scan's. Made only
+/// by [`AppState::speleodb_lock_ops_guard`].
+pub(super) struct LockOpsHeld<'a> {
+    _guard: std::sync::MutexGuard<'a, ()>,
+}
+
 impl AppState {
     /// Record a session boundary. Call ONLY while holding the `project` mutex
     /// (rule 1 above); every call site takes a `_proj_guard`-shaped local or
@@ -427,6 +437,7 @@ impl AppState {
     /// self-deadlock.
     pub(super) fn speleodb_unwind_release(
         &self,
+        lock_ops: &LockOpsHeld<'_>,
         endpoint: &str,
         token: &str,
         insecure_http: bool,
@@ -443,7 +454,7 @@ impl AppState {
             insecure_http,
             project_id: project_id.to_owned(),
         };
-        if let Err(e) = self.speleodb_release_unless_reclaimed_locked(&params) {
+        if let Err(e) = self.speleodb_release_unless_reclaimed_locked(lock_ops, &params) {
             tracing::warn!(
                 error = %e,
                 project_id,
@@ -467,8 +478,8 @@ impl AppState {
         &self,
         params: &LockReleaseParams,
     ) -> Result<(), SpeleoDbError> {
-        let _lock_ops = self.speleodb_lock_ops.lock();
-        self.speleodb_release_unless_reclaimed_locked(params)
+        let lock_ops = self.speleodb_lock_ops_guard();
+        self.speleodb_release_unless_reclaimed_locked(&lock_ops, params)
     }
 
     /// The status poll's inherited-lock gate reopen: enable editing on the open
@@ -675,6 +686,7 @@ impl AppState {
     /// the delete may already have destroyed.
     pub(super) fn speleodb_release_unless_reclaimed_locked(
         &self,
+        _lock_ops: &LockOpsHeld<'_>,
         params: &LockReleaseParams,
     ) -> Result<(), SpeleoDbError> {
         if self.speleodb_claim_on_deployment(&params.endpoint, &params.project_id)
@@ -725,14 +737,14 @@ impl AppState {
         entry_gen: u64,
         claim: Option<LockClaim>,
     ) -> Result<(), SpeleoDbError> {
-        let _lock_ops = self.speleodb_lock_ops_guard();
+        let lock_ops = self.speleodb_lock_ops_guard();
         {
             let _proj_guard = self.project.lock();
             if self.speleodb_session_generation() == entry_gen {
                 self.set_edit_enabled(false);
             }
         }
-        let outcome = self.speleodb_release_unless_reclaimed_locked(params);
+        let outcome = self.speleodb_release_unless_reclaimed_locked(&lock_ops, params);
         if outcome.is_err() {
             // The mutex is still held and now has no local pointer: put the
             // claim back so the no-project janitor can retry it, exactly as the
@@ -791,8 +803,10 @@ impl AppState {
     /// The guard Start Editing holds across acquire -> commit (see the module
     /// doc). A poisoned mutex is recovered: the guarded value is `()`, so there
     /// is no state to protect - only the serialization matters.
-    pub(super) fn speleodb_lock_ops_guard(&self) -> std::sync::MutexGuard<'_, ()> {
-        self.speleodb_lock_ops.lock()
+    pub(super) fn speleodb_lock_ops_guard(&self) -> LockOpsHeld<'_> {
+        LockOpsHeld {
+            _guard: self.speleodb_lock_ops.lock(),
+        }
     }
 
     /// The stranded-claim janitor: with NO project open, a surviving
@@ -909,8 +923,8 @@ impl AppState {
         // One lock-ops span over release AND restore: a Start Editing cannot
         // mint or inherit between a failed POST and the record going back, so
         // the restore can never overwrite a successor's claim.
-        let _lock_ops = self.speleodb_lock_ops_guard();
-        if let Err(e) = self.speleodb_release_unless_reclaimed_locked(&params) {
+        let lock_ops = self.speleodb_lock_ops_guard();
+        if let Err(e) = self.speleodb_release_unless_reclaimed_locked(&lock_ops, &params) {
             tracing::warn!(
                 error = %e,
                 project_id = %params.project_id,
@@ -1231,7 +1245,14 @@ mod tests {
         state.speleodb_note_lock_acquired(Some(ID));
 
         // The POST fails fast (nothing listens); best-effort is the contract.
-        state.speleodb_unwind_release("http://127.0.0.1:1/", "token", true, ID, entry_gen);
+        state.speleodb_unwind_release(
+            &state.speleodb_lock_ops_guard(),
+            "http://127.0.0.1:1/",
+            "token",
+            true,
+            ID,
+            entry_gen,
+        );
 
         assert!(
             !state.speleodb_lock_acquired_here(ID),
@@ -1252,7 +1273,14 @@ mod tests {
         // The successor's claim, minted by ITS Start Editing.
         state.speleodb_note_lock_acquired(Some(ID));
 
-        state.speleodb_unwind_release("http://127.0.0.1:1/", "token", true, ID, entry_gen);
+        state.speleodb_unwind_release(
+            &state.speleodb_lock_ops_guard(),
+            "http://127.0.0.1:1/",
+            "token",
+            true,
+            ID,
+            entry_gen,
+        );
 
         assert!(
             state.speleodb_lock_acquired_here(ID),
@@ -2019,71 +2047,44 @@ mod tests {
             .expect("the deferred-release span is present");
         let span = &own[start..];
         let span = &span[..span.find("\n    }\n").expect("fn body terminates")];
-        let guard = span
-            .find("self.speleodb_lock_ops_guard()")
-            .expect("the span is serialized");
+        // [#576 A8] guard -> decision is the type's job now (the reclaim-checked
+        // release takes the span's `LockOpsHeld` proof); gate -> decision is not yet.
         let gate = span
             .find("self.set_edit_enabled(false)")
             .expect("the span shuts the gate");
         let decide = span
-            .find("self.speleodb_release_unless_reclaimed_locked(params)")
+            .find("self.speleodb_release_unless_reclaimed_locked(")
             .expect("the span runs the reclaim-checked release");
         assert!(
-            guard < gate && gate < decide,
-            "order must be: guard, then the gate, then the decision - the poll \
-             must have no moment between the shut gate and the verdict"
+            gate < decide,
+            "order must be: the gate, then the decision - the poll must have no moment \
+             between the shut gate and the verdict"
         );
     }
 
+    /// The fast-forward arm commits on identity alone, and identity cannot see a logout
+    /// (the project slot never moves). What keeps that sound is the lock-ops span:
+    /// logout is a lock operation like the acquire and the captured releases, so it
+    /// cannot run inside a Start Editing span (round 6).
+    ///
+    /// [#576 A8] guard -> gates -> credential forget, with the guard still held at the
+    /// forget, is the type's job now: both halves take the span's `LockOpsHeld` proof,
+    /// so a gate drop or a forget outside the span does not compile. What stays a
+    /// sanctioned source scan (docs/testing-recipes.md, "Source scans") is the gate
+    /// half's site rules, which no type states.
     #[test]
-    fn logout_takes_the_lock_ops_guard_before_it_ends_the_session() {
-        // The fast-forward arm commits on identity alone, and identity cannot see
-        // a logout (the project slot never moves). What keeps that sound is this
-        // guard: logout is a lock operation like the acquire and the captured
-        // releases, so it cannot run inside a Start Editing span. Drop it here and
-        // the identity-only commit silently goes back to reopening the edit gate
-        // for a signed-out session (round 6).
+    fn the_logout_gate_half_inherits_its_callers_span() {
+        use crate::models::source_scan::fn_body;
         let src = state_source("speleodb_logout.rs");
-        // Production region only, like every other scan in this family - and here
-        // it also keeps the search off the test-only wrapper whose name starts
-        // with the same words.
-        let start = src
-            .find("fn speleodb_logout(")
-            .expect("the logout verb is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-
-        let guard = body
-            .find("self.speleodb_lock_ops_guard()")
-            .expect("logout must serialize with every other SpeleoDB lock operation");
-        let gates = body
-            .find("self.speleodb_logout_drop_gates()")
-            .expect("logout drops the gates and releases the lock");
-        let forget = body
-            .find(".forget_reporting()")
-            .expect("logout forgets the credential");
-        assert!(
-            guard < gates && gates < forget,
-            "the guard has to be taken BEFORE the gates drop and still be held \
-             when the credential goes. Round 6 scoped it to the gate half alone, \
-             which left a Start Editing free to take it the instant that half \
-             returned, read the not-yet-forgotten token, and commit an edit \
-             session for an account this call was in the middle of deleting"
-        );
-        // The gate half must NOT re-take it: the span belongs to the whole verb.
-        let gate_half = src
-            .find("fn speleodb_logout_drop_gates")
-            .expect("the gate-drop half is present");
-        let gate_body = &src[gate_half..];
-        let gate_body = &gate_body[..gate_body.find("\n    }\n").expect("fn body terminates")];
+        let gate_body = fn_body(&src, "fn speleodb_logout_drop_gates(");
         assert!(
             !gate_body.contains("self.speleodb_lock_ops_guard()"),
-            "the gate half must inherit its caller's span, not open a narrower \
-             one of its own (the mutex is not reentrant either)"
+            "RULE (lock-ops is not reentrant): the gate half must inherit its caller's \
+             span, not open a narrower one of its own"
         );
         assert!(
             gate_body.contains("self.bump_speleodb_session()"),
-            "logout is still a session boundary"
+            "RULE (logout is a session boundary): the gate half bumps the session"
         );
     }
 

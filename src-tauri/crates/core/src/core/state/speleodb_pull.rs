@@ -1067,7 +1067,7 @@ impl AppState {
         // and a span held across it would block logout - and every other lock operation
         // - for as long as an import takes.
         let (endpoint, token, insecure_http, my_email, concurrent_session, lock) = {
-            let _lock_ops = self.speleodb_lock_ops_guard();
+            let lock_ops = self.speleodb_lock_ops_guard();
             let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
             let insecure_http = self.speleodb_insecure_http();
 
@@ -1120,7 +1120,14 @@ impl AppState {
             // READ_ONLY member and an offline machine both converted their project before
             // this flow existed, and both still do - the copy simply stays local, stamped
             // with un-pushed edits, which is exactly what it is.
-            let lock = self.adopt_take_lock(&endpoint, &token, insecure_http, &project_id, holder);
+            let lock = self.adopt_take_lock(
+                &lock_ops,
+                &endpoint,
+                &token,
+                insecure_http,
+                &project_id,
+                holder,
+            );
             (
                 endpoint,
                 token,
@@ -1420,7 +1427,7 @@ impl AppState {
         // across - not across the download and import, which is why the acquire span
         // further up closes before them.
         let (finalized, upload) = {
-            let _lock_ops = self.speleodb_lock_ops_guard();
+            let lock_ops = self.speleodb_lock_ops_guard();
 
             // Make sure the server project ends up typed `other`, and report whether it
             // did. Only after a landed push, which is the precondition either way:
@@ -1480,8 +1487,12 @@ impl AppState {
                     // go on standing a later release down over a mutex the server has
                     // told us is not ours.
                     if let Some(email) = my_email.as_deref() {
-                        let _ =
-                            self.speleodb_forget_lock_acquired_as(&project_id, &endpoint, email);
+                        let _ = self.speleodb_forget_lock_acquired_as(
+                            &lock_ops,
+                            &project_id,
+                            &endpoint,
+                            email,
+                        );
                     }
                     AdoptUpload::Pushed
                 }
@@ -1549,6 +1560,7 @@ impl AppState {
     /// acquire.
     fn adopt_take_lock(
         &self,
+        _lock_ops: &super::speleodb_session::LockOpsHeld<'_>,
         endpoint: &str,
         token: &str,
         insecure_http: bool,
@@ -3507,10 +3519,13 @@ mod tests {
     /// with the token it captured beforehand - a server mutex held by a session that no
     /// longer exists, with no local claim naming it, freed only by the server timeout.
     ///
-    /// Structural, because reproducing it needs a logout to interleave with an in-flight
-    /// HTTP request. What it pins is that the span exists and covers BOTH steps - and
-    /// that it does not swallow the conversion, which would block logout for as long as
-    /// an import takes.
+    /// [#576 A8] That the ACQUIRE (and the claim it mints) runs inside the span, with
+    /// the span still held there, is the type's job now: `adopt_take_lock` takes the
+    /// span's `LockOpsHeld` proof, so an acquire outside it - or an early `drop` of the
+    /// guard - does not compile. What is left here is not converted yet: that the
+    /// account read and the holder probe sit inside the span too, and that the span
+    /// closes before the download (it must not swallow the conversion, which would
+    /// block logout for as long as an import takes).
     #[test]
     fn the_adopt_acquire_and_its_claim_share_the_lock_ops_span() {
         let body = adopt_body();
@@ -3535,13 +3550,10 @@ mod tests {
         // want of an account to stamp it with. The sibling path states the rule - the
         // guard comes first, before the account is read.
         assert!(
-            span < token && span < probe && span < acquire,
+            span < token && span < probe,
             "the span must cover the account read and the probe, not only the acquire"
         );
 
-        // SCOPE, not just order: the block has to still be open at the acquire. Closing
-        // it early would satisfy every inequality above while re-opening the exact
-        // window the span exists to shut.
         let closes = body[acquire..]
             .find("\n        };")
             .map(|at| acquire + at)
@@ -3550,17 +3562,9 @@ mod tests {
             .find("client::get_revisions(")
             .expect("the head resolve follows it");
         assert!(
-            acquire < closes && closes < resolve,
-            "the span must still be open at the acquire and shut before the download - \
-             holding it across the import would block logout for the length of one"
-        );
-        // Held, not merely declared. An explicit `drop` inside the block satisfies every
-        // position check above while re-opening the window between the mutex becoming
-        // ours and the claim recording it.
-        assert!(
-            !body[span..closes].contains("drop(_lock_ops"),
-            "the span must not be released early: the acquire and the claim it mints are \
-             one act, and a drop between them is the teardown window reopened"
+            closes < resolve,
+            "the span must shut before the download - holding it across the import would \
+             block logout for the length of one"
         );
     }
 
@@ -3576,6 +3580,11 @@ mod tests {
     ///
     /// Structural for the same reason as the acquire span: reproducing it needs a second
     /// edit session to interleave with an in-flight HTTP request.
+    ///
+    /// [#576 A8] The CLEAR's half is the type's job now: `speleodb_forget_lock_acquired_as`
+    /// takes the span's `LockOpsHeld` proof, so a clear outside the block, or after an
+    /// early `drop` of the guard, does not compile. What is left: the holder read
+    /// (`adopt_finalize`) opens inside the same span - not converted yet.
     #[test]
     fn the_release_verdict_and_its_claim_clear_share_a_lock_ops_span() {
         let body = adopt_body();
@@ -3595,36 +3604,18 @@ mod tests {
         let finalize = body
             .find("self.adopt_finalize(")
             .expect("the holder and type are read");
-        let clear = body
-            .find("self.speleodb_forget_lock_acquired_as(")
-            .expect("the disproved claim is retired");
-
-        assert!(
-            span < finalize && finalize < clear,
-            "the span must open before the holder read and still cover the clear"
-        );
-
-        // SCOPE, not just order - the same distinction the acquire span's tripwire draws.
-        let closes = body[clear..]
-            .find("\n        };")
-            .map(|at| clear + at)
-            .expect("the span's block closes");
-        assert!(
-            clear < closes,
-            "the clear has to be INSIDE the block, or the span shuts between the read \
-             that disproved the claim and the act of retiring it"
-        );
-        assert!(
-            !body[span..closes].contains("drop(_lock_ops"),
-            "and it must not be released early: a drop between the holder read and the \
-             clear reopens the very window the span exists to shut"
-        );
+        assert!(span < finalize, "the span must open before the holder read");
     }
 
     /// The counterpart to the span above: the helper it calls must NOT take the guard
     /// itself. `std::sync::Mutex` is not reentrant, so a second acquisition inside the
     /// caller's span is not a redundancy - it is a self-deadlock on the first adoption
     /// anyone runs.
+    ///
+    /// A sanctioned source scan (#576 A8-D2, docs/testing-recipes.md "Source scans"):
+    /// "this function takes no guard of its own" is a site rule the type cannot state -
+    /// the helper is HANDED the span's proof, which proves the span is held, not that
+    /// nothing inside reaches for it again.
     #[test]
     fn the_acquire_helper_does_not_retake_the_span_its_caller_holds() {
         let src = prod_source();
@@ -3636,7 +3627,8 @@ mod tests {
 
         assert!(
             !body.contains("speleodb_lock_ops_guard()"),
-            "the caller holds the span across this call; retaking it self-deadlocks"
+            "RULE (lock-ops is not reentrant): the caller holds the span across this call; \
+             retaking it self-deadlocks"
         );
         assert!(
             body.contains("self.speleodb_note_lock_acquired("),

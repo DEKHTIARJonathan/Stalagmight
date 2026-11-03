@@ -1835,7 +1835,7 @@ impl AppState {
         // and committing on behalf of a signed-out session, which the fast-forward
         // arm's identity-only commit cannot see (the slot never moves). Held across
         // the network span on purpose - see `speleodb_session`.
-        let _lock_ops = self.speleodb_lock_ops_guard();
+        let lock_ops = self.speleodb_lock_ops_guard();
         // [#576 RV4-R-S1] An explicit Start editing is the way back in after a Done
         // that finished here: the status poll may resume the account's lock again.
         self.speleodb_clear_finished_here();
@@ -2022,6 +2022,7 @@ impl AppState {
             // a moved one never touches the record and stands down for a
             // successor's claim. See `speleodb_unwind_release`.
             self.speleodb_unwind_release(
+                &lock_ops,
                 &endpoint,
                 &token,
                 insecure_http,

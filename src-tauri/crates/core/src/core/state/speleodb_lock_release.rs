@@ -385,6 +385,7 @@ impl AppState {
     /// delete release down, leaving a mutex held that nothing will now free.
     pub(super) fn speleodb_forget_lock_acquired_as(
         &self,
+        _lock_ops: &super::speleodb_session::LockOpsHeld<'_>,
         project_id: &str,
         endpoint: &str,
         email: &str,
