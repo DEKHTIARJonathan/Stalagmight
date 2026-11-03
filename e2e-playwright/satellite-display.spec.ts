@@ -310,10 +310,10 @@ test.describe('Satellite Display', () => {
   });
 
   /**
-   * Cache Status tests require navigating back to GlobalView and opening Settings.
-   * These tests are marked .fixme because the mock project always has sections and
-   * triggers the unsaved-changes dialog with timing issues. The cache functionality
-   * is tested in e2e-playwright/ui-components.spec.ts via Settings tests from GlobalView.
+   * Cache Status tests navigate back to GlobalView and open Settings. The way back
+   * waits for either the unsaved-changes prompt or GlobalView, so a clean and a
+   * dirty project both work. Settings from GlobalView is also covered in
+   * e2e-playwright/ui-components.spec.ts.
    */
   test.describe('Cache Status', () => {
     /**

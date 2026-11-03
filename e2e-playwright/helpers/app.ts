@@ -290,11 +290,15 @@ export async function closeProjectViaMenu(page: Page): Promise<void> {
   await page.getByTestId('back-button').click();
   // A dirty project blocks the close on an unsaved-changes dialog - discard to
   // proceed so the helper works whether or not there are unsaved edits.
+  // Wait for whichever comes first (isVisible does not wait: Playwright ignores
+  // its timeout option), then discard only if the prompt is what came up.
   const discard = page.locator('button:has-text("Discard")');
-  if (await discard.isVisible({ timeout: 1000 }).catch(() => false)) {
+  const globalView = page.getByTestId('global-view');
+  await expect(discard.or(globalView)).toBeVisible({ timeout: 8000 });
+  if (await discard.isVisible()) {
     await discard.click();
   }
-  await expect(page.getByTestId('global-view')).toBeVisible({ timeout: 8000 });
+  await expect(globalView).toBeVisible({ timeout: 8000 });
 }
 
 export async function openNewProjectDialog(page: Page): Promise<void> {
