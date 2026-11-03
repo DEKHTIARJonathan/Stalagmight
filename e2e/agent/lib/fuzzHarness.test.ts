@@ -129,13 +129,11 @@ describe('MoveLog', () => {
     note('#1 undo -> depth 0');
     startingMove('#2 redo');
 
-    expect(log.inFlight).toBe('#2 redo');
     expect(log.tail(5)).toEqual(['    #1 undo -> depth 0', '    #2 redo -> IN FLIGHT (had not returned)']);
     // The in-flight line is EXTRA: the limit counts history lines only.
     expect(log.tail(1)).toEqual(['    #1 undo -> depth 0', '    #2 redo -> IN FLIGHT (had not returned)']);
 
     finishedMove();
-    expect(log.inFlight).toBeNull();
     expect(log.tail(5)).toEqual(['    #1 undo -> depth 0']);
   });
 });

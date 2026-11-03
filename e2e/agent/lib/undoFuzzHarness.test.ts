@@ -280,7 +280,8 @@ describe('undoFuzzHarness.saveAndReload', () => {
       '#3 save -> ok (depth 2, undo 2, redo 1)',
       '#3 reload -> depth 2 (undo 2, redo 1)',
     ]);
-    expect(log.inFlight).toBeNull();
+    // [#576 RV7a-7] Read through the rendering the failure text uses: no move left armed.
+    expect(log.tail(log.history.length).some((line) => line.endsWith('-> IN FLIGHT (had not returned)'))).toBe(false);
     expect(page.metrics).toMatchObject({ saves: 1, reloads: 1 });
   });
 
@@ -306,7 +307,7 @@ describe('undoFuzzHarness.saveAndReload', () => {
     await expect(h.saveAndReload('#1', '/tmp/s.stalx')).rejects.toThrow(
       new Error('reopening the saved project failed\n  error: locked'),
     );
-    expect(log.inFlight).toBe('#1 close/reopen');
+    expect(log.tail(1).at(-1)).toBe('    #1 close/reopen -> IN FLIGHT (had not returned)');
   });
 });
 

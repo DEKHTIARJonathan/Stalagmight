@@ -161,6 +161,16 @@ export function checkSnapshot(
   // A shot list that differs field-by-field cannot say whether the same shots
   // moved or a DIFFERENT shot was removed. uuid survives a save/reload, so it
   // answers that - and the answer is the difference between drift and data loss.
+  //
+  // [#576 RV7a-5] Gated on a REPORTED shots path, for both undo fuzzers alike
+  // (this one check serves undoRedoFuzz and undoPersistenceFuzz). The persistence
+  // fuzzer's own copy used to print the delta whenever the uuid set changed; the
+  // gate is kept on purpose: when the walk was capped before any shots path, or
+  // every shots difference was attributed and subtracted, the delta would speak
+  // about differences this report neither shows nor stands behind. The run fails
+  // either way; the gate decides only what the text claims. Pinned by
+  // fuzzSnapshotCheck.test.ts ('gates the shot-identity report on a reported
+  // shots path').
   if (diffs.some((diff) => /^project\.sections\[\d+\]\.shots\b/.test(diff.path))) {
     const deltas = shotSetDelta(expected, actual);
     if (deltas.length > 0) {

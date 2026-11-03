@@ -576,7 +576,9 @@ so it can only ever touch a temp copy.
 
 `STALAGMIGHT_FUZZ_FIXTURE`, `_ALLOW_KNOWN_BUGS`, `_DUMP_HISTORY` and the
 `_TRACE` / `_REPLAY` pair (below) have one definition, `e2e/agent/lib/fuzzKnobs.ts`,
-shared by all four fuzz scenarios and read at call time. The per-run plumbing
+read at call time. The module is shared; not every knob is: all four fuzz
+scenarios read the fixture and the trace pair, only the two undo fuzzers read
+`_ALLOW_KNOWN_BUGS` and `_DUMP_HISTORY`. The per-run plumbing
 those scenarios used to copy from each other - the replay refusals, the move log
 with its in-flight move, the trace writer and the failure shape - is
 `lib/fuzzHarness.ts`; the undo-model half the two undo fuzzers share (the fused

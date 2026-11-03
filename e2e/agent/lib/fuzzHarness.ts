@@ -99,11 +99,6 @@ export class MoveLog {
     this.current = null;
   };
 
-  /** The armed move's label, or null between moves. */
-  get inFlight(): string | null {
-    return this.current;
-  }
-
   /**
    * The last `limit` lines (every line when `full`), indented for a failure
    * message, plus the armed move if one had not returned.

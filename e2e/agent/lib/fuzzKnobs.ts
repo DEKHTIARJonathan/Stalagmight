@@ -1,6 +1,7 @@
 /**
- * The environment knobs every fuzz scenario reads the same way: trace
- * replay/record, the fixture, and the two diagnostic switches.
+ * The environment knobs the fuzz scenarios share, each read the same way
+ * wherever it is read: trace replay/record and the fixture (all four fuzz
+ * scenarios), and the two diagnostic switches (the two undo fuzzers only).
  *
  * They used to be re-declared in `undoRedoFuzz.ts`, `undoPersistenceFuzz.ts`,
  * `exportRoundtripFuzz.ts` and `importDialogFuzz.ts`, each copy pointing at
