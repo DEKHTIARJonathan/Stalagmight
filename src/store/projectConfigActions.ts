@@ -30,7 +30,9 @@ export interface ProjectConfigActions {
    * data-table and grid-view layouts - re-reads through here, so its answer cannot
    * land after a later save's re-read and show the store a config without it.
    * [#576 NF-W8FE-4] So does every other re-read: the startup load, the gas writer,
-   * the SpeleoDB credential verbs and the recent-projects edits. Only a save's own
+   * the SpeleoDB credential verbs and the recent-projects edits; Settings > Advanced
+   * "Reload from disk" runs its own `reload_config` read in the same chain
+   * (#576 RV9b-3). Only a save's own
    * re-read, already inside the chain, calls `loadConfig` directly (calling this
    * there would wait on itself).
    */

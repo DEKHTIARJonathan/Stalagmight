@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invokeIpc } from '../../../utils/ipc';
+import { chainSettingWrite, SETTING_KEYS } from '../../../utils/settingWriteChain';
 import { Toggle } from '../../common/Toggle';
 import { Select } from '../../common/Select';
 import { Button } from '../../common/Button';
@@ -306,15 +307,22 @@ export function AdvancedSettings({
     setIsReloading(true);
     setReloadMessage(null);
     try {
-      const newConfig = await invokeIpc('reload_config', undefined, { purpose: 'reload config from disk' });
+      // [#576 RV9b-3] A config re-read, so in the config chain like every other
+      // (`reloadConfigInOrder`): issued while a settings save is in flight, it
+      // could answer with the file before the save and land in the store after
+      // the save's re-read. The store write is part of the same step.
+      const newConfig = await chainSettingWrite(SETTING_KEYS.config, async () => {
+        const fresh = await invokeIpc('reload_config', undefined, { purpose: 'reload config from disk' });
+        if (mountedRef.current) setConfig(fresh);
+        return fresh;
+      });
 
       if (!mountedRef.current) return;
 
       const changes = computeConfigDiff(config, newConfig);
 
-      // Update both the store and the local dialog state via onChange
-      // This ensures the UI reflects the reloaded config and clears unsaved changes
-      setConfig(newConfig);
+      // The store took the reloaded config above; the local dialog state follows
+      // via onChange, so the UI reflects it and unsaved changes are cleared.
       onChange(newConfig);
 
       if (changes.length > 0) {
