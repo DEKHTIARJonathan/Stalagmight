@@ -76,6 +76,49 @@ fn database_open_leaves_a_newer_file_untouched() {
     );
 }
 
+/// [#576 RV4-R-S7] The header read the SpeleoDB pulls refuse a newer download by
+/// gives the open's own answer: for a newer file, for a current one, and for bytes
+/// that are no database at all.
+#[test]
+fn the_newer_version_read_off_the_header_is_the_opens_answer() {
+    let temp = TempDir::new().unwrap();
+    let newer = SCHEMA_VERSION + 1;
+    let newer_path = reshaped_file(
+        temp.path(),
+        "Newer.stalx",
+        &format!("UPDATE project SET schema_version = {newer}; PRAGMA user_version = {newer};"),
+    );
+    let current_path = reshaped_file(temp.path(), "Current.stalx", "");
+
+    for path in [&newer_path, &current_path] {
+        let bytes = std::fs::read(path).unwrap();
+        let from_header = Database::newer_schema_version_in_header(&bytes[..Database::HEADER_LEN]);
+        let from_open = Database::open_existing(path)
+            .unwrap()
+            .newer_schema_version();
+        println!(
+            "{}: header says {from_header:?}, the open says {from_open:?}",
+            path.display()
+        );
+        assert_eq!(from_header, from_open);
+    }
+    assert_eq!(
+        Database::newer_schema_version_in_header(
+            &std::fs::read(&newer_path).unwrap()[..Database::HEADER_LEN]
+        ),
+        Some(newer)
+    );
+    assert_eq!(
+        Database::newer_schema_version_in_header(b"PK\x03\x04 not a database"),
+        None
+    );
+    assert_eq!(
+        Database::newer_schema_version_in_header(b"SQLite format 3\0"),
+        None,
+        "a header cut short says nothing"
+    );
+}
+
 /// A pre-release file is refused before anything is written to it, on this
 /// path too (docs/saving.md: "refused before anything is written to it").
 #[test]

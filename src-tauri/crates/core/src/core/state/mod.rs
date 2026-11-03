@@ -700,6 +700,15 @@ mod internal_error_status_tests;
 mod merge_source_read_only_tests;
 #[cfg(test)]
 #[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              answers are the evidence a run captures"
+)]
+mod newer_download_refusal_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point, and the printed \

@@ -683,6 +683,9 @@ impl AppState {
                 StalxAmbiguity::Ask,
             )
             .map_err(local_dto)?;
+        // [#576 RV4-R-S7] Before the replace: a newer build's file is refused, so
+        // the open copy keeps its link, BASE, un-pushed mark and Unwind position.
+        super::speleodb_pull::refuse_a_newer_download(&mut dump, &entry).map_err(local_dto)?;
 
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
         // A forward step loads the CHILD revision's stack. Its policy is therefore the

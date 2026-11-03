@@ -369,6 +369,41 @@ pub(super) fn probe_inputs_valid(project_id: &str, hexsha: Option<&str>) -> bool
     validate_project_id(project_id).is_ok() && hexsha.is_none_or(|sha| validate_hexsha(sha).is_ok())
 }
 
+/// [#576 RV4-R-S7, decision RV4-R-S7-D1] THE NEWER-FORMAT REFUSAL: refuse a
+/// downloaded `entry` that a NEWER Stalagmight saved, BEFORE it replaces anything.
+///
+/// Called by every path that installs a server `.stalx` over the cache copy - the
+/// pull, the fast-forward (Start editing, Update, Take remote, Discard) and the
+/// revision View / Restore - after the entry is chosen and before the replace. A
+/// newer file used to be installed and then left unlinked (this build never stamps
+/// one, `stamp_pulled_file`), so a fast-forward ended in a "session moved" retry and
+/// a revision swap dropped the copy's SpeleoDB identity mid-session. Refused here,
+/// the linked copy - its file, BASE, un-pushed mark and Unwind position - stays as
+/// it was, and the error is the newer-version refusal (`NEWER_FILE_READ_ONLY`).
+///
+/// Reads only the entry's database header, so it costs no extraction.
+pub(super) fn refuse_a_newer_download(
+    dump: &mut dump::Dump<'_>,
+    entry: &str,
+) -> Result<(), SpeleoDbError> {
+    let head = dump.entry_head(entry, crate::persistence::Database::HEADER_LEN)?;
+    match crate::persistence::Database::newer_schema_version_in_header(&head) {
+        Some(version) => {
+            tracing::warn!(
+                version,
+                purpose = "never install a file a newer build saved over the cache copy (#576 RV4-R-S7)",
+                "speleodb: the download was saved by a newer version; refusing it before the replace"
+            );
+            Err(super::speleodb::newer_file_refused(format!(
+                "this project on SpeleoDB was saved by a newer version of Stalagmight (file \
+                 format {version}), so it was not downloaded and your copy is unchanged. Update \
+                 Stalagmight to open it."
+            )))
+        }
+        None => Ok(()),
+    }
+}
+
 /// Map a downloaded dump's entry list to the single openable `.stalx` path, or the
 /// reason a human has to decide. Pure, so it is unit-testable without an archive.
 pub(super) fn classify_dump_entry(names: &[String]) -> Result<String, UnopenableDump> {
@@ -869,6 +904,8 @@ impl AppState {
                 StalxAmbiguity::Ask,
             )
             .map_err(local_dto)?;
+        // [#576 RV4-R-S7] Before the replace: a newer build's file is refused.
+        refuse_a_newer_download(&mut dump, &entry).map_err(local_dto)?;
 
         // Carry the user's local view toggles across the download-replace (a re-open
         // of a previously-customized remote project shouldn't reset their view -
@@ -2085,6 +2122,8 @@ impl AppState {
             pinned.dump_at(),
             StalxAmbiguity::Refuse,
         )?;
+        // [#576 RV4-R-S7] Before the replace: a newer build's file is refused.
+        refuse_a_newer_download(&mut dump, &entry)?;
         let dest = self.speleodb_cache_path(project_id)?;
         // Capture the user's local view toggles BEFORE the download replaces the
         // file - they're stripped from the server copy, so they'd otherwise reset

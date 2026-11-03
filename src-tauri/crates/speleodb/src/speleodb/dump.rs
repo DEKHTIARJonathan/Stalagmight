@@ -328,6 +328,21 @@ impl<'a> Dump<'a> {
         self.extract_entry_capped(entry_path, dest, MAX_ENTRY_BYTES)
     }
 
+    /// [#576 RV4-R-S7] The first `len` bytes of an entry (all of it when shorter),
+    /// read without extracting it: enough to tell what a file is - a `.stalx`'s
+    /// database header - before deciding to install it. Inflates only what it reads.
+    pub fn entry_head(&mut self, entry_path: &str, len: usize) -> Result<Vec<u8>, SpeleoDbError> {
+        let entry = self.archive.by_name(entry_path).map_err(|e| {
+            SpeleoDbError::Parse(format!("entry `{entry_path}` not found in dump: {e}"))
+        })?;
+        let mut head = Vec::with_capacity(len);
+        entry
+            .take(u64::try_from(len).unwrap_or(u64::MAX))
+            .read_to_end(&mut head)
+            .map_err(|e| SpeleoDbError::Io(format!("could not read `{entry_path}`: {e}")))?;
+        Ok(head)
+    }
+
     /// Extraction with an explicit byte ceiling (parameterized for testing). The
     /// entry's declared size comes from the ZIP central directory - server- /
     /// attacker-controlled - so it is rejected up front when it exceeds `max_bytes`

@@ -310,6 +310,28 @@ impl Database {
             .filter(|version| *version > SCHEMA_VERSION)
     }
 
+    /// [#576 RV4-R-S7] How many leading bytes of a file
+    /// [`Self::newer_schema_version_in_header`] reads: the SQLite database header.
+    pub const HEADER_LEN: usize = 100;
+
+    /// [#576 RV4-R-S7] [`Self::newer_schema_version`] for a project file that is
+    /// not on disk yet - a SpeleoDB download still inside its dump - read off its
+    /// first [`Self::HEADER_LEN`] bytes, `head`.
+    ///
+    /// The same stamp, not an estimate of it: SQLite keeps `PRAGMA user_version`
+    /// in the database header, as the big-endian 32-bit integer at offset 60
+    /// (sqlite.org/fileformat2.html, "The Database Header"), so the two answers
+    /// cannot disagree about a file. `None` when `head` is not a SQLite database
+    /// header at all: the open that follows reports what the file is instead.
+    pub fn newer_schema_version_in_header(head: &[u8]) -> Option<i32> {
+        const MAGIC: &[u8] = b"SQLite format 3\0";
+        if !head.starts_with(MAGIC) {
+            return None;
+        }
+        let stamp: [u8; 4] = head.get(60..64)?.try_into().ok()?;
+        Some(i32::from_be_bytes(stamp)).filter(|version| *version > SCHEMA_VERSION)
+    }
+
     /// [#576 B6-D1] Re-open `path` - the file this handle was opened from by
     /// [`Self::open_existing`] - through a READ-ONLY connection, consuming the
     /// read-write one so a session cannot keep both.
