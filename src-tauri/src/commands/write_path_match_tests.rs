@@ -123,6 +123,29 @@ fn each_platform_matches_a_path_against_a_folder_by_its_own_rules() {
             WINDOWS,
             false,
         ),
+        // [#576 RV8a-F5] A UNC path and a path rooted on the current drive that
+        // spell the same names are different places.
+        (
+            "windows, UNC path vs a rooted path of the same names",
+            r"\\server\share\AppData\CaveL.stalx",
+            r"\server\share\AppData",
+            WINDOWS,
+            false,
+        ),
+        (
+            "windows, rooted path vs a UNC path of the same names",
+            r"\server\share\AppData\CaveL.stalx",
+            r"\\server\share\AppData",
+            WINDOWS,
+            false,
+        ),
+        (
+            "windows, UNC path inside a UNC folder",
+            r"\\server\share\AppData\CaveL.stalx",
+            r"\\server\share\AppData",
+            WINDOWS,
+            true,
+        ),
         // Separators that do not change the place.
         (
             "linux, trailing separator",

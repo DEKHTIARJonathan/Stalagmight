@@ -271,7 +271,10 @@ pub(crate) fn path_is_within(path: &str, dir: &str, rules: PathRules) -> bool {
 }
 
 /// `path` as the components [`path_is_within`] compares: a leading separator (the
-/// root, or a UNC path's `\\`) is a component of its own.
+/// root, or a UNC path's `\\`) is a component of its own - and under Windows rules
+/// a UNC path's `\\` is a different one from a rooted path's `\` (#576 RV8a-F5):
+/// `\\server\share\x` and `\server\share\x` (that folder on the current drive)
+/// are different places, which split into the same names otherwise.
 fn path_components(path: &str, rules: PathRules) -> Vec<String> {
     let mut text = if rules.windows {
         let text = path.replace('/', "\\");
@@ -293,7 +296,9 @@ fn path_components(path: &str, rules: PathRules) -> Vec<String> {
     }
     let separator = if rules.windows { '\\' } else { '/' };
     let mut parts = Vec::new();
-    if text.starts_with(separator) {
+    if rules.windows && text.starts_with(r"\\") {
+        parts.push(r"\\".to_owned());
+    } else if text.starts_with(separator) {
         parts.push(separator.to_string());
     }
     parts.extend(
