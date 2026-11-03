@@ -82,9 +82,11 @@ work:
   that proves something does NOT happen (a poll would pass on its first,
   pre-update read): mark it with a `// settle: <why>` comment directly above
   the call. `pnpm lint:e2e-no-sleep` (smoke job) fails on any other sleep:
-  any `waitForTimeout` reference (a bound or destructured one too), a
-  runner-side `setTimeout` (one outside `page.evaluate` and friends), or a
-  `timers/promises` import.
+  any `waitForTimeout` reference (a bound or destructured one too, or a key
+  that spells it, `page['wait' + 'ForTimeout']`), a runner-side `setTimeout`
+  (one outside `page.evaluate` and friends), a `timers/promises` import, or a
+  wait whose failure is swallowed (`locator.waitFor({ timeout }).catch(() => {})`,
+  or one awaited in a `try` whose `catch` neither throws nor asserts).
 - Retries are configured in `playwright.config.ts` (2 in CI, 1 locally), so one
   blip does not abort a push. `PW_RETRIES=0` to fail fast while hunting a flake.
 

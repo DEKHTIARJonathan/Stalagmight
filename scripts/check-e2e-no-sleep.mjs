@@ -16,7 +16,20 @@
 //     (`const st = setTimeout`), `promisify(setTimeout)` and a setInterval
 //     sleep do too (#576 RV4-FE-FEB-2);
 //   - an import of `timers/promises`, whose `setTimeout` is a sleep under any
-//     alias.
+//     alias;
+//   - a string expression that spells `waitForTimeout`: a lone literal or a
+//     constant concatenation (`page['wait' + 'ForTimeout']`, a template whose
+//     substitutions are literals) - the key of a computed call (#576 NF-W9FE-4);
+//   - a wait whose failure is swallowed (#576 NF-W9FE-4): a Playwright wait
+//     (`waitFor`, `waitForSelector`, `waitForFunction`, ...) or a web-first
+//     assertion (`expect(...)`, `expect.poll`, `toPass`) chained into a
+//     `.catch(...)` that neither throws nor asserts, or awaited in a `try`
+//     whose `catch` neither throws nor asserts. When the condition never comes
+//     it waits out the timeout and the test goes on as if it had - a sleep.
+//     Not counted: a boolean probe
+//     (`.then(() => true).catch(() => false)`) whose outcome the test keeps - to
+//     branch or assert on (one whose value is thrown away is a sleep) - and a
+//     swallowed action (`click({ timeout })`), which is not a wait.
 //
 // THE ESCAPE HATCH - some waits are legitimate: proving that something does NOT
 // happen ("press the key, give a buggy handler time to react, assert the tool is
@@ -56,9 +69,11 @@ export const SCAN_DIR = 'e2e-playwright';
 export const MIN_REASON = 12;
 
 // Any mention of the name outside comments and strings: a call, a bind, a
-// destructure. `page['waitForTimeout']` is matched before strings are blanked.
+// destructure. A string that spells it (`page['waitForTimeout']`,
+// `page['wait' + 'ForTimeout']`) is found by spelledSleepLines before strings
+// are blanked.
 const SLEEP_RE = /\bwaitForTimeout\b/g;
-const SLEEP_BRACKET_RE = /\[\s*(['"`])waitForTimeout\1\s*\]/g;
+const SLEEP_NAME = 'waitForTimeout';
 // A bare or global `setTimeout` / `setInterval` reference - a call, an alias,
 // an argument (`promisify(setTimeout)`); `test.setTimeout(` /
 // `testInfo.setTimeout(` (budgets) are members of something else and do not
@@ -92,6 +107,142 @@ export function settleReason(lines, i) {
 const STRING_RE = /'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*"|`(?:\\.|[^`\\])*`/g;
 const blank = (lit) => lit[0] + ' '.repeat(lit.length - 2) + lit[lit.length - 1];
 
+// [#576 NF-W9FE-4] 0-based lines where a string expression spells
+// `waitForTimeout`: a lone literal, or literals joined by `+` (across lines),
+// a template's `${'literal'}` substitutions folded in. Reported at the line of
+// the first literal. Runs on `stripped`, which keeps the strings; what lies
+// between two literals is code, so a `+` there joins them.
+const TEMPLATE_LITERAL_SUB_RE = /\$\{\s*(['"])((?:\\.|(?!\1)[^\\])*)\1\s*\}/g;
+function literalValue(lit) {
+  const body = lit.slice(1, -1);
+  return lit[0] === '`' ? body.replace(TEMPLATE_LITERAL_SUB_RE, '$2') : body;
+}
+function spelledSleepLines(stripped) {
+  const text = stripped.join('\n');
+  const lits = [];
+  for (const m of text.matchAll(STRING_RE)) lits.push({ at: m.index, end: m.index + m[0].length, value: literalValue(m[0]) });
+  const lines = [];
+  for (let i = 0; i < lits.length; ) {
+    let value = lits[i].value;
+    let j = i;
+    while (j + 1 < lits.length && /^\s*\+\s*$/.test(text.slice(lits[j].end, lits[j + 1].at))) value += lits[++j].value;
+    if (value === SLEEP_NAME) lines.push(text.slice(0, lits[i].at).split('\n').length - 1);
+    i = j + 1;
+  }
+  return lines;
+}
+
+// [#576 NF-W9FE-4] Waits whose failure is swallowed. All offsets are into
+// `code` (comments stripped, same-line strings blanked, joined with '\n').
+const WAIT_METHODS = new Set([
+  'waitFor', 'waitForSelector', 'waitForFunction', 'waitForURL', 'waitForLoadState',
+  'waitForEvent', 'waitForResponse', 'waitForRequest', 'waitForNavigation',
+]);
+const CHAIN_STOP_WORDS = new Set(['await', 'return', 'yield', 'void', 'typeof', 'new', 'in', 'of', 'throw', 'case', 'else', 'do']);
+const CLOSERS = { ')': '(', ']': '[', '}': '{' };
+
+// The index of the opener matching the closer at `close`, scanning back.
+function matchBack(code, close) {
+  const closeCh = code[close];
+  const openCh = CLOSERS[closeCh];
+  let depth = 0;
+  for (let i = close; i >= 0; i--) {
+    if (code[i] === closeCh) depth++;
+    else if (code[i] === openCh && --depth === 0) return i;
+  }
+  return -1;
+}
+
+// The index after the closer matching the opener at `open` ({ or ( ), scanning forward.
+function matchForward(code, open) {
+  const openCh = code[open];
+  const closeCh = openCh === '{' ? '}' : ')';
+  let depth = 0;
+  for (let i = open; i < code.length; i++) {
+    if (code[i] === openCh) depth++;
+    else if (code[i] === closeCh && --depth === 0) return i + 1;
+  }
+  return code.length;
+}
+
+// The member chain ending right before `end` (`page.locator(x).waitFor(y)`):
+// where it starts, and its names from the last back to the root.
+function chainBefore(code, end) {
+  const names = [];
+  let start = end;
+  for (;;) {
+    let j = start - 1;
+    while (j >= 0 && /\s/.test(code[j])) j--;
+    if (j < 0) return { start, names };
+    if (CLOSERS[code[j]] && code[j] !== '}') {
+      const open = matchBack(code, j);
+      if (open < 0) return { start, names };
+      start = open;
+      continue;
+    }
+    if (!/[\w$]/.test(code[j])) return { start, names };
+    let k = j;
+    while (k > 0 && /[\w$]/.test(code[k - 1])) k--;
+    const name = code.slice(k, j + 1);
+    if (CHAIN_STOP_WORDS.has(name)) return { start, names };
+    names.push(name);
+    start = k;
+    let d = k - 1;
+    while (d >= 0 && /\s/.test(code[d])) d--;
+    if (d < 0 || code[d] !== '.') return { start, names };
+    start = d > 0 && code[d - 1] === '?' ? d - 1 : d;
+  }
+}
+
+// Whether the expression starting at `start` (after an optional `await`) is a
+// whole statement - its value thrown away.
+function isStatement(code, start) {
+  const before = code.slice(0, start).replace(/\bawait\s*$/, '').trimEnd();
+  return before === '' || /[;{}]$/.test(before);
+}
+
+const isWaitChain = (names) => names.some((n) => WAIT_METHODS.has(n)) || names[names.length - 1] === 'expect';
+// `() => true` / `(e) => false` / `() => { return false; }`: a boolean outcome.
+const BOOLEAN_HANDLER_RE = /^\s*(?:async\s+)?(?:\([^)]*\)|[\w$]+)\s*=>\s*(?:(?:true|false)|\{\s*return\s+(?:true|false)\s*;?\s*\})\s*$/;
+// A handler that throws or asserts does not swallow the failure.
+const RETHROWS_RE = /\bthrow\b|\bexpect\s*[.(]/;
+const CATCH_CALL_RE = /\.\s*catch\s*\(/g;
+const TRY_RE = /\btry\s*\{/g;
+const CATCH_BLOCK_RE = /^\s*catch\s*(?:\([^)]*\)\s*)?\{/;
+const TRY_WAIT_RE = new RegExp(`\\.\\s*(?:${[...WAIT_METHODS].join('|')})\\s*\\(|\\bawait\\s+(expect)\\b`, 'g');
+
+function swallowedWaitLines(code) {
+  const lineOf = (at) => code.slice(0, at).split('\n').length - 1;
+  const starts = new Set();
+  let m;
+  CATCH_CALL_RE.lastIndex = 0;
+  while ((m = CATCH_CALL_RE.exec(code)) !== null) {
+    const { start, names } = chainBefore(code, m.index);
+    if (!isWaitChain(names)) continue;
+    const open = m.index + m[0].length - 1;
+    const handler = code.slice(open + 1, matchForward(code, open) - 1);
+    if (RETHROWS_RE.test(handler)) continue;
+    if (names.includes('then') && BOOLEAN_HANDLER_RE.test(handler) && !isStatement(code, start)) continue;
+    starts.add(start);
+  }
+  TRY_RE.lastIndex = 0;
+  while ((m = TRY_RE.exec(code)) !== null) {
+    const tryOpen = m.index + m[0].length - 1;
+    const tryEnd = matchForward(code, tryOpen);
+    const catchHead = CATCH_BLOCK_RE.exec(code.slice(tryEnd));
+    if (!catchHead) continue;
+    const catchOpen = tryEnd + catchHead[0].length - 1;
+    if (RETHROWS_RE.test(code.slice(catchOpen, matchForward(code, catchOpen)))) continue;
+    const body = code.slice(tryOpen, tryEnd);
+    let w;
+    TRY_WAIT_RE.lastIndex = 0;
+    while ((w = TRY_WAIT_RE.exec(body)) !== null) {
+      starts.add(w[1] ? tryOpen + w.index + w[0].length - w[1].length : chainBefore(code, tryOpen + w.index).start);
+    }
+  }
+  return [...starts].map(lineOf);
+}
+
 export function findSleeps(text, rel = '') {
   const lines = text.split('\n');
   const stripped = stripComments(lines);
@@ -102,13 +253,14 @@ export function findSleeps(text, rel = '') {
   stripped.forEach((c, i) => {
     const imports = (c.match(TIMERS_PROMISES_RE) ?? []).length;
     if (imports) timersPromisesLines.add(i);
-    const n = (c.match(SLEEP_BRACKET_RE) ?? []).length + imports;
-    if (n) hit(i, n);
+    if (imports) hit(i, imports);
   });
+  for (const i of spelledSleepLines(stripped)) hit(i);
   code.forEach((c, i) => {
     const n = (c.match(SLEEP_RE) ?? []).length;
     if (n) hit(i, n);
   });
+  for (const i of swallowedWaitLines(code.join('\n'))) hit(i);
   if (!BROWSER_SIDE_DIRS.some((d) => rel.startsWith(d))) {
     const joined = code.join('\n');
     const strippedJoined = stripped.join('\n');
@@ -162,7 +314,7 @@ export function main(root = REPO_ROOT, log = console.log, err = console.error) {
     return 0;
   }
   err(`\n✗ e2e-playwright no-sleep check failed - ${violations.length + symlinks.length} issue(s):\n`);
-  for (const v of violations) err(`  ${v.rel}:${v.lineNo}  a sleep (waitForTimeout, a runner-side setTimeout/setInterval or timers/promises) without a "// settle: <reason>" comment above it`);
+  for (const v of violations) err(`  ${v.rel}:${v.lineNo}  a sleep (waitForTimeout, a runner-side setTimeout/setInterval, timers/promises or a swallowed wait) without a "// settle: <reason>" comment above it`);
   for (const l of symlinks) err(`  ${l.rel}  is a symlink (-> ${l.target}); not followed, so not scanned - replace it with a regular file`);
   err(
     '\nWait for the condition instead (web-first assertion, expect.poll, toPass, or a helper\n' +

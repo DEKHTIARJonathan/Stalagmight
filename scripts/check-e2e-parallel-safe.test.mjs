@@ -85,6 +85,13 @@ const HIDDEN_WRITES = {
     "import { link, chmod as ch } from 'node:fs/promises';\nconst { rm } = fsp;\nconst { cp, rename: mv } = fsPromises;\nconst { truncate } = await import('fs/promises');",
     [['disk-write', 1], ['disk-write', 2], ['disk-write', 3], ['disk-write', 4]],
   ],
+  // #576 NF-W9FE-4: a nested destructure through `promises` hid the name.
+  'disk-write fires on a nested destructure: const { promises: { open } } = fs': ["const { promises: { open } } = fs;\nawait open(p, 'w');", [['disk-write', 1]]],
+  'disk-write fires on a nested destructure with an alias: const { promises: { writeFile: w } } = fs': ['const { promises: { writeFile: w } } = fs;\nawait w(p, x);', [['disk-write', 1]]],
+  'disk-write fires on a multi-line nested destructure of require / import, at the line of each name': [
+    "const {\n  readFileSync,\n  promises: {\n    rm,\n    rename: mv,\n  },\n} = require('node:fs');\nconst { promises: { link } } = await import('fs');\nconst { default: { promises: { chmod } } } = await import('node:fs');",
+    [['disk-write', 4], ['disk-write', 5], ['disk-write', 8], ['disk-write', 9]],
+  ],
 };
 for (const [name, [text, expected]] of Object.entries(HIDDEN_WRITES)) {
   test(name, () => {
@@ -92,6 +99,12 @@ for (const [name, [text, expected]] of Object.entries(HIDDEN_WRITES)) {
     assert.deepEqual(got, expected, `got ${JSON.stringify(got)}, want ${JSON.stringify(expected)}`);
   });
 }
+
+test('a nested destructure does NOT fire on a read name, a non-fs source, or an object literal', () => {
+  assert.deepEqual(ids('const { promises: { readFile, stat } } = fs;'), []);
+  assert.deepEqual(ids('const { menu: { open } } = page;\nawait open();'), []);
+  assert.deepEqual(ids("const opts = { promises: { open: true } };\nconst { a } = fs;"), []);
+});
 
 test('the import / bracket checks do NOT fire on a read import, a namespace import, an object key, or a non-fs open', () => {
   assert.deepEqual(ids("import { readFileSync } from 'node:fs';"), []);

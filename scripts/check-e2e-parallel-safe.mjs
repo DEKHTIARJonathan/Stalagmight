@@ -67,34 +67,54 @@ const LONG = DISK_WRITE_NAMES.join('|');
 const FS_RECEIVER = '\\b(?:fs|fsp|fsPromises|promises)';
 
 // `{ ... }` import / destructure sources that bind fs functions to plain names:
-// `import {...} from '(node:)fs(/promises)'`, `const {...} = require(...)` (or
-// `await import(...)`) of the same modules, and `{...} = fs | fsp |
+// `import {...} from '(node:)fs(/promises)'`, and a destructure `{...} =` of
+// `require(...)` / `await import(...)` of the same modules or of `fs | fsp |
 // fsPromises | promises | fs.promises`. Matched on the whole comment-stripped
-// file, so a multi-line import brace counts; group 1 is the brace contents.
-const FS_IMPORT_RES = [
-  /\bimport\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?\{([^}]*)\}\s*from\s*(['"`])(?:node:)?fs(?:\/promises)?\2/g,
-  /\b(?:const|let|var)\s+\{([^}]*)\}\s*=\s*(?:await\s+)?(?:require|import)\s*\(\s*(['"`])(?:node:)?fs(?:\/promises)?\2\s*\)/g,
-  /\{([^}]*)\}\s*=(?![=>])\s*(?:fs\.promises|fsPromises|fsp|fs|promises)(?![\w$.])/g,
-];
+// file, so a multi-line brace counts. An import brace is flat (group 1 is its
+// contents); a destructure may nest - `const { promises: { open } } = fs`
+// (#576 NF-W9FE-4) - so FS_DESTRUCTURE_RE finds only its closing brace and the
+// `=`, and the pattern is walked back to its opening brace.
+const FS_IMPORT_RE = /\bimport\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?\{([^}]*)\}\s*from\s*(['"`])(?:node:)?fs(?:\/promises)?\2/g;
+const FS_DESTRUCTURE_RE =
+  /\}\s*=(?![=>])\s*(?:(?:await\s+)?(?:require|import)\s*\(\s*(['"`])(?:node:)?fs(?:\/promises)?\1\s*\)|(?:fs\.promises|fsPromises|fsp|fs|promises)(?![\w$.]))/g;
+// A binding key in a destructure pattern: the name right after `{` or `,` at any
+// depth (`writeFile` in `{ writeFile: w }`; not `w`, which follows a `:`).
+const PATTERN_KEY_RE = /[{,]\s*([A-Za-z_$][\w$]*)/g;
 const FS_IMPORTED = new Set([...DISK_WRITE_NAMES, ...FS_SHORT_NAMES]);
 
+// The index of the `{` matching the `}` at `close`, scanning back; -1 if none.
+function openingBrace(text, close) {
+  let depth = 0;
+  for (let i = close; i >= 0; i--) {
+    if (text[i] === '}') depth++;
+    else if (text[i] === '{' && --depth === 0) return i;
+  }
+  return -1;
+}
+
 // 0-based lines of `code` (stripComments output) that import or destructure a
-// disk-write name from fs, alias or not: the line of the name itself.
+// disk-write name from fs, alias or not, nested or not: the line of the name itself.
 function fsImportLines(code) {
   const text = code.join('\n');
   const lines = new Set();
-  for (const re of FS_IMPORT_RES) {
-    re.lastIndex = 0;
-    let m;
-    while ((m = re.exec(text)) !== null) {
-      let at = m.index + m[0].indexOf('{') + 1;
-      for (const entry of m[1].split(',')) {
-        const name = /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)/.exec(entry);
-        if (name && FS_IMPORTED.has(name[1])) {
-          lines.add(text.slice(0, at + name[0].length).split('\n').length - 1);
-        }
-        at += entry.length + 1;
-      }
+  const lineOf = (at) => text.slice(0, at).split('\n').length - 1;
+  let m;
+  FS_IMPORT_RE.lastIndex = 0;
+  while ((m = FS_IMPORT_RE.exec(text)) !== null) {
+    let at = m.index + m[0].indexOf('{') + 1;
+    for (const entry of m[1].split(',')) {
+      const name = /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)/.exec(entry);
+      if (name && FS_IMPORTED.has(name[1])) lines.add(lineOf(at + name[0].length));
+      at += entry.length + 1;
+    }
+  }
+  FS_DESTRUCTURE_RE.lastIndex = 0;
+  while ((m = FS_DESTRUCTURE_RE.exec(text)) !== null) {
+    const open = openingBrace(text, m.index);
+    if (open < 0) continue;
+    const pattern = text.slice(open, m.index + 1);
+    for (const key of pattern.matchAll(PATTERN_KEY_RE)) {
+      if (FS_IMPORTED.has(key[1])) lines.add(lineOf(open + key.index + key[0].length));
     }
   }
   return lines;
@@ -161,8 +181,10 @@ export const RULES = [
     // Bracket access (`fs['writeFileSync'](p)`; the short names only on an fs
     // receiver) and a name imported or destructured from fs / fs/promises,
     // alias or not (`import { writeFileSync as w } from 'node:fs'`,
-    // `const { open } = fs.promises`), count too (#576 RV4-FE-FEB-3); the
-    // import check reads the whole file, so a multi-line import brace counts.
+    // `const { open } = fs.promises`), count too (#576 RV4-FE-FEB-3), as does
+    // one destructured through `promises` (`const { promises: { open } } = fs`,
+    // #576 NF-W9FE-4); the import check reads the whole file, so a multi-line
+    // brace counts.
     re: new RegExp(
       `\\b(?:${LONG})\\s*\\(|\\.(?:rm|cp|rename|truncate)\\s*\\(|${FS_RECEIVER}\\.(?:open|link|chmod)\\s*\\(`
         + `|\\[\\s*(['"\`])(?:${LONG})\\1\\s*\\]|${FS_RECEIVER}\\s*\\[\\s*(['"\`])(?:${FS_SHORT_NAMES.join('|')})\\2\\s*\\]`,

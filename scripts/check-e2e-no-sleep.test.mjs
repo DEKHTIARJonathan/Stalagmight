@@ -112,6 +112,82 @@ test('a setTimeout the browser runs (evaluate, addInitScript, waitForFunction) o
   assert.deepEqual(scan(['e2e-playwright/helpers/x.ts'], () => mock).violations.map((v) => v.lineNo), [1]);
 });
 
+// #576 NF-W9FE-4: sleeps in disguise the gate used to miss.
+const DISGUISED = {
+  'a wait whose failure is swallowed counts: locator.waitFor({ timeout }).catch(() => {})': [
+    "await page.getByTestId('menu').waitFor({ state: 'visible', timeout: 500 }).catch(() => {});",
+    [1],
+  ],
+  'every Playwright wait counts when swallowed (waitForSelector, waitForFunction, waitForEvent, waitForURL, waitForLoadState)': [
+    [
+      "await page.waitForSelector('#a', { timeout: 500 }).catch(() => undefined);",
+      'await page.waitForFunction(() => window.ready, null, { timeout: 500 }).catch(() => null);',
+      "await page.waitForEvent('download', { timeout: 500 }).catch(noop);",
+      "await page.waitForURL('**/x', { timeout: 500 }).catch((e) => console.log(e));",
+      "await page.waitForLoadState('networkidle').catch(() => { /* fine */ });",
+    ].join('\n'),
+    [1, 2, 3, 4, 5],
+  ],
+  'a swallowed web-first assertion, expect.poll or toPass counts': [
+    [
+      "await expect(page.getByTestId('toast')).toBeVisible({ timeout: 500 }).catch(() => {});",
+      'await expect.poll(() => count(), { timeout: 500 }).toBe(2).catch(() => {});',
+      'await expect(async () => { await check(); }).toPass({ timeout: 500 }).catch(() => {});',
+    ].join('\n'),
+    [1, 2, 3],
+  ],
+  'a swallowed wait split across lines counts at the line its statement starts': [
+    "const x = 1;\nawait page\n  .locator('#a')\n  .waitFor({ state: 'hidden', timeout: 500 })\n  .catch(() => {});",
+    [2],
+  ],
+  'a .then(() => {}) before the .catch does not hide it': [
+    'await loc.waitFor({ timeout: 500 }).then(() => {}).catch(() => {});',
+    [1],
+  ],
+  'a boolean probe whose value is thrown away counts': [
+    'await loc.waitFor({ timeout: 500 }).then(() => true).catch(() => false);\nif (x) {\n  expect.poll(read).toBe(1).then(() => true).catch(() => false);\n}',
+    [1, 3],
+  ],
+  'a wait swallowed by try / catch counts, at the wait': [
+    "try {\n  await page.getByTestId('x').waitFor({ timeout: 500 });\n} catch {\n  // fine either way\n}\ntry { await expect(loc).toBeHidden({ timeout: 500 }); } catch (e) { log(e); }",
+    [2, 6],
+  ],
+  "a concatenated member name counts: page['wait' + 'ForTimeout'](500)": ["await page['wait' + 'ForTimeout'](500);", [1]],
+  'a concatenation across parts, quote styles, lines and a constant template counts': [
+    "const nap = 'wait' + \"For\" +\n  `Timeout`;\nawait page[nap](500);\nawait page[`wait${'For'}Timeout`](500);",
+    [1, 4],
+  ],
+  "a lone 'waitForTimeout' string used as a key counts": ["const m = 'waitForTimeout';\nawait page[m](500);", [1]],
+};
+for (const [name, [text, lines]] of Object.entries(DISGUISED)) {
+  test(name, () => assert.deepEqual(bad(text), lines));
+}
+
+test('a settle annotation clears a swallowed wait and a concatenated name', () => {
+  assert.deepEqual(bad("// settle: proves no toast appears; absence holds on the first read\nawait page.getByTestId('toast').waitFor({ timeout: 500 }).catch(() => {});"), []);
+  assert.deepEqual(bad("// settle: proves the debounce never fires early\nawait page['wait' + 'ForTimeout'](500);"), []);
+});
+
+test('NOT a sleep: a wait that can fail, a rethrowing catch, a boolean probe, a swallowed action, prose and strings', () => {
+  assert.deepEqual(bad("await page.getByTestId('x').waitFor({ timeout: 500 });"), []);
+  assert.deepEqual(bad("await expect(loc).toBeVisible().catch((cause) => {\n  throw new Error('margin never settled', { cause });\n});"), []);
+  assert.deepEqual(bad("try {\n  await loc.waitFor({ timeout: 500 });\n} catch (e) {\n  throw new Error('x', { cause: e });\n}"), []);
+  assert.deepEqual(bad("try {\n  await loc.waitFor();\n} finally {\n  await page.close();\n}"), []);
+  // A catch that asserts instead does not swallow the failure.
+  assert.deepEqual(bad("try {\n  await openMenu(page);\n  await expect(canvas).toBeVisible();\n} catch {\n  await expect(canvas).toBeVisible();\n}"), []);
+  assert.deepEqual(bad('await loc.waitFor({ timeout: 500 }).catch(async () => {\n  await expect(other).toBeVisible();\n});'), []);
+  // A probe keeps the outcome as a value the test branches or asserts on.
+  assert.deepEqual(bad('const ok = await loc.waitFor({ timeout: 500 }).then(() => true).catch(() => false);'), []);
+  assert.deepEqual(bad('return expect.poll(read, { timeout: 500 }).toBe(true).then(() => true).catch(() => false);'), []);
+  // An action, not a wait; and catch on things that are not waits.
+  assert.deepEqual(bad('await button.click({ force: true, timeout: 1000 }).catch(() => {});'), []);
+  assert.deepEqual(bad("await fetchThing().catch(() => {});\nawait page.goto('/').catch(() => {});"), []);
+  assert.deepEqual(bad("// await loc.waitFor({ timeout: 5 }).catch(() => {});\nconst s = \"page['wait' + 'ForTimeout']\";"), []);
+  assert.deepEqual(bad("const a = 'wait' + 'ForIt';\nconst b = 'waitForTimeout(100) is banned';\ntest('waitForTimeout is gone', () => {});"), []);
+  // A try block with no wait, or a sync expect, is not a swallowed wait.
+  assert.deepEqual(bad('try {\n  JSON.parse(raw);\n} catch {\n  // not JSON\n}\ntry { expect(a).toBe(1); } catch { }'), []);
+});
+
 test('a regex literal holding /* does not hide a later sleep (shared stripper)', () => {
   assert.deepEqual(bad('const LEAD = /^\\/*/;\nawait page.waitForTimeout(5);\n/* end */'), [2]);
 });
