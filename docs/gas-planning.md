@@ -200,9 +200,12 @@ passes a way point:
   before a pin, the dive turns at the last station it can afford on the way there.
   The stage is carried the whole dive, the drop is reported at its pin past the
   turnaround - its `stage_drop_route_indices` entry is beyond the route's last
-  station - and is never flagged over-reserve; the map draws it grey and the
-  readout says "not reached" (`utils/gasReach.ts` `stageDropReached`). The pin is
-  priced as if reached: what it strands stays stranded.
+  station - and is never flagged over-reserve (the marker and the readout apply
+  the same rule); the map draws it grey, the legend keys it, and the readout says
+  "not reached" (`utils/gasReach.ts` `stageDropReached`). Its keyboard slider sits
+  one step past the turnaround: Left pulls the pin onto the turnaround, Right has
+  nowhere deeper to go. The pin is priced as if reached: what it strands stays
+  stranded.
 - A pin the route already passes before its own turn - on the way-point chain, or
   on the way to an earlier pin (drop 2 moved shallower than drop 1) - stays at that
   first pass: the stage is dropped there full, and the dive is not sent back to it.
