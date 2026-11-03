@@ -212,6 +212,20 @@ const renderWizard = (
     />,
   );
 
+/**
+ * The anchor import has landed AND the run has let go of it. The fake project
+ * holds the id the moment the mock answers, but the wizard is still importing
+ * until the store's import path returns (its refresh, its integrity check), and
+ * both exits are shut while it is (`exitBlocked`) - a click in that window hits
+ * a disabled button and opens nothing. Waiting on the id alone lost that race
+ * (#576 NF-FIX5-2: the file's first case, 22 runs in 30 on a quiet machine).
+ */
+async function anchorImportSettled(): Promise<void> {
+  await waitFor(() => expect(projectSectionIds).toEqual([7]));
+  await waitFor(() => expect(screen.getByTestId('back-button')).toBeEnabled());
+  expect(screen.getByTestId('cancel-button')).toBeEnabled();
+}
+
 // [#576 NF-W6A-5] Every refresh this file drives must be answered by its mock.
 failOnRefreshErrors();
 
@@ -290,7 +304,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
       zeroDatumConfig: zeroDatumOnly(),
     });
 
-    await waitFor(() => expect(projectSectionIds).toEqual([7]));
+    await anchorImportSettled();
 
     fireEvent.click(screen.getByTestId('back-button'));
     expect(screen.getByTestId('back-confirm-message')).toHaveTextContent(
@@ -326,7 +340,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     const onCancel = vi.fn();
     renderWizard(undefined, { onCancel, selected: [0], zeroDatumConfig: zeroDatumOnly() });
 
-    await waitFor(() => expect(projectSectionIds).toEqual([7]));
+    await anchorImportSettled();
 
     fireEvent.click(screen.getByTestId('cancel-button'));
 
@@ -394,7 +408,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     const onCancel = vi.fn();
     renderWizard(undefined, { onCancel, selected: [0], zeroDatumConfig: zeroDatumOnly() });
 
-    await waitFor(() => expect(projectSectionIds).toEqual([7]));
+    await anchorImportSettled();
 
     fireEvent.click(screen.getByTestId('cancel-button'));
     fireEvent.click(screen.getByTestId('confirm-cancel-button'));
@@ -555,7 +569,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     await act(async () => {
       importGate.release();
     });
-    await waitFor(() => expect(projectSectionIds).toEqual([7]));
+    await anchorImportSettled();
 
     // And the id that landed is tracked: cancelling now offers to remove it.
     fireEvent.click(screen.getByTestId('cancel-button'));
@@ -578,7 +592,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     const onCancel = vi.fn();
     renderWizard(undefined, { onCancel, selected: [0], zeroDatumConfig: zeroDatumOnly() });
 
-    await waitFor(() => expect(projectSectionIds).toEqual([7]));
+    await anchorImportSettled();
     fireEvent.click(screen.getByTestId('cancel-button'));
     fireEvent.click(screen.getByTestId('cancel-remove-button'));
 
@@ -676,7 +690,7 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
     const onCancel = vi.fn();
     renderWizard(undefined, { onCancel, selected: [0], zeroDatumConfig: zeroDatumOnly() });
 
-    await waitFor(() => expect(projectSectionIds).toEqual([7]));
+    await anchorImportSettled();
     fireEvent.click(screen.getByTestId('cancel-button'));
     fireEvent.click(screen.getByTestId('cancel-remove-button'));
 
