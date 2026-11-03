@@ -83,7 +83,6 @@ export type ScreenId =
   | 'zero-datum-config'
   | 'wiz-init'
   | 'wiz-suggest'
-  | 'wiz-no-suggest'
   | 'wiz-manual'
   | 'wiz-placing'
   | 'wiz-done'
@@ -323,10 +322,9 @@ export async function computeImportScreenDigest(
   else if (shown('zero-datum-config-dialog')) screen = 'zero-datum-config';
   else if (shown('orphan-placement-dialog')) screen = 'orphan-placement';
   else if (wizardUp) {
-    if (shown('wizard-importing-zero-datum') || shown('wizard-calculating') || shown('wizard-early-importing')) {
+    if (shown('wizard-importing-zero-datum') || shown('wizard-calculating')) {
       screen = 'wiz-init';
     } else if (shown('wizard-suggestion')) screen = 'wiz-suggest';
-    else if (shown('wizard-no-suggestions')) screen = 'wiz-no-suggest';
     else if (shown('wizard-manual-placing')) screen = 'wiz-manual';
     else if (shown('wizard-placing')) screen = 'wiz-placing';
     else if (shown('wizard-all-placed')) screen = 'wiz-done';
@@ -460,9 +458,7 @@ export async function computeImportScreenDigest(
       'error-dialog',
       'wizard-importing-zero-datum',
       'wizard-calculating',
-      'wizard-early-importing',
       'wizard-suggestion',
-      'wizard-no-suggestions',
       'wizard-manual-placing',
       'wizard-placing',
       'wizard-all-placed',

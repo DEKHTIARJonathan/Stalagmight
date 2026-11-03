@@ -92,26 +92,13 @@
  * distinguishable from "the geometry did not match", and the ORPHAN PLACEMENT
  * check above now holds both of the dialog's answers to account.
  *
- * ## `wiz-no-suggest` is a transition, not a screen
+ * ## No `wiz-no-suggest` screen
  *
- * `wizard-no-suggestions` reads like the "nothing could be placed
- * automatically" surface and is not one. It renders while `phase ===
- * 'suggesting'` with no current suggestion, which is only the gap between the
- * pool running dry and `transitionToPlacingOrManual` setting `isImporting` - and
- * that call sets it synchronously, so the frame rarely survives a paint. It has
- * no control of its own either: the footer renders nothing for a
- * suggestion-less `suggesting` phase, leaving the wizard's standing Cancel and
- * Back. Over the 130-cell corpus campaign the digest never sampled it once, so
- * the two generators that named it never ran.
- *
- * The options a user is actually offered when nothing was suggested are on
- * `manual_placing` - reuse a skipped suggestion, attach to an existing section,
- * place on the map by hand, or discard - together with a map placement and a
- * shot table. So the bridge's settle predicate WAITS through the frame and the
- * walk arrives at `wiz-manual`, where those live. The screen id, its digest
- * classification and its escape path all stay: a frame that outlasts the settle
- * cap is a genuine hang, and it must still be named and still be escapable when
- * the escape oracle comes for it.
+ * When the suggestion pool runs dry the wizard goes straight to
+ * `manual_placing` (reuse a skipped suggestion, attach to an existing section,
+ * place on the map by hand, or discard, with a map placement and a shot
+ * table), so the walk meets that as `wiz-manual`. The "no suggestions" frame
+ * the digest used to classify is no longer rendered (#576 NF-W8D4-1).
  *
  * ## What is asserted
  *

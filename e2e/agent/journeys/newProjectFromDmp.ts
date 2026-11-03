@@ -107,12 +107,9 @@ function primaryAction(screen: string, live: Record<string, 0 | 1 | 2>): Move | 
     case 'wiz-init':
     case 'wiz-placing':
     case 'wiz-blank':
-    // `wiz-no-suggest` renders no skip button (it classifies on
-    // !currentSuggestion, and skip-button renders only WITH one) - it
-    // self-transitions to manual placing. `wiz-done` has no footer buttons in
-    // phase 'done'; it auto-advances via the completion effect. Both are
-    // transients here; if either sticks, the poll budget names it.
-    case 'wiz-no-suggest':
+    // `wiz-done` has no footer buttons in phase 'done'; it auto-advances via
+    // the completion effect. A transient here; if it sticks, the poll budget
+    // names it.
     case 'wiz-done':
       return null; // transient - observe again
     case 'orphan-placement':

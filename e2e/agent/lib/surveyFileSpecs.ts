@@ -382,8 +382,8 @@ export function randomDmpSpec(rng: Rng, profile: SpecProfile = 'valid'): DmpSpec
  * 25 degrees of azimuth, `max(3% of length, 0.4 m)` of length, 0.30 m of depth
  * per measurement point, with a 0.45 aggregate-score floor. Two independently
  * random sections clear none of that, so the pool comes back empty,
- * `pickFromPool` returns false, and the wizard falls straight through
- * `wizard-no-suggestions` into `manual_placing`. Measured over a 130-cell
+ * `pickFromPool` returns false, and the wizard falls straight into
+ * `manual_placing`. Measured over a 130-cell
  * campaign: 47 steps on `wiz-suggest` against 13,781 total, ZERO clicks on an
  * alternative, and not one confirmed overlap - so the merge-station picker, the
  * overlap modes, `applyAllOverlapTreatments` and the `ExistingShotUpdate` path

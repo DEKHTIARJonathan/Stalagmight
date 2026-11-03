@@ -66,7 +66,6 @@ export const IMPORT_GUARDED_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
   'zero-datum-config',
   'wiz-init',
   'wiz-suggest',
-  'wiz-no-suggest',
   'wiz-manual',
   'wiz-placing',
   'wiz-done',
@@ -96,7 +95,6 @@ export const IN_FLOW_SCREENS: ReadonlySet<ScreenId> = new Set<ScreenId>([
   'zero-datum-config',
   'wiz-init',
   'wiz-suggest',
-  'wiz-no-suggest',
   'wiz-manual',
   'wiz-placing',
   'wiz-done',
@@ -399,13 +397,6 @@ export const ADVANCE_MOVE: Readonly<Partial<Record<ScreenId, readonly string[]>>
   'zero-datum-select': ['zero-datum-section-card-*', 'zero-datum-selection-skip'],
   'zero-datum-config': ['zero-datum-config-confirm'],
   'wiz-suggest': ['confirm-button'],
-  // No entry for `wiz-no-suggest`: the bridge's settle predicate waits through
-  // that frame now (see `busy()` in importDialogBridge.ts), so the walk arrives
-  // at `wiz-manual` instead - which is where the placement options actually are.
-  // A frame that OUTLASTS the settle cap still reaches the digest, is still
-  // classified, and is still escapable through the entry below; it just has no
-  // advancing move, which is honest, because the app is mid-transition and there
-  // is nothing on it to press.
   // PLACE ON MAP first, then the footer's Place, then Skip.
   //
   // `segment-place-button` alone could not advance this screen. It is
@@ -467,7 +458,6 @@ export const ESCAPE_PATH: Readonly<Record<ScreenId, readonly string[]>> = {
   'zero-datum-config': ['dirty-dialog-discard', 'zero-datum-config-cancel', 'key:Escape'],
   'wiz-init': ['cancel-button', 'key:Escape'],
   'wiz-suggest': ['cancel-button', 'key:Escape'],
-  'wiz-no-suggest': ['cancel-button', 'key:Escape'],
   'wiz-manual': ['cancel-button', 'key:Escape'],
   'wiz-placing': ['cancel-button', 'key:Escape'],
   'wiz-done': ['cancel-button', 'key:Escape'],
