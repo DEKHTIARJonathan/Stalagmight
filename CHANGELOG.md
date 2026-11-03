@@ -7,6 +7,13 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Changed
+
+#### Plan mode
+
+- **The turn gauge reads a third of the gauge** - turn and drop pressures are now a share of the tank's gauge, as divers work them out by hand: a 12 L tank at 207 bar turns at 138 bar (141 before), one at 300 bar at 200 (211 before). Above about 96 bar a third of the gauge holds a little less gas than a third of the gas, so the turn is lower than the old gauge, and a diver who turns on it breathes somewhat more before turning (4.7% more at 207 bar, 13.5% at 300). Every tank still keeps at least two thirds of its real gas at the turn, and the reach drawn on the map only shrinks ([#576](https://github.com/Stalagmight/Stalagmight/issues/576))
+- **A moved stage drop decides the route** - the dive now goes through every stage drop you pin: past your way points, to each pinned drop in order, then on to your endpoint - doubling back where a drop is off its passage, with the extra swim counted - or, with no endpoint, as deep as it can go beyond the last drop. Before, a drop the planned route did not pass was ignored, so a change that moved the route (less gas, for one) gave back the gas the drop leaves behind and showed more reach than a diver who drops there has. When the gas runs out before a pinned drop, the dive turns on the way there, the stage is carried the whole dive, and the drop is shown grey as not reached ([#576](https://github.com/Stalagmight/Stalagmight/issues/576))
+
 ## [0.5.0] - 2026-08-13
 
 The first release with builds for all three platforms. The headline additions are

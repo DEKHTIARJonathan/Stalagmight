@@ -6,7 +6,8 @@ turn dots, the stage drops, the pressure gauges - is a view onto that answer.
 
 Plan is one of the three workspace modes, read-only over the survey
 ([SPEC.md 6.1](SPEC.md#61-workspace-modes)). The engine is
-`src-tauri/crates/models/src/project/gas.rs` (+ `gas/model.rs`, `gas/physics.rs`),
+`src-tauri/crates/models/src/project/gas.rs` (+ `gas/model.rs`, `gas/physics.rs`,
+`gas/pinned.rs`),
 reached through the single `compute_gas_reach_field` command. Umbrella issue
 [#38](https://github.com/Stalagmight/Stalagmight/issues/38); its design PRD was
 removed from the repo before open-sourcing, so this page is the reference.
@@ -116,6 +117,17 @@ is shorter (about 6.6% at 207 bar, 8.6% at 232 and 15% at 300 for a tank at its
 rating). An overfill under the cap is turned at `fill - rated/3`: 12 L rated 207
 filled to 250 turns at 181 bar and is credited the 681 L between 250 and 181.
 
+**What changed for the diver** (#576, decided "thirds of the gauge"): the turn
+gauge now reads the hand third (a third of the gauge off the fill), and above
+about 96 bar that is lower than the gauge before #576 showed - a 12 L tank at
+207 bar turns at 138 bar (141 before), one at 300 bar at 200 (211 before). A diver
+who turns on the new gauge breathes a little more before turning than on the old
+one (706 -> 740 L at 207 bar, +4.7%; 801 -> 909 L at 300 bar, +13.5%). Every tank
+still keeps at least two thirds of its real gas at the turn - a third of the gauge
+holds less than a third of the gas, so the thirds hold with gas to spare - and the
+reach the map draws only shrinks: it is credited the gas between the fill and the
+new turn, not the old volume third.
+
 Half Minus, in diver terms: the stage carries the penetration, so you dip less of
 your back gas. A stage spends half of what its basis holds above the reserve,
 `(basis - reserve)/2`, on the way in - it is dropped at `fill - (basis -
@@ -169,51 +181,81 @@ clamped to `[0, tank empty]`. **A moved drop never buys reach**
 the stage that amount capped at the strategy's own safe IN gas, so it recomputes
 on `base_budget + sum(min(breathed, safe) - safe)` and can never reach further
 than the same plan without the moved drops. The pins are re-checked on every
-recompute, so this holds whatever moved under a saved pin since it was set:
+recompute, so this holds whatever moved under a saved pin since it was set.
+
+**A pinned drop decides the route** (#576 RV8c-2, decided D1-D3; `gas/pinned.rs`).
+A drop the diver pinned is a place the dive goes, so the route passes it the way it
+passes a way point:
+
+- **D1, no endpoint**: out through every pin, in drop order, then on to the
+  deepest station *beyond* the last pin - a station a shortest path from the
+  previous point reaches through the pin, never one only a backtrack reaches.
+  The deepest station anywhere is no longer a candidate.
+- **D2, with an endpoint**: through the pins first, then on to the endpoint. A pin
+  off the endpoint's passage is visited and the dive doubles back from it; the
+  backtrack is charged like any other leg (two pins on different branches: drop 1's
+  branch, back, drop 2's branch). Out of budget, the dive turns at the last
+  station it can afford on that route, as toward any endpoint.
+- **D3, the gas runs out first**: when the budget (or the scooter range) ends
+  before a pin, the dive turns at the last station it can afford on the way there.
+  The stage is carried the whole dive, the drop is reported at its pin past the
+  turnaround - its `stage_drop_route_indices` entry is beyond the route's last
+  station - and is never flagged over-reserve; the map draws it grey and the
+  readout says "not reached" (`utils/gasReach.ts` `stageDropReached`). The pin is
+  priced as if reached: what it strands stays stranded.
+- A pin the route already passes before its own turn - on the way-point chain, or
+  on the way to an earlier pin (drop 2 moved shallower than drop 1) - stays at that
+  first pass: the stage is dropped there full, and the dive is not sent back to it.
+- With way points, every pin the way-point chain does not pass is visited after
+  the last way point (#576 open question: a pin between two way points).
+
+The route through the pins does not depend on the budget; only where the dive
+turns on it does. So the gas each pin has cost is read off the pinned route before
+the budget exists - the ordering stays acyclic - and LESS gas can only turn a
+pinned plan earlier, never send it somewhere else (the rule this replaced,
+NF-PGAS3-1, priced a pin only when the pin-free route happened to pass it: a change
+that moved the pin-free route handed the stranded gas back, and the same pinned plan
+reached further on less gas). The reach masks and the turn frontier stay the plain
+field's at the final budget, so a pin that strands gas shrinks them and none can
+grow them. What each kind of pin does to the plan:
 
 - **Shallower** than the strategy point: the stage is dropped part-full, the
-  surplus stranded, the budget shrinks and the reach shortens. The dive then turns
-  earlier **on the same route** (#576 NF-PGAS3-1, decided "route computed without
-  pins, then pins applied"): at the last station of the pin-free plan's route the
-  lower budget still affords, the way a plan turns short of an endpoint it cannot
-  reach (`budget_view_on_route`). It used to re-pick the deepest station anywhere,
-  which with no endpoint could be on another branch - with the pinned marker
-  re-placed there by its threshold. A moved drop never chooses where the dive goes,
-  and every marker stays on the pin-free route.
+  surplus stranded, the budget shrinks and the reach shortens; the dive turns
+  where the lower budget runs out on the route through the pin.
 - **Deeper**: the marker stays where the diver put it and turns red,
   `stage_drop_over_reserve[k]` is set, the panel warns, and the drop gauge reads
   what the stage gauge shows there - breathing the stage that far eats into its
-  reserve. The plan does not count that gas: the budget, the reach and the turn
-  stay those of the default drop. Set only for a genuine drag deeper
+  reserve. The plan does not count that gas: the budget and the reach stay those
+  of the default drop, and so does the turn for a pin on the pin-free route. Set
+  only for a genuine drag deeper
   (`breathed > safe + 1e-6`); past tank-empty the breathed gas clamps, so the
   drop snaps back to the empty point. A later drop is still placed after it, so
   it can land at the turnaround.
-- **Onto the station the default already sits on**: an exact no-op. The default
-  marker sits at the first station whose gas *reaches* the threshold, so its gas
-  usually overshoots; scoring that as a fresh pin would fabricate an over-reserve
-  flag out of a jiggle.
-- **Off the route** - on another branch, or past the end of the route - and
-  unresolvable or non-finite pins: the same as no pin, the strategy default.
-  Reachable in normal use - `.plnx` persists overrides, so a plan reloaded after
-  the survey, the endpoint, the way points or the rig changed can carry a pin the
-  new route no longer passes. Pricing such a pin from its own path, or from the
-  passage beyond the turn, once credited a pin left past the end of a shrunken
-  route with up to 1248 L against the 698 L plan without it.
+- **Onto the station the default already sits on**: the default's pressure,
+  credit and flag. The default marker sits at the first station whose gas
+  *reaches* the threshold, so its gas usually overshoots; scoring that as a fresh
+  pin would fabricate an over-reserve flag out of a jiggle. It counts only where
+  the threshold really lands on the pinned route: a default clamped onto the
+  turnaround (the threshold is past the end of the route) is not the default, and
+  a pin there strands the stage's unbreathed gas like any shallow pin - forgiving
+  it handed that gas back (RV8c-2, scenario 10172).
+- **Off the route** - on another branch, past the end of the route, or past where
+  a shrunken plan now turns: D1-D3 above. Reachable in normal use - `.plnx`
+  persists overrides, so a plan reloaded after the survey, the endpoint, the way
+  points or the rig changed can carry a pin the new route does not pass. Pricing
+  such a pin from the passage beyond the turn once credited it up to 1248 L against
+  the 698 L plan without it; ignoring it (NF-PGAS3-1) gave back its stranded gas.
+  An unresolvable pin, or one in another graph component, is the same as no pin.
 
 Before the cap, a deeper pin extended the reach by the gas breathed into the
 reserve. That made a saved pin dangerous to any later input change: a pin left on
 the station that WAS the default turned into a deeper drag as soon as the default
 moved shallower, and credited the overshoot.
 
-Arrival gas comes from the route's own cumulative gas at the pin's first pass -
+Arrival gas comes from the pinned route's own cumulative gas at the pin's pass -
 not from the station's gas-to-reach, which with way points is measured from the
 last way point and for a station passed on the way out reports the cost of coming
-*back* to it. The walk runs against the base budget's route, which keeps the
-ordering acyclic - the final route depends on the budget, which depends on these
-contributions - and it is also the route the plan flies: the same route, cut
-short where a stranding pin's lower budget runs out. A pin past that earlier
-turnaround is still priced at its station; its marker clamps to the turnaround
-like any threshold past the end of the route. A moved drop's
+*back* to it. A moved drop's
 displayed pressure is inverted off the Z curve by bisection
 (`drop_pressure_for_contribution`) from the stage's real fill - the same gauge
 every default drop (`fill - usable`) is read on - so a drop moved to exactly the
@@ -449,6 +491,11 @@ each pins a rule that reads like an implementation detail and is not.
 
 ## Known limits
 
+- A stage pinned past its own tank-empty point (red) ahead of a later pinned stage:
+  the drop snaps back to the empty point and the next stage is breathed from
+  there, so a smaller first stage hands more of the route to the next one and can
+  raise the budget a little. The one place a pinned plan is not monotone in its gas
+  (`gas/pin_monotone_tests.rs` counts it; #576 open question).
 - [#311](https://github.com/Stalagmight/Stalagmight/issues/311) - the stage-drop
   marker's keyboard nudge and its `aria-valuenow` re-derive the route position by
   first match, so on a way-point route that doubles back they act on the wrong
