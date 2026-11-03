@@ -14,15 +14,19 @@
 //! under the cap, and under Free with a usable allowance below the fill, the decided gauge rule
 //! (#576 A18(e)) credits a LOWER fill MORE even without a pin - the same usable bar sits lower on
 //! the Z curve - so there only the cylinder's size is lowered. The pin-free plan's budget never
-//! rising is asserted too, as the check that each case is in that domain.
+//! rising is asserted too, as the check that each case is in that domain. What is asserted for
+//! every lowering, with nothing set aside: the budget never rises, no station is newly painted
+//! (the overlay is priced on the route through the pins, D4), the turn never moves later, and the
+//! pinned plan never has more budget or reach than the same plan without its pins. The sweep is a
+//! fixed 2,500 plans from a fixed seed, so it runs the same cases in the same few seconds every
+//! time.
 //!
-//! One corner of the kept stage-drop pricing is set aside and counted, not asserted: a stage
-//! pinned past its own tank-empty point (red, over its reserve) ahead of a later pinned stage.
-//! The drop snaps back to the empty point and the next stage is breathed from there (#246), so a
-//! SMALLER first stage empties sooner, hands more of the route to the next one, and strands less of
-//! it - its full tank shrinks faster than its credited half. Starting the next stage at the pin
-//! instead makes the sweep clean; that is a pricing change, left to the owner (W9-GAS report,
-//! open question).
+//! The corner this sweep used to set aside is asserted now (#576 RV8c-2-D5, decided "next stage
+//! starts at pin"): a stage pinned past its own tank-empty point ahead of a later stage. Its drop
+//! snaps back to the empty point (#246), and the next stage used to be breathed from there, so a
+//! SMALLER first stage emptied sooner, handed more of the route to the next one, and was credited
+//! less of the stranding - 18 of 563 such lowerings raised the budget, one from 1302 to 1805 L
+//! (rebuilt below). The next stage now starts at the pin.
 
 #![expect(
     clippy::unwrap_used,
@@ -115,6 +119,7 @@ fn random_cylinder(r: &mut Rng, role: CylRole, conservative: bool) -> Cylinder {
 }
 
 fn reach_within(smaller: &GasReachField, larger: &GasReachField) -> Option<StationRef> {
+    debug_assert_eq!(smaller.station_refs, larger.station_refs);
     smaller
         .reachable
         .iter()
@@ -123,10 +128,11 @@ fn reach_within(smaller: &GasReachField, larger: &GasReachField) -> Option<Stati
         .map(|i| smaller.station_refs[i])
 }
 
-/// Whether lowering stage `k` (its index among the plan's stage drops) is the corner the module
-/// doc sets aside: stage `k` is pinned, has a later stage behind it, and reads empty at its drop
-/// in either plan - breathed to tank-empty before its pin. In this sweep's domain (fills at or
-/// below the rating under the cap, or no cap) a drained stage's gauge reads 0.
+/// Whether lowering stage `k` (its index among the plan's stage drops) is the D5 corner the module
+/// doc names - counted so the sweep shows it reaches it: stage `k` is pinned, has a later stage
+/// behind it, and reads empty at its drop in either plan - breathed to tank-empty before its pin.
+/// In this sweep's domain (fills at or below the rating under the cap, or no cap) a drained
+/// stage's gauge reads 0.
 fn drains_ahead_of_another(
     k: Option<usize>,
     pins: &[Option<StationRef>],
@@ -159,7 +165,6 @@ fn lowering_any_gas_input_never_lets_a_pinned_plan_reach_further() {
     let mut runs = 0usize;
     let mut lowered_budget = 0usize;
     let mut drained_corner = 0usize;
-    let mut corner_bit = 0usize;
     let mut violations: Vec<String> = Vec::new();
     for case in 0..2500 {
         let (project, origin, stations) = random_cave(&mut r);
@@ -293,16 +298,14 @@ fn lowering_any_gas_input_never_lets_a_pinned_plan_reach_further() {
             let stage_k = (rig[i].role == CylRole::Stage).then(|| i - backs);
             if drains_ahead_of_another(stage_k, &pins, [&pinned, &after]) {
                 drained_corner += 1;
-                corner_bit += usize::from(!found.is_empty());
-            } else {
-                violations.extend(found.iter().map(|f| label(f)));
             }
+            violations.extend(found.iter().map(|f| label(f)));
         }
     }
     println!(
         "pinned monotonicity sweep: {runs} lowered inputs over 2500 pinned plans, {lowered_budget} \
-         lowered the budget, {drained_corner} set aside (a stage drained ahead of another; \
-         {corner_bit} of them reach further), {} violations",
+         lowered the budget, {drained_corner} in the D5 corner (a stage drained ahead of another), \
+         0 set aside, {} violations",
         violations.len()
     );
     for v in violations.iter().take(8) {
@@ -313,12 +316,149 @@ fn lowering_any_gas_input_never_lets_a_pinned_plan_reach_further() {
         "the sweep must bite"
     );
     assert!(
-        drained_corner < runs / 10,
-        "{drained_corner} cases set aside"
+        drained_corner > 100,
+        "the sweep must reach the D5 corner ({drained_corner})"
     );
     assert!(
         violations.is_empty(),
         "{} pinned plans reached further on less gas, or past the plan without their pins",
         violations.len()
+    );
+}
+
+/// The sweep's case 791, rebuilt: a five-leg line (lengths and depths as the sweep drew them,
+/// rounded to the millimetre), with two side passages joined at its end, 0:5.
+fn case_791_cave() -> (Project, StationRef, [StationRef; 2]) {
+    let mut p = Project::new("Gas".to_string(), None);
+    let leg = |length: f64, depth_in: f64, depth_out: f64| ShotData {
+        length,
+        depth_in,
+        depth_out,
+        ..Default::default()
+    };
+    let line = p
+        .add_section(SectionData {
+            shots: vec![
+                leg(114.447, 0.414, 4.986),
+                leg(123.952, 4.986, 7.380),
+                leg(195.989, 7.380, 4.909),
+                leg(144.319, 4.909, 12.504),
+                leg(23.379, 12.504, 9.073),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let end = StationRef::new(line, 5);
+    let mut side = |shots: Vec<ShotData>| {
+        let id = p
+            .add_section(SectionData {
+                shots,
+                ..Default::default()
+            })
+            .id;
+        p.merge_stations(end, StationRef::new(id, 0)).unwrap();
+        StationRef::new(id, 0)
+    };
+    let first = side(vec![leg(150.895, 9.073, 8.289), leg(35.917, 8.289, 6.731)]);
+    let second = side(vec![
+        leg(161.595, 9.073, 12.904),
+        leg(113.914, 12.904, 16.607),
+    ]);
+    (p, StationRef::new(line, 0), [first, second])
+}
+
+#[test]
+fn case_791_a_smaller_first_stage_no_longer_hands_the_route_to_the_second() {
+    // #576 RV8c-2-D5, the W9-GAS sweep's worst set-aside case. TwoStage under the conservative cap,
+    // the endpoint back at the entrance, both drops pinned at the end of the line (stage 1 on one
+    // side passage's first station, stage 2 on the other's - the same place, 0:5). Stage 1 holds
+    // more than the route to the pin, so stage 2 is dropped there full and its gas stranded:
+    // 1302 L, and the dive turns at 0:2, short of the pins.
+    //
+    // Lowering stage 1's fill from 130.61 to 54.05 bar empties it before the pin. Breathed from
+    // that empty point, stage 2 was credited the rest of the way to the pin and the budget went UP
+    // to 1805 L - the turn moved on to 0:3 on less gas. Starting stage 2 at the pin, it stays full
+    // and stranded, and the budget falls by exactly what the pin-free plan loses.
+    let (project, origin, [first_side, second_side]) = case_791_cave();
+    let diver = Diver::new(20.0, None).unwrap();
+    let mut cfg = GasConfig {
+        default_reserve: ReservePreset::TwoStage,
+        conservative_tank_gas: true,
+        ..GasConfig::default()
+    };
+    cfg.reserve_profile.stage_reserve_bar = 1.936;
+    cfg.normalize();
+    let cylinder = |volume: f64, rated: f64, fill: f64, role: CylRole| {
+        Cylinder::new(volume, rated, fill, TankMaterial::Steel, role, None).unwrap()
+    };
+    let rig = |stage_1_fill: f64| {
+        [
+            cylinder(15.696, 300.0, 114.360, CylRole::BackGas),
+            cylinder(15.986, 207.0, stage_1_fill, CylRole::Stage),
+            cylinder(13.002, 232.0, 205.065, CylRole::Stage),
+        ]
+    };
+    let pins = [Some(second_side), Some(first_side)];
+    let plan = |stage_1_fill: f64, pins: &[Option<StationRef>]| {
+        project.compute_gas_reach_field_with_overrides(
+            Some(&origin),
+            Some(&origin),
+            &[],
+            &[],
+            &diver,
+            &rig(stage_1_fill),
+            &cfg,
+            pins,
+        )
+    };
+    let full = plan(130.61, &pins);
+    let lowered = plan(54.05, &pins);
+    let (free_full, free_lowered) = (plan(130.61, &[]), plan(54.05, &[]));
+    let show = |label: &str, f: &GasReachField| {
+        println!(
+            "CASE-791 {label}: budget {:.2} L, turn {:?}, drop bars {:?}, over {:?}",
+            f.budget_litres,
+            f.final_turn_ref.map(|s| (s.section_id, s.station_index)),
+            f.stage_drop_bars
+                .iter()
+                .map(|b| (b * 100.0).round() / 100.0)
+                .collect::<Vec<_>>(),
+            f.stage_drop_over_reserve
+        );
+    };
+    show("stage 1 at 130.61 bar", &full);
+    show("stage 1 at 54.05 bar", &lowered);
+    assert!(
+        lowered.stage_drop_bars[0] < 1e-6,
+        "the lowered stage 1 must run dry before its pin ({:.2} bar)",
+        lowered.stage_drop_bars[0]
+    );
+    for (f, what) in [(&full, "130.61"), (&lowered, "54.05")] {
+        assert!(
+            (f.stage_drop_bars[1] - 205.065).abs() < 1e-6,
+            "stage 1 at {what} bar: stage 2 breathed before the shared pin ({:.2} bar left)",
+            f.stage_drop_bars[1]
+        );
+    }
+    assert!(
+        lowered.budget_litres < full.budget_litres,
+        "less stage gas raised the budget: {:.2} -> {:.2} L",
+        full.budget_litres,
+        lowered.budget_litres
+    );
+    let free_loss = free_full.budget_litres - free_lowered.budget_litres;
+    assert!(
+        ((full.budget_litres - lowered.budget_litres) - free_loss).abs() < 1e-6,
+        "the pinned plan loses {:.2} L, the plan without pins {free_loss:.2} L",
+        full.budget_litres - lowered.budget_litres
+    );
+    assert!(
+        reach_within(&lowered, &full).is_none(),
+        "less gas painted a station"
+    );
+    let (before, after) = (turn_gas(&full).unwrap(), turn_gas(&lowered).unwrap());
+    assert!(
+        after <= before + 1e-9,
+        "the turn moved later: {before:.2} -> {after:.2} L"
     );
 }

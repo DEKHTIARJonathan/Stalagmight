@@ -1433,6 +1433,13 @@ const OVER_RESERVE_EPS_LITRES: f64 = 1e-6;
 /// Uncapped, a pin left on what USED to be the default station turned into a deeper drag the moment
 /// an input change moved the default shallower, and credited the overshoot.
 ///
+/// The next stage starts at the pin (#576 RV8c-2-D5, decided "next stage starts at pin"), also
+/// when the pinned stage ran dry before it: the dive carries that stage to its pin, and the next
+/// stage is credited only the route from there. Starting it at the empty point instead made a
+/// SMALLER stage hand more of the route to the next one - it empties sooner - and a later pinned
+/// stage was credited the difference: lowering a stage's fill raised the budget (W9-GAS sweep: 18
+/// cases, one from 1302 to 1805 L). The dry stage's marker still sits at its empty point.
+///
 /// The price is the same whether or not the dive gets to the pin (#576 RV8c-2-D3, "no stranding
 /// forgiven"): a dive that runs out of gas on the way there turns early and carries the stage, and
 /// what the pin strands stays stranded.
@@ -1466,21 +1473,24 @@ fn price_stage_drops(
             Some((before, at))
         });
         let default_threshold = eff_cum + p.safe_in_litres;
-        let (breathed, bar, is_over) = match pass {
+        // `next` is where the following stage starts: the pin for a priced pin (D5) - the same as
+        // `eff_cum + breathed` unless the stage ran dry short of it - else this drop.
+        let (breathed, bar, is_over, next) = match pass {
             Some((before, at)) if !(before < default_threshold && default_threshold <= at) => {
                 let breathed = (at - eff_cum).clamp(0.0, p.phys_cap_litres);
                 (
                     breathed,
                     drop_pressure_for_contribution(p, breathed),
                     breathed > p.safe_in_litres + OVER_RESERVE_EPS_LITRES,
+                    at.max(eff_cum),
                 )
             }
-            _ => (p.safe_in_litres, p.default_bar, false),
+            _ => (p.safe_in_litres, p.default_bar, false, default_threshold),
         };
         // Credit no more of the stage than its default drop would: a deeper pin buys no reach.
         delta += breathed.min(p.safe_in_litres) - p.safe_in_litres;
-        eff_cum += breathed;
-        thresholds.push(eff_cum);
+        thresholds.push(eff_cum + breathed);
+        eff_cum = next;
         bars.push(bar.max(0.0));
         over.push(is_over);
     }
