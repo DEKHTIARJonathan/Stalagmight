@@ -477,6 +477,37 @@ test('the live workflows hand the unprivileged runner to one wrapped command, ne
   }
 });
 
+// "Lints first, tests still run" (#576 E18(h)) must hold for a FORMAT failure too, the
+// most common lint failure: with an implicit success() a failed `cargo fmt --check`
+// skipped Clippy (its findings hidden until the next run) and the hosted Rust cache
+// restore (every later Rust step compiled cold) (#576 RV4-FE-FEB-5). Every step of the
+// `check` job after the fmt gate carries !cancelled() (or always()), except the
+// PLUMBING_STEPS rows (observability that gates nothing).
+test('in ci.yml `check`, every gate and cache step after cargo fmt still runs when fmt fails', () => {
+  const wf = '.github/workflows/ci.yml';
+  const lines = fs.readFileSync(path.join(REPO_ROOT, wf), 'utf8').split(/\r?\n/);
+  const steps = [];
+  let inCheck = false;
+  for (const line of lines) {
+    if (/^ {2}[\w-]+:\s*$/.test(line)) inCheck = line.trim() === 'check:';
+    if (!inCheck) continue;
+    const item = /^ {6}- (.*)$/.exec(line);
+    const key = item ? item[1] : (/^ {8}(\S.*)$/.exec(line)?.[1] ?? null);
+    if (item) steps.push({ name: null, uses: null, cond: null });
+    if (key === null || steps.length === 0) continue;
+    const kv = /^(name|uses|if):\s*(.*)$/.exec(key);
+    if (kv) steps.at(-1)[kv[1] === 'if' ? 'cond' : kv[1]] = kv[2].trim();
+  }
+  const fmt = steps.findIndex((s) => s.name === 'Rust formatting (cargo fmt --check)');
+  assert.ok(fmt >= 0 && steps.length - fmt > 10, `the fmt step or the steps after it are gone (${steps.length} steps read)`);
+  const plumbing = new Set(PLUMBING_STEPS.filter((s) => s.workflow === wf).map((s) => s.step));
+  const skippedOnFmtFailure = steps
+    .slice(fmt + 1)
+    .filter((s) => !plumbing.has(s.name) && !/!cancelled\(\)|always\(\)/.test(s.cond ?? ''))
+    .map((s) => s.name ?? s.uses);
+  assert.deepEqual(skippedOnFmtFailure, [], 'these steps keep the implicit success() and are skipped when cargo fmt fails');
+});
+
 // --- the live repo -------------------------------------------------------------------------------
 
 test('the live tree passes: every CI gate is in the CLAUDE.md checklist', () => {

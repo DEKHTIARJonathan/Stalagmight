@@ -86,8 +86,10 @@ jobs:
       # Self-hosted: that's useless on an ephemeral (--rm) runner - it uses the
       # persistent sccache Docker volume instead (RUSTC_WRAPPER=sccache is set
       # in the container env). 100% warm hit-rate measured in #134.
+      # !cancelled(): a cargo fmt failure above must not skip the restore, or every
+      # Rust step below (which all run !cancelled()) compiles cold (#576 RV4-FE-FEB-5).
       - name: Rust cache (hosted only)
-        if: runner.environment == 'github-hosted'
+        if: ${{ !cancelled() && runner.environment == 'github-hosted' }}
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           # vendor/compass_data is [workspace]-excluded, so it builds into its own
@@ -110,8 +112,9 @@ jobs:
       # check are check-mode builds (metadata, no codegen) and share no artifacts
       # with the full `cargo test` build, so running them before it costs nothing
       # extra and reports a deny-level lint or a release-only type error in
-      # minutes instead of after the whole test run. Every step after Clippy
-      # carries `if: !cancelled()`, so a lint failure still gets the release
+      # minutes instead of after the whole test run. Clippy and every step after
+      # it carry `if: !cancelled()`, so a lint failure - cargo fmt's included
+      # (#576 RV4-FE-FEB-5) - still gets Clippy's own findings, the release
       # check, tsc, the pnpm gates, vitest and the Rust tests in the same run
       # (the job still fails). The steps that need node_modules also require
       # the pnpm install to have succeeded, so a failed install reports once
@@ -121,6 +124,7 @@ jobs:
       # 17dc4feb; this enforces it so it can't silently rot again. Pedantic lints
       # stay warn-level (advisory) - only the deny-level policy fails the build.
       - name: Clippy (deny-level lint gate)
+        if: ${{ !cancelled() }}
         run: cargo clippy --workspace --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets
         env:
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
