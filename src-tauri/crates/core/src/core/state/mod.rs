@@ -439,6 +439,7 @@ mod sdb_failed_push_save_tests;
 #[expect(
     clippy::expect_used,
     clippy::print_stdout,
+    clippy::panic,
     reason = "test module: panics on a failed assumption are the point, and the printed \
               values are the evidence a run captures"
 )]
