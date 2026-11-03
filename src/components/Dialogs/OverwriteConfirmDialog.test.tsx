@@ -2,9 +2,13 @@
  * Component test - the Save As overwrite confirm reads its body copy from the
  * locale (#576 RV2-FE-5, decision D20-D1), in both variants: the file exists, or
  * the existence probe failed and the dialog must not claim it does (E10-D1).
- * The keys are read back from i18n, so a hard-coded sentence fails here.
+ *
+ * [#576 RV4-FE-FEB-6] The copy cases below render with the four keys OVERRIDDEN
+ * by test sentences that no hard-coded English could match, so a component that
+ * stopped reading the locale fails them. Reading the real locale back proved
+ * nothing: its strings equal the old hard-coded English.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 
 import i18n from '../../i18n';
@@ -21,13 +25,29 @@ beforeEach(() => {
   useUIStore.setState({ closeDialog: vi.fn(), dialogData: { path: '/x/CaveA.stalx', fileName: 'CaveA.stalx' } });
 });
 
+/** Test sentences in place of the four keys: only a component that reads them shows them. */
+const OVERRIDES = {
+  message: 'TEST exists <name>{{fileName}}</name> TEST',
+  messageUnknown: 'TEST unknown <name>{{fileName}}</name> TEST',
+  warning: 'TEST exists warning',
+  warningUnknown: 'TEST unknown warning',
+};
+const ORIGINAL = Object.fromEntries(
+  Object.keys(OVERRIDES).map((key) => [key, i18n.t(`dialogs.overwriteConfirm.${key}`)]),
+);
+const setOverwriteCopy = (copy: Record<string, string>) =>
+  i18n.addResourceBundle('en', 'translation', { dialogs: { overwriteConfirm: copy } }, true, true);
+
 describe('OverwriteConfirmDialog copy', () => {
+  beforeEach(() => setOverwriteCopy(OVERRIDES));
+  afterEach(() => setOverwriteCopy(ORIGINAL));
+
   it('the file exists: the locale sentence names it, in emphasis, and the locale warning follows', () => {
     render(<OverwriteConfirmDialog />);
     const message = screen.getByTestId('overwrite-confirm-message');
-    expect(message).toHaveTextContent(plain('dialogs.overwriteConfirm.message', 'CaveA.stalx'));
+    expect(message.textContent).toBe('TEST exists CaveA.stalx TEST');
     expect(message.querySelector('span')).toHaveTextContent('CaveA.stalx');
-    expect(screen.getByText(i18n.t('dialogs.overwriteConfirm.warning'))).toBeInTheDocument();
+    expect(screen.getByText('TEST exists warning')).toBeInTheDocument();
     expect(screen.queryByTestId('overwrite-confirm-unknown')).toBeNull();
   });
 
@@ -37,12 +57,15 @@ describe('OverwriteConfirmDialog copy', () => {
     });
     render(<OverwriteConfirmDialog />);
     const message = screen.getByTestId('overwrite-confirm-unknown');
-    expect(message).toHaveTextContent(plain('dialogs.overwriteConfirm.messageUnknown', 'CaveA.stalx'));
+    expect(message.textContent).toBe('TEST unknown CaveA.stalx TEST');
     expect(message.querySelector('span')).toHaveTextContent('CaveA.stalx');
-    expect(screen.getByText(i18n.t('dialogs.overwriteConfirm.warningUnknown'))).toBeInTheDocument();
+    expect(screen.getByText('TEST unknown warning')).toBeInTheDocument();
     // It must not claim the file is there.
-    expect(message).not.toHaveTextContent(/already exists\. Do you want/);
+    expect(screen.queryByText('TEST exists warning')).toBeNull();
   });
+});
+
+describe('OverwriteConfirmDialog real copy', () => {
 
   // [#576 NF-W6-1] The name is user text. Interpolated unescaped (the global
   // escapeValue: false), a "<" in it was parsed by Trans as markup: the tail of
