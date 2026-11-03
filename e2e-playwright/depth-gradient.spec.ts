@@ -176,9 +176,10 @@ function differs(a: PixelRgba, b: PixelRgba, tolerance = 8): boolean {
  */
 function isBetween(mid: PixelRgba, a: PixelRgba, b: PixelRgba, slack = 6): boolean {
   for (let c = 0; c < 3; c++) {
-    const lo = Math.min(a[c], b[c]) - slack;
-    const hi = Math.max(a[c], b[c]) + slack;
-    if (mid[c] < lo || mid[c] > hi) return false;
+    // In range: c < 3 indexes the r/g/b members of the 4-channel PixelRgba tuple.
+    const lo = Math.min(a[c]!, b[c]!) - slack;
+    const hi = Math.max(a[c]!, b[c]!) + slack;
+    if (mid[c]! < lo || mid[c]! > hi) return false;
   }
   return true;
 }

@@ -41,7 +41,7 @@ const sectionSeeds: SectionSeed[] = [
 async function getSectionId(page: Page): Promise<number> {
   return page.evaluate(() => {
     const e2e = (window as E2EWindow).__E2E_TEST__;
-    return e2e.projectStore.getState().project!.sections[0].id as number;
+    return e2e.projectStore.getState().project!.sections[0]!.id as number;
   });
 }
 

@@ -399,7 +399,7 @@ export function corpusLookup(reference: string): CorpusLookup {
       ? (entry) => entry.id
       : (entry) => entry.relPath;
   const matches = entries.filter((entry) => key(entry) === reference);
-  if (matches.length === 1) return { outcome: 'found', entry: matches[0], matches: 1 };
+  if (matches.length === 1) return { outcome: 'found', entry: matches[0]!, matches: 1 };
   if (matches.length === 0) return { outcome: 'missing', entry: null, matches: 0 };
   return { outcome: 'ambiguous', entry: null, matches: matches.length };
 }
@@ -602,7 +602,7 @@ export function materializeCorpusEntry(
       const segments = file.rel.split('/');
       for (const segment of segments) names.add(segment);
       if (segments.length > 1) {
-        const top = segments[0];
+        const top = segments[0]!;
         if (!createdTop.includes(top) && !fs.existsSync(path.join(destDir, top))) createdTop.push(top);
         fs.mkdirSync(path.dirname(path.join(destDir, ...segments)), { recursive: true });
       } else if (!createdTop.includes(file.rel)) {

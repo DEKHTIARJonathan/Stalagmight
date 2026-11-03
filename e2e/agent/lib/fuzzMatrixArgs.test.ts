@@ -206,7 +206,7 @@ describe('the other flags still parse as they did', () => {
     // day somebody adds or renames a fixture, which is not what this asserts.
     const known = parse().fixtures[0];
     expect(known).toMatch(/\.stalx$/);
-    expect(parse('--fixtures', known).fixtures).toEqual([known]);
+    expect(parse('--fixtures', known!).fixtures).toEqual([known]); // toMatch above: a string
     expect(() => parse('--fixtures', `sub/${known}`)).toThrow(MatrixArgError);
     expect(() => parse('--fixtures', 'anything.tml')).toThrow(MatrixArgError);
     expect(() => parse('--fixtures', 'no-such-fixture.stalx')).toThrow(MatrixArgError);

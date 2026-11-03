@@ -203,7 +203,7 @@ function runOne(
       if (spawnError) headline = `spawn failed: ${spawnError.message}`;
       else if (timedOut) headline = `timed out after ${Math.round(CHILD_TIMEOUT_MS / 60000)}min (process group killed)`;
       else if (!passed && failIndex >= 0) {
-        const failLine = outLines[failIndex].slice('FAIL: '.length).trim();
+        const failLine = outLines[failIndex]!.slice('FAIL: '.length).trim();
         headline = failLine.endsWith('threw:')
           ? `${failLine} ${(outLines.slice(failIndex + 1).find((line) => line.trim()) ?? '').trim()}`
           : failLine;
@@ -252,9 +252,11 @@ function printReport(results: RunResult[], opts: Options, wallMs: number): void 
   );
   const axisKey = results.find((r) => r.axis !== null)?.axis?.key ?? 'axis';
   const header = ['fixture', 'seed', ...(withAxis ? [axisKey] : []), 'result', 'duration', 'detail'];
-  const widths = header.map((h, i) => Math.max(h.length, ...rows.map((row) => row[i].length)));
+  // Every row has one cell per header column (both split on the same withAxis),
+  // so `row[i]` and `widths[i]` are in range.
+  const widths = header.map((h, i) => Math.max(h.length, ...rows.map((row) => row[i]!.length)));
   const line = (cells: string[]): string =>
-    cells.map((cell, i) => (i === cells.length - 1 ? cell : cell.padEnd(widths[i]))).join('  ').trimEnd();
+    cells.map((cell, i) => (i === cells.length - 1 ? cell : cell.padEnd(widths[i]!))).join('  ').trimEnd();
 
   process.stdout.write(`\n=== fuzz matrix: ${results.length} cell(s) ===\n${line(header)}\n`);
   for (const row of rows) process.stdout.write(`${line(row)}\n`);
@@ -368,7 +370,7 @@ async function main(): Promise<void> {
   const freshness = checkBuildFreshness({ mode: opts.release ? 'release' : agentBuildMode() });
   let next = 0;
   if (cells.length > 1 && workers > 1 && !freshness.fresh) {
-    const first = cells[0];
+    const first = cells[0]!;
     next = 1;
     const label = `[1/${cells.length}]`;
     process.stdout.write(`${label} warm-up alone (rebuild needed: ${freshness.reasons.join('; ')})\n`);
@@ -383,7 +385,7 @@ async function main(): Promise<void> {
         for (;;) {
           const index = next++;
           if (index >= cells.length) return;
-          const cell = cells[index];
+          const cell = cells[index]!;
           const label = `[${index + 1}/${cells.length}]`;
           const result = await runOne(cell, slot, opts, label);
           results.push(result);

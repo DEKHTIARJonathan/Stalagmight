@@ -677,7 +677,7 @@ test.describe('Gas planning', () => {
             format: string;
             request: Record<string, unknown>;
           }>
-        )[0],
+        )[0]!, // in range: the poll above waited for exactly one export
     );
     expect(sent.format).toBe('subsurface-xml');
     expect(sent.path.endsWith('.xml')).toBe(true);
@@ -826,7 +826,7 @@ test.describe('Gas planning', () => {
                     gasPlanStore: { getState: () => { cylinders: Array<{ enabled: boolean }> } };
                   };
                 }
-              ).__E2E_TEST__.gasPlanStore.getState().cylinders[0].enabled,
+              ).__E2E_TEST__.gasPlanStore.getState().cylinders[0]!.enabled,
           ),
         { timeout: 2000 },
       )
@@ -882,7 +882,7 @@ test.describe('Gas planning', () => {
                 gasPlanStore: { getState: () => { cylinders: Array<{ usable_gas_bar: number }> } };
               };
             }
-          ).__E2E_TEST__.gasPlanStore.getState().cylinders[idx].usable_gas_bar,
+          ).__E2E_TEST__.gasPlanStore.getState().cylinders[idx]!.usable_gas_bar,
         i,
       );
     await editGridCell(page, 'gas-cylinder', 0, 'usable', '80');
@@ -973,7 +973,7 @@ test.describe('Gas planning', () => {
           };
         }
       ).__E2E_TEST__;
-      const sec = e2e.projectStore.getState().project.sections[0];
+      const sec = e2e.projectStore.getState().project.sections[0]!;
       e2e.uiStore.getState().openDialog('context-menu', {
         target: { type: 'station', ref: { section_id: sec.id, station_index: 1 } },
         position: { x: 220, y: 220 },
@@ -1008,7 +1008,7 @@ test.describe('Gas planning', () => {
           };
         }
       ).__E2E_TEST__;
-      const sec = e2e.projectStore.getState().project.sections[0];
+      const sec = e2e.projectStore.getState().project.sections[0]!;
       e2e.uiStore.getState().openDialog('context-menu', {
         target: { type: 'station', ref: { section_id: sec.id, station_index: idx } },
         position: { x: 220, y: 220 },
@@ -1095,7 +1095,7 @@ test.describe('Gas planning', () => {
         };
       }).__E2E_TEST__;
       const ps = e2e!.projectStore.getState();
-      const secId = ps.project!.sections[0].id;
+      const secId = ps.project!.sections[0]!.id;
       await ps.setZeroDatum(
         { section_id: secId, station_index: 10 },
         { latitude: 24.55, longitude: -81.78, depth_reference: 0 },
@@ -1612,10 +1612,10 @@ test.describe('Gas planning', () => {
           };
         };
       }).__E2E_TEST__;
-      const sec = e2e!.projectStore.getState().project!.sections[0];
+      const sec = e2e!.projectStore.getState().project!.sections[0]!;
       e2e!.uiStore
         .getState()
-        .setSelection({ type: 'shot', sectionId: sec.id, shotId: sec.shots[0].id });
+        .setSelection({ type: 'shot', sectionId: sec.id, shotId: sec.shots[0]!.id });
     });
     await page.keyboard.press('Delete');
     await expect(page.locator('[data-testid="confirm-dialog"]')).toHaveCount(0);
@@ -1643,7 +1643,7 @@ test.describe('Gas planning', () => {
         };
       }).__E2E_TEST__;
       const ps = e2e!.projectStore.getState();
-      const secId = ps.project!.sections[0].id;
+      const secId = ps.project!.sections[0]!.id;
       await ps.setZeroDatum(
         { section_id: secId, station_index: 0 },
         { latitude: 24.55, longitude: -81.78, depth_reference: 0 },
@@ -1832,7 +1832,7 @@ test.describe('Gas planning', () => {
       .poll(
         async () => {
           const segs = await lastGasReachSegments(page);
-          return segs.length === 0 ? 'no-compute-yet' : segs[0].speed_m_per_min;
+          return segs.length === 0 ? 'no-compute-yet' : segs[0]!.speed_m_per_min;
         },
         { timeout: 3000 }
       )

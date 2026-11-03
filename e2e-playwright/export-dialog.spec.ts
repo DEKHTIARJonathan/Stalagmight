@@ -180,7 +180,7 @@ test.describe('Export Dialog', () => {
 
       await page.getByTestId('export-button').click();
       const calls = await waitForIpcCall(page, 'export_image', n);
-      const args = calls[n - 1].args as { path?: string; options?: { format?: string } };
+      const args = calls[n - 1]!.args as { path?: string; options?: { format?: string } }; // waited for n calls
       expect(args.options?.format).toBe(format);
       expect(args.path).toBe(`/mock/saved-project.${format}`);
       await expect(exportDialog).not.toBeVisible({ timeout: 10000 });

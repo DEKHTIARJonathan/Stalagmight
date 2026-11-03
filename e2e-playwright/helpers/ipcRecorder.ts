@@ -58,10 +58,19 @@ export async function getIpcCalls(page: Page, cmd?: string): Promise<RecordedIpc
   return cmd === undefined ? calls : calls.filter((c) => c.cmd === cmd);
 }
 
-/** Wait until `cmd` has been called `count` times (default: at least once), and return its calls. */
-export async function waitForIpcCall(page: Page, cmd: string, count = 1, timeout = 10000): Promise<RecordedIpcCall[]> {
+/**
+ * Wait until `cmd` has been called `count` times (default: at least once), and return its calls.
+ * `count` is >= 1 at every call site, so the result is typed non-empty: the poll only resolves
+ * once that many calls are recorded, and the log is append-only until the next recordIpcCalls.
+ */
+export async function waitForIpcCall(
+  page: Page,
+  cmd: string,
+  count = 1,
+  timeout = 10000,
+): Promise<[RecordedIpcCall, ...RecordedIpcCall[]]> {
   await expect
     .poll(async () => (await getIpcCalls(page, cmd)).length, { timeout, message: `waiting for IPC ${cmd} x${count}` })
     .toBeGreaterThanOrEqual(count);
-  return getIpcCalls(page, cmd);
+  return getIpcCalls(page, cmd) as Promise<[RecordedIpcCall, ...RecordedIpcCall[]]>;
 }

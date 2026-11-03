@@ -169,11 +169,11 @@ test.describe('Dive-plan persistence (#244)', () => {
 
     const plans = await savedPlans(page);
     expect(plans).toHaveLength(1);
-    expect(plans[0].name).toBe('Deep push');
+    expect(plans[0]!.name).toBe('Deep push');
     // The just-saved plan is now the loaded one (baseline = current inputs → not dirty).
-    expect(await loadedPlanId(page)).toBe(plans[0].id);
+    expect(await loadedPlanId(page)).toBe(plans[0]!.id);
     await expect(page.locator('[data-testid="dive-plan-dirty"]')).toHaveCount(0);
-    await expect(page.locator('[data-testid="dive-plan-select"]')).toHaveText(plans[0].name);
+    await expect(page.locator('[data-testid="dive-plan-select"]')).toHaveText(plans[0]!.name);
   });
 
   test('loading another plan applies its snapshot to the inputs @smoke', async ({ page }) => {

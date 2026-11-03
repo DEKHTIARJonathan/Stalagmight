@@ -159,7 +159,7 @@ test.describe('Draft shot rows', () => {
     await fillDraftRow(page, 3, '5');
     await expect(page.getByTestId('grid-row-4')).toHaveClass(/sg-row-draft/);
     const uuids = await page.evaluate(() => {
-      const shots = (window as E2EWindow).__E2E_MOCKS__!.getCurrentProject()!.sections[0].shots as Array<{
+      const shots = (window as E2EWindow).__E2E_MOCKS__!.getCurrentProject()!.sections[0]!.shots as Array<{
         uuid?: string | null;
       }>;
       return shots.map((s) => s.uuid ?? null);
@@ -355,8 +355,8 @@ test.describe('Draft shot rows', () => {
 
     const newShotLeft = () =>
       page.evaluate(() => {
-        const shots = (window as E2EWindow).__E2E_TEST__.projectStore.getState().project!.sections[0].shots;
-        return shots.length === 4 ? shots[3].left : `shots=${shots.length}`;
+        const shots = (window as E2EWindow).__E2E_TEST__.projectStore.getState().project!.sections[0]!.shots;
+        return shots.length === 4 ? shots[3]!.left : `shots=${shots.length}`;
       });
     await expect.poll(newShotLeft, { timeout: 5000 }).toBe(2.5);
     await expect(page.getByTestId('grid-cell-3-left')).toHaveText('2.5');

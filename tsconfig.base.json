@@ -29,6 +29,7 @@
     "strictNullChecks": true,
     "exactOptionalPropertyTypes": true,
     "noImplicitAny": true,
+    "noUncheckedIndexedAccess": true,
     "strictFunctionTypes": true,
     "strictBindCallApply": true,
     "strictPropertyInitialization": true,

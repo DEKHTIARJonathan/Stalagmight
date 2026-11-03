@@ -45,7 +45,12 @@ function buildShot(index: number) {
   };
 }
 
-async function setup(page: Page, sectionCount = 1) {
+// Typed by count: the length check at the end of setup() throws unless exactly
+// `sectionCount` ids came back.
+function setup(page: Page): Promise<[number]>;
+function setup(page: Page, sectionCount: 2): Promise<[number, number]>;
+function setup(page: Page, sectionCount: 3): Promise<[number, number, number]>;
+async function setup(page: Page, sectionCount = 1): Promise<number[]> {
   await setupMockedPage(page);
   await createProject(page, 'Reverse Section');
 
@@ -573,7 +578,7 @@ test.describe('Reverse Section', () => {
     await waitForNoDialogs(page);
 
     const sectionId = await page.evaluate(
-      () => (window as E2EWindow).__E2E_TEST__.projectStore.getState().project!.sections[0].id as number
+      () => (window as E2EWindow).__E2E_TEST__.projectStore.getState().project!.sections[0]!.id as number
     );
     await page.evaluate(() =>
       (window as E2EWindow).__E2E_TEST__.projectStore.setState({ isDirty: false })

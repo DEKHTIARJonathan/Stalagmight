@@ -122,7 +122,7 @@ function buildMockDmpFile(options: MockDmpOptions = {}) {
   };
 }
 
-const defaultSuggestions: MockSuggestion[] = [
+const defaultSuggestions: [MockSuggestion, ...MockSuggestion[]] = [
   {
     existingStationIndex: 0,
     importStationIndex: 0,

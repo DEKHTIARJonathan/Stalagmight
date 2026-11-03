@@ -364,12 +364,12 @@ export async function computeImportScreenDigest(
       const prefix = entry.slice(0, entry.length - 1);
       const found = byPrefix(prefix);
       for (let j = 0; j < found.length && j < PATTERN_CAP; j++) {
-        const id = found[j].getAttribute('data-testid');
+        const id = found[j]!.getAttribute('data-testid');
         // Reported as-is. A prefix can over-match slightly (`shot-editor-cell-`
         // also catches `shot-editor-cell-editor`), and that is wanted: every id
         // it catches is a real control, and the generators draw only from ids
         // the model's own patterns describe.
-        if (id !== null && live[id] === undefined) live[id] = classify(found[j]);
+        if (id !== null && live[id] === undefined) live[id] = classify(found[j]!);
       }
       continue;
     }
@@ -398,7 +398,7 @@ export async function computeImportScreenDigest(
     if (portaled.length === 0) continue;
     const values: string[] = [];
     for (let j = 0; j < portaled.length && j < PATTERN_CAP; j++) {
-      const value = portaled[j].getAttribute('data-value');
+      const value = portaled[j]!.getAttribute('data-value');
       if (value !== null) values.push(value);
     }
     opts[id] = values;
@@ -409,7 +409,7 @@ export async function computeImportScreenDigest(
   const frozen: number[] = [];
   const frozenNodes = byPrefix('shot-frozen-');
   for (let i = 0; i < frozenNodes.length; i++) {
-    const id = frozenNodes[i].getAttribute('data-testid') || '';
+    const id = frozenNodes[i]!.getAttribute('data-testid') || '';
     const index = Number(id.slice('shot-frozen-'.length));
     if (Number.isInteger(index) && index >= 0) frozen.push(index);
   }
@@ -424,16 +424,16 @@ export async function computeImportScreenDigest(
   };
   let activeRow: number | null = null;
   for (let i = 0; i < rowNodes.length; i++) {
-    if (rowNodes[i].getAttribute('data-active') === 'true') {
-      const index = rowIndexOf(rowNodes[i], 'shot-editor-row-');
+    if (rowNodes[i]!.getAttribute('data-active') === 'true') {
+      const index = rowIndexOf(rowNodes[i]!, 'shot-editor-row-');
       if (index >= 0) activeRow = index;
     }
   }
   const selected: Record<string, true> = {};
   const cellNodes = byPrefix('shot-editor-cell-');
   for (let i = 0; i < cellNodes.length; i++) {
-    if (cellNodes[i].getAttribute('data-in-selection') !== 'true') continue;
-    const index = rowIndexOf(cellNodes[i], 'shot-editor-cell-');
+    if (cellNodes[i]!.getAttribute('data-in-selection') !== 'true') continue;
+    const index = rowIndexOf(cellNodes[i]!, 'shot-editor-cell-');
     if (index >= 0) selected[String(index)] = true;
   }
   // Diagnostics, only for the two screens a reader cannot otherwise explain.
@@ -498,7 +498,7 @@ export async function computeImportScreenDigest(
   const toast: string[] = [];
   const toastNodes = many('toast');
   for (let i = 0; i < toastNodes.length; i++) {
-    toast.push(toastNodes[i].getAttribute('data-toast-key') || '(unkeyed)');
+    toast.push(toastNodes[i]!.getAttribute('data-toast-key') || '(unkeyed)');
   }
   const err = textOf('wizard-error') ?? textOf('error-dialog') ?? textOf('zero-datum-gps-error');
 
@@ -545,7 +545,7 @@ export async function computeImportScreenDigest(
       sections = list.length;
       shots = 0;
       for (let i = 0; i < list.length; i++) {
-        const own = list[i] && Array.isArray(list[i].shots) ? (list[i].shots as unknown[]).length : 0;
+        const own = list[i] && Array.isArray(list[i]!.shots) ? (list[i]!.shots as unknown[]).length : 0;
         shots += own;
       }
       undo = ((await core.invoke('get_undo_stack')) as unknown[]).length;

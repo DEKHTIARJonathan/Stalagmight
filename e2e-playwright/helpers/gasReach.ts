@@ -18,7 +18,7 @@ export async function lastGasReachEndpoint(page: Page): Promise<StationRef | nul
           __MOCK_GAS_REACH_CALLS__?: Array<{ endpoint: StationRef | null }>;
         }
       ).__MOCK_GAS_REACH_CALLS__ ?? [];
-    return calls.length ? calls[calls.length - 1].endpoint : null;
+    return calls.length ? calls[calls.length - 1]!.endpoint : null;
   });
 }
 
@@ -31,7 +31,7 @@ export async function lastGasReachOverrides(page: Page): Promise<Array<StationRe
           __MOCK_GAS_REACH_CALLS__?: Array<{ stageDropOverrides: Array<StationRef | null> }>;
         }
       ).__MOCK_GAS_REACH_CALLS__ ?? [];
-    return calls.length ? calls[calls.length - 1].stageDropOverrides : [];
+    return calls.length ? calls[calls.length - 1]!.stageDropOverrides : [];
   });
 }
 
@@ -48,7 +48,7 @@ export async function lastGasReachSegments(page: Page): Promise<PlanSegmentLite[
           __MOCK_GAS_REACH_CALLS__?: Array<{ segments: PlanSegmentLite[] }>;
         }
       ).__MOCK_GAS_REACH_CALLS__ ?? [];
-    return calls.length ? calls[calls.length - 1].segments : [];
+    return calls.length ? calls[calls.length - 1]!.segments : [];
   });
 }
 
@@ -58,7 +58,7 @@ export async function lastGasReachCylinderRoles(page: Page): Promise<string[]> {
     const calls =
       (window as unknown as { __MOCK_GAS_REACH_CALLS__?: Array<{ cylinders?: Array<{ role: string }> }> })
         .__MOCK_GAS_REACH_CALLS__ ?? [];
-    return calls.length ? (calls[calls.length - 1].cylinders ?? []).map((c) => c.role) : [];
+    return calls.length ? (calls[calls.length - 1]!.cylinders ?? []).map((c) => c.role) : [];
   });
 }
 
@@ -73,7 +73,7 @@ export async function lastGasReachDpv(page: Page): Promise<unknown> {
           __MOCK_GAS_REACH_CALLS__?: Array<{ dpv: unknown }>;
         }
       ).__MOCK_GAS_REACH_CALLS__ ?? [];
-    return calls.length ? calls[calls.length - 1].dpv : undefined;
+    return calls.length ? calls[calls.length - 1]!.dpv : undefined;
   });
 }
 

@@ -174,7 +174,7 @@ export function parseArgs(argv: string[]): Options {
   const raw: Record<string, string> = {};
   const notes: string[] = [];
   for (let i = 0; i < argv.length; i++) {
-    const token = argv[i];
+    const token = argv[i]!;
     if (!token.startsWith('--')) bad(`unexpected argument "${token}"`);
     const eq = token.indexOf('=');
     const flag = eq >= 0 ? token.slice(2, eq) : token.slice(2);

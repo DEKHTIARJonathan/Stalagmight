@@ -40,8 +40,8 @@ async function selectFirstShot(page: Page): Promise<void> {
         uiStore: { getState: () => { setSelection: (s: unknown) => void } };
       };
     }).__E2E_TEST__;
-    const section = e2e.projectStore.getState().project.sections[0];
-    e2e.uiStore.getState().setSelection({ type: 'shot', sectionId: section.id, shotId: section.shots[0].id });
+    const section = e2e.projectStore.getState().project.sections[0]!; // the seeded section
+    e2e.uiStore.getState().setSelection({ type: 'shot', sectionId: section.id, shotId: section.shots[0]!.id });
   });
 }
 

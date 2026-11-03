@@ -354,9 +354,10 @@ describe('schema v4 steps', () => {
       corpusId: string;
       corpusHash?: string;
     }[];
-    expect(folded.corpusId).toBe(corpusFileId(rel));
-    expect(folded.corpusHash).toBe(corpusPathHash(rel));
-    expect(idOnly.corpusHash).toBeUndefined();
+    // Two records were made just above.
+    expect(folded!.corpusId).toBe(corpusFileId(rel));
+    expect(folded!.corpusHash).toBe(corpusPathHash(rel));
+    expect(idOnly!.corpusHash).toBeUndefined();
     expect(JSON.stringify(recorder.snapshot())).not.toContain('cave-system');
   });
 

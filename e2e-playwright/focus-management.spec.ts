@@ -158,7 +158,7 @@ test.describe('Focus Management', () => {
       await expect(trigger).toBeFocused();
 
       const sectionId = await page.evaluate(
-        () => (window as E2EWindow).__E2E_TEST__.projectStore.getState().project!.sections[0].id,
+        () => (window as E2EWindow).__E2E_TEST__.projectStore.getState().project!.sections[0]!.id,
       );
       await page.evaluate((id) => {
         (window as E2EWindow).__E2E_TEST__.uiStore

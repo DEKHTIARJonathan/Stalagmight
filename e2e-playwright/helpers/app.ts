@@ -201,6 +201,7 @@ export async function deleteShotAt(page: Page, shotIndex: number): Promise<void>
     ).__E2E_TEST__;
     const state = e2e.projectStore.getState();
     const sec = state.project.sections[0];
+    if (!sec) throw new Error('no section to delete a shot from');
     const shot = sec.shots[idx];
     if (!shot) throw new Error(`no shot at index ${idx}`);
     await state.deleteShot(sec.id, shot.id);

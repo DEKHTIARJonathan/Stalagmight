@@ -136,7 +136,7 @@ test.describe('Virtual Scrolling in DataTable', () => {
     if (!ids) throw new Error('No project IDs');
 
     // Select a shot near the end (index 100) via store
-    const targetShotId = ids.shotIds[100];
+    const targetShotId = ids.shotIds[100]!; // in range: beforeEach seeds SHOT_COUNT (120) shots
     await page.evaluate(
       ({ sectionId, shotId }) => {
         const e2e = (window as E2EWindow).__E2E_TEST__;

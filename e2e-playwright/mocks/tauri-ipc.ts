@@ -2455,7 +2455,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               },
             ] satisfies MockReply<'list_recent_projects'>).filter((p) => !deletedProjectPaths.has(p.file_path)).map((p) =>
               recentNameOverrides[p.file_path]
-                ? { ...p, name: recentNameOverrides[p.file_path] }
+                ? { ...p, name: recentNameOverrides[p.file_path]! }
                 : p
             ) satisfies MockReply<'list_recent_projects'>;
 

@@ -134,9 +134,9 @@ test.describe('Ariane TML import journey', () => {
 
     const calls = await getTmlImportCalls(page);
     expect(calls).toHaveLength(1);
-    expect(calls[0].includeExcluded).toBe(false);
-    expect(calls[0].commentsOnStations).toBe(true);
-    expect(calls[0].virtualShotMode).toBe('Auto');
+    expect(calls[0]!.includeExcluded).toBe(false);
+    expect(calls[0]!.commentsOnStations).toBe(true);
+    expect(calls[0]!.virtualShotMode).toBe('Auto');
   });
 
   test('the excluded-shot toggle counts the extra shot in the preview and sends includeExcluded', async ({ page }) => {
@@ -157,7 +157,7 @@ test.describe('Ariane TML import journey', () => {
 
     const calls = await getTmlImportCalls(page);
     expect(calls).toHaveLength(1);
-    expect(calls[0].includeExcluded).toBe(true);
+    expect(calls[0]!.includeExcluded).toBe(true);
   });
 
   test('the virtual-shot override sends AllReferences', async ({ page }) => {
@@ -174,7 +174,7 @@ test.describe('Ariane TML import journey', () => {
 
     const calls = await getTmlImportCalls(page);
     expect(calls).toHaveLength(1);
-    expect(calls[0].virtualShotMode).toBe('AllReferences');
+    expect(calls[0]!.virtualShotMode).toBe('AllReferences');
   });
 
   test('the all-jumps override sends AllJumps', async ({ page }) => {
@@ -191,7 +191,7 @@ test.describe('Ariane TML import journey', () => {
 
     const calls = await getTmlImportCalls(page);
     expect(calls).toHaveLength(1);
-    expect(calls[0].virtualShotMode).toBe('AllJumps');
+    expect(calls[0]!.virtualShotMode).toBe('AllJumps');
   });
 
   test('an imperial file reports the unit conversion in the dialog and the receipt', async ({ page }) => {

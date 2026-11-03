@@ -170,7 +170,7 @@ test.describe('DMP Import Dialog', () => {
     const [call] = await waitForIpcCall(page, 'import_sections');
     const sent = call.args.sections as Array<{ name?: string; shots?: unknown[] }>;
     expect(sent.map((section) => section.name)).toEqual(['Main Passage']);
-    expect(sent[0].shots?.length ?? 0).toBeGreaterThan(0);
+    expect(sent[0]!.shots?.length ?? 0).toBeGreaterThan(0);
     await expect(page.getByTestId('dmp-new-import-dialog')).toBeHidden({ timeout: 15000 });
     await expect.poll(() => countSections(page), { timeout: 10000 }).toBe(2);
     // A warning-free receipt is a toast (not the modal): one section landed.
@@ -188,8 +188,8 @@ test.describe('DMP Import Dialog', () => {
       }>;
       return sections.map((section) => section.shots.map((shot) => shot.uuid ?? null));
     });
-    expect(uuids[1].length).toBe(sent[0].shots?.length);
-    expect(uuids[1].every((uuid) => typeof uuid === 'string'), `imported uuids: ${JSON.stringify(uuids[1])}`).toBe(true);
+    expect(uuids[1]!.length).toBe(sent[0]!.shots?.length); // uuids[1]: two sections polled above
+    expect(uuids[1]!.every((uuid) => typeof uuid === 'string'), `imported uuids: ${JSON.stringify(uuids[1])}`).toBe(true);
     expect(new Set(uuids.flat()).size).toBe(uuids.flat().length);
   });
 

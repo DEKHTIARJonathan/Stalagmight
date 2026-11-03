@@ -267,7 +267,7 @@ test.describe('Merge and Closure Dialogs', () => {
           });
         }
       },
-      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+      { sectionA: sectionIds[0]!, sectionB: sectionIds[1]! }, // length >= 2 asserted above
     );
 
     // Should open MergeDialog (not ClosureDialog)
@@ -330,7 +330,7 @@ test.describe('Merge and Closure Dialogs', () => {
           });
         }
       },
-      { sectionA: sectionIds[0], sectionB: sectionIds[1] },
+      { sectionA: sectionIds[0]!, sectionB: sectionIds[1]! }, // length >= 2 asserted above
     );
 
     // Should open ClosureDialog (not MergeDialog)
