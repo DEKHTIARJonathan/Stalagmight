@@ -1280,19 +1280,19 @@ mod tests {
         // tmp-directory hazard is guarded at the source: a future edit that reaches
         // back for `VACUUM;` silently reinstates "a small /tmp blocks every push on a
         // large project".
-        let src = include_str!("repair.rs");
-        let start = src
-            .find("pub fn sanitize_push_snapshot")
-            .expect("sanitize fn present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+        // A sanctioned source scan (#576 A8-D2, docs/testing-recipes.md "Source scans").
+        use crate::models::source_scan::{fn_body, prod_region};
+        let src = prod_region(include_str!("repair.rs"), "pub fn sanitize_push_snapshot");
+        let body = fn_body(src, "pub fn sanitize_push_snapshot(");
         assert!(
             body.contains("VACUUM INTO ?1"),
-            "sanitize must compact via VACUUM INTO a sibling"
+            "RULE (no plain VACUUM on the push path): sanitize must compact via VACUUM \
+             INTO a sibling"
         );
         assert!(
             !body.contains("\"VACUUM;\"") && !body.contains("execute_batch(\"VACUUM"),
-            "sanitize must NOT run a plain VACUUM (it rewrites through SQLITE_TMPDIR)"
+            "RULE (no plain VACUUM on the push path): sanitize must NOT run a plain VACUUM \
+             (it rewrites through SQLITE_TMPDIR)"
         );
     }
 

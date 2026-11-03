@@ -2488,20 +2488,19 @@ mod tests {
         // guard it at the source: BOTH dump endpoints must send on
         // `spec::DOWNLOAD_DUMP`. A future edit that reaches for another row
         // silently reinstates the 30 s budget and the 10 MiB ceiling on one of them.
-        let src = include_str!("client.rs");
+        // A sanctioned source scan (#576 A8-D2, docs/testing-recipes.md "Source scans").
+        use crate::models::source_scan::{fn_body, prod_region};
+        let src = prod_region(include_str!("client.rs"), "pub fn download_dump_at_hash(");
         for name in ["pub fn download_dump(", "pub fn download_dump_at_hash("] {
-            let start = src.find(name).expect("dump download fn present");
-            let body = &src[start..];
-            let end = body.find("\n}\n").expect("fn body terminates");
-            let body = &body[..end];
+            let body = fn_body(src, name);
             assert!(
                 body.contains("send(base, insecure_http, &spec::DOWNLOAD_DUMP,"),
-                "{name} must send on the dump row"
+                "RULE (both dump downloads use the dump row): {name} must send on the dump row"
             );
             assert_eq!(
                 body.matches("spec::").count(),
                 1,
-                "{name} must name no other row"
+                "RULE (both dump downloads use the dump row): {name} must name no other row"
             );
         }
         assert_eq!(
@@ -2517,21 +2516,24 @@ mod tests {
         // timeout, the body ceiling, the retry policy and the metrics label off the
         // call's row. An agent built or a retry flag passed anywhere else is the
         // hand-picking that produced the four disagreements this table replaced.
-        let src = include_str!("client.rs");
-        let prod = &src[..src.find("\n#[cfg(test)]\n#[expect(").expect("tests start")];
+        // A sanctioned source scan (#576 A8-D2, docs/testing-recipes.md "Source scans").
+        let prod =
+            crate::models::source_scan::prod_region(include_str!("client.rs"), "fn agent_config");
         assert_eq!(
             prod.matches("ureq::Agent::config_builder()").count(),
             1,
-            "agents are configured in one place (`agent_config`)"
+            "RULE (one endpoint table, #576 B5): agents are configured in one place \
+             (`agent_config`)"
         );
         assert_eq!(
             prod.matches("with_retry(").count(),
             2,
-            "with_retry is called only by `send` (plus its own definition)"
+            "RULE (one endpoint table, #576 B5): with_retry is called only by `send` (plus \
+             its own definition)"
         );
         assert!(
             !prod.contains(".call()?") && !prod.contains(".send(form)"),
-            "no request is sent outside `send`"
+            "RULE (one endpoint table, #576 B5): no request is sent outside `send`"
         );
     }
 

@@ -654,6 +654,44 @@ loader binds to comctl32 v5, which lacks `TaskDialogIndirect` (statically
 imported via rfd / tauri-plugin-dialog). The env var makes `build.rs` delay-load
 comctl32 for test binaries. The shipping app is unaffected.
 
+### Source scans (Rust)
+
+A source scan is a test that `include_str!`s production Rust and asserts
+something about its text. It is the weakest test there is: a rewording that
+keeps the behaviour fails it, and a behaviour change that keeps the words passes
+it. So it is allowed for one kind of rule only (#576 A8):
+
+- **Acceptable:** a policy the type system cannot express - a *site inventory*
+  ("BASE advances only at these triggers", "exactly one production site may keep
+  inherited undo history", "this function takes no lock-ops guard of its own").
+  Each failure message starts with `RULE (...)` and names the rule, so whoever
+  trips it knows what they are being asked to justify.
+- **Not acceptable:** an ORDERING ("X before Y", "inside this lock's span") or
+  the presence of a log line. An ordering becomes a type: the later step takes a
+  value only the earlier step can produce (token passing - `Flushed` ->
+  `PushSnapshot` in `speleodb_push.rs`, `Landed`, `Relocated`,
+  `LocalEditsCleared`, `UnwindCleared` / `ChildPolicyChecked` / `CapturedRecord`
+  / `Reloaded` in `speleodb_revisions.rs`, `EditSessionOpen`), or a guard
+  wrapper the in-span step borrows (`LockOpsHeld`, like `CommandsHeld`). Put the
+  proof type and its producer in a small private module so nothing else can
+  construct it (a private field), and prove the conversion by writing the
+  forbidden reorder in a throwaway copy and capturing the compile error.
+  Behaviour a test can drive is driven: `do_load_project_full` and
+  `do_create_project_full` need only an event sink
+  (`core::events::NullEventSink`), not an app handle; a check that needs the
+  process-wide app directories goes in its own integration-test binary
+  (`crates/core/tests/`). Exhaustiveness is a lint, not a scan
+  (`#[deny(clippy::wildcard_enum_match_arm)]` on the match).
+
+Every scan reads its file through `models::source_scan` (test-support):
+`prod_region(src, anchor)` cuts at the file's trailing test region - the
+column-0 `#[cfg(test)]` inline module with only test items after it, so a gated
+`use`, an indented test-only method, a test-only module mid-file or a comment
+quoting the attribute cannot end production early and make an absence check
+pass vacuously - and fails the test when `anchor` is not in the region.
+`fn_body(region, "fn name(")` takes one uniquely named function at its own
+indentation. Never split on the bare `#[cfg(test)]` string.
+
 ### Agent harness (real Tauri app, on-demand)
 
 ```bash

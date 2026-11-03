@@ -798,7 +798,8 @@ mod tests {
         );
         assert!(
             offenders.is_empty(),
-            "production code must share the open's budget through the `_within` loaders \
+            "RULE (sanctioned scan, #576 A8-D2 - one history budget per open, #473): \
+             production code must share the open's budget through the `_within` loaders \
              (see Database::load_history_budget), never mint its own: {offenders:?}"
         );
     }

@@ -426,8 +426,9 @@ mod tests {
         assert_eq!(
             speleodb_prod_matches("replace_cache_stalx_abandoning", &["speleodb_cache.rs"]),
             0,
-            "the orchestration reaches the abandoning replace only through the \
-             named LocalEditsPolicy, so every waiver is spelled out at its call site"
+            "RULE (sanctioned scan, #576 A8-D2 - every local-edits waiver is spelled at \
+             its call site): the orchestration reaches the abandoning replace only through \
+             the named LocalEditsPolicy"
         );
     }
 
@@ -444,8 +445,9 @@ mod tests {
         let keeps = speleodb_prod_matches("InheritedUndo::Keep", &["speleodb_cache.rs"]);
         assert_eq!(
             keeps, 1,
-            "exactly one production site may keep a downloaded copy's undo history (the \
-             Unwind); found {keeps}. Every other adopt path inherits a stranger's \
+            "RULE (sanctioned scan, #576 A8-D2 - keeping inherited history is Unwind-only, \
+             #194 b3): exactly one production site may keep a downloaded copy's undo \
+             history (the Unwind); found {keeps}. Every other adopt path inherits a stranger's \
              history one Ctrl-Z away from the user (#194 b3)."
         );
     }

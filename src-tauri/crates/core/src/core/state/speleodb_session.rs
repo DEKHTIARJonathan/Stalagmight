@@ -1868,8 +1868,9 @@ mod tests {
         assert_eq!(
             bumping,
             vec!["session_commit.rs", "speleodb_logout.rs"],
-            "the bump-site inventory moved; re-derive the session-boundary \
-             classification in `speleodb_session` before updating this list"
+            "RULE (sanctioned scan, #576 A8-D2 - every slot writer bumps the session or \
+             is classified exempt): the bump-site inventory moved; re-derive the \
+             session-boundary classification in `speleodb_session` before updating this list"
         );
         // Classified non-bumping slot writers: the rollback restore
         // (`restore_snapshot_into`) is the SAME session by design (footgun 5.7).

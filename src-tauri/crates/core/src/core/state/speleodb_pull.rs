@@ -4267,7 +4267,8 @@ mod tests {
         assert_eq!(
             speleodb_prod_matches("speleodb_revision_landed(", &[]),
             4,
-            "expected one definition plus the three landing arms that return an \
+            "RULE (sanctioned scan, #576 A8-D2 - every landing invalidates the recall, \
+             #258): expected one definition plus the three landing arms that return an \
              outcome (200, 304, AdoptConfirmed)"
         );
         // BOTH adoption plans conclude a prior push landed, and counting only the ones
@@ -4361,9 +4362,8 @@ mod tests {
 
     #[test]
     fn every_classify_site_goes_through_the_remembering_resolver() {
-        // [#258] Structural, like the guard-order tripwire above, and for the same
-        // reason: the behaviour needs an `AppState`, whose construction latches the
-        // process-wide app dirs into every other test in this binary.
+        // [#258] A sanctioned source scan (#576 A8-D2, docs/testing-recipes.md
+        // "Source scans"): "these are the classify sites" is a site inventory.
         //
         // What it protects: the ambiguity is normally settled when the project is
         // OPENED, which takes no lock. Restore must CONSULT that answer, not merely
@@ -4376,7 +4376,8 @@ mod tests {
         assert_eq!(
             speleodb_prod_matches("resolve_dump_entry(", &[]),
             2,
-            "resolve_dump_entry must have exactly one definition and one caller - the \
+            "RULE (sanctioned scan, #576 A8-D2 - every classify site remembers, #258): \
+             resolve_dump_entry must have exactly one definition and one caller - the \
              remembering wrapper. A direct call skips both the recall and the record."
         );
         assert_eq!(

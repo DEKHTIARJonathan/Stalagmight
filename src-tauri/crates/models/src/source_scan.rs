@@ -14,11 +14,13 @@
 /// The production region of a Rust source file - everything above its top-level
 /// inline test module - after checking that `anchor` is in it.
 ///
-/// The cut is the first column-0 `#[cfg(test)]` that gates an INLINE module
-/// (`mod tests {`), after any further attribute, comment or blank lines. A gated
-/// `use`, a gated method, an out-of-line `mod x_tests;` declaration, or the
-/// attribute's text inside a comment does not end production. A file with no
-/// such module is production to the end.
+/// The cut is the column-0 `#[cfg(test)]` that gates an INLINE module (`mod tests
+/// {`, after any further attribute, comment or blank lines) and is followed by
+/// nothing but test-gated items to the end of the file - the trailing test region.
+/// A gated `use`, a gated method, an out-of-line `mod x_tests;` declaration, the
+/// attribute's text inside a comment, or a test-only inline module with
+/// production code after it (`repair.rs`'s fault injection) does not end
+/// production. A file with no such region is production to the end.
 ///
 /// `anchor` is text the scan's subject must contain - the signature of the
 /// function it slices, or a line known to sit near the end of the file. Its
@@ -44,37 +46,41 @@ pub fn prod_region<'a>(src: &'a str, anchor: &str) -> &'a str {
     region
 }
 
-/// Byte offset of the line that starts the first top-level inline test module,
-/// if the file has one. See [`prod_region`] for what counts.
+/// Byte offset of the line that starts the file's trailing test region, if it has
+/// one. See [`prod_region`] for what counts.
 pub fn test_module_start(src: &str) -> Option<usize> {
+    let lines: Vec<&str> = src.split_inclusive('\n').collect();
     let mut offset = 0;
-    for line in src.split_inclusive('\n') {
-        if line.trim_end() == "#[cfg(test)]" && gates_an_inline_module(&src[offset + line.len()..])
-        {
-            return Some(offset);
+    for (at, line) in lines.iter().enumerate() {
+        if line.trim_end() == "#[cfg(test)]" {
+            if let Some((item, true)) = gated_item(&lines, at) {
+                if only_gated_items_from(&lines, item_end(&lines, item) + 1) {
+                    return Some(offset);
+                }
+            }
         }
         offset += line.len();
     }
     None
 }
 
-/// Whether the text after a column-0 `#[cfg(test)]` line is (attributes,
-/// comments and blank lines, then) an inline module.
-fn gates_an_inline_module(rest: &str) -> bool {
+/// The item a column-0 attribute line at `gate` applies to - past any further
+/// attribute lines (bracket-balanced: lint waivers run over several lines),
+/// comments and blank lines - and whether that item is an INLINE module (a
+/// declaration, `mod x_tests;`, is not: its body is another file).
+fn gated_item(lines: &[&str], gate: usize) -> Option<(usize, bool)> {
     let bracket_delta = |line: &str| -> i64 {
         let opens = i64::try_from(line.matches('[').count()).unwrap_or(0);
         let closes = i64::try_from(line.matches(']').count()).unwrap_or(0);
         opens - closes
     };
-    let mut depth = 0_i64;
-    for line in rest.lines() {
+    let mut depth = bracket_delta(lines.get(gate)?);
+    for (at, line) in lines.iter().enumerate().skip(gate + 1) {
         if depth > 0 {
             depth += bracket_delta(line);
             continue;
         }
         let trimmed = line.trim_start();
-        // Lint waivers (`#[expect(...)]`, often several lines long) and the comments
-        // explaining them sit between the gate and the module.
         if trimmed.is_empty() || trimmed.starts_with("//") {
             continue;
         }
@@ -82,15 +88,49 @@ fn gates_an_inline_module(rest: &str) -> bool {
             depth += bracket_delta(line);
             continue;
         }
-        // An INLINE module ends production; a DECLARATION (`mod x_tests;`) does
-        // not - its body is another file, and the rest of this one is still code.
         let is_mod = line.starts_with("mod ")
             || line.starts_with("pub mod ")
             || line.starts_with("pub(crate) mod ")
             || line.starts_with("pub(super) mod ");
-        return is_mod && !line.trim_end().ends_with(';');
+        return Some((at, is_mod && !line.trim_end().ends_with(';')));
     }
-    false
+    None
+}
+
+/// The last line of the item starting at `item`: its column-0 closing brace when
+/// the item opens a block (rustfmt layout), else the item line itself.
+fn item_end(lines: &[&str], item: usize) -> usize {
+    let opens_block = lines.get(item).is_some_and(|l| l.trim_end().ends_with('{'));
+    if !opens_block {
+        return item;
+    }
+    lines
+        .iter()
+        .enumerate()
+        .skip(item + 1)
+        .find(|(_, l)| l.starts_with('}'))
+        .map_or(lines.len(), |(at, _)| at)
+}
+
+/// Whether everything from line `from` to the end is test-gated items, blank
+/// lines and comments - i.e. no production follows.
+fn only_gated_items_from(lines: &[&str], from: usize) -> bool {
+    let mut at = from;
+    while let Some(line) = lines.get(at) {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with("//") {
+            at += 1;
+            continue;
+        }
+        if line.trim_end() != "#[cfg(test)]" {
+            return false;
+        }
+        let Some((item, _)) = gated_item(lines, at) else {
+            return true;
+        };
+        at = item_end(lines, item) + 1;
+    }
+    true
 }
 
 /// The text of the one function in `region` whose signature contains
@@ -150,6 +190,11 @@ use std::path::Path;
 #[cfg(test)]
 use std::fmt as _probe;
 
+#[cfg(test)]
+pub(super) mod fault {
+    pub(crate) fn inject() {}
+}
+
 // A comment that quotes #[cfg(test)] mid-line.
 pub fn first() {
     let _ = 1;
@@ -187,6 +232,10 @@ mod tests {
     fn the_cut_lands_at_the_inline_test_module_and_nowhere_earlier() {
         let region = prod_region(SAMPLE, "pub fn last_production_item()");
         assert!(region.contains("pub fn first()"));
+        assert!(
+            region.contains("mod fault"),
+            "a test-only module with production after it is not the test region"
+        );
         assert!(region.contains("fn test_only_method"));
         assert!(region.contains("pub fn second"));
         assert!(
