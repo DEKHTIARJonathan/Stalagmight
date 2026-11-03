@@ -23,11 +23,11 @@ import { accepted, refusedBy } from '../commandResult';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import i18n from '../../i18n';
 import type { DisplaySettings } from '../../types/loading';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
 const loadBinaryMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../utils/ipc');
 vi.mock('../../utils/loadProjectBinary', () => ({ loadProjectFullBinary: loadBinaryMock }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 

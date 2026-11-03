@@ -12,12 +12,10 @@
  * order is the one the test chooses, not whichever file imported them first.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { invokeIpcMock as invokeIpc, stubGetErrorMessage } from '../../test/factories/ipc';
 
-const invokeIpc = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc,
-  getErrorMessage: (e: unknown, fallback?: string) => (e instanceof Error ? e.message : (fallback ?? String(e))),
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage((e: unknown, fallback?: string) => (e instanceof Error ? e.message : (fallback ?? String(e))));
 
 beforeEach(() => {
   vi.resetModules();

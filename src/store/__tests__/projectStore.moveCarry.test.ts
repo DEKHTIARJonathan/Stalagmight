@@ -15,12 +15,9 @@ import {
   isMoveCarryInFlight,
   isMoveCarryRefusal,
 } from '../moveCarry';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 /**
  * GHOST-2 (#576): the mutation chokepoints refuse every survey mutation issued while

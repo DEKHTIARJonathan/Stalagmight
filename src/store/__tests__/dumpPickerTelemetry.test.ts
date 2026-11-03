@@ -23,13 +23,13 @@ vi.mock('../../utils/telemetry', () => ({
   checkDialogCancel,
   trackDialogComplete,
 }));
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: vi.fn(async () => null),
-  getErrorMessage: (e: unknown) => (e as { message?: string })?.message ?? 'error',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage((e: unknown) => (e as { message?: string })?.message ?? 'error');
+invokeIpcMock.mockImplementation(async () => null);
 
 import { useSpeleoStore } from '../speleoStore';
 import { useUIStore } from '../uiStore';
+import { invokeIpcMock, stubGetErrorMessage } from '../../test/factories/ipc';
 
 const DIALOG = 'dialog.speleodb-dump-picker';
 const KEY = 'speleodb-dump-picker';

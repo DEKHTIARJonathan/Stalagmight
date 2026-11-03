@@ -3,12 +3,9 @@ import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import { shouldShowAutosaveBanner } from '../../utils/saveFeedback';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 /**
  * `saveProject(path, isAutosave)`'s second argument leaves the backend save

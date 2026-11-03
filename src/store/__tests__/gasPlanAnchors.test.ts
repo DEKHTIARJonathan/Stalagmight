@@ -17,10 +17,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const planAnchorsForRefs = vi.hoisted(() => vi.fn());
 const planRefsForAnchors = vi.hoisted(() => vi.fn());
-const invokeIpcMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../utils/divePlanApi', () => ({ planAnchorsForRefs, planRefsForAnchors }));
-vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../utils/ipc');
 
 import {
   selectComputeGate,
@@ -33,6 +32,7 @@ import { useProjectStore } from '../projectStore';
 import { projectStateEnvelope } from '../../test/projectStateEnvelope';
 import { divePlanSnapshotOf } from '../../utils/divePlan';
 import type { StationRef } from '../../types/project';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
 const SECTION = 4;
 

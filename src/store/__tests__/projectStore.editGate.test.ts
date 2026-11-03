@@ -3,12 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import { READ_ONLY_EDIT_NOTICE } from '../../utils/editErrors';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 /**
  * #191 read-only edit gate - executeCommand failure handling. When the backend

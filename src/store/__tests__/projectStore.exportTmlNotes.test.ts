@@ -14,17 +14,15 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
 const showToastMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown) => String(e),
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(stringOfError);
 
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { invokeIpcMock, stubGetErrorMessage, stringOfError } from '../../test/factories/ipc';
 
 describe('exportTml surfaces the backend azimuth notes', () => {
   beforeEach(() => {

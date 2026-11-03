@@ -2,19 +2,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { failOnRefreshErrors } from '../../test/refreshGuard';
 
 import { useProjectStore } from '../projectStore';
+import { emptyBinaryRefresh, invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  // [#576 NF-W6A-5] The refresh every edit/import ends with reads bytes; a test that
-  // gives none answers "no project open" rather than making the decoder throw.
-  invokeIpc: (...args: unknown[]) =>
-    args[0] === 'get_project_state_binary'
-      ? Promise.resolve(invokeIpcMock(...args)).then((answer: unknown) =>
-          answer instanceof ArrayBuffer || answer instanceof Uint8Array ? answer : new ArrayBuffer(0),
-        )
-      : invokeIpcMock(...args),
-}));
+vi.mock('../../utils/ipc');
+// [#576 NF-W6A-5] The refresh every edit/import ends with reads bytes; a test that
+// gives none answers "no project open" rather than making the decoder throw.
+emptyBinaryRefresh();
 
 // [#576 NF-W6A-5] Every refresh this file drives must be answered by its mock.
 failOnRefreshErrors();

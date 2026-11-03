@@ -3,12 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import i18n from '../../i18n';
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 /**
  * #576 D39(a): a refused Repair is a coded rejection (code `EDIT_DISABLED`, #576 C4).

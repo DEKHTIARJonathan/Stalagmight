@@ -18,13 +18,11 @@ import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import { useExportStore, DEFAULT_IMAGE_OPTIONS } from '../exportStore';
 import type { DisplaySettings } from '../../types/loading';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
 const loadBinaryMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 vi.mock('../../utils/loadProjectBinary', () => ({
   loadProjectFullBinary: loadBinaryMock,

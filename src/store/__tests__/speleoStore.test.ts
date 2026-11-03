@@ -7,15 +7,12 @@ import {
   speleoProjectSessionStillCurrent,
 } from '../speleoStore';
 import type { SpeleoLinkStatus } from '../../types/ipc.generated';
+import { invokeIpcMock, messageOr, stubGetErrorMessage } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  // The store reports a failed picker retry through this, so the mock has to carry
-  // it or the error path throws inside the very catch that exists to report.
-  getErrorMessage: (e: unknown, fallback?: string) =>
-    (e as { message?: string })?.message ?? fallback ?? 'error',
-}));
+vi.mock('../../utils/ipc');
+// The store reports a failed picker retry through this, so the mock has to carry
+// it or the error path throws inside the very catch that exists to report.
+stubGetErrorMessage(messageOr('error'));
 
 /** A logged-in session so `scanLocksOnOpen` skips the `refreshSession` prelude. */
 const loggedInAs = (email: string) =>

@@ -4,12 +4,9 @@ import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 /**
  * [#576 A3-D2, NF-AN2-1] A save that SUCCEEDS can still have gone without

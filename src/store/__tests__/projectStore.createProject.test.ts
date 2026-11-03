@@ -3,12 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import type { DisplaySettings } from '../../types/loading';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 describe('projectStore.createProject', () => {
   beforeEach(() => {

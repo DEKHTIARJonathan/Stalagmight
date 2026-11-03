@@ -14,9 +14,9 @@ import i18n from '../../i18n';
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../utils/ipc');
 
 /** The backend's read-only-workspace refusal (#576 C4): its code and its sentence. */
 const WORKSPACE_REFUSAL = {

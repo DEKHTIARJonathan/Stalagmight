@@ -19,9 +19,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useProjectStore } from '../projectStore';
 import { useUIStore } from '../uiStore';
 import { startWorkspaceModeSync } from '../workspaceModeSync';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../utils/ipc');
 
 /** Let every pending microtask and timer-free continuation run. */
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));

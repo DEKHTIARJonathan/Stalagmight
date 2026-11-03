@@ -2,12 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useUIStore } from '../uiStore';
 import { sendWorkspaceMode, startWorkspaceModeSync } from '../workspaceModeSync';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 /**
  * #576 C5: the backend refuses survey edits while the workspace is Plan or Export,

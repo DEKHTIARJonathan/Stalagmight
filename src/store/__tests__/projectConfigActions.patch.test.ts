@@ -8,14 +8,11 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../utils/ipc')>()),
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../utils/ipc');
 
 import { useProjectStore } from '../projectStore';
 import { defaultConfig, type Config } from '../../types/config';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
 beforeEach(() => {
   invokeIpcMock.mockReset();

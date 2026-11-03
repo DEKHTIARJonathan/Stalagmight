@@ -25,9 +25,9 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
 import { applySpeleoTreeReplacement } from '../../utils/speleoTreeReplacement';
 import { projectStateEnvelope } from '../../test/projectStateEnvelope';
 import type { StationRef } from '../../types/project';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../utils/ipc');
 const loadBinaryMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/loadProjectBinary', () => ({ loadProjectFullBinary: loadBinaryMock }));
 
