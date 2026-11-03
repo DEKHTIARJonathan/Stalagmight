@@ -13,6 +13,10 @@
 // must catch. Its rules are pinned by scripts/check-e2e-parallel-safe.test.mjs
 // (#576 E7), which runs first in the same job.
 //
+// The same walk over every spec also checks one tier invariant that is not about
+// parallelism (#576 RV8b-E3-3): each spec takes `test` from fixtures/coverage.ts,
+// whose auto fixture is the unmocked-IPC teardown guard (rule `unguarded-test`).
+//
 // The premise is checked too: the root `playwright.config.ts` must still say
 // `fullyParallel: true` - a config that quietly turned it off would make every
 // rule below moot while the gate kept passing.
@@ -96,9 +100,37 @@ function fsImportLines(code) {
   return lines;
 }
 
+// [#576 RV8b-E3-3] The unmocked-IPC teardown guard (E3) is an auto fixture on the
+// `test` that e2e-playwright/fixtures/coverage.ts exports: a spec that takes `test`
+// from anywhere else runs with no guard, and an unmocked command silently answers
+// null. So a spec must import `test` from fixtures/coverage, and must take no value
+// import of `test` (nor a default / namespace import) from '@playwright/test' - a
+// type-only import is fine. Returns the 0-based lines to report.
+const SPEC_FILE_RE = /\.spec\.ts$/;
+const GUARDED_TEST_IMPORT_RE =
+  /\bimport\s*\{[^}]*\btest\b[^}]*\}\s*from\s*(['"`])(?:\.\.?\/)+(?:[\w.-]+\/)*fixtures\/coverage\1/;
+const PLAYWRIGHT_IMPORT_RE = /\bimport\s+(type\s+)?([^;]*?)\s*from\s*(['"`])@playwright\/test\3/g;
+function unguardedTestLines(code, rel) {
+  const lines = new Set();
+  if (!SPEC_FILE_RE.test(rel)) return lines;
+  const text = code.join('\n');
+  const lineOf = (at) => text.slice(0, at).split('\n').length - 1;
+  PLAYWRIGHT_IMPORT_RE.lastIndex = 0;
+  let m;
+  while ((m = PLAYWRIGHT_IMPORT_RE.exec(text)) !== null) {
+    if (m[1]) continue; // `import type { ... }`
+    const named = /\{([^}]*)\}/.exec(m[2]);
+    const valueTest = named !== null && named[1].split(',').some((spec) => /^\s*test\b/.test(spec));
+    const defaultOrNamespace = /^\s*(?:\*\s*as\s+[\w$]+|[\w$]+)\s*(?:,|$)/.test(m[2]);
+    if (valueTest || defaultOrNamespace) lines.add(lineOf(m.index));
+  }
+  if (!GUARDED_TEST_IMPORT_RE.test(text)) lines.add(Math.max(0, code.findIndex((l) => l.trim())));
+  return lines;
+}
+
 // One rule per parallel-unsafe pattern. `re` is tested per comment-stripped line;
 // an optional `accept(match)` exempts a benign sub-case (used for the shared port),
-// and an optional `fileLines(code)` adds the lines a whole-file pattern fires on.
+// and an optional `fileLines(code, rel)` adds the lines a whole-file pattern fires on.
 export const RULES = [
   {
     id: 'own-server',
@@ -151,6 +183,14 @@ export const RULES = [
     why: `hardcodes a host:port other than :${SHARED_VITE_PORT} - implies a per-test server/socket, not parallel-safe.`,
   },
   {
+    // Not a parallel-safety rule: the one tier invariant this walk over every spec
+    // also checks (#576 RV8b-E3-3, see unguardedTestLines). Whole-file only.
+    id: 'unguarded-test',
+    re: /(?!)/,
+    fileLines: unguardedTestLines,
+    why: "takes `test` from somewhere other than ./fixtures/coverage - the unmocked-IPC teardown guard (#576 E3) rides on that fixture's `test`; import { test } from './fixtures/coverage' (a type-only import from @playwright/test is fine).",
+  },
+  {
     id: 'serial',
     // Both the `test.describe.serial(...)` shorthand and the idiomatic
     // `test.describe.configure({ mode: 'serial' })` form.
@@ -176,7 +216,7 @@ export function scan(files, readFile) {
   for (const rel of files) {
     const lines = readFile(rel).split('\n');
     const code = stripComments(lines);
-    const fileHits = new Map(RULES.filter((r) => r.fileLines).map((r) => [r.id, r.fileLines(code)]));
+    const fileHits = new Map(RULES.filter((r) => r.fileLines).map((r) => [r.id, r.fileLines(code, rel)]));
     code.forEach((c, i) => {
       if (!c.trim()) return;
       for (const rule of RULES) {

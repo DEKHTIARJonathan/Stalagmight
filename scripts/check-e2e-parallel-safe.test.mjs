@@ -27,7 +27,13 @@ function test(name, fn) {
 }
 
 const SPEC = 'e2e-playwright/x.spec.ts';
-const ids = (text, rel = SPEC) => scan([rel], () => text).map((v) => v.ruleId);
+// The rule fixtures below are snippets of a spec; each gets the guarded `test`
+// import a real spec carries (#576 RV8b-E3-3), appended so line numbers hold.
+const GUARD_IMPORT = "\nimport { test } from './fixtures/coverage';";
+const scanSpec = (text, rel = SPEC) => scan([rel], () => text + GUARD_IMPORT);
+const ids = (text, rel = SPEC) => scanSpec(text, rel).map((v) => v.ruleId);
+/** A raw scan, for the guard's own cases. */
+const rawIds = (text, rel = SPEC) => scan([rel], () => text).map((v) => v.ruleId);
 
 // --- every rule fires on its pattern ---------------------------------------------
 
@@ -63,7 +69,7 @@ test('the async open / link / chmod names need an fs receiver: window.open and a
 });
 
 // #576 RV4-FE-FEB-3: each of these wrote to disk without the gate seeing a call it knew.
-const at = (text, rel = SPEC) => scan([rel], () => text).map((v) => [v.ruleId, v.lineNo]);
+const at = (text, rel = SPEC) => scanSpec(text, rel).map((v) => [v.ruleId, v.lineNo]);
 const HIDDEN_WRITES = {
   "disk-write fires on bracket access: fs['writeFileSync'](p, x)": ["fs['writeFileSync'](p, x);", [['disk-write', 1]]],
   'disk-write fires on bracket access: fs["rmSync"](d)': ['fs["rmSync"](d, { recursive: true });', [['disk-write', 1]]],
@@ -154,13 +160,13 @@ test('a // inside a string is not a comment (URL), a real trailing // is', () =>
 
 test('block comments are stripped across lines; a pattern in prose does not fire', () => {
   const text = ['/* never do this:', "  fs.writeFileSync('/tmp/x', 'y');", '  test.describe.serial() */', "fs.rmSync('/tmp/d');"].join('\n');
-  const v = scan([SPEC], () => text);
+  const v = scanSpec(text);
   assert.deepEqual(v.map((x) => [x.ruleId, x.lineNo]), [['disk-write', 4]]);
 });
 
 test('REGRESSION (#576 RV3-FE-12): a /* inside a regex literal opens no block comment', () => {
   const text = ['const LEADING = /^\\/*/;', "fs.writeFileSync('/tmp/fixed-path.txt', 'x');", '/* end */'].join('\n');
-  assert.deepEqual(scan([SPEC], () => text).map((x) => [x.ruleId, x.lineNo]), [['disk-write', 2]]);
+  assert.deepEqual(scanSpec(text).map((x) => [x.ruleId, x.lineNo]), [['disk-write', 2]]);
   // Division and a regex after `=>` / `(` / `return` are told apart.
   const kept = stripComments(['const half = a / 2 / b; // note', 'xs.filter((s) => /\\/*x/.test(s));', 'return /"/.test(q); // q']);
   assert.deepEqual(kept, ['const half = a / 2 / b; ', 'xs.filter((s) => /\\/*x/.test(s));', 'return /"/.test(q); ']);
@@ -172,7 +178,7 @@ test('a multi-line template literal keeps a // inside it', () => {
 });
 
 test('reports the original line as the snippet, and the 1-based line number', () => {
-  const [v] = scan([SPEC], () => "\n\n  fs.rmSync('/tmp/d'); // cleanup");
+  const [v] = scanSpec("\n\n  fs.rmSync('/tmp/d'); // cleanup");
   assert.equal(v.lineNo, 3);
   assert.equal(v.snippet, "fs.rmSync('/tmp/d'); // cleanup");
 });
@@ -204,7 +210,7 @@ test('main fails when e2e-playwright/ is missing, and on a symlinked spec', () =
     assert.equal(main(root, quiet, quiet), 1, 'missing scan dir');
     fs.mkdirSync(path.join(root, 'e2e-playwright'));
     fs.writeFileSync(path.join(root, 'playwright.config.ts'), 'export default { fullyParallel: true };');
-    fs.writeFileSync(path.join(root, 'e2e-playwright', 'a.spec.ts'), "test('a', () => {});");
+    fs.writeFileSync(path.join(root, 'e2e-playwright', 'a.spec.ts'), "import { test } from './fixtures/coverage';\ntest('a', () => {});");
     assert.equal(main(root, quiet, quiet), 0, 'clean tree');
     fs.writeFileSync(path.join(root, 'outside.ts'), "fs.writeFileSync('/tmp/x', 'y');");
     fs.symlinkSync('../outside.ts', path.join(root, 'e2e-playwright', 'b.spec.ts'));
@@ -214,6 +220,29 @@ test('main fails when e2e-playwright/ is missing, and on a symlinked spec', () =
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+// #576 RV8b-E3-3: the unmocked-IPC teardown guard is an auto fixture on the `test`
+// fixtures/coverage.ts exports, so a spec that takes `test` from anywhere else runs
+// with no guard and an unmocked command silently answers null.
+const GUARDED = "import { test, expect } from './fixtures/coverage';\ntest('a', async () => {});";
+test('unguarded-test fires on a spec that takes `test` from @playwright/test', () => {
+  assert.deepEqual(rawIds("import { test, expect } from '@playwright/test';\ntest('a', async () => {});"), ['unguarded-test']);
+  assert.deepEqual(rawIds("import { type Page, test } from '@playwright/test';\nimport { expect } from './fixtures/coverage';"), ['unguarded-test']);
+  assert.deepEqual(rawIds(`import * as pw from '@playwright/test';\n${GUARDED}`), ['unguarded-test']);
+  assert.deepEqual(rawIds(`import { test as base } from '@playwright/test';\n${GUARDED}`), ['unguarded-test']);
+});
+
+test('unguarded-test fires on a spec with no `test` from fixtures/coverage', () => {
+  assert.deepEqual(rawIds("import { test, expect } from './helpers/app';\ntest('a', async () => {});"), ['unguarded-test']);
+  assert.deepEqual(rawIds("import { expect } from './fixtures/coverage';\ntest('a', async () => {});"), ['unguarded-test']);
+});
+
+test('unguarded-test passes a guarded spec, a type-only import, a nested spec and a helper', () => {
+  assert.deepEqual(rawIds(GUARDED), []);
+  assert.deepEqual(rawIds(`import type { Locator } from '@playwright/test';\n${GUARDED}`), []);
+  assert.deepEqual(rawIds("import {\n  test,\n  expect,\n} from '../fixtures/coverage';\ntest('a', async () => {});", 'e2e-playwright/sub/a.spec.ts'), []);
+  assert.deepEqual(rawIds("import { test, expect, type Page } from '@playwright/test';", 'e2e-playwright/helpers/x.ts'), []);
 });
 
 test('the live tree passes', () => {

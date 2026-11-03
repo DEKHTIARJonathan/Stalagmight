@@ -929,7 +929,9 @@ test.describe('Feature Name', () => {
 ```
 
 Import `test` from `./fixtures/coverage`, not from `@playwright/test` - that
-fixture is what wires up E2E coverage collection.
+fixture is what wires up E2E coverage collection and the unmocked-IPC teardown
+guard. `pnpm lint:e2e-parallel` fails a spec that takes `test` from anywhere else
+(a type-only import from `@playwright/test` is fine; #576 RV8b-E3-3).
 
 ### Waiters
 
