@@ -301,14 +301,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       const mockShotId = (sectionId: number, seq: number): number =>
         sectionId * MOCK_FEATURE_ID_STRIDE + seq;
 
-      // `section_offsets` reaches the mock in TWO shapes, so nothing may index it
-      // directly. `create_project_full` / `import_sections` / `execute_gpx_import`
-      // build the JS `Record<sectionId, [dx, dy]>`, while the binary envelope
-      // (`load_project_full_binary`, mirroring `core/load_binary.rs`) and anything
-      // injected through `__E2E_MOCKS__.setCurrentProject` carry the backend's
-      // `Array<[sectionId, [dx, dy]]>` pairs. `offsets["1"] = [dx, dy]` on the
-      // array form sets ELEMENT 1 - silently clobbering a neighbouring section's
-      // pair with a bare coordinate - so every read/write goes through these.
+      // `section_offsets` reaches the mock in TWO shapes: `create_project_full` /
+      // `import_sections` / `execute_gpx_import` build the JS `Record<sectionId, [dx, dy]>`,
+      // while the binary envelope (`load_project_full_binary`, mirroring
+      // `core/load_binary.rs`) and anything injected through `__E2E_MOCKS__.setCurrentProject`
+      // carry the backend's `Array<[sectionId, [dx, dy]]>` pairs. The packer reads either
+      // through this; nothing in the mock writes an offset (#576 E3: the reverse's anchor
+      // compensation is the backend's).
       const sectionOffsetPairs = (offsets: unknown): Array<[number, [number, number]]> => {
         if (Array.isArray(offsets)) {
           return (offsets as Array<[number, [number, number]]>).map(
@@ -318,35 +317,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         return Object.entries((offsets ?? {}) as Record<string, [number, number]>).map(
           ([k, v]) => [Number(k), v] as [number, [number, number]],
         );
-      };
-      const readSectionOffset = (offsets: unknown, sectionId: number): [number, number] => {
-        if (Array.isArray(offsets)) {
-          const entry = (offsets as Array<[number, [number, number]]>).find(
-            ([k]) => Number(k) === sectionId,
-          );
-          return entry?.[1] ?? [0, 0];
-        }
-        return (
-          (offsets as Record<string, [number, number] | undefined> | null | undefined)?.[
-            String(sectionId)
-          ] ?? [0, 0]
-        );
-      };
-      const writeSectionOffset = (
-        offsets: unknown,
-        sectionId: number,
-        value: [number, number],
-      ): void => {
-        if (Array.isArray(offsets)) {
-          const pairs = offsets as Array<[number, [number, number]]>;
-          const at = pairs.findIndex(([k]) => Number(k) === sectionId);
-          if (at >= 0) pairs[at] = [sectionId, value];
-          else pairs.push([sectionId, value]);
-          return;
-        }
-        if (offsets && typeof offsets === 'object') {
-          (offsets as Record<string, [number, number]>)[String(sectionId)] = value;
-        }
       };
 
       // The binary envelope `core/load_binary.rs` encodes, packed from the JSON state this
@@ -834,13 +804,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         showDepthGradient: 'false',
       };
 
-      interface MockGpxPoint {
-        latitude: number;
-        longitude: number;
-        elevation: number | null;
-        time: string | null;
-      }
-
       const buildMockGpxFile = (path: string | null | undefined) => {
         const normalized = (path ?? '').toLowerCase();
         const now = new Date();
@@ -926,62 +889,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         ...overrides,
       });
 
-      // Preview closures derived the way the real parser's extract_closures
-      // does (parsers/tml.rs): every Closure-type shot with closure_to_id >= 0
-      // contributes one entry; "from" is the closure shot's own RAW position,
-      // "to" is the target shot's RAW position (indices over the unfiltered
-      // shot lists, including Closure/excluded rows). The real START-target
-      // fallback is not modeled - this fixture has no START shots.
-      const deriveTmlClosures = (
-        sections: TmlFile['sections']
-      ): TmlFile['closures'] => {
-        const idToRawLoc = new Map<number, [number, number]>();
-        sections.forEach((section, si) =>
-          section.shots.forEach((shot, idx) => idToRawLoc.set(shot.id, [si, idx]))
-        );
-        const closures: TmlFile['closures'] = [];
-        sections.forEach((section, si) =>
-          section.shots.forEach((shot, idx) => {
-            if (shot.shot_type !== 'Closure' || shot.closure_to_id < 0) return;
-            const to = idToRawLoc.get(shot.closure_to_id);
-            if (to) {
-              closures.push({
-                from_section_index: si,
-                from_station_index: idx,
-                to_section_index: to[0],
-                to_station_index: to[1],
-              });
-            }
-          })
-        );
-        return closures;
-      };
-
-      // A path containing "imperial" yields an Imperial-unit file, so a spec can
-      // drive the "converted from feet" branch of the dialog and the receipt.
-      // The real parser converts ft->m BEFORE returning the preview
-      // (`apply_unit_conversion`, src-tauri/crates/parsers/src/parsers/tml/mod.rs):
-      // shot length, depth and LRUD, depth_in unless it is the -1 "same as
-      // previous" sentinel, every section's start_depth and the file's
-      // first_start_absolute_elevation all scale by 0.3048 - so the imperial
-      // fixture's canonical numbers are FEET and the parse output below is
-      // metric. This mock scales the shot fields only: its elevation is 0 either
-      // way, and start_depth is read only for a sentinel depth_in, which no shot
-      // that survives the import carries here (only the Closure row has one, and
-      // the preview and the import both skip Closure rows).
+      // A path containing "imperial" yields a file whose unit is Imperial, so a spec can
+      // drive the "converted from feet" branch of the dialog. [#576 E3] Canned: the same
+      // shots either way. The real parser converts ft->m before it returns the preview and
+      // extracts the closures from the Closure rows (`apply_unit_conversion`,
+      // `extract_closures`; parsers tml tests `test_imperial_conversion`,
+      // `test_closure_mapping`); the closure below is written out, not derived.
       const buildMockTmlFile = (path: string | null | undefined): TmlFile => {
         const imperial = (path ?? '').toLowerCase().includes('imperial');
-        const scale = imperial ? 0.3048 : 1;
-        const scaleShot = (shot: TmlShot): TmlShot => ({
-          ...shot,
-          length: shot.length * scale,
-          depth: shot.depth * scale,
-          depth_in: shot.depth_in * scale,
-          left: shot.left * scale,
-          right: shot.right * scale,
-          up: shot.up * scale,
-          down: shot.down * scale,
-        });
         const sections: TmlFile['sections'] = [
           {
             name: 'Main Line',
@@ -989,7 +904,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               buildMockTmlShot(1, 0, 'Main Line', 2),
               buildMockTmlShot(2, 1, 'Main Line', 4, { comment: 'Restriction at the T' }),
               buildMockTmlShot(3, 2, 'Main Line', 6, { excluded: true }),
-            ].map(scaleShot),
+            ],
             surveyor: 'Synthetic Surveyor',
             date: '2026-01-02',
             color: '#3b82f6',
@@ -1015,7 +930,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 closure_to_id: 4,
                 length: 0,
               }),
-            ].map(scaleShot),
+            ],
             surveyor: 'Synthetic Surveyor',
             date: '2026-01-03',
             color: '#22c55e',
@@ -1032,41 +947,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           first_start_absolute_elevation: 0,
           geo_coding: null,
           sections,
-          closures: deriveTmlClosures(sections),
-        };
-      };
-
-      const toShot = (
-        pointA: MockGpxPoint,
-        pointB: MockGpxPoint,
-        shotId: number,
-        depthInverted: boolean
-      ) => {
-        const dLat = pointB.latitude - pointA.latitude;
-        const dLon = pointB.longitude - pointA.longitude;
-        const horizontalMeters = Math.max(0.1, Math.hypot(dLat, dLon) * 111_000);
-        const azimuth = ((Math.atan2(dLon, dLat) * 180) / Math.PI + 360) % 360;
-        const toDepth = (value: number | null): number => {
-          if (value == null || !Number.isFinite(value)) return 0;
-          return depthInverted ? -Math.abs(value) : -value;
-        };
-        return {
-          id: shotId,
-          azimuth_in: azimuth,
-          azimuth_out: azimuth,
-          length: Number(horizontalMeters.toFixed(2)),
-          depth_in: toDepth(pointA.elevation),
-          depth_out: toDepth(pointB.elevation),
-          pitch_in: null,
-          pitch_out: null,
-          left: null,
-          right: null,
-          up: null,
-          down: null,
-          comment: null,
-          kind: 'Normal',
-          marker_index: null,
-          temperature: null,
+          // The Closure row (Side Passage raw row 2) ties back to shot 4 (its raw row 0).
+          closures: [{ from_section_index: 1, from_station_index: 2, to_section_index: 1, to_station_index: 0 }],
         };
       };
 
@@ -1310,126 +1192,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               isIndeterminate: false,
             });
 
-            // Generate mock stations from sections
-            const mockStations: Array<{
-              station_ref: { section_id: number; station_index: number };
-              coordinates: { x: number; y: number; z: number };
-              is_zero_datum: boolean;
-              gps_coordinates: { latitude: number; longitude: number; depth_reference: number } | null;
-              merged_with: Array<{ section_id: number; station_index: number }>;
-              // Optional, exactly like the generated `Station` type: the backend
-              // omits `closures_with` when empty (#441), so the mock must too -
-              // a present-but-empty array is a wire shape the app never sees.
-              closures_with?: Array<{
-                closure_id: number;
-                station_ref: { section_id: number; station_index: number };
-                via_station: { section_id: number; station_index: number } | null;
-                is_transitive: boolean;
-              }>;
-            }> = [];
-
-            // Collect all section IDs for merged station setup
-            const sectionIds = (currentProject.sections as Array<{ id: number }>).map(s => s.id);
-            const currentMerges = (currentProject.station_merges ?? []) as Array<{
-              station_a: { section_id: number; station_index: number };
-              station_b: { section_id: number; station_index: number };
-            }>;
-            const currentClosures = (currentProject.loop_closures ?? []) as Array<{
-              id: number;
-              station_a: { section_id: number; station_index: number };
-              station_b: { section_id: number; station_index: number };
-            }>;
-
-            // Build zero_datums lookup for deriving is_zero_datum and gps_coordinates
-            const loadDatums = (currentProject.zero_datums ?? []) as Array<{
-              station_ref: { section_id: number; station_index: number };
-              gps: { latitude: number; longitude: number; depth_reference: number };
-            }>;
-
-            for (const section of currentProject.sections as Array<{ id: number; shots: Array<{ depth_in?: number; depth_out?: number }> }>) {
-              const shots = section.shots ?? [];
-              const depths: number[] = [];
-              if (shots.length > 0) {
-                const firstDepth = shots[0]?.depth_in ?? 0;
-                depths.push(firstDepth);
-                for (const shot of shots) {
-                  depths.push(shot.depth_out ?? depths[depths.length - 1] ?? 0);
-                }
-              } else {
-                depths.push(0);
-              }
-
-              for (let i = 0; i < depths.length; i++) {
-                const stationRef = { section_id: section.id, station_index: i };
-                let mergedWith: Array<{ section_id: number; station_index: number }> = currentMerges
-                  .flatMap((merge) => {
-                    const isA =
-                      merge.station_a.section_id === stationRef.section_id &&
-                      merge.station_a.station_index === stationRef.station_index;
-                    const isB =
-                      merge.station_b.section_id === stationRef.section_id &&
-                      merge.station_b.station_index === stationRef.station_index;
-                    if (isA) return [merge.station_b];
-                    if (isB) return [merge.station_a];
-                    return [];
-                  });
-
-                const sectionIndex = sectionIds.indexOf(section.id);
-                const isLastStation = i === depths.length - 1;
-                const isFirstStation = i === 0;
-
-                // Backward-compatible fallback used by legacy tests when no explicit merges are configured.
-                if (mergedWith.length === 0 && currentMerges.length === 0) {
-                  if (sectionIndex === 0 && isLastStation && sectionIds.length > 1) {
-                    mergedWith = [{ section_id: sectionIds[1]!, station_index: 0 }];
-                  }
-                  if (sectionIndex === 1 && isFirstStation && sectionIds.length > 1) {
-                    const firstSection = currentProject.sections[0] as { shots: unknown[] } | undefined;
-                    const firstSectionLastStationIndex = firstSection ? (firstSection.shots?.length ?? 0) : 0;
-                    mergedWith = [{ section_id: sectionIds[0]!, station_index: firstSectionLastStationIndex }];
-                  }
-                }
-
-                // Derive is_zero_datum and gps_coordinates from project zero_datums
-                const loadDatum = loadDatums.find(
-                  (d) => d.station_ref.section_id === section.id && d.station_ref.station_index === i
-                );
-                const closuresWith = currentClosures.flatMap((closure) => {
-                  const isA =
-                    closure.station_a.section_id === stationRef.section_id &&
-                    closure.station_a.station_index === stationRef.station_index;
-                  const isB =
-                    closure.station_b.section_id === stationRef.section_id &&
-                    closure.station_b.station_index === stationRef.station_index;
-                  if (isA) {
-                    return [{
-                      closure_id: closure.id,
-                      station_ref: closure.station_b,
-                      via_station: null,
-                      is_transitive: false,
-                    }];
-                  }
-                  if (isB) {
-                    return [{
-                      closure_id: closure.id,
-                      station_ref: closure.station_a,
-                      via_station: null,
-                      is_transitive: false,
-                    }];
-                  }
-                  return [];
-                });
-
-                mockStations.push({
-                  station_ref: stationRef,
-                  coordinates: { x: i * 10, y: 0, z: depths[i] ?? 0 },
-                  is_zero_datum: !!loadDatum,
-                  gps_coordinates: loadDatum ? loadDatum.gps : null,
-                  merged_with: mergedWith,
-                  ...(closuresWith.length > 0 ? { closures_with: closuresWith } : {}),
-                });
-              }
-            }
+            // [#576 E3] The loaded project's stations and stats, canned for the fixed fixture
+            // above (one section, id 1, two shots): the placeholder layout at x = 10 i, the
+            // absolute station depths 0 / -2 / -5 the shots chain to, and the totals of those
+            // two shots. What the backend computes on a real load is pinned by its load tests.
+            const mockStations = [0, -2, -5].map((z, i) => ({
+              station_ref: { section_id: 1, station_index: i },
+              coordinates: { x: i * 10, y: 0, z },
+              is_zero_datum: false,
+              gps_coordinates: null,
+              merged_with: [],
+            }));
 
             // Phase 3-7: Computing stations, validating, etc.
             emitEvent('loading-progress', {
@@ -1455,17 +1228,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               isIndeterminate: true,
             });
 
-            const shotLengths = defaultSections.flatMap((section) =>
-              (section.shots ?? []).map((shot: { length?: number }) => shot.length ?? 0)
-            );
-            const totalLength = shotLengths.reduce((sum, length) => sum + length, 0);
-            // Absolute station z, as the backend fills it (#481) - not the raw
-            // shot depths.
-            const depthValues = mockStations.map((station) => station.coordinates.z);
-            const minDepth = depthValues.length > 0 ? Math.min(...depthValues) : 0;
-            const maxDepth = depthValues.length > 0 ? Math.max(...depthValues) : 0;
-            const shotCount = defaultSections.reduce((count, section) => count + (section.shots?.length ?? 0), 0);
-
             // Return LoadProjectFullResult format
             return {
               loadingId,
@@ -1473,14 +1235,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               project: currentProject as unknown as MockReply<'load_project_full'>['project'],
               stations: mockStations,
               stats: {
-                section_count: currentProject.sections.length,
-                shot_count: shotCount,
-                total_length: totalLength,
-                min_depth: minDepth,
-                max_depth: maxDepth,
-                station_count: mockStations.length,
+                section_count: 1,
+                shot_count: 2,
+                total_length: 25,
+                min_depth: -5,
+                max_depth: 0,
+                station_count: 3,
                 loop_count: 0,
-                penetration_distance: totalLength,
+                penetration_distance: 25,
               },
               warnings: [],
               // The backend's DisplaySettings::default() (loading.rs), every field it sends.
@@ -1676,8 +1438,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               comment?: string;
             }> = [];
 
-            // Collect all section IDs for merged station setup
-            const sectionIdList = (currentProject?.sections as Array<{ id: number }> ?? []).map(s => s.id);
+            // [#576 E3] Stations are a placeholder layout (station i of a section at x = 10 i,
+            // y = 0, z = 0), with the stored merges, closures, datums and comments echoed
+            // onto the stations they name. The real station geometry is the backend's.
             const stateMerges = (currentProject?.station_merges ?? []) as Array<{
               station_a: { section_id: number; station_index: number };
               station_b: { section_id: number; station_index: number };
@@ -1698,11 +1461,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               for (const section of currentProject.sections as Array<{ id: number; shots: unknown[] }>) {
                 // Each section gets (shots.length + 1) stations
                 const shotCount = section.shots?.length ?? 0;
-                const sectionIndex = sectionIdList.indexOf(section.id);
 
                 for (let i = 0; i <= shotCount; i++) {
                   const stationRef = { section_id: section.id, station_index: i };
-                  let mergedWith: Array<{ section_id: number; station_index: number }> = stateMerges
+                  const mergedWith: Array<{ section_id: number; station_index: number }> = stateMerges
                     .flatMap((merge) => {
                       const isA =
                         merge.station_a.section_id === stationRef.section_id &&
@@ -1714,20 +1476,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                       if (isB) return [merge.station_a];
                       return [];
                     });
-                  const isLastStation = i === shotCount;
-                  const isFirstStation = i === 0;
-
-                  // Backward-compatible fallback used by legacy tests when no explicit merges are configured.
-                  if (mergedWith.length === 0 && stateMerges.length === 0) {
-                    if (sectionIndex === 0 && isLastStation && sectionIdList.length > 1) {
-                      mergedWith = [{ section_id: sectionIdList[1]!, station_index: 0 }];
-                    }
-                    if (sectionIndex === 1 && isFirstStation && sectionIdList.length > 1) {
-                      const firstSection = currentProject.sections[0] as { shots?: unknown[] } | undefined;
-                      const firstSectionLastStationIndex = firstSection?.shots?.length ?? 0;
-                      mergedWith = [{ section_id: sectionIdList[0]!, station_index: firstSectionLastStationIndex }];
-                    }
-                  }
 
                   // Derive is_zero_datum and gps_coordinates from project zero_datums
                   const matchingDatum = zeroDatums.find(
@@ -1773,20 +1521,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }
             }
 
-            const depthValues = mockStations.map((station) => station.coordinates.z);
-            const minDepth = depthValues.length > 0 ? Math.min(...depthValues) : 0;
-            const maxDepth = depthValues.length > 0 ? Math.max(...depthValues) : 0;
             const shotCount =
               currentProject?.sections.reduce(
                 (count: number, section) =>
-                  count + ((section as { shots?: Array<{ length?: number }> }).shots?.length ?? 0),
+                  count + ((section as { shots?: unknown[] }).shots?.length ?? 0),
                 0
               ) ?? 0;
-            const totalLength =
-              currentProject?.sections.reduce((total: number, section) => {
-                const shots = (section as { shots?: Array<{ length?: number }> }).shots ?? [];
-                return total + shots.reduce((sum, shot) => sum + (shot.length ?? 0), 0);
-              }, 0) ?? 0;
 
             return {
               // Return a FRESH (deep-cloned) project each call, mirroring the real Tauri
@@ -1804,15 +1544,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 MockReply<'get_project_state'>
               >['project'],
               stations: mockStations,
+              // [#576 E3] Counts of what is stored; the figures the backend derives from the
+              // survey (total length, depth range, penetration, loops - ProjectStats, pinned by
+              // models `stats_single_section` / `stats_multiple_sections` /
+              // `depth_range_is_absolute_not_a_delta_walk`) are canned at 0.
               stats: {
                 section_count: currentProject?.sections.length ?? 0,
                 shot_count: shotCount,
-                total_length: totalLength,
-                min_depth: minDepth,
-                max_depth: maxDepth,
+                total_length: 0,
+                min_depth: 0,
+                max_depth: 0,
                 station_count: mockStations.length,
                 loop_count: 0,
-                penetration_distance: totalLength,
+                penetration_distance: 0,
               },
               frozen_shots: [],
             } satisfies MockReply<'get_project_state'>;
@@ -2037,200 +1781,70 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'execute_gpx_import': {
-            const importWaypoints = (args?.importWaypoints as boolean | undefined) ?? false;
-            const importTracks = (args?.importTracks as boolean | undefined) ?? false;
-            const importRoutes = (args?.importRoutes as boolean | undefined) ?? false;
-            const depthInverted = (args?.depthInverted as boolean | undefined) ?? false;
-            const filePath = (args?.path as string | undefined) ?? null;
-            const sectionPlacements = (Array.isArray(args?.sectionPlacements) ? args?.sectionPlacements : []) as Array<{
-              section_index?: number;
-              placement?: {
-                type?: string;
-                station_index?: number;
-                coordinates?: { latitude: number; longitude: number; depth_reference: number };
-              };
-              name?: string | null;
-              color?: string;
-            }>;
-
+            // [#576 E3] Canned: the file's two waypoints, its track and its route land as
+            // four sections with a zero datum each, whatever the dialog chose. Turning GPX
+            // points into shots (bearing, slope length, depth from elevation, the depth sign
+            // option) and a placement into a datum is the backend's (parsers gpx.rs tests).
             if (!currentProject) {
-              const now = new Date().toISOString();
-              sectionCounter = 0;
-              currentProject = {
-                id: 1,
-                name: 'Imported Project',
-                location: null,
-                created_at: now,
-                modified_at: now,
-                file_path: null,
-                sections: [],
-                station_merges: [],
-                zero_datums: [],
-                loop_closures: [],
-                section_offsets: {},
-              };
+              return Promise.reject({ code: 'FAILED', message: 'No project open' } satisfies CommandError);
             }
-
-            const gpxFile = buildMockGpxFile(filePath);
-            const placementMap = new Map<number, typeof sectionPlacements[number]>();
-            for (const placement of sectionPlacements) {
-              const sectionIndex = placement.section_index;
-              if (typeof sectionIndex === 'number') {
-                placementMap.set(sectionIndex, placement);
-              }
-            }
-
-            const createdSectionIds: number[] = [];
-            let backendSectionIndex = 0;
-            let gpxShotCount = 0;
-
-            const appendSection = (
-              name: string,
-              shots: Array<Record<string, unknown>>,
-              color: string,
-              datum:
-                | {
-                    stationIndex: number;
-                    gps: { latitude: number; longitude: number; depth_reference: number };
-                  }
-                | null
-            ) => {
+            const gpxSections: Array<{
+              name: string;
+              color: string;
+              shots: Array<Record<string, unknown>>;
+              gps: { latitude: number; longitude: number; depth_reference: number };
+            }> = [
+              { name: 'Entry Bell', color: '#4a90d9', shots: [], gps: { latitude: 24.55, longitude: -81.78, depth_reference: 0 } },
+              { name: 'Jump Reel', color: '#4a90d9', shots: [], gps: { latitude: 24.5504, longitude: -81.7794, depth_reference: 0 } },
+              {
+                name: 'Main Line',
+                color: '#3b82f6',
+                shots: [
+                  { azimuth_in: 40, azimuth_out: 40, length: 28.6, depth_in: -2, depth_out: -2.6 },
+                  { azimuth_in: 50, azimuth_out: 50, length: 42.6, depth_in: -2.6, depth_out: -3.1 },
+                ],
+                gps: { latitude: 24.55, longitude: -81.78, depth_reference: 0 },
+              },
+              {
+                name: 'Exit Route',
+                color: '#22c55e',
+                shots: [
+                  { azimuth_in: 56, azimuth_out: 56, length: 40.1, depth_in: -3.1, depth_out: -2.8 },
+                  { azimuth_in: 63, azimuth_out: 63, length: 37.0, depth_in: -2.8, depth_out: -2.5 },
+                ],
+                gps: { latitude: 24.55045, longitude: -81.7795, depth_reference: 0 },
+              },
+            ];
+            const gpxSectionIds: number[] = [];
+            for (const landed of gpxSections) {
               sectionCounter += 1;
               const sectionId = sectionCounter;
-              // toShot() numbers shots 1..n before the destination section is
-              // known; re-key them onto this section's band so GPX-imported
-              // sections carry the same section-encoded ids as every other path.
-              const encodedShots = shots.map((shot, idx) => ({
-                ...shot,
-                id: mockShotId(sectionId, idx),
-              }));
-              const section = {
+              currentProject.sections.push({
                 id: sectionId,
-                name,
+                name: landed.name,
                 surveyor: 'GPX Import',
                 date: new Date().toISOString().split('T')[0] ?? '',
-                color,
+                color: landed.color,
                 direction: 'in',
-                shots: encodedShots,
-              };
-              currentProject?.sections.push(section);
-              createdSectionIds.push(sectionId);
-              gpxShotCount += encodedShots.length;
-              if (datum) {
-                (currentProject?.zero_datums as Array<{
-                  station_ref: { section_id: number; station_index: number };
-                  gps: { latitude: number; longitude: number; depth_reference: number };
-                }>).push({
-                  station_ref: { section_id: sectionId, station_index: datum.stationIndex },
-                  gps: datum.gps,
-                });
-              }
-            };
-
-            if (importWaypoints) {
-              gpxFile.waypoints.forEach((wpt, index) => {
-                appendSection(
-                  wpt.name ?? `Waypoint ${index + 1}`,
-                  [],
-                  '#4a90d9',
-                  {
-                    stationIndex: 0,
-                    gps: {
-                      latitude: wpt.latitude,
-                      longitude: wpt.longitude,
-                      depth_reference: 0,
-                    },
-                  }
-                );
-                backendSectionIndex += 1;
+                shots: landed.shots.map((shot, index) => buildShot(mockShotId(sectionId, index), shot)),
               });
-            }
-
-            if (importTracks) {
-              gpxFile.tracks.forEach((track, trackIndex) => {
-                track.segments.forEach((segment, segmentIndex) => {
-                  const shots = segment.points.slice(1).map((point, idx) =>
-                    toShot(segment.points[idx]!, point, idx + 1, depthInverted)
-                  );
-                  const placement = placementMap.get(backendSectionIndex);
-                  const placementDatum =
-                    placement?.placement?.type === 'zero_datum' && placement.placement.coordinates
-                      ? {
-                          stationIndex: placement.placement.station_index ?? 0,
-                          gps: placement.placement.coordinates,
-                        }
-                      : segment.points[0]
-                        ? {
-                            stationIndex: 0,
-                            gps: {
-                              latitude: segment.points[0].latitude,
-                              longitude: segment.points[0].longitude,
-                              depth_reference: 0,
-                            },
-                          }
-                        : null;
-
-                  appendSection(
-                    placement?.name ??
-                      track.name ??
-                      `Track ${trackIndex + 1}${track.segments.length > 1 ? ` - Seg ${segmentIndex + 1}` : ''}`,
-                    shots,
-                    placement?.color ?? '#3b82f6',
-                    placementDatum
-                  );
-                  backendSectionIndex += 1;
-                });
+              (currentProject.zero_datums as unknown[]).push({
+                station_ref: { section_id: sectionId, station_index: 0 },
+                gps: landed.gps,
               });
+              gpxSectionIds.push(sectionId);
             }
-
-            if (importRoutes) {
-              gpxFile.routes.forEach((route, routeIndex) => {
-                const shots = route.points.slice(1).map((point, idx) =>
-                  toShot(route.points[idx]!, point, idx + 1, depthInverted)
-                );
-                const placement = placementMap.get(backendSectionIndex);
-                const placementDatum =
-                  placement?.placement?.type === 'zero_datum' && placement.placement.coordinates
-                    ? {
-                        stationIndex: placement.placement.station_index ?? 0,
-                        gps: placement.placement.coordinates,
-                      }
-                    : route.points[0]
-                      ? {
-                          stationIndex: 0,
-                          gps: {
-                            latitude: route.points[0].latitude,
-                            longitude: route.points[0].longitude,
-                            depth_reference: 0,
-                          },
-                        }
-                      : null;
-
-                appendSection(
-                  placement?.name ?? route.name ?? `Route ${routeIndex + 1}`,
-                  shots,
-                  placement?.color ?? '#22c55e',
-                  placementDatum
-                );
-                backendSectionIndex += 1;
-              });
-            }
-
-            if (currentProject) {
-              currentProject.modified_at = new Date().toISOString();
-            }
-
-            const gpxFileName = (filePath ?? '').split('/').pop() ?? filePath ?? '';
+            const gpxPath = (args?.path as string | undefined) ?? '';
             return {
               warnings: [],
               remote_link: remoteLink(),
-              section_ids: createdSectionIds,
+              section_ids: gpxSectionIds,
               import_receipt: {
                 source_format: 'GPX',
-                file_name: gpxFileName,
-                sections_found: createdSectionIds.length,
-                sections_imported: createdSectionIds.length,
-                shot_count: gpxShotCount,
+                file_name: gpxPath.split('/').pop() ?? gpxPath,
+                sections_found: 4,
+                sections_imported: 4,
+                shot_count: 4,
                 closures_requested: 0,
                 closures_created: 0,
                 unit_conversion: null,
@@ -2245,244 +1859,92 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return buildMockTmlFile(args?.path as string | undefined) satisfies MockReply<'parse_tml'>;
 
           case 'execute_tml_import': {
+            // [#576 E3] Recorded (every option the dialog sent, for the spec to assert), and
+            // canned: the synthetic file lands as it does under the default options, whatever
+            // was sent - Main Line with its two kept shots, Side Passage with its real shot
+            // and its virtual one (a Jump), Side Passage's station 0 merged with Main Line's
+            // station 1, the file's one loop closure, and Main Line's commented shot's note
+            // on its station. What the options change (excluded shots, the virtual-shot kind,
+            // a deselected section, comments on stations), the merges and closures, and the
+            // receipt's counts are the backend's (parsers tml tests, core
+            // command_import tests and mock_narrowing_tests.rs).
             tmlImportCalls.push({ ...(args ?? {}) });
-            const tmlPath = (args?.path as string | undefined) ?? '';
-            const includeExcluded = (args?.includeExcluded as boolean | undefined) ?? false;
-            const virtualShotMode = (args?.virtualShotMode as string | null | undefined) ?? null;
-            const tmlFile = buildMockTmlFile(tmlPath);
-
             if (!currentProject) {
-              const now = new Date().toISOString();
-              sectionCounter = 0;
-              currentProject = {
-                id: 1,
-                name: 'Imported Project',
-                location: null,
-                created_at: now,
-                modified_at: now,
-                file_path: null,
-                sections: [],
-                station_merges: [],
-                zero_datums: [],
-                loop_closures: [],
-                section_offsets: {},
-              };
+              return Promise.reject({ code: 'FAILED', message: 'No project open' } satisfies CommandError);
             }
-
-            const commentsOnStations = (args?.commentsOnStations as boolean | undefined) ?? true;
-
-            // Import-space station index per shot ID, mirroring the real
-            // converter's id_to_import_loc (parsers/tml.rs): Closure rows and
-            // (by default) excluded shots never enter the map; the shot at kept
-            // index i ends at station i+1. Placements and closures below both
-            // resolve through this, so exclusion renumbering behaves like the
-            // real import.
-            // #425: `null` selects every section; a list selects those indices.
-            // Deselected sections contribute nothing to `idToImportLoc` either,
-            // mirroring `build_selection_index` - which is what makes a
-            // dependent section fall back to the origin instead of pointing at
-            // a section that was never created.
-            const rawSelection = args?.selectedSections as number[] | null | undefined;
-            const selectedSections = rawSelection ? new Set(rawSelection) : null;
-            const isSectionSelected = (i: number) =>
-              selectedSections === null || selectedSections.has(i);
-            const keptBySection: Array<{ tmlIndex: number; shots: typeof tmlFile.sections[number]['shots'] }> = [];
-            const idToImportLoc = new Map<number, [number, number]>();
-            tmlFile.sections.forEach((tmlSection, tmlIndex) => {
-              if (!isSectionSelected(tmlIndex)) return;
-              const kept = tmlSection.shots.filter(
-                (shot) => shot.shot_type !== 'Closure' && (includeExcluded || !shot.excluded)
-              );
-              keptBySection.push({ tmlIndex, shots: kept });
-              kept.forEach((shot, keptIdx) => idToImportLoc.set(shot.id, [tmlIndex, keptIdx + 1]));
+            const tmlPath = (args?.path as string | undefined) ?? '';
+            const mainId = sectionCounter + 1;
+            const sideId = sectionCounter + 2;
+            sectionCounter += 2;
+            const landedShot = (azimuth: number, depthIn: number, depthOut: number, kind: string) => ({
+              azimuth_in: azimuth,
+              azimuth_out: azimuth,
+              length: 10,
+              depth_in: depthIn,
+              depth_out: depthOut,
+              pitch_in: 0,
+              left: 1,
+              right: 1,
+              up: 1,
+              down: 1,
+              kind,
             });
-
-            // ZWSP marker split (core/comment_split.rs): lines prefixed with
-            // U+200B are shot-comment lines (marker stripped); unmarked lines
-            // are station comments routed to the shot's "to" station. A bare
-            // Ariane comment has no markers, so it peels entirely to the
-            // station when commentsOnStations is on.
-            const splitComment = (raw: string | null): { shot: string | null; station: string | null } => {
-              if (!raw) return { shot: null, station: null };
-              const shotLines: string[] = [];
-              const stationLines: string[] = [];
-              for (const line of raw.split('\n')) {
-                if (line.startsWith('\u200B')) shotLines.push(line.slice(1));
-                else stationLines.push(line);
-              }
-              return {
-                shot: shotLines.length ? shotLines.join('\n') : null,
-                station: stationLines.length ? stationLines.join('\n') : null,
-              };
-            };
-
-            const createdIdByTmlIndex = new Map<number, number>();
-            const tmlSectionIds: number[] = [];
-            let tmlShotCount = 0;
-            for (const { tmlIndex, shots: keptShots } of keptBySection) {
-              if (keptShots.length === 0) continue;
-              const tmlSection = tmlFile.sections[tmlIndex];
-              sectionCounter += 1;
-              const sectionId = sectionCounter;
-              currentProject?.sections.push({
-                id: sectionId,
-                name: tmlSection.name,
-                surveyor: tmlSection.surveyor,
-                date: tmlSection.date,
-                color: tmlSection.color,
+            currentProject.sections.push(
+              {
+                id: mainId,
+                name: 'Main Line',
+                surveyor: 'Synthetic Surveyor',
+                date: '2026-01-02',
+                color: '#3b82f6',
                 direction: 'in',
-                shots: keptShots.map((shot, index) => {
-                  const split = commentsOnStations
-                    ? splitComment(shot.comment)
-                    : { shot: shot.comment, station: null };
-                  if (split.station) {
-                    // Station comments live in the mock's station-comment
-                    // store, same as set_station_comment writes - the project
-                    // state derives stations per refresh and threads these in.
-                    mockStationComments[`${sectionId}:${index + 1}`] = split.station;
-                  }
-                  return {
-                    id: mockShotId(sectionId, index),
-                    // Same stable-uuid idiom as create_section above: the real
-                    // backend never produces a uuid-less shot.
-                    uuid: `mock-shot-uuid-${mockShotId(sectionId, index)}`,
-                    azimuth_in: shot.azimuth,
-                    azimuth_out: shot.azimuth,
-                    length: shot.length,
-                    // Depths pass through UNCHANGED: the real converter stores
-                    // the parsed positive-down absolute depths verbatim in
-                    // ShotData (normalize_tml_shot in parsers/tml.rs) - no
-                    // sign flip, no rebasing.
-                    depth_in: shot.depth_in,
-                    depth_out: shot.depth,
-                    // inclination_to_pitch (parsers/tml.rs): pitch is +down,
-                    // Ariane inclination negates unless exactly zero; always
-                    // Some(...) on the real path, so never null here.
-                    pitch_in: shot.inclination === 0 ? 0 : -shot.inclination,
-                    pitch_out: null,
-                    left: shot.left,
-                    right: shot.right,
-                    up: shot.up,
-                    down: shot.down,
-                    comment: split.shot,
-                    // DELIBERATELY UNMODELED: the real backend's Auto mode runs
-                    // the #27 chain rule (classify_virtual_shots in
-                    // src-tauri/src/models/project/classify.rs) over the merged
-                    // station graph; this mock reduces it to a ternary, so under
-                    // 'Auto' the kind below can DISAGREE with the real backend.
-                    // Specs must not assert virtual-shot kinds under Auto - only
-                    // under the unconditional overrides (AllJumps/AllReferences),
-                    // which bypass the chain rule in the real backend too. Also
-                    // unmodeled: the effective_start_id fallback and the
-                    // topological re-sort of forward references (this fixture
-                    // never produces either).
-                    kind:
-                      shot.shot_type === 'Virtual'
-                        ? virtualShotMode === 'AllReferences'
-                          ? 'Reference'
-                          : 'Jump'
-                        : 'Normal',
-                    marker_index: null,
-                    temperature: null,
-                  };
-                }),
-              });
-              createdIdByTmlIndex.set(tmlIndex, sectionId);
-              tmlSectionIds.push(sectionId);
-              tmlShotCount += keptShots.length;
-            }
-
-            // Placement, as determine_placement + FromImporting do it: section
-            // 0 sits at the origin (no GPS in this fixture); every later
-            // section resolves its start_ariane_id through id_to_import_loc
-            // and, when the target lives in another section, station 0 of the
-            // new section merges with the target station
-            // (command_import.rs, ImportPlacement::FromImporting ->
-            // merge_stations).
-            for (const { tmlIndex } of keptBySection) {
-              if (tmlIndex === 0) continue;
-              const sectionId = createdIdByTmlIndex.get(tmlIndex);
-              if (sectionId == null) continue;
-              const startId = tmlFile.sections[tmlIndex].start_ariane_id;
-              const target = startId >= 0 ? idToImportLoc.get(startId) : undefined;
-              if (!target || target[0] === tmlIndex) continue;
-              const targetSectionId = createdIdByTmlIndex.get(target[0]);
-              if (targetSectionId == null) continue;
-              (currentProject?.station_merges as Array<{
-                station_a: { section_id: number; station_index: number };
-                station_b: { section_id: number; station_index: number };
-              }>).push({
-                station_a: { section_id: sectionId, station_index: 0 },
-                station_b: { section_id: targetSectionId, station_index: target[1] },
-              });
-            }
-
-            // Loop closures, as the real import scan does it (parsers/tml.rs
-            // closure extraction over id_to_import_loc): every Closure row
-            // whose from_id AND closure_to_id both resolve to kept shots
-            // becomes a loop closure; either endpoint filtered means the
-            // closure is dropped. closures_requested mirrors the converter's
-            // already-filtered list length, so requested == created here.
-            let closuresCreated = 0;
-            const loopClosures = (currentProject?.loop_closures ?? []) as Array<{
-              id: number;
-              station_a: { section_id: number; station_index: number };
-              station_b: { section_id: number; station_index: number };
-              path_length: number;
-              misclosure_distance: number;
-              error_percentage: number;
-              horizontal_misclosure: number;
-              vertical_misclosure: number;
-              strategy: string;
-              is_aligned: boolean;
-            }>;
-            for (const tmlSection of tmlFile.sections) {
-              for (const shot of tmlSection.shots) {
-                if (shot.shot_type !== 'Closure' || shot.closure_to_id < 0) continue;
-                const from = idToImportLoc.get(shot.from_id);
-                const to = idToImportLoc.get(shot.closure_to_id);
-                if (!from || !to) continue;
-                const fromSectionId = createdIdByTmlIndex.get(from[0]);
-                const toSectionId = createdIdByTmlIndex.get(to[0]);
-                if (fromSectionId == null || toSectionId == null) continue;
-                const maxExistingId = loopClosures.reduce(
-                  (maxId, closure) => (closure.id > maxId ? closure.id : maxId),
-                  0
-                );
-                loopClosures.push({
-                  id: maxExistingId + 1,
-                  station_a: { section_id: fromSectionId, station_index: from[1] },
-                  station_b: { section_id: toSectionId, station_index: to[1] },
-                  path_length: 0,
-                  misclosure_distance: 0,
-                  error_percentage: 0,
-                  horizontal_misclosure: 0,
-                  vertical_misclosure: 0,
-                  strategy: 'Batch',
-                  is_aligned: false,
-                });
-                closuresCreated += 1;
-              }
-            }
-
-            if (currentProject) {
-              currentProject.modified_at = new Date().toISOString();
-            }
-
+                shots: [landedShot(30, 1, 2, 'Normal'), landedShot(60, 3, 4, 'Normal')].map((shot, index) =>
+                  buildShot(mockShotId(mainId, index), shot),
+                ),
+              },
+              {
+                id: sideId,
+                name: 'Side Passage',
+                surveyor: 'Synthetic Surveyor',
+                date: '2026-01-03',
+                color: '#22c55e',
+                direction: 'in',
+                shots: [landedShot(120, 2, 3, 'Normal'), landedShot(150, 4, 5, 'Jump')].map((shot, index) =>
+                  buildShot(mockShotId(sideId, index), shot),
+                ),
+              },
+            );
+            (currentProject.station_merges as unknown[]).push({
+              station_a: { section_id: sideId, station_index: 0 },
+              station_b: { section_id: mainId, station_index: 1 },
+            });
+            const closures = currentProject.loop_closures as Array<{ id: number }>;
+            closures.push({
+              id: closures.reduce((max, c) => Math.max(max, c.id), 0) + 1,
+              station_a: { section_id: mainId, station_index: 1 },
+              station_b: { section_id: sideId, station_index: 1 },
+              path_length: 0,
+              misclosure_distance: 0,
+              error_percentage: 0,
+              horizontal_misclosure: 0,
+              vertical_misclosure: 0,
+              strategy: 'Batch',
+              is_aligned: false,
+            } as { id: number });
+            mockStationComments[`${mainId}:2`] = 'Restriction at the T';
+            currentProject.modified_at = new Date().toISOString();
             return {
               warnings: [],
               remote_link: remoteLink(),
-              section_ids: tmlSectionIds,
+              section_ids: [mainId, sideId],
               import_receipt: {
                 source_format: 'Ariane TML',
                 file_name: tmlPath.split('/').pop() ?? tmlPath,
-                sections_found: tmlFile.sections.length,
-                sections_imported: tmlSectionIds.length,
-                shot_count: tmlShotCount,
-                closures_requested: closuresCreated,
-                closures_created: closuresCreated,
-                unit_conversion:
-                  tmlFile.unit === 'Imperial' ? 'Lengths converted from feet to meters' : null,
+                sections_found: 2,
+                sections_imported: 2,
+                shot_count: 4,
+                closures_requested: 1,
+                closures_created: 1,
+                unit_conversion: null,
                 warnings: [],
                 info: [],
                 zero_datum_created: null,
@@ -2528,21 +1990,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const commands = (Array.isArray(args?.commands) ? args?.commands : []) as Array<
               Record<string, unknown>
             >;
-            // The real execute_batch is all-or-nothing: it snapshots the WHOLE
-            // project (`capture_project_snapshot`) and restores on any
-            // sub-command failure. Snapshot the whole thing here too - a
-            // sections-only snapshot would leave `section_offsets`, the station
-            // refs and the comment map half-mirrored after a failed multi-section
-            // reverse (#24), i.e. exactly the half-applied state the batching
-            // exists to prevent, in the mock that is supposed to pin it.
-            const projectBefore = currentProject
-              ? (JSON.parse(JSON.stringify(currentProject)) as typeof currentProject)
-              : null;
-            const commentsBefore = { ...mockStationComments };
-            // #24: entries accumulate ACROSS sub-commands, in step order and with repeats -
-            // each carries the shot count in force at its own step, which is what lets the
-            // frontend compose rather than replay. A batch reversing the same section twice
-            // must therefore emit two entries, not one.
+            // [#576 E3] No rollback: the real execute_batch is all-or-nothing (it snapshots the
+            // whole project and restores it on a failed sub-command, pinned by the core batch
+            // tests), and the mock does not re-implement that. A refused sub-command's
+            // rejection is the batch's answer; what earlier steps stored stays stored.
+            // Each reverse sub-command's canned entry, in step order. (The backend also nets
+            // out a section reversed twice in one batch; the UI never sends one twice.)
             const reversedSections: Array<{ section_id: number; shot_count: number }> = [];
             for (const command of commands) {
               // A sub-command's reply, from this mock's own (checked) cases: its outcome, or
@@ -2582,14 +2035,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 }
               }
               if (result instanceof Promise) {
-                // The sub-command was refused: restore, and reject with its CommandError.
-                if (currentProject && projectBefore) {
-                  Object.assign(currentProject, projectBefore);
-                }
-                for (const key of Object.keys(mockStationComments)) {
-                  delete mockStationComments[key];
-                }
-                Object.assign(mockStationComments, commentsBefore);
+                // The sub-command was refused: its CommandError rejection answers the batch.
                 return result;
               }
             }
@@ -2643,23 +2089,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 is_aligned: boolean;
               }>;
 
-              const alreadyExists = loopClosures.some((closure) => {
-                const direct =
-                  closure.station_a.section_id === stationA.section_id &&
-                  closure.station_a.station_index === stationA.station_index &&
-                  closure.station_b.section_id === stationB.section_id &&
-                  closure.station_b.station_index === stationB.station_index;
-                const reverse =
-                  closure.station_a.section_id === stationB.section_id &&
-                  closure.station_a.station_index === stationB.station_index &&
-                  closure.station_b.section_id === stationA.section_id &&
-                  closure.station_b.station_index === stationA.station_index;
-                return direct || reverse;
-              });
-              if (alreadyExists) {
-                return Promise.reject({ code: 'FAILED', message: 'A loop closure already exists between these stations.' } satisfies CommandError);
-              }
-
+              // [#576 E3] Stored as asked. Refusing a duplicate pair (in either order) is the
+              // backend's rule, pinned by models `create_loop_closure_rejects_duplicate`.
               const maxExistingId = loopClosures.reduce(
                 (maxId, closure) => (closure.id > maxId ? closure.id : maxId),
                 0
@@ -2720,47 +2151,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   station_b: { section_id: number; station_index: number };
                 }>;
 
-                const removedPairs: Array<{
-                  station_a: { section_id: number; station_index: number };
-                  station_b: { section_id: number; station_index: number };
-                }> = [];
-
+                // [#576 E3] Only the merge records naming the station go. Dropping the loop
+                // closures over a removed pair is the backend's rule (models
+                // `unmerge_stations_removes_matching_closure_and_preserves_others`).
                 for (let i = stationMerges.length - 1; i >= 0; i -= 1) {
                   const merge = stationMerges[i]!;
                   const touchesStation =
                     (merge.station_a.section_id === stationRef.section_id && merge.station_a.station_index === stationRef.station_index) ||
                     (merge.station_b.section_id === stationRef.section_id && merge.station_b.station_index === stationRef.station_index);
-                  if (touchesStation) {
-                    removedPairs.push(merge);
-                    stationMerges.splice(i, 1);
-                  }
-                }
-
-                if (removedPairs.length > 0 && Array.isArray(currentProject.loop_closures)) {
-                  const loopClosures = currentProject.loop_closures as Array<Record<string, unknown>>;
-                  currentProject.loop_closures = loopClosures.filter((closure) => {
-                    const stationA = closure.station_a as { section_id: number; station_index: number } | undefined;
-                    const stationB = closure.station_b as { section_id: number; station_index: number } | undefined;
-                    if (!stationA || !stationB) {
-                      return true;
-                    }
-
-                    const matchesRemovedPair = removedPairs.some((pair) => {
-                      const direct =
-                        pair.station_a.section_id === stationA.section_id &&
-                        pair.station_a.station_index === stationA.station_index &&
-                        pair.station_b.section_id === stationB.section_id &&
-                        pair.station_b.station_index === stationB.station_index;
-                      const reverse =
-                        pair.station_b.section_id === stationA.section_id &&
-                        pair.station_b.station_index === stationA.station_index &&
-                        pair.station_a.section_id === stationB.section_id &&
-                        pair.station_a.station_index === stationB.station_index;
-                      return direct || reverse;
-                    });
-
-                    return !matchesRemovedPair;
-                  });
+                  if (touchesStation) stationMerges.splice(i, 1);
                 }
               }
             }
@@ -2796,35 +2195,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 return direct || reverse;
               });
 
-              if (matchIndex >= 0) {
-                stationMerges.splice(matchIndex, 1);
-
-                if (Array.isArray(currentProject.loop_closures)) {
-                  const loopClosures = currentProject.loop_closures as Array<Record<string, unknown>>;
-                  currentProject.loop_closures = loopClosures.filter((closure) => {
-                    const closureA = closure.station_a as { section_id: number; station_index: number } | undefined;
-                    const closureB = closure.station_b as { section_id: number; station_index: number } | undefined;
-                    if (!closureA || !closureB) {
-                      return true;
-                    }
-                    const direct =
-                      closureA.section_id === stationA.section_id &&
-                      closureA.station_index === stationA.station_index &&
-                      closureB.section_id === stationB.section_id &&
-                      closureB.station_index === stationB.station_index;
-                    const reverse =
-                      closureA.section_id === stationB.section_id &&
-                      closureA.station_index === stationB.station_index &&
-                      closureB.section_id === stationA.section_id &&
-                      closureB.station_index === stationA.station_index;
-                    return !(direct || reverse);
-                  });
-                }
-                return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'unmerge_station_pair'>;
-              }
+              // [#576 E3] Only the merge record goes. The closure cascade and the refusal of a
+              // pair that is not directly merged are the backend's (models
+              // `unmerge_stations_removes_matching_closure_and_preserves_others`, core
+              // `unmerging_a_pair_that_is_not_merged_is_refused`).
+              if (matchIndex >= 0) stationMerges.splice(matchIndex, 1);
             }
-
-            return Promise.reject({ code: 'FAILED', message: 'Stations are not directly merged' } satisfies CommandError);
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'unmerge_station_pair'>;
           }
 
           case 'move_segment': {
@@ -3506,151 +2883,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'reverse_section': {
-            console.log('[Mock IPC] reverse_section called with:', args);
-            const sectionId = (args?.sectionId ?? args?.section_id) as number;
-            const swapLr = (args?.swapLeftRight ?? args?.swap_left_right ?? false) as boolean;
-            const section = (currentProject?.sections as Array<{
-              id: number;
-              shots: Array<Record<string, unknown>>;
-            }> | undefined)?.find((s) => s.id === sectionId);
+            // [#576 E3] Canned: the request is acknowledged and the project is left as it
+            // was. The transform (reciprocate-and-swap, depths, pitch, the optional L/R
+            // swap), the anchor compensation and the mirroring of merges, closures, datums
+            // and comments are the backend's, pinned in Rust (models project/reverse.rs and
+            // project/mock_narrowing_tests.rs, core reverse_tests.rs). The reply echoes the
+            // section's stored shot count, which is what the frontend mirrors its own
+            // positional refs (plan pins, the distance origin) by.
+            const sectionId = args?.sectionId as number;
+            const section = (currentProject?.sections as Array<{ id: number; shots: unknown[] }> | undefined)?.find(
+              (s) => s.id === sectionId,
+            );
             if (!section) {
               return Promise.reject({ code: 'FAILED', message: `Section ${sectionId} not found` } satisfies CommandError);
             }
-            const shotCount = section.shots.length;
-            // Mirror the backend transform (#24, models/project/reverse.rs):
-            // reverse the order, normalise both readings to [0, 360), reciprocate
-            // AND swap the azimuths (they are two FORWARD readings, so swapping
-            // alone is a no-op), swap depths, swap and negate pitch, optionally
-            // swap L/R. Ids stay attached to positions; everything else travels.
-            const ids = section.shots.map((sh) => sh.id);
-            const num = (v: unknown) => (typeof v === 'number' ? v : 0);
-            // Every wrap here is `rem_euclid`, matching `reverse.rs::reciprocal`
-            // and `models::shot::average_azimuth_of`. A bare `%` truncates toward
-            // zero and returns the ANTIPODE once the operand goes below -360 -
-            // exactly the bug #24 fixed in `average_azimuth_of`, and reachable
-            // because validation only WARNS on an out-of-range azimuth.
-            const mod360 = (a: number) => ((a % 360) + 360) % 360;
-            const recip = (a: number) => mod360(a + 180);
-            const reversed = [...section.shots].reverse().map((sh) => {
-              const next: Record<string, unknown> = { ...sh };
-              // Normalise BEFORE the degenerate test, like `reverse_shots`: that
-              // branch swaps its operands verbatim, so an out-of-range reading
-              // would otherwise be written straight back onto the record and stay
-              // out of range for every later consumer.
-              const azIn = mod360(num(sh.azimuth_in));
-              const azOut = mod360(num(sh.azimuth_out));
-              if (mod360(azOut - azIn) === 180) {
-                // Readings exactly opposite: the circular mean is undefined and
-                // reciprocating maps the pair to itself, so the backend swaps
-                // them instead to turn the bearing around.
-                next.azimuth_in = azOut;
-                next.azimuth_out = azIn;
-              } else {
-                next.azimuth_in = recip(azOut);
-                next.azimuth_out = recip(azIn);
-              }
-              next.depth_in = sh.depth_out;
-              next.depth_out = sh.depth_in;
-              const pitchIn = sh.pitch_in as number | null | undefined;
-              const pitchOut = sh.pitch_out as number | null | undefined;
-              next.pitch_in = pitchOut == null ? pitchOut : -pitchOut;
-              next.pitch_out = pitchIn == null ? pitchIn : -pitchIn;
-              if (swapLr) {
-                next.left = sh.right;
-                next.right = sh.left;
-              }
-              return next;
-            });
-            reversed.forEach((sh, i) => {
-              sh.id = ids[i];
-            });
-
-            // Station 0 is now the far end, so the section anchor gains the
-            // displacement the section used to span or the whole passage
-            // teleports. Measured on the PRE-reverse order, like the backend.
-            let dx = 0;
-            let dy = 0;
-            for (const sh of section.shots) {
-              const azIn = num(sh.azimuth_in);
-              const azOut = num(sh.azimuth_out);
-              // Circular mean of two FORWARD readings (models::average_azimuth_of),
-              // wrapped with rem_euclid for the reason above - the truncated form
-              // returns the antipode for a pair more than 540 apart, which would
-              // send the offset compensation the wrong way and move the cave.
-              const diff = mod360(azOut - azIn + 540) - 180;
-              const meanRad = (mod360(azIn + diff / 2) * Math.PI) / 180;
-              const dz = num(sh.depth_out) - num(sh.depth_in);
-              const lenSq = num(sh.length) ** 2 - dz ** 2;
-              const horizontal = lenSq <= 0 ? 0 : Math.sqrt(lenSq);
-              dx += horizontal * Math.sin(meanRad);
-              dy += horizontal * Math.cos(meanRad);
-            }
-            section.shots = reversed;
-
-            // Finiteness first, like `reverse_section`: `NaN !== 0` is TRUE, so a
-            // bare `!== 0` admits a non-finite displacement into `section_offsets`,
-            // which has no other finite guard - and `save_project` rewrites a
-            // non-finite offset to 0.0, teleporting the section to the origin. See
-            // the backend's `reverse_refuses_to_write_a_non_finite_offset`.
-            if (Number.isFinite(dx) && Number.isFinite(dy) && (dx !== 0 || dy !== 0)) {
-              const offsets = currentProject!.section_offsets;
-              const [ox, oy] = readSectionOffset(offsets, sectionId);
-              writeSectionOffset(offsets, sectionId, [ox + dx, oy + dy]);
-            }
-
-            // Station i became station shotCount - i, so every external ref into
-            // this section moves with it - otherwise a merge, closure or datum
-            // silently ends up on the opposite physical end. The mock stores
-            // refs positionally (the backend's anchor keys survive the reverse
-            // on their own), so mirror the index here.
-            const mirror = (ref: { section_id: number; station_index: number } | undefined) => {
-              if (ref && ref.section_id === sectionId) {
-                ref.station_index = shotCount - ref.station_index;
-              }
-            };
-            for (const m of (currentProject!.station_merges ?? []) as Array<{
-              station_a: { section_id: number; station_index: number };
-              station_b: { section_id: number; station_index: number };
-            }>) {
-              mirror(m.station_a);
-              mirror(m.station_b);
-            }
-            for (const c of (currentProject!.loop_closures ?? []) as Array<{
-              station_a: { section_id: number; station_index: number };
-              station_b: { section_id: number; station_index: number };
-            }>) {
-              mirror(c.station_a);
-              mirror(c.station_b);
-            }
-            for (const zd of (currentProject!.zero_datums ?? []) as Array<{
-              station_ref: { section_id: number; station_index: number };
-            }>) {
-              mirror(zd.station_ref);
-            }
-            // Comments are keyed "sectionId:stationIndex"; rebuild the section's
-            // keys in one pass so a mirror can't collide with a key it just wrote.
-            const movedComments: Array<[string, string]> = [];
-            for (const key of Object.keys(mockStationComments)) {
-              const [sid, stationIndex] = key.split(':');
-              if (Number(sid) !== sectionId) continue;
-              const text = mockStationComments[key]!;
-              delete mockStationComments[key];
-              movedComments.push([`${sectionId}:${shotCount - Number(stationIndex)}`, text]);
-            }
-            for (const [key, text] of movedComments) {
-              mockStationComments[key] = text;
-            }
-
-            // #24: the frontend's own POSITIONAL refs (gas-plan pins, the loaded-plan
-            // baseline, the distance-gradient origin) are mirrored off this field, not
-            // inferred from geometry - a reverse keeps every station's world position, so
-            // a position diff reports nothing. Omitting it here made the whole forward
-            // aftermath a silent no-op under the mock while the specs asserted the mirror.
-            // Matches the backend: `{section_id, shot_count}` with the count IN FORCE at
-            // this step, and a shot-less section is DROPPED (nothing was renumbered, and
-            // it is the divisor for the frontend's mirror).
             return {
-              reversed_sections: shotCount > 0 ? [{ section_id: sectionId, shot_count: shotCount }] : [],
+              reversed_sections: [{ section_id: sectionId, shot_count: section.shots.length }],
               warnings: [],
               remote_link: remoteLink(),
             } satisfies MockReply<'reverse_section'>;
@@ -3699,70 +2947,26 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'split_shot_at_distance': {
-            console.log('[Mock IPC] split_shot_at_distance called with:', args);
-            // Record calls for assertions (exact args), mirroring create_shot.
+            // [#576 E3] Recorded (exact args) and acknowledged; the project is left as it
+            // was. The split - the 0.01 m floor on both children, the interpolated depth,
+            // the new head shot before the tail that keeps its id - is the backend's,
+            // pinned by core tests.rs `test_split_shot_at_distance_happy_path` and
+            // `test_split_shot_at_distance_rejects_invalid_distances`.
             const win = window as unknown as Record<string, unknown>;
             const existing = win.__MOCK_SPLIT_SHOT_CALLS__ as unknown[] | undefined;
             const calls = Array.isArray(existing) ? existing : [];
             calls.push(args ?? null);
             win.__MOCK_SPLIT_SHOT_CALLS__ = calls;
-
-            const sectionId = (args?.sectionId ?? args?.section_id) as number;
-            const shotId = (args?.shotId ?? args?.shot_id) as number;
-            const distance = args?.distance as number;
-            const section = (currentProject?.sections as Array<{
-              id: number;
-              shots: Array<{ id: number } & Record<string, unknown>>;
-            }> | undefined)?.find((s) => s.id === sectionId);
+            const sectionId = args?.sectionId as number;
+            const section = (currentProject?.sections as Array<{ id: number; shots: Array<{ id: number }> }> | undefined)?.find(
+              (s) => s.id === sectionId,
+            );
             if (!section) {
               return Promise.reject({ code: 'FAILED', message: `Section ${sectionId} not found` } satisfies CommandError);
             }
-            const idx = section.shots.findIndex((s) => s.id === shotId);
-            if (idx < 0) {
-              return Promise.reject({ code: 'FAILED', message: `Shot ${shotId} not found in section ${sectionId}` } satisfies CommandError);
-            }
-            const target = section.shots[idx] as Record<string, unknown>;
-            const length = (target.length as number) ?? 0;
-            // Mirror the backend floor: both children must be at least
-            // MIN_SPLIT_CHILD_LENGTH_M (src/utils/shotSplit.ts + models/project.rs),
-            // so the mock cannot accept a distance the real command would reject.
-            const MIN_SPLIT_CHILD_LENGTH_M = 0.01;
-            if (
-              !Number.isFinite(distance) ||
-              distance < MIN_SPLIT_CHILD_LENGTH_M ||
-              length - distance < MIN_SPLIT_CHILD_LENGTH_M
-            ) {
-              return Promise.reject({
-                code: 'FAILED',
-                message: `Both sides of the split must be at least ${MIN_SPLIT_CHILD_LENGTH_M.toFixed(
-                  2,
-                )}m (shot length ${length.toFixed(2)}m)`,
-              } satisfies CommandError);
-            }
-            // Mirrors the backend's collinear split: shared azimuth/pitch/LRUD,
-            // depth linearly interpolated at the split point. The tail is
-            // mutated in place (keeps its id); the head is a fresh shot
-            // inserted before it, matching split_shot_at_distance's semantics
-            // closely enough for UI assertions.
-            const depthIn = (target.depth_in as number) ?? 0;
-            const depthOut = (target.depth_out as number) ?? 0;
-            const midDepth = depthIn + (distance / length) * (depthOut - depthIn);
+            // The id the backend would mint next in this section's band.
             const nextId =
-              section.shots.reduce(
-                (max, s) => Math.max(max, s.id),
-                mockShotId(section.id as number, 0) - 1,
-              ) + 1;
-            const headShot = {
-              ...target,
-              id: nextId,
-              length: distance,
-              depth_out: midDepth,
-              comment: null,
-              marker_index: null,
-            };
-            target.length = length - distance;
-            target.depth_in = midDepth;
-            section.shots.splice(idx, 0, headShot);
+              section.shots.reduce((max, s) => Math.max(max, s.id), mockShotId(section.id, 0) - 1) + 1;
             return { shot_id: nextId, warnings: [], remote_link: remoteLink() } satisfies MockReply<'split_shot_at_distance'>;
           }
 

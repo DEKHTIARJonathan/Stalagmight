@@ -11,90 +11,34 @@ import type { MockCommandFamily, MockReply } from './types';
  * may use only `ctx` and browser globals - never an import (type-only imports are erased).
  */
 export const gasPlanCommands: MockCommandFamily = (ctx) => {
-  // #310: live plan pins are kept as opaque ANCHORS beside their positional refs, so a
-  // survey edit that renumbers stations doesn't silently retarget them. The real backend
-  // names a station by the shots on either side of it (core/state/dive_plan.rs's
-  // `PlanAnchor`); this mock mirrors that NEIGHBOUR-PAIR semantics only - no reverse-parity
-  // or terminal-shot-length tracking, since the mock only needs to survive the shot
-  // add/delete an e2e can actually drive. The anchor shape below is this mock's own and is
-  // opaque to the app (`PlanAnchor` is `unknown` on the TS side).
+  // #310: live plan pins are kept as opaque ANCHORS beside their positional refs, so a survey
+  // edit that renumbers stations does not silently retarget them. [#576 E3] Canned: the mock's
+  // anchor is the ref it was taken from, and re-resolving one answers that same ref - unless
+  // the spec has said what the backend answers for it after an edit
+  // (`__MOCK_SET_ANCHOR_RESOLUTION__({ 'sectionId:stationIndex': ref | null })`). How the
+  // backend names a station by its neighbouring shots and re-places it across a delete, an
+  // insert or a reverse (`PlanAnchor` / `resolve_anchor`, core dive_plan.rs) is pinned by its
+  // dive_plan tests, never here. The anchor shape is this mock's own and opaque to the app.
   interface MockPlanRefLite {
     section_id: number;
     station_index: number;
   }
   interface MockPlanAnchor {
-    section_id: number;
-    before_shot_uuid: string | null;
-    after_shot_uuid: string | null;
+    mock_anchor_of: MockPlanRefLite;
   }
-  interface MockShotRef {
-    id: number;
-    uuid?: string;
-  }
-  interface MockSectionRef {
-    id: number;
-    shots: MockShotRef[];
-  }
-  const sectionForAnchor = (sectionId: number): MockSectionRef | undefined =>
-    (ctx.currentProject()?.sections as MockSectionRef[] | undefined)?.find(
-      (s) => s.id === sectionId,
-    );
-  /** Describe the station at `ref` by the uuids of its neighbouring shots (station `i` sits
-   *  between shot `i-1` and shot `i`; a section end has no neighbour on that side). `null`
-   *  when the section is gone or the index is out of range - mirrors the backend's
-   *  `to_anchor`. */
-  const refToAnchor = (ref: MockPlanRefLite | null | undefined): MockPlanAnchor | null => {
-    if (!ref) return null;
-    const section = sectionForAnchor(ref.section_id);
-    if (!section || ref.station_index < 0 || ref.station_index > section.shots.length) {
-      return null;
-    }
-    const before = ref.station_index > 0 ? section.shots[ref.station_index - 1] : undefined;
-    const after =
-      ref.station_index < section.shots.length ? section.shots[ref.station_index] : undefined;
-    return {
-      section_id: ref.section_id,
-      before_shot_uuid: before?.uuid ?? null,
-      after_shot_uuid: after?.uuid ?? null,
-    };
+  let anchorResolution: Record<string, MockPlanRefLite | null> = {};
+  (window as unknown as Record<string, unknown>).__MOCK_SET_ANCHOR_RESOLUTION__ = (
+    resolution: Record<string, MockPlanRefLite | null>,
+  ) => {
+    anchorResolution = { ...resolution };
   };
-  /** Place an anchor against the project as it stands now, following the backend's
-   *  `resolve_anchor` rules: with BOTH neighbours found the station is the boundary between
-   *  them regardless of which now comes first (`pa < pb ? pa+1 : pa` - the order-agnosticism
-   *  is what makes a reverse a no-op for interior stations); with one side that was NEVER
-   *  recorded (a section END at capture), the station follows its sole shot to whichever end
-   *  it currently touches (a reverse carries station 0 to station N and back); with one side
-   *  recorded but deleted, the surviving side keeps its directional meaning. `null` only when
-   *  NEITHER uuid is found anymore. */
+  const refToAnchor = (ref: MockPlanRefLite | null | undefined): MockPlanAnchor | null =>
+    ref ? { mock_anchor_of: { section_id: ref.section_id, station_index: ref.station_index } } : null;
   const anchorToRef = (anchor: MockPlanAnchor | null | undefined): MockPlanRefLite | null => {
-    if (!anchor) return null;
-    const section = sectionForAnchor(anchor.section_id);
-    if (!section) return null;
-    const find = (u: string | null) =>
-      u ? section.shots.findIndex((s) => s.uuid === u) : -1;
-    const pa = find(anchor.before_shot_uuid);
-    const pb = find(anchor.after_shot_uuid);
-    const n = section.shots.length;
-    if (pa >= 0 && pb >= 0) {
-      return { section_id: anchor.section_id, station_index: pa < pb ? pa + 1 : pa };
-    }
-    if (pa >= 0) {
-      if (anchor.after_shot_uuid === null) {
-        // Tail-end station at capture: stay on the end its shot touches now.
-        const idx = pa === 0 ? 0 : n;
-        return { section_id: anchor.section_id, station_index: idx };
-      }
-      return { section_id: anchor.section_id, station_index: pa + 1 };
-    }
-    if (pb >= 0) {
-      if (anchor.before_shot_uuid === null) {
-        // Head-end station at capture: stay on the end its shot touches now.
-        const idx = pb === n - 1 ? n : 0;
-        return { section_id: anchor.section_id, station_index: idx };
-      }
-      return { section_id: anchor.section_id, station_index: pb };
-    }
-    return null;
+    const ref = anchor?.mock_anchor_of;
+    if (!ref) return null;
+    const key = `${ref.section_id}:${ref.station_index}`;
+    return Object.prototype.hasOwnProperty.call(anchorResolution, key) ? anchorResolution[key]! : ref;
   };
 
   // Dive-plan (.plnx) mock store (#244): an in-memory list of saved plans for the
@@ -134,9 +78,8 @@ export const gasPlanCommands: MockCommandFamily = (ctx) => {
         const found = mockDivePlans.find((p) => p.id === args?.id);
         if (!found) return Promise.reject({ code: 'FAILED', message: 'That dive plan no longer exists.' } satisfies CommandError);
         // #310: this mock keeps a plan's refs POSITIONAL (unlike the real `.plnx`, which
-        // canonicalizes to shot-uuid anchors on save), so the anchors below are derived
-        // fresh at load time against the CURRENT survey - exactly what a real load would
-        // hand back for a plan whose refs happen to still be current.
+        // canonicalizes to shot-uuid anchors on save); a load hands back the canned anchor of
+        // each stored ref.
         const snap = (found.snapshot ?? {}) as {
           origin?: MockPlanRefLite | null;
           endpoint?: MockPlanRefLite | null;

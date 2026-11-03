@@ -434,6 +434,15 @@ test.describe('Dive-plan persistence (#244)', () => {
     });
     await expect(page.locator('[data-testid="dive-plan-save"]')).toBeEnabled();
 
+    // [#576 E3] That the anchor of a station whose neighbours are both deleted no longer
+    // places is the backend's answer (core dive_plan
+    // `a_pin_whose_both_neighbouring_shots_are_deleted_no_longer_places`); the mock answers
+    // what this spec says it does. Asserted here: the frontend flags the pin and blocks Save.
+    await page.evaluate(() => {
+      (window as unknown as { __MOCK_SET_ANCHOR_RESOLUTION__: (r: Record<string, null>) => void })
+        .__MOCK_SET_ANCHOR_RESOLUTION__({ '1:3': null });
+    });
+
     // The survey is edited in Survey: Plan is read-only, and the backend refuses a survey
     // edit there (#576 C5). The plan and its pins survive the round trip (#244).
     await page.locator('[data-testid="mode-survey"]').click();

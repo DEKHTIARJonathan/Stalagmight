@@ -1253,6 +1253,15 @@ test.describe('Gas planning', () => {
     const WRONG_OLD_BEHAVIOUR_INDEX = 8;
     const CORRECT_INDEX = 7;
 
+    // [#576 E3] Which station the anchor names after the delete is the backend's answer
+    // (core dive_plan `an_anchored_pin_follows_its_station_across_an_upstream_shot_delete`);
+    // the mock answers what this spec says it does. Asserted here: the frontend re-resolves
+    // the pin around the edit and sends the engine the answer, not its stale index.
+    await page.evaluate(() => {
+      (window as unknown as { __MOCK_SET_ANCHOR_RESOLUTION__: (r: Record<string, StationRefLite | null>) => void })
+        .__MOCK_SET_ANCHOR_RESOLUTION__({ '1:8': { section_id: 1, station_index: 7 } });
+    });
+
     await enterMode(page, 'survey');
     await deleteShotAt(page, 0);
     await enterPlanMode(page);

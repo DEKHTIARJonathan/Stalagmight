@@ -80,16 +80,19 @@ test.describe('Compass import journey', () => {
     });
     await expect(dialog).toBeHidden({ timeout: 10000 });
 
-    // Receipt: a warning-free import is a toast (not the modal) with the counts.
-    // `.filter` because the toast testid is per toast.
+    // Receipt: a warning-free import is a toast (not the modal) with the counts the
+    // backend answered. `.filter` because the toast testid is per toast. [#576 E3] The
+    // mock's import is canned (the default options' landing, whatever was sent): which
+    // legs an option lands, and the receipt's counts, are pinned in Rust
+    // (`the_compass_command_honours_include_excluded_and_records_the_file`).
     const receipt = page.getByTestId('toast').filter({ hasText: 'Compass import:' });
     await expect(receipt).toContainText('2 sections', { timeout: 10000 });
-    await expect(receipt).toContainText('7 shots');
+    await expect(receipt).toContainText('6 shots');
     await expect(page.getByTestId('import-receipt-dialog')).toBeHidden();
 
-    // And the data landed in the new project.
+    // And what the backend landed shows in the new project.
     await expect.poll(() => importedSections(page)).toEqual([
-      { name: 'A1', shots: 4 },
+      { name: 'A1', shots: 3 },
       { name: 'A2', shots: 3 },
     ]);
   });

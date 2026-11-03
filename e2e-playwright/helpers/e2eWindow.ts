@@ -67,6 +67,14 @@ export type E2EWindow = typeof window & {
    * read both).
    */
   __MOCK_CONNECTIVITY_RESULT__?: ConnectivityResult;
+  /**
+   * What `plan_refs_for_anchors` answers, per anchored station (`'sectionId:stationIndex'`),
+   * after a survey edit - a spec's stand-in for the backend's re-resolution (#576 E3);
+   * any other anchor resolves to the station it was taken from (mocks/ipc/gasPlan.ts).
+   */
+  __MOCK_SET_ANCHOR_RESOLUTION__?: (
+    resolution: Record<string, { section_id: number; station_index: number } | null>,
+  ) => void;
   /** The mock's call logs: each entry is one call's `commands` (execute_batch) or `args`. */
   __MOCK_EXECUTE_BATCH_CALLS__?: unknown[];
   __MOCK_CREATE_SHOT_CALLS__?: unknown[];

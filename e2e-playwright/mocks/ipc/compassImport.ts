@@ -7,12 +7,11 @@ import type { MockCommandFamily, MockReply } from './types';
  * read anywhere), and `execute_compass_import` lands one section per survey in
  * the core's open project and returns the receipt the dialog presents.
  *
- * The landing rule mirrors pass 1 of `convert_compass_to_import_configs` for the
- * subset this file exercises: an excluded shot lands only with
- * `includeExcluded`, and every shot is valid (all `invalid_shot_counts` are 0),
- * so `applyCorrections` changes no count. Lengths are meters and nothing is
- * georeferenced, so the receipt carries no unit conversion and no zero datum
- * and is surfaced as a toast, as the real one would be.
+ * [#576 E3] The landing is canned: what the file lands with the default options
+ * (the excluded leg left out), whatever the dialog sent. Which legs land under which
+ * options, and the receipt's counts, are the backend's (app import_command_tests
+ * `the_compass_command_honours_include_excluded_and_records_the_file`, parsers
+ * compass `preview_shot_counts_match_the_landed_count_in_all_four_toggle_states`).
  *
  * Runs IN THE PAGE (serialized with `Function.prototype.toString`): only `ctx`
  * and browser globals, so every helper lives inside the factory.
@@ -82,12 +81,11 @@ export const compassImportCommands: MockCommandFamily = (ctx) => {
       case 'execute_compass_import': {
         const project = ctx.currentProject() as { sections: Array<Record<string, unknown>> } | null;
         if (!project) return Promise.reject({ code: 'FAILED', message: 'No project open' } satisfies CommandError);
-        const includeExcluded = (args?.includeExcluded as boolean | undefined) ?? false;
         let nextId = project.sections.reduce((max, s) => Math.max(max, Number(s.id) || 0), 0);
         const sectionIds: number[] = [];
         let shotCount = 0;
         for (const survey of SURVEYS) {
-          const legs = survey.legs.filter((leg) => includeExcluded || !leg.excluded);
+          const legs = survey.legs.filter((leg) => !leg.excluded);
           if (legs.length === 0) continue;
           nextId += 1;
           const sectionId = nextId;
