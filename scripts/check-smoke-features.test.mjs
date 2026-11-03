@@ -128,6 +128,40 @@ test('a TestInfo skip in a sibling, a closed describe.skip group and a titled te
   assert.deepEqual(only.problems, [], 'test.only is still a canary');
 });
 
+// #576 RV9b-6: only an annotation through `test`, `test.info()` or a test / hook
+// callback's own TestInfo parameter is one; and a canary that exists but does not
+// run says so instead of "renamed or deleted".
+test('a skip/fail call on some other object, or in a helper on an untyped parameter, does not disqualify the canary', () => {
+  const domain = "test('confirming deletes @smoke', async () => {\n  reader.skip(4);\n  queue.fail(new Error('x'));\n});";
+  assert.deepEqual(run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': domain }).problems, []);
+  const helper = [
+    'function needsWebgl(info) {',
+    "  info.skip(!webgl, 'no webgl');",
+    '}',
+    "test('other', async ({}, testInfo) => { needsWebgl(testInfo); });",
+    "test('confirming deletes @smoke', async () => {});",
+  ].join('\n');
+  assert.deepEqual(run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': helper }).problems, []);
+  // The canary's own TestInfo, under any name, still disqualifies it; a sibling's does not.
+  const own = "test('other', async ({}, info) => {});\ntest('confirming deletes @smoke', async ({ page }, ti) => {\n  ti.skip();\n});";
+  assert.equal(run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': own }).problems.length, 1);
+  const tagged = "test('confirming deletes @smoke', { tag: '@x' }, async ({ page }, ti) => {\n  ti.fixme();\n});";
+  assert.equal(run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': tagged }).problems.length, 1);
+});
+
+test('a canary that is there but does not run says why, not "renamed or deleted"', () => {
+  for (const spec of [
+    "test.skip('confirming deletes @smoke', async () => {});",
+    "test.fail('confirming deletes @smoke', async () => {});",
+    "test.describe.fixme('G', () => {\n  test('confirming deletes @smoke', async () => {});\n});",
+    "test('confirming deletes @smoke', async ({}, testInfo) => {\n  testInfo.skip();\n});",
+  ]) {
+    const [problem] = run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': spec }).problems;
+    assert.match(problem ?? '', /found it, but it does not run/, spec);
+    assert.doesNotMatch(problem ?? '', /renamed or deleted/, spec);
+  }
+});
+
 test('an @smoke mention in a comment is not a tag (the custom-renderer-health trap)', () => {
   const spec = ['/**', ' * Kept @smoke so a regression trips the merge gate - confirming deletes.', ' */', "test('confirming deletes', async () => {});"].join('\n');
   assert.equal(run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': spec }).problems.length, 1);

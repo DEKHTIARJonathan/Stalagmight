@@ -92,29 +92,41 @@ export function parseFeatureList(md) {
 //     (TEST_CALL_RE does not read `test.fail('title')` as a test at all).
 // Scopes are the paren extents of the calls (scripts/lib/js-comments.mjs
 // matchParen), so nesting depth and line breaks do not matter. The
-// annotation's receiver is `test`, `test.info()` or any bare identifier; the
-// lookbehind keeps `test.describe.skip(` / `test.step.skip(` (a member of a
-// member) from reading as one.
+// annotation's receiver is `test`, `test.info()` or the TestInfo parameter
+// of a test or hook callback that encloses it - the second parameter, after
+// the fixtures object (`async ({ page }, testInfo) =>`) - so `reader.skip(4)`
+// or a helper's own `info.skip()` is not one (#576 RV9b-6); the lookbehind
+// keeps `test.describe.skip(` / `test.step.skip(` (a member of a member) from
+// reading as one. A skip made in a helper the canary calls is not seen.
 const TEST_CALL_RE = /\btest(?:\.(only|slow))?\s*\(\s*(['"`])((?:\\.|(?!\2)[^\\])*)\2/g;
-const SKIPPED_GROUP_RE = /\b(?:test\.)?describe\.(?:skip|fixme)\s*\(/g;
+const DECLARED_NOT_RUN_RE = /\btest\.(skip|fixme|fail)\s*\(\s*(['"`])((?:\\.|(?!\2)[^\\])*)\2/g;
+const SKIPPED_GROUP_RE = /\b(?:test\.)?describe\.(skip|fixme)\s*\(/g;
 const GROUP_RE = /\b(?:test\.)?describe(?:\.(?:only|parallel|serial))?\s*\(/g;
-const ANNOTATION_RE = /(?<![\w$.])(?:test\.info\(\)|[A-Za-z_$][\w$]*)\.(?:skip|fixme|fail)\s*\(\s*(?!['"`])/g;
+const ANNOTATION_RE = /(?<![\w$.])(test\.info\(\)|[A-Za-z_$][\w$]*)\.(skip|fixme|fail)\s*\(\s*(?!['"`])/g;
+// A test or hook call, and - read from the start of its arguments, past an
+// optional title and details object - its callback's TestInfo parameter.
+const TEST_OR_HOOK_RE = /\btest(?:\.(?:only|slow|skip|fixme|fail|beforeEach|afterEach|beforeAll|afterAll))?\s*\(/g;
+const TESTINFO_PARAM_RE =
+  /^\s*(?:(['"`])(?:\\.|(?!\1)[^\\])*\1\s*,\s*)?(?:\{[^{}]*\}\s*,\s*)?(?:async\s+)?(?:function\s*[\w$]*\s*)?\(\s*\{[^}]*\}\s*,\s*([A-Za-z_$][\w$]*)/;
 
-// [{start, end}] extents of every call `re` matches (its `(` is the match's
-// last character).
+// [{start, end, kind, open}] extents of every call `re` matches (its `(` is the
+// match's last character); `kind` is the match's group 1, if any.
 function callExtents(code, re) {
   const out = [];
   let m;
   re.lastIndex = 0;
   while ((m = re.exec(code)) !== null) {
     const open = code.lastIndexOf('(', m.index + m[0].length - 1);
-    out.push({ start: m.index, end: matchParen(code, open) });
+    out.push({ start: m.index, end: matchParen(code, open), kind: m[1], open });
   }
   return out;
 }
 
-export function testTitles(source) {
+// Every test the spec declares: {title, runs, why}, `why` saying what stops one
+// that does not run (#576 RV9b-6).
+export function testEntries(source) {
   const code = stripComments(source.split('\n')).join('\n');
+  const lineOf = (at) => code.slice(0, at).split('\n').length;
   const tests = [];
   let m;
   TEST_CALL_RE.lastIndex = 0;
@@ -122,20 +134,45 @@ export function testTitles(source) {
     const open = code.indexOf('(', m.index);
     tests.push({ title: m[3], start: m.index, end: matchParen(code, open) });
   }
-  const skipped = callExtents(code, SKIPPED_GROUP_RE);
+  const skipped = callExtents(code, SKIPPED_GROUP_RE).map((g) => ({
+    ...g,
+    why: `it is in a describe.${g.kind} group (line ${lineOf(g.start)})`,
+  }));
+  // The TestInfo parameters in scope: each test or hook callback's own.
+  const infoScopes = callExtents(code, TEST_OR_HOOK_RE)
+    .map((c) => ({ ...c, name: TESTINFO_PARAM_RE.exec(code.slice(c.open + 1, c.end))?.[2] }))
+    .filter((c) => c.name !== undefined);
   // An annotation skips its innermost enclosing test or describe, else the file.
   const scopes = [...tests, ...callExtents(code, GROUP_RE)];
   ANNOTATION_RE.lastIndex = 0;
   while ((m = ANNOTATION_RE.exec(code)) !== null) {
     const at = m.index;
+    const receiver = m[1];
+    const isTestInfo =
+      receiver === 'test' ||
+      receiver === 'test.info()' ||
+      infoScopes.some((c) => c.name === receiver && c.start < at && at < c.end);
+    if (!isTestInfo) continue;
     const inner = scopes
       .filter((s) => s.start < at && at < s.end)
       .reduce((best, s) => (best === null || s.start > best.start ? s : best), null);
-    skipped.push(inner ?? { start: 0, end: code.length });
+    skipped.push({ ...(inner ?? { start: 0, end: code.length }), why: `${receiver}.${m[2]}() in its scope (line ${lineOf(at)})` });
   }
-  return tests
-    .filter((t) => !skipped.some((s) => s.start <= t.start && t.start < s.end))
-    .map((t) => t.title);
+  const entries = tests.map((t) => {
+    const stop = skipped.find((s) => s.start <= t.start && t.start < s.end);
+    return { title: t.title, runs: stop === undefined, why: stop?.why ?? null };
+  });
+  DECLARED_NOT_RUN_RE.lastIndex = 0;
+  while ((m = DECLARED_NOT_RUN_RE.exec(code)) !== null) {
+    entries.push({ title: m[3], runs: false, why: `it is declared test.${m[1]}(...) (line ${lineOf(m.index)})` });
+  }
+  return entries;
+}
+
+export function testTitles(source) {
+  return testEntries(source)
+    .filter((e) => e.runs)
+    .map((e) => e.title);
 }
 
 // `read(rel)` returns file text or throws. Returns {problems, covered}.
@@ -155,24 +192,27 @@ export function checkFeatures(read) {
     const rel = `${SPEC_DIR}/${row.spec}`;
     if (!cache.has(rel)) {
       try {
-        cache.set(rel, testTitles(read(rel)));
+        cache.set(rel, testEntries(read(rel)));
       } catch {
         cache.set(rel, null);
       }
     }
-    const titles = cache.get(rel);
-    if (titles === null) {
+    const entries = cache.get(rel);
+    if (entries === null) {
       problems.push(`"${row.feature}": ${rel} does not exist (${LIST_FILE}:${row.line})`);
       continue;
     }
+    const titles = entries.filter((e) => e.runs).map((e) => e.title);
     const hit = titles.find((t) => t.includes('@smoke') && t.includes(row.canary));
     if (!hit) {
       const near = titles.find((t) => t.includes(row.canary));
-      problems.push(
-        `"${row.feature}": no @smoke test in ${rel} whose title contains "${row.canary}"` +
-          (near ? ` (found it untagged: "${near}")` : ' (renamed or deleted?)') +
-          ` - ${LIST_FILE}:${row.line}`,
-      );
+      const stopped = entries.find((e) => !e.runs && e.title.includes(row.canary));
+      const why = near
+        ? ` (found it untagged: "${near}")`
+        : stopped
+          ? ` (found it, but it does not run: ${stopped.why})`
+          : ' (renamed or deleted?)';
+      problems.push(`"${row.feature}": no @smoke test in ${rel} whose title contains "${row.canary}"${why} - ${LIST_FILE}:${row.line}`);
       continue;
     }
     covered.push({ feature: row.feature, rel, title: hit });
