@@ -1493,9 +1493,13 @@ mod perf_tests;
 mod differential_tests;
 
 #[cfg(test)]
-#[expect(clippy::print_stdout)]
+#[expect(
+    clippy::print_stdout,
+    reason = "the NaN-order test prints the order it observed, so a failure shows it"
+)]
 mod tests {
     use super::*;
+    use crate::test_fixtures::bare_shot;
 
     fn make_shot_data(
         az_in: f64,
@@ -1504,14 +1508,9 @@ mod tests {
         depth_in: f64,
         depth_out: f64,
     ) -> ShotData {
-        ShotData {
-            azimuth_in: az_in,
-            azimuth_out: az_out,
-            length,
-            depth_in,
-            depth_out,
-            ..Default::default()
-        }
+        bare_shot(length)
+            .with_azimuths(az_in, az_out)
+            .with_depths(depth_in, depth_out)
     }
 
     fn make_shot(

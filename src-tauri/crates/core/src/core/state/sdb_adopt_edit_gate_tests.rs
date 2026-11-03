@@ -21,17 +21,9 @@ use crate::core::{Command, CommandError};
 use crate::models::CommandErrorCode;
 use crate::models::{ShotUpdates, SpeleoLink};
 use crate::parsers::tml::test_helpers::{wrap_xml, TripShot};
+use crate::test_fixtures::state_with_null_sink;
 
 const PROJECT_ID: &str = "55555555-5555-5555-5555-555555555555";
-
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
 
 fn remote_file(dir: &Path) -> PathBuf {
     let shots: Vec<String> = (1..=3)
@@ -75,8 +67,7 @@ fn an_edit_between_the_adoptions_local_span_and_its_hand_over_is_refused() {
     let temp = TempDir::new().unwrap();
     let dest = temp.path().join("project.stalx");
     let remote = remote_file(temp.path());
-    let state = AppState::new().unwrap();
-    state.set_event_sink(std::sync::Arc::new(NoListener));
+    let state = state_with_null_sink();
 
     let adopted = state.adopt_import_and_save(
         Some(PROJECT_ID),
@@ -127,8 +118,7 @@ fn a_new_open_lifts_the_adoptions_gate() {
     // generation) is not held by it.
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
-    let state = AppState::new().unwrap();
-    state.set_event_sink(std::sync::Arc::new(NoListener));
+    let state = state_with_null_sink();
     assert!(
         state
             .execute(Command::CreateProject {

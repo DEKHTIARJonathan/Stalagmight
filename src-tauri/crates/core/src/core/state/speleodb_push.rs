@@ -1845,7 +1845,6 @@ mod snapshot_undo_metadata_tests {
     reason = "test setup failures should stop the regression test immediately"
 )]
 mod redo_during_push_tests {
-    use super::*;
     use crate::core::Command;
     use crate::models::ShotData;
 
@@ -1856,15 +1855,7 @@ mod redo_during_push_tests {
         // snapshot never held the redone section, so its undo entry has to outlive the
         // post-push cut - before, Ctrl+Z could no longer revert it and the next push
         // uploaded it with no history.
-        let state = AppState::new().expect("state");
-        assert!(
-            state
-                .execute(Command::CreateProject {
-                    name: "CaveA".to_owned(),
-                    location: None,
-                })
-                .success
-        );
+        let state = crate::test_fixtures::state_with_project("CaveA");
         assert!(
             state
                 .execute(Command::CreateSection {

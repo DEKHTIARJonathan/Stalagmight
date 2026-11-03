@@ -35,6 +35,7 @@ use super::{
     TracePoint,
 };
 use crate::config::PlacementSuggestionConfig;
+use crate::test_fixtures::straight_shot;
 use crate::{AzimuthReference, SectionId, Shot, ShotData};
 
 /// SplitMix64: every seed, zero included, gives a full-period stream.
@@ -87,17 +88,6 @@ impl Rng {
     }
 }
 
-fn shot(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
-    ShotData {
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        length,
-        depth_in,
-        depth_out,
-        ..Default::default()
-    }
-}
-
 /// A passage-like random walk: the heading wanders up to `turn` degrees a
 /// leg, 1-10 m legs, the depth drifting by up to `drift` a leg.
 fn random_run(rng: &mut Rng, len: usize, turn: f64, drift: f64) -> Vec<ShotData> {
@@ -107,7 +97,7 @@ fn random_run(rng: &mut Rng, len: usize, turn: f64, drift: f64) -> Vec<ShotData>
         .map(|_| {
             heading = (heading + rng.range(-turn, turn)).rem_euclid(360.0);
             let next = (depth + rng.range(-drift, drift)).max(0.0);
-            let s = shot(heading, rng.range(1.0, 10.0), depth, next);
+            let s = straight_shot(heading, rng.range(1.0, 10.0)).with_depths(depth, next);
             depth = next;
             s
         })
@@ -117,7 +107,7 @@ fn random_run(rng: &mut Rng, len: usize, turn: f64, drift: f64) -> Vec<ShotData>
 /// A dead-straight passage at one depth.
 fn straight(len: usize, azimuth: f64, step: f64, depth: f64) -> Vec<ShotData> {
     (0..len)
-        .map(|_| shot(azimuth, step, depth, depth))
+        .map(|_| straight_shot(azimuth, step).with_depths(depth, depth))
         .collect()
 }
 
@@ -133,9 +123,7 @@ fn noisy_copy(
         .iter()
         .map(|s| {
             let az = (s.azimuth_in + scale * rng.range(-1.5, 1.5)).rem_euclid(360.0);
-            shot(
-                az,
-                s.length + scale * rng.range(-0.05, 0.05),
+            straight_shot(az, s.length + scale * rng.range(-0.05, 0.05)).with_depths(
                 s.depth_in + scale * rng.range(-0.05, 0.05),
                 s.depth_out + scale * rng.range(-0.05, 0.05),
             )
@@ -149,12 +137,8 @@ fn walked_backwards(shots: &[ShotData]) -> Vec<ShotData> {
         .iter()
         .rev()
         .map(|s| {
-            shot(
-                (s.azimuth_in + 180.0).rem_euclid(360.0),
-                s.length,
-                s.depth_out,
-                s.depth_in,
-            )
+            straight_shot((s.azimuth_in + 180.0).rem_euclid(360.0), s.length)
+                .with_depths(s.depth_out, s.depth_in)
         })
         .collect()
 }
@@ -415,12 +399,8 @@ fn scene(seed: u64, max_len: usize) -> (&'static str, Scene) {
                 };
                 (0..len)
                     .map(|_| {
-                        shot(
-                            (az + scale * rng.range(-1.0, 1.0)).rem_euclid(360.0),
-                            st,
-                            depth,
-                            depth,
-                        )
+                        straight_shot((az + scale * rng.range(-1.0, 1.0)).rem_euclid(360.0), st)
+                            .with_depths(depth, depth)
                     })
                     .collect()
             };
@@ -457,7 +437,7 @@ fn scene(seed: u64, max_len: usize) -> (&'static str, Scene) {
                 for _ in 0..bend {
                     h += b.rng.range(-60.0, 60.0);
                     let d = depth + b.rng.pick(&[0.0, 0.0, 2.0, 5.0]);
-                    shots.push(shot(h.rem_euclid(360.0), st, d, d));
+                    shots.push(straight_shot(h.rem_euclid(360.0), st).with_depths(d, d));
                 }
                 let second = b.rng.between(0, max_len / 2);
                 let second_az = if b.rng.chance(0.5) { az } else { h };
@@ -509,15 +489,15 @@ fn scene(seed: u64, max_len: usize) -> (&'static str, Scene) {
                 let last_out = shots.last().map_or(depth, |s| s.depth_out);
                 let mut h = shots.last().map_or(0.0, |s| s.azimuth_in);
                 // Step down to the offset, then wander back across.
-                shots.push(shot(h, b.rng.range(1.0, 6.0), last_out, depth + offset));
+                shots.push(
+                    straight_shot(h, b.rng.range(1.0, 6.0)).with_depths(last_out, depth + offset),
+                );
                 for _ in 0..b.rng.between(2, 12) {
                     h += b.rng.range(90.0, 200.0) / 3.0;
-                    shots.push(shot(
-                        h.rem_euclid(360.0),
-                        b.rng.range(1.0, 8.0),
-                        depth + offset,
-                        depth + offset,
-                    ));
+                    shots.push(
+                        straight_shot(h.rem_euclid(360.0), b.rng.range(1.0, 8.0))
+                            .with_depths(depth + offset, depth + offset),
+                    );
                 }
                 b.import(shots);
             }
@@ -568,7 +548,7 @@ fn scene(seed: u64, max_len: usize) -> (&'static str, Scene) {
                         } else {
                             az
                         };
-                        shot(h.rem_euclid(360.0), st, depth, depth)
+                        straight_shot(h.rem_euclid(360.0), st).with_depths(depth, depth)
                     })
                     .collect()
             };
@@ -622,12 +602,16 @@ fn scene(seed: u64, max_len: usize) -> (&'static str, Scene) {
                     .map(|_| {
                         let az = rng.pick(&[0.0, 90.0, 45.0, 180.0]);
                         match rng.below(10) {
-                            0 => shot(az, 0.0, depth, depth),
-                            1 => shot(az, 3.0, depth, depth + 3.0),
-                            2 => shot(az, 3.0, depth + 3.0, depth),
-                            3 if rng.chance(0.1) => shot(f64::NAN, 5.0, depth, depth),
-                            4 if rng.chance(0.1) => shot(az, f64::INFINITY, depth, depth),
-                            _ => shot(az, 5.0, depth, depth),
+                            0 => straight_shot(az, 0.0).with_depths(depth, depth),
+                            1 => straight_shot(az, 3.0).with_depths(depth, depth + 3.0),
+                            2 => straight_shot(az, 3.0).with_depths(depth + 3.0, depth),
+                            3 if rng.chance(0.1) => {
+                                straight_shot(f64::NAN, 5.0).with_depths(depth, depth)
+                            }
+                            4 if rng.chance(0.1) => {
+                                straight_shot(az, f64::INFINITY).with_depths(depth, depth)
+                            }
+                            _ => straight_shot(az, 5.0).with_depths(depth, depth),
                         }
                     })
                     .collect()
@@ -1151,7 +1135,9 @@ fn optimised_pipeline_matches_the_reference_at_worst_case_sizes() {
         (0..2).map(|i| straight_import(i, 2000, 37.0)).collect(),
     );
     let mut bent = straight(1000, 90.0, 5.0, 10.0);
-    bent.extend((0..8).map(|k| shot(90.0 - 11.0 * f64::from(k), 5.0, 10.0, 10.0)));
+    bent.extend(
+        (0..8).map(|k| straight_shot(90.0 - 11.0 * f64::from(k), 5.0).with_depths(10.0, 10.0)),
+    );
     bent.extend(straight(992, 0.0, 5.0, 10.0));
     add(
         "bent 2000 / straight 2000",
@@ -1175,7 +1161,9 @@ fn optimised_pipeline_matches_the_reference_at_worst_case_sizes() {
     );
     let wobble = |rng: &mut Rng, len: usize, scale: f64| -> Vec<ShotData> {
         (0..len)
-            .map(|_| shot(90.0 + scale * rng.range(-1.0, 1.0), 5.0, 10.0, 10.0))
+            .map(|_| {
+                straight_shot(90.0 + scale * rng.range(-1.0, 1.0), 5.0).with_depths(10.0, 10.0)
+            })
             .collect()
     };
     let wobbled = wobble(&mut rng, 2000, 1e-9);

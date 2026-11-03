@@ -25,19 +25,11 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 
 use super::speleodb_adopt::AdoptionEditGate;
 use super::AppState;
-use crate::core::Command;
+use crate::test_fixtures::state_with_project;
 
 /// An open project whose gate an adoption has shut.
 fn gate_shut_by_an_adoption() -> AppState {
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "CaveA".to_string(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("CaveA");
     state.speleodb_shut_gate_for_adoption();
     assert!(state.speleodb_adoption_holds_gate());
     state

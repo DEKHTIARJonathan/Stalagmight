@@ -2573,8 +2573,7 @@ mod tests {
         std::fs::write(&remote, wrap_xml(&shots.join("\n"))).expect("write remote file");
         let dest = temp.path().join("project.stalx");
 
-        let state = AppState::new().expect("state");
-        state.set_event_sink(std::sync::Arc::new(crate::core::events::NullEventSink));
+        let state = crate::test_fixtures::state_with_null_sink();
         let (receipt, stamped) = state
             .adopt_import_and_save(
                 None,

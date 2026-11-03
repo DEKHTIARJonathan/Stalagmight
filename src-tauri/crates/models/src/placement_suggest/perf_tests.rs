@@ -19,6 +19,7 @@ use super::{
     TracePoint,
 };
 use crate::config::PlacementSuggestionConfig;
+use crate::test_fixtures::straight_shot;
 use crate::{AzimuthReference, SectionId, Shot, ShotData};
 
 /// xorshift64* - deterministic, dependency-free.
@@ -44,17 +45,6 @@ impl Rng {
     }
 }
 
-fn shot(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
-    ShotData {
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        length,
-        depth_in,
-        depth_out,
-        ..Default::default()
-    }
-}
-
 /// A passage-like random walk: the heading wanders by up to 25 degrees a leg,
 /// 1-10 m legs, the depth drifting.
 fn random_run(rng: &mut Rng, len: usize) -> Vec<ShotData> {
@@ -64,7 +54,7 @@ fn random_run(rng: &mut Rng, len: usize) -> Vec<ShotData> {
         .map(|_| {
             heading = (heading + rng.range(-25.0, 25.0)).rem_euclid(360.0);
             let next = (depth + rng.range(-2.0, 2.0)).max(0.0);
-            let s = shot(heading, rng.range(1.0, 10.0), depth, next);
+            let s = straight_shot(heading, rng.range(1.0, 10.0)).with_depths(depth, next);
             depth = next;
             s
         })
@@ -74,7 +64,9 @@ fn random_run(rng: &mut Rng, len: usize) -> Vec<ShotData> {
 /// A dead-straight passage at one depth: every shot matches every other, so
 /// every start index survives the matcher and reaches the crossing check.
 fn straight_run(len: usize, azimuth: f64) -> Vec<ShotData> {
-    (0..len).map(|_| shot(azimuth, 5.0, 10.0, 10.0)).collect()
+    (0..len)
+        .map(|_| straight_shot(azimuth, 5.0).with_depths(10.0, 10.0))
+        .collect()
 }
 
 fn existing(id: SectionId, shots: &[ShotData]) -> ExistingSection {
@@ -106,9 +98,7 @@ fn noisy_copy(rng: &mut Rng, source: &[ShotData], from: usize, len: usize) -> Ve
         .iter()
         .map(|s| {
             let az = (s.azimuth_in + rng.range(-1.5, 1.5)).rem_euclid(360.0);
-            let mut copy = shot(
-                az,
-                s.length + rng.range(-0.05, 0.05),
+            let mut copy = straight_shot(az, s.length + rng.range(-0.05, 0.05)).with_depths(
                 s.depth_in + rng.range(-0.05, 0.05),
                 s.depth_out + rng.range(-0.05, 0.05),
             );
@@ -149,7 +139,7 @@ fn golden_scene() -> (Vec<ImportSectionForSuggestion>, Vec<ExistingSection>) {
         .rev()
         .map(|s| {
             let az = (s.azimuth_in + 180.0).rem_euclid(360.0);
-            let mut r = shot(az, s.length, s.depth_out, s.depth_in);
+            let mut r = straight_shot(az, s.length).with_depths(s.depth_out, s.depth_in);
             r.azimuth_out = az;
             r
         })
@@ -623,7 +613,7 @@ fn diagonal_walk_matches_the_matrix_matcher() {
 /// A trace that runs straight at `azimuth`, starting from `(x0, y0)`.
 fn straight_trace(len: usize, azimuth: f64, step: f64, depth: f64) -> Vec<TracePoint> {
     let shots: Vec<ShotData> = (0..len)
-        .map(|_| shot(azimuth, step, depth, depth))
+        .map(|_| straight_shot(azimuth, step).with_depths(depth, depth))
         .collect();
     section_trace_points(&match_shots(&shots))
 }

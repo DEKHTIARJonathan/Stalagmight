@@ -20,17 +20,9 @@ use crate::core::Command;
 use crate::models::{Project, SectionData, ShotData, ShotUpdates, SpeleoLink};
 use crate::parsers::tml::test_helpers::{wrap_xml, TripShot};
 use crate::persistence::Database;
+use crate::test_fixtures::state_with_null_sink;
 
 const PROJECT_ID: &str = "44444444-4444-4444-4444-444444444444";
-
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
 
 fn link(dirty: bool) -> SpeleoLink {
     SpeleoLink {
@@ -60,8 +52,7 @@ fn open_cache_copy(dest: &Path) -> AppState {
     db.save_project(&project).unwrap();
     db.save_speleo_link(Some(&link(false))).unwrap();
     drop(db);
-    let state = AppState::new().unwrap();
-    state.set_event_sink(std::sync::Arc::new(NoListener));
+    let state = state_with_null_sink();
     assert!(state.open_project(dest.to_path_buf()).success);
     state.set_edit_enabled(true);
     state

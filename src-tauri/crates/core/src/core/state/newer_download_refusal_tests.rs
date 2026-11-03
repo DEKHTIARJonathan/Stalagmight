@@ -39,6 +39,7 @@ use super::take_remote_success_tests::{output_within, CHILD_DEADLINE};
 use super::AppState;
 use crate::models::{CommandErrorCode, Project, SectionData, ShotData, SpeleoLink, UndoMode};
 use crate::persistence::Database;
+use crate::test_fixtures::state_with_null_sink;
 
 /// The environment variable that carries the child's scenario.
 const CHILD_ENV: &str = "STALAGMIGHT_NEWER_DOWNLOAD_CHILD";
@@ -156,16 +157,6 @@ fn routing_stub(zip: Vec<u8>) -> (String, std::net::TcpListener, Arc<Mutex<Vec<S
     (format!("http://127.0.0.1:{port}"), listener, seen)
 }
 
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
-
 /// Re-run this test binary on the child body with `scenario` - killed, and the
 /// test failed, if it is still running at the deadline (#576 RV8a-F1).
 fn run_child(scenario: &str) {
@@ -270,8 +261,7 @@ fn newer_download_body_in_a_process_of_its_own() {
             .filter(|r| r.contains("/download/"))
             .count()
     };
-    let state = AppState::new().expect("state");
-    state.set_event_sink(Arc::new(NoListener));
+    let state = state_with_null_sink();
     *state.speleodb.lock() = authed_session_at(&base);
 
     if scenario == "first_open" {
