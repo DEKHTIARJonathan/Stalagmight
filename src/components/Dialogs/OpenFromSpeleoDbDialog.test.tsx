@@ -335,3 +335,31 @@ describe('OpenFromSpeleoDbDialog with work at risk in the open project (#270)', 
     expect(closeDialogMock).not.toHaveBeenCalled();
   });
 });
+
+// [#576 RV4-FE-SP-5] The access badge shows the localized level, as the collaborator
+// tab and the Publish dialog do, not the wire enum ("READ_AND_WRITE", "UNKNOWN").
+describe('OpenFromSpeleoDbDialog access badge', () => {
+  it.each([
+    ['READ_AND_WRITE', 'Read & write'],
+    ['READ_ONLY', 'Read only'],
+    ['UNKNOWN', 'Unknown'],
+  ])('%s reads as "%s"', async (permission, label) => {
+    mockRoutes({
+      speleodb_list_projects: () => Promise.resolve([{ ...ARIANE_PROJECT, permission }]),
+    });
+    render(<OpenFromSpeleoDbDialog />);
+
+    const list = await screen.findByTestId('open-from-speleodb-list');
+    expect(list).toHaveTextContent(label);
+    expect(list).not.toHaveTextContent(permission);
+  });
+
+  it('a project without access still says so', async () => {
+    mockRoutes({
+      speleodb_list_projects: () => Promise.resolve([{ ...ARIANE_PROJECT, permission: null }]),
+    });
+    render(<OpenFromSpeleoDbDialog />);
+
+    expect(await screen.findByTestId('open-from-speleodb-list')).toHaveTextContent('NO ACCESS');
+  });
+});

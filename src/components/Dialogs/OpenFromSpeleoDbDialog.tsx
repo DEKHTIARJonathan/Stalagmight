@@ -260,7 +260,10 @@ export default function OpenFromSpeleoDbDialog() {
                             p.permission ? 'bg-accent-10 text-accent' : 'bg-error-10 text-error'
                           }`}
                         >
-                          {p.permission ?? t('speleodb.browser.noAccess')}
+                          {/* [#576 RV4-FE-SP-5] The localized level, not the wire enum. */}
+                          {p.permission
+                            ? t(`speleodb.collaborators.levels.${p.permission}`)
+                            : t('speleodb.browser.noAccess')}
                         </span>
                         <span className="px-1.5 py-0.5 rounded text-xs bg-panel border border-border text-text-secondary">
                           {p.type_tag}
