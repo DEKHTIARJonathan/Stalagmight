@@ -9371,11 +9371,31 @@ mod tests {
             "speleodb_session.rs: ReclaimRelease for StrandedClaim",
         ];
         sanctioned.sort_unstable();
-        assert_eq!(
-            found, sanctioned,
+        // [#576 RV9a-4-D1] Name the rows that differ, and how to sanction one.
+        let unsanctioned: Vec<&str> = found
+            .iter()
+            .map(String::as_str)
+            .filter(|row| !sanctioned.contains(row))
+            .collect();
+        let gone: Vec<&str> = sanctioned
+            .iter()
+            .copied()
+            .filter(|row| !found.iter().any(|f| f == row))
+            .collect();
+        assert!(
+            found == sanctioned,
             "RULE (a licence is held only by a proof or a named no-precondition marker, \
-             #576 RV9a-4): the licence implementations in the workspace changed; add a new \
-             one to this list only with the reason it may skip the step the licence guards"
+             #576 RV9a-4): the licence implementations in the workspace changed.\n\
+             Not sanctioned: {unsanctioned:#?}\nSanctioned but gone: {gone:#?}\n\
+             To sanction a new licence, add its row exactly as printed above \
+             (`<file>: <Trait> for <Type>`) to `sanctioned` in this test \
+             (core/state/speleodb.rs, licence_implementations_are_exactly_the_sanctioned_set), \
+             with a comment saying why it may skip the step the licence guards: under \
+             \"Proofs\" when the type is made only by the step whose order the licence carries, \
+             or under \"Markers\" when it is a marker named for why its flow has no \
+             precondition. Anything else holding a licence - a convenience marker, a test \
+             licence in production - is the bypass the trait exists to stop. Remove a row whose \
+             implementation is gone. (A new licence TRAIT goes in TRAITS above.)"
         );
     }
 
