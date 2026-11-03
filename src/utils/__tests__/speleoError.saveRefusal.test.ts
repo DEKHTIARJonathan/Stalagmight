@@ -33,14 +33,14 @@ describe('humanizeSpeleoError and a refused pre-push save (#576 NF-W2SAVE-1)', (
       () => i18n.t('banners.autosave.pathNotFound'),
     ],
   ] as const)('names the save refusal by its code: %s', (code, message, expected) => {
-    const shown = humanizeSpeleoError(dto(code, message), 'Could not push changes');
+    const shown = humanizeSpeleoError(dto(code, message), 'Could not push changes', { saves: true });
     // The operation frame drops a trailing period, as for every SpeleoDB error.
     expect(shown).toBe(`Could not push changes: ${expected().replace(/\.\s*$/, '')}`);
     expect(shown).not.toMatch(/[A-Z_]{8,}:/);
   });
 
   it('relays an uncoded save failure as the backend wrote it', () => {
-    expect(humanizeSpeleoError(dto('FAILED', 'Failed to save project: disk full.'), 'Could not push changes')).toBe(
+    expect(humanizeSpeleoError(dto('FAILED', 'Failed to save project: disk full.'), 'Could not push changes', { saves: true })).toBe(
       'Could not push changes: Failed to save project: disk full',
     );
   });

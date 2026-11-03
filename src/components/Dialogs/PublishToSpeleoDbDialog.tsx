@@ -194,7 +194,11 @@ export default function PublishToSpeleoDbDialog() {
       }
       closeDialog();
     } catch (e) {
-      showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
+      showToast(
+        humanizeSpeleoError(e, t('speleodb.publish.failed'), { saves: true }),
+        TOAST_KEYS.SPELEODB_PUBLISH,
+        'error',
+      );
       if (errorCode(e) === 'SPELEODB_RELOGIN') {
         useSpeleoStore.getState().clearSession();
       }

@@ -55,6 +55,15 @@ function transportMessage(cause: TransportCause): string {
   return i18n.t(TRANSPORT_KEYS[cause], { endpoint });
 }
 
+/** What the failed SpeleoDB verb did, where its wording depends on it. */
+export interface SpeleoErrorContext {
+  /**
+   * The verb saves the project before anything else (Push, Done, Publish), so a
+   * refused save is what failed (#576 NF-W9BE-1).
+   */
+  saves?: boolean;
+}
+
 /**
  * Turn a rejected SpeleoDB IPC error into a single user-facing line.
  *
@@ -65,7 +74,7 @@ function transportMessage(cause: TransportCause): string {
  * is already self-framed and would otherwise read as "Login failed: Network
  * error…").
  */
-export function humanizeSpeleoError(e: unknown, contextPrefix?: string): string {
+export function humanizeSpeleoError(e: unknown, contextPrefix?: string, context: SpeleoErrorContext = {}): string {
   const cause = transportCause(e);
   if (cause) return transportMessage(cause);
   const code = errorCode(e);
@@ -73,9 +82,18 @@ export function humanizeSpeleoError(e: unknown, contextPrefix?: string): string 
   // [#576 RV2-R-15] An edit-gate refusal (e.g. Restore revision / Unwind in the
   // read-only Plan or Export workspace) gets the same notice a refused edit gets.
   if (isEditGateCode(code)) return READ_ONLY_EDIT_NOTICE(code);
+  const kind = saveErrorKind(code);
   // [#576 NF-W2SAVE-1] A Done/Push whose pre-push save refused carries the save's
-  // own code: worded like any refused save's line.
-  const saved = saveErrorKind(code) === 'other' ? raw : autosaveFailureMessage({ code, error: raw });
+  // own code: worded like any refused save's line. [#576 NF-W9BE-1] Except the
+  // newer-version code outside a verb that saves: a download that would install
+  // such a project (open, View, Restore, Update) and Start editing / Force edit
+  // are refused with it too, and they saved nothing.
+  const saved =
+    kind === 'newer-file' && !context.saves
+      ? i18n.t('banners.newerFile.lead')
+      : kind === 'other'
+        ? raw
+        : autosaveFailureMessage({ code, error: raw });
   // Strip a trailing period so "…credentials." reads cleanly after our prefix.
   const msg = saved.replace(/\.\s*$/, '');
   if (!contextPrefix) return msg;

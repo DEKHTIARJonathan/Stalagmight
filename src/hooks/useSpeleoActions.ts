@@ -13,7 +13,7 @@ import {
 } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { openExitPrompt, type PendingExit } from '../utils/quit';
-import { humanizeSpeleoError } from '../utils/speleoError';
+import { humanizeSpeleoError, type SpeleoErrorContext } from '../utils/speleoError';
 import { errorCode } from '../utils/commandError';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
 import { afterQueuedEdits } from '../utils/projectTransition';
@@ -180,9 +180,9 @@ export function useSpeleoActions(): SpeleoActions {
       inline notice inside the Speleo dialogs). One event, one surface
       (docs/notifications.md); the toast-and-banner pair predates the banner. */
   const humanizeError = useCallback(
-    (e: unknown, prefixKey: string): string => {
+    (e: unknown, prefixKey: string, context?: SpeleoErrorContext): string => {
       if (errorCode(e) === 'SPELEODB_RELOGIN') clearSession();
-      return humanizeSpeleoError(e, t(prefixKey));
+      return humanizeSpeleoError(e, t(prefixKey), context);
     },
     [clearSession, t],
   );
@@ -435,7 +435,7 @@ export function useSpeleoActions(): SpeleoActions {
       } catch (e) {
         // Banner only (durable; inline notice inside the Speleo dialogs while
         // one is open). The old extra toast was pre-#260 redundancy.
-        const humanized = humanizeError(e, 'speleodb.editBar.toasts.pushFailed');
+        const humanized = humanizeError(e, 'speleodb.editBar.toasts.pushFailed', { saves: true });
         raisePushFailedBanner({
           message: humanized,
           origin: 'push',
@@ -563,7 +563,7 @@ export function useSpeleoActions(): SpeleoActions {
         }
         return result;
       } catch (e) {
-        const humanized = humanizeError(e, 'speleodb.editBar.toasts.doneFailed');
+        const humanized = humanizeError(e, 'speleodb.editBar.toasts.doneFailed', { saves: true });
         raisePushFailedBanner({
           message: humanized,
           origin: 'done',
