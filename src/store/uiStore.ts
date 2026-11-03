@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
-import { chainSettingWrite, SETTING_KEYS } from '../utils/settingWriteChain';
+import { chainProjectSettingWrite, chainSettingWrite, SETTING_KEYS } from '../utils/settingWriteChain';
+import { errorCode } from '../utils/commandError';
 import { clampRound } from '../utils/clamp';
 import {
   PANEL_SIZE_BOUNDS,
@@ -1053,6 +1054,30 @@ export function isScreenBusy(
   return state.activeDialog !== null || state.placementMode !== null || state.screenOccupants > 0;
 }
 
+/**
+ * Persist one display setting (grid spacing, the geometry mode, a display toggle)
+ * into the open project, after any earlier write of the same key
+ * ([#576 SETTINGS-ORDER]) and for the project it was made in ([#576 RV6b-2]: a
+ * write queued past a project switch is dropped, one already sent names its
+ * project and the backend refuses it once another is open - PROJECT_CHANGED,
+ * which is that rule working, not a failure to report).
+ */
+function persistDisplaySetting(key: string, value: string, failure: string): Promise<void> {
+  return chainProjectSettingWrite(SETTING_KEYS.displaySetting(key), (projectCreatedAt) =>
+    invokeIpc(
+      'save_display_setting',
+      // Omitted with no project open: the backend reads an absent identity as none.
+      { key, value, ...(projectCreatedAt === null ? {} : { projectCreatedAt }) },
+      { purpose: 'persist display setting', fields: { key } },
+    ),
+  ).then(
+    () => undefined,
+    (e: unknown) => {
+      if (errorCode(e) !== 'PROJECT_CHANGED') console.warn(failure, e);
+    },
+  );
+}
+
 export const useUIStore = create<UIStore>((set) => ({
   // View state
   view: 'global',
@@ -1848,29 +1873,12 @@ export const useUIStore = create<UIStore>((set) => ({
     // Scoped to Plan/Export while there (restored on exit) - don't persist it.
     if (useUIStore.getState().appMode !== 'survey') return;
     // Persist the spacing setting ([#576 SETTINGS-ORDER] in click order: last wins)
-    chainSettingWrite(SETTING_KEYS.displaySetting('gridSpacing'), () =>
-      invokeIpc(
-        'save_display_setting',
-        { key: 'gridSpacing', value: String(spacing) },
-        { purpose: 'persist display setting', fields: { key: 'gridSpacing' } }
-      )
-    ).catch((e) => {
-      console.warn('Failed to save grid spacing:', e);
-    });
+    void persistDisplaySetting('gridSpacing', String(spacing), 'Failed to save grid spacing:');
   },
   saveDisplaySetting: async (key, value) => {
-    try {
-      // [#576 SETTINGS-ORDER] Same key, click order: a toggle flipped twice lands
-      // as the second flip, not whichever IPC the pool happened to finish last.
-      await chainSettingWrite(SETTING_KEYS.displaySetting(String(key)), () =>
-        invokeIpc('save_display_setting', { key, value: String(value) }, {
-          purpose: 'persist display setting',
-          fields: { key: String(key) },
-        }),
-      );
-    } catch (e) {
-      console.warn('Failed to save display setting:', e);
-    }
+    // [#576 SETTINGS-ORDER] Same key, click order: a toggle flipped twice lands
+    // as the second flip, not whichever IPC the pool happened to finish last.
+    await persistDisplaySetting(String(key), String(value), 'Failed to save display setting:');
   },
   resetDisplaySettings: () => {
     // Reset all display toggles to their default values (from DISPLAY_DEFAULTS - single source of truth)
@@ -1987,15 +1995,7 @@ export const useUIStore = create<UIStore>((set) => ({
     set({ geometryMode: mode, ...MEASURE_CLEARED });
     // Persist for "remember last used" across sessions (string value, like gridSpacing),
     // in toggle order ([#576 SETTINGS-ORDER]).
-    chainSettingWrite(SETTING_KEYS.displaySetting('geometryMode'), () =>
-      invokeIpc(
-        'save_display_setting',
-        { key: 'geometryMode', value: mode },
-        { purpose: 'persist display setting', fields: { key: 'geometryMode' } }
-      )
-    ).catch((e) => {
-      console.warn('Failed to save geometry mode:', e);
-    });
+    void persistDisplaySetting('geometryMode', mode, 'Failed to save geometry mode:');
   },
 
   // Hover state

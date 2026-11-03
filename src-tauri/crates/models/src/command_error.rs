@@ -114,6 +114,10 @@ pub enum CommandErrorCode {
     /// place, so it is refused and left as it was; the message says to copy the
     /// project somewhere writable.
     UpgradeRefused,
+    /// [#576 RV6b-2] A per-project write (a display setting) refused because the
+    /// project it was made for is no longer the open one: the user switched
+    /// projects while the write was queued or in flight. Nothing was written.
+    ProjectChanged,
 
     // --- SpeleoDB (the former `SpeleoDbAction`, one code per action) ----------
     /// The session token is dead: log in again.
@@ -144,7 +148,7 @@ pub enum CommandErrorCode {
 impl CommandErrorCode {
     /// Every code, in declaration order, for the wire-name tests. A new variant
     /// gets a wire name from the exhaustive [`Self::as_str`]; list it here too.
-    pub const ALL: [Self; 39] = [
+    pub const ALL: [Self; 40] = [
         Self::Failed,
         Self::InternalError,
         Self::RefusedAfterInternalError,
@@ -174,6 +178,7 @@ impl CommandErrorCode {
         Self::Io,
         Self::PreReleaseFile,
         Self::UpgradeRefused,
+        Self::ProjectChanged,
         Self::SpeleodbRelogin,
         Self::SpeleodbReadOnly,
         Self::SpeleodbFence,
@@ -218,6 +223,7 @@ impl CommandErrorCode {
             Self::Io => "IO",
             Self::PreReleaseFile => "PRE_RELEASE_FILE",
             Self::UpgradeRefused => "UPGRADE_REFUSED",
+            Self::ProjectChanged => "PROJECT_CHANGED",
             Self::SpeleodbRelogin => "SPELEODB_RELOGIN",
             Self::SpeleodbReadOnly => "SPELEODB_READ_ONLY",
             Self::SpeleodbFence => "SPELEODB_FENCE",

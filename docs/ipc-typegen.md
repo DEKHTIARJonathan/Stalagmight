@@ -70,7 +70,9 @@ command's argument names. The generator reads both and writes the manifest
   command resolves with (`ArrayBuffer` for a raw `tauri::ipc::Response`, `null`
   for `()`); `error` is its `Err` type - `CommandError` for every fallible
   command (#576 C4, see docs/architecture.md "Command results and errors") except
-  the settings writes in `commands/config.rs`, which are still `string`; `never`
+  the settings writes in `commands/config.rs`, which are still `string`
+  (`save_display_setting` aside: its `PROJECT_CHANGED` refusal is coded, #576
+  RV6b-2); `never`
   when it returns no `Result`. Tauri still rejects with a plain string when it
   cannot deserialize the arguments.
 - `src/types/ipc/ipcCommands.json` - the same data, machine-readable, with the

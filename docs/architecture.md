@@ -87,7 +87,8 @@ it (#576 RV5-6). `get_config` does too (#576 NF-W7E-5; it used to re-raise the c
 so the call never resolved). One stays infallible: `get_network_status` (a crash reads
 as offline). The settings
 write commands in `commands/config.rs` still return `Result<_, String>` (rejected as a
-plain string).
+plain string), except `save_display_setting`, whose refusal of a write made for
+another project is coded (`PROJECT_CHANGED`, #576 RV6b-2).
 
 The success side is per command (A12). `AppState` methods still build their answer
 in the internal `CommandResult` accumulator, which no longer crosses the IPC: each

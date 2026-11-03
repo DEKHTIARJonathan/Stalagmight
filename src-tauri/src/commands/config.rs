@@ -8,7 +8,7 @@ use crate::config::{
     normalize_column_widths, Config, ConfigPatch, ConfigSaveReport, GasConfig,
     DATA_TABLE_ANGLE_MODES,
 };
-use crate::core::CommandError;
+use crate::core::{AppState, CommandError};
 
 /// Get the current configuration.
 ///
@@ -392,16 +392,20 @@ pub async fn load_display_settings<R: Runtime>(
 }
 
 /// Save a display setting to the current project database
+///
+/// [#576 RV6b-2] `project_created_at` names the project the setting was made for
+/// (the frontend's open project, `None` when it had none); a write for a project
+/// that is no longer open is refused with `PROJECT_CHANGED`
+/// (`AppState::save_display_setting_for`).
 #[tauri::command]
 pub async fn save_display_setting<R: Runtime>(
     app: AppHandle<R>,
     key: String,
     value: String,
-) -> Result<(), String> {
+    project_created_at: Option<String>,
+) -> Result<(), CommandError> {
     pool::run(app, move |state| {
-        state
-            .save_display_setting(&key, &value)
-            .map_err(|e| e.to_string())
+        state.save_display_setting_for(project_created_at.as_deref(), &key, &value)
     })
     .await
 }

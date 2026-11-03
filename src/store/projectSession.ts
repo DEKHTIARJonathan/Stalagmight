@@ -25,3 +25,20 @@ export function projectSessionEpoch(): number {
 export function noteProjectSessionChanged(): void {
   epoch += 1;
 }
+
+/**
+ * [#576 RV6b-2] The open project's identity as the backend knows it (`created_at`,
+ * the key `projectSwitched` uses), or null with none open: what a per-project write
+ * names so the backend can refuse it once another project is open. Late-bound like
+ * `speleoStoreHandle`: projectStore registers its getter when it evaluates; before
+ * that (a unit test that never loads it) there is no identity to give.
+ */
+let identity: (() => string | null) | null = null;
+
+export function registerOpenProjectIdentity(get: () => string | null): void {
+  identity = get;
+}
+
+export function openProjectIdentity(): string | null {
+  return identity ? identity() : null;
+}

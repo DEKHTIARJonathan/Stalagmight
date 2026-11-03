@@ -23,7 +23,7 @@ import { emptyCommandResult, refusedLocally, settleCommand, type CommandOutcome 
 import { useExportStore } from './exportStore';
 import { refuseMutationDuringCarry, refuseStaleCarryCommit, takeMoveCarryCommit, type MoveCarryCommit } from './moveCarry';
 import { runSerialized } from './mutationQueue';
-import { noteProjectSessionChanged, projectSessionEpoch } from './projectSession';
+import { noteProjectSessionChanged, projectSessionEpoch, registerOpenProjectIdentity } from './projectSession';
 import type {
   Project,
   ProjectMetadata,
@@ -2346,3 +2346,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 };
 });
+
+// [#576 RV6b-2] The identity a per-project setting write names (store/projectSession.ts).
+registerOpenProjectIdentity(() => useProjectStore.getState().project?.created_at ?? null);

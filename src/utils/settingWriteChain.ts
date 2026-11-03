@@ -16,6 +16,8 @@
  * is their one writer and already serializes (and coalesces) its own writes.
  */
 
+import { openProjectIdentity, projectSessionEpoch } from '../store/projectSession';
+
 const tails = new Map<string, Promise<void>>();
 
 /**
@@ -34,6 +36,28 @@ export function chainSettingWrite<T>(key: string, write: () => Promise<T>): Prom
     if (tails.get(key) === tail) tails.delete(key);
   });
   return result;
+}
+
+/**
+ * [#576 RV6b-2] {@link chainSettingWrite} for a setting stored IN the open project
+ * (grid spacing, the geometry mode, the display toggles), which the backend writes
+ * into whichever project is open when the command runs. A write queued behind
+ * another used to reach the backend after the user opened another project, and
+ * land there. Now `write` gets the identity of the project open when the write was
+ * MADE, to send for the backend to check (`save_display_setting` refuses another
+ * project's with PROJECT_CHANGED), and a write whose turn comes after the project
+ * was replaced (`store/projectSession.ts`) is dropped unsent: it resolves
+ * `undefined`.
+ */
+export function chainProjectSettingWrite<T>(
+  key: string,
+  write: (projectCreatedAt: string | null) => Promise<T>,
+): Promise<T | undefined> {
+  const session = projectSessionEpoch();
+  const madeFor = openProjectIdentity();
+  return chainSettingWrite(key, () =>
+    session === projectSessionEpoch() ? write(madeFor) : Promise.resolve(undefined),
+  );
 }
 
 /** Keys for the writers that share a command but not a setting. */

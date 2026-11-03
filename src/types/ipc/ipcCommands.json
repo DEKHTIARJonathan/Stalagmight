@@ -2747,6 +2747,13 @@
           "rust": "String",
           "ts": "string",
           "optional": false
+        },
+        {
+          "name": "project_created_at",
+          "key": "projectCreatedAt",
+          "rust": "Option<String>",
+          "ts": "string | null",
+          "optional": true
         }
       ],
       "result": {
@@ -2754,8 +2761,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "String",
-        "ts": "string"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {

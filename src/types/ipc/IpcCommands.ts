@@ -220,7 +220,7 @@ export interface IpcCommands {
   resolve_warning: { args: { sectionId: number; shotId: number; warningCode: string; comment?: string | null }; result: EditOutcome; error: CommandError };
   restore_from_backup: { args: { projectPath: string; backupPath: string }; result: string; error: CommandError };
   reverse_section: { args: { sectionId: number; swapLeftRight: boolean }; result: ReverseOutcome; error: CommandError };
-  save_display_setting: { args: { key: string; value: string }; result: null; error: string };
+  save_display_setting: { args: { key: string; value: string; projectCreatedAt?: string | null }; result: null; error: CommandError };
   save_dive_plan: { args: { id?: number | null; name: string; snapshot: DivePlanSnapshot }; result: DivePlanMeta; error: CommandError };
   save_project: { args: { path?: string | null; isAutosave?: boolean | null }; result: SaveOutcome; error: CommandError };
   set_project_name_for_path: { args: { path: string; name: string }; result: EditOutcome; error: CommandError };

@@ -1137,6 +1137,7 @@ fn test_save_display_setting_then_get() {
         h(&app),
         "k1".to_string(),
         "v1".to_string(),
+        None,
     ))
     .unwrap();
     let value = state(&app).get_display_setting("k1").unwrap();
@@ -1150,12 +1151,14 @@ fn test_save_display_setting_overwrites() {
         h(&app),
         "k2".to_string(),
         "v1".to_string(),
+        None,
     ))
     .unwrap();
     run(config::save_display_setting(
         h(&app),
         "k2".to_string(),
         "v2".to_string(),
+        None,
     ))
     .unwrap();
     let value = state(&app).get_display_setting("k2").unwrap();
@@ -1183,12 +1186,14 @@ fn test_load_display_settings_returns_all() {
         h(&app),
         "k1".to_string(),
         "v1".to_string(),
+        None,
     ))
     .unwrap();
     run(config::save_display_setting(
         h(&app),
         "k2".to_string(),
         "v2".to_string(),
+        None,
     ))
     .unwrap();
     let values = run(config::load_display_settings(h(&app))).unwrap();
