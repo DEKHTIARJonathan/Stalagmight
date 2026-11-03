@@ -500,7 +500,10 @@ impl AppState {
                 // closed the session, so the poll's catch-alls will never run
                 // over it, and the deferred release below is not reached from
                 // here either.
-                self.speleodb_restore_lock_claim(cleared_claim.and_then(|c| c.into_claim()));
+                self.speleodb_restore_lock_claim(
+                    cleared_claim
+                        .and_then(super::speleodb_lock_release::ClaimClearedUnderSlot::into_claim),
+                );
                 return CommandResult::failure(format!("Failed to delete {}: {e}", path.display()))
                     .with_session_closed(session_closed);
             }

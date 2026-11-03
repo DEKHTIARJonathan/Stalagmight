@@ -117,10 +117,7 @@ fn ff_arm_body_in_a_process_of_its_own() {
         }))
         .expect("link");
     let state = state_with_null_sink();
-    assert!(
-        state.open_project(dest.clone()).success,
-        "open the cache copy"
-    );
+    assert!(state.open_project(dest).success, "open the cache copy");
     *state.speleodb.lock() = authed_session_at(&base);
 
     let answer = match scenario.as_str() {

@@ -152,7 +152,7 @@ fn crash_during_upload_body() {
         .expect("link");
     let state = crate::test_fixtures::state_with_null_sink();
     assert!(
-        state.open_project(project_cache.clone()).success,
+        state.open_project(project_cache).success,
         "open the cache copy"
     );
     *state.speleodb.lock() = super::speleodb::authed_session_at(&base);
