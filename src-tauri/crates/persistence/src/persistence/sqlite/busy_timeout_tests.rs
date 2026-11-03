@@ -61,6 +61,13 @@ fn every_open_path_waits_at_least_five_seconds_for_a_busy_file() {
             Database::open_for_recovery(&path).unwrap(),
         ),
         ("in_memory", Database::in_memory().unwrap()),
+        // [#576 NF-FIX5-3] The restore check sets the timeout itself: handed a
+        // connection that would not wait at all, it still waits.
+        ("for_candidate_check", {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.busy_timeout(std::time::Duration::ZERO).unwrap();
+            Database::for_candidate_check(conn).unwrap()
+        }),
     ];
     for (how, db) in &opened {
         let timeout = busy_timeout_ms(db);

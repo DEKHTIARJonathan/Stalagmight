@@ -9,44 +9,50 @@
 //! and fails for any that `busy_timeout_tests.rs` never calls.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Constructors the busy-timeout test cannot reach, with why that is safe. Keep it
 /// this short: anything here is a construction no test pins the timeout of.
-const NOT_AN_OPEN_PATH: &[(&str, &str)] = &[
-    (
-        "check_candidate_connection",
-        "private to repair.rs: wraps a connection its two callers opened with \
-         rusqlite's own Connection::open / open_with_flags (the default the busy-timeout \
-         test pins) to check a restore candidate",
-    ),
-    (
-        "open_existing_with",
-        "private to open.rs: the one body of open_existing and \
+const NOT_AN_OPEN_PATH: &[(&str, &str)] = &[(
+    "open_existing_with",
+    "private to open.rs: the one body of open_existing and \
          open_existing_refusing_upgrade (#576 RV4-R-M3-OPEN), which are its only callers \
          and are both opened in the busy-timeout test",
-    ),
-];
+)];
 
-/// The production `.rs` files of the `sqlite` module: `sqlite.rs` and its children,
-/// test modules (`*tests.rs`) excluded.
+/// The production `.rs` files of the `sqlite` module: `sqlite.rs` and every file
+/// under `sqlite/`, at any depth (#576 RV6a-14: a constructor in a future
+/// `sqlite/<sub>/x.rs` is found too), test modules (`*tests.rs`) excluded. Each is
+/// named by its path below `persistence/`.
 fn sqlite_sources() -> Vec<(String, String)> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/persistence");
-    let mut files = vec![root.join("sqlite.rs")];
-    for entry in std::fs::read_dir(root.join("sqlite")).unwrap() {
-        let path = entry.unwrap().path();
-        let is_rust = path.extension().is_some_and(|ext| ext == "rs");
-        let is_test = path
-            .file_stem()
-            .is_some_and(|stem| stem.to_string_lossy().ends_with("tests"));
-        if is_rust && !is_test {
-            files.push(path);
+    fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, out);
+                continue;
+            }
+            let is_rust = path.extension().is_some_and(|ext| ext == "rs");
+            let is_test = path
+                .file_stem()
+                .is_some_and(|stem| stem.to_string_lossy().ends_with("tests"));
+            if is_rust && !is_test {
+                out.push(path);
+            }
         }
     }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/persistence");
+    let mut files = vec![root.join("sqlite.rs")];
+    walk(&root.join("sqlite"), &mut files);
+    files.sort();
     files
         .into_iter()
         .map(|path| {
-            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let name = path
+                .strip_prefix(&root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
             (name, std::fs::read_to_string(&path).unwrap())
         })
         .collect()

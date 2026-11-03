@@ -140,6 +140,22 @@ fn classify_candidate(stem: &str, name: &str) -> Option<(BackupKind, Option<u32>
     None
 }
 
+/// How long a restore check waits out a competing writer on the candidate: the
+/// 5000 ms every other open path has (`busy_timeout_tests`).
+const CANDIDATE_BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(5000);
+
+impl Database {
+    /// [#576 NF-FIX5-3] Wrap a connection a restore check opened on a candidate,
+    /// with the busy timeout set here rather than left to whatever the caller's
+    /// open happened to configure (rusqlite's default today), so the wait the
+    /// busy-timeout test pins on every other open path holds on this one too.
+    pub(super) fn for_candidate_check(conn: Connection) -> Result<Self> {
+        conn.busy_timeout(CANDIDATE_BUSY_TIMEOUT)
+            .context("Failed to set the busy timeout on a restore candidate")?;
+        Ok(Self { conn })
+    }
+}
+
 /// The checks a restore candidate has to pass, on a connection that already
 /// sees its committed contents: quick_check, and a project inside.
 ///
@@ -153,7 +169,7 @@ fn check_candidate_connection(conn: Connection) -> std::result::Result<(), Strin
             "it is not a readable project file".to_string()
         }
     };
-    let db = Database { conn };
+    let db = Database::for_candidate_check(conn).map_err(|e| unreadable(&e))?;
     db.validate_integrity().map_err(|e| unreadable(&e))?;
     match db.has_project_data() {
         Ok(true) => Ok(()),
