@@ -318,22 +318,44 @@ export async function openDmpSelectionDialog(page: Page): Promise<void> {
   await expect(page.getByTestId('dmp-selection-dialog')).toBeVisible({ timeout: 10000 });
 }
 
+/**
+ * Wizard phases the DMP wizard stays on until the user acts. Its init phase
+ * (computing placement suggestions, importing the zero-datum section) and the
+ * import in progress are not among them: from those it moves on by itself, and
+ * when nothing could be suggested it hands the section off to map placement and
+ * unmounts.
+ */
+const SETTLED_WIZARD_PHASES = [
+  'wizard-suggestion',
+  'wizard-manual-placing',
+  'wizard-all-placed',
+  'wizard-error',
+];
+
 export async function ensureDmpNewImportDialogVisible(page: Page): Promise<void> {
-  await page.waitForFunction(() => {
-    const wizard = document.querySelector('[data-testid="dmp-new-import-dialog"]');
-    const placement = document.querySelector('[data-testid="placement-mode-indicator"]');
-    return Boolean(wizard || placement);
-  }, undefined, { timeout: 15000 });
+  // [#576 NF-W8E3-1] Wait for a state that stays: the wizard on a settled phase,
+  // or map placement. A single isVisible() read used to catch the wizard on its
+  // init phase, visible for a moment before it handed off to the map by itself,
+  // and return - leaving the caller waiting for a wizard that was gone, with the
+  // map placement nobody would Escape out of (dmp-import.spec.ts flaked so).
+  const settled = await page.waitForFunction(
+    (phases) => {
+      const shown = (selector: string) => {
+        const el = document.querySelector(selector) as (HTMLElement & { checkVisibility?: () => boolean }) | null;
+        return Boolean(el && (el.checkVisibility ? el.checkVisibility() : el.offsetParent !== null));
+      };
+      if (shown('[data-testid="placement-mode-indicator"]')) return 'placement';
+      const wizard = '[data-testid="dmp-new-import-dialog"]';
+      if (shown(wizard) && phases.some((id) => shown(`${wizard} [data-testid="${id}"]`))) return 'wizard';
+      return false;
+    },
+    SETTLED_WIZARD_PHASES,
+    { timeout: 15000 },
+  );
+  if ((await settled.jsonValue()) === 'wizard') return;
 
-  const wizard = page.getByTestId('dmp-new-import-dialog');
-  if (await wizard.isVisible()) {
-    return;
-  }
-
-  const placementIndicator = page.getByTestId('placement-mode-indicator');
-  await expect(placementIndicator).toBeVisible({ timeout: 10000 });
   await page.keyboard.press('Escape');
-  await expect(wizard).toBeVisible({ timeout: 10000 });
+  await expect(page.getByTestId('dmp-new-import-dialog')).toBeVisible({ timeout: 10000 });
 }
 
 export async function proceedToDmpImportWizard(page: Page): Promise<void> {
