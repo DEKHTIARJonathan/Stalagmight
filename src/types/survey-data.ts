@@ -446,6 +446,9 @@ export function surveyDataFromLegacy(
       direction: section.direction,
       quality: section.quality,
       next_shot_id: section.next_shot_id,
+      // As the binary decoder does (absent folds to null, "inherits"), so the two
+      // builders hand out the same section metadata (#576 RV7b-5).
+      azimuth_reference: section.azimuth_reference ?? null,
       shotOffset: cursor,
       shotCount: section.shots.length,
     });
