@@ -8,7 +8,7 @@ use crate::config::{
     normalize_column_widths, Config, ConfigPatch, ConfigSaveReport, GasConfig,
     DATA_TABLE_ANGLE_MODES,
 };
-use crate::core::{AppState, CommandError};
+use crate::core::CommandError;
 
 /// Get the current configuration.
 ///

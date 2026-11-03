@@ -236,8 +236,8 @@ impl AppState {
         // for that last reason: skipping restores nothing, so the form's serde
         // defaults land on top of the backend-owned fields and sign the user out
         // with no way to explain it. That is the unsafe direction, and it is the
-        // same call the save pipeline makes with the project lock
-        // (`project_io::close_project_if_open_at`) - these are plain values with no
+        // same call the cache replace makes with the project lock
+        // (`project_io::close_project_if_open_at_held`) - these are plain values with no
         // half-written invariant to protect.
         let previously_disabled = {
             let existing = self.config.lock();
