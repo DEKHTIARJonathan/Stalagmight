@@ -18,6 +18,11 @@ import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factories/ipc';
 import { makeSpeleoLink } from '../../test/factories/speleo';
 
+/** [#576 NF-W8FE-2] Done and Push answer the wire envelope, never a bare outcome. */
+function report<R>(result: R): { result: R; save_warnings: [] } {
+  return { result, save_warnings: [] };
+}
+
 const LINK: SpeleoLinkState = makeSpeleoLink();
 
 const RESTORED = { local_path: '/cache/p1.stalx', concurrent_session: false };
@@ -87,7 +92,7 @@ describe('SpeleoRevertDialog', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     render(<SpeleoRevertDialog />);
 
@@ -219,7 +224,7 @@ describe('SpeleoRevertDialog - a failed upload is actionable from the dialog', (
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     await userEvent.click(retry);
 
@@ -247,7 +252,7 @@ describe('SpeleoRevertDialog - a failed upload is actionable from the dialog', (
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     await userEvent.click(retry);
 
@@ -267,7 +272,7 @@ describe('SpeleoRevertDialog - a failed upload is actionable from the dialog', (
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'push_unconfirmed' }),
+      speleodb_done: ok(report({ kind: 'push_unconfirmed' })),
     });
     render(<SpeleoRevertDialog />);
     await userEvent.click(screen.getByTestId('speleodb-revert-confirm-btn'));
@@ -282,7 +287,7 @@ describe('SpeleoRevertDialog - a failed upload is actionable from the dialog', (
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     await userEvent.click(retry);
 
@@ -327,7 +332,7 @@ describe('SpeleoRevertDialog - the armed discard', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     render(<SpeleoRevertDialog />);
 
@@ -374,7 +379,7 @@ describe('SpeleoRevertDialog - the armed discard', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     await userEvent.click(screen.getByTestId('speleodb-revert-retry-upload-btn'));
 
@@ -388,7 +393,7 @@ describe('SpeleoRevertDialog - the armed discard', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'push_unconfirmed' }),
+      speleodb_done: ok(report({ kind: 'push_unconfirmed' })),
     });
     render(<SpeleoRevertDialog />);
 
@@ -407,7 +412,7 @@ describe('SpeleoRevertDialog - the armed discard', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'not_editing' }),
+      speleodb_done: ok(report({ kind: 'not_editing' })),
     });
     render(<SpeleoRevertDialog />);
 
@@ -424,7 +429,7 @@ describe('SpeleoRevertDialog - the armed discard', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     render(<SpeleoRevertDialog />);
 
@@ -454,7 +459,7 @@ describe('SpeleoRevertDialog - unsaved local edits', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     render(<SpeleoRevertDialog />);
 

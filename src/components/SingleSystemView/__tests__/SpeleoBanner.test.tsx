@@ -18,6 +18,11 @@ import { useUIStore } from '../../../store/uiStore';
 import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../../test/factories/ipc';
 import { makeSpeleoLink } from '../../../test/factories/speleo';
 
+/** [#576 NF-W8FE-2] Done and Push answer the wire envelope, never a bare outcome. */
+function report<R>(result: R): { result: R; save_warnings: [] } {
+  return { result, save_warnings: [] };
+}
+
 const LINK: SpeleoLinkState = makeSpeleoLink({
   editState: 'editing',
   hasUnpushedEdits: true,
@@ -95,7 +100,7 @@ describe('SpeleoBanner push failure (#260)', () => {
 
   it('Retry re-issues the push verb with the original commit message', async () => {
     seedFailure('push', 'my message');
-    invokeIpcMock.mockResolvedValue({ kind: 'pushed' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'pushed' }));
     render(<SpeleoBanner />);
 
     await userEvent.click(screen.getByTestId('speleo-banner-retry-push'));
@@ -112,7 +117,7 @@ describe('SpeleoBanner push failure (#260)', () => {
 
   it('Retry re-issues the unlock verb when the failure came from Done', async () => {
     seedFailure('done', 'wrap up');
-    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'released' }));
     render(<SpeleoBanner />);
 
     await userEvent.click(screen.getByTestId('speleo-banner-retry-push'));

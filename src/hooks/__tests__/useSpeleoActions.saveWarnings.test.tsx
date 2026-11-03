@@ -84,4 +84,23 @@ describe('useSpeleoActions: the pre-push save warnings (#576 NF-W2SAVE-1)', () =
     expect(outcome).toEqual({ kind: 'pushed' });
     expectSaveWarningShown();
   });
+
+  // [#576 NF-W8FE-2] Only the wire envelope is read, as Publish reads its own. A bare
+  // outcome used to pass for a clean one: Done said "released" and Push "pushed".
+  it.each([
+    ['done', 'speleodb_done', { kind: 'released' }],
+    ['push', 'speleodb_push', { kind: 'pushed' }],
+  ] as const)('%s: a bare outcome is a broken contract, not a success', async (verb, command, bare) => {
+    invokeIpcMock.mockImplementation(async (cmd: string) => (cmd === command ? bare : null));
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = verb === 'done' ? await result.current.done() : await result.current.push();
+    });
+
+    expect(outcome).toBeNull();
+    expect(showToast.mock.calls.filter((call) => call[2] === 'success')).toEqual([]);
+    expect(useSpeleoStore.getState().banner).toMatchObject({ kind: 'push_failed', origin: verb });
+  });
 });

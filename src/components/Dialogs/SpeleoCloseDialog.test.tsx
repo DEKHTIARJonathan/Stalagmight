@@ -25,6 +25,11 @@ import { useUIStore } from '../../store/uiStore';
 import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 import { makeSpeleoLink } from '../../test/factories/speleo';
 
+/** [#576 NF-W8FE-2] Done and Push answer the wire envelope, never a bare outcome. */
+function report<R>(result: R): { result: R; save_warnings: [] } {
+  return { result, save_warnings: [] };
+}
+
 // The real dialog actions, captured before `beforeEach` swaps in spies. The [#303]
 // hand-off at the bottom of this file moves the user BETWEEN two dialogs, so
 // `activeDialog` has to actually change rather than be recorded.
@@ -42,7 +47,7 @@ let closeDialog: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   invokeIpcMock.mockReset();
-  invokeIpcMock.mockResolvedValue({ kind: 'released' });
+  invokeIpcMock.mockResolvedValue(report({ kind: 'released' }));
   closeProject = vi.fn(async () => ({ success: true }));
   saveProject = vi.fn(async () => ({ success: true }));
   closeDialog = vi.fn();

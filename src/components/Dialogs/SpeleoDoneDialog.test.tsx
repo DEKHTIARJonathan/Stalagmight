@@ -30,6 +30,11 @@ import { useUIStore } from '../../store/uiStore';
 import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 import { makeSpeleoLink } from '../../test/factories/speleo';
 
+/** [#576 NF-W8FE-2] Done and Push answer the wire envelope, never a bare outcome. */
+function report<R>(result: R): { result: R; save_warnings: [] } {
+  return { result, save_warnings: [] };
+}
+
 const LINK: SpeleoLinkState = makeSpeleoLink({ editState: 'editing', hasUnpushedEdits: true });
 
 beforeEach(() => {
@@ -108,7 +113,7 @@ describe('SpeleoDoneDialog - a failed upload is surfaced inside the dialog (#260
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
     await screen.findByTestId('speleodb-push-failure-inline');
 
-    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'released' }));
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
 
     await waitFor(() => expect(useUIStore.getState().activeDialog).toBeNull());

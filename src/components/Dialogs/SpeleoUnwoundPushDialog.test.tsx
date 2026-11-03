@@ -35,6 +35,11 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factories/ipc';
 
+/** [#576 NF-W8FE-2] Done and Push answer the wire envelope, never a bare outcome. */
+function report<R>(result: R): { result: R; save_warnings: [] } {
+  return { result, save_warnings: [] };
+}
+
 const open = () => {
   useUIStore.setState({
     activeDialog: 'speleodb-unwound-push',
@@ -120,7 +125,7 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
   it('keeps the message and retry surface when the release attempt fails', async () => {
     invokeIpcMock
       .mockRejectedValueOnce(new Error('offline'))
-      .mockResolvedValueOnce({ kind: 'released' });
+      .mockResolvedValueOnce(report({ kind: 'released' }));
     open();
     render(<SpeleoUnwoundPushDialog />);
 
@@ -149,7 +154,7 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
 
   it('acknowledges an explicit push without releasing the lock', async () => {
     useUIStore.setState({ dialogData: { message: 'push old', mode: 'push' } });
-    invokeIpcMock.mockResolvedValue({ kind: 'pushed' });
+    invokeIpcMock.mockResolvedValue(report({ kind: 'pushed' }));
     render(<SpeleoUnwoundPushDialog />);
 
     await userEvent.click(screen.getByTestId('speleodb-unwound-push-push-anyway'));
@@ -247,7 +252,7 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
    */
   describe('the routes with no exit waiting are unchanged', () => {
     it('closes and exits nothing when Push anyway succeeds', async () => {
-      invokeIpcMock.mockResolvedValueOnce({ kind: 'released' });
+      invokeIpcMock.mockResolvedValueOnce(report({ kind: 'released' }));
       open();
       render(<SpeleoUnwoundPushDialog />);
 

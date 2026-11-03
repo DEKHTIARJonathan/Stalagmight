@@ -22,6 +22,8 @@ import { surfaceSaveWarnings } from '../utils/saveFeedback';
 import type {
   DoneResult,
   PushResult,
+  SpeleoDoneReport,
+  SpeleoPushReport,
   StartEditingResult,
   ValidationWarning,
 } from '../types/ipc.generated';
@@ -30,14 +32,14 @@ import type {
  * [#576 NF-W2SAVE-1] Done and Push answer their outcome together with the warnings
  * of the project save they ran before the upload (what that save could not keep).
  * Those are one-shot - the save after the push does not repeat them - so they are
- * shown here, like a normal save's. An answer without the envelope (a bare outcome,
- * as test doubles return it) reads as that outcome with no warnings.
+ * shown here, like a normal save's. [#576 NF-W8FE-2] Only that wire shape is read,
+ * as Publish reads its own: a bare outcome is a broken contract and fails the verb
+ * loudly instead of passing for a clean one.
  */
-function readSpeleoReport<R extends { kind: string }>(
-  raw: { result: R; save_warnings: ValidationWarning[] } | R,
-): { result: R; saveWarnings: ValidationWarning[] } {
-  if ('result' in raw) return { result: raw.result, saveWarnings: raw.save_warnings ?? [] };
-  return { result: raw, saveWarnings: [] };
+function readSpeleoReport<T extends SpeleoDoneReport | SpeleoPushReport>(
+  raw: T,
+): { result: T['result']; saveWarnings: ValidationWarning[] } {
+  return { result: raw.result, saveWarnings: raw.save_warnings ?? [] };
 }
 
 /**
@@ -393,7 +395,7 @@ export function useSpeleoActions(): SpeleoActions {
       // arm, which neither lands nor throws.
       clearPushFailedBanner();
       try {
-        const { result, saveWarnings } = readSpeleoReport<PushResult>(
+        const { result, saveWarnings } = readSpeleoReport(
           await invokeIpc('speleodb_push', {
             message: message ?? null,
             acceptOlderVersion: opts?.acceptOlderVersion ?? false,
@@ -503,7 +505,7 @@ export function useSpeleoActions(): SpeleoActions {
       // it BEFORE the call.
       const hadUnpushedEdits = useSpeleoStore.getState().link?.hasUnpushedEdits ?? false;
       try {
-        const { result, saveWarnings } = readSpeleoReport<DoneResult>(
+        const { result, saveWarnings } = readSpeleoReport(
           await invokeIpc('speleodb_done', {
             message: message ?? null,
             acceptOlderVersion: opts?.acceptOlderVersion ?? false,

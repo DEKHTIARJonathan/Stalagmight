@@ -17,6 +17,11 @@ import { useUIStore } from '../../store/uiStore';
 import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factories/ipc';
 import { makeSpeleoLink } from '../../test/factories/speleo';
 
+/** [#576 NF-W8FE-2] Done and Push answer the wire envelope, never a bare outcome. */
+function report<R>(result: R): { result: R; save_warnings: [] } {
+  return { result, save_warnings: [] };
+}
+
 const LINK: SpeleoLinkState = makeSpeleoLink();
 
 const ARGS: RevertRevisionArgs = {
@@ -88,7 +93,7 @@ describe('useRevertRevision - the happy path', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
 
     const outcome = await run();
@@ -135,7 +140,7 @@ describe('useRevertRevision - the happy path', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
     const steps: string[] = [];
 
@@ -153,7 +158,7 @@ describe('useRevertRevision - the resume is identity-checked too (#258)', () => 
     // PUSHES. A retry after a project switch therefore uploaded the replacement and
     // released its lock.
     useSpeleoStore.setState({ remoteProjectId: 'p2' });
-    ipc({ speleodb_done: ok({ kind: 'released' }) });
+    ipc({ speleodb_done: ok(report({ kind: 'released' })) });
 
     expect(await run({ resumeAtPush: true })).toEqual({ kind: 'project_changed' });
     expect(issued()).toEqual([]);
@@ -167,7 +172,7 @@ describe('useRevertRevision - the resume is identity-checked too (#258)', () => 
       link: { ...LINK, hasUnpushedEdits: true },
     });
     useProjectStore.setState({ isDirty: true });
-    ipc({ speleodb_done: ok({ kind: 'released' }) });
+    ipc({ speleodb_done: ok(report({ kind: 'released' })) });
 
     expect(await run({ resumeAtPush: true })).toEqual({ kind: 'reverted' });
     expect(issued()).toEqual(['speleodb_done']);
@@ -190,7 +195,7 @@ describe('useRevertRevision - the swapped tree owns no stale entity refs (#258)'
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
 
     expect(await run()).toEqual({ kind: 'reverted' });
@@ -296,7 +301,7 @@ describe('useRevertRevision - unwinding a failed restore', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: rejects(UNPUSHED_REFUSAL),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
 
     const outcome = await run();
@@ -309,7 +314,7 @@ describe('useRevertRevision - unwinding a failed restore', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: rejects({ message: 'offline' }),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
 
     const outcome = await run();
@@ -327,7 +332,7 @@ describe('useRevertRevision - unwinding a failed restore', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: rejects({ message: 'offline' }),
-      speleodb_done: ok({ kind: 'not_editing' }),
+      speleodb_done: ok(report({ kind: 'not_editing' })),
     });
 
     const outcome = await run();
@@ -393,7 +398,7 @@ describe('useRevertRevision - a restore that landed but a push that did not', ()
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'not_editing' }),
+      speleodb_done: ok(report({ kind: 'not_editing' })),
     });
 
     const outcome = await run();
@@ -407,7 +412,7 @@ describe('useRevertRevision - a restore that landed but a push that did not', ()
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'push_unconfirmed' }),
+      speleodb_done: ok(report({ kind: 'push_unconfirmed' })),
     });
 
     const outcome = await run();
@@ -435,7 +440,7 @@ describe('useRevertRevision - resuming at the push', () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
 
     const outcome = await run({ resumeAtPush: true });
@@ -457,7 +462,7 @@ describe('useRevertRevision - resuming at the push', () => {
     // user mid-revert, holding a lock with a retry they cannot press, is the one
     // failure this control exists to prevent.
     useProjectStore.setState({ isDirty: true });
-    ipc({ speleodb_done: ok({ kind: 'released' }) });
+    ipc({ speleodb_done: ok(report({ kind: 'released' })) });
 
     const outcome = await run({ resumeAtPush: true });
 
@@ -469,7 +474,7 @@ describe('useRevertRevision - resuming at the push', () => {
     // `hasUnpushedEdits` is set by the restore, so the ordinary route would refuse
     // this retry outright - offering to "replace my changes" over the user's own
     // revert. The resume must not consult that guard at all.
-    ipc({ speleodb_done: ok({ kind: 'released' }) });
+    ipc({ speleodb_done: ok(report({ kind: 'released' })) });
 
     const outcome = await run({ resumeAtPush: true });
 
@@ -478,7 +483,7 @@ describe('useRevertRevision - resuming at the push', () => {
   });
 
   it('reports the pushing step and no other', async () => {
-    ipc({ speleodb_done: ok({ kind: 'released' }) });
+    ipc({ speleodb_done: ok(report({ kind: 'released' })) });
     const steps: string[] = [];
 
     await run({ resumeAtPush: true, onStep: (s) => steps.push(s) });
@@ -499,7 +504,7 @@ describe('useRevertRevision - resuming at the push', () => {
   });
 
   it('maps an unconfirmed resume through that tail too', async () => {
-    ipc({ speleodb_done: ok({ kind: 'push_unconfirmed' }) });
+    ipc({ speleodb_done: ok(report({ kind: 'push_unconfirmed' })) });
 
     const outcome = await run({ resumeAtPush: true });
 
@@ -526,7 +531,7 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
       speleodb_dump_candidates: ok(AMBIGUOUS.dump_candidates),
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
 
     const outcome = await run();
@@ -551,7 +556,7 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
       }
       if (cmd === 'speleodb_start_editing') return { kind: 'editing' };
       if (cmd === 'speleodb_restore_revision') return RESTORED;
-      if (cmd === 'speleodb_done') return { kind: 'released' };
+      if (cmd === 'speleodb_done') return report({ kind: 'released' });
       return null;
     });
 
@@ -571,7 +576,7 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
 
     const outcome = await run({ entryPath: 'misc/b.stalx' });
@@ -592,7 +597,7 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
       }
       if (cmd === 'speleodb_start_editing') return { kind: 'editing' };
       if (cmd === 'speleodb_restore_revision') return RESTORED;
-      if (cmd === 'speleodb_done') return { kind: 'released' };
+      if (cmd === 'speleodb_done') return report({ kind: 'released' });
       return null;
     });
 
@@ -616,7 +621,7 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
         return { kind: 'editing' };
       }
       if (cmd === 'speleodb_restore_revision') return RESTORED;
-      if (cmd === 'speleodb_done') return { kind: 'released' };
+      if (cmd === 'speleodb_done') return report({ kind: 'released' });
       if (cmd === 'speleodb_release_lock_acquired_here') return null;
       return null;
     });
@@ -696,7 +701,7 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
       speleodb_dump_candidates: ok(AMBIGUOUS.dump_candidates),
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
 
     const outcome = await run({ entryPath: 'misc/b.stalx' });
@@ -712,7 +717,7 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
       speleodb_dump_candidates: rejects({ message: 'offline', code: 'SPELEODB_RETRY' }),
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
 
     expect(await run()).toEqual({ kind: 'reverted' });
@@ -727,7 +732,7 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: rejects(AMBIGUOUS),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
 
     const outcome = await run();
@@ -742,7 +747,7 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
 
     const outcome = await run({ entryPath: 'misc/b.stalx' });
@@ -774,7 +779,7 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: rejects(AMBIGUOUS),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
 
     const outcome = await run();
@@ -802,7 +807,7 @@ describe('useRevertRevision - the read-only Plan/Export workspace (#576 RV4-FE-S
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
 
     const outcome = await run();
@@ -820,7 +825,7 @@ describe('useRevertRevision - the read-only Plan/Export workspace (#576 RV4-FE-S
       },
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: ok(RESTORED),
-      speleodb_done: ok({ kind: 'released' }),
+      speleodb_done: ok(report({ kind: 'released' })),
     });
 
     const outcome = await run();
