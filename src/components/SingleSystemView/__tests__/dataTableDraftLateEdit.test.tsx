@@ -35,40 +35,12 @@ import type { ShotCreated } from '../../../types/ipc/ShotCreated';
 import type { Section, Shot } from '../../../types/project';
 import { invokeIpcMock } from '../../../test/factories/ipc';
 import { NoopResizeObserver } from '../../../test/factories/dom';
+import { makeSection, makeShot } from '../../../test/factories/survey';
 
-const shot = (id: number, length: number): Shot => ({
-  id,
-  azimuth_in: 10,
-  azimuth_out: 10,
-  length,
-  depth_in: 0,
-  depth_out: 1,
-  pitch_in: null,
-  pitch_out: null,
-  left: null,
-  right: null,
-  up: null,
-  down: null,
-  comment: null,
-  kind: 'Normal',
-  marker_index: null,
-  temperature: null,
-});
+const shot = (id: number, length: number): Shot =>
+  makeShot({ id, azimuth_in: 10, azimuth_out: 10, length, depth_out: 1 });
 
-const section: Section = {
-  id: 1,
-  name: 'CaveA',
-  surveyor: null,
-  date: null,
-  color: '#3388ff',
-  direction: 'in',
-  quality: 0,
-  shots: [shot(1, 10), shot(2, 20), shot(3, 30)],
-  next_shot_id: 4,
-  reverse_parity: false,
-  gauge_shot_uuid: null,
-  gauge_neighbour_uuid: null,
-};
+const section: Section = makeSection({ name: 'CaveA', shots: [shot(1, 10), shot(2, 20), shot(3, 30)] });
 
 const created = (shotId: number): CommandOutcome<ShotCreated> =>
   accepted<ShotCreated>({ shot_id: shotId, warnings: [], remote_link: null });

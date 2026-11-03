@@ -31,48 +31,15 @@ import type { Config } from '../../../types/config';
 import type { Section, Shot, Station } from '../../../types/project';
 import { invokeIpcMock } from '../../../test/factories/ipc';
 import { NoopResizeObserver } from '../../../test/factories/dom';
+import { makeSection, makeShot, makeStation } from '../../../test/factories/survey';
 
-const shot = (id: number): Shot => ({
-  id,
-  azimuth_in: 10,
-  azimuth_out: 10,
-  length: id * 10,
-  depth_in: 0,
-  depth_out: 1,
-  pitch_in: null,
-  pitch_out: null,
-  left: null,
-  right: null,
-  up: null,
-  down: null,
-  comment: null,
-  kind: 'Normal',
-  marker_index: null,
-  temperature: null,
-});
+const shot = (id: number): Shot =>
+  makeShot({ id, azimuth_in: 10, azimuth_out: 10, length: id * 10, depth_out: 1 });
 
-const section: Section = {
-  id: 1,
-  name: 'CaveA',
-  surveyor: null,
-  date: null,
-  color: '#3388ff',
-  direction: 'in',
-  quality: 0,
-  shots: [shot(1), shot(2), shot(3)],
-  next_shot_id: 4,
-  reverse_parity: false,
-  gauge_shot_uuid: null,
-  gauge_neighbour_uuid: null,
-};
+const section: Section = makeSection({ name: 'CaveA', shots: [shot(1), shot(2), shot(3)] });
 
-const station = (index: number): Station => ({
-  station_ref: { section_id: 1, station_index: index },
-  coordinates: { x: index, y: 0, z: 0 },
-  is_zero_datum: false,
-  gps_coordinates: null,
-  merged_with: [],
-});
+const station = (index: number): Station =>
+  makeStation({ station_ref: { section_id: 1, station_index: index }, coordinates: { x: index, y: 0, z: 0 } });
 
 /** The grid row holding the cursor, as its row index (-1 when none). */
 const activeRow = () => {

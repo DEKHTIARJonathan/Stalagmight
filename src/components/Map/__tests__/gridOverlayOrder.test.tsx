@@ -28,16 +28,10 @@ import { BOTTOM_SURVEY_LAYERS, SATELLITE_BOTTOM_CANDIDATES } from '../mapUtils';
 import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';
 import type { Station } from '../../../types/project';
+import { makeStation as stationOf } from '../../../test/factories/survey';
 
 function makeStation(station_index: number, x: number, y: number): Station {
-  return {
-    station_ref: { section_id: 1, station_index },
-    coordinates: { x, y, z: 0 },
-    is_zero_datum: false,
-    gps_coordinates: null,
-    merged_with: [],
-    closures_with: [],
-  };
+  return stationOf({ station_ref: { section_id: 1, station_index }, coordinates: { x, y, z: 0 }, closures_with: [] });
 }
 
 interface FakeMap {

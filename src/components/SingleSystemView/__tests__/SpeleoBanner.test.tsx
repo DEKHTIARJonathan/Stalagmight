@@ -16,21 +16,15 @@ import { SpeleoBanner } from '../SpeleoBanner';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
 import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../../test/factories/ipc';
+import { makeSpeleoLink } from '../../../test/factories/speleo';
 
-const LINK: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
+const LINK: SpeleoLinkState = makeSpeleoLink({
   editState: 'editing',
-  lockHolder: null,
-  lockedByOther: false,
   hasUnpushedEdits: true,
-  unwound: false,
   forceEditing: true,
   forceEditAllowed: true,
-  undoMode: 'full',
   remoteState: 'unknown',
-  noAccess: false,
-  serverError: null,
-};
+});
 
 const seedLink = (o: Partial<SpeleoLinkState> = {}) =>
   useSpeleoStore.setState({ link: { ...LINK, ...o }, banner: null });

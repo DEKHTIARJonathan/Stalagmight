@@ -18,26 +18,10 @@ import {
 } from '../dataTableDrafts';
 import { AZIMUTH_AVG_KEY } from '../dataTableEdits';
 import type { Shot } from '../../../types/project';
+import { makeShot } from '../../../test/factories/survey';
 
-const shot = (id: number, over: Partial<Shot> = {}): Shot => ({
-  id,
-  azimuth_in: 90,
-  azimuth_out: 90,
-  length: 10,
-  depth_in: 0,
-  depth_out: 1,
-  pitch_in: null,
-  pitch_out: null,
-  left: null,
-  right: null,
-  up: null,
-  down: null,
-  comment: null,
-  kind: 'Normal' as const,
-  marker_index: null,
-  temperature: null,
-  ...over,
-});
+const shot = (id: number, over: Partial<Shot> = {}): Shot =>
+  makeShot({ id, azimuth_in: 90, azimuth_out: 90, depth_out: 1, ...over });
 
 const draft = (key: number, anchor: ShotDraft['anchor'], data: ShotDraft['data'] = {}): ShotDraft => ({
   key,

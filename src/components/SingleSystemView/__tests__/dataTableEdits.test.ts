@@ -1,26 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from '../dataTableEdits';
 import type { Shot } from '../../../types/project';
+import { makeShot } from '../../../test/factories/survey';
 
-const shot = (over: Partial<Shot> = {}): Shot => ({
-  id: 1,
-  azimuth_in: 90,
-  azimuth_out: 90,
-  length: 10,
-  depth_in: 0,
-  depth_out: 1,
-  pitch_in: null,
-  pitch_out: null,
-  left: null,
-  right: null,
-  up: null,
-  down: null,
-  comment: null,
-  kind: 'Normal' as const,
-  marker_index: null,
-  temperature: null,
-  ...over,
-});
+const shot = (over: Partial<Shot> = {}): Shot =>
+  makeShot({ azimuth_in: 90, azimuth_out: 90, depth_out: 1, ...over });
 
 describe('buildShotUpdates', () => {
   it('maps real column keys straight through', () => {
