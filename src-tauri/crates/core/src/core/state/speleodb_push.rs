@@ -1627,11 +1627,11 @@ mod update_restore {
         }
     }
 
+    #[cfg(test)]
     impl<'s, 'g> FastForwarded<'s, 'g> {
         /// A reload that captured `capture` in `lock_ops`, for the restore's own tests:
         /// production reaches a `FastForwarded` only through
         /// [`EditingCapture::fast_forward`].
-        #[cfg(test)]
         pub(super) fn for_tests(
             state: &AppState,
             lock_ops: &'s LockOpsHeld<'g>,
@@ -1642,7 +1642,9 @@ mod update_restore {
                 local_path: String::new(),
             }
         }
+    }
 
+    impl FastForwarded<'_, '_> {
         /// Restore the captured session after the reload, and hand back the local path.
         ///
         /// [#576 B35(a)] Reopen only for the session that ran the download: the span
