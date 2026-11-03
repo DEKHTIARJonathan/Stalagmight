@@ -401,11 +401,18 @@ test.describe('Depth Gradient', () => {
     await toggleDisplayOption(page, 'showDepthGradient');
     await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible();
     const [on] = await waitForIpcCall(page, 'save_display_setting');
-    expect(on.args).toEqual({ key: 'showDepthGradient', value: 'true' });
+    // The write also carries the project's identity (#576 RV6b-2), pinned in vitest
+    // and Rust; this test is about the key and the value the toggle sends.
+    expect(on.args).toMatchObject({ key: 'showDepthGradient', value: 'true' });
 
     await toggleDisplayOption(page, 'showDepthGradient');
     const calls = await waitForIpcCall(page, 'save_display_setting', 2);
-    expect(calls.map((c) => c.args).filter((a) => a.key === 'showDepthGradient')).toEqual([
+    expect(
+      calls
+        .map((c) => c.args)
+        .filter((a) => a.key === 'showDepthGradient')
+        .map((a) => ({ key: a.key, value: a.value })),
+    ).toEqual([
       { key: 'showDepthGradient', value: 'true' },
       { key: 'showDepthGradient', value: 'false' },
     ]);
