@@ -1235,7 +1235,21 @@ impl AppState {
 /// - the stamp's proof ([`DirtyStamped`]) disarms the guard, and only a disarmed guard
 ///   hands a held lock over ([`HeldForHandOver`]);
 /// - only a hand-over that landed may settle the server type ([`AdoptLanded`]);
+/// - the type settle borrows the verdict span, and the release-verdict correction
+///   that clears a disproved claim is its method ([`AdoptSettled`]), so the two
+///   cannot be split across spans (#576 NF-A8R-GAPS);
 /// - the close is the last step, and the verb's answer is made by it ([`AdoptClosed`]).
+///
+/// [#576 NF-A8R-GAPS] What the types do NOT stop: an EXTRA `close_project()` written
+/// earlier in the verb. The close is made last by [`AdoptClosed`], but the verb runs
+/// on `&AppState`, whose `close_project` is the general teardown every command and
+/// flow uses, and no proof can take a method away from one function body. Forbidding
+/// it would mean running the whole chain on a narrowed handle that exposes only the
+/// steps above - a rewrite of the verb, not a proof type - so it is left to review.
+/// It is not behaviour-neutral (a close before the stamp leaves the stamp no live
+/// handle to write through), and no test drives the verb past the download yet: the
+/// verb needs a stub for the whole acquire / download / push / release exchange,
+/// which the single-request tests here do not model.
 mod adopt_order {
     use std::path::Path;
 

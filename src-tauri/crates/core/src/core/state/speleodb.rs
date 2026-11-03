@@ -2726,6 +2726,13 @@ pub(super) fn unwind_keeps_lock(
 /// ([`HolderProbed`]) both run inside the lock-ops span (they take its proof, the
 /// probe with the account read inside it), and the acquire takes both - so it cannot
 /// be written above either, and neither can leave the span.
+///
+/// [#576 NF-A8R-GAPS] Not typed, on purpose: the session snapshot
+/// (`speleodb_session_snapshot`) before the token read. Both are reads inside the
+/// same span (each takes its proof), nothing between them can change either - logout
+/// and login wait on the span - and the commit re-checks the generation and the
+/// identity anyway, so swapping them changes no outcome. A proof there would order
+/// two reads, not a read and the step it guards.
 mod start_order {
     use super::super::speleodb_session::{InSpan, LockOpsHeld};
     use super::{lock_held_by_me, AppState};

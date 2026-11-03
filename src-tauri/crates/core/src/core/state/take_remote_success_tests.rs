@@ -38,21 +38,27 @@ const CHILD_TEST: &str =
 
 /// Our BASE, and the tip another account pushed on top of it (revision ids are
 /// 40-hex shas: anything else is not pinned, and the dump comes from HEAD).
-const BASE_SHA: &str = "abc1230000000000000000000000000000000000";
-const TIP_SHA: &str = "def4560000000000000000000000000000000000";
+pub(super) const BASE_SHA: &str = "abc1230000000000000000000000000000000000";
+pub(super) const TIP_SHA: &str = "def4560000000000000000000000000000000000";
 
 /// Every JSON request: the project, its revision history and the release answer.
 /// Our own account (`u@x`, `authed_session_at`) holds the lock.
 fn project_json() -> String {
+    project_json_held_by(r#""active_mutex":{"user":"u@x"},"#)
+}
+
+/// [`project_json`] with `mutex` (an `"active_mutex":{..},` member, or nothing for
+/// an unheld lock) in place of our account's.
+pub(super) fn project_json_held_by(mutex: &str) -> String {
     format!(
-        r#"{{"id":"{REMOTE_ID}","name":"Remote","active_mutex":{{"user":"u@x"}},
+        r#"{{"id":"{REMOTE_ID}","name":"Remote",{mutex}
             "commits":[{{"id":"{TIP_SHA}","parent_ids":["{BASE_SHA}"],"author_email":"other@x"}},
                        {{"id":"{BASE_SHA}","parent_ids":[],"author_email":"u@x"}}]}}"#
     )
 }
 
 /// A project file holding one section named `section`.
-fn project_file(path: &Path, name: &str, section: &str) {
+pub(super) fn project_file(path: &Path, name: &str, section: &str) {
     let mut project = Project::new(name.to_owned(), None);
     project.add_section(SectionData {
         name: Some(section.to_owned()),
@@ -70,7 +76,7 @@ fn project_file(path: &Path, name: &str, section: &str) {
 }
 
 /// The server's working tree at the tip: one `.stalx` entry, as SpeleoDB zips it.
-fn dump_at_tip() -> Vec<u8> {
+pub(super) fn dump_at_tip() -> Vec<u8> {
     let temp = TempDir::new().expect("temp");
     let server = temp.path().join("server.stalx");
     project_file(&server, "Server Copy", "ServerSection");
@@ -88,13 +94,22 @@ fn dump_at_tip() -> Vec<u8> {
 /// A loopback stub routing by path - the dump at a hash gets `zip`, everything
 /// else [`project_json`] - and recording every request line. Keep the listener
 /// bound for the whole test.
-fn routing_stub(zip: Vec<u8>) -> (String, std::net::TcpListener, Arc<Mutex<Vec<String>>>) {
+pub(super) fn routing_stub(
+    zip: Vec<u8>,
+) -> (String, std::net::TcpListener, Arc<Mutex<Vec<String>>>) {
+    routing_stub_answering(zip, project_json())
+}
+
+/// [`routing_stub`] answering every JSON request with `json`.
+pub(super) fn routing_stub_answering(
+    zip: Vec<u8>,
+    json: String,
+) -> (String, std::net::TcpListener, Arc<Mutex<Vec<String>>>) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
     let port = listener.local_addr().expect("addr").port();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let accept_on = listener.try_clone().expect("clone listener");
     let log = Arc::clone(&seen);
-    let json = project_json();
     std::thread::spawn(move || {
         while let Ok((mut stream, _)) = accept_on.accept() {
             let _ = stream.set_read_timeout(Some(Duration::from_millis(150)));
