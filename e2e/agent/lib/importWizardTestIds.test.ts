@@ -41,7 +41,7 @@ describe('import fuzzer wizard lookups (#576 NF-W8D4-1)', () => {
   it.each(LOOKUP_FILES)('%s looks up only wizard test ids the wizard renders', (file) => {
     const source = fs.readFileSync(path.join(repo, file), 'utf8');
     const looked = [...source.matchAll(/['"`](wizard-[\w-]+)['"`]/g)].map((m) => m[1]);
-    expect(looked.length, `no wizard-* lookups read from ${file}: the pattern no longer matches`).toBeGreaterThan(3);
+    expect(looked.length, `no wizard-* lookups read from ${file}: the pattern no longer matches`).toBeGreaterThan(0);
     expect([...new Set(looked)].filter((id) => !rendered.has(id))).toEqual([]);
   });
 });

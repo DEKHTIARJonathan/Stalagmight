@@ -24,11 +24,15 @@ function List({ guarded, onReady }: { guarded: boolean; onReady: (v: Rows) => vo
     getScrollElement: () => scrollRef.current,
     estimateSize: () => 24,
     overscan: 4,
+    // jsdom lays nothing out: give the viewport a size so rows render (and measure).
+    initialRect: { width: 300, height: 120 },
   });
   // The hook is called either way, so both variants run the same hooks; only the
   // guard's effect differs.
   useVirtualizerUnmountGuard(guarded ? rows : DUMMY);
-  useEffect(() => onReady(rows), [rows, onReady]);
+  useEffect(() => {
+    onReady(rows);
+  }, [rows, onReady]);
   return (
     <div ref={scrollRef} style={{ height: 120, overflow: 'auto' }}>
       <div style={{ height: rows.getTotalSize(), position: 'relative' }}>
