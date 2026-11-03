@@ -183,7 +183,7 @@ on `base_budget + sum(min(breathed, safe) - safe)` and can never reach further
 than the same plan without the moved drops. The pins are re-checked on every
 recompute, so this holds whatever moved under a saved pin since it was set.
 
-**A pinned drop decides the route** (#576 RV8c-2, decided D1-D3; `gas/pinned.rs`).
+**A pinned drop decides the route** (#576 RV8c-2, decided D1-D6; `gas/pinned.rs`).
 A drop the diver pinned is a place the dive goes, so the route passes it the way it
 passes a way point:
 
@@ -207,7 +207,8 @@ passes a way point:
   on the way to an earlier pin (drop 2 moved shallower than drop 1) - stays at that
   first pass: the stage is dropped there full, and the dive is not sent back to it.
 - With way points, every pin the way-point chain does not pass is visited after
-  the last way point (#576 open question: a pin between two way points).
+  the last way point, in drop order (D6: kept, also for a pin that sits between
+  two way points on another branch).
 
 The route through the pins does not depend on the budget; only where the dive
 turns on it does. So the gas each pin has cost is read off the pinned route before
@@ -215,9 +216,31 @@ the budget exists - the ordering stays acyclic - and LESS gas can only turn a
 pinned plan earlier, never send it somewhere else (the rule this replaced,
 NF-PGAS3-1, priced a pin only when the pin-free route happened to pass it: a change
 that moved the pin-free route handed the stranded gas back, and the same pinned plan
-reached further on less gas). The reach masks and the turn frontier stay the plain
-field's at the final budget, so a pin that strands gas shrinks them and none can
-grow them. What each kind of pin does to the plan:
+reached further on less gas).
+
+**The overlay shows only where the pinned dive goes** (D4). The reach masks, the
+gas-to-reach the map colors by and the turn dots are priced on the route through
+the pins, the way a way-point plan prices them: a station the route passes on the
+way to the last pin costs what the route has spent at that pass, and every other
+station costs the route to the last pin plus the way on from there. So the map
+paints only stations a diver who drops at the pins can be at. In the review's
+scenario 12178 (stage pinned at B:1, 555.97 L, turn at B:1) the old overlay also
+lit A:1, A:2 and C:1 - each within 555.97 L of the entrance, none within reach of
+a diver who has swum out to B:1 - and offered turn dots there; now it paints the
+entrance and B:1 and offers no dot, since the dive can end nowhere else. A dive
+that turns before a pin (D3) paints the way to its turn and nothing more. Every
+turn dot is a station the plan really turns at when that dot is clicked as the
+endpoint (D2 routes it through the pins first), and the way to a pin is transit,
+so it carries no dot, as the way to a way point does not. The pinned route does
+not depend on the budget, so less gas only takes stations off the map, and its
+gas price for a station is never below the plan without pins, so no pin paints a
+station that plan leaves dark. The cost, accepted with the decision: a pin is a
+way point for the overlay even when it sits on its own default station, so
+pinning a drop where the default already is can change the overlay (stations up
+another branch now price the way back from the pin) while the budget and the drop
+stay those of the default.
+
+What each kind of pin does to the plan:
 
 - **Shallower** than the strategy point: the stage is dropped part-full, the
   surplus stranded, the budget shrinks and the reach shortens; the dive turns
@@ -225,12 +248,20 @@ grow them. What each kind of pin does to the plan:
 - **Deeper**: the marker stays where the diver put it and turns red,
   `stage_drop_over_reserve[k]` is set, the panel warns, and the drop gauge reads
   what the stage gauge shows there - breathing the stage that far eats into its
-  reserve. The plan does not count that gas: the budget and the reach stay those
-  of the default drop, and so does the turn for a pin on the pin-free route. Set
+  reserve. The plan does not count that gas: the budget stays that of the
+  default drop, and so does the turn for a pin on the pin-free route; the overlay
+  can only lose the stations the dive through the pin no longer goes to (D4). Set
   only for a genuine drag deeper
   (`breathed > safe + 1e-6`); past tank-empty the breathed gas clamps, so the
-  drop snaps back to the empty point. A later drop is still placed after it, so
-  it can land at the turnaround.
+  drop snaps back to the empty point. **The next stage starts at the pin, not
+  at that empty point** (D5): the dive carries the dry stage to its pin, and the
+  stage behind it is credited only the route from there. Starting it at the
+  empty point made a smaller first stage hand more of the route to the next one,
+  so less gas raised the budget - in the W9-GAS sweep 18 of 563 such lowerings,
+  one TwoStage plan from 1302 to 1805 L, its turn moving on a station
+  (`case_791_a_smaller_first_stage_no_longer_hands_the_route_to_the_second`).
+  A later default drop is placed from the pin on, so it can land at the
+  turnaround.
 - **Onto the station the default already sits on**: the default's pressure,
   credit and flag. The default marker sits at the first station whose gas
   *reaches* the threshold, so its gas usually overshoots; scoring that as a fresh
@@ -491,11 +522,6 @@ each pins a rule that reads like an implementation detail and is not.
 
 ## Known limits
 
-- A stage pinned past its own tank-empty point (red) ahead of a later pinned stage:
-  the drop snaps back to the empty point and the next stage is breathed from
-  there, so a smaller first stage hands more of the route to the next one and can
-  raise the budget a little. The one place a pinned plan is not monotone in its gas
-  (`gas/pin_monotone_tests.rs` counts it; #576 open question).
 - [#311](https://github.com/Stalagmight/Stalagmight/issues/311) - the stage-drop
   marker's keyboard nudge and its `aria-valuenow` re-derive the route position by
   first match, so on a way-point route that doubles back they act on the wrong
