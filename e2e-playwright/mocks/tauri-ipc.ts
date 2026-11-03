@@ -1991,9 +1991,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               Record<string, unknown>
             >;
             // [#576 E3] No rollback: the real execute_batch is all-or-nothing (it snapshots the
-            // whole project and restores it on a failed sub-command, pinned by the core batch
-            // tests), and the mock does not re-implement that. A refused sub-command's
-            // rejection is the batch's answer; what earlier steps stored stays stored.
+            // whole project and restores it on a failed sub-command), and the mock - canned
+            // transport, no computation - does not re-implement that. A refused sub-command's
+            // rejection is the batch's answer; what earlier steps stored stays stored, which
+            // the real app never shows, so a spec must not assert the project after a refused
+            // batch (#576 RV8b-E3-4). The rollback is owned by the core crate's batch tests:
+            // test_batch_rollback_on_failure, test_batch_partial_failure_rolls_back and
+            // a_batch_that_reverses_a_section_after_deleting_it_rolls_back
+            // (`cargo test -p stalagmight-core --lib batch`).
             // Each reverse sub-command's canned entry, in step order. (The backend also nets
             // out a section reversed twice in one batch; the UI never sends one twice.)
             const reversedSections: Array<{ section_id: number; shot_count: number }> = [];
