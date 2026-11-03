@@ -25,7 +25,10 @@
 // (even plumbing like `pnpm install`) next to a command this gate cannot
 // compare (`python3 scripts/x.py`, `bash scripts/x.sh`, `make lint`) fails
 // unless the step is classified; plain shell glue (SHELL_GLUE: `if`, `echo`,
-// `exit`, assignments, ...) is not a command to compare. Rows in either table
+// `exit`, assignments, ...) is not a command to compare - unless a command
+// substitution in it (`$(...)`, backticks) runs something that is not glue
+// itself, as `[ -z "$(git status --porcelain)" ]` or `OUT=$(python3 x.py)` do
+// (#576 RV4-FE-FEB-4). Rows in either table
 // that match no step are themselves a failure (stale allowlist).
 // A `uses:` step (an action) carries its command inside the action, so there is
 // nothing in the YAML to compare (#576 NF-FIX3B-1): it passes only when its
@@ -165,11 +168,62 @@ export const SHELL_GLUE = new Set([
 ]);
 
 // Is `cmd` shell glue (nothing a gate could hide in)? Assignments and the
-// prefix words are skipped; an empty remainder is a pure assignment.
+// prefix words are skipped; an empty remainder is a pure assignment. The
+// first word is not the whole story: every command substitution in `cmd` must
+// run only glue too (#576 RV4-FE-FEB-4), or `test -z "$(python3 gate.py)"`
+// would hide a gate behind `test`.
 export function isShellGlue(cmd) {
   const tokens = tokenize(cmd);
   while (tokens.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[0]) || SHELL_PREFIX_WORDS.has(tokens[0]))) tokens.shift();
-  return tokens.length === 0 || SHELL_GLUE.has(tokens[0]);
+  if (tokens.length > 0 && !SHELL_GLUE.has(tokens[0])) return false;
+  return commandSubstitutions(cmd).every((body) => splitCommands(body).every(isShellGlue));
+}
+
+// The bodies of the command substitutions in `cmd`: `$(...)` (nested parens
+// matched, quotes inside it skipped) and backticks, outside single quotes,
+// where nothing expands. `$((...))` is arithmetic, not a command; its text is
+// still scanned for a substitution inside it.
+function commandSubstitutions(cmd) {
+  const out = [];
+  let dq = false;
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i];
+    if (c === '\\') { i++; continue; }
+    if (c === "'" && !dq) {
+      const close = cmd.indexOf("'", i + 1);
+      i = close < 0 ? cmd.length : close;
+      continue;
+    }
+    if (c === '"') { dq = !dq; continue; }
+    if (c === '$' && cmd[i + 1] === '(' && cmd[i + 2] === '(') { i += 2; continue; }
+    if (c === '$' && cmd[i + 1] === '(') {
+      let depth = 0;
+      let quote = null;
+      let j = i + 1;
+      for (; j < cmd.length; j++) {
+        const d = cmd[j];
+        if (quote) {
+          if (d === '\\' && quote === '"') j++;
+          else if (d === quote) quote = null;
+          continue;
+        }
+        if (d === '\\') { j++; continue; }
+        if (d === "'" || d === '"') { quote = d; continue; }
+        if (d === '(') depth++;
+        else if (d === ')' && --depth === 0) break;
+      }
+      out.push(cmd.slice(i + 2, j));
+      i = j;
+      continue;
+    }
+    if (c === '`') {
+      let j = i + 1;
+      while (j < cmd.length && cmd[j] !== '`') j += cmd[j] === '\\' ? 2 : 1;
+      out.push(cmd.slice(i + 1, j));
+      i = j;
+    }
+  }
+  return out;
 }
 
 // pnpm first words that are not package.json scripts (built-ins and the one

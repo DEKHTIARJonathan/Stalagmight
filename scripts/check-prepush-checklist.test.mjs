@@ -215,6 +215,40 @@ test('shell glue next to a gate (loops, tests, echo, exit, assignments) is not a
   for (const tool of ['python3 x.py', 'if ! make lint', 'bash scripts/x.sh', 'A=1 ruby x.rb']) assert.ok(!isShellGlue(tool), tool);
 });
 
+// #576 RV4-FE-FEB-4: glue was judged by its first word, so a gate inside a command
+// substitution passed as glue next to a recognised command.
+const HIDDEN_IN_SUBSTITUTION = [
+  'test -z "$(python3 scripts/gate.py)"',
+  '[ -z "$(git status --porcelain)" ]',
+  'echo "$(python3 x.py)"',
+  'exit $(python3 x.py)',
+  'OUT=$(python3 scripts/gate.py)',
+  'test -z "`python3 scripts/gate.py`"',
+  '[ -z "`git status --porcelain`" ]',
+  'echo "`python3 x.py`"',
+  'exit `python3 x.py`',
+  'OUT=`python3 scripts/gate.py`',
+];
+for (const form of HIDDEN_IN_SUBSTITUTION) {
+  test(`a gate in a command substitution is not glue: ${form}`, () => {
+    const step = `      - name: Lint\n        run: |\n          pnpm lint:foo\n          ${form}`;
+    const r = run({ [WF]: workflow(step), 'CLAUDE.md': checklist(['pnpm lint:foo']) });
+    assert.equal(r.problems.length, 1, JSON.stringify(r.problems));
+    assert.match(r.problems[0], /step "Lint" also runs ".*", which this gate cannot compare/);
+    const plumbing = { plumbingSteps: [{ workflow: WF, step: 'Lint', why: 'x' }] };
+    assert.deepEqual(run({ [WF]: workflow(step), 'CLAUDE.md': checklist(['pnpm lint:foo']) }, plumbing).problems, []);
+  });
+}
+
+test('glue whose substitutions run only glue stays glue; a single-quoted $(...) expands nothing', () => {
+  for (const glue of ['echo "v=$(echo 1)"', "echo '$(python3 x)'", "echo '`python3 x`'", 'v=$(printf a | true; echo b)','echo "$((1 + 2))"', 'echo "\\$(python3 x)"']) {
+    assert.ok(isShellGlue(glue), glue);
+  }
+  for (const tool of ['echo "$(echo "$(python3 x)")"', 'echo "$(true && python3 x)"', 'echo "$((1 + $(python3 x)))"', 'v=$(echo ")"; python3 x)']) {
+    assert.ok(!isShellGlue(tool), tool);
+  }
+});
+
 test('a classification row whose step no longer exists is reported stale', () => {
   const opts = { plumbingSteps: [{ workflow: WF, step: 'Renamed away', why: 'x' }] };
   const r = run({ [WF]: workflow('      - run: pnpm lint:foo'), 'CLAUDE.md': checklist(['pnpm lint:foo']) }, opts);
