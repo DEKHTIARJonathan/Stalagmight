@@ -1297,158 +1297,6 @@ mod tests {
         );
     }
 
-    /// [#303] A save must carry the Unwind chain position onto the fresh file.
-    ///
-    /// `save_project` writes a brand-new `.stalx` and renames it over the destination, so
-    /// every local-only table it does not explicitly re-apply is destroyed - the same shape
-    /// of bug as the undo history losing its rows. Here the loss is not just "the walk
-    /// restarts from BASE" (documented, benign): the pointer is what EXCUSES the dirty bit
-    /// an Unwind leaves, so dropping it makes a copy the user only unwound read as holding
-    /// un-pushed work. The confirmation resolves the flag before an autosave and the guard
-    /// re-derives it after, they disagree, and the Unwind fails on press. Nothing in a
-    /// scripted run saves between two Unwinds; a person pausing between them always does.
-    #[test]
-    fn a_save_carries_the_unwind_chain_position_onto_the_fresh_file() {
-        // [#576 A3] The carry lives in the side-table registry now; the behavioural
-        // pin is `save_sidecar_tests::a_linked_save_carries_every_side_table`. What
-        // this keeps is the ORDER the pipeline runs it in.
-        let io = std::include_str!("project_io.rs");
-        let snapshot = io
-            .find("self.snapshot_sidecars(")
-            .expect("the save path must snapshot the side tables before rebuilding");
-        let staged = io
-            .find("Database::open(&temp_path)")
-            .expect("the save path stages into a fresh temp database");
-        assert!(
-            snapshot < staged,
-            "the snapshot has to be read from the OLD database - taken after the rebuild it \
-             would read the fresh file's empty table and preserve nothing"
-        );
-        // Re-applied while the temp database is still open, like its `speleo_link` sibling.
-        let reapply = io
-            .find("self.write_sidecars(")
-            .expect("...and re-apply them to the fresh file");
-        let closed = io
-            .find("// Close the temp database before renaming")
-            .expect("the save path closes the temp db before the rename");
-        assert!(
-            staged < reapply && reapply < closed,
-            "the write must land before the temp database is dropped and renamed"
-        );
-
-        // [#303] The inherited-history watermark needs the same carry-over, and loses more
-        // by missing it: it decides which undo rows are cut from the next upload, so a save
-        // that dropped it would let a loaded revision's history ride into the commit as
-        // though this session had authored it - the duplication it exists to prevent,
-        // reintroduced by an idle autosave. Both ride the same registry entry.
-        let registry = std::include_str!("save_sidecars.rs");
-        for needle in [
-            "self.undo_chain = db.load_speleo_undo_chain()?",
-            "self.undo_watermark = db.load_speleo_undo_watermark()?",
-            "db.save_speleo_undo_chain(Some(sha))?",
-            "db.save_speleo_undo_watermark(Some(ts))?",
-        ] {
-            assert!(
-                registry.contains(needle),
-                "the undo-chain markers entry must read and write both markers: {needle}"
-            );
-        }
-    }
-
-    /// [#303] The watermark outlives an edit; the chain pointer does not.
-    ///
-    /// They look like the same kind of state and are cleared by nearly the same events, so
-    /// the one place they differ is worth pinning: a forward command drops the pointer (the
-    /// walk no longer describes the copy) but must LEAVE the watermark, because the whole
-    /// point of it is to still know, at push time, which rows the user never authored. Clear
-    /// it there and the loaded history ships again.
-    #[test]
-    fn a_forward_edit_keeps_the_watermark_even_as_it_drops_the_chain_pointer() {
-        let forward = std::include_str!("app_state.rs");
-        assert!(
-            forward.contains("fn mark_remote_forward_edit")
-                && forward.contains("self.speleodb_forget_unwind_position();"),
-            "the shared forward-edit path drops the chain pointer"
-        );
-        assert!(
-            !forward.contains("speleodb_set_inherited_through"),
-            "...and must NOT touch the watermark: an edit is exactly when it starts to \
-             matter, since it is what separates the user's new work from what was loaded"
-        );
-    }
-
-    /// [#303] A forward edit drops the Unwind chain position; undo / redo must not.
-    ///
-    /// The asymmetry is the point, and it is what makes the confirmation warn again after
-    /// an unwound copy is edited. Walking back through loaded history risks nothing the
-    /// server has not already got, so the pointer stays and the dialog stays quiet. A new
-    /// edit exists only in this copy, so the pointer goes and the dirt stops being excused.
-    /// Clearing it from the undo path would collapse the two cases back together and warn
-    /// on every step of an ordinary walk.
-    #[test]
-    fn a_forward_edit_forgets_the_unwind_position_but_an_undo_does_not() {
-        let state_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/core/state");
-        let mut forward_calls = Vec::new();
-        for entry in std::fs::read_dir(state_dir).expect("read state source directory") {
-            let path = entry.expect("state source entry").path();
-            if path.extension().and_then(|v| v.to_str()) != Some("rs") {
-                continue;
-            }
-            let name = path
-                .file_name()
-                .and_then(|v| v.to_str())
-                .expect("file name");
-            let source = std::fs::read_to_string(&path).expect("read state source");
-            // Test fixtures may set up a dirty state directly; this tripwire governs
-            // production mutation paths only.
-            if !matches!(
-                name,
-                "app_state.rs" | "undo.rs" | "speleodb.rs" | "speleodb_revisions.rs" | "tests.rs"
-            ) {
-                assert!(
-                    !source.contains("mark_remote_dirty();"),
-                    "{name} calls the raw dirty marker; forward writers must use \
-                     mark_remote_forward_edit so they also invalidate Unwind"
-                );
-            }
-            if name != "speleodb_revisions.rs" && source.contains("mark_remote_forward_edit();") {
-                forward_calls.push(name.to_owned());
-            }
-        }
-        forward_calls.sort();
-        // [#576 A4] Every forward mutation entry point (execute, the batch, Repair,
-        // the delete/split paths, Insert station, the imports, the project settings,
-        // the comment move) flips the bit through the shared forward epilogue in
-        // `command_epilogue.rs`; `forward_epilogue_tests.rs` checks each one runs it.
-        assert_eq!(
-            forward_calls,
-            ["command_epilogue.rs", "recent_projects.rs", "warnings.rs",],
-            "enumerate every direct forward writer so a new path is reviewed explicitly"
-        );
-        assert!(
-            !std::include_str!("undo.rs").contains("speleodb_forget_unwind_position"),
-            "undo / redo walk the loaded history - clearing the position there would warn \
-             on every ordinary step of an Unwind chain"
-        );
-    }
-
-    /// [#303] The fourth writer of the project file, which the test above cannot see.
-    ///
-    /// `a_forward_edit_forgets_the_unwind_position_but_an_undo_does_not` counts sites in
-    /// `commands.rs`, so it was blind to `speleodb_set_undo_mode` - which writes
-    /// `speleo_link.undo_mode` into the `.stalx`, rides to the server in the next push, and
-    /// is therefore an edit of the project like any other. The mode, dirty stamp, and chain
-    /// clear now share one database transaction: calling the older best-effort helper here
-    /// would re-open both the half-write and silent-Unwind hazards.
-    #[test]
-    fn the_undo_mode_setter_forgets_the_unwind_position_too() {
-        let policy = std::include_str!("undo_policy.rs");
-        assert!(
-            policy.contains("set_speleo_undo_mode_and_mark_forward_edit"),
-            "the undo-mode write must atomically dirty the link and clear the chain pointer"
-        );
-    }
-
     /// [#303] The predicate behind both the warning and the refusal.
     ///
     /// Dirty ALONE is not enough to mean "un-pushed work at risk": an Unwind stamps the copy
@@ -1714,5 +1562,252 @@ mod tests {
                 refused.message
             );
         }
+    }
+
+    // ---- [#576 A8] the Unwind chain markers, driven ---------------------------------
+
+    /// The chain pointer and the inherited-history watermark as a linked copy carries
+    /// them mid-walk.
+    const CHAIN_SHA: &str = "deadbeefcafe";
+    const WATERMARK: &str = "2026-07-31T00:00:00+00:00";
+
+    /// A LINKED project OPEN in an `AppState` from its own file, mid Unwind walk (both
+    /// markers set) and editable - the state a forward edit or an undo meets.
+    fn open_mid_walk(dir: &std::path::Path) -> (AppState, std::path::PathBuf) {
+        let path = dir.join("walked.stalx");
+        let mut db = Database::open(&path).expect("open fixture .stalx");
+        db.save_project(&Project::new("CaveA".to_owned(), None))
+            .expect("save fixture project");
+        db.save_speleo_link(Some(&SpeleoLink {
+            endpoint: "https://example.invalid".to_owned(),
+            project_id: FIXTURE_PROJECT_ID.to_owned(),
+            project_name: "CaveA".to_owned(),
+            base_commit_sha: Some(CHAIN_SHA.to_owned()),
+            has_unpushed_edits: true,
+            last_edit_at: Some(WATERMARK.to_owned()),
+            last_verify_at: None,
+            undo_mode: Some(UndoMode::Full),
+        }))
+        .expect("stamp the fixture link");
+        db.save_speleo_undo_chain(Some(CHAIN_SHA))
+            .expect("chain pointer");
+        db.save_speleo_undo_watermark(Some(WATERMARK))
+            .expect("watermark");
+        drop(db);
+        let state = AppState::new().expect("state");
+        assert!(
+            state.open_project(path.clone()).success,
+            "open the walked copy"
+        );
+        state.set_edit_enabled(true);
+        (state, path)
+    }
+
+    fn watermark(state: &AppState) -> Option<String> {
+        state
+            .database
+            .lock()
+            .as_ref()
+            .and_then(|db| db.load_speleo_undo_watermark().ok().flatten())
+    }
+
+    /// One forward edit: a section, through the shared forward epilogue.
+    fn forward_edit(state: &AppState) {
+        let created = state.execute(crate::core::Command::CreateSection {
+            name: Some("SectionA".to_owned()),
+            surveyor: None,
+            date: None,
+            color: "#336699".to_owned(),
+            direction: None,
+            shots: vec![crate::models::ShotData {
+                length: 4.0,
+                ..Default::default()
+            }],
+        });
+        assert!(created.success, "{:?}", created.error);
+    }
+
+    /// [#303] The watermark outlives an edit; the chain pointer does not. A forward
+    /// command drops the pointer (the walk no longer describes the copy) but must LEAVE
+    /// the watermark: it is what still knows, at push time, which rows the user never
+    /// authored. Clear it there and the loaded history ships again.
+    ///
+    /// [#576 A8] Was a source scan of `app_state.rs`; a real forward edit runs here.
+    #[test]
+    fn a_forward_edit_drops_the_chain_pointer_and_keeps_the_watermark() {
+        let _cfg = crate::test_helpers::isolated_config();
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let (state, _) = open_mid_walk(temp.path());
+        forward_edit(&state);
+        println!(
+            "after a forward edit -> chain pointer {:?}, watermark {:?}",
+            state.speleodb_unwound_from(),
+            watermark(&state)
+        );
+        assert_eq!(
+            state.speleodb_unwound_from(),
+            None,
+            "the walk position goes"
+        );
+        assert_eq!(
+            watermark(&state).as_deref(),
+            Some(WATERMARK),
+            "the inherited-history watermark stays"
+        );
+    }
+
+    /// [#303] A forward edit drops the Unwind chain position; undo / redo must not.
+    /// Walking back through loaded history risks nothing the server has not already got,
+    /// so the pointer stays and the confirmation stays quiet; clearing it from the undo
+    /// path would warn on every step of an ordinary walk.
+    ///
+    /// [#576 A8] Was the undo half of a source scan (`undo.rs` must not name the clear);
+    /// an undo runs here. The site half stays a sanctioned inventory below.
+    #[test]
+    fn an_undo_keeps_the_unwind_position_a_forward_edit_drops() {
+        let _cfg = crate::test_helpers::isolated_config();
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let (state, _) = open_mid_walk(temp.path());
+        forward_edit(&state);
+        let after_edit = state.speleodb_unwound_from();
+        state.speleodb_set_unwound_from(Some(CHAIN_SHA));
+        let undone = state.undo();
+        println!(
+            "edit -> pointer {after_edit:?}; then undo ({}) -> pointer {:?}",
+            undone.success,
+            state.speleodb_unwound_from()
+        );
+        assert_eq!(after_edit, None, "precondition: the edit dropped it");
+        assert!(undone.success, "{:?}", undone.error);
+        assert_eq!(
+            state.speleodb_unwound_from().as_deref(),
+            Some(CHAIN_SHA),
+            "an undo walks loaded history and keeps the position"
+        );
+    }
+
+    /// [#303] The fourth writer of the project file: `speleodb_set_undo_mode` writes
+    /// `speleo_link.undo_mode`, which rides to the server in the next push, so it is an
+    /// edit like any other - the mode, the dirty stamp and the chain clear in one
+    /// transaction.
+    ///
+    /// [#576 A8] Was a source scan for the transactional helper's name; the setter runs
+    /// here.
+    #[test]
+    fn the_undo_mode_setter_dirties_the_copy_and_forgets_the_unwind_position() {
+        let _cfg = crate::test_helpers::isolated_config();
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let (state, _) = open_mid_walk(temp.path());
+        state
+            .speleodb_mutate_link(|link| {
+                link.has_unpushed_edits = false;
+                link.last_edit_at = None;
+            })
+            .expect("a clean copy mid-walk");
+        let set = state.speleodb_set_undo_mode(UndoMode::Disabled);
+        let link = state.speleodb_open_link().expect("link");
+        println!(
+            "set undo mode -> {:?}; mode {:?}, dirty {}, pointer {:?}",
+            set.as_ref().err().map(|e| &e.message),
+            link.undo_mode,
+            link.has_unpushed_edits,
+            state.speleodb_unwound_from()
+        );
+        assert!(set.is_ok());
+        assert_eq!(link.undo_mode, Some(UndoMode::Disabled));
+        assert!(
+            link.has_unpushed_edits,
+            "the setting is an edit of the project"
+        );
+        assert_eq!(state.speleodb_unwound_from(), None, "and it ends the walk");
+    }
+
+    /// [#303] A save writes a brand-new `.stalx` and renames it over the destination, so
+    /// the side tables it does not re-apply are destroyed - the chain pointer among them,
+    /// which is what EXCUSES the dirt an Unwind leaves (`save_sidecar_tests` drives the
+    /// carry). The pipeline's order is what keeps a refusal free: the tables are
+    /// snapshotted from the open file BEFORE any temp file exists, so a snapshot that
+    /// refuses has written nothing.
+    ///
+    /// [#576 A8] Was a source scan of `project_io.rs`'s call order. The write-into-the-
+    /// temp-before-it-closes half is the borrow checker's (`write_sidecars` borrows the
+    /// staged database the close then moves); the snapshot-first half is driven here.
+    #[test]
+    fn a_refused_save_stages_nothing_beside_the_file() {
+        let _cfg = crate::test_helpers::isolated_config();
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let (state, path) = open_mid_walk(temp.path());
+        rusqlite::Connection::open(&path)
+            .expect("open the fixture's file")
+            .execute_batch(
+                "ALTER TABLE speleo_undo_watermark RENAME COLUMN inherited_through TO broken_value;",
+            )
+            .expect("make the markers unreadable");
+        let saved = state.save_project(None);
+        let staged = path.with_extension("stalx.tmp");
+        println!(
+            "unreadable markers -> saved {}, error {:?}; staging file left: {}",
+            saved.success,
+            saved.error,
+            staged.exists()
+        );
+        assert!(!saved.success, "precondition: the snapshot refuses");
+        assert!(
+            !staged.exists(),
+            "a refusal at the snapshot must leave no staged file behind"
+        );
+    }
+
+    /// The site half of the forward-edit rule, a sanctioned inventory (#576 A8-D2,
+    /// docs/testing-recipes.md "Source scans"): forward writers flip the dirty bit
+    /// through `mark_remote_forward_edit` (which also ends an Unwind walk), never the
+    /// raw marker, and every direct forward writer is enumerated so a new path is
+    /// reviewed - a statement about which files may call what, which no type expresses.
+    #[test]
+    fn every_direct_forward_writer_is_enumerated() {
+        let state_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/core/state");
+        let mut forward_calls = Vec::new();
+        for entry in std::fs::read_dir(state_dir).expect("read state source directory") {
+            let path = entry.expect("state source entry").path();
+            let name = path
+                .file_name()
+                .and_then(|v| v.to_str())
+                .expect("file name")
+                .to_owned();
+            if path.extension().and_then(|v| v.to_str()) != Some("rs") || name.ends_with("tests.rs")
+            {
+                continue;
+            }
+            let source = std::fs::read_to_string(&path).expect("read state source");
+            let production = source
+                .get(
+                    ..crate::models::source_scan::test_module_start(&source)
+                        .unwrap_or(source.len()),
+                )
+                .unwrap_or(&source);
+            if !matches!(
+                name.as_str(),
+                "app_state.rs" | "undo.rs" | "speleodb.rs" | "speleodb_revisions.rs"
+            ) {
+                assert!(
+                    !production.contains("mark_remote_dirty();"),
+                    "RULE (a forward edit also ends an Unwind walk, #303): {name} calls the \
+                     raw dirty marker; forward writers use mark_remote_forward_edit"
+                );
+            }
+            if name != "speleodb_revisions.rs" && production.contains("mark_remote_forward_edit();")
+            {
+                forward_calls.push(name);
+            }
+        }
+        forward_calls.sort();
+        // [#576 A4] Every forward mutation entry point flips the bit through the shared
+        // forward epilogue in `command_epilogue.rs`; `forward_epilogue_tests.rs` checks
+        // each one runs it.
+        assert_eq!(
+            forward_calls,
+            ["command_epilogue.rs", "recent_projects.rs", "warnings.rs"],
+            "RULE (every direct forward writer is reviewed, #303): the set moved"
+        );
     }
 }
