@@ -726,6 +726,8 @@ export function isEditSectionDirty(state: EditSectionDirtyState, section: Sectio
  * never sent.
  */
 export function editedShotUpdates(original: Shot, current: EditableShot): Partial<ShotUpdates> {
+  // [#576 NF-W7F-1] Compared in f32: a cell re-typed to the reading it already
+  // showed (1.20 over 1.2) is not an edit.
   return changedShotFields(original, {
     azimuth_in: current.azimuth_in,
     azimuth_out: current.azimuth_out,
@@ -740,23 +742,10 @@ export function editedShotUpdates(original: Shot, current: EditableShot): Partia
     down: current.down,
     comment: current.comment,
     kind: current.kind ?? 'Normal',
-  });
+  }, 'f32');
 }
 
+/** Whether Save would send an update for this row (the dirty check and Save agree). */
 function hasChanges(original: Shot, current: EditableShot): boolean {
-  return (
-    original.azimuth_in !== current.azimuth_in ||
-    original.azimuth_out !== current.azimuth_out ||
-    original.length !== current.length ||
-    original.depth_in !== current.depth_in ||
-    original.depth_out !== current.depth_out ||
-    original.pitch_in !== current.pitch_in ||
-    original.pitch_out !== current.pitch_out ||
-    original.left !== current.left ||
-    original.right !== current.right ||
-    original.up !== current.up ||
-    original.down !== current.down ||
-    original.comment !== current.comment ||
-    original.kind !== current.kind
-  );
+  return Object.keys(editedShotUpdates(original, current)).length > 0;
 }

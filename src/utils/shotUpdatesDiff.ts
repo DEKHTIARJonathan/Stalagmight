@@ -10,13 +10,24 @@
  * own value leaves every untouched field to the backend's copy, bit for bit.
  */
 import type { ShotUpdates } from '../types/ipc/ShotUpdates';
+import { sameF32 } from './f32Text';
 
 /** A shot's fields as the store (or an editor's local copy) holds them. */
 type ShotFields = { readonly [K in keyof ShotUpdates]?: ShotUpdates[K] };
 
+/**
+ * How a proposed number is compared with the store's:
+ * - `exact`: identical only. For values a path computes or takes from a file.
+ * - `f32` ([#576 NF-W7F-1]): the same once rounded to f32, the precision the store
+ *   holds. For values the user TYPED into an editor seeded with the store's value:
+ *   1.20 typed over a stored 1.2 is the reading the user already had, not an edit.
+ */
+export type ShotFieldCompare = 'exact' | 'f32';
+
 /** Same value for patch purposes: identical (NaN included), or both unset. */
-function sameValue(a: unknown, b: unknown): boolean {
-  return Object.is(a, b) || (a == null && b == null);
+function sameValue(a: unknown, b: unknown, compare: ShotFieldCompare): boolean {
+  if (Object.is(a, b) || (a == null && b == null)) return true;
+  return compare === 'f32' && typeof a === 'number' && typeof b === 'number' && sameF32(a, b);
 }
 
 /**
@@ -24,11 +35,15 @@ function sameValue(a: unknown, b: unknown): boolean {
  * that changes exactly those fields. An empty result means nothing would change:
  * callers skip the command rather than record an empty undo step.
  */
-export function changedShotFields(current: ShotFields, proposed: Partial<ShotUpdates>): Partial<ShotUpdates> {
+export function changedShotFields(
+  current: ShotFields,
+  proposed: Partial<ShotUpdates>,
+  compare: ShotFieldCompare = 'exact',
+): Partial<ShotUpdates> {
   const patch: Partial<ShotUpdates> = {};
   for (const key of Object.keys(proposed) as (keyof ShotUpdates)[]) {
     const next = proposed[key];
-    if (next === undefined || sameValue(current[key], next)) continue;
+    if (next === undefined || sameValue(current[key], next, compare)) continue;
     (patch as Record<string, unknown>)[key] = next;
   }
   return patch;

@@ -37,6 +37,7 @@ import { GridHeaderRow } from './GridHeaderRow';
 import { activateCellIn, directTypedValue } from './gridActivate';
 import { measureColumnWidth, fillExtent, AUTOFIT_CHROME_PX } from './gridAutoFit';
 import { planClear } from './gridClear';
+import { f32FractionDigits } from '../../../utils/f32Text';
 import {
   arrowTarget,
   clamp,
@@ -214,12 +215,13 @@ interface EditState {
 const PRINTABLE = /^.$/u;
 
 /** Full-precision, group-free, locale-decimal string for editing/converting -
- *  must round-trip through parseLocaleNumber. */
+ *  must round-trip through parseLocaleNumber. [#576 NF-W7F-1] A reading held as
+ *  an f32 gets the fewest digits that are still that f32 (1.2, not 1.200000047684). */
 const formatEditValue = (value: unknown, locale: string): string => {
   if (typeof value === 'number') {
     // Non-finite (e.g. a draft row's unset field) edits as empty, never "NaN".
     return Number.isFinite(value)
-      ? new Intl.NumberFormat(locale, { useGrouping: false, maximumFractionDigits: 12 }).format(value)
+      ? new Intl.NumberFormat(locale, { useGrouping: false, maximumFractionDigits: f32FractionDigits(value) ?? 12 }).format(value)
       : '';
   }
   return String(value ?? '');

@@ -4,6 +4,8 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { normalizeAzimuth } from '../../utils/azimuth';
+import { f32Text } from '../../utils/f32Text';
+import { changedShotFields } from '../../utils/shotUpdatesDiff';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -52,20 +54,22 @@ export default function EditShotDialog() {
   const [down, setDown] = useState('');
   const [comment, setComment] = useState('');
 
-  // Initialize form with shot data
+  // Initialize form with shot data. [#576 NF-W7F-1] Each reading as entered: the
+  // store holds it as an f32 (1.2000000476837158 for 1.2), so `seeded` shows the
+  // shortest decimal that is the same f32.
   useEffect(() => {
     if (shot) {
-      setAzimuthIn(shot.azimuth_in.toString());
-      setAzimuthOut(shot.azimuth_out.toString());
-      setLength(shot.length.toString());
-      setDepthIn(shot.depth_in.toString());
-      setDepthOut(shot.depth_out.toString());
-      setPitchIn(shot.pitch_in?.toString() ?? '');
-      setPitchOut(shot.pitch_out?.toString() ?? '');
-      setLeft(shot.left?.toString() ?? '');
-      setRight(shot.right?.toString() ?? '');
-      setUp(shot.up?.toString() ?? '');
-      setDown(shot.down?.toString() ?? '');
+      setAzimuthIn(seeded(shot.azimuth_in));
+      setAzimuthOut(seeded(shot.azimuth_out));
+      setLength(seeded(shot.length));
+      setDepthIn(seeded(shot.depth_in));
+      setDepthOut(seeded(shot.depth_out));
+      setPitchIn(seeded(shot.pitch_in));
+      setPitchOut(seeded(shot.pitch_out));
+      setLeft(seeded(shot.left));
+      setRight(seeded(shot.right));
+      setUp(seeded(shot.up));
+      setDown(seeded(shot.down));
       setComment(shot.comment ?? '');
     }
   }, [shot]);
@@ -138,21 +142,15 @@ export default function EditShotDialog() {
   const pitchOutVal = parseFloat(pitchOut);
   const pitchOutInvalid = Number.isFinite(pitchOutVal) && (pitchOutVal < -90 || pitchOutVal > 90);
 
-  // Track if form has been modified
-  const isDirty = shot ? (
-    azimuthIn !== shot.azimuth_in.toString() ||
-    azimuthOut !== shot.azimuth_out.toString() ||
-    length !== shot.length.toString() ||
-    depthIn !== shot.depth_in.toString() ||
-    depthOut !== shot.depth_out.toString() ||
-    pitchIn !== (shot.pitch_in?.toString() ?? '') ||
-    pitchOut !== (shot.pitch_out?.toString() ?? '') ||
-    left !== (shot.left?.toString() ?? '') ||
-    right !== (shot.right?.toString() ?? '') ||
-    up !== (shot.up?.toString() ?? '') ||
-    down !== (shot.down?.toString() ?? '') ||
-    comment !== (shot.comment ?? '')
-  ) : false;
+  // Track if form has been modified: whether Save would send anything.
+  const isDirty = shot
+    ? Object.keys(
+        changedShotFormFields(shot, {
+          azimuthIn, azimuthOut, length, depthIn, depthOut, pitchIn, pitchOut,
+          left, right, up, down, comment,
+        }),
+      ).length > 0
+    : false;
 
   if (!shot) {
     return (
@@ -375,14 +373,18 @@ interface ShotForm {
   comment: string;
 }
 
+/** An input's text for a stored reading: blank when unset (#576 NF-W7F-1, `f32Text`). */
+const seeded = (v: number | null | undefined) => (v == null ? '' : f32Text(v));
+
 /**
  * The update for the fields whose text differs from what the form was seeded
- * with (`shot`'s own values - the comparison `isDirty` makes). Kind, marker index
- * and temperature have no input here and are never sent.
+ * with (`shot`'s own values), less any whose typed value is the same f32 as the
+ * stored one (#576 NF-W7F-1: 1.20 re-typed over 1.2 is not an edit). `isDirty`
+ * is this patch being non-empty. Kind, marker index and temperature have no input
+ * here and are never sent.
  */
 function changedShotFormFields(shot: Shot, form: ShotForm): Partial<ShotUpdates> {
   const updates: Partial<ShotUpdates> = {};
-  const seeded = (v: number | null | undefined) => v?.toString() ?? '';
   const optional = (v: string) => (v ? parseFloat(v) : null);
   if (form.azimuthIn !== seeded(shot.azimuth_in)) updates.azimuth_in = normalizeAzimuth(parseFloat(form.azimuthIn));
   if (form.azimuthOut !== seeded(shot.azimuth_out)) updates.azimuth_out = normalizeAzimuth(parseFloat(form.azimuthOut));
@@ -396,5 +398,5 @@ function changedShotFormFields(shot: Shot, form: ShotForm): Partial<ShotUpdates>
   if (form.up !== seeded(shot.up)) updates.up = optional(form.up);
   if (form.down !== seeded(shot.down)) updates.down = optional(form.down);
   if (form.comment !== (shot.comment ?? '')) updates.comment = form.comment.trim() || null;
-  return updates;
+  return changedShotFields(shot, updates, 'f32');
 }
