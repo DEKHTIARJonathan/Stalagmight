@@ -1839,7 +1839,7 @@ impl AppState {
 
         // Close before the rename: `Database::open_existing` holds a 256 MB mmap over
         // the staging file, and on Windows SQLite opens without `FILE_SHARE_DELETE`,
-        // so renaming a live handle is the hazard `close_project_if_open_at` exists
+        // so renaming a live handle is the hazard `close_project_if_open_at_held` exists
         // for. This is the same close, at the same point in the same sequence.
         self.close_project_held(commands);
         if let Err(e) = std::fs::rename(&staged, dest) {
@@ -2808,7 +2808,7 @@ mod adopt_order {
         /// adoption finished with the view switched, no project in any store, and a
         /// success toast over an empty screen. Closing here makes the frontend's load
         /// an ordinary full load, which is how the pull path has always behaved: it
-        /// runs `close_project_if_open_at` before it replaces a cache file, and the
+        /// runs `close_project_if_open_at_held` before it replaces a cache file, and the
         /// frontend's `loadProject` is what opens the result.
         ///
         /// LAST, because everything above needs the project open: the link stamp writes

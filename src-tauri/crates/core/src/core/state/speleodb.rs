@@ -32,25 +32,6 @@ use super::speleodb_cache::LocalEditsPolicy;
 // its empty-tip-tolerant head read.
 use super::speleodb_push::{head_with_empty_retry, PushOutcome};
 
-/// [#576 A8] Proof that a push arm has CONCLUDED an upload landed, and dropped the
-/// remembered dump choice that landing made stale.
-///
-/// Made only by [`AppState::speleodb_note_prior_push_landed`] (its field is private
-/// to this module). Every step that may only follow a landing takes one - the
-/// managed-type heal and each arm's link write - so writing one of them above the
-/// landing it records is a compile error, not a source-text tripwire. That is also
-/// what puts the invalidation ahead of every fallible local write (#258).
-#[must_use = "a concluded landing is what the arm's later steps and its outcome are built on"]
-pub(super) struct Landed {
-    _concluded: (),
-}
-
-impl Landed {
-    /// What an arm that concluded a landing reports.
-    pub(super) fn outcome(&self) -> PushOutcome {
-        PushOutcome::Confirmed
-    }
-}
 use super::AppState;
 use crate::speleodb::auth::{account_key, SecretStoreError, TokenStore, TokenTier};
 use crate::speleodb::client;
@@ -1368,26 +1349,6 @@ impl AppState {
     /// while putting both ahead of anything fallible.
     pub(super) fn speleodb_revision_landed(&self, project_id: &str) -> Landed {
         self.speleodb_note_prior_push_landed(project_id)
-    }
-
-    /// The invalidation on its own, for the arm that concludes a landing WITHOUT
-    /// producing an outcome (#258).
-    ///
-    /// `AdoptThenUpload` is that arm, and it is the reachable one of the two adoption
-    /// plans - `AdoptConfirmed` is documented as forward-compatible only while
-    /// push-start is unpersisted. It establishes exactly what the others do, that a
-    /// prior upload landed, and then keeps going to push on top of it, so it has no
-    /// `PushOutcome` to hand back and cannot use the wrapper above. Routing it through
-    /// the wrapper's `Confirmed` and discarding that would be worse than this split:
-    /// it would read as if the arm had finished.
-    ///
-    /// Leaving it out was a real hole, not a stylistic one. Its own `mutate_link` can
-    /// fail, and the upload it continues into can come back ambiguous - and on either
-    /// path the function returns having proved a revision exists that our remembered
-    /// choice predates, with the choice still standing.
-    pub(super) fn speleodb_note_prior_push_landed(&self, project_id: &str) -> Landed {
-        self.speleodb_forget_dump_entry(project_id);
-        Landed { _concluded: () }
     }
 
     /// [Track C] (#188, C5): centralized session-level 401 auto-drop handler.
@@ -2902,6 +2863,59 @@ mod start_order {
         }
     }
 }
+
+/// [#576 A8 RV8a-5] A concluded landing's proof and its one producer, apart: nothing
+/// else in this file (or its tests) can build a [`Landed`].
+mod landing {
+    use super::{AppState, PushOutcome};
+
+    /// [#576 A8] Proof that a push arm has CONCLUDED an upload landed, and dropped the
+    /// remembered dump choice that landing made stale.
+    ///
+    /// Made only by [`AppState::speleodb_note_prior_push_landed`] (its field is private
+    /// to this small module, #576 RV8a-5). Every step that may only follow a landing takes one - the
+    /// managed-type heal and each arm's link write - so writing one of them above the
+    /// landing it records is a compile error, not a source-text tripwire. That is also
+    /// what puts the invalidation ahead of every fallible local write (#258).
+    #[must_use = "a concluded landing is what the arm's later steps and its outcome are built on"]
+    pub(in crate::core::state) struct Landed {
+        _concluded: (),
+    }
+
+    impl Landed {
+        /// What an arm that concluded a landing reports.
+        pub(in crate::core::state) fn outcome(&self) -> PushOutcome {
+            PushOutcome::Confirmed
+        }
+    }
+
+    impl AppState {
+        /// The invalidation on its own, for the arm that concludes a landing WITHOUT
+        /// producing an outcome (#258).
+        ///
+        /// `AdoptThenUpload` is that arm, and it is the reachable one of the two adoption
+        /// plans - `AdoptConfirmed` is documented as forward-compatible only while
+        /// push-start is unpersisted. It establishes exactly what the others do, that a
+        /// prior upload landed, and then keeps going to push on top of it, so it has no
+        /// `PushOutcome` to hand back and cannot use the wrapper above. Routing it through
+        /// the wrapper's `Confirmed` and discarding that would be worse than this split:
+        /// it would read as if the arm had finished.
+        ///
+        /// Leaving it out was a real hole, not a stylistic one. Its own `mutate_link` can
+        /// fail, and the upload it continues into can come back ambiguous - and on either
+        /// path the function returns having proved a revision exists that our remembered
+        /// choice predates, with the choice still standing.
+        pub(in crate::core::state) fn speleodb_note_prior_push_landed(
+            &self,
+            project_id: &str,
+        ) -> Landed {
+            self.speleodb_forget_dump_entry(project_id);
+            Landed { _concluded: () }
+        }
+    }
+}
+
+pub(super) use landing::Landed;
 
 // The fixtures the sibling test modules (`sdb_*_tests.rs`) share with the tests
 // below. Re-exported at the very end of the production code, so a source scan that
@@ -9227,6 +9241,21 @@ mod tests {
             4,
             "RULE (a remote edit session opens only through the identity-checked commit): \
              expected the commit, force edit, unlink and the restore's reopen"
+        );
+    }
+
+    /// [#576 RV8a-6] The proof types' `#[cfg(test)]` constructors (`for_tests`) exist
+    /// for the tests of the steps a proof gates. Production reaching one would skip
+    /// the step that earns the proof; a non-test build (cargo build, CI's clippy lib
+    /// target) refuses it, but under `cargo test` production is compiled with
+    /// `cfg(test)` too, so this site inventory is what fails there.
+    #[test]
+    fn no_production_code_reaches_a_test_only_proof_constructor() {
+        assert_eq!(
+            speleodb_prod_matches("::for_tests(", &[]),
+            0,
+            "RULE (a proof is earned, never minted, outside tests): a production region \
+             calls a `for_tests` constructor"
         );
     }
 

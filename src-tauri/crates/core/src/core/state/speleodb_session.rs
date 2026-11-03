@@ -197,47 +197,66 @@ impl LockClaim {
     }
 }
 
-/// [#576 A8] Proof that the holder owns `speleodb_lock_ops`, the span every SpeleoDB
-/// lock operation serializes on (the acquire -> commit of Start Editing, the captured
-/// and detached releases, logout, the adoption's acquire and verdict). A step that
-/// must run INSIDE that span takes one, so it cannot be called before the span opens
-/// or after it closes: the lock order is the type's, not a source scan's. Made only
-/// by [`AppState::speleodb_lock_ops_guard`].
-pub(super) struct LockOpsHeld<'a> {
-    _guard: std::sync::MutexGuard<'a, ()>,
-}
+/// [#576 A8 RV8a-5] The lock-ops span's proof and its one producer, apart: nothing
+/// outside this module can build a [`LockOpsHeld`] from a guard of its own.
+mod lock_ops_span {
+    use super::AppState;
 
-/// [#576 A8] A value read INSIDE the lock-ops span. Made only by
-/// [`LockOpsHeld::read`], so a step that takes one cannot be handed a value read
-/// before the span opened - the account a lock operation acts for, or the holder it
-/// decides on, is then the span's fact rather than an earlier one.
-pub(super) struct InSpan<T> {
-    value: T,
-}
+    /// [#576 A8] Proof that the holder owns `speleodb_lock_ops`, the span every SpeleoDB
+    /// lock operation serializes on (the acquire -> commit of Start Editing, the captured
+    /// and detached releases, logout, the adoption's acquire and verdict). A step that
+    /// must run INSIDE that span takes one, so it cannot be called before the span opens
+    /// or after it closes: the lock order is the type's, not a source scan's. Made only
+    /// by [`AppState::speleodb_lock_ops_guard`].
+    pub(in crate::core::state) struct LockOpsHeld<'a> {
+        _guard: std::sync::MutexGuard<'a, ()>,
+    }
 
-impl LockOpsHeld<'_> {
-    /// Read `f` while this span is held.
-    pub(super) fn read<T>(&self, f: impl FnOnce() -> T) -> InSpan<T> {
-        InSpan { value: f() }
+    /// [#576 A8] A value read INSIDE the lock-ops span. Made only by
+    /// [`LockOpsHeld::read`], so a step that takes one cannot be handed a value read
+    /// before the span opened - the account a lock operation acts for, or the holder it
+    /// decides on, is then the span's fact rather than an earlier one.
+    pub(in crate::core::state) struct InSpan<T> {
+        value: T,
+    }
+
+    impl LockOpsHeld<'_> {
+        /// Read `f` while this span is held.
+        pub(in crate::core::state) fn read<T>(&self, f: impl FnOnce() -> T) -> InSpan<T> {
+            InSpan { value: f() }
+        }
+    }
+
+    impl<T> InSpan<T> {
+        pub(in crate::core::state) fn get(&self) -> &T {
+            &self.value
+        }
+
+        pub(in crate::core::state) fn into_inner(self) -> T {
+            self.value
+        }
+    }
+
+    impl<T, E> InSpan<Result<T, E>> {
+        /// A fallible read: the error, or the value still marked as read in the span.
+        pub(in crate::core::state) fn transpose(self) -> Result<InSpan<T>, E> {
+            self.value.map(|value| InSpan { value })
+        }
+    }
+
+    impl AppState {
+        /// The guard Start Editing holds across acquire -> commit (see the module
+        /// doc). A poisoned mutex is recovered: the guarded value is `()`, so there
+        /// is no state to protect - only the serialization matters.
+        pub(in crate::core::state) fn speleodb_lock_ops_guard(&self) -> LockOpsHeld<'_> {
+            LockOpsHeld {
+                _guard: self.speleodb_lock_ops.lock(),
+            }
+        }
     }
 }
 
-impl<T> InSpan<T> {
-    pub(super) fn get(&self) -> &T {
-        &self.value
-    }
-
-    pub(super) fn into_inner(self) -> T {
-        self.value
-    }
-}
-
-impl<T, E> InSpan<Result<T, E>> {
-    /// A fallible read: the error, or the value still marked as read in the span.
-    pub(super) fn transpose(self) -> Result<InSpan<T>, E> {
-        self.value.map(|value| InSpan { value })
-    }
-}
+pub(super) use lock_ops_span::{InSpan, LockOpsHeld};
 
 /// [#576 A8 NF-A8-BYPASS] Why a reclaim-checked release may be decided where it is:
 /// [`AppState::speleodb_release_unless_reclaimed_locked`] takes one. The deferred
@@ -890,15 +909,6 @@ impl AppState {
             .any(|live| live.is_same_lock(&claim))
         {
             session.locks_acquired_here.push(claim);
-        }
-    }
-
-    /// The guard Start Editing holds across acquire -> commit (see the module
-    /// doc). A poisoned mutex is recovered: the guarded value is `()`, so there
-    /// is no state to protect - only the serialization matters.
-    pub(super) fn speleodb_lock_ops_guard(&self) -> LockOpsHeld<'_> {
-        LockOpsHeld {
-            _guard: self.speleodb_lock_ops.lock(),
         }
     }
 
@@ -2029,9 +2039,11 @@ mod tests {
     fn the_logout_gate_half_inherits_its_callers_span() {
         use crate::models::source_scan::fn_body;
         let src = state_source("speleodb_logout.rs");
-        let gate_body = fn_body(&src, "fn speleodb_logout_drop_gates(");
+        let gate_body = fn_body(&src, "fn speleodb_logout_drop_gates<'s>(");
+        let release_body = fn_body(&src, "fn speleodb_logout_release_and_drop_gates(");
         assert!(
-            !gate_body.contains("self.speleodb_lock_ops_guard()"),
+            !gate_body.contains("self.speleodb_lock_ops_guard()")
+                && !release_body.contains("self.speleodb_lock_ops_guard()"),
             "RULE (lock-ops is not reentrant): the gate half must inherit its caller's \
              span, not open a narrower one of its own"
         );

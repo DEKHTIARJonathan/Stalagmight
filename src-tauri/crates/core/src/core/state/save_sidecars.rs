@@ -211,7 +211,7 @@ impl Sidecar {
     }
 
     /// The warning for a table a save went ahead without.
-    fn lost_warning(self, code: &str) -> ValidationWarning {
+    pub(super) fn lost_warning(self, code: &str) -> ValidationWarning {
         let message = match self {
             Self::History => "The project was saved, but its Undo and Redo history could not be \
                               preserved and was removed."

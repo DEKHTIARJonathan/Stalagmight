@@ -239,38 +239,9 @@ impl AppState {
         })
     }
 
-    /// [#576 RV4-R-S6] Run a Done / Push body that collects the warnings of the save
-    /// it runs before its upload, and hand those warnings to the frontend through the
-    /// event sink ([`crate::core::events::SpeleoPrePushSave`]) when the body then
-    /// FAILS.
-    ///
-    /// The Ok answer carries them (`SpeleoDoneReport` / `SpeleoPushReport`); an error
-    /// cannot. The save did happen, and its warnings are one-shot - the next save does
-    /// not repeat them - so a push that fails after it (a refused or dropped upload, a
-    /// failed render or snapshot) used to leave the user never told what that save
-    /// could not keep. Nothing is sent when the save did not run or lost nothing.
-    #[expect(
-        clippy::result_large_err,
-        reason = "the SpeleoErrorDto every SpeleoDB verb returns; boxing the error type is a \
-                  repo-wide change outside #576 RV4"
-    )]
-    pub(super) fn speleodb_with_pre_push_save<R>(
-        &self,
-        body: impl FnOnce(&mut Vec<ValidationWarning>) -> Result<R, SpeleoErrorDto>,
-    ) -> Result<(R, Vec<ValidationWarning>), SpeleoErrorDto> {
-        let mut collected = Vec::new();
-        match body(&mut collected) {
-            Ok(result) => Ok((result, collected)),
-            Err(e) => {
-                self.speleodb_surface_pre_push_save(collected);
-                Err(e)
-            }
-        }
-    }
-
     /// Emit the pre-push save's warnings of a failed Done / Push (see
     /// [`Self::speleodb_with_pre_push_save`]) as the save's own outcome.
-    fn speleodb_surface_pre_push_save(&self, warnings: Vec<ValidationWarning>) {
+    pub(super) fn speleodb_surface_pre_push_save(&self, warnings: Vec<ValidationWarning>) {
         if warnings.is_empty() {
             return;
         }
@@ -292,7 +263,7 @@ impl AppState {
         &self,
         message: Option<String>,
         accept_older_version: bool,
-        save_warnings: &mut Vec<ValidationWarning>,
+        save_warnings: &mut pre_push_save::PrePushSave<'_>,
     ) -> Result<DoneResult, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
 
@@ -471,7 +442,7 @@ impl AppState {
         &self,
         message: Option<String>,
         accept_older_version: bool,
-        save_warnings: &mut Vec<ValidationWarning>,
+        save_warnings: &mut pre_push_save::PrePushSave<'_>,
     ) -> Result<PushResult, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
 
@@ -1191,14 +1162,16 @@ impl AppState {
                          rather than resetting it to the empty-repo sentinel"
                     );
                 }
-                self.speleodb_record_landed_upload(
-                    &landed,
-                    new_base.as_deref(),
-                    &push_start,
-                    &undo_cutoff,
-                    snapshot_newest,
-                )
-                .map_err(local_dto)?;
+                let dropped = self
+                    .speleodb_record_landed_upload(
+                        &landed,
+                        new_base.as_deref(),
+                        &push_start,
+                        &undo_cutoff,
+                        snapshot_newest,
+                    )
+                    .map_err(local_dto)?;
+                report_dropped_history(save_warnings, dropped);
                 Ok(landed.outcome())
             }
             Err(e) => {
@@ -1220,14 +1193,16 @@ impl AppState {
                         server_kind.as_deref(),
                     );
                     // BASE unchanged: the tree already matched.
-                    self.speleodb_record_landed_upload(
-                        &landed,
-                        None,
-                        &push_start,
-                        &undo_cutoff,
-                        snapshot_newest,
-                    )
-                    .map_err(local_dto)?;
+                    let dropped = self
+                        .speleodb_record_landed_upload(
+                            &landed,
+                            None,
+                            &push_start,
+                            &undo_cutoff,
+                            snapshot_newest,
+                        )
+                        .map_err(local_dto)?;
+                    report_dropped_history(save_warnings, dropped);
                     return Ok(landed.outcome());
                 }
                 // Ambiguous (retried-then-exhausted 5xx, or a transport drop): we
@@ -1338,7 +1313,7 @@ impl AppState {
         push_start: &str,
         undo_cutoff: &str,
         captured_through: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<(), SpeleoDbError> {
+    ) -> Result<Option<ValidationWarning>, SpeleoDbError> {
         let _commands = self.hold_commands();
         self.speleodb_mutate_link(|l| {
             if let Some(base) = new_base {
@@ -1349,8 +1324,7 @@ impl AppState {
                 l.last_edit_at = None;
             }
         })?;
-        self.speleodb_clear_undo_after_push(undo_cutoff, captured_through);
-        Ok(())
+        Ok(self.speleodb_clear_undo_after_push(undo_cutoff, captured_through))
     }
 
     /// [#303] Clear-on-push (q8 / Q25): after a CONFIRMED push, drop the undo entries
@@ -1382,18 +1356,22 @@ impl AppState {
     /// `captured_through` is the newest undo stamp the uploaded snapshot carried (#576
     /// A18(b)): with it the cut can tell an entry the commit holds from one a redo
     /// put back while the upload ran - see [`crate::core::undo::UndoStack::drop_pushed_entries`].
+    ///
+    /// [#576 RV8a-F4] Returns the `UNDO_HISTORY_DROPPED` warning when the crash rule
+    /// below cleared the file's history, so the push can report it the way the save
+    /// does (`save_warnings` of the push answer).
     pub(super) fn speleodb_clear_undo_after_push(
         &self,
         undo_cutoff: &str,
         captured_through: Option<chrono::DateTime<chrono::Utc>>,
-    ) {
+    ) -> Option<ValidationWarning> {
         let Ok(cutoff) = chrono::DateTime::parse_from_rfc3339(undo_cutoff) else {
             tracing::warn!(
                 undo_cutoff,
                 purpose = "clear undo history after a confirmed push (#303)",
                 "could not parse the undo cutoff; leaving the undo stack alone"
             );
-            return;
+            return None;
         };
         let cutoff = cutoff.with_timezone(&chrono::Utc);
         let database = self.database.lock();
@@ -1405,7 +1383,7 @@ impl AppState {
                 purpose = "persist confirmed-push undo cleanup (#303)",
                 "no live database handle; retaining the chain metadata so stale disk rows remain classified"
             );
-            return;
+            return None;
         };
         // [#576 RV6a-1] The save's crash rule (`persist_or_clear_undo_stacks_into`):
         // the upload releases `command_lock` while it is on the network, and an edit
@@ -1413,9 +1391,14 @@ impl AppState {
         // survey. Writing the remaining entries would hand them to the restarted
         // session, which replays them; the file's history is cleared instead, as the
         // save after a crash does (`UNDO_HISTORY_DROPPED`).
+        let mut dropped_history = None;
         let persisted = if self.refuse_after_crash("Saving the Undo history").is_err() {
             match db.clear_history_stacks() {
                 Ok(()) => {
+                    dropped_history = Some(
+                        super::save_sidecars::Sidecar::History
+                            .lost_warning(super::save_sidecars::UNDO_HISTORY_DROPPED_CODE),
+                    );
                     tracing::warn!(
                         dropped,
                         code = super::save_sidecars::UNDO_HISTORY_DROPPED_CODE,
@@ -1443,7 +1426,7 @@ impl AppState {
                 purpose = "persist confirmed-push undo cleanup (#303)",
                 "could not persist the pruned history; retaining the chain metadata so stale disk rows remain classified"
             );
-            return;
+            return dropped_history;
         }
         let remaining = stack.len();
         drop(stack);
@@ -1461,6 +1444,85 @@ impl AppState {
             purpose = "avoid duplicating pushed history in the next commit (#303)",
             "Persisted the undo cleanup for a confirmed push"
         );
+        dropped_history
+    }
+}
+
+/// [#576 RV8a-F4] Report the push cleanup's crash-time history drop in the push answer,
+/// once: after a crash the pre-push save has usually said the same thing already.
+fn report_dropped_history(
+    save_warnings: &mut Vec<ValidationWarning>,
+    dropped: Option<ValidationWarning>,
+) {
+    if let Some(warning) = dropped {
+        if !save_warnings.iter().any(|w| w.code == warning.code) {
+            save_warnings.push(warning);
+        }
+    }
+}
+
+/// [#576 A8] The pre-push save's collector as a type: Done's and Push's bodies collect
+/// the warnings of the save they run before their upload into a [`PrePushSave`], which
+/// only [`AppState::speleodb_with_pre_push_save`] makes - so both verbs surface those
+/// warnings when the body then fails, by construction.
+mod pre_push_save {
+    use crate::core::state::AppState;
+    use crate::core::ValidationWarning;
+    use crate::speleodb::SpeleoErrorDto;
+
+    /// Where a Done / Push body collects the pre-push save's warnings.
+    pub(in crate::core::state) struct PrePushSave<'a> {
+        warnings: &'a mut Vec<ValidationWarning>,
+    }
+
+    impl std::ops::Deref for PrePushSave<'_> {
+        type Target = Vec<ValidationWarning>;
+        fn deref(&self) -> &Self::Target {
+            self.warnings
+        }
+    }
+
+    impl std::ops::DerefMut for PrePushSave<'_> {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            self.warnings
+        }
+    }
+
+    impl AppState {
+        /// [#576 RV4-R-S6] Run a Done / Push body that collects the warnings of the save
+        /// it runs before its upload, and hand those warnings to the frontend through the
+        /// event sink ([`crate::core::events::SpeleoPrePushSave`]) when the body then
+        /// FAILS.
+        ///
+        /// The Ok answer carries them (`SpeleoDoneReport` / `SpeleoPushReport`); an error
+        /// cannot. The save did happen, and its warnings are one-shot - the next save does
+        /// not repeat them - so a push that fails after it (a refused or dropped upload, a
+        /// failed render or snapshot) used to leave the user never told what that save
+        /// could not keep. Nothing is sent when the save did not run or lost nothing.
+        #[expect(
+            clippy::result_large_err,
+            reason = "the SpeleoErrorDto every SpeleoDB verb returns; boxing the error type is a \
+                      repo-wide change outside #576 RV4"
+        )]
+        ///
+        /// [#576 A8] The body's collector is a [`PrePushSave`], made only here - and the
+        /// Done and Push bodies take one - so a verb that ran its body without this helper
+        /// does not compile.
+        pub(in crate::core::state) fn speleodb_with_pre_push_save<R>(
+            &self,
+            body: impl FnOnce(&mut PrePushSave<'_>) -> Result<R, SpeleoErrorDto>,
+        ) -> Result<(R, Vec<ValidationWarning>), SpeleoErrorDto> {
+            let mut collected = Vec::new();
+            match body(&mut PrePushSave {
+                warnings: &mut collected,
+            }) {
+                Ok(result) => Ok((result, collected)),
+                Err(e) => {
+                    self.speleodb_surface_pre_push_save(collected);
+                    Err(e)
+                }
+            }
+        }
     }
 }
 
@@ -1951,6 +2013,166 @@ mod update_restore_tests {
         assert!(
             !state.edit_enabled(),
             "editing a remote project for a signed-out session"
+        );
+    }
+}
+
+/// [#195 / #576 RV8a-2] The push's snapshot is a VACUUM of the live file, so the live
+/// file must carry the in-memory edits before it: a snapshot of an un-flushed file
+/// uploads without the last edits. `Flushed` proves its producer ran before the
+/// snapshot; this drives the producer and reads the file it flushed.
+#[cfg(test)]
+#[expect(clippy::expect_used, reason = "unit test fixtures")]
+mod flush_for_snapshot_tests {
+    use crate::core::state::AppState;
+    use crate::core::Command;
+    use crate::models::{Project, ShotData};
+    use crate::persistence::Database;
+
+    fn sections_on_disk(path: &std::path::Path) -> usize {
+        Database::open_existing(path)
+            .expect("open the live file")
+            .load_project()
+            .expect("read the live file")
+            .sections
+            .len()
+    }
+
+    #[test]
+    fn the_snapshot_proof_is_made_only_after_the_live_file_carries_the_edits() {
+        let _cfg = crate::test_helpers::isolated_config();
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let path = temp.path().join("live.stalx");
+        Database::open(&path)
+            .expect("create the live file")
+            .save_project(&Project::new("CaveA".to_owned(), None))
+            .expect("save it");
+        let state = AppState::new().expect("state");
+        assert!(
+            state.open_project(path.clone()).success,
+            "open the live file"
+        );
+        let created = state.execute(Command::CreateSection {
+            name: Some("SectionA".to_owned()),
+            surveyor: None,
+            date: None,
+            color: "#336699".to_owned(),
+            direction: None,
+            shots: vec![ShotData {
+                length: 4.0,
+                ..Default::default()
+            }],
+        });
+        assert!(created.success, "{:?}", created.error);
+        let before = sections_on_disk(&path);
+
+        let flushed = state.speleodb_flush_for_snapshot();
+        let after = sections_on_disk(&path);
+        println!(
+            "sections in the live file: before the flush {before}, after it {after} \
+             (flush ok: {})",
+            flushed.is_ok()
+        );
+        assert_eq!(before, 0, "precondition: the edit is in memory only");
+        assert!(flushed.is_ok(), "{:?}", flushed.err().map(|e| e.message));
+        assert_eq!(
+            after, 1,
+            "the snapshot's proof must only exist once the live file carries the edit"
+        );
+    }
+}
+
+/// [#576 RV8a-F4] After a crash the push cleanup clears the file's Undo history (the
+/// save's crash rule) - and now says so in the push answer, as the save does, instead
+/// of only in the log.
+#[cfg(test)]
+#[expect(clippy::expect_used, reason = "unit test fixtures")]
+#[expect(
+    clippy::panic,
+    reason = "the crash is a panic while the command lock is held, which poisons it"
+)]
+mod crash_drop_report_tests {
+    use super::report_dropped_history;
+    use crate::core::state::save_sidecars::UNDO_HISTORY_DROPPED_CODE;
+    use crate::core::state::AppState;
+    use crate::core::{Command, ValidationWarning, WarningSeverity};
+    use crate::models::{Project, ShotData};
+    use crate::persistence::Database;
+
+    fn saved_project_with_history(dir: &std::path::Path) -> AppState {
+        let path = dir.join("CaveA.stalx");
+        Database::open(&path)
+            .expect("create the file")
+            .save_project(&Project::new("CaveA".to_owned(), None))
+            .expect("save it");
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(path).success, "open it");
+        let created = state.execute(Command::CreateSection {
+            name: Some("SectionA".to_owned()),
+            surveyor: None,
+            date: None,
+            color: "#336699".to_owned(),
+            direction: None,
+            shots: vec![ShotData {
+                length: 4.0,
+                ..Default::default()
+            }],
+        });
+        assert!(created.success, "{:?}", created.error);
+        state
+    }
+
+    #[test]
+    fn the_push_cleanup_reports_the_history_it_dropped_after_a_crash() {
+        let _cfg = crate::test_helpers::isolated_config();
+        let calm_dir = tempfile::TempDir::new().expect("temp dir");
+        let calm = saved_project_with_history(calm_dir.path());
+        let cutoff = chrono::Utc::now().to_rfc3339();
+        let no_crash = calm.speleodb_clear_undo_after_push(&cutoff, None);
+
+        let crashed_dir = tempfile::TempDir::new().expect("temp dir");
+        let crashed = saved_project_with_history(crashed_dir.path());
+        let _ = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let _guard = crashed.command_lock.lock();
+                    panic!("synthetic crash under command_lock (#576 RV8a-F4 test)");
+                })
+                .join()
+        });
+        assert!(
+            crashed.refuse_after_crash("probe").is_err(),
+            "precondition: a crash"
+        );
+        let after_crash = crashed.speleodb_clear_undo_after_push(&cutoff, None);
+        println!(
+            "push cleanup -> no crash: {:?}; after a crash: {:?}",
+            no_crash.as_ref().map(|w| &w.code),
+            after_crash.as_ref().map(|w| &w.code)
+        );
+        assert!(no_crash.is_none(), "nothing dropped, nothing to report");
+        assert_eq!(
+            after_crash.map(|w| w.code).as_deref(),
+            Some(UNDO_HISTORY_DROPPED_CODE),
+            "the dropped history is reported"
+        );
+    }
+
+    #[test]
+    fn a_dropped_history_is_reported_once() {
+        let dropped = || ValidationWarning {
+            code: UNDO_HISTORY_DROPPED_CODE.to_owned(),
+            message: "dropped".to_owned(),
+            severity: WarningSeverity::Warning,
+        };
+        let mut answer = Vec::new();
+        report_dropped_history(&mut answer, Some(dropped()));
+        report_dropped_history(&mut answer, Some(dropped()));
+        report_dropped_history(&mut answer, None);
+        assert_eq!(
+            answer.len(),
+            1,
+            "the pre-push save may have said it already"
         );
     }
 }

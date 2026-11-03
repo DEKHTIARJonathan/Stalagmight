@@ -10,7 +10,9 @@
 //!
 //! The helper is driven directly: Done and Push reach the save only after the
 //! cache-dir check that only the env-gated live tests can pass (see
-//! `sdb_flush_*_tests.rs`). A source check pins that both verbs go through it.
+//! `sdb_flush_*_tests.rs`). That both verbs go through it is the type's job since
+//! #576 A8 (it used to be a source check here): their bodies collect into a
+//! `PrePushSave`, which only the helper makes.
 
 use std::sync::{Arc, Mutex};
 
@@ -105,23 +107,4 @@ fn a_successful_push_or_a_failure_with_nothing_lost_sends_no_event() {
         sent, 0,
         "no event: the Ok answer carries them, or nothing was lost"
     );
-}
-
-#[test]
-fn done_and_push_both_run_through_the_pre_push_save_helper() {
-    let source = include_str!("speleodb_push.rs");
-    for verb in [
-        "fn speleodb_done_reported(",
-        "fn speleodb_push_only_reported(",
-    ] {
-        let body = source
-            .split_once(verb)
-            .map(|(_, rest)| rest)
-            .and_then(|rest| rest.split("\n    }\n").next())
-            .unwrap_or_default();
-        assert!(
-            body.contains("self.speleodb_with_pre_push_save("),
-            "{verb} must collect through speleodb_with_pre_push_save"
-        );
-    }
 }

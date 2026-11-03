@@ -275,7 +275,7 @@ impl AppState {
     /// 1. read the outgoing file's `display_settings` while it still exists;
     /// 2. close the open project IF it is this very file, so no live SQLite handle
     ///    (and no 256 MB mmap) survives into the replace - see
-    ///    [`AppState::close_project_if_open_at`] for why that is required on
+    ///    [`AppState::close_project_if_open_at_held`] for why that is required on
     ///    Windows and why it is conditional;
     /// 3. extract, which stages to a sibling temp file and RENAMES over `dest`, so
     ///    an interrupted extract leaves the old copy intact rather than a stub.

@@ -496,11 +496,12 @@ impl AppState {
         SpeleoDbError,
     > {
         // [#576 A8] The order is the types': the relocation needs the span's proof,
-        // and the stamp needs the relocation's.
+        // and the stamp needs the relocation's - which borrows that same span, so the
+        // two cannot be split across two acquisitions (#576 RV8a-1).
         let commands = self.hold_commands();
         let (relocated, relocation_losses) =
             self.speleodb_publish_relocate_into(&commands, dest)?;
-        let link = self.speleodb_publish_stamp(&commands, relocated, make_link)?;
+        let link = self.speleodb_publish_stamp(relocated, make_link)?;
         Ok((link, relocation_losses))
     }
 }
@@ -517,9 +518,11 @@ mod publish_order {
     use crate::core::ValidationWarning;
     use crate::speleodb::SpeleoDbError;
 
-    /// Proof that the open project was relocated into the cache while still UNLINKED.
-    pub(super) struct Relocated {
-        _saved: (),
+    /// Proof that the open project was relocated into the cache while still UNLINKED,
+    /// borrowing the `command_lock` span it was relocated under: the stamp takes only
+    /// this, so it runs in that span (no autosave between the two).
+    pub(super) struct Relocated<'c> {
+        _span: &'c CommandsHeld<'c>,
     }
 
     impl AppState {
@@ -528,11 +531,11 @@ mod publish_order {
         ///    (open/fast-forward both extract there), and the push machinery reads
         ///    exactly that path. `save_project(Some(dest))` writes a fresh `.stalx`
         ///    there AND switches the active database + `project.file_path` to it.
-        pub(super) fn speleodb_publish_relocate_into(
+        pub(super) fn speleodb_publish_relocate_into<'c>(
             &self,
-            _commands: &CommandsHeld<'_>,
+            commands: &'c CommandsHeld<'c>,
             dest: &Path,
-        ) -> Result<(Relocated, Vec<ValidationWarning>), SpeleoDbError> {
+        ) -> Result<(Relocated<'c>, Vec<ValidationWarning>), SpeleoDbError> {
             let save = self.save_project(Some(dest.to_path_buf()));
             if !save.success {
                 // The save's own refusal, shown as written (as
@@ -545,15 +548,14 @@ mod publish_order {
                     "the project could not be written into the SpeleoDB cache",
                 ));
             }
-            Ok((Relocated { _saved: () }, save.warnings))
+            Ok((Relocated { _span: commands }, save.warnings))
         }
 
         /// 3. Stamp the hand-off link onto the relocated copy, through the live handle
         ///    the relocation switched to.
         pub(super) fn speleodb_publish_stamp(
             &self,
-            _commands: &CommandsHeld<'_>,
-            _relocated: Relocated,
+            _relocated: Relocated<'_>,
             make_link: impl FnOnce(crate::models::UndoMode) -> crate::models::SpeleoLink,
         ) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
             let db_guard = self.database.lock();

@@ -1133,6 +1133,17 @@ impl AppState {
         guard.as_ref().and_then(|p| p.file_path.clone())
     }
 
+    /// [`Self::close_project_if_open_at_held`] under a `command_lock` span of its own.
+    ///
+    /// [#576 RV6a-5] Test builds only: the one production caller, the cache
+    /// replace, closes inside its own `command_lock` span
+    /// ([`Self::close_project_if_open_at_held`]).
+    #[cfg(test)]
+    pub(super) fn close_project_if_open_at(&self, dest: &Path) -> bool {
+        let commands = self.hold_commands();
+        self.close_project_if_open_at_held(&commands, dest)
+    }
+
     /// Close the open project IF AND ONLY IF it is the file at `dest`; returns
     /// whether it was closed.
     ///
@@ -1157,18 +1168,8 @@ impl AppState {
     /// `open_project_path` and closing through `close_project` re-took the lock in
     /// between, so a load finishing in that gap had ITS session torn down instead.
     ///
-    /// [#576 RV6a-5] Test builds only: the one production caller, the cache
-    /// replace, closes inside its own `command_lock` span
-    /// ([`Self::close_project_if_open_at_held`]).
-    #[cfg(test)]
-    pub(super) fn close_project_if_open_at(&self, dest: &Path) -> bool {
-        let commands = self.hold_commands();
-        self.close_project_if_open_at_held(&commands, dest)
-    }
-
-    /// [`Self::close_project_if_open_at`] inside a `command_lock` span the caller
-    /// already holds - the cache replace's, which reads the display settings to
-    /// carry over in the same span (#576 RV6a-5).
+    /// Inside a `command_lock` span the caller already holds - the cache replace's,
+    /// which reads the display settings to carry over in the same span (#576 RV6a-5).
     pub(super) fn close_project_if_open_at_held(
         &self,
         commands: &CommandsHeld<'_>,
