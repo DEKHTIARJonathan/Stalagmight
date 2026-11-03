@@ -207,6 +207,8 @@ mod load_repairs_tests;
 #[cfg(test)]
 mod metamorphic_undo_tests;
 #[cfg(test)]
+mod mock_narrowing_tests;
+#[cfg(test)]
 #[expect(
     clippy::unwrap_used,
     clippy::panic,

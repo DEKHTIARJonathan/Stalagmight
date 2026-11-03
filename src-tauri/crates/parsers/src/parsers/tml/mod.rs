@@ -41,6 +41,9 @@ pub mod test_helpers;
 #[expect(clippy::print_stdout)]
 mod undated_date_rv4_tests;
 
+#[cfg(test)]
+mod mock_narrowing_tests;
+
 use linearize::{
     collapsed_trip_report, join_contiguous_chains, linearize_section, split_runs_at_trip_boundaries,
 };
