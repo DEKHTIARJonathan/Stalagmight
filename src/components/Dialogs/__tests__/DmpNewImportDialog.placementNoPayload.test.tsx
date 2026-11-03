@@ -1,0 +1,85 @@
+/**
+ * #576 NF-W9FE-3: a map-placement handoff that cannot build its payload closed the
+ * wizard.
+ *
+ * `handleStartSegmentPlacement` hands a segment to the map: it builds the overlay
+ * payload, starts placement mode and closes the wizard (a drop reopens it). With no
+ * payload - the anchor section is not in the file - it reopened the wizard
+ * (`openDialog`) and then went on to the unconditional `closeDialog()`. Reached from
+ * the hidden auto-start handoff, the run vanished: no wizard, no placement, no
+ * late import. It now leaves the wizard where it is, so the settled handoff shows
+ * it on the segment's manual-placing screen (the screen a declined handoff ends
+ * on), where the user can skip the segment or go back.
+ *
+ * All data is synthetic (dmpWizardHarness).
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { failOnRefreshErrors } from '../../../test/refreshGuard';
+import { screen, waitFor } from '@testing-library/react';
+
+// SectionPreview and the map panel pull maplibre-gl (WebGL) at module load,
+// which jsdom cannot execute. Nothing here asserts on anything drawn.
+vi.mock('../SectionPreview', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../SectionPreview')>()),
+  default: () => null,
+}));
+vi.mock('maplibre-gl', () => ({ default: {} }));
+vi.mock('../WizardMapPanel', () => ({
+  WizardMapPanel: () => null,
+  MAP_PANEL_DEFAULT_WIDTH: 400,
+  MAP_PANEL_MAX_WIDTH: 800,
+}));
+vi.mock('react-i18next', async () => (await import('../../../test/factories/i18n')).i18nKeys());
+vi.mock('../../../utils/telemetry', async () =>
+  (await import('../../../test/factories/telemetry')).telemetryWith({ setSource: vi.fn() }),
+);
+
+import { emptyBinaryRefresh, invokeIpcMock } from '../../../test/factories/ipc';
+
+vi.mock('../../../utils/ipc');
+// [#576 NF-W6A-5] The refresh every edit/import ends with reads bytes; a test that
+// gives none answers "no project open" rather than making the decoder throw.
+emptyBinaryRefresh();
+
+import { useUIStore } from '../../../store/uiStore';
+import { useProjectStore } from '../../../store/projectStore';
+import { renderWizard, savedState } from './dmpWizardHarness';
+
+beforeEach(() => {
+  invokeIpcMock.mockReset();
+  invokeIpcMock.mockResolvedValue(null);
+  useProjectStore.setState({ project: null });
+});
+
+// [#576 NF-W6A-5] Every refresh this file drives must be answered by its mock.
+failOnRefreshErrors();
+
+describe('DMP wizard: a handoff with no placement payload (#576 NF-W9FE-3)', () => {
+  it('leaves the wizard open on the manual-placing screen instead of reopening and closing it', async () => {
+    // The wizard as a drop reopened it: the active dialog, its data in dialogData,
+    // the next segment to hand off at once. Its anchor names a section the file
+    // does not have, so no overlay payload can be built.
+    const dialogData = { filePath: '/tmp/dive.dmp' };
+    useUIStore.setState({ activeDialog: 'dmp-import-new', dialogData, placementMode: null });
+    const openDialog = vi.spyOn(useUIStore.getState(), 'openDialog');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    renderWizard(
+      savedState({ segmentQueue: [[1]], segmentAnchor: { sectionIndex: 9, stationIndex: 0 } }),
+      { selected: [0, 1], autoStartManualPlacement: true },
+    );
+
+    // The handoff was attempted and settled: the manual-placing screen shows.
+    await waitFor(() => expect(screen.getByTestId('wizard-manual-placing')).toBeVisible());
+
+    // Soft, so a regression reports all of it: reopened, then closed.
+    const ui = useUIStore.getState();
+    expect.soft(openDialog).not.toHaveBeenCalled();
+    expect.soft(ui.activeDialog).toBe('dmp-import-new');
+    expect.soft(ui.dialogData).toBe(dialogData);
+    expect.soft(ui.placementMode).toBeNull();
+    expect.soft(warn).toHaveBeenCalledWith('[dmpImport] no placement payload for anchor section', 9);
+    openDialog.mockRestore();
+    warn.mockRestore();
+  });
+});

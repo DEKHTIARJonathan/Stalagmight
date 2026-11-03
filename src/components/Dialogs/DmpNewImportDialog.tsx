@@ -1169,40 +1169,44 @@ export default function DmpNewImportDialog({
 
     const payload = buildSegmentPlacementPayload(currentSegment, segmentAnchor);
     if (!payload) {
-      reopen(false);
-    } else {
-      const anchor = segmentAnchor;
-      startPlacementMode(
-        payload.sectionData,
-        payload.emittedStationIndex,
-        (result: PlacementResult) => {
-          // The SAME station the overlay was aligned to. Storing the visible
-          // index here while placing against the emitted one meant the preview
-          // and the import disagreed, and the segment landed a station too far
-          // downstream whenever a blank row preceded the anchor.
-          const alignStation = payload.emittedStationIndex;
-          const placement: ImportPlacement = result.snappedToStation
-            ? { type: 'manual_snap', align_station_index: alignStation, snapped_to_station: result.snappedToStation }
-            : { type: 'manual', align_station_index: alignStation, offset: result.position };
-          // The drop only RECORDS the placement (#576 D13): the reopened wizard
-          // imports it, hidden like any auto-started handoff, so a failure shows
-          // on this segment's screen and a success hands off the next segment.
-          reopen(true, {
-            segment: currentSegment,
-            placement: { anchorSectionIndex: anchor.sectionIndex, anchorStationIndex: alignStation, placement },
-          });
-        },
-        () => reopen(false),
-        payload.additionalSections.length > 0 ? payload.additionalSections : undefined,
-        DMP_AZIMUTH_REFERENCE,
-      );
-
-      showToast(
-        t('dmpWizard.toasts.placementHint'),
-        TOAST_KEYS.DMP_MANUAL_PLACEMENT_HINT,
-        'info'
-      );
+      // [#576 NF-W9FE-3] Nothing to put on the map (the anchor section is not in
+      // the file). Leave the wizard as it is: reopening it and then closing it
+      // below ended the run without a word, and from the auto-start handoff the
+      // settled window now shows this segment's manual-placing screen instead.
+      console.warn('[dmpImport] no placement payload for anchor section', segmentAnchor.sectionIndex);
+      return;
     }
+    const anchor = segmentAnchor;
+    startPlacementMode(
+      payload.sectionData,
+      payload.emittedStationIndex,
+      (result: PlacementResult) => {
+        // The SAME station the overlay was aligned to. Storing the visible
+        // index here while placing against the emitted one meant the preview
+        // and the import disagreed, and the segment landed a station too far
+        // downstream whenever a blank row preceded the anchor.
+        const alignStation = payload.emittedStationIndex;
+        const placement: ImportPlacement = result.snappedToStation
+          ? { type: 'manual_snap', align_station_index: alignStation, snapped_to_station: result.snappedToStation }
+          : { type: 'manual', align_station_index: alignStation, offset: result.position };
+        // The drop only RECORDS the placement (#576 D13): the reopened wizard
+        // imports it, hidden like any auto-started handoff, so a failure shows
+        // on this segment's screen and a success hands off the next segment.
+        reopen(true, {
+          segment: currentSegment,
+          placement: { anchorSectionIndex: anchor.sectionIndex, anchorStationIndex: alignStation, placement },
+        });
+      },
+      () => reopen(false),
+      payload.additionalSections.length > 0 ? payload.additionalSections : undefined,
+      DMP_AZIMUTH_REFERENCE,
+    );
+
+    showToast(
+      t('dmpWizard.toasts.placementHint'),
+      TOAST_KEYS.DMP_MANUAL_PLACEMENT_HINT,
+      'info'
+    );
 
     // Close dialog so user can interact with the map
     trackDialogComplete('dmp-import-new');
