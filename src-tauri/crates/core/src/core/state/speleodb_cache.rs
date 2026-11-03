@@ -192,6 +192,19 @@ pub(super) enum InheritedUndo {
     Keep,
 }
 
+/// [#576 A8 NF-A8-BYPASS] Proof a caller hands [`AppState::replace_cache_stalx_with`]:
+/// whatever had to run before the cache file is replaced did. The pull's
+/// un-pushed-edits guard (`LocalEditsCleared`), the revision swap's child-policy
+/// check (`ChildPolicyChecked`) and the fast-forward's pinned download
+/// (`PinnedDump`) implement it.
+///
+/// A proof stops a reorder at its own call site, but a replace callable with
+/// strings alone could still be written above the step it must follow. Taking the
+/// proof as an argument closes that: the replace has no other production entry
+/// point (the guarded and abandoning bodies are private to this module).
+/// Implementing this anywhere but on such a proof is the bypass it exists to stop.
+pub(super) trait ReplaceLicence {}
+
 impl AppState {
     /// Refuse when the copy of `project_id` at `dest` still holds edits the server
     /// has never seen. The gate in front of every download-replace, and the reason
@@ -268,6 +281,13 @@ impl AppState {
     ///    an interrupted extract leaves the old copy intact rather than a stub.
     ///
     /// Steps 2 and 3 cover different failure modes and neither replaces the other.
+    ///
+    /// [#576 A8 NF-A8-BYPASS] Test builds only: the orchestration replaces the cache
+    /// file through [`AppState::replace_cache_stalx_with`] alone, which takes a
+    /// [`ReplaceLicence`]. The body is the private `replace_cache_stalx_guarded`;
+    /// this name exists for the tests elsewhere in `core::state` that drive the
+    /// replace directly.
+    #[cfg(test)]
     pub(super) fn replace_cache_stalx(
         &self,
         dump: &mut Dump<'_>,
@@ -276,16 +296,33 @@ impl AppState {
         project_id: &str,
         undo: InheritedUndo,
     ) -> Result<HashMap<String, String>, SpeleoDbError> {
+        self.replace_cache_stalx_guarded(dump, entry, dest, project_id, undo)
+    }
+
+    /// The guarded replace's body (see [`AppState::replace_cache_stalx`]).
+    fn replace_cache_stalx_guarded(
+        &self,
+        dump: &mut Dump<'_>,
+        entry: &str,
+        dest: &Path,
+        project_id: &str,
+        undo: InheritedUndo,
+    ) -> Result<HashMap<String, String>, SpeleoDbError> {
         self.guard_local_edits(project_id, dest)?;
-        self.replace_cache_stalx_abandoning(dump, entry, dest, undo)
+        self.replace_cache_stalx_unguarded(dump, entry, dest, undo)
     }
 
     /// [`AppState::replace_cache_stalx`] or its abandoning sibling, chosen by an
     /// explicit [`LocalEditsPolicy`]. For the orchestration verbs that serve both a
     /// protected and a confirmed-discard caller and therefore cannot pick one verb
     /// statically; their own callers name the policy.
+    ///
+    /// [#576 A8 NF-A8-BYPASS] The ONE way production replaces the cache file, and it
+    /// takes the proof of whatever had to run first (`_licence`, see
+    /// [`ReplaceLicence`]): a replace written without one does not compile.
     pub(super) fn replace_cache_stalx_with(
         &self,
+        _licence: &impl ReplaceLicence,
         dump: &mut Dump<'_>,
         entry: &str,
         dest: &Path,
@@ -295,10 +332,10 @@ impl AppState {
     ) -> Result<HashMap<String, String>, SpeleoDbError> {
         match policy {
             LocalEditsPolicy::Protect => {
-                self.replace_cache_stalx(dump, entry, dest, project_id, undo)
+                self.replace_cache_stalx_guarded(dump, entry, dest, project_id, undo)
             }
             LocalEditsPolicy::Discard => {
-                self.replace_cache_stalx_abandoning(dump, entry, dest, undo)
+                self.replace_cache_stalx_unguarded(dump, entry, dest, undo)
             }
         }
     }
@@ -308,7 +345,23 @@ impl AppState {
     /// `speleodb_take_remote` (and the open-project prompt's "take remote and
     /// discard local" branch, which routes through the same policy). Named so the
     /// destruction is visible at the call site rather than implied by a flag.
+    ///
+    /// [#576 A8 NF-A8-BYPASS] Test builds only, like [`AppState::replace_cache_stalx`]:
+    /// production waives the guard solely by naming [`LocalEditsPolicy::Discard`] to
+    /// [`AppState::replace_cache_stalx_with`].
+    #[cfg(test)]
     pub(super) fn replace_cache_stalx_abandoning(
+        &self,
+        dump: &mut Dump<'_>,
+        entry: &str,
+        dest: &Path,
+        undo: InheritedUndo,
+    ) -> Result<HashMap<String, String>, SpeleoDbError> {
+        self.replace_cache_stalx_unguarded(dump, entry, dest, undo)
+    }
+
+    /// The abandoning replace's body (see [`AppState::replace_cache_stalx_abandoning`]).
+    fn replace_cache_stalx_unguarded(
         &self,
         dump: &mut Dump<'_>,
         entry: &str,
@@ -404,40 +457,10 @@ mod tests {
     /// The `.stalx` entry inside the fixture dump below.
     const ENTRY: &str = "misc/project.stalx";
 
-    /// Tripwire: the orchestration never names the abandoning replace directly, so
-    /// every waiver of the un-pushed-edits guard is spelled out as a
-    /// [`LocalEditsPolicy`] at its call site and shows up in a diff as the word
-    /// `Discard`. Everything that pulls the server copy over the local one funnels
-    /// through this module, and the whole point of splitting the verb in two is that
-    /// opting out of the guard is a deliberate, reviewable act.
-    ///
-    /// The orchestration's source is scanned from HERE rather than from its own test
-    /// module so the needle does not match the test that looks for it.
-    ///
-    /// This test used to ALSO pin the number of `LocalEditsPolicy::Discard` sites at
-    /// a literal count. That was not a safety property - it was an assertion about a
-    /// source string - and it distorted the code it guarded: `speleodb_adopt_ariane`
-    /// rebuilds its destination itself rather than going through
-    /// [`AppState::replace_cache_stalx_with`], so it has no policy to pass, and the
-    /// enum value was constructed there and immediately compared away purely to keep
-    /// the count at four. What holds the line instead is the shape of this module -
-    /// the guard is the DEFAULT (`replace_cache_stalx`), the opt-out is a separate
-    /// `pub(super)` verb no production code outside this file names (the assertion
-    /// this test kept), and the behaviour of both is pinned by the test below.
-    #[test]
-    fn the_orchestration_never_calls_the_abandoning_replace_directly() {
-        // Production code only, across EVERY speleodb module except this one - the
-        // definition site legitimately names the verb, and the orchestration's own
-        // test module drives both verbs on purpose. Scanning a single sibling would
-        // pass vacuously as soon as the call sites move out of it (#275).
-        assert_eq!(
-            speleodb_prod_matches("replace_cache_stalx_abandoning", &["speleodb_cache.rs"]),
-            0,
-            "RULE (sanctioned scan, #576 A8-D2 - every local-edits waiver is spelled at \
-             its call site): the orchestration reaches the abandoning replace only through \
-             the named LocalEditsPolicy"
-        );
-    }
+    /// The replace's licence for the tests that drive it directly: they test the
+    /// replace, not the step that earns one.
+    struct TestReplace;
+    impl ReplaceLicence for TestReplace {}
 
     /// [#303] Spec item 15's structural half, and the reason `InheritedUndo` is a named
     /// enum rather than a bool: KEEPING a downloaded copy's undo history is a waiver of
@@ -445,8 +468,11 @@ mod tests {
     /// that asks for it - the Unwind, which exists to fetch that history back under an
     /// explicit, confirmed, lock-held action.
     ///
-    /// Same shape as `the_orchestration_never_calls_the_abandoning_replace_directly`
-    /// above: a diff that adds a second `Keep` site fails here and has to justify itself.
+    /// A site inventory (#576 A8-D2, docs/testing-recipes.md "Source scans"): a diff
+    /// that adds a second `Keep` site fails here and has to justify itself. (Its old
+    /// sibling - no production caller names the abandoning replace - is the module's
+    /// visibility now: outside test builds that replace is private here, and the
+    /// orchestration's one entry point takes a `ReplaceLicence`, #576 NF-A8-BYPASS.)
     #[test]
     fn undo_history_keep_is_unwind_only() {
         let keeps = speleodb_prod_matches("InheritedUndo::Keep", &["speleodb_cache.rs"]);
@@ -538,6 +564,7 @@ mod tests {
 
         let err = state
             .replace_cache_stalx_with(
+                &TestReplace,
                 &mut Dump::open(&zip).expect("open dump"),
                 ENTRY,
                 &dest,
@@ -555,6 +582,7 @@ mod tests {
 
         state
             .replace_cache_stalx_with(
+                &TestReplace,
                 &mut Dump::open(&zip).expect("open dump"),
                 ENTRY,
                 &dest,

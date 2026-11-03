@@ -7999,8 +7999,17 @@ mod tests {
             .expect("create project")
             .id;
         client::acquire_lock(url, token, false, &id).expect("acquire seed lock");
-        client::upload_auto(url, token, false, &id, &stalx, Path::new(ORCH_TML), "seed")
-            .expect("seed upload");
+        client::upload_auto(
+            &client::TestWire,
+            url,
+            token,
+            false,
+            &id,
+            &stalx,
+            Path::new(ORCH_TML),
+            "seed",
+        )
+        .expect("seed upload");
         client::release_lock(url, token, false, &id).expect("release seed lock");
         id
     }
@@ -8012,6 +8021,7 @@ mod tests {
         let stalx = orch_seed_stalx(seed_dir.path(), true);
         client::acquire_lock(url, token, false, id).expect("acquire advance lock");
         client::upload_auto(
+            &client::TestWire,
             url,
             token,
             false,
@@ -8735,7 +8745,8 @@ mod tests {
         state.speleodb_done(None).expect("done");
 
         // Inspect the archive the server now holds.
-        let zip = client::download_dump(&url, &token, false, &id).expect("download dump");
+        let zip = client::download_dump(&client::TestWire, &url, &token, false, &id)
+            .expect("download dump");
         let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open server dump");
         let entries = dump.entry_paths().expect("dump entry paths");
 
@@ -8832,7 +8843,8 @@ mod tests {
         state.speleodb_done(None).expect("done");
 
         // Pull the ariane.tml the server now holds.
-        let zip = client::download_dump(&url, &token, false, &id).expect("download dump");
+        let zip = client::download_dump(&client::TestWire, &url, &token, false, &id)
+            .expect("download dump");
         let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open server dump");
         let entries = dump.entry_paths().expect("dump entry paths");
         let tml_entry = entries

@@ -567,6 +567,7 @@ mod live_tests {
         std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
         client::acquire_lock(&url, &token, false, &project_id).expect("acquire mutex");
         let uploaded = client::upload_auto(
+            &client::TestWire,
             &url,
             &token,
             false,
@@ -583,7 +584,8 @@ mod live_tests {
         client::release_lock(&url, &token, false, &project_id).expect("release mutex");
 
         // 4. Pull the dump, classify, extract, and open the .stalx self-contained.
-        let zip = client::download_dump(&url, &token, false, &project_id).expect("download dump");
+        let zip = client::download_dump(&client::TestWire, &url, &token, false, &project_id)
+            .expect("download dump");
         let mut dump = dump::Dump::open(&zip).expect("open dump zip");
         let names = dump.entry_paths().expect("read dump entries");
         let DumpClassification::Stalx(entry) = dump::classify(&names) else {
@@ -681,6 +683,7 @@ mod live_tests {
         std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
         client::acquire_lock(&url, &owner, false, &project_id).expect("acquire mutex");
         client::upload_auto(
+            &client::TestWire,
             &url,
             &owner,
             false,
@@ -695,7 +698,7 @@ mod live_tests {
             .expect("grant WEB_VIEWER");
 
         let viewer = client::login(&url, false, &email2, &pw2).expect("viewer login");
-        let err = client::download_dump(&url, &viewer, false, &project_id)
+        let err = client::download_dump(&client::TestWire, &url, &viewer, false, &project_id)
             .expect_err("WEB_VIEWER must be denied the dump download");
         assert!(
             matches!(&err, SpeleoDbError::Status { status: 403, .. }),
@@ -985,6 +988,7 @@ mod live_tests {
         std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
 
         let project = client::upload_auto(
+            &client::TestWire,
             &url,
             &token,
             false,
@@ -1032,6 +1036,7 @@ mod live_tests {
         // not the nested `project.latest_commit` (which is max-authored-date and
         // ties to the service-account root - see speleodb_server_head).
         let hexsha = client::upload_auto(
+            &client::TestWire,
             &url,
             &token,
             false,
@@ -1102,6 +1107,7 @@ mod live_tests {
 
         // First upload lands the tree (200).
         client::upload_auto(
+            &client::TestWire,
             &url,
             &token,
             false,
@@ -1114,6 +1120,7 @@ mod live_tests {
 
         // Re-upload the identical tree → 304 (unchanged).
         let err = client::upload_auto(
+            &client::TestWire,
             &url,
             &token,
             false,
@@ -1218,6 +1225,7 @@ mod live_tests {
         std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
 
         let err = client::upload_auto(
+            &client::TestWire,
             &url,
             &token,
             false,
@@ -1255,6 +1263,7 @@ mod live_tests {
         let tml_sidecar = tml_dir.path().join("ariane.tml");
         std::fs::copy(TML_FIXTURE, &tml_sidecar).expect("copy real Ariane .tml fixture");
         client::upload_auto(
+            &client::TestWire,
             &url,
             &token,
             false,
@@ -1270,7 +1279,8 @@ mod live_tests {
 
         // Pull the dump and locate the .stalx BY SUFFIX (the AUTO catch-all stored
         // it verbatim).
-        let zip = client::download_dump(&url, &token, false, &cleanup.id).expect("download dump");
+        let zip = client::download_dump(&client::TestWire, &url, &token, false, &cleanup.id)
+            .expect("download dump");
         let mut d = dump::Dump::open(&zip).expect("open dump zip");
         let names = d.entry_paths().expect("read dump entries");
         let DumpClassification::Stalx(entry) = dump::classify(&names) else {
@@ -1565,6 +1575,7 @@ mod live_tests {
         let stalx = &seed_stalx(dir.path());
         client::acquire_lock(&url, &token, false, &cleanup.id).expect("acquire mutex");
         let uploaded = client::upload_auto(
+            &client::TestWire,
             &url,
             &token,
             false,
@@ -1643,6 +1654,7 @@ mod live_tests {
         let stalx = &seed_stalx(dir.path());
         client::acquire_lock(&url, &token, false, &cleanup.id).expect("acquire mutex");
         let uploaded = client::upload_auto(
+            &client::TestWire,
             &url,
             &token,
             false,
@@ -1767,6 +1779,7 @@ mod live_tests {
 
         // Land a commit, then GET the single project while still locked.
         client::upload_auto(
+            &client::TestWire,
             &url,
             &token,
             false,

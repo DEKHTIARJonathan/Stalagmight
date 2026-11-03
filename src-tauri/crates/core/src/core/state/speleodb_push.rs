@@ -1576,6 +1576,11 @@ mod push_snapshot {
         path: PathBuf,
     }
 
+    /// [#576 A8 NF-A8-BYPASS] The upload's licence: `client::upload_auto` takes
+    /// it, so a push cannot stream a file that never went through
+    /// [`PushSnapshot::take`].
+    impl client::UploadLicence for PushSnapshot {}
+
     impl PushSnapshot {
         /// VACUUM the live file into `path`. Takes the flush's proof: a snapshot of a
         /// file the last edits never reached would upload without them.
@@ -1609,6 +1614,7 @@ mod push_snapshot {
             commit_message: &str,
         ) -> Result<crate::speleodb::models::Project, SpeleoDbError> {
             client::upload_auto(
+                self,
                 endpoint,
                 token,
                 insecure_http,

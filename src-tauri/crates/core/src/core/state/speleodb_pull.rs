@@ -678,6 +678,11 @@ impl AppState {
         if !probe_inputs_valid(&project_id, hexsha.as_deref()) {
             return Ok(None);
         }
+        /// [#576 A8 NF-A8-BYPASS] This probe's download licence. It reads a dump
+        /// and installs nothing - no lock, no cache replace - so nothing has to run
+        /// before it. Local to this function, so no other flow can borrow it.
+        struct LockFreeProbe;
+        impl client::DumpLicence for LockFreeProbe {}
         let Ok((endpoint, token)) = self.speleodb_active_token() else {
             return Ok(None);
         };
@@ -687,11 +692,24 @@ impl AppState {
             // path validates before building its own download-at-hash URL.
             Some(sha) => self.speleodb_handle_auth(
                 Endpoint::DownloadDump,
-                client::download_dump_at_hash(&endpoint, &token, insecure_http, &project_id, sha),
+                client::download_dump_at_hash(
+                    &LockFreeProbe,
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &project_id,
+                    sha,
+                ),
             ),
             None => self.speleodb_handle_auth(
                 Endpoint::DownloadDump,
-                client::download_dump(&endpoint, &token, insecure_http, &project_id),
+                client::download_dump(
+                    &LockFreeProbe,
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &project_id,
+                ),
             ),
         };
         let Ok(zip) = downloaded else { return Ok(None) };
@@ -939,6 +957,7 @@ impl AppState {
         // if - and only if - the user chose to abandon the local copy.
         let preserved_view = self
             .replace_cache_stalx_with(
+                &cleared,
                 &mut dump,
                 &entry,
                 &dest,
@@ -1182,18 +1201,29 @@ impl AppState {
         };
         // Download the dump (routed through the auth handler like the pull, so a dead
         // token forces re-login).
+        /// [#576 A8 NF-A8-BYPASS] The adoption's download licence. Local to this
+        /// function, so no other flow can borrow it.
+        struct AdoptionDownload;
+        impl client::DumpLicence for AdoptionDownload {}
         let zip = self
             .speleodb_handle_auth(
                 Endpoint::DownloadDump,
                 match adopt_at.as_deref() {
                     Some(sha) => client::download_dump_at_hash(
+                        &AdoptionDownload,
                         &endpoint,
                         &token,
                         insecure_http,
                         &project_id,
                         sha,
                     ),
-                    None => client::download_dump(&endpoint, &token, insecure_http, &project_id),
+                    None => client::download_dump(
+                        &AdoptionDownload,
+                        &endpoint,
+                        &token,
+                        insecure_http,
+                        &project_id,
+                    ),
                 },
             )
             .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
@@ -2216,16 +2246,34 @@ impl AppState {
         // push landing in between handed back commit B's tree labelled A. This is the
         // window the pull and adopt paths were both changed to close; the fast-forward
         // is the one that kept the claim without the fix.
+        /// [#576 A8 NF-A8-BYPASS] The fast-forward's download and replace licence.
+        /// Nothing runs before its download: the local-edits guard is the replace's
+        /// own (`policy`), and every caller reached this verb from a reconcile
+        /// verdict. Local to this function, so no other flow can borrow it.
+        struct FastForwardPull;
+        impl client::DumpLicence for FastForwardPull {}
+        impl super::speleodb_cache::ReplaceLicence for FastForwardPull {}
         let pinned = usable_tip(tip.map(str::to_owned), project_id);
         let zip = self.speleodb_handle_auth(
             Endpoint::DownloadDump,
             match pinned.as_deref() {
-                Some(sha) => {
-                    client::download_dump_at_hash(endpoint, token, insecure_http, project_id, sha)
-                }
+                Some(sha) => client::download_dump_at_hash(
+                    &FastForwardPull,
+                    endpoint,
+                    token,
+                    insecure_http,
+                    project_id,
+                    sha,
+                ),
                 // No usable tip: take HEAD as before, and say so by dating it `Unknown`
                 // rather than with a sha these bytes are not known to be.
-                None => client::download_dump(endpoint, token, insecure_http, project_id),
+                None => client::download_dump(
+                    &FastForwardPull,
+                    endpoint,
+                    token,
+                    insecure_http,
+                    project_id,
+                ),
             },
         )?;
         let mut dump = dump::Dump::open(&zip)?;
@@ -2260,6 +2308,7 @@ impl AppState {
         // undo/redo, so hoisting the close ahead of the extract is behaviour-
         // preserving.
         let preserved_view = self.replace_cache_stalx_with(
+            &FastForwardPull,
             &mut dump,
             &entry,
             &dest,
@@ -2349,7 +2398,7 @@ mod pull_guard {
     use std::path::Path;
 
     use super::AppState;
-    use crate::core::state::speleodb_cache::LocalEditsPolicy;
+    use crate::core::state::speleodb_cache::{LocalEditsPolicy, ReplaceLicence};
     use crate::speleodb::{client, SpeleoDbError};
 
     /// Proof that the pull's local un-pushed-edits guard has run (or that the caller
@@ -2357,6 +2406,11 @@ mod pull_guard {
     pub(super) struct LocalEditsCleared {
         _guarded: (),
     }
+
+    /// [#576 A8 NF-A8-BYPASS] The pull's download and its cache replace both take
+    /// this proof, so neither can be written above the guard.
+    impl client::DumpLicence for LocalEditsCleared {}
+    impl ReplaceLicence for LocalEditsCleared {}
 
     impl AppState {
         /// The un-pushed-edits guard, BEFORE the download: purely local (the cached
@@ -2389,10 +2443,15 @@ mod pull_guard {
             tip: Option<&str>,
         ) -> Result<Vec<u8>, SpeleoDbError> {
             match tip {
-                Some(sha) => {
-                    client::download_dump_at_hash(endpoint, token, insecure_http, project_id, sha)
-                }
-                None => client::download_dump(endpoint, token, insecure_http, project_id),
+                Some(sha) => client::download_dump_at_hash(
+                    self,
+                    endpoint,
+                    token,
+                    insecure_http,
+                    project_id,
+                    sha,
+                ),
+                None => client::download_dump(self, endpoint, token, insecure_http, project_id),
             }
         }
     }

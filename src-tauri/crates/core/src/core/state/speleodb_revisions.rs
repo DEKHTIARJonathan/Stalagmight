@@ -452,6 +452,11 @@ impl AppState {
     /// revision whose history a forward step loads, regardless of the mode in the older
     /// copy currently open.
     pub fn speleodb_rewind_target(&self) -> Result<Option<SpeleoRewindTarget>, SpeleoErrorDto> {
+        /// [#576 A8 NF-A8-BYPASS] This query's download licence. It reads the child
+        /// revision's undo policy and installs nothing, so nothing has to run before
+        /// it. Local to this function, so no other flow can borrow it.
+        struct AffordanceProbe;
+        impl client::DumpLicence for AffordanceProbe {}
         let Some(candidate) = self.speleodb_rewind_candidate()? else {
             return Ok(None);
         };
@@ -460,6 +465,7 @@ impl AppState {
             .speleodb_handle_auth(
                 Endpoint::DownloadDump,
                 client::download_dump_at_hash(
+                    &AffordanceProbe,
                     &candidate.endpoint,
                     &candidate.token,
                     candidate.insecure_http,
@@ -858,7 +864,7 @@ mod restore_order {
     use std::path::{Path, PathBuf};
 
     use super::super::speleodb::local_dto;
-    use super::super::speleodb_cache::{InheritedUndo, LocalEditsPolicy};
+    use super::super::speleodb_cache::{InheritedUndo, LocalEditsPolicy, ReplaceLicence};
     use super::{downloaded_revision_undo_mode, AppState};
     use crate::speleodb::{client, dump, SpeleoDbError, SpeleoErrorDto};
 
@@ -873,6 +879,12 @@ mod restore_order {
     pub(super) struct ChildPolicyChecked {
         _checked: (),
     }
+
+    /// [#576 A8 NF-A8-BYPASS] The swap's download takes the Unwind preconditions'
+    /// proof and its cache replace the child-policy proof, so neither raw step can
+    /// be written above the check it must follow.
+    impl client::DumpLicence for UnwindCleared {}
+    impl ReplaceLicence for ChildPolicyChecked {}
 
     /// The acquisition record as it stood BEFORE the reload: the last point the
     /// pre-reload truth exists.
@@ -931,7 +943,7 @@ mod restore_order {
             project_id: &str,
             hexsha: &str,
         ) -> Result<Vec<u8>, SpeleoDbError> {
-            client::download_dump_at_hash(endpoint, token, insecure_http, project_id, hexsha)
+            client::download_dump_at_hash(self, endpoint, token, insecure_http, project_id, hexsha)
         }
 
         /// A forward step loads the CHILD revision's stack, so the child's own policy
@@ -977,7 +989,7 @@ mod restore_order {
             policy: LocalEditsPolicy,
             undo: InheritedUndo,
         ) -> Result<HashMap<String, String>, SpeleoDbError> {
-            state.replace_cache_stalx_with(dump, entry, dest, project_id, policy, undo)
+            state.replace_cache_stalx_with(self, dump, entry, dest, project_id, policy, undo)
         }
     }
 

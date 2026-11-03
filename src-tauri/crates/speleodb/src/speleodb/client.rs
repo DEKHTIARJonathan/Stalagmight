@@ -800,9 +800,43 @@ pub fn fetch_user_email(
     Ok(info.email)
 }
 
+/// [#576 A8 NF-A8-BYPASS] Proof a caller hands [`download_dump`] /
+/// [`download_dump_at_hash`]: whatever had to run before the download did.
+///
+/// The orchestration's orderings are proof types (`core::state`): the pull's
+/// un-pushed-edits guard returns one, the revision swap's Unwind preconditions
+/// return one, the adoption's lock decision returns one. A proof stops a REORDER
+/// at its own call site, but a raw wire call taking only strings could still be
+/// written above the step it must follow, skipping the proof altogether. So the
+/// download takes the proof as its first argument, and a call made without one
+/// does not compile.
+///
+/// Implemented only by those proof types, by a function-local marker in each
+/// flow whose download has no precondition (named for why), and by
+/// [`TestWire`]. Implementing it anywhere else is the bypass this trait exists
+/// to stop.
+pub trait DumpLicence {}
+
+/// [#576 A8 NF-A8-BYPASS] The [`DumpLicence`] of [`upload_auto`]: the push's
+/// quiescent snapshot (`core::state`'s `PushSnapshot`, made only after the
+/// pre-push flush). Same rule - only that proof and [`TestWire`] implement it.
+pub trait UploadLicence {}
+
+/// The licence tests drive the wire calls with: they test the call, not the
+/// orchestration that earns one. Compiled only into test builds.
+#[cfg(any(test, feature = "test-support"))]
+pub struct TestWire;
+
+#[cfg(any(test, feature = "test-support"))]
+impl DumpLicence for TestWire {}
+
+#[cfg(any(test, feature = "test-support"))]
+impl UploadLicence for TestWire {}
+
 /// `GET /api/v2/projects/{id}/download/dump/` - download the project's working
 /// tree (HEAD) as a ZIP. Returns the raw ZIP bytes for [`super::dump`] to handle.
 pub fn download_dump(
+    _licence: &impl DumpLicence,
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -825,6 +859,7 @@ pub fn download_dump(
 /// retry) but pinned to `hexsha` rather than HEAD. The caller validates `hexsha`
 /// at the trust boundary before it reaches this URL interpolation.
 pub fn download_dump_at_hash(
+    _licence: &impl DumpLicence,
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -930,6 +965,7 @@ fn build_upload_parts(
 /// mutex. `idempotent = false` → runs at most once (a commit must not
 /// double-submit on a mid-response failure).
 pub fn upload_auto(
+    _licence: &impl UploadLicence,
     base: &str,
     token: &str,
     insecure_http: bool,
@@ -1499,8 +1535,8 @@ mod tests {
         human_bytes, json, list_teams, list_user_autocomplete, list_user_permissions, mime_for,
         parse_error_message, parse_upload_auto_response, remove_team_permission,
         remove_user_permission, send, set_user_permission, spec, with_retry, Connection, Retry,
-        RevisionHistory, UserInfo, DEFAULT_MAX_BYTES, DUMP_DOWNLOAD_TIMEOUT, DUMP_MAX_BYTES,
-        REQUEST_TIMEOUT, REVERIFY_PROBE_TIMEOUT, UPLOAD_TIMEOUT,
+        RevisionHistory, TestWire, UserInfo, DEFAULT_MAX_BYTES, DUMP_DOWNLOAD_TIMEOUT,
+        DUMP_MAX_BYTES, REQUEST_TIMEOUT, REVERIFY_PROBE_TIMEOUT, UPLOAD_TIMEOUT,
     };
     use crate::speleodb::{Permission, SpeleoDbError, TransportCause};
 
@@ -2160,6 +2196,7 @@ mod tests {
         let mut stub = LoopbackStub::start(vec![200]);
         let base = stub.base.clone();
         let project = super::upload_auto(
+            &TestWire,
             &base,
             "tok",
             false,
@@ -2448,7 +2485,7 @@ mod tests {
         // HEAD. A missing/misplaced SHA would silently restore the wrong revision.
         let mut stub = LoopbackStub::start(vec![200]);
         let base = stub.base.clone();
-        let _ = download_dump_at_hash(&base, "tok", false, WIRE_PID, "abc1234");
+        let _ = download_dump_at_hash(&TestWire, &base, "tok", false, WIRE_PID, "abc1234");
         stub.join();
         let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
         assert!(
@@ -2636,7 +2673,8 @@ mod tests {
         });
 
         let base = format!("http://127.0.0.1:{port}");
-        let body = download_dump(&base, "tok", false, WIRE_PID).expect("an 10 MiB+ dump downloads");
+        let body = download_dump(&TestWire, &base, "tok", false, WIRE_PID)
+            .expect("an 10 MiB+ dump downloads");
         let _ = handle.join();
         assert_eq!(
             body.len(),
@@ -2765,7 +2803,7 @@ mod tests {
         });
 
         let base = format!("http://127.0.0.1:{port}");
-        let err = download_dump(&base, "tok", false, WIRE_PID)
+        let err = download_dump(&TestWire, &base, "tok", false, WIRE_PID)
             .expect_err("a 302 must not be followed, and is not a success");
         assert!(
             matches!(err, SpeleoDbError::Status { status: 302, .. }),
