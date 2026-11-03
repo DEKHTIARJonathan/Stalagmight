@@ -164,7 +164,8 @@ export function useSurveyLayerSync({
     if (surveyLayerRef.current) {
       surveyLayerRef.current.applyThemeColors(getMapThemeColors());
     }
-  }, [resolvedTheme, mapLoaded]);
+    // surveyLayerRef is MapCanvas's useRef object: stable, listed for the linter only.
+  }, [resolvedTheme, mapLoaded, surveyLayerRef]);
 
   // Re-apply map background color to match the active theme. Not while the
   // WebGL context is lost (no style; the write would throw): styleEpoch runs
@@ -173,7 +174,8 @@ export function useSurveyLayerSync({
     if (map.current && mapLoaded && hasLiveStyle(map.current)) {
       map.current.setPaintProperty('background', 'background-color', getMapThemeColors().background);
     }
-  }, [resolvedTheme, mapLoaded, styleEpoch]);
+    // map is MapCanvas's useRef object: stable, listed for the linter only.
+  }, [resolvedTheme, mapLoaded, styleEpoch, map]);
 
   // Sync selection state with SurveyLayer for visual feedback.
   // useLayoutEffect (not useEffect) so it clears before paint, in the same commit
