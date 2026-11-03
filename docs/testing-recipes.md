@@ -1678,6 +1678,70 @@ mod tests {
 
 Async tests use `#[tokio::test]`.
 
+### Shared test fixtures
+
+The setup the Rust tests share lives in two modules (#576 E1):
+`stalagmight_models::test_fixtures` (survey data) and
+`stalagmight_core::test_fixtures` (`AppState`, plus a re-export of the models
+builders, so a core or app-crate test imports from one place). Both are
+`cfg(any(test, feature = "test-support"))`: every member's own tests and the app
+crate's tests (through its `[dev-dependencies]`) see them, production builds never
+compile them. Inside a member the path is `crate::test_fixtures` (models, core) or
+`crate::models::test_fixtures` (export, persistence); the app crate imports
+`stalagmight_core::test_fixtures`.
+
+| fixture | what the test gets |
+|---|---|
+| `state_with_project(name)` | a fresh `AppState` with an empty project made by `Command::CreateProject` (no location); fails the test if the create fails |
+| `state_holding(project)` | a fresh `AppState` holding `project` exactly as given (`set_project_for_tests`): no command runs, no history |
+| `state_with_null_sink()` | a fresh `AppState`, no project, with `NullEventSink` installed - what the progress-reporting load and create paths need |
+| `section_with_shots(&state, name, shots)` | `Command::CreateSection` with fixed defaults (color `#3388FF`, no surveyor, date or direction); the new id |
+| `shot(length)` | azimuth 45 / 225, depth 10 / 11 |
+| `straight_shot(azimuth, length)` | azimuth / azimuth, depth 0 / 0 |
+| `heading_shot(azimuth, length)` | azimuth / (azimuth + 180) mod 360, depth 10 / 10 |
+| `bare_shot(length)` | only a length |
+| `.with_length` `.with_azimuths` `.with_depths` `.with_pitches` `.with_lrud` `.with_kind` `.with_uuid` `.with_comment` `.with_marker_index` `.with_temperature` | setters on `ShotData`: each replaces exactly the fields it names |
+
+```rust
+use crate::test_fixtures::{section_with_shots, state_with_project, straight_shot};
+
+#[test]
+fn a_descending_section_keeps_its_length() {
+    let state = state_with_project("CaveA");
+    let section = section_with_shots(
+        &state,
+        "SectionA",
+        vec![straight_shot(90.0, 5.0).with_depths(0.0, 1.0)],
+    );
+    // ...
+}
+```
+
+How to use them:
+
+- Start a state test from a fixture, not from `AppState::new()` plus an inline
+  `Command::CreateProject`. Keep the inline create only when the create is what
+  the test is about (it reads the create's answer, or the project needs a
+  location).
+- Build a shot from a fixture plus setters. A file that needs its own shape many
+  times may name it in a one-line local wrapper over them; a shape a third file
+  needs belongs in `models::test_fixtures` instead. There is no private event
+  sink to write either: use `NullEventSink` (or `state_with_null_sink()`).
+- Two kinds of builder keep an exhaustive `ShotData { .. }` literal on purpose:
+  the fuzz generators (`random_shot`, `hostile_shot`) and fixtures whose point is
+  to name every field (`base_shot_data`), so a new field fails to compile there
+  until someone decides how to fill it.
+- A member's own integration tests (`crates/<name>/tests/`) link the member
+  without its `test-support` feature, so `stalagmight_core::test_fixtures` is not
+  visible to `crates/core/tests/`; the app's `src-tauri/tests` sees both modules.
+- Nothing enforces this (#576 E1-D2 chose docs and review over a gate).
+
+`core/state/tests.rs` is a module root over topic files in `core/state/tests/`
+(each a `*_tests.rs` declared `#[cfg(test)]` there, so the file-size ratchet and
+the source scans treat it as a test file). Add a test to the topic file it
+belongs with, or a new topic file; a helper more than one topic file uses lives
+in `tests.rs`, one only a single file uses lives in that file.
+
 ### Config isolation
 
 `AppState::new()` LOADS the global config and much of the state module writes it
