@@ -24,129 +24,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { useMemo, useState } from 'react';
 
-const h = vi.hoisted(() => {
-  type Handler = (e?: unknown) => void;
-  const state = { map: null as FakeMap | null, markersCreated: 0 };
-  class FakeMap {
-    private handlers = new Map<string, Set<Handler>>();
-    private container: HTMLElement;
-    dragRotate = { disable() {} };
-    touchPitch = { disable() {} };
-    touchZoomRotate = { disableRotation() {} };
-    keyboard = { disable() {} };
-    doubleClickZoom = { disable() {} };
-    constructor(opts: { container: HTMLElement }) {
-      this.container = opts.container;
-      state.map = this;
-    }
-    addControl() {}
-    on(ev: string, fn: Handler) {
-      if (!this.handlers.has(ev)) this.handlers.set(ev, new Set());
-      this.handlers.get(ev)!.add(fn);
-    }
-    off(ev: string, fn: Handler) {
-      this.handlers.get(ev)?.delete(fn);
-    }
-    once() {}
-    fire(ev: string) {
-      for (const fn of [...(this.handlers.get(ev) ?? [])]) fn({});
-    }
-    getBounds() {
-      return { contains: () => true, getCenter: () => ({ lng: 0, lat: 0 }) };
-    }
-    getCenter() {
-      return { lng: 0, lat: 0 };
-    }
-    getZoom() {
-      return 10;
-    }
-    getContainer() {
-      return this.container;
-    }
-    getSource() {
-      return undefined;
-    }
-    fitBounds() {}
-    easeTo() {}
-    flyTo() {}
-    setMaxBounds() {}
-    setMinZoom() {}
-    triggerRepaint() {}
-    remove() {}
-  }
-  class FakeMarker {
-    private el: HTMLElement;
-    constructor(opts: { element: HTMLElement }) {
-      this.el = opts.element;
-      state.markersCreated += 1;
-    }
-    setLngLat() {
-      return this;
-    }
-    addTo() {
-      document.body.appendChild(this.el);
-      return this;
-    }
-    remove() {
-      this.el.remove();
-    }
-    getElement() {
-      return this.el;
-    }
-  }
-  class FakePopup {
-    setLngLat() {
-      return this;
-    }
-    setDOMContent() {
-      return this;
-    }
-    addTo() {
-      return this;
-    }
-    remove() {}
-  }
-  class FakeBounds {
-    constructor(
-      private sw: [number, number],
-      private ne: [number, number]
-    ) {}
-    getSouthWest() {
-      return { lng: this.sw[0], lat: this.sw[1] };
-    }
-    getNorthEast() {
-      return { lng: this.ne[0], lat: this.ne[1] };
-    }
-    getCenter() {
-      return { lng: (this.sw[0] + this.ne[0]) / 2, lat: (this.sw[1] + this.ne[1]) / 2 };
-    }
-  }
-  class Noop {}
-  return { state, FakeMap, FakeMarker, FakePopup, FakeBounds, Noop };
-});
-
-vi.mock('maplibre-gl', () => ({
-  default: {
-    Map: h.FakeMap,
-    Marker: h.FakeMarker,
-    Popup: h.FakePopup,
-    LngLatBounds: h.FakeBounds,
-    NavigationControl: h.Noop,
-    ScaleControl: h.Noop,
-  },
-}));
-vi.mock('../GlobalSurveyLayer', () => ({
-  default: class {
-    update() {}
-    setVisible() {}
-    setSelectedSystems() {}
-    applyThemeColors() {}
-    setPrecision() {}
-    setSearchFilter() {}
-    destroy() {}
-  },
-  generateSystemColor: () => '#336699',
-}));
+vi.mock('maplibre-gl', async () => (await import('../../../test/factories/globalViewMap')).maplibreModule);
+vi.mock('../GlobalSurveyLayer', async () =>
+  (await import('../../../test/factories/globalViewMap')).globalSurveyLayerModule,
+);
 vi.mock('../../../utils/ipc');
 
 import GlobalViewMap from '../GlobalViewMap';
@@ -155,6 +36,7 @@ import type { ProjectMetadata } from '../../../types/project';
 import { testIdPart } from '../../../utils/testId';
 import { useShallow } from 'zustand/react/shallow';
 import { invokeIpcMock } from '../../../test/factories/ipc';
+import { fakeGlobalView as h } from '../../../test/factories/globalViewMap';
 
 const GOOD = '/caves/CaveA.stalx';
 const BROKEN = '/caves/CaveB.stalx';
