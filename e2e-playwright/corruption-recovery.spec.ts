@@ -37,6 +37,7 @@ function setupRecoveryMocks(page: Page): Promise<void> {
 
     overrides.attempt_repair = {
       success: true,
+      backupPath: '/mock/corrupt-project.stalx.bak.1',
       message: 'Repair complete. REINDEX and VACUUM applied successfully.',
     };
 
@@ -65,6 +66,8 @@ function setupRecoveryMocks(page: Page): Promise<void> {
     overrides.restore_from_backup = 'File restored successfully from backup.';
 
     overrides.export_salvageable_data = {
+      projectName: 'CaveA',
+      projectLocation: null,
       sectionCount: 3,
       shotCount: 42,
       mergeCount: 2,
@@ -238,6 +241,7 @@ test.describe('Corruption Recovery Dialog', () => {
       const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.attempt_repair = {
         success: false,
+        backupPath: '/mock/corrupt-project.stalx.bak.1',
         message: 'Database corruption too severe for automatic repair.',
       };
       (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;
@@ -259,6 +263,7 @@ test.describe('Corruption Recovery Dialog', () => {
       const overrides = (window as E2EWindow).__MOCK_IPC_OVERRIDES__ ?? {};
       overrides.attempt_repair = {
         success: false,
+        backupPath: '/mock/corrupt-project.stalx.bak.1',
         message: 'Repair failed.',
       };
       (window as E2EWindow).__MOCK_IPC_OVERRIDES__ = overrides;

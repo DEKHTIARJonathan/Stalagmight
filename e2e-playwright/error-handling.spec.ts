@@ -95,7 +95,6 @@ test.describe('Error Handling', () => {
       const expectOpenErrorSurfaced = async (message: string) => {
         await setIpcOverrides(page, {
           load_project_full: { __throw: message },
-          load_project: { __throw: message },
           'plugin:dialog|open': '/mock/broken-project.stalx',
         });
 
@@ -124,7 +123,6 @@ test.describe('Error Handling', () => {
 
       await setIpcOverrides(page, {
         import_dmp: { __throw: 'Invalid DMP header: expected version 2-5, got invalid data' },
-        parse_dmp: { __throw: 'Invalid DMP header: expected version 2-5, got invalid data' },
       });
 
       await page.keyboard.press('Control+i');
@@ -146,7 +144,6 @@ test.describe('Error Handling', () => {
 
       await setIpcOverrides(page, {
         import_dmp: { __throw: 'Truncated DMP file: unexpected end of data' },
-        parse_dmp: { __throw: 'Truncated DMP file: unexpected end of data' },
       });
 
       await page.keyboard.press('Control+i');

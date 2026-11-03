@@ -147,7 +147,6 @@ test.describe('GlobalView Recent Projects - search, table view, missing files', 
       const message = 'File not found: the specified file does not exist';
       await setIpcOverrides(page, {
         load_project_full: { __throw: message },
-        load_project: { __throw: message },
       });
 
       const loadingError = page.getByTestId('loading-progress');

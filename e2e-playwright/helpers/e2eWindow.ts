@@ -15,6 +15,7 @@ import type { ConnectivityResult } from '../../src/types/ipc/ConnectivityResult'
 import type { useGasPlanStore } from '../../src/store/gasPlanStore';
 import type { useProjectStore } from '../../src/store/projectStore';
 import type { useUIStore } from '../../src/store/uiStore';
+import type { IpcOverrides } from './ipcOverrides';
 
 /**
  * The stores `src/main.tsx` puts on `window.__E2E_TEST__` in the dev/test/E2E
@@ -59,7 +60,7 @@ export type E2EWindow = typeof window & {
    * Command -> canned reply (or `{ __throw: message }`), read by the mock's
    * dispatcher before its own handlers; see helpers/ipcOverrides.ts.
    */
-  __MOCK_IPC_OVERRIDES__?: Record<string, unknown>;
+  __MOCK_IPC_OVERRIDES__?: IpcOverrides;
   /**
    * What `check_merge_connectivity` returns instead of the mock's default, passed
    * through as given - so it is a whole `ConnectivityResult` (#576 NF-W7F-3: a reply
