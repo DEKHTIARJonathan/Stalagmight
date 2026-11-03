@@ -121,4 +121,28 @@ describe('distance gradient: a field that cannot be computed (#576 C7-MSG)', () 
     await actMicrotasks(5);
     expect(failureToasts()).toHaveLength(2);
   });
+
+  // [#576 RV7b-14] The failure flag hides the "computing" cue (C7-CUE). It used to
+  // be cleared only by a successful field, so after one failure the next enable
+  // computed with no cue at all.
+  it('switching the overlay off clears the failure, so the next enable shows its computing cue', async () => {
+    const setDistanceField = vi.fn();
+    invokeIpcMock.mockRejectedValueOnce(new Error('distance field failed (test)'));
+    const { result, rerender } = renderHook((props: Options) => useAnalyticalOverlays(props), {
+      initialProps: options('t1', setDistanceField),
+    });
+    await flush();
+    expect(result.current.distanceFieldFailed).toBe(true);
+
+    rerender(options('t1', setDistanceField, false));
+    await flush();
+    expect(result.current.distanceFieldFailed).toBe(false);
+
+    // Re-enabled: the recompute is still in flight, and nothing has failed yet.
+    invokeIpcMock.mockReturnValueOnce(new Promise(() => {}));
+    rerender(options('t1', setDistanceField, true));
+    await flush();
+    expect(invokeIpcMock).toHaveBeenCalledTimes(2);
+    expect(result.current.distanceFieldFailed).toBe(false);
+  });
 });

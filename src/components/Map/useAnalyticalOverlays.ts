@@ -120,6 +120,9 @@ export function useAnalyticalOverlays({
   useEffect(() => {
     if (!showDistanceGradient) {
       distanceFailureToldRef.current = false;
+      // [#576 RV7b-14] The failure hides the "computing" cue (C7-CUE); left set,
+      // the next enable recomputed with no cue at all.
+      setDistanceFieldFailed(false);
       return undefined;
     }
     let cancelled = false;
