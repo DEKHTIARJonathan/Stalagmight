@@ -1,4 +1,4 @@
-//! [#576 RV8c-2] A pinned plan is monotone in its gas.
+//! [#576 RV8c-2] A pinned plan is monotone in its gas, measured against the plan without its pins.
 //!
 //! The rule this replaced (NF-PGAS3-1) priced a pin only when the pin-free route passed it, so
 //! LESS gas - which can move the pin-free route to another branch, or end it short of the pin -
@@ -14,20 +14,31 @@
 //! to 300 bar without it. Above the rating under the cap, and under Free with a usable allowance
 //! below the fill, the decided gauge rule (#576 A18(e)) credits a LOWER fill MORE even without a
 //! pin - the same usable bar sits lower on the Z curve - so there only the cylinder's size is
-//! lowered. The loop sweep (#576 RV9a-1): caves with a deep loop off a shallow line - closed by a
-//! loop closure or a merge - so a station on the line is reached two ways, along the line on less
-//! gas or round the loop on less scooter range; most plans scootered, with the range set near the
-//! line's length, half the drops pinned on the loop and most endpoints on the line beyond it; the
-//! same inputs lowered, and the scooter's range too (a unit's burn time, or a larger reserve).
+//! lowered. The loop sweep (#576 RV9a-1): caves with a deep loop off a shallow line - one end
+//! merged onto it, the other tied to it by a loop closure - so a station on the line is reached two
+//! ways, along the line on less gas or round the loop on less scooter range; most plans scootered,
+//! with the range set near the line's length, half the drops pinned on the loop and most endpoints
+//! on the line beyond it. It lowers every fill, those windows included (overfills under the cap
+//! too), a Free allowance, a cylinder's size, and the scooter's range (a unit's burn time, or a
+//! larger reserve).
 //!
-//! What is asserted for every lowering, with nothing set aside: the budget never rises, no station
-//! is newly painted (the overlay is priced on the route through the pins, D4), the turn never moves
-//! later. For every plan: the pinned plan never has more budget than the same plan without its
-//! pins, never prices a station below it, and paints only stations it affords on gas. Every station
-//! of a plan's route up to its turnaround, and the turnaround, is painted, and the turn spends no
-//! more scooter range than the rig has (RV9a-1: the pinned dive turned round a loop on a station
-//! the overlay left dark). Each sweep is a fixed set of plans from a fixed seed, so it runs the
-//! same cases in the same few seconds every time.
+//! So what is asserted is scoped to what the PINS may do, not that less gas never shows more reach
+//! (#576 RV9a-5-D1, "keep physics, document": in those windows a lower fill shows a larger budget
+//! with or without pins, docs/gas-planning.md "A lower fill can hold more gas"). For every
+//! lowering, with nothing set aside:
+//! - the pin rules: the pinned budget rises by no more than the plan without pins' budget does,
+//!   and not at all where that one does not rise; and a lowering that does not raise the pinned
+//!   budget paints no new station and does not move the turn later (the route through the pins
+//!   does not depend on the gas, D1-D4);
+//! - the tree sweep's inputs keep the plan without pins from gaining, so there the pinned budget
+//!   never rises at all; the loop sweep counts the lowerings that raise the plan without pins.
+//!
+//! For every plan, lowered or not, pinned against pin-free: the pinned plan never has more budget,
+//! never prices a station below the plan without pins, and paints only stations that plan affords
+//! on gas. Every station of a plan's route up to its turnaround, and the turnaround, is painted,
+//! and the turn spends no more scooter range than the rig has (RV9a-1: the pinned dive turned
+//! round a loop on a station the overlay left dark). Each sweep is a fixed set of plans from a
+//! fixed seed, so it runs the same cases in the same few seconds every time.
 //!
 //! One difference from the plan without pins is allowed, and only round a loop on a scooter: the
 //! overlay prices the range along the pinned walk, while the plan without pins prices it along its
@@ -49,6 +60,7 @@
 )]
 
 use super::model::{CylRole, Cylinder, Diver, GasReachField, PlanSegment, TankMaterial};
+use super::physics::deliverable_gas;
 use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset};
 use crate::{ClosureStrategy, Project, SectionData, ShotData, StationRef};
 
@@ -229,10 +241,17 @@ fn random_loop_cave(r: &mut Rng) -> LoopCave {
     }
 }
 
-fn random_cylinder(r: &mut Rng, role: CylRole, conservative: bool) -> Cylinder {
+/// A random cylinder. Under the conservative cap its fill stays at or below the rating, unless
+/// `overfill`, which lets it run up to 15% past it (to 300 bar at most).
+fn random_cylinder(r: &mut Rng, role: CylRole, conservative: bool, overfill: bool) -> Cylinder {
     let rated = [176.0, 200.0, 207.0, 232.0, 300.0][r.pick(5)];
     let fill = if conservative {
-        r.range(30.0, rated)
+        let top = if overfill {
+            (rated * 1.15_f64).min(300.0).max(rated)
+        } else {
+            rated
+        };
+        r.range(30.0, top)
     } else {
         r.range(30.0, 300.0)
     };
@@ -292,8 +311,12 @@ impl Plan {
     }
 }
 
-/// The strategy, the rig and the stage reserve, drawn the same way for both sweeps.
-fn random_rig(r: &mut Rng) -> (ReservePreset, bool, usize, Vec<Cylinder>, GasConfig) {
+/// The strategy, the rig and the stage reserve, drawn the same way for both sweeps (`overfill`
+/// as in [`random_cylinder`]).
+fn random_rig(
+    r: &mut Rng,
+    overfill: bool,
+) -> (ReservePreset, bool, usize, Vec<Cylinder>, GasConfig) {
     let preset = [
         ReservePreset::OneStage,
         ReservePreset::TwoStage,
@@ -302,9 +325,9 @@ fn random_rig(r: &mut Rng) -> (ReservePreset, bool, usize, Vec<Cylinder>, GasCon
     let conservative = r.unit() < 0.7;
     let backs = 1 + r.pick(2);
     let mut rig: Vec<Cylinder> = (0..backs)
-        .map(|_| random_cylinder(r, CylRole::BackGas, conservative))
+        .map(|_| random_cylinder(r, CylRole::BackGas, conservative, overfill))
         .collect();
-    rig.extend((0..=r.pick(3)).map(|_| random_cylinder(r, CylRole::Stage, conservative)));
+    rig.extend((0..=r.pick(3)).map(|_| random_cylinder(r, CylRole::Stage, conservative, overfill)));
     let mut cfg = GasConfig {
         default_reserve: preset,
         conservative_tank_gas: conservative,
@@ -317,7 +340,7 @@ fn random_rig(r: &mut Rng) -> (ReservePreset, bool, usize, Vec<Cylinder>, GasCon
 /// The tree sweep's plan, drawn exactly as the sweep always has.
 fn tree_plan(r: &mut Rng) -> Plan {
     let (project, origin, stations) = random_cave(r);
-    let (preset, conservative, backs, rig, mut cfg) = random_rig(r);
+    let (preset, conservative, backs, rig, mut cfg) = random_rig(r, false);
     let scootered = r.unit() < 0.25;
     if scootered {
         cfg.dpv = Some(DpvRig {
@@ -364,13 +387,13 @@ fn tree_plan(r: &mut Rng) -> Plan {
     }
 }
 
-/// The loop sweep's plan: a [`random_loop_cave`], a scooter on four plans in five, ridden below
-/// both units' cruise so a metre of line costs more than a metre of range, with the usable range
-/// set to between 0.3 and 1.5 times the line's length to the loop's end; most endpoints on the
-/// line past the loop, half the pins on the loop.
+/// The loop sweep's plan: a [`random_loop_cave`], cylinders that can be overfilled under the cap,
+/// a scooter on four plans in five, ridden below both units' cruise so each metre of line spends
+/// more than a metre of range, with the usable range set to between 0.3 and 1.5 times the line's
+/// length to the loop's end; most endpoints on the line past the loop, half the pins on the loop.
 fn loop_plan(r: &mut Rng) -> Plan {
     let cave = random_loop_cave(r);
-    let (preset, conservative, backs, rig, mut cfg) = random_rig(r);
+    let (preset, conservative, backs, rig, mut cfg) = random_rig(r, true);
     let scootered = r.unit() < 0.8;
     let speed = r.range(10.0, 22.0);
     if scootered {
@@ -516,17 +539,18 @@ fn route_is_painted(f: &GasReachField) -> Result<usize, String> {
     Ok(route.len())
 }
 
-/// Lower one input of `plan`: a cylinder's fill (only where the strategy's own credit is monotone
-/// in it, module doc) or size, or - with `lower_range` - the scooter's range. Returns what it did,
-/// the lowered rig and config, and the cylinder it lowered, if it was one.
+/// Lower one input of `plan`: a cylinder's fill or size, or - with `every_input` - a Free
+/// allowance or the scooter's range. Without `every_input` (the tree sweep) a fill is lowered only
+/// where the strategy's own credit is monotone in it (module doc); with it, any fill. Returns what
+/// it did, the lowered rig and config, and the cylinder it lowered, if it was one.
 fn lower_one(
     r: &mut Rng,
     plan: &Plan,
-    lower_range: bool,
+    every_input: bool,
 ) -> (String, Vec<Cylinder>, GasConfig, Option<usize>) {
     let mut rig = plan.rig.clone();
     let mut cfg = plan.cfg.clone();
-    if lower_range && plan.scootered() && r.unit() < 0.3 {
+    if every_input && plan.scootered() && r.unit() < 0.3 {
         let dpv = cfg.dpv.as_mut().unwrap();
         let what = match r.pick(3) {
             0 => {
@@ -560,7 +584,14 @@ fn lower_one(
     let c = &mut rig[i];
     let fill_is_monotone = plan.preset != ReservePreset::Free
         && (!plan.conservative || c.fill_bar <= c.rated_pressure_bar);
-    let what = if fill_is_monotone && r.unit() < 0.6 {
+    let what = if every_input && plan.preset == ReservePreset::Free && r.unit() < 0.25 {
+        let from = c.usable_gas_bar;
+        c.usable_gas_bar = from * r.range(0.0, 0.99);
+        format!(
+            "{:?} {i} usable {from:.2} -> {:.2} bar",
+            c.role, c.usable_gas_bar
+        )
+    } else if (every_input || fill_is_monotone) && r.unit() < 0.6 {
         let from = c.fill_bar;
         c.fill_bar = (from * r.range(0.4, 0.99)).max(5.0);
         format!("{:?} {i} fill {from:.2} -> {:.2}", c.role, c.fill_bar)
@@ -581,6 +612,11 @@ struct Tally {
     runs: usize,
     lowered_budget: usize,
     lowered_range: usize,
+    /// Lowerings that raised the budget of the plan without pins: a Free allowance below the fill
+    /// or an overfill under the cap, taken lower on the Z curve (module doc).
+    pin_free_rose: usize,
+    /// Lowerings that raised the pinned budget - each within what the plan without pins gained.
+    pinned_rose: usize,
     drained_corner: usize,
     scootered: usize,
     range_bound_turns: usize,
@@ -640,7 +676,7 @@ fn check_against_pin_free(
     found
 }
 
-fn sweep(seed: u64, plans: usize, draw: fn(&mut Rng) -> Plan, lower_range: bool) -> Tally {
+fn sweep(seed: u64, plans: usize, draw: fn(&mut Rng) -> Plan, every_input: bool) -> Tally {
     let mut r = Rng(seed);
     let mut t = Tally {
         plans,
@@ -666,37 +702,48 @@ fn sweep(seed: u64, plans: usize, draw: fn(&mut Rng) -> Plan, lower_range: bool)
         let found = check_against_pin_free(&plan, &pinned, &pin_free, &mut t);
         t.violations.extend(found.iter().map(|f| label(f)));
         for _ in 0..3 {
-            let (what, rig, cfg, lowered_cyl) = lower_one(&mut r, &plan, lower_range);
+            let (what, rig, cfg, lowered_cyl) = lower_one(&mut r, &plan, every_input);
             t.runs += 1;
             t.lowered_range += usize::from(lowered_cyl.is_none());
             let after = plan.field(&rig, &cfg, pins);
             let free_after = plan.field(&rig, &cfg, &[]);
-            assert!(
-                free_after.budget_litres <= pin_free.budget_litres + 1e-9,
-                "test domain: the pin-free budget rose ({what}), {:.3} -> {:.3} L",
-                pin_free.budget_litres,
-                free_after.budget_litres
+            let (rise, free_rise) = (
+                after.budget_litres - pinned.budget_litres,
+                free_after.budget_litres - pin_free.budget_litres,
             );
-            if after.budget_litres < pinned.budget_litres - 1e-9 {
+            t.pin_free_rose += usize::from(free_rise > 1e-9);
+            t.pinned_rose += usize::from(rise > 1e-9);
+            if rise < -1e-9 {
                 t.lowered_budget += 1;
             }
             let mut found: Vec<String> = Vec::new();
-            if after.budget_litres > pinned.budget_litres + 1e-9 {
+            // The pin rules, scoped against the plan without pins: the pins never add budget a
+            // lowering takes away - the pinned budget rises by no more than that plan's, and not
+            // at all where that plan's does not.
+            if rise > free_rise.max(0.0) + 1e-9 {
                 found.push(format!(
-                    "{what}: budget {:.3} -> {:.3} L",
-                    pinned.budget_litres, after.budget_litres
+                    "{what}: budget {:.3} -> {:.3} L, the plan without pins {:.3} -> {:.3} L",
+                    pinned.budget_litres,
+                    after.budget_litres,
+                    pin_free.budget_litres,
+                    free_after.budget_litres
                 ));
             }
-            if let Some(s) = reach_within(&after, &pinned) {
-                found.push(format!("{what}: {s:?} became reachable"));
-            }
-            match (turn_gas(&pinned), turn_gas(&after)) {
-                (Some(before), Some(now)) if now > before + 1e-6 => found.push(format!(
-                    "{what}: turn moved later, {before:.2} -> {now:.2} L of route gas ({:?} -> {:?})",
-                    pinned.final_turn_ref, after.final_turn_ref
-                )),
-                (None, Some(_)) => found.push(format!("{what}: a turnaround appeared")),
-                _ => {}
+            // One fixed pinned plan on no more budget (the range never rises either): its route
+            // does not depend on the gas, so nothing is newly painted and the turn is no later.
+            if rise <= 1e-9 {
+                if let Some(s) = reach_within(&after, &pinned) {
+                    found.push(format!("{what}: {s:?} became reachable"));
+                }
+                match (turn_gas(&pinned), turn_gas(&after)) {
+                    (Some(before), Some(now)) if now > before + 1e-6 => found.push(format!(
+                        "{what}: turn moved later, {before:.2} -> {now:.2} L of route gas ({:?} \
+                         -> {:?})",
+                        pinned.final_turn_ref, after.final_turn_ref
+                    )),
+                    (None, Some(_)) => found.push(format!("{what}: a turnaround appeared")),
+                    _ => {}
+                }
             }
             let lowered = check_against_pin_free(&plan, &after, &free_after, &mut t);
             found.extend(lowered.iter().map(|f| format!("{what}: lowered: {f}")));
@@ -715,16 +762,19 @@ fn sweep(seed: u64, plans: usize, draw: fn(&mut Rng) -> Plan, lower_range: bool)
 fn report(name: &str, t: &Tally) {
     println!(
         "pinned monotonicity sweep, {name}: {} lowered inputs ({} of them the scooter's range) \
-         over {} pinned plans ({} scootered, {} turning on the range), {} lowered the budget, {} in \
-         the D5 corner (a stage drained ahead of another), {} route stations up to the turn \
-         checked painted, {} stations painted that the plan without pins leaves dark on range \
-         alone, 0 set aside, {} violations",
+         over {} pinned plans ({} scootered, {} turning on the range), {} lowered the budget, {} \
+         raised the budget of the plan without pins (Free allowance or overfill) and {} the pinned \
+         budget, {} in the D5 corner (a stage drained ahead of another), {} route stations up to the turn checked \
+         painted, {} stations painted that the plan without pins leaves dark on range alone, 0 \
+         set aside, {} violations",
         t.runs,
         t.lowered_range,
         t.plans,
         t.scootered,
         t.range_bound_turns,
         t.lowered_budget,
+        t.pin_free_rose,
+        t.pinned_rose,
         t.drained_corner,
         t.route_stations,
         t.range_only,
@@ -736,7 +786,7 @@ fn report(name: &str, t: &Tally) {
 }
 
 #[test]
-fn lowering_any_gas_input_never_lets_a_pinned_plan_reach_further() {
+fn in_a_tree_cave_less_gas_never_lets_a_pinned_plan_gain_more_than_without_its_pins() {
     let t = sweep(0x2545_F491_4F6C_DD1D, 2500, tree_plan, false);
     report("tree caves", &t);
     assert!(
@@ -749,18 +799,26 @@ fn lowering_any_gas_input_never_lets_a_pinned_plan_reach_further() {
         t.drained_corner
     );
     assert_eq!(t.range_only, 0, "a tree cave has one way to each station");
+    // This sweep's inputs stay where the strategy's credit is monotone in them, so the plan
+    // without pins never gains, and the pin rules say the pinned budget never rises at all.
+    assert_eq!(
+        t.pin_free_rose, 0,
+        "test domain: a lowering raised the plan without pins"
+    );
     assert!(
         t.violations.is_empty(),
-        "{} pinned plans reached further on less gas, past the plan without their pins, or turned \
-         on a station the map leaves dark",
+        "{} pinned plans gained more than the plan without their pins on less gas, or turned on a \
+         station the map leaves dark",
         t.violations.len()
     );
 }
 
 #[test]
-fn a_pinned_plan_round_a_loop_never_reaches_further_on_less_gas_or_scooter_range() {
+fn round_a_loop_less_gas_or_range_never_lets_a_pinned_plan_gain_more_than_without_its_pins() {
     // #576 RV9a-1: the sweep above round a deep loop, where the pinned walk and the plan without
-    // pins take different ways to a station, most plans scootered, and the range lowered too.
+    // pins take different ways to a station, most plans scootered, the range lowered too, and
+    // (RV9a-5-D1) every fill, a Free allowance below the fill and an overfill under the cap
+    // included - where a lower fill can raise the budget, pins or none.
     let t = sweep(0x9A1C_0FFE_E5EE_D001, 2500, loop_plan, true);
     report("caves with a loop", &t);
     assert!(
@@ -777,8 +835,8 @@ fn a_pinned_plan_round_a_loop_never_reaches_further_on_less_gas_or_scooter_range
     );
     assert!(
         t.violations.is_empty(),
-        "{} pinned plans reached further on less gas or range, past the plan without their pins \
-         on gas, or turned on a station the map leaves dark",
+        "{} pinned plans gained more than the plan without their pins on less gas or range, \
+         reached past it on gas, or turned on a station the map leaves dark",
         t.violations.len()
     );
     // The geometry RV9a-1 needs: a station the pinned walk reaches in range round the loop and
@@ -787,6 +845,12 @@ fn a_pinned_plan_round_a_loop_never_reaches_further_on_less_gas_or_scooter_range
         t.range_only > 100,
         "the sweep must reach the stations only the pinned walk reaches in range ({})",
         t.range_only
+    );
+    // And the windows RV9a-5-D1 keeps: lowerings that raise the plan without pins.
+    assert!(
+        t.pin_free_rose > 50,
+        "the sweep must reach the Free and overfill windows ({})",
+        t.pin_free_rose
     );
 }
 
@@ -925,4 +989,105 @@ fn case_791_a_smaller_first_stage_no_longer_hands_the_route_to_the_second() {
         after <= before + 1e-9,
         "the turn moved later: {before:.2} -> {after:.2} L"
     );
+}
+
+#[test]
+fn a_lower_fill_can_be_credited_more_under_a_free_allowance_or_an_overfill_under_the_cap() {
+    // #576 RV9a-5-D1, "keep physics, document" (docs/gas-planning.md, "A lower fill can hold more
+    // gas"): where a rule spends a set number of bar whatever the fill - a Free allowance below
+    // the fill, or the share of the rating an overfill is held to under the cap - a lower fill
+    // takes that bar lower in the cylinder, where a bar holds more gas, so it is credited more.
+    // The rule itself does not move: each budget is exactly that bar off its own gauge, and the
+    // turn gauge reads the fill less that bar, the reserve below it never credited. The doc's
+    // numbers, for a 12 L steel tank rated 207 bar, back gas only, under the cap.
+    let mut project = Project::new("Gas".to_string(), None);
+    let line = project
+        .add_section(SectionData {
+            shots: vec![ShotData {
+                length: 50.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .id;
+    let gas_between = |from: f64, to: f64| {
+        deliverable_gas(from, 12.0, f64::INFINITY, false)
+            - deliverable_gas(to, 12.0, f64::INFINITY, false)
+    };
+    let plan = |preset: ReservePreset, fill: f64, usable: f64| {
+        let cfg = GasConfig {
+            default_reserve: preset,
+            ..GasConfig::default()
+        };
+        assert!(
+            cfg.conservative_tank_gas,
+            "the doc's numbers are under the cap"
+        );
+        let tank = Cylinder {
+            usable_gas_bar: usable,
+            ..Cylinder::new(
+                12.0,
+                207.0,
+                fill,
+                TankMaterial::Steel,
+                CylRole::BackGas,
+                None,
+            )
+            .unwrap()
+        };
+        project.compute_gas_reach_field(
+            Some(&StationRef::new(line, 0)),
+            None,
+            &Diver::new(20.0, None).unwrap(),
+            &[tank],
+            &cfg,
+        )
+    };
+    // (strategy, the bar its rule spends, [(fill, the doc's litres)]): thirds of the 207-bar
+    // rating is 69 bar at any fill under the cap; the Free allowance is the diver's 100 bar.
+    let cases = [
+        (
+            ReservePreset::AllThirds,
+            69.0,
+            [(250.0, 681.0), (207.0, 739.8)],
+        ),
+        (
+            ReservePreset::Free,
+            100.0,
+            [(250.0, 1018.0), (207.0, 1096.0)],
+        ),
+    ];
+    for (preset, spent, fills) in cases {
+        let [high, low] = fills.map(|(fill, litres)| {
+            let f = plan(preset, fill, spent);
+            let turn = f.backgas_turn_bar.unwrap();
+            println!(
+                "RV9a-5 {preset:?} at {fill} bar: spends {:.1} bar, turns at {turn:.1} bar, {:.2} L",
+                f.cylinder_usable_bars[0], f.budget_litres
+            );
+            assert!(
+                (f.cylinder_usable_bars[0] - spent).abs() < 1e-9,
+                "{preset:?} at {fill} bar: the rule spends {spent} bar"
+            );
+            assert!(
+                (turn - (fill - spent)).abs() < 1e-9,
+                "{preset:?} at {fill} bar: the turn gauge is the fill less {spent} bar"
+            );
+            assert!(
+                (f.budget_litres - gas_between(fill, fill - spent)).abs() < 1e-9,
+                "{preset:?} at {fill} bar: the budget is that bar off its own gauge"
+            );
+            assert!(
+                (f.budget_litres - litres).abs() < 0.5,
+                "{preset:?} at {fill} bar: {:.2} L, the doc says {litres} L",
+                f.budget_litres
+            );
+            f.budget_litres
+        });
+        assert!(
+            low > high,
+            "{preset:?}: the lower fill holds more gas in the same {spent} bar ({high:.2} -> \
+             {low:.2} L)"
+        );
+    }
 }

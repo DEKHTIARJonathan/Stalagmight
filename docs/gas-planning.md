@@ -156,6 +156,34 @@ filled to 250, 100 bar usable: 1018 L between 250 and 150 bar, against 1096 L
 between 207 and 107). An overfill never buys extra penetration, and switching the
 cap off never credits a tank less.
 
+**A lower fill can hold more gas** (#576 RV9a-5, decided "keep physics,
+document"). Where a rule spends a set number of bar whatever the fill - a Free
+allowance below the fill, with the cap on or off, or the share of the rating an
+overfill is held to under the cap - a lower fill takes that bar lower in the
+cylinder, where Z is smaller and a bar holds more gas. So a lower fill can show a
+slightly larger budget, and a little more reach. The 12 L tank rated 207 on
+thirds turns at 181 bar filled to 250 and is credited 681.3 L; filled to its
+rating it turns at 138 and is credited 739.8 L (+8.6%). With a 100-bar Free
+allowance the same tank holds 1018.0 L at 250 bar and 1096.2 L at 207 (+7.7%).
+The review's sweep found rises of up to +9.8%, a Free plan whose back gas went
+from 313.8 to 179.0 bar: 3979 -> 4371 L (that tank's 184-bar allowance is more
+than the lower fill, so there it spends the whole tank).
+
+This is the real gas, not a rule bending. Each budget is the decided share of its
+own gauge: the bar the rule names, taken off that fill. The turn or drop gauge
+still reads the fill less that bar, and the reserve the diver keeps - the gas
+below that gauge, in bar as the rule sets it - is never credited, so the extra
+litres are never reserve handed to the budget. Elsewhere (thirds, quarters and
+sixths at or below the rating or without the cap, Half Minus stages at or below
+it, a Free allowance that takes the whole fill) the bar spent falls with the fill
+and the budget with it. The pin sweeps in `gas/pin_monotone_tests.rs` are scoped
+accordingly: they do not claim a lower fill never shows more reach; they assert
+that a pin never adds what a lowered input takes away - the pinned budget rises
+by no more than the plan without pins does - and the tree sweep, whose fills stay
+out of these windows, that it never rises at all
+(`a_lower_fill_can_be_credited_more_under_a_free_allowance_or_an_overfill_under_the_cap`
+pins the numbers above).
+
 A staged strategy the rig cannot support falls back to All-thirds.
 `effective_preset` counts enabled `stage` cylinders; short of `required_stages`
 the budget, the gauges, the drops and the per-cylinder usable column all switch
@@ -250,7 +278,7 @@ range, where the shallow line - the cheaper gas - is 684 m long and has spent
 without pins turns at 0:4 and leaves 0:5 dark. Before, the pinned plan kept the
 other plan's masks, so its dive turned on a station its own map left dark
 (`rv9a_1_a_scootered_dive_pinned_round_a_loop_is_painted_to_its_turn`; the loop
-sweep `a_pinned_plan_round_a_loop_never_reaches_further_on_less_gas_or_scooter_range`
+sweep `round_a_loop_less_gas_or_range_never_lets_a_pinned_plan_gain_more_than_without_its_pins`
 checks every route to the turn is painted). In a cave without loops there is one
 way to each station, and the pinned overlay stays inside the other one.
 
