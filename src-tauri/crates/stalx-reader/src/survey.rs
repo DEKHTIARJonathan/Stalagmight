@@ -19,7 +19,9 @@ use stalagmight_models::{NorthReference, Project, ShotKind as ModelShotKind, Sur
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct Survey {
-    /// `PRAGMA user_version` of the file as read, before any in-memory migration.
+    /// The file's schema version as uploaded, read before the private copy is
+    /// migrated forward (`PRAGMA user_version`, or the project row's own version
+    /// for files that predate the pragma; 0 if neither is recorded).
     pub schema_version: i32,
     pub name: String,
     pub location: Option<String>,
@@ -153,7 +155,10 @@ pub struct StationComment {
     pub text: String,
 }
 
-/// Local position in metres: x east, y north, z depth (positive down).
+/// Position in metres in the project's own local frame, the one the app's measured
+/// view draws: x east, y north, z depth (positive down). Section and station
+/// offsets are applied. The frame is not georeferenced and has no fixed origin
+/// across projects; use [`Survey::zero_datums`] to place it on the earth.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct StationPosition {

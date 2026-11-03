@@ -1,14 +1,20 @@
 //! Read-only reader for Stalagmight `.stalx` project files (#593).
 //!
 //! Built for servers that store `.stalx` uploads and need the survey inside
-//! them, e.g. to generate a map. It never writes to the source file: the bytes
-//! are copied to a private temporary file, the app's own load path runs on that
+//! them, e.g. to generate a map. It never writes to the source: the bytes are
+//! copied to a private temporary file, the app's own load path runs on that
 //! copy (integrity check, forward migrations, foreign-key check), and the
 //! result is converted into this crate's [`Survey`].
 //!
 //! Running the app's migrations is what makes old files read correctly: some
 //! migrations change stored meaning (v12 flips the pitch sign convention), so a
 //! raw read of an old file would be silently wrong.
+//!
+//! The input is treated as hostile. Before the app's load path runs, a file
+//! that defines views, triggers or virtual tables is refused, because those
+//! would run SQL the file chose. The load itself runs on a connection in
+//! defensive mode with `trusted_schema` off, with a cap on any value SQLite
+//! produces, and a deadline that interrupts any statement still running past it.
 //!
 //! Files written by a newer schema than this crate knows are refused with
 //! [`ReadError::NewerSchema`]; upgrade the crate to read them.
@@ -23,8 +29,9 @@
 
 mod survey;
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
+use std::time::Duration;
 
 use stalagmight_persistence::persistence::{Database, SCHEMA_VERSION};
 
@@ -34,7 +41,10 @@ pub use survey::{
 };
 
 /// Default cap on the input size, in bytes.
-pub const DEFAULT_MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
+pub const DEFAULT_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// Default deadline, measured from opening the copy.
+pub const DEFAULT_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The newest `.stalx` schema version this crate reads.
 pub const SUPPORTED_SCHEMA_VERSION: i32 = SCHEMA_VERSION;
@@ -43,8 +53,13 @@ pub const SUPPORTED_SCHEMA_VERSION: i32 = SCHEMA_VERSION;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct ReadOptions {
-    /// Inputs larger than this are refused before anything is copied.
+    /// Inputs larger than this are refused before anything is copied. Also caps
+    /// any single string or blob SQLite produces while loading.
     pub max_file_bytes: u64,
+    /// A statement still running this long after the copy is opened is
+    /// interrupted and the read fails. SQLite checks it every 1,000 VM steps per
+    /// statement, so it bounds long statements, not the sum of many short ones.
+    pub deadline: Duration,
     /// Also compute measured (unadjusted) station positions into [`Survey::stations`].
     pub with_stations: bool,
 }
@@ -53,6 +68,7 @@ impl Default for ReadOptions {
     fn default() -> Self {
         Self {
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            deadline: DEFAULT_DEADLINE,
             with_stations: false,
         }
     }
@@ -66,6 +82,12 @@ impl ReadOptions {
     }
 
     #[must_use]
+    pub fn deadline(mut self, deadline: Duration) -> Self {
+        self.deadline = deadline;
+        self
+    }
+
+    #[must_use]
     pub fn with_stations(mut self, on: bool) -> Self {
         self.with_stations = on;
         self
@@ -75,13 +97,17 @@ impl ReadOptions {
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ReadError {
-    #[error("input is {size} bytes, over the {max}-byte limit")]
-    TooLarge { size: u64, max: u64 },
+    #[error("input is over the {max}-byte limit")]
+    TooLarge { max: u64 },
     #[error("file uses .stalx schema v{found}; this reader supports up to v{supported}")]
     NewerSchema { found: i32, supported: i32 },
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    /// Not a readable `.stalx`: not SQLite, corrupt, or missing project data.
+    /// Not a readable `.stalx`: not SQLite, corrupt, missing project data, a
+    /// refused schema object, or interrupted by the deadline.
+    ///
+    /// The text can quote content from the file (SQLite error context). Treat it
+    /// as untrusted: log it, don't echo it to other users.
     #[error("not a readable .stalx file: {0}")]
     Invalid(String),
 }
@@ -91,22 +117,28 @@ pub fn read_file(path: &Path) -> Result<Survey, ReadError> {
     read_file_with(path, &ReadOptions::default())
 }
 
-/// Read a `.stalx` file.
+/// Read a `.stalx` file. Reads at most `max_file_bytes + 1` bytes from `path`.
 pub fn read_file_with(path: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
-    let size = std::fs::metadata(path)?.len();
-    check_size(size, options)?;
-    read_bytes(&std::fs::read(path)?, options)
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(options.max_file_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)?;
+    read_bytes(&bytes, options)
 }
 
 /// Read a `.stalx` file held in memory (e.g. an upload).
 pub fn read_bytes(bytes: &[u8], options: &ReadOptions) -> Result<Survey, ReadError> {
-    check_size(bytes.len() as u64, options)?;
+    if bytes.len() as u64 > options.max_file_bytes {
+        return Err(ReadError::TooLarge {
+            max: options.max_file_bytes,
+        });
+    }
 
     let dir = tempfile::tempdir()?;
     let copy = dir.path().join("project.stalx");
     std::fs::File::create(&copy)?.write_all(bytes)?;
 
-    let schema_version = read_user_version(&copy)?;
+    let schema_version = inspect(&copy)?;
     if schema_version > SCHEMA_VERSION {
         return Err(ReadError::NewerSchema {
             found: schema_version,
@@ -114,7 +146,9 @@ pub fn read_bytes(bytes: &[u8], options: &ReadOptions) -> Result<Survey, ReadErr
         });
     }
 
-    let db = Database::open_existing(&copy).map_err(invalid)?;
+    let max_value_bytes = i32::try_from(options.max_file_bytes).unwrap_or(i32::MAX);
+    let db = Database::open_existing_untrusted(&copy, max_value_bytes, options.deadline)
+        .map_err(invalid)?;
     let project = db.load_project().map_err(invalid)?;
     Ok(Survey::from_project(
         &project,
@@ -123,23 +157,63 @@ pub fn read_bytes(bytes: &[u8], options: &ReadOptions) -> Result<Survey, ReadErr
     ))
 }
 
-fn check_size(size: u64, options: &ReadOptions) -> Result<(), ReadError> {
-    if size > options.max_file_bytes {
-        return Err(ReadError::TooLarge {
-            size,
-            max: options.max_file_bytes,
-        });
-    }
-    Ok(())
-}
-
-/// The file's version, read before `open_existing` migrates the copy forward.
-fn read_user_version(path: &Path) -> Result<i32, ReadError> {
+/// Refuse schema objects that would run file-chosen SQL, and return the file's
+/// schema version, both read before anything migrates the copy.
+///
+/// The version follows the app's own rule: `PRAGMA user_version`, or when that
+/// is 0 (files from before the pragma), the `project.schema_version` column.
+fn inspect(path: &Path) -> Result<i32, ReadError> {
+    let sql_err = |e: rusqlite::Error| ReadError::Invalid(e.to_string());
     let conn =
         rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .map_err(|e| ReadError::Invalid(e.to_string()))?;
-    conn.query_row("PRAGMA user_version", [], |row| row.get(0))
-        .map_err(|e| ReadError::Invalid(e.to_string()))
+            .map_err(sql_err)?;
+
+    let refused: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master \
+             WHERE type IN ('view', 'trigger') \
+                OR (type = 'table' AND sql LIKE 'CREATE VIRTUAL TABLE%')",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_err)?;
+    if refused > 0 {
+        return Err(ReadError::Invalid(format!(
+            "the file defines {refused} view(s), trigger(s) or virtual table(s)"
+        )));
+    }
+
+    let stamped: i32 = conn
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(sql_err)?;
+    if stamped < 0 {
+        return Err(ReadError::Invalid(format!(
+            "negative schema version {stamped}"
+        )));
+    }
+    if stamped > 0 {
+        return Ok(stamped);
+    }
+    let has_column: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('project') WHERE name = 'schema_version'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_err)?;
+    if has_column == 0 {
+        return Ok(0);
+    }
+    let claimed: Option<i32> = conn
+        .query_row("SELECT schema_version FROM project LIMIT 1", [], |row| {
+            row.get(0)
+        })
+        .or_else(|e| match e {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            e => Err(e),
+        })
+        .map_err(sql_err)?;
+    Ok(claimed.unwrap_or(0).max(0))
 }
 
 fn invalid(e: anyhow::Error) -> ReadError {

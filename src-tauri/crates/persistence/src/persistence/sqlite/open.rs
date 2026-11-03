@@ -72,7 +72,43 @@ impl Database {
         // Open in read-only mode first to check if it's valid
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .context("Failed to open database - file may not be a valid SQLite database")?;
+        Self::finish_open_existing(conn)
+    }
 
+    /// [`Self::open_existing`] for a file from an untrusted source, e.g. a server
+    /// upload. Callers must pass a private COPY: this runs the same forward
+    /// migrations, which write to the file.
+    ///
+    /// The file can carry its own schema, so before anything reads it the
+    /// connection is put in defensive mode with `trusted_schema` off (no
+    /// non-innocuous functions from schema code), every string or blob SQLite
+    /// produces is capped at `max_value_bytes`, and any statement still running
+    /// once `deadline` has passed since the open is interrupted. SQLite checks the
+    /// deadline every 1,000 VM steps within a statement, so it bounds long
+    /// statements; many short ones are bounded by the input size instead.
+    pub fn open_existing_untrusted(
+        path: &Path,
+        max_value_bytes: i32,
+        deadline: std::time::Duration,
+    ) -> Result<Self> {
+        use rusqlite::config::DbConfig;
+        use rusqlite::limits::Limit;
+
+        if !path.exists() {
+            anyhow::bail!("File does not exist");
+        }
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .context("Failed to open database - file may not be a valid SQLite database")?;
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
+        conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, max_value_bytes);
+        let expires = std::time::Instant::now() + deadline;
+        conn.progress_handler(1_000, Some(move || std::time::Instant::now() > expires));
+        Self::finish_open_existing(conn)
+    }
+
+    /// The checks and migrations every existing-file open runs on `conn`.
+    fn finish_open_existing(conn: Connection) -> Result<Self> {
         let mut db = Self { conn };
         db.enable_foreign_keys()?;
 

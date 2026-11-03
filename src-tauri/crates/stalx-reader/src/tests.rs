@@ -117,6 +117,10 @@ fn reads_every_part_of_a_current_file() {
     assert_eq!(side.shots[0].right, None, "an absent LRUD stays absent");
     assert_eq!(side.shots[1].kind, ShotKind::Jump);
     assert_eq!(side.shots[1].comment.as_deref(), Some("sump"));
+    assert_eq!(main.surveyor.as_deref(), Some("user1"));
+    assert_eq!(main.color, "#ff5733");
+    assert_eq!(main.north, super::North::Magnetic);
+    assert_eq!(main.azimuth_correction_deg, 0.0);
 
     let id = |section: u32, index| StationId {
         section_id: section,
@@ -192,10 +196,7 @@ fn an_oversized_input_is_refused_before_it_is_read() {
 
     let err = read_file_with(&path, &ReadOptions::default().max_file_bytes(1024)).unwrap_err();
 
-    assert!(
-        matches!(err, ReadError::TooLarge { max: 1024, .. }),
-        "{err}"
-    );
+    assert!(matches!(err, ReadError::TooLarge { max: 1024 }), "{err}");
 }
 
 #[test]
@@ -253,4 +254,107 @@ fn station_positions_cover_every_station_when_requested() {
         (last.z - origin.z - 20.0).abs() < 1e-9,
         "four 5 m descents put the end 20 m deeper"
     );
+    for section in &survey.sections {
+        for index in 0..=section.shots.len() as u32 {
+            let want = StationId {
+                section_id: section.id,
+                index,
+            };
+            assert!(
+                stations.iter().any(|s| s.station == want),
+                "missing position for {want:?}"
+            );
+        }
+    }
+}
+
+/// A file whose own schema would run SQL during the load.
+fn with_schema_sql(sql: &str) -> PathBuf {
+    let dir = Box::leak(Box::new(TempDir::new().unwrap()));
+    let path = save(dir, &full_project());
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(sql)
+        .unwrap();
+    path
+}
+
+#[test]
+fn views_triggers_and_virtual_tables_are_refused() {
+    for sql in [
+        // An endless recursive view standing in for a real table.
+        "ALTER TABLE shots RENAME TO real_shots;
+         CREATE VIEW shots AS WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n)
+           SELECT * FROM real_shots, n;",
+        "CREATE TRIGGER t AFTER UPDATE ON shots BEGIN UPDATE shots SET length = 0; END;",
+        "CREATE VIRTUAL TABLE v USING rtree(id, a, b);",
+    ] {
+        let err = read_file(&with_schema_sql(sql)).unwrap_err();
+        assert!(
+            matches!(&err, ReadError::Invalid(m) if m.contains("view(s), trigger(s)")),
+            "{sql}: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_newer_version_claimed_by_the_project_row_is_refused() {
+    // Files from before the pragma carry their version in the project row; the
+    // app falls back to it when user_version is 0, and so must the reader.
+    let path = with_schema_sql(&format!(
+        "PRAGMA user_version = 0; UPDATE project SET schema_version = {};",
+        SUPPORTED_SCHEMA_VERSION + 1
+    ));
+
+    let err = read_file(&path).unwrap_err();
+
+    assert!(matches!(err, ReadError::NewerSchema { .. }), "{err}");
+}
+
+#[test]
+fn a_negative_schema_version_is_invalid() {
+    let path = with_schema_sql("PRAGMA user_version = -1;");
+
+    let err = read_file(&path).unwrap_err();
+
+    assert!(matches!(err, ReadError::Invalid(_)), "{err}");
+}
+
+#[test]
+fn read_bytes_enforces_its_own_size_cap() {
+    let err = read_bytes(&[0u8; 2048], &ReadOptions::default().max_file_bytes(1024)).unwrap_err();
+
+    assert!(matches!(err, ReadError::TooLarge { max: 1024 }), "{err}");
+}
+
+#[test]
+fn an_expired_deadline_interrupts_a_long_statement() {
+    // A plain filler table is allowed, but the integrity check walks it in one
+    // long statement, which the deadline must interrupt.
+    let path = with_schema_sql(
+        "CREATE TABLE filler (x);
+         WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 50000)
+           INSERT INTO filler SELECT x FROM n;",
+    );
+
+    let err = read_file_with(
+        &path,
+        &ReadOptions::default().deadline(std::time::Duration::ZERO),
+    )
+    .unwrap_err();
+
+    assert!(
+        matches!(&err, ReadError::Invalid(m) if m.contains("interrupt")),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_dangling_cross_reference_is_dropped_and_counted() {
+    let path = with_schema_sql("UPDATE station_comments SET station_index = 999;");
+
+    let survey = read_file(&path).unwrap();
+
+    assert!(survey.station_comments.is_empty());
+    assert_eq!(survey.unresolved_references, 1);
 }
