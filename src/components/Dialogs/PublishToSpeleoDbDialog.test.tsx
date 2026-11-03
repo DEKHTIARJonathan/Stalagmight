@@ -28,6 +28,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import i18n from '../../i18n';
 import { invokeIpcMock, stubGetErrorMessage } from '../../test/factories/ipc';
 
 /** `speleodb_publish`'s answer as the wire carries it (`SpeleoPublishReport`, #576
@@ -129,6 +130,29 @@ describe('PublishToSpeleoDbDialog', () => {
     console.log(`[RV6a-6] bare answer: loadProject calls=${loadProjectMock.mock.calls.length} toasts=${JSON.stringify(kinds)}`);
     expect(loadProjectMock).not.toHaveBeenCalled();
     expect(kinds).toEqual([[TOAST_KEYS.SPELEODB_PUBLISH, 'error']]);
+    expect(closeDialogMock).not.toHaveBeenCalled();
+  });
+
+  it('a project a newer Stalagmight saved reads as the newer-version line, not "Not saved" (#576 NF-W9BE-1-D1)', async () => {
+    // Publish saves the project into the SpeleoDB cache first, and the backend refuses
+    // that save with NEWER_FILE_READ_ONLY. Decided: the toast reads like Start editing's
+    // and Update's refusal of such a project, not like a refused save.
+    invokeIpcMock.mockRejectedValue({
+      code: 'NEWER_FILE_READ_ONLY',
+      message: 'Saving is disabled: this project was saved by a newer version of Stalagmight (file format 99)',
+    });
+    render(<PublishToSpeleoDbDialog />);
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
+
+    await waitFor(() => expect(showToastMock).toHaveBeenCalled());
+    const [message, key, kind] = showToastMock.mock.calls[0] ?? [];
+    console.log(`[NF-W9BE-1-D1] publish toast: ${String(message)}`);
+    const noPeriod = (s: string) => s.replace(/\.\s*$/, '');
+    expect(message).toBe(`${i18n.t('speleodb.publish.failed')}: ${noPeriod(i18n.t('banners.newerFile.lead'))}`);
+    expect(message).not.toContain(noPeriod(i18n.t('banners.newerFile.saveRefused')));
+    expect([key, kind]).toEqual([TOAST_KEYS.SPELEODB_PUBLISH, 'error']);
     expect(closeDialogMock).not.toHaveBeenCalled();
   });
 

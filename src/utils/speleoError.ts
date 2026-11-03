@@ -58,8 +58,10 @@ function transportMessage(cause: TransportCause): string {
 /** What the failed SpeleoDB verb did, where its wording depends on it. */
 export interface SpeleoErrorContext {
   /**
-   * The verb saves the project before anything else (Push, Done, Publish), so a
-   * refused save is what failed (#576 NF-W9BE-1).
+   * The verb saves the project before anything else (Push, Done), so a refused
+   * save is what failed (#576 NF-W9BE-1). Publish saves first too but does not
+   * pass it: its newer-version refusal reads as the newer-version line, like
+   * Start editing's (#576 NF-W9BE-1-D1).
    */
   saves?: boolean;
 }

@@ -5,8 +5,9 @@
  * Restore, Update), Start editing, Force edit. The humanizer read every one of them
  * as a refused save, "Not saved: ...", for an open or a Start editing that saved
  * nothing. It now says what happened - the project is from a newer version, update
- * to edit it - unless the verb saves first (Push, Done, Publish), where the refused
- * save's own wording stands.
+ * to edit it - unless the verb saves first (Push, Done), where the refused save's
+ * own wording stands. Publish saves first too, but reads as the newer-version line
+ * by decision (#576 NF-W9BE-1-D1, PublishToSpeleoDbDialog.test.tsx).
  */
 import { describe, expect, it } from 'vitest';
 
@@ -40,7 +41,7 @@ describe('humanizeSpeleoError: a newer-version refusal outside a save (#576 NF-W
     expect(shown).not.toMatch(/Not saved/);
   });
 
-  it('a verb that saves first (Push, Done, Publish) keeps the refused-save wording', () => {
+  it('a verb that saves first (Push, Done) keeps the refused-save wording', () => {
     const prefix = i18n.t('speleodb.editBar.toasts.pushFailed');
 
     expect(humanizeSpeleoError(VERB_REFUSED, prefix, { saves: true })).toBe(

@@ -194,11 +194,10 @@ export default function PublishToSpeleoDbDialog() {
       }
       closeDialog();
     } catch (e) {
-      showToast(
-        humanizeSpeleoError(e, t('speleodb.publish.failed'), { saves: true }),
-        TOAST_KEYS.SPELEODB_PUBLISH,
-        'error',
-      );
+      // [#576 NF-W9BE-1-D1] No `saves` context, though publish saves into the cache
+      // first: a project a newer Stalagmight saved reads as the newer-version line,
+      // like Start editing and Update, not as "Not saved: ...".
+      showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
       if (errorCode(e) === 'SPELEODB_RELOGIN') {
         useSpeleoStore.getState().clearSession();
       }
