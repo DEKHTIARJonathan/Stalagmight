@@ -62,6 +62,41 @@ test('the async open / link / chmod names need an fs receiver: window.open and a
   assert.deepEqual(ids("await link(page, 'Station A1');"), []);
 });
 
+// #576 RV4-FE-FEB-3: each of these wrote to disk without the gate seeing a call it knew.
+const at = (text, rel = SPEC) => scan([rel], () => text).map((v) => [v.ruleId, v.lineNo]);
+const HIDDEN_WRITES = {
+  "disk-write fires on bracket access: fs['writeFileSync'](p, x)": ["fs['writeFileSync'](p, x);", [['disk-write', 1]]],
+  'disk-write fires on bracket access: fs["rmSync"](d)': ['fs["rmSync"](d, { recursive: true });', [['disk-write', 1]]],
+  'disk-write fires on bracket access: a template-quoted fs[`mkdirSync`](d)': ['fs[`mkdirSync`](d);', [['disk-write', 1]]],
+  "disk-write fires on bracket access to a short name on an fs receiver: fsp['open'](p, 'w')": ["await fsp['open'](p, 'w');", [['disk-write', 1]]],
+  'disk-write fires on a destructured alias: const { writeFileSync: w } = fs': ['const { writeFileSync: w } = fs;\nw(p, x);', [['disk-write', 1]]],
+  "disk-write fires on an import alias: import { writeFileSync as w } from 'node:fs'": ["import { writeFileSync as w } from 'node:fs';\nw(p, x);", [['disk-write', 1]]],
+  'disk-write fires on a multi-line import, at the line of the name': ["import {\n  readFileSync,\n  writeFileSync as w,\n} from 'fs';\nw(p, x);", [['disk-write', 3]]],
+  "disk-write fires on an imported async open: import { open } from 'fs/promises'": ["import { open } from 'fs/promises';\nawait open(p, 'w');", [['disk-write', 1]]],
+  "disk-write fires on a required async open: const { open } = require('node:fs/promises')": ["const { open } = require('node:fs/promises');\nawait open(p, 'w');", [['disk-write', 1]]],
+  'disk-write fires on a destructured async open: const { open } = fs.promises': ["const { open } = fs.promises;\nawait open(p, 'w');", [['disk-write', 1]]],
+  'disk-write fires on the other short async names imported or destructured (link, chmod, rm, cp, rename, truncate)': [
+    "import { link, chmod as ch } from 'node:fs/promises';\nconst { rm } = fsp;\nconst { cp, rename: mv } = fsPromises;\nconst { truncate } = await import('fs/promises');",
+    [['disk-write', 1], ['disk-write', 2], ['disk-write', 3], ['disk-write', 4]],
+  ],
+};
+for (const [name, [text, expected]] of Object.entries(HIDDEN_WRITES)) {
+  test(name, () => {
+    const got = at(text);
+    assert.deepEqual(got, expected, `got ${JSON.stringify(got)}, want ${JSON.stringify(expected)}`);
+  });
+}
+
+test('the import / bracket checks do NOT fire on a read import, a namespace import, an object key, or a non-fs open', () => {
+  assert.deepEqual(ids("import { readFileSync } from 'node:fs';"), []);
+  assert.deepEqual(ids("import * as fs from 'fs';"), []);
+  assert.deepEqual(ids('const handlers = {\n  open: async () => {},\n  rename: (x) => x,\n};'), []);
+  assert.deepEqual(ids('const { open } = menu;\nawait open();'), []);
+  assert.deepEqual(ids("import { open } from './helpers/menu';"), []);
+  assert.deepEqual(ids("await menu['open']();\nitems['rename'](x);"), []);
+  assert.deepEqual(ids("import { mkdirSync, writeFileSync } from 'fs';", 'e2e-playwright/fixtures/coverage.ts'), [], 'the ALLOW row still applies');
+});
+
 test('disk-write does NOT fire on a mock label, a UI helper named rename, or mkdtemp', () => {
   assert.deepEqual(ids("handlers['plugin:fs|writeFile'] = () => null;"), []);
   assert.deepEqual(ids("await rename(page, 'Section B');"), []);

@@ -51,8 +51,54 @@ export const ALLOW = [
   },
 ];
 
+// The fs calls that write, create, delete or link on disk, and the short async
+// names (fs/promises) that are also common method names elsewhere.
+const DISK_WRITE_NAMES = [
+  'writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream', 'copyFileSync', 'copyFile', 'cpSync',
+  'renameSync', 'mkdirSync', 'mkdir', 'unlinkSync', 'unlink', 'rmSync', 'rmdirSync', 'rmdir', 'symlinkSync', 'symlink',
+  'truncateSync', 'openSync', 'writeSync', 'writevSync', 'linkSync', 'chmodSync', 'ftruncateSync',
+];
+const FS_SHORT_NAMES = ['open', 'link', 'chmod', 'rm', 'cp', 'rename', 'truncate'];
+const LONG = DISK_WRITE_NAMES.join('|');
+const FS_RECEIVER = '\\b(?:fs|fsp|fsPromises|promises)';
+
+// `{ ... }` import / destructure sources that bind fs functions to plain names:
+// `import {...} from '(node:)fs(/promises)'`, `const {...} = require(...)` (or
+// `await import(...)`) of the same modules, and `{...} = fs | fsp |
+// fsPromises | promises | fs.promises`. Matched on the whole comment-stripped
+// file, so a multi-line import brace counts; group 1 is the brace contents.
+const FS_IMPORT_RES = [
+  /\bimport\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?\{([^}]*)\}\s*from\s*(['"`])(?:node:)?fs(?:\/promises)?\2/g,
+  /\b(?:const|let|var)\s+\{([^}]*)\}\s*=\s*(?:await\s+)?(?:require|import)\s*\(\s*(['"`])(?:node:)?fs(?:\/promises)?\2\s*\)/g,
+  /\{([^}]*)\}\s*=(?![=>])\s*(?:fs\.promises|fsPromises|fsp|fs|promises)(?![\w$.])/g,
+];
+const FS_IMPORTED = new Set([...DISK_WRITE_NAMES, ...FS_SHORT_NAMES]);
+
+// 0-based lines of `code` (stripComments output) that import or destructure a
+// disk-write name from fs, alias or not: the line of the name itself.
+function fsImportLines(code) {
+  const text = code.join('\n');
+  const lines = new Set();
+  for (const re of FS_IMPORT_RES) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      let at = m.index + m[0].indexOf('{') + 1;
+      for (const entry of m[1].split(',')) {
+        const name = /^\s*(?:type\s+)?([A-Za-z_$][\w$]*)/.exec(entry);
+        if (name && FS_IMPORTED.has(name[1])) {
+          lines.add(text.slice(0, at + name[0].length).split('\n').length - 1);
+        }
+        at += entry.length + 1;
+      }
+    }
+  }
+  return lines;
+}
+
 // One rule per parallel-unsafe pattern. `re` is tested per comment-stripped line;
-// an optional `accept(match)` exempts a benign sub-case (used for the shared port).
+// an optional `accept(match)` exempts a benign sub-case (used for the shared port),
+// and an optional `fileLines(code)` adds the lines a whole-file pattern fires on.
 export const RULES = [
   {
     id: 'own-server',
@@ -80,7 +126,16 @@ export const RULES = [
     // (#576 RV3-FE-12); `open` / `link` / `chmod` are common method names
     // (`window.open(`, a menu's `open(`), so their async forms count only on an
     // fs-looking receiver (`fs.`, `fsp.`, `fsPromises.`, `promises.`).
-    re: /\b(?:writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream|copyFileSync|copyFile|cpSync|renameSync|mkdirSync|mkdir|unlinkSync|unlink|rmSync|rmdirSync|rmdir|symlinkSync|symlink|truncateSync|openSync|writeSync|writevSync|linkSync|chmodSync|ftruncateSync)\s*\(|\.(?:rm|cp|rename|truncate)\s*\(|\b(?:fs|fsp|fsPromises|promises)\.(?:open|link|chmod)\s*\(/,
+    // Bracket access (`fs['writeFileSync'](p)`; the short names only on an fs
+    // receiver) and a name imported or destructured from fs / fs/promises,
+    // alias or not (`import { writeFileSync as w } from 'node:fs'`,
+    // `const { open } = fs.promises`), count too (#576 RV4-FE-FEB-3); the
+    // import check reads the whole file, so a multi-line import brace counts.
+    re: new RegExp(
+      `\\b(?:${LONG})\\s*\\(|\\.(?:rm|cp|rename|truncate)\\s*\\(|${FS_RECEIVER}\\.(?:open|link|chmod)\\s*\\(`
+        + `|\\[\\s*(['"\`])(?:${LONG})\\1\\s*\\]|${FS_RECEIVER}\\s*\\[\\s*(['"\`])(?:${FS_SHORT_NAMES.join('|')})\\2\\s*\\]`,
+    ),
+    fileLines: fsImportLines,
     why: 'writes, creates or deletes on disk - use a per-(test,worker)-unique path only (see fixtures/coverage.ts), else concurrent workers clobber each other.',
   },
   {
@@ -121,12 +176,13 @@ export function scan(files, readFile) {
   for (const rel of files) {
     const lines = readFile(rel).split('\n');
     const code = stripComments(lines);
+    const fileHits = new Map(RULES.filter((r) => r.fileLines).map((r) => [r.id, r.fileLines(code)]));
     code.forEach((c, i) => {
       if (!c.trim()) return;
       for (const rule of RULES) {
         const m = rule.re.exec(c);
-        if (!m) continue;
-        if (rule.accept && rule.accept(m)) continue;
+        if (!m && !fileHits.get(rule.id)?.has(i)) continue;
+        if (m && rule.accept && rule.accept(m)) continue;
         if (isAllowed(rel, rule.id)) continue;
         violations.push({ rel, lineNo: i + 1, ruleId: rule.id, why: rule.why, snippet: lines[i].trim() });
       }
