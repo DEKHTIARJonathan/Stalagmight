@@ -82,6 +82,7 @@ where
     R: Runtime,
     T: MutationOutcome + Send + 'static,
 {
+    let after_crash = app.clone();
     let answer = spawn(move || {
         let state = app.state::<AppState>().inner();
         let mut answer = f(state);
@@ -95,7 +96,24 @@ where
     .await;
     match answer {
         Ok(answer) => answer,
-        Err(crash) => Err(CommandError::internal(crash_message(&crash))),
+        Err(crash) => {
+            // [#576 RV7a-2] The body may have marked the copy before it crashed (a
+            // single undo stamps the link before its geometry reconcile): the
+            // failure carries the bits as they stand now, read on the pool like any
+            // answer's, so the frontend applies them as for every other failure.
+            // `try_state`: a body that crashed because the state is missing has no
+            // bits to read.
+            let mut error = CommandError::internal(crash_message(&crash));
+            error.payload.remote_link = spawn(move || {
+                after_crash
+                    .try_state::<AppState>()
+                    .and_then(|state| state.remote_link_bits())
+            })
+            .await
+            .ok()
+            .flatten();
+            Err(error)
+        }
     }
 }
 

@@ -302,3 +302,54 @@ fn a_local_project_answers_no_link_bits() {
         );
     });
 }
+
+/// [#576 RV7a-2] A mutation whose body crashes AFTER it marked the copy - a single
+/// undo marks the link before its geometry reconcile - rejects with
+/// `INTERNAL_ERROR` carrying the link row as it now stands, so the status button
+/// and the quit guard show the un-pushed copy at once instead of at the next
+/// status poll. The crash is real, on the pool, inside `run_mutation`.
+#[test]
+fn a_mutation_that_crashes_after_marking_the_copy_rejects_with_the_dirty_link_row() {
+    with_config_lock(|| {
+        let fx = linked(false);
+        let section_id = fx.with_shots;
+        let error = run(super::pool::run_mutation(
+            h(&fx.app),
+            move |state| -> Result<crate::core::EditOutcome, crate::core::CommandError> {
+                let edited = state.execute(Command::UpdateSectionMetadata {
+                    section_id,
+                    updates: SectionUpdates {
+                        name: Some(Some("Renamed".to_owned())),
+                        ..Default::default()
+                    },
+                });
+                assert!(
+                    edited.success,
+                    "the edit marks the copy: {:?}",
+                    edited.error
+                );
+                panic!("synthetic crash after the edit marked the copy (#576 RV7a-2 test)")
+            },
+        ))
+        .expect_err("a crashed body answers a failure");
+        let row = link_row(&fx.path);
+        println!(
+            "crash after marking -> code {} remote_link {:?}; link row {row:?}",
+            error.code, error.payload.remote_link
+        );
+        assert_eq!(error.code, CommandErrorCode::InternalError);
+        assert_eq!(
+            row,
+            RemoteLinkBits {
+                has_unpushed_edits: true,
+                unwound: false,
+            },
+            "fixture: the edit marked the copy before the crash"
+        );
+        assert_eq!(
+            error.payload.remote_link,
+            Some(row),
+            "the rejection carries the link row the crash left"
+        );
+    });
+}
