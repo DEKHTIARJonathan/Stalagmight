@@ -5,8 +5,9 @@ Tauri desktop app for processing underwater cave survey data (Rust backend + Rea
 It is year 2026. No em-dashes: write an ASCII hyphen instead, instead of '—' use '-'. This covers the
 hyphen, non-breaking hyphen, figure dash, en dash, em dash, horizontal bar,
 minus sign, soft hyphen, the small, fullwidth, two-em, three-em and vertical
-dash forms and the double hyphens (U+2010..U+2015, U+2212, U+00AD, U+FE58,
-U+FE63, U+FF0D, U+2E3A, U+2E3B, U+FE31, U+FE32, U+2E40, U+2E17). The
+dash forms, the double hyphens and the Armenian and oblique hyphens
+(U+2010..U+2015, U+2212, U+00AD, U+FE58, U+FE63, U+FF0D, U+2E3A, U+2E3B,
+U+FE31, U+FE32, U+2E40, U+2E17, U+058A, U+2E5D). The
 soft hyphen is invisible inside a word, so delete it rather than replace it.
 Box-drawing characters in ASCII diagrams are fine.
 
