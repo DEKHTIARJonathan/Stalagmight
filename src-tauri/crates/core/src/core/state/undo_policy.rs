@@ -72,18 +72,15 @@ impl AppState {
         // Must be a remote project: a local one has no policy to set (the fixed window is
         // unconditional there), and no link row to write it into.
         let _link = self.speleodb_validated_link()?;
-        if !self.edit_enabled() {
-            return Err(super::speleodb::local_dto(SpeleoDbError::refused(
-                "start editing before changing the undo-history setting".to_owned(),
-            )));
-        }
+        // [#576 A8] The write below is a method of the gate's proof, so it cannot be
+        // moved ahead of the check (a policy written first would ride the next push).
+        let gate = self.speleodb_undo_mode_gate()?;
         let db_guard = self.database.lock();
         let db = db_guard
             .as_ref()
             .ok_or_else(|| super::speleodb::local_dto(SpeleoDbError::NoRemoteProject))?;
         let now = chrono::Utc::now().to_rfc3339();
-        db.set_speleo_undo_mode_and_mark_forward_edit(mode, &now)
-            .map_err(|e| super::speleodb::local_dto(SpeleoDbError::Io(e.to_string())))?;
+        gate.write(db, mode, &now)?;
         drop(db_guard);
         drop(project_guard);
         self.sync_undo_depth_limit();
@@ -203,6 +200,46 @@ pub(super) fn arm_undo_depth_limit(stack: &mut crate::core::UndoStack, policy: U
         stack.set_byte_budget(crate::core::undo::UNDO_BYTE_BUDGET_BYTES);
     } else {
         stack.use_count_limit();
+    }
+}
+
+/// [#576 A8] The undo-mode setter's edit gate as a type: the policy write is a method
+/// of [`EditSessionOpen`], made only by the check, so writing the policy before
+/// checking the gate does not compile.
+mod undo_mode_gate {
+    use super::AppState;
+    use crate::models::UndoMode;
+    use crate::persistence::Database;
+    use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
+
+    /// Proof that the edit gate was open when the setter checked it.
+    pub(super) struct EditSessionOpen {
+        _checked: (),
+    }
+
+    impl AppState {
+        /// Changing what the next push ships needs an edit session.
+        pub(super) fn speleodb_undo_mode_gate(&self) -> Result<EditSessionOpen, SpeleoErrorDto> {
+            if !self.edit_enabled() {
+                return Err(super::super::speleodb::local_dto(SpeleoDbError::refused(
+                    "start editing before changing the undo-history setting".to_owned(),
+                )));
+            }
+            Ok(EditSessionOpen { _checked: () })
+        }
+    }
+
+    impl EditSessionOpen {
+        /// The policy, the dirty stamp and the chain clear, in one transaction.
+        pub(super) fn write(
+            &self,
+            db: &Database,
+            mode: UndoMode,
+            now: &str,
+        ) -> Result<(), SpeleoErrorDto> {
+            db.set_speleo_undo_mode_and_mark_forward_edit(mode, now)
+                .map_err(|e| super::super::speleodb::local_dto(SpeleoDbError::Io(e.to_string())))
+        }
     }
 }
 
@@ -355,31 +392,6 @@ mod tests {
                 "read-only sessions cannot change what the project ships"
             );
         });
-    }
-
-    /// The lock gate is the FIRST thing after the link lookup, so no write can slip in
-    /// ahead of it. Structural, for the reason above.
-    #[test]
-    fn the_undo_mode_write_is_gated_before_it_mutates() {
-        let src = crate::models::source_scan::prod_region(
-            include_str!("undo_policy.rs"),
-            "pub fn speleodb_set_undo_mode",
-        );
-        let verb = src
-            .split_once("pub fn speleodb_set_undo_mode")
-            .map(|(_, rest)| rest)
-            .expect("the verb is in this file");
-        let gate = verb
-            .find("if !self.edit_enabled()")
-            .expect("the verb must check the edit gate");
-        let write = verb
-            .find("set_speleo_undo_mode_and_mark_forward_edit")
-            .expect("the verb writes the link");
-        assert!(
-            gate < write,
-            "the edit gate must precede the write - checking afterwards would leave the \
-             policy on disk for the next push to ship"
-        );
     }
 
     /// With no linked project open, status reports the application default.
