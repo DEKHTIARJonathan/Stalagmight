@@ -2137,7 +2137,7 @@ impl AppState {
                     &token,
                     insecure_http,
                     &link,
-                    tip.as_deref(),
+                    tip.clone(),
                     LocalEditsPolicy::Protect,
                 ) {
                     Ok(p) => p,
@@ -2359,7 +2359,7 @@ impl AppState {
             &token,
             insecure_http,
             &link,
-            tip.as_deref(),
+            tip.clone(),
             LocalEditsPolicy::Discard,
         );
         if result.is_err() {

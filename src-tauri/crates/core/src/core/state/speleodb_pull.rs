@@ -2036,7 +2036,7 @@ impl AppState {
         token: &str,
         insecure_http: bool,
         link: &crate::models::SpeleoLink,
-        tip: Option<&str>,
+        tip: Option<String>,
         policy: LocalEditsPolicy,
     ) -> Result<String, SpeleoDbError> {
         let project_id = &link.project_id;
@@ -2048,37 +2048,15 @@ impl AppState {
         // push landing in between handed back commit B's tree labelled A. This is the
         // window the pull and adopt paths were both changed to close; the fast-forward
         // is the one that kept the claim without the fix.
-        /// [#576 A8 NF-A8-BYPASS] The fast-forward's download and replace licence.
-        /// Nothing runs before its download: the local-edits guard is the replace's
-        /// own (`policy`), and every caller reached this verb from a reconcile
-        /// verdict. Local to this function, so no other flow can borrow it.
-        struct FastForwardPull;
-        impl client::DumpLicence for FastForwardPull {}
-        impl super::speleodb_cache::ReplaceLicence for FastForwardPull {}
-        let pinned = usable_tip(tip.map(str::to_owned), project_id);
-        let zip = self.speleodb_handle_auth(
+        //
+        // [#576 A8] By type: `tip` is MOVED into the pinned fetch, which validates it
+        // (`usable_tip`) and downloads by hash, and the dating and BASE below can only
+        // name the commit the bytes were fetched at (`PinnedDump::dump_at` / `sha`).
+        let pinned = self.speleodb_handle_auth(
             Endpoint::DownloadDump,
-            match pinned.as_deref() {
-                Some(sha) => client::download_dump_at_hash(
-                    &FastForwardPull,
-                    endpoint,
-                    token,
-                    insecure_http,
-                    project_id,
-                    sha,
-                ),
-                // No usable tip: take HEAD as before, and say so by dating it `Unknown`
-                // rather than with a sha these bytes are not known to be.
-                None => client::download_dump(
-                    &FastForwardPull,
-                    endpoint,
-                    token,
-                    insecure_http,
-                    project_id,
-                ),
-            },
+            pinned_dump::PinnedDump::fetch(endpoint, token, insecure_http, project_id, tip),
         )?;
-        let mut dump = dump::Dump::open(&zip)?;
+        let mut dump = dump::Dump::open(pinned.zip())?;
         // [#258] No `entryPath` reaches this verb - it honours whatever the session
         // already settled, and a miss still fails closed rather than guessing.
         // Adoption is reachable from here: this verb pulls the TIP, which is exactly
@@ -2099,7 +2077,7 @@ impl AppState {
             &mut dump,
             None,
             ArianeRoute::Adopt,
-            DumpAt::from_sha(pinned.as_deref()),
+            pinned.dump_at(),
             StalxAmbiguity::Refuse,
         )?;
         let dest = self.speleodb_cache_path(project_id)?;
@@ -2110,7 +2088,7 @@ impl AppState {
         // undo/redo, so hoisting the close ahead of the extract is behaviour-
         // preserving.
         let preserved_view = self.replace_cache_stalx_with(
-            &FastForwardPull,
+            &pinned,
             &mut dump,
             &entry,
             &dest,
@@ -2135,7 +2113,7 @@ impl AppState {
                         project_name: link.project_name.clone(),
                         // The same sha the dump was fetched at, so BASE cannot name a
                         // commit these bytes did not come from.
-                        base_commit_sha: pinned.clone(),
+                        base_commit_sha: pinned.sha().map(str::to_owned),
                         has_unpushed_edits: false,
                         last_edit_at: None,
                         // A fresh pull confirms BASE == the server tip as of now, so
@@ -2489,7 +2467,8 @@ mod adopt_order {
         endpoint: String,
         project_id: String,
         project_name: String,
-        base_commit_sha: Option<String>,
+        /// BASE, decided at [`AdoptedLink::new`].
+        base: Option<String>,
     }
 
     impl AdoptedLink {
@@ -2521,7 +2500,7 @@ mod adopt_order {
                 endpoint,
                 project_id,
                 project_name,
-                base_commit_sha: base,
+                base,
             }
         }
 
@@ -2545,7 +2524,7 @@ mod adopt_order {
                 endpoint: self.endpoint,
                 project_id: self.project_id,
                 project_name: self.project_name,
-                base_commit_sha: self.base_commit_sha,
+                base_commit_sha: self.base,
                 has_unpushed_edits: true,
                 last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
                 last_verify_at: None,
@@ -2857,6 +2836,81 @@ mod adopt_order {
             };
             drop(edit_gate);
             AdoptClosed { result }
+        }
+    }
+}
+
+/// [#576 A8] The fast-forward's download as a type: the caller's tip goes in, is
+/// validated at the by-hash boundary, and the bytes come back with the ONE sha they
+/// were fetched at - the only sha the dating and BASE can then name.
+mod pinned_dump {
+    use super::super::speleodb::DumpAt;
+    use super::super::speleodb_cache::ReplaceLicence;
+    use super::usable_tip;
+    use crate::speleodb::{client, SpeleoDbError};
+
+    /// A dump fetched for a fast-forward, with the commit it was fetched at (`None`:
+    /// no usable tip, so HEAD, undatable).
+    pub(super) struct PinnedDump {
+        zip: Vec<u8>,
+        sha: Option<String>,
+    }
+
+    /// The fetch's download licence. Nothing runs before a fast-forward's download:
+    /// its local-edits guard is the replace's own, and every caller reached the verb
+    /// from a reconcile verdict.
+    struct FastForwardFetch;
+    impl client::DumpLicence for FastForwardFetch {}
+
+    /// [#576 A8 NF-A8-BYPASS] The fast-forward replaces the cache file with what it
+    /// fetched, and only that.
+    impl ReplaceLicence for PinnedDump {}
+
+    impl PinnedDump {
+        /// Download the dump at `tip` - by hash once it has crossed the validation
+        /// boundary (`usable_tip`), else HEAD - and keep the sha with the bytes.
+        pub(super) fn fetch(
+            endpoint: &str,
+            token: &str,
+            insecure_http: bool,
+            project_id: &str,
+            tip: Option<String>,
+        ) -> Result<Self, SpeleoDbError> {
+            let sha = usable_tip(tip, project_id);
+            let zip = match sha.as_deref() {
+                Some(sha) => client::download_dump_at_hash(
+                    &FastForwardFetch,
+                    endpoint,
+                    token,
+                    insecure_http,
+                    project_id,
+                    sha,
+                ),
+                // No usable tip: take HEAD as before, and say so by dating it
+                // `Unknown` rather than with a sha these bytes are not known to be.
+                None => client::download_dump(
+                    &FastForwardFetch,
+                    endpoint,
+                    token,
+                    insecure_http,
+                    project_id,
+                ),
+            }?;
+            Ok(Self { zip, sha })
+        }
+
+        pub(super) fn zip(&self) -> &[u8] {
+            &self.zip
+        }
+
+        /// The revision these bytes are, for the remembered-choice dating.
+        pub(super) fn dump_at(&self) -> DumpAt<'_> {
+            DumpAt::from_sha(self.sha.as_deref())
+        }
+
+        /// The commit these bytes were fetched at - what BASE names.
+        pub(super) fn sha(&self) -> Option<&str> {
+            self.sha.as_deref()
         }
     }
 }
@@ -4221,47 +4275,6 @@ mod tests {
         );
     }
 
-    /// [#258 review] The fast-forward must fetch the commit it dates and stamps. It
-    /// downloaded plain HEAD while dating with a `tip` its caller resolved in an earlier
-    /// request, and asserted in a comment that the two agreed - which is the same
-    /// two-request window the pull and adopt paths were changed to close. `Update` holds
-    /// no lock and `Take remote` releases before getting here, so nothing prevents a
-    /// push landing inside it.
-    ///
-    /// Source-order, because reaching the real thing needs a server that can advance its
-    /// head between two requests; the live orchestration tests are where a behavioural
-    /// version belongs.
-    #[test]
-    fn the_fast_forward_downloads_the_commit_it_dates_and_stamps() {
-        let src = prod_source();
-        let start = src
-            .find("fn speleodb_fast_forward")
-            .expect("the fast-forward verb is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-
-        assert!(
-            body.contains("usable_tip(tip.map(str::to_owned)"),
-            "the caller's tip must cross the by-hash validation boundary before it can \
-             pin a download"
-        );
-        assert_eq!(
-            body.matches("download_dump_at_hash(").count(),
-            1,
-            "the fast-forward must fetch BY HASH when it has a usable tip"
-        );
-        assert!(
-            body.contains("DumpAt::from_sha(pinned.as_deref())"),
-            "the choice must be dated with the sha the bytes were fetched at, not one \
-             resolved by a separate request"
-        );
-        assert!(
-            body.contains("base_commit_sha: pinned.clone()"),
-            "and BASE must name that same sha, so it cannot claim a commit these bytes \
-             did not come from"
-        );
-    }
-
     /// The rule above is only worth anything if every landing path applies it, and
     /// "landed" is not the same set as "returned Confirmed". A source scan because
     /// reaching the real thing needs a server; the failure being guarded is someone
@@ -4844,6 +4857,75 @@ mod tests {
         assert!(
             still_signed_in,
             "a swallowed 401 on a best-effort read must not sign the user out"
+        );
+    }
+
+    /// The fast-forward's dump as the server serves it: one entry at whatever path.
+    fn pinned_dump_route(line: &str) -> (u16, &'static str) {
+        // Not a ZIP - the fetch hands bytes back without opening them.
+        let _ = line;
+        (200, "dump-bytes")
+    }
+
+    /// [#258 review] The fast-forward must fetch the commit it dates and stamps. It
+    /// downloaded plain HEAD while dating with a `tip` its caller resolved in an earlier
+    /// request - the two-request window the pull and adopt paths were changed to close.
+    /// A tip that could reshape the authenticated URL is not used to build one: it
+    /// falls back to HEAD, undatable.
+    ///
+    /// [#576 A8] Was a source scan of the verb's body. The tip is moved into
+    /// `PinnedDump::fetch` (so the verb cannot reach for it again), and the dating and
+    /// BASE read the sha the fetch kept; the fetch is driven here.
+    #[test]
+    fn the_fast_forward_fetches_by_hash_the_commit_it_dates_or_an_undatable_head() {
+        let (base, _listener, seen) = routing_stub(pinned_dump_route);
+        let pinned = super::pinned_dump::PinnedDump::fetch(
+            &base,
+            "tok",
+            true,
+            GUARDED,
+            Some(TIP.to_owned()),
+        )
+        .expect("fetched at the tip");
+        let unusable = super::pinned_dump::PinnedDump::fetch(
+            &base,
+            "tok",
+            true,
+            GUARDED,
+            Some("../../users/".to_owned()),
+        )
+        .expect("fetched at HEAD");
+        let seen = seen.lock().expect("request log").clone();
+        println!(
+            "tip {TIP} -> sha {:?}, dated {:?}; unusable tip -> sha {:?}, dated {:?}; \
+             requests {seen:?}",
+            pinned.sha(),
+            pinned.dump_at(),
+            unusable.sha(),
+            unusable.dump_at()
+        );
+        assert_eq!(pinned.sha(), Some(TIP), "BASE will name the commit fetched");
+        assert_eq!(
+            pinned.dump_at(),
+            DumpAt::Revision(TIP),
+            "and so will the dating"
+        );
+        assert_eq!(pinned.zip(), b"dump-bytes");
+        assert!(
+            seen.first()
+                .is_some_and(|line| line.contains(&format!("/download/dump/{TIP}/"))),
+            "fetched BY HASH"
+        );
+        assert_eq!(unusable.sha(), None, "an unusable tip is not used");
+        assert_eq!(
+            unusable.dump_at(),
+            DumpAt::Unknown,
+            "and the bytes are undatable"
+        );
+        assert!(
+            seen.get(1)
+                .is_some_and(|line| line.contains(&format!("/projects/{GUARDED}/download/dump/ "))),
+            "fetched at HEAD"
         );
     }
 }

@@ -577,7 +577,7 @@ impl AppState {
             token,
             insecure_http,
             link,
-            tip,
+            tip.map(str::to_owned),
             LocalEditsPolicy::Discard,
         )
         .map_err(local_dto)
@@ -754,7 +754,7 @@ impl AppState {
                         &token,
                         insecure_http,
                         &link,
-                        tip.as_deref(),
+                        tip.clone(),
                         LocalEditsPolicy::Protect,
                     )
                     .map_err(local_dto)?;
