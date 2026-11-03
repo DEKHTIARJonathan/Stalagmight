@@ -5,14 +5,15 @@
 // ones on nearly every PR. PR #293 swept them all to ASCII hyphens; this guard
 // keeps them from creeping back.
 //
-// WHAT IT FLAGS - thirteen dash-like code points, all replaced by a plain
+// WHAT IT FLAGS - nineteen dash-like code points, all replaced by a plain
 // ASCII hyphen:
 //   U+2010 hyphen, U+2011 non-breaking hyphen, U+2012 figure dash,
 //   U+2013 en dash, U+2014 em dash, U+2015 horizontal bar, U+2212 minus sign,
 //   U+00AD soft hyphen, U+FE58 small em dash, U+FE63 small hyphen-minus,
 //   U+FF0D fullwidth hyphen-minus, U+2E3A two-em dash, U+2E3B three-em dash,
 //   U+FE31 / U+FE32 vertical em / en dash, U+2E40 double hyphen, U+2E17
-//   double oblique hyphen (the last four since #576 RV3-FE-NITS).
+//   double oblique hyphen (those four since #576 RV3-FE-NITS), U+058A
+//   Armenian hyphen, U+2E5D oblique hyphen (#576 RV4-FE-FEB-11).
 // The last six were added in #576 (E18(d)). U+00AD is the sharpest of them:
 // inside a word it renders as nothing at all, so `pro<U+00AD>ject` and
 // `project` look identical in review while comparing unequal (a test ID, a
@@ -97,6 +98,11 @@ export const BANNED = [
   { code: 0xfe32, name: 'U+FE32 vertical en dash' },
   { code: 0x2e40, name: 'U+2E40 double hyphen' },
   { code: 0x2e17, name: 'U+2E17 double oblique hyphen' },
+  // The two remaining Pd members that render as a plain dash in Latin text
+  // (#576 RV4-FE-FEB-11). Other Pd letters (U+05BE, U+1400, U+1806, U+2E1A,
+  // U+30A0, U+3030) look nothing like an ASCII hyphen there.
+  { code: 0x058a, name: 'U+058A Armenian hyphen' },
+  { code: 0x2e5d, name: 'U+2E5D oblique hyphen' },
 ].map((b) => ({ ...b, char: String.fromCharCode(b.code) }));
 const BANNED_NAME = new Map(BANNED.map((b) => [b.char, b.name]));
 const BANNED_RE = new RegExp(`[${BANNED.map((b) => b.char).join('')}]`, 'g');
