@@ -51,6 +51,82 @@ fn a_non_finite_station_offset_is_reset_on_load() {
     );
 }
 
+/// [#576 B35(g), RV7b-4] The project-list read keeps the zero datum the load keeps.
+/// A depth reference beyond 11 km (written before that bound existed) with a valid
+/// latitude and longitude opens with the datum active and flagged, but the
+/// metadata read ran every datum through `GpsCoordinates::new` and dropped it - so
+/// the recents card and the Global View lost the project's position and marker,
+/// under a comment claiming it matched the load. The depth reference positions
+/// nothing; only a non-finite coordinate, or a latitude no map can place, is left
+/// out of the position.
+#[test]
+fn the_project_list_keeps_a_zero_datum_the_load_keeps() {
+    let temp = TempDir::new().unwrap();
+    let path = b35_build_file(
+        temp.path(),
+        "INSERT INTO zero_datums (section_id, station_index, latitude, longitude, depth_reference)
+         VALUES ({sid}, 0, 20.5, -87.25, 20000.0);",
+    );
+
+    let project = Database::open_existing(&path)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    let loaded: Vec<_> = project
+        .zero_datums
+        .iter()
+        .map(|zd| zd.gps.clone())
+        .collect();
+    let meta = Database::open_for_metadata(&path)
+        .unwrap()
+        .load_metadata(path.clone())
+        .unwrap();
+    println!(
+        "zero datum (lat 20.5, lon -87.25, depth_reference 20000 m): load keeps {loaded:?}; \
+         metadata gps_center = {:?}, gps_bounds = {:?}",
+        meta.gps_center, meta.gps_bounds
+    );
+    assert_eq!(loaded.len(), 1, "the load keeps the finite datum");
+    assert_eq!(
+        meta.gps_center,
+        Some((-87.25, 20.5)),
+        "the recents card and the Global View marker are placed by the datum the load kept"
+    );
+    let bounds = meta.gps_bounds.expect("bounds from the kept datum");
+    assert_eq!(
+        (bounds.south, bounds.north, bounds.west, bounds.east),
+        (20.5, 20.5, -87.25, -87.25)
+    );
+}
+
+/// [#576 RV7b-4] What the project-list read leaves out of the position: a datum
+/// the load drops (a non-finite coordinate, which SQLite stores as +/-Inf) and one
+/// whose latitude no map can place - MapLibre throws on a latitude outside
+/// [-90, 90], which would take the whole Global View down. The other datum still
+/// positions the project.
+#[test]
+fn the_project_list_positions_a_project_only_by_placeable_datums() {
+    let temp = TempDir::new().unwrap();
+    let path = b35_build_file(
+        temp.path(),
+        "INSERT INTO zero_datums (section_id, station_index, latitude, longitude, depth_reference)
+         VALUES ({sid}, 0, 9e999, 10.0, 0.0), ({sid}, 1, 95.0, 11.0, 0.0),
+                ({sid}, 2, 45.0, 12.0, 0.0);",
+    );
+
+    let meta = Database::open_for_metadata(&path)
+        .unwrap()
+        .load_metadata(path.clone())
+        .unwrap();
+    println!(
+        "zero datums (+Inf lat; lat 95; lat 45): metadata gps_center = {:?}, gps_bounds = {:?}",
+        meta.gps_center, meta.gps_bounds
+    );
+    assert_eq!(meta.gps_center, Some((12.0, 45.0)));
+    let bounds = meta.gps_bounds.expect("bounds from the placeable datum");
+    assert_eq!((bounds.south, bounds.north), (45.0, 45.0));
+}
+
 /// [#576 B35(h)] The load report counts every value the load reset, per kind, so
 /// the open can tell the user once (the next save makes the reset permanent).
 /// A clean file reports nothing.

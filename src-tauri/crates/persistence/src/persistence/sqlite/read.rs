@@ -85,10 +85,24 @@ impl Database {
                     row.get::<_, f64>(2)?,
                 ))
             }) {
-                for r in rows.flatten() {
-                    // Skip rows that don't validate (matches load_project behavior).
-                    if let Ok(gps) = GpsCoordinates::new(r.0, r.1, r.2) {
-                        zero_datums.push(gps);
+                for (latitude, longitude, depth_reference) in rows.flatten() {
+                    // [#576 B35(g), RV7b-4] The load's rule: a non-finite
+                    // coordinate is dropped, and a FINITE one is kept as stored
+                    // even when it is out of range (a depth reference beyond
+                    // 11 km from a build before that bound), so a project the
+                    // load opens with its datum still gets its card position and
+                    // Global View marker. One more is left out HERE, because this
+                    // read only positions a pin: a latitude outside [-90, 90],
+                    // which no map can place (MapLibre throws on it).
+                    let finite = latitude.is_finite()
+                        && longitude.is_finite()
+                        && depth_reference.is_finite();
+                    if finite && (-90.0..=90.0).contains(&latitude) {
+                        zero_datums.push(GpsCoordinates {
+                            latitude,
+                            longitude,
+                            depth_reference,
+                        });
                     }
                 }
             }
