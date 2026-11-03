@@ -25,6 +25,7 @@ import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 import { SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
+import { warningTextAfterOwnShot } from './warningShotRef';
 
 /** Center/locate glyph (small ring + edge spokes), filled so it stays crisp
  *  under the page-zoom UI scale. Shared by the per-entity "center on map"
@@ -551,10 +552,11 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
               </span>
               <span className={`text-sm ${warning.isResolved ? 'line-through' : ''}`}>
                 {(() => {
-                  // Messages start with "Shot <sectionId>:<position> …"; at the
-                  // Full level swap that leading reference for the shot pill.
-                  const m = showPills && warning.message.match(/^Shot \d+:\d+\s*/);
-                  if (!m) return warning.message;
+                  // At the Full level swap the message's leading reference to the
+                  // warning's OWN shot for the shot pill (#576 NF-W7E-3: found from
+                  // its sectionId/shotIndex, not by pattern over the text).
+                  const rest = showPills ? warningTextAfterOwnShot(warning) : null;
+                  if (rest === null) return warning.message;
                   return (
                     <>
                       {/* The shot pill navigates to Details (select + switch tab),
@@ -578,7 +580,7 @@ function WarningsContent({ warnings, project, onWarningClick }: WarningsContentP
                         </EntityBlob>
                       </button>
                       {' '}
-                      {warning.message.slice(m[0].length)}
+                      {rest}
                     </>
                   );
                 })()}
