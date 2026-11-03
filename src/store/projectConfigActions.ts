@@ -29,6 +29,10 @@ export interface ProjectConfigActions {
    * its own re-read) made before this call. A writer outside that chain - the
    * data-table and grid-view layouts - re-reads through here, so its answer cannot
    * land after a later save's re-read and show the store a config without it.
+   * [#576 NF-W8FE-4] So does every other re-read: the startup load, the gas writer,
+   * the SpeleoDB credential verbs and the recent-projects edits. Only a save's own
+   * re-read, already inside the chain, calls `loadConfig` directly (calling this
+   * there would wait on itself).
    */
   reloadConfigInOrder: () => Promise<void>;
   /**
@@ -184,8 +188,11 @@ export function createProjectConfigActions(
       try {
         const routingBefore = get().config?.gas.include_reference_legs;
         await invokeIpc('update_gas_config', { gas }, { purpose: 'persist gas planning settings' });
-        // Re-fetch to pick up the backend-normalized values, same as updateConfig.
-        await get().loadConfig();
+        // Re-fetch to pick up the backend-normalized values, same as updateConfig -
+        // in the config chain [#576 NF-W8FE-4]: issued while a settings save is in
+        // flight, this read could answer after that save's re-read and put back a
+        // config without it.
+        await get().reloadConfigInOrder();
         // Same reasoning as updateConfig's copy of this: `include_reference_legs`
         // decides whether penetration routes through reference ties, and
         // `stats.penetration_distance` is computed eagerly inside get_project_state.

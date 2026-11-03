@@ -1651,7 +1651,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // refresh matters for "missing" recents (paths in config.general
         // .recent_projects that didn't load): those rows are derived from config,
         // so without this the removed path lingers and the row re-renders.
-        await Promise.all([get().loadRecentProjects(), get().loadConfig()]);
+        await Promise.all([get().loadRecentProjects(), get().reloadConfigInOrder()]);
       }
       return result;
     } catch (e) {
@@ -1698,7 +1698,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // survived, so its entry has to stay so the project is re-openable.
       if (result.success ? result.session_closed : result.failure?.session_closed) clearOpenProjectState(set);
       if (result.success) {
-        await Promise.all([get().loadRecentProjects(), get().loadConfig()]);
+        await Promise.all([get().loadRecentProjects(), get().reloadConfigInOrder()]);
       }
       return result;
     } catch (e) {

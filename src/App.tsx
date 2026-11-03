@@ -50,12 +50,12 @@ import { ZERO_DATUM_CARRY_KEY, readCarriedZeroDatumConfig, carryZeroDatumConfig 
 
 function App() {
   const { t } = useTranslation();
-  const { project, stations, loading, loadConfig, config, isDirty, setConfig } = useProjectStore(
+  const { project, stations, loading, reloadConfigInOrder, config, isDirty, setConfig } = useProjectStore(
     useShallow((s) => ({
       project: s.project,
       stations: s.stations,
       loading: s.loading,
-      loadConfig: s.loadConfig,
+      reloadConfigInOrder: s.reloadConfigInOrder,
       config: s.config,
       isDirty: s.isDirty,
       setConfig: s.setConfig,
@@ -226,14 +226,15 @@ function App() {
   );
 
   useEffect(() => {
-    // Load config on startup
-    loadConfig();
+    // Load config on startup - in the config chain [#576 NF-W8FE-4], so a settings
+    // save made while it is in flight cannot be overtaken by its answer.
+    void reloadConfigInOrder();
 
     // Flush telemetry on page unload (best-effort)
     const handleUnload = () => { void flushTelemetry(); };
     window.addEventListener('beforeunload', handleUnload);
     return () => window.removeEventListener('beforeunload', handleUnload);
-  }, [loadConfig]);
+  }, [reloadConfigInOrder]);
 
   // Initialize telemetry once config is loaded (only collects if user opted in)
   useEffect(() => {

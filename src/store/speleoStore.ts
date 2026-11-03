@@ -1255,7 +1255,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // fail, and then the honest thing to show is session-only.
       get().setSession(status);
       set({ storageChoiceOpen: false });
-      await useProjectStore.getState().loadConfig();
+      await useProjectStore.getState().reloadConfigInOrder();
       // The landed tier, handed back rather than collapsed to a bare `true`, so the
       // caller can say where the key went instead of where it was sent. `storage` is
       // null only when the backend reports logged-out, which this verb refuses
@@ -1270,7 +1270,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     try {
       const status = await invokeIpc('speleodb_retry_keychain');
       get().setSession(status);
-      await useProjectStore.getState().loadConfig();
+      await useProjectStore.getState().reloadConfigInOrder();
       return true;
     } catch {
       return false;
