@@ -419,6 +419,31 @@ describe('DMP wizard: what Back and Cancel do with sections already imported (#3
   });
 
   /**
+   * The done step completes the run ONCE (#576 D4). It was an effect watching
+   * for `done` that ran again whenever the run's busy flag flipped, so a removal
+   * from that screen - open to the user while App.tsx is still saving after the
+   * first completion - completed the run a second time.
+   *
+   * Injection: put the completion back in an effect keyed on `isImporting` and
+   * `onComplete` is called twice.
+   */
+  it('a removal from the done screen does not complete the run again', async () => {
+    const onComplete = vi.fn();
+    const onCancel = vi.fn();
+    renderWizard(undefined, { onComplete, onCancel, selected: [0], zeroDatumConfig: zeroDatumOnly() });
+
+    await waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    await anchorImportSettled();
+    fireEvent.click(screen.getByTestId('cancel-button'));
+    fireEvent.click(screen.getByTestId('cancel-remove-button'));
+    await waitFor(() => expect(onCancel).toHaveBeenCalled());
+    await act(async () => {});
+
+    expect(projectSectionIds).toEqual([]);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  /**
    * The ids are seeded from the saved state AND appended by live imports, so one
    * can appear twice across the map-placement handoff. `execute_batch` is
    * all-or-nothing and the second `delete_section` for an id fails "not found",

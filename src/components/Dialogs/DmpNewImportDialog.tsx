@@ -77,12 +77,12 @@ import {
 } from '../common/emittedShots';
 import { applyAllOverlapTreatments } from '../../utils/overlapTreatment';
 import { findIncompleteSections } from '../../utils/importPayloadGuard';
-import { reanchorAfterRunDelete, reanchorStation } from '../../utils/stationReanchor';
 import { blankEditableShot } from '../common/editableShot';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useDmpImportRun } from './dmpWizard/useDmpImportRun';
 import { buildBatchImport } from './dmpWizard/buildBatchImport';
+import { initialWizardState, segmentQueue, useWizardState, type SegmentChoices } from './dmpWizard/wizardState';
 import { adjustConnectionsForEdits, buildEffectiveDmpSection } from './dmpWizard/effectiveSections';
 import {
   normalizeSkippedSuggestionEntry,
@@ -178,23 +178,24 @@ export default function DmpNewImportDialog({
     earlyImported,
   } = useDmpImportRun({ dmpFile, selectionConfig, carried: saved, importsOnMount: saved?.placedSegment != null });
 
-  // Core state - virtual connections instead of imported indices
+  // The step the wizard is on, with the data that step has (#576 D4): see
+  // dmpWizard/wizardState.ts. `dispatch` returns where an action left it.
+  const { state: wizard, dispatch, current: currentWizard } = useWizardState(() =>
+    initialWizardState(saved, autoStartManualPlacement)
+  );
+  const { phase } = wizard;
+  const suggesting = phase.kind === 'suggesting' ? phase : null;
+  const manual = phase.kind === 'manual_placing' ? phase : null;
+  const currentSuggestion = suggesting?.suggestion ?? null;
+  const alternatives = suggesting?.alternatives ?? [];
+  const isCalculating = phase.kind === 'init' && phase.calculating;
+
+  // The run's plan so far - virtual connections instead of imported indices
   const [connections, setConnections] = useState<VirtualConnection[]>(saved?.connections ?? []);
   const [skippedIndices, setSkippedIndices] = useState<Set<number>>(
     saved ? new Set(saved.skippedIndices) : new Set()
   );
-  const [currentSuggestion, setCurrentSuggestion] = useState<CrossSectionSuggestion | null>(null);
-  const [alternatives, setAlternatives] = useState<CrossSectionSuggestion[]>([]);
   const [showAlternatives, setShowAlternatives] = useState(true);
-  const [isCalculating, setIsCalculating] = useState(false);
-  const [phase, setPhase] = useState<'init' | 'suggesting' | 'manual_placing' | 'placing' | 'done'>(
-    saved ? 'manual_placing' : 'init'
-  );
-  const [autoStartManualPlacementPending, setAutoStartManualPlacementPending] = useState(
-    autoStartManualPlacement
-  );
-  const [showCancelConfirm, setShowCancelConfirm] = useState(false);
-  const [showBackConfirm, setShowBackConfirm] = useState(false);
   const error = failure?.message ?? null;
   // F8: registers this dialog's footer height with the toast stack for as long
   // as the footer is mounted, so a lingering toast (e.g. the manual-placement
@@ -217,10 +218,6 @@ export default function DmpNewImportDialog({
       unregisterToastBottomOffset(owner);
     };
   }, [registerToastBottomOffset, unregisterToastBottomOffset]);
-  const [placingRetry, setPlacingRetry] = useState(0);
-
-  // Merge station selection
-  const [selectedMergeOffset, setSelectedMergeOffset] = useState(0);
 
   // Overlap handling mode (persisted to config)
   const [overlapMode, setOverlapMode] = useState<OverlapMode>(
@@ -260,51 +257,26 @@ export default function DmpNewImportDialog({
   const temporalDistanceCacheRef = useRef<Map<string, number>>(new Map());
   const temporalDistanceFetchedOriginsRef = useRef<Set<string>>(new Set());
 
-  // ─── Manual placing phase state ────────────────────────────────────────────
-  const [segmentQueue, setSegmentQueue] = useState<number[][]>(saved?.segmentQueue ?? []);
-  const currentSegment = segmentQueue[0] ?? null;
+  // ─── Manual placing phase ──────────────────────────────────────────────────
+  // The queue, the anchor, the preview anchor, the mode and the From Existing
+  // pick are the `manual_placing` phase's own (wizardState.ts).
+  const currentSegment = manual?.queue[0] ?? null;
+  const segmentAnchor = manual?.anchor ?? null;
 
-  const [segmentPlacementMode, setSegmentPlacementMode] = useState<SegmentPlacementMode>('manual');
-  const [segmentAnchor, setSegmentAnchor] = useState<{
-    sectionIndex: number; stationIndex: number;
-  } | null>(saved?.segmentAnchor ?? null);
+  const commitSegmentAnchor = useCallback((anchor: { sectionIndex: number; stationIndex: number }) => {
+    dispatch({ type: 'commitAnchor', anchor });
+  }, [dispatch]);
 
-  // Preview anchor tracks which station the SectionPreview highlights.
-  // Follows dropdown hover; reverts to segmentAnchor on dropdown close.
-  const [previewAnchor, setPreviewAnchor] = useState<{
-    sectionIndex: number; stationIndex: number;
-  } | null>(saved?.segmentAnchor ?? null);
-  const segmentAnchorRef = useRef(segmentAnchor);
-
-  // Commit a new anchor: updates committed value, preview, and ref together.
-  const commitSegmentAnchor = useCallback((anchor: { sectionIndex: number; stationIndex: number } | null) => {
-    setSegmentAnchor(anchor);
-    setPreviewAnchor(anchor);
-    segmentAnchorRef.current = anchor;
-  }, []);
-
-  // When a section dropdown hovers an option, preview it on the map;
-  // when dropdown closes without selection, revert to the committed anchor.
-  // Uses ref (not state) to avoid stale-closure race conditions.
+  // A dropdown hovering an option previews it on the map; closing without a
+  // choice reverts to the committed anchor. The reducer reads that anchor, so no
+  // handler can act on a stale copy of it.
   const handleAnchorSectionHover = useCallback((value: string | null) => {
-    if (value !== null) {
-      setPreviewAnchor({ sectionIndex: Number(value), stationIndex: 0 });
-    } else {
-      setPreviewAnchor(segmentAnchorRef.current);
-    }
-  }, []);
+    dispatch({ type: 'hoverAnchorSection', sectionIndex: value === null ? null : Number(value) });
+  }, [dispatch]);
 
-  // Same for station dropdown hover - reads current section from ref.
   const handleAnchorStationHover = useCallback((value: string | null) => {
-    if (value !== null) {
-      const current = segmentAnchorRef.current;
-      if (current) {
-        setPreviewAnchor({ sectionIndex: current.sectionIndex, stationIndex: Number(value) });
-      }
-    } else {
-      setPreviewAnchor(segmentAnchorRef.current);
-    }
-  }, []);
+    dispatch({ type: 'hoverAnchorStation', stationIndex: value === null ? null : Number(value) });
+  }, [dispatch]);
 
   // ─── The anchor's two station spaces ──────────────────────────────────────
   //
@@ -338,10 +310,6 @@ export default function DmpNewImportDialog({
     []
   );
 
-  // Per-mode state for manual_placing
-  const [fromExistingSectionId, setFromExistingSectionId] = useState<number | null>(null);
-  const [fromExistingStationIdx, setFromExistingStationIdx] = useState<number>(0);
-
   // Track original suggestions for sections skipped during suggesting phase
   const skippedSuggestionsRef = useRef<Map<number, SkippedSuggestionPlacement>>(
     new Map((saved?.skippedSuggestions ?? []).map(([idx, entry]) => [idx, normalizeSkippedSuggestionEntry(entry)]))
@@ -360,22 +328,25 @@ export default function DmpNewImportDialog({
     saved ? new Map(saved.segmentSkipCounts) : new Map()
   );
 
-  // Guard against React StrictMode double-firing the mount effect
-  // When restoring from saved state, skip the init effect entirely
-  const importStartedRef = useRef(!!saved);
-  // Prevent duplicate "advance suggestion" actions (double-click skip/confirm)
-  // from racing the suggesting→placing transition.
-  const suggestionActionInFlightRef = useRef(false);
-  // Prevent re-entering early-import transition before state updates land.
-  const transitionToPlacingInFlightRef = useRef(false);
+  /**
+   * Re-entry latch for the suggestion actions and the early import. Confirm and
+   * Skip hold it ('picking') while the next suggestion is chosen - a double
+   * click must not record the same section twice - and the early import holds
+   * it ('importing') until it has answered, which no second Confirm, Skip or
+   * Place manually may start again. A ref: two clicks in one tick both run
+   * before React re-renders.
+   */
+  const advanceLatchRef = useRef<'idle' | 'picking' | 'importing'>('idle');
 
   // Refs to avoid stale closures
   const connectionsRef = useLatest(connections);
   const skippedIndicesRef = useLatest(skippedIndices);
 
-  const chooseSegmentAnchorSection = useCallback((segment: number[]): number => {
-    return segment.find((idx) => skippedIndicesRef.current.has(idx)) ?? segment[0]!;
-  }, [skippedIndicesRef]);
+  /** What decides where a segment opens (wizardState.ts `SegmentChoices`), read live. */
+  const segmentChoices = useCallback((): SegmentChoices => ({
+    skipped: skippedIndicesRef.current,
+    withSuggestion: new Set(skippedSuggestionsRef.current.keys()),
+  }), [skippedIndicesRef]);
 
   const selectedIndices = useMemo(
     () => Array.from(selectionConfig.selectedIndices).sort((a, b) => a - b),
@@ -385,11 +356,11 @@ export default function DmpNewImportDialog({
   // Section currently being edited in the right-side editor panel.
   // In suggesting mode this follows the current suggestion section.
   // In manual placing mode this follows the selected segment anchor section.
-  const activeEditableSectionIndex = useMemo(() => {
-    if (currentSuggestion) return currentSuggestion.importSectionIndex;
-    if (phase === 'manual_placing' && segmentAnchor) return segmentAnchor.sectionIndex;
-    return null;
-  }, [currentSuggestion, phase, segmentAnchor]);
+  const activeEditableSectionIndex = suggesting
+    ? suggesting.suggestion.importSectionIndex
+    : manual
+      ? manual.anchor.sectionIndex
+      : null;
 
   const totalSelected = selectedIndices.length;
 
@@ -413,6 +384,7 @@ export default function DmpNewImportDialog({
   }, [currentSuggestion, importShotCount]);
 
   // Selected merge pair
+  const selectedMergeOffset = suggesting?.mergeOffset ?? 0;
   const selectedMergePair = useMemo(() => {
     if (mergeOptions.length === 0) return null;
     return mergeOptions.find((o) => o.offset === selectedMergeOffset) ?? mergeOptions[mergeOptions.length - 1]!;
@@ -965,19 +937,19 @@ export default function DmpNewImportDialog({
       stageShots(mutate(before));
       setEditState((prev) => (prev ? { ...prev, shots: mutate(prev.shots) } : prev));
 
-      const anchor = segmentAnchorRef.current;
-      if (delta === 0 || !anchor || anchor.sectionIndex !== activeEditableSectionIndex) return;
-      const at = visibleBefore(before, arrayIndex);
-      const survivorsAfter = visibleShotCount(before) + delta;
-      const stationIndex =
-        delta < 0
-          ? reanchorAfterRunDelete(anchor.stationIndex, at, -delta, survivorsAfter)
-          : reanchorStation(anchor.stationIndex, at, delta, survivorsAfter);
-      if (stationIndex !== anchor.stationIndex) {
-        commitSegmentAnchor({ sectionIndex: anchor.sectionIndex, stationIndex });
-      }
+      // The anchor is renumbered by the reducer, from the anchor it holds now
+      // (wizardState.ts 'rowsChanged'); only a manual-placing anchor on this
+      // section moves.
+      if (delta === 0 || activeEditableSectionIndex == null) return;
+      dispatch({
+        type: 'rowsChanged',
+        sectionIndex: activeEditableSectionIndex,
+        at: visibleBefore(before, arrayIndex),
+        delta,
+        survivorsAfter: visibleShotCount(before) + delta,
+      });
     },
-    [activeEditableSectionIndex, commitSegmentAnchor, currentShots, stageShots]
+    [activeEditableSectionIndex, currentShots, dispatch, stageShots]
   );
 
   /** Blank rows to insert, each with its own temp id. */
@@ -1157,17 +1129,18 @@ export default function DmpNewImportDialog({
     if (reranked.suggestions.length === 0) return false;
 
     const top = reranked.suggestions[0]!;
-    // Set default merge option immediately to avoid a one-render race where
-    // confirm can read the previous suggestion's offset.
-    setSelectedMergeOffset(computeDefaultMergeOffset(top));
-    setCurrentSuggestion(top);
-    setAlternatives(
-      reranked.suggestions
+    // The default merge offset rides the same action as the suggestion, so
+    // Confirm can never read the previous suggestion's offset.
+    dispatch({
+      type: 'suggest',
+      suggestion: top,
+      alternatives: reranked.suggestions
         .filter((s) => s !== top && s.importSectionIndex === top.importSectionIndex)
-        .slice(0, 4)
-    );
+        .slice(0, 4),
+      mergeOffset: computeDefaultMergeOffset(top),
+    });
     return true;
-  }, [computeDefaultMergeOffset, dmpFile.sections, ensureTemporalDistances, connectionsRef, skippedIndicesRef]);
+  }, [computeDefaultMergeOffset, dmpFile.sections, ensureTemporalDistances, connectionsRef, skippedIndicesRef, dispatch]);
 
   /** A section that reached the emit loop and produced nothing would otherwise
    *  disappear between the wizard and the map: it is not in the `unreachable`
@@ -1184,11 +1157,53 @@ export default function DmpNewImportDialog({
     );
   }, [dmpFile.sections, t]);
 
+  /** Hand `unplaced` to manual placing, one segment at a time, starting with the
+   *  auto-start handoff of the first to map placement. `mode` 'manual' opens it
+   *  on map placement whatever it holds (the early import's way in); 'bySegment'
+   *  opens a segment holding a skipped suggestion on reusing it. False when the
+   *  sections form no segment. */
+  const placeRemainingManually = useCallback((unplaced: number[], mode: 'manual' | 'bySegment'): boolean => {
+    const queue = segmentQueue(computeUnreachableSegments(unplaced, connectionsRef.current));
+    if (!queue) return false;
+    segmentSkipCountRef.current = new Map();
+    // The suggestion is the `suggesting` phase's own and leaves with it: the shot
+    // table used to keep following the last SUGGESTED section into manual
+    // placing while the anchor named another.
+    dispatch({ type: 'placeManually', queue, choices: segmentChoices(), mode });
+    return true;
+  }, [connectionsRef, dispatch, segmentChoices]);
+
+  /**
+   * Nothing left to suggest: the run is done - unless sections are still not
+   * placed (connected to nothing), which go to manual placing instead. Called
+   * where the wizard gets there (the anchor was the whole import, or nothing
+   * was left to suggest); it used to be an effect watching for `done`, which
+   * ran again whenever the run's busy flag flipped - a withdrawal from that
+   * screen completed the run a second time.
+   */
+  const finishRun = useCallback(() => {
+    dispatch({ type: 'done' });
+    const connected = new Set(connectionsRef.current.map((c) => c.importSectionIndex));
+    const remaining = selectedIndices.filter(
+      (idx) => !connected.has(idx) && idx !== zeroDatumConfig?.sectionIndex
+    );
+    if (remaining.length > 0 && placeRemainingManually(remaining, 'bySegment')) {
+      clearFailure();
+      return;
+    }
+    trackDialogComplete('dmp-import-new');
+    // With the receipt, like the other three completion sites (#487). This one
+    // is reached after the zero-datum import has already banked one - a
+    // single-selected-section file, or a selection with nothing left to
+    // suggest - so dropping it silenced the receipt for those imports too.
+    onComplete(...completion());
+  }, [clearFailure, completion, connectionsRef, dispatch, onComplete, placeRemainingManually, selectedIndices, zeroDatumConfig?.sectionIndex]);
+
   // Transition from suggesting phase: import reachable sections immediately (early import),
   // then enter manual_placing for unreachable segments, or complete if none.
   const transitionToPlacingOrManual = useCallback(async () => {
-    if (transitionToPlacingInFlightRef.current) return;
-    transitionToPlacingInFlightRef.current = true;
+    if (advanceLatchRef.current === 'importing') return;
+    advanceLatchRef.current = 'importing';
 
     try {
       // Import every reachable section now (the early import).
@@ -1233,36 +1248,16 @@ export default function DmpNewImportDialog({
       if (!plan) return;
       const { unreachable } = plan;
 
-      // 5. Check for unreachable sections
-      if (unreachable.length > 0) {
-        const segments = computeUnreachableSegments(unreachable, connectionsRef.current);
-        if (segments.length > 0) {
-          setSegmentQueue(segments);
-          segmentSkipCountRef.current = new Map();
-
-          // Initialize anchor to first section's station 0
-          const firstSegment = segments[0]!;
-          commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(firstSegment), stationIndex: 0 });
-          setSegmentPlacementMode('manual');
-          setAutoStartManualPlacementPending(true);
-          // The shot table follows the suggestion first and nothing ever cleared
-          // it, so entering manual placing with an exhausted pool left the grid
-          // editing the last SUGGESTED section while the anchor named another.
-          setCurrentSuggestion(null);
-
-          setPhase('manual_placing');
-          return;
-        }
-      }
+      // 5. What is still unreachable goes to manual placing, map placement first.
+      if (unreachable.length > 0 && placeRemainingManually(unreachable, 'manual')) return;
 
       // No unreachable - all done
       trackDialogComplete('dmp-import-new');
       onComplete(...completion());
     } finally {
-      transitionToPlacingInFlightRef.current = false;
-      suggestionActionInFlightRef.current = false;
+      advanceLatchRef.current = 'idle';
     }
-  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, importBatch, completion, reportEmptySections, resolvedTheme, connectionsRef, skippedIndicesRef]);
+  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, importBatch, completion, reportEmptySections, resolvedTheme, connectionsRef, skippedIndicesRef, placeRemainingManually]);
 
   /**
    * Ask the backend where every remaining section might connect, then present
@@ -1276,7 +1271,7 @@ export default function DmpNewImportDialog({
    */
   const computeSuggestions = useCallback(async () => {
     clearFailure();
-    setIsCalculating(true);
+    dispatch({ type: 'calculating', calculating: true });
     const zeroDatumIdx = zeroDatumConfig?.sectionIndex ?? null;
 
     const remainingSections: ImportSectionForSuggestion[] = [];
@@ -1305,8 +1300,8 @@ export default function DmpNewImportDialog({
     }
 
     if (remainingSections.length === 0) {
-      setIsCalculating(false);
-      setPhase('done');
+      dispatch({ type: 'calculating', calculating: false });
+      finishRun();
       return;
     }
 
@@ -1322,161 +1317,88 @@ export default function DmpNewImportDialog({
     } catch (e) {
       const reason = getErrorMessage(e);
       console.warn('[dmpImport] placement suggestions could not be computed:', reason);
-      setIsCalculating(false);
+      dispatch({ type: 'calculating', calculating: false });
       fail('suggestions', t('dialogs.dmpNewImport.suggestionsFailed', { reason }));
       return;
     }
 
-    setIsCalculating(false);
+    dispatch({ type: 'calculating', calculating: false });
 
+    // A suggestion picked moves the wizard to `suggesting`; none left goes on
+    // to the early import.
     if (!(await pickFromPool())) {
-      // No suggestions at all - check for unreachable sections
       transitionToPlacingOrManual();
+    }
+  }, [clearFailure, dispatch, dmpFile.sections, fail, finishRun, pickFromPool, selectedIndices, t, transitionToPlacingOrManual, zeroDatumConfig?.sectionIndex]);
+
+  /**
+   * The late import: whatever manual placement added, in one batch (overlap
+   * treatment and the connection redirect already ran with the early import).
+   * Called on entering `placing` - the queue emptied, or the instance reopened
+   * on an empty one - and by Retry; it used to be an effect watching for
+   * `placing` and a retry counter. What it leaves unreachable, bar what the user
+   * discarded, goes back to manual placing.
+   */
+  const runLateImport = useCallback(async () => {
+    const plan = await importBatch('late', () => {
+      const batch = buildBatchImport(
+        connectionsRef.current,
+        zeroDatumConfig?.sectionIndex ?? null,
+        dmpFile,
+        selectionConfig,
+        sectionEditsRef.current,
+        fullPoolRef.current,
+        directPlacementsRef.current,
+        earlyImported,
+        undefined,
+        resolvedTheme,
+        discardedIndicesRef.current,
+      );
+      reportEmptySections(batch.emptySections);
+      return batch;
+    });
+    if (!plan) return;
+
+    // Filter out discarded segments - they should not be placed later.
+    const remaining = plan.unreachable.filter(idx => !discardedIndicesRef.current.has(idx));
+    if (remaining.length > 0 && placeRemainingManually(remaining, 'bySegment')) {
+      clearFailure();
       return;
     }
 
-    setPhase('suggesting');
-  }, [clearFailure, dmpFile.sections, fail, pickFromPool, selectedIndices, t, transitionToPlacingOrManual, zeroDatumConfig?.sectionIndex]);
+    trackDialogComplete('dmp-import-new');
+    onComplete(...completion());
+  }, [clearFailure, completion, connectionsRef, dmpFile, earlyImported, importBatch, onComplete, placeRemainingManually, reportEmptySections, resolvedTheme, selectionConfig, zeroDatumConfig?.sectionIndex]);
 
-  // On mount: import zero datum section and fire suggest_all_import_placements
-  useEffect(() => {
-    if (importStartedRef.current) return;
-    importStartedRef.current = true;
+  /** Start the run: the zero-datum anchor, then the suggestions. */
+  const startRun = useCallback(async () => {
+    // 1. Import zero datum section if provided (this is the anchor)
+    if (zeroDatumConfig) {
+      const { sectionIndex } = zeroDatumConfig;
+      if (!(await importAnchor(() => buildZeroDatumSectionConfig(zeroDatumConfig)))) return;
 
-    const init = async () => {
-      // 1. Import zero datum section if provided (this is the anchor)
-      if (zeroDatumConfig) {
-        const { sectionIndex } = zeroDatumConfig;
-        if (!(await importAnchor(() => buildZeroDatumSectionConfig(zeroDatumConfig)))) return;
+      // Snap-fit to the newly placed zero datum section
+      useUIStore.getState().triggerFitToBounds({ snap: true });
 
-        // Snap-fit to the newly placed zero datum section
-        useUIStore.getState().triggerFitToBounds({ snap: true });
-
-        // Check if only 1 section was selected - we're done
-        if (selectedIndices.length === 1 && selectedIndices[0] === sectionIndex) {
-          setPhase('done');
-          return;
-        }
-      } else {
-        // No zero datum - check if we can suggest
-        const existingProject = useProjectStore.getState().project;
-        const hasExistingSections = (existingProject?.sections.length ?? 0) > 0;
-
-        if (!hasExistingSections && selectedIndices.length <= 1) {
-          setPhase('done');
-          return;
-        }
+      // Check if only 1 section was selected - we're done
+      if (selectedIndices.length === 1 && selectedIndices[0] === sectionIndex) {
+        finishRun();
+        return;
       }
+    } else {
+      // No zero datum - check if we can suggest
+      const existingProject = useProjectStore.getState().project;
+      const hasExistingSections = (existingProject?.sections.length ?? 0) > 0;
 
-      // 2. Fire suggest_all_import_placements with all remaining sections
-      await computeSuggestions();
-    };
-
-    init();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only: the zero-datum import starts once (importStartedRef also guards a StrictMode re-run)
-  }, []);
-
-  // When restored from manual placement with an empty segment queue, transition to placing.
-  useEffect(() => {
-    if (phase === 'manual_placing' && segmentQueue.length === 0) {
-      setPhase('placing');
-    }
-  }, [phase, segmentQueue.length]);
-
-  // Handle 'placing' phase - late import of remaining sections after manual_placing.
-  // Overlap treatment and connection redirect already happened during early import.
-  useEffect(() => {
-    if (phase !== 'placing') return;
-    if (isImporting) return;
-
-    const doLateImport = async () => {
-      const plan = await importBatch('late', () => {
-        const batch = buildBatchImport(
-          connectionsRef.current,
-          zeroDatumConfig?.sectionIndex ?? null,
-          dmpFile,
-          selectionConfig,
-          sectionEditsRef.current,
-          fullPoolRef.current,
-          directPlacementsRef.current,
-          earlyImported,
-          undefined,
-          resolvedTheme,
-          discardedIndicesRef.current,
-        );
-        reportEmptySections(batch.emptySections);
-        return batch;
-      });
-      if (!plan) return;
-      const { unreachable } = plan;
-
-      // Filter out discarded segments - they should not be placed later.
-      const remaining = unreachable.filter(idx => !discardedIndicesRef.current.has(idx));
-      if (remaining.length > 0) {
-        const segments = computeUnreachableSegments(remaining, connectionsRef.current);
-        if (segments.length > 0) {
-          setSegmentQueue(segments);
-          segmentSkipCountRef.current = new Map();
-
-          const firstSegment = segments[0]!;
-          commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(firstSegment), stationIndex: 0 });
-          const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
-          setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
-          setFromExistingSectionId(null);
-          setFromExistingStationIdx(0);
-          setAutoStartManualPlacementPending(true);
-          clearFailure();
-          setCurrentSuggestion(null);
-          setPhase('manual_placing');
-          return;
-        }
-      }
-
-      trackDialogComplete('dmp-import-new');
-      onComplete(...completion());
-    };
-
-    doLateImport();
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- phase machine: runs on entering 'placing' (or a retry), not whenever a callback it calls is re-created
-  }, [phase, placingRetry]);
-
-  // Handle 'done' phase (only reached when no sections to place)
-  useEffect(() => {
-    if (phase !== 'done') return;
-    if (isImporting || isCalculating) return;
-
-    const remaining = selectedIndices.filter(
-      (idx) => !connectedIndices.has(idx) && idx !== zeroDatumConfig?.sectionIndex
-    );
-
-    if (remaining.length > 0) {
-      const segments = computeUnreachableSegments(remaining, connectionsRef.current);
-      if (segments.length > 0) {
-        setSegmentQueue(segments);
-        segmentSkipCountRef.current = new Map();
-
-        const firstSegment = segments[0]!;
-        commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(firstSegment), stationIndex: 0 });
-        const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
-        setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
-        setFromExistingSectionId(null);
-        setFromExistingStationIdx(0);
-        setAutoStartManualPlacementPending(true);
-        clearFailure();
-        setCurrentSuggestion(null);
-        setPhase('manual_placing');
+      if (!hasExistingSections && selectedIndices.length <= 1) {
+        finishRun();
         return;
       }
     }
 
-    trackDialogComplete('dmp-import-new');
-    // With the receipt, like the other three completion sites (#487). This one
-    // is reached after the zero-datum import has already banked one - a
-    // single-selected-section file, or a selection with nothing left to
-    // suggest - so dropping it silenced the receipt for those imports too.
-    onComplete(...completion());
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- phase machine: runs on entering 'done' and when the import or calculation settles
-  }, [phase, isImporting, isCalculating]);
+    // 2. Fire suggest_all_import_placements with all remaining sections
+    await computeSuggestions();
+  }, [computeSuggestions, finishRun, importAnchor, selectedIndices, zeroDatumConfig]);
 
   // Build preview section for import side from original shots (no mode modifications).
   // Both import and target sections display their original geometry so the user can
@@ -1626,8 +1548,8 @@ export default function DmpNewImportDialog({
   const handleConfirm = useCallback(async () => {
     if (!currentSuggestion) return;
     if (refuseIncompleteShots()) return;
-    if (suggestionActionInFlightRef.current || transitionToPlacingInFlightRef.current) return;
-    suggestionActionInFlightRef.current = true;
+    if (advanceLatchRef.current !== 'idle') return;
+    advanceLatchRef.current = 'picking';
     try {
       debugLog(
         `[handleConfirm] import=${currentSuggestion.importSectionIndex} "${currentSuggestion.importSectionName}"`,
@@ -1701,9 +1623,8 @@ export default function DmpNewImportDialog({
         return;
       }
     } finally {
-      if (!transitionToPlacingInFlightRef.current) {
-        suggestionActionInFlightRef.current = false;
-      }
+      // Still held by this action unless the early import took it over.
+      if (advanceLatchRef.current === 'picking') advanceLatchRef.current = 'idle';
     }
   }, [currentSuggestion, selectedMergePair, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual, clearFailure, refuseIncompleteShots, connectionsRef, skippedIndicesRef]);
 
@@ -1711,8 +1632,8 @@ export default function DmpNewImportDialog({
   const handleSkip = useCallback(async () => {
     if (refuseIncompleteShots()) return;
     if (!currentSuggestion) return;
-    if (suggestionActionInFlightRef.current || transitionToPlacingInFlightRef.current) return;
-    suggestionActionInFlightRef.current = true;
+    if (advanceLatchRef.current !== 'idle') return;
+    advanceLatchRef.current = 'picking';
     try {
       const skippedIdx = currentSuggestion.importSectionIndex;
       const mergeImportStation = selectedMergePair?.importStation ?? currentSuggestion.importStationIndex;
@@ -1752,25 +1673,15 @@ export default function DmpNewImportDialog({
         return;
       }
     } finally {
-      if (!transitionToPlacingInFlightRef.current) {
-        suggestionActionInFlightRef.current = false;
-      }
+      if (advanceLatchRef.current === 'picking') advanceLatchRef.current = 'idle';
     }
   }, [currentSuggestion, selectedMergePair, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual, connectionsRef, skippedIndicesRef]);
 
   // Alternative click handler
   const handleAlternativeClick = useCallback((alt: CrossSectionSuggestion) => {
-    setSelectedMergeOffset(computeDefaultMergeOffset(alt));
-    setCurrentSuggestion(alt);
-    setAlternatives((prev) => {
-      const newAlts = prev.filter((a) => a !== alt);
-      if (currentSuggestion) {
-        newAlts.push(currentSuggestion);
-        newAlts.sort((a, b) => b.score - a.score);
-      }
-      return newAlts.slice(0, 4);
-    });
-  }, [currentSuggestion, computeDefaultMergeOffset]);
+    // The reducer swaps it with the suggestion on screen, with its default offset.
+    dispatch({ type: 'chooseAlternative', alternative: alt, mergeOffset: computeDefaultMergeOffset(alt) });
+  }, [computeDefaultMergeOffset, dispatch]);
 
   // ─── Manual placing phase handlers ────────────────────────────────────────
 
@@ -1780,15 +1691,12 @@ export default function DmpNewImportDialog({
   const openDialog = useUIStore((s) => s.openDialog);
   const showToast = useUIStore((s) => s.showToast);
   const setDmpImportWizardPhase = useUIStore((s) => s.setDmpImportWizardPhase);
-  const onboardingWizardPhase = useMemo(() => {
-    if (phase === 'suggesting' && !isCalculating && currentSuggestion) {
-      return 'suggesting' as const;
-    }
-    if (phase === 'manual_placing' && currentSegment && !autoStartManualPlacementPending) {
-      return 'manual_placing' as const;
-    }
-    return null;
-  }, [phase, isCalculating, currentSuggestion, currentSegment, autoStartManualPlacementPending]);
+  const onboardingWizardPhase =
+    phase.kind === 'suggesting'
+      ? ('suggesting' as const)
+      : phase.kind === 'manual_placing' && !phase.handoffPending
+        ? ('manual_placing' as const)
+        : null;
 
   useEffect(() => {
     setDmpImportWizardPhase(onboardingWizardPhase);
@@ -1805,6 +1713,23 @@ export default function DmpNewImportDialog({
   const projectSections = useProjectStore((s) => s.project?.sections ?? []);
   const projectMerges = useProjectStore((s) => s.project?.station_merges ?? []);
   const projectDefault = useProjectStore((s) => s.project?.default_azimuth_reference);
+
+  // The manual_placing phase's mode and From Existing pick
+  const segmentPlacementMode = manual?.mode ?? 'manual';
+  const fromExistingSectionId = manual?.fromExisting.sectionId ?? null;
+  const fromExistingStationIdx = manual?.fromExisting.stationIndex ?? 0;
+  const setSegmentPlacementMode = useCallback(
+    (mode: SegmentPlacementMode) => dispatch({ type: 'setMode', mode }),
+    [dispatch],
+  );
+  const setFromExistingSectionId = useCallback(
+    (sectionId: number | null) => dispatch({ type: 'setFromExistingSection', sectionId }),
+    [dispatch],
+  );
+  const setFromExistingStationIdx = useCallback(
+    (stationIndex: number) => dispatch({ type: 'setFromExistingStation', stationIndex }),
+    [dispatch],
+  );
 
   // Get target section stations for "From Existing" mode
   const fromExistingTargetSection = useMemo(() => {
@@ -1868,25 +1793,12 @@ export default function DmpNewImportDialog({
     return null;
   }, [currentSegment]);
 
-  // Advance to next segment or transition to placing
+  // Advance to the next segment, or - the queue empty - to the late import.
   const advanceSegmentQueue = useCallback(() => {
-    setSegmentQueue((prev) => {
-      const next = prev.slice(1);
-      if (next.length === 0) {
-        // Queue empty - transition to placing
-        setPhase('placing');
-        return [];
-      }
-      // Initialize anchor for next segment
-      const firstSegment = next[0]!;
-      commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(firstSegment), stationIndex: 0 });
-      const hasSuggestion = firstSegment.some(idx => skippedSuggestionsRef.current.has(idx));
-      setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
-      setFromExistingSectionId(null);
-      setFromExistingStationIdx(0);
-      return next;
-    });
-  }, [chooseSegmentAnchorSection, commitSegmentAnchor]);
+    const before = currentWizard().phase.kind;
+    const next = dispatch({ type: 'segmentDone', choices: segmentChoices() });
+    if (before === 'manual_placing' && next.phase.kind === 'placing') void runLateImport();
+  }, [currentWizard, dispatch, runLateImport, segmentChoices]);
 
   // Place segment handler
   const handleSegmentPlace = useCallback(() => {
@@ -1965,25 +1877,12 @@ export default function DmpNewImportDialog({
     const count = (segmentSkipCountRef.current.get(key) ?? 0) + 1;
     segmentSkipCountRef.current.set(key, count);
 
-    setSegmentQueue((prev) => {
-      if (prev.length <= 1) {
-        // Only one segment left - can't skip, it stays
-        return prev;
-      }
-      const [first, ...rest] = prev;
-      const next = [...rest, first!];
-      // Initialize anchor for next segment
-      const nextSeg = next[0]!;
-      commitSegmentAnchor({ sectionIndex: chooseSegmentAnchorSection(nextSeg), stationIndex: 0 });
-      const hasSuggestion = nextSeg.some(idx => skippedSuggestionsRef.current.has(idx));
-      // 'manual' like every other way into a segment: the radio group has no
-      // 'origin' option, so it used to come up with nothing selected (#576 NF-AN4-N3).
-      setSegmentPlacementMode(hasSuggestion ? 'suggestion' : 'manual');
-      setFromExistingSectionId(null);
-      setFromExistingStationIdx(0);
-      return next;
-    });
-  }, [currentSegment, chooseSegmentAnchorSection, commitSegmentAnchor]);
+    // To the back of the queue (the only segment left stays). The next one
+    // opens like every other way into a segment: 'manual' unless it holds a
+    // skipped suggestion - Skip used to set an 'origin' mode the radio group
+    // has no option for, so nothing came up selected (#576 NF-AN4-N3).
+    dispatch({ type: 'segmentSkipped', choices: segmentChoices() });
+  }, [currentSegment, dispatch, segmentChoices]);
 
   // Station click handler for segment preview. The index arrives in the
   // preview's own (emitted) numbering - see the note on the two spaces.
@@ -2102,12 +2001,15 @@ export default function DmpNewImportDialog({
    * stake: `handlePlaceOnMapClick` (the user-initiated button), the segment
    * submit, and `handleConfirm`/`handleSkip`.
    *
-   * It also no longer clears `autoStartManualPlacementPending`. That window is
-   * owned by the effect that opened it - see there.
+   * It does not end the hidden handoff window either (the manual_placing
+   * phase's `handoffPending`): the effect that attempts the handoff does - see
+   * there.
    */
   const handleStartSegmentPlacement = useCallback(() => {
     // The payload is still guarded: importPlacedSegmentNow -> buildBatchImport -> assertSendableShots.
-    if (!currentSegment || !segmentAnchor) return;
+    if (!manual) return;
+    const { queue: segmentQueue, anchor: segmentAnchor } = manual;
+    const currentSegment = segmentQueue[0];
 
     // Reopen data (same as what App.tsx passes)
     const reopenData = {
@@ -2186,9 +2088,7 @@ export default function DmpNewImportDialog({
     trackDialogComplete('dmp-import-new');
     closeDialog();
   }, [
-    currentSegment,
-    segmentAnchor,
-    segmentQueue,
+    manual,
     buildSegmentPlacementPayload,
     dmpFile,
     selectionConfig,
@@ -2203,29 +2103,46 @@ export default function DmpNewImportDialog({
   ]);
 
   /**
-   * #576 D13: import the segment the user just dropped on the map, in THIS
-   * instance - the drop reopened the wizard with it pending
-   * (`SavedManualPlacingState.placedSegment`). The run starts busy, so the exits
-   * and the auto-start handoff wait for the answer. Imported: the placement is
-   * recorded and the queue advances, and the auto-start effect hands off the
-   * next segment (or the late import runs). Refused: the segment stays queued,
-   * its placement is not kept, and the wizard shows the failure on its screen.
+   * Where this instance starts the run, once (a ref, so StrictMode's second
+   * mount does not start it again):
+   *
+   * - a fresh wizard imports the anchor and asks for suggestions (`startRun`);
+   * - #576 D13: one reopened after a drop on the map imports that segment HERE -
+   *   the drop reopened the wizard with it pending
+   *   (`SavedManualPlacingState.placedSegment`), and the run starts busy, so the
+   *   exits and the auto-start handoff wait for the answer. Imported: the
+   *   placement is recorded and the queue advances, and the handoff takes the
+   *   next segment (or the late import runs). Refused: the segment stays queued,
+   *   its placement is not kept, and the wizard shows the failure on its screen;
+   * - one reopened on an empty queue goes straight to the late import.
+   *
+   * The continuations read the LATEST callbacks: the import answers after
+   * renders this closure never saw.
    */
-  const placedSegmentStartedRef = useRef(false);
+  const runStartedRef = useRef(false);
+  const advanceSegmentQueueRef = useLatest(advanceSegmentQueue);
   useEffect(() => {
-    const placed = saved?.placedSegment;
-    if (!placed || placedSegmentStartedRef.current) return;
-    placedSegmentStartedRef.current = true;
-    const placements = [...directPlacementsRef.current, placed.placement];
-    void importPlacedSegmentNow(placed.segment, placements).then((imported) => {
-      if (!imported) {
-        setAutoStartManualPlacementPending(false);
-        return;
-      }
-      directPlacementsRef.current = placements;
-      advanceSegmentQueue();
-    });
-  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only: `saved` is this instance's restore data
+    if (runStartedRef.current) return;
+    runStartedRef.current = true;
+    if (!saved) {
+      void startRun();
+      return;
+    }
+    const placed = saved.placedSegment;
+    if (placed) {
+      const placements = [...directPlacementsRef.current, placed.placement];
+      void importPlacedSegmentNow(placed.segment, placements).then((imported) => {
+        if (!imported) {
+          dispatch({ type: 'handoffSettled' });
+          return;
+        }
+        directPlacementsRef.current = placements;
+        advanceSegmentQueueRef.current();
+      });
+      return;
+    }
+    if (currentWizard().phase.kind === 'placing') void runLateImport();
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- mount only: `saved` is this instance's restore data, and the run starts once
   }, []);
 
   /**
@@ -2240,13 +2157,15 @@ export default function DmpNewImportDialog({
   }, [refuseIncompleteShots, handleStartSegmentPlacement]);
 
   /**
-   * The auto-start handoff, and the sole owner of `autoStartManualPlacementPending`.
+   * The auto-start handoff: what ends the manual_placing phase's
+   * `handoffPending` (with the placed-segment import's refusal).
    *
    * That flag hides the whole dialog (`hidden` -> `display:none` on
    * DialogWrapper's container), so the window it opens MUST be closed by
    * whatever happens next. Its honest meaning is "the handoff has not been
    * ATTEMPTED yet" - a state that any single attempt leaves, whatever the
-   * attempt decides.
+   * attempt decides - and it exists only inside manual placing, so leaving that
+   * phase ends it too.
    *
    * It used to be cleared inside `handleStartSegmentPlacement`, after two early
    * returns, so a callee that declined left the dialog mounted, `display:none`,
@@ -2257,21 +2176,13 @@ export default function DmpNewImportDialog({
    * actual invariant; clearing above each individual `return` would be correct
    * today and re-breakable tomorrow.
    *
-   * `isImporting` is the ONLY guard that is transient - it flips false and
-   * re-runs this effect. Every other reason not to attempt is terminal, so it
-   * ends the hidden window instead of waiting forever.
+   * `isImporting` is the ONLY reason to wait - it flips false and re-runs this
+   * effect. The terminal ones (no segment, no anchor, another phase) cannot be
+   * represented while the handoff is pending (wizardState.ts).
    */
+  const handoffPending = manual?.handoffPending ?? false;
   useEffect(() => {
-    if (!autoStartManualPlacementPending) {
-      return;
-    }
-    if (isImporting) {
-      return;
-    }
-    if (phase !== 'manual_placing' || !currentSegment || !segmentAnchor) {
-      setAutoStartManualPlacementPending(false);
-      return;
-    }
+    if (!handoffPending || isImporting) return;
 
     const timeoutId = window.setTimeout(() => {
       // Attempted, so the window is over either way. In the success case the
@@ -2281,21 +2192,14 @@ export default function DmpNewImportDialog({
       try {
         handleStartSegmentPlacement();
       } finally {
-        setAutoStartManualPlacementPending(false);
+        dispatch({ type: 'handoffSettled' });
       }
     }, 0);
 
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [
-    autoStartManualPlacementPending,
-    phase,
-    currentSegment,
-    segmentAnchor,
-    isImporting,
-    handleStartSegmentPlacement,
-  ]);
+  }, [handoffPending, isImporting, handleStartSegmentPlacement, dispatch]);
 
   // ─── Cancel / Back ────────────────────────────────────────────────────────
   //
@@ -2311,10 +2215,10 @@ export default function DmpNewImportDialog({
   // (`withdrawImportedSections`, the run's one batched `delete_section` - one
   // undo entry for one user action).
 
-  /** How many sections the pending confirmation is talking about. Snapshotted
-   *  into state when the confirmation opens: the live count lives in a ref, and
-   *  a ref does not re-render the copy that quotes it. */
-  const [pendingWithdrawCount, setPendingWithdrawCount] = useState(0);
+  /** How many sections the open confirmation is talking about. Taken when it
+   *  opens (the reducer's `exit`): the live count lives in a ref, and a ref does
+   *  not re-render the copy that quotes it. */
+  const pendingWithdrawCount = wizard.exit?.count ?? 0;
 
   /**
    * Neither exit may be OPENED while an import is in flight.
@@ -2330,45 +2234,39 @@ export default function DmpNewImportDialog({
 
   /** Leaving a confirmation also drops the reason its last removal failed: it
    *  belongs to that dialog, and the next one asks afresh. */
-  const closeCancelConfirm = useCallback(() => {
-    setShowCancelConfirm(false);
+  const closeExitConfirm = useCallback(() => {
+    dispatch({ type: 'closeExit' });
     clearWithdrawalFailure();
-  }, [clearWithdrawalFailure]);
-  const closeBackConfirm = useCallback(() => {
-    setShowBackConfirm(false);
-    clearWithdrawalFailure();
-  }, [clearWithdrawalFailure]);
+  }, [clearWithdrawalFailure, dispatch]);
 
   const handleCancel = useCallback(() => {
     if (isImporting) return;
     const count = importedCount();
     if (connections.length > 0 || count > 0) {
-      setPendingWithdrawCount(count);
       clearWithdrawalFailure();
-      setShowCancelConfirm(true);
+      dispatch({ type: 'openExit', exit: { kind: 'cancel', count } });
     } else {
       onCancel();
     }
-  }, [connections.length, onCancel, isImporting, importedCount, clearWithdrawalFailure]);
+  }, [connections.length, onCancel, isImporting, importedCount, clearWithdrawalFailure, dispatch]);
 
   /** Close the wizard, first removing what it imported. */
   const handleCancelWithRemoval = useCallback(async () => {
     if (!(await withdrawImportedSections())) return;
-    setShowCancelConfirm(false);
+    dispatch({ type: 'closeExit' });
     onCancel();
-  }, [withdrawImportedSections, onCancel]);
+  }, [withdrawImportedSections, onCancel, dispatch]);
 
   const handleBack = useCallback(() => {
     if (isImporting) return;
     const count = importedCount();
     if (connections.length > 0 || count > 0) {
-      setPendingWithdrawCount(count);
       clearWithdrawalFailure();
-      setShowBackConfirm(true);
+      dispatch({ type: 'openExit', exit: { kind: 'back', count } });
     } else {
       onBack();
     }
-  }, [connections.length, onBack, isImporting, importedCount, clearWithdrawalFailure]);
+  }, [connections.length, onBack, isImporting, importedCount, clearWithdrawalFailure, dispatch]);
 
   /**
    * Back re-enters the flow at a step BEFORE anything was imported (zero-datum
@@ -2384,9 +2282,9 @@ export default function DmpNewImportDialog({
    */
   const handleBackWithRemoval = useCallback(async () => {
     if (!(await withdrawImportedSections())) return;
-    setShowBackConfirm(false);
+    dispatch({ type: 'closeExit' });
     onBack();
-  }, [withdrawImportedSections, onBack]);
+  }, [withdrawImportedSections, onBack, dispatch]);
 
   // Confidence helpers
   const confidenceColors: Record<string, string> = {
@@ -2400,17 +2298,11 @@ export default function DmpNewImportDialog({
 
   // Progress - during manual_placing, compute from queue (which has ALL unplaced sections).
   // Otherwise, count connected sections + zero datum.
-  const sectionsInQueue = useMemo(() => segmentQueue.flat().length, [segmentQueue]);
-  const placedCount = phase === 'manual_placing' || phase === 'placing' || phase === 'done'
+  const sectionsInQueue = useMemo(() => (manual ? manual.queue.flat().length : 0), [manual]);
+  const placedCount = phase.kind === 'manual_placing' || phase.kind === 'placing' || phase.kind === 'done'
     ? totalSelected - sectionsInQueue
     : connectedIndices.size + (zeroDatumConfig ? 1 : 0);
   const skippedCount = skippedIndices.size;
-
-  // Whether we're in the suggestion view with a current suggestion (side-by-side layout)
-  const showSideBySide = phase === 'suggesting' && !isCalculating && currentSuggestion != null;
-
-  // Whether we're in the manual_placing phase
-  const showManualPlacing = phase === 'manual_placing' && currentSegment != null;
 
   // Target type label for import-to-import connections
   const isImportTarget = currentSuggestion?.targetType === 'importing';
@@ -2438,7 +2330,7 @@ export default function DmpNewImportDialog({
       size="fullscreen"
       overflow="hidden"
       bodyClassName="flex-1 flex flex-col p-0 min-h-0"
-      hidden={autoStartManualPlacementPending}
+      hidden={handoffPending}
       data-testid="dmp-new-import-dialog"
     >
       <div className="flex-1 flex flex-col min-h-0">
@@ -2455,7 +2347,7 @@ export default function DmpNewImportDialog({
         </div>
 
         {/* Body: side-by-side when showing suggestion, centered otherwise */}
-        {showSideBySide ? (
+        {suggesting ? (
           <WizardScrollBody
             bodyRef={suggestionBodyRef}
             table={
@@ -2542,7 +2434,7 @@ export default function DmpNewImportDialog({
                   {mergeOptions.length > 1 ? (
                     <Select
                       value={String(selectedMergeOffset)}
-                      onChange={(v) => setSelectedMergeOffset(Number(v))}
+                      onChange={(v) => dispatch({ type: 'setMergeOffset', mergeOffset: Number(v) })}
                       options={mergeOptions.map((opt) => ({
                         value: String(opt.offset),
                         label: t('dialogs.dmpNewImport.mergeOption', { importStation: opt.importStation, target: targetSectionName, existingStation: opt.existingStation }),
@@ -2661,7 +2553,7 @@ export default function DmpNewImportDialog({
             </div>
             )}
           </WizardScrollBody>
-        ) : showManualPlacing ? (
+        ) : manual ? (
           <WizardScrollBody
             bodyRef={manualBodyRef}
             table={
@@ -2692,8 +2584,8 @@ export default function DmpNewImportDialog({
                 size={manualPreviewSize.width}
                 height={manualPreviewSize.height}
                 onStationClick={handleSegmentStationClick}
-                selectedStationIndex={previewAnchor ? emittedAnchorStation(previewAnchor) : null}
-                selectedSectionIndex={previewAnchor?.sectionIndex ?? null}
+                selectedStationIndex={emittedAnchorStation(manual.previewAnchor)}
+                selectedSectionIndex={manual.previewAnchor.sectionIndex}
               />
             </WizardMapPanel>
 
@@ -2703,8 +2595,8 @@ export default function DmpNewImportDialog({
               <div>
                 <div className="text-sm font-medium">
                   {t('dialogs.dmpNewImport.manualPlacing.segmentHeader', {
-                    current: segmentQueue.length > 0 ? 1 : 0,
-                    total: segmentQueue.length,
+                    current: manual.queue.length > 0 ? 1 : 0,
+                    total: manual.queue.length,
                   })}
                 </div>
                 <div className="text-xs text-text-secondary mt-0.5">
@@ -2795,7 +2687,7 @@ export default function DmpNewImportDialog({
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center p-6 min-h-0 overflow-auto">
             {/* Init/Importing zero datum */}
-            {phase === 'init' && isImporting && (
+            {phase.kind === 'init' && isImporting && (
               <div className="text-center" data-testid="wizard-importing-zero-datum">
                 <div className="text-lg mb-2">{t('dialogs.dmpNewImport.importingZeroDatum')}</div>
                 <div className="animate-pulse text-text-secondary">...</div>
@@ -2805,7 +2697,7 @@ export default function DmpNewImportDialog({
             {/* A failed step with no panel of its own - the anchor import in
                 `init` above all, which used to leave this body blank (#576
                 NF-AN4-N1). `placing` shows its failure below, with its Retry. */}
-            {phase !== 'placing' && error && !isImporting && !isCalculating && (
+            {phase.kind !== 'placing' && error && !isImporting && !isCalculating && (
               <div
                 className="text-center"
                 data-testid={failure?.kind === 'suggestions' ? 'wizard-suggestions-failed' : 'wizard-status-failed'}
@@ -2815,7 +2707,7 @@ export default function DmpNewImportDialog({
             )}
 
             {/* Calculating suggestions */}
-            {(phase === 'init' || phase === 'suggesting') && isCalculating && (
+            {isCalculating && (
               <div className="text-center" data-testid="wizard-calculating">
                 <div className="text-lg mb-2">{t('dialogs.dmpNewImport.calculating')}</div>
                 <div className="animate-pulse text-text-secondary">...</div>
@@ -2823,7 +2715,7 @@ export default function DmpNewImportDialog({
             )}
 
             {/* Placing - batch import in progress or failed */}
-            {phase === 'placing' && (
+            {phase.kind === 'placing' && (
               <div className="text-center" data-testid="wizard-placing">
                 {error && !isImporting ? (
                   <>
@@ -2838,23 +2730,8 @@ export default function DmpNewImportDialog({
               </div>
             )}
 
-            {/* Early import in progress (between suggesting and manual_placing/done) */}
-            {phase === 'suggesting' && isImporting && (
-              <div className="text-center" data-testid="wizard-early-importing">
-                <div className="text-lg mb-2">{t('dialogs.dmpNewImport.placing', { count: connectedIndices.size })}</div>
-                <div className="animate-pulse text-text-secondary">...</div>
-              </div>
-            )}
-
-            {/* No suggestions - show status while transitioning to manual placement */}
-            {phase === 'suggesting' && !isCalculating && !currentSuggestion && !isImporting && (
-              <div className="text-center" data-testid="wizard-no-suggestions">
-                <div className="text-lg mb-2">{t('dialogs.dmpNewImport.noSuggestions')}</div>
-              </div>
-            )}
-
             {/* Done - all placed */}
-            {phase === 'done' && placedCount === totalSelected && (
+            {phase.kind === 'done' && placedCount === totalSelected && (
               <div className="text-center" data-testid="wizard-all-placed">
                 <CheckCircleIcon size={32} className="text-success mx-auto mb-2" />
                 <div className="text-lg">{t('dialogs.dmpNewImport.allPlaced')}</div>
@@ -2888,7 +2765,7 @@ export default function DmpNewImportDialog({
             </Button>
           </div>
           <div className="flex gap-2" data-testid="wizard-suggestion-actions">
-            {phase === 'suggesting' && !isCalculating && currentSuggestion && (
+            {suggesting && (
               <>
                 <Button
                   onClick={handleSkip}
@@ -2908,9 +2785,9 @@ export default function DmpNewImportDialog({
                 </Button>
               </>
             )}
-            {phase === 'manual_placing' && currentSegment && (
+            {manual && (
               <>
-                {segmentQueue.length > 1 && (
+                {manual.queue.length > 1 && (
                   <Button
                     onClick={handleSegmentSkip}
                     className={importSecondaryButtonClass}
@@ -2950,10 +2827,10 @@ export default function DmpNewImportDialog({
                 </Button>
               </>
             )}
-            {phase === 'placing' && error && !isImporting && (
+            {phase.kind === 'placing' && error && !isImporting && (
               <Button
                 variant="primary"
-                onClick={() => setPlacingRetry((n) => n + 1)}
+                onClick={() => { void runLateImport(); }}
                 data-testid="retry-button"
               >
                 {t('common.actions.retry')}
@@ -2969,19 +2846,19 @@ export default function DmpNewImportDialog({
           its id and its meaning (close, change nothing on disk); the removal is
           the new, additional action. */}
       <AlertDialog
-        open={showCancelConfirm}
+        open={wizard.exit?.kind === 'cancel'}
         title={t('dialogs.dmpNewImport.cancelWizard')}
         // A delete is on the wire; every route out of this confirmation is shut
         // until it lands, including Escape and the backdrop. "Keep and close"
         // above all: it would close the wizard over a removal that still
         // completes, leaving the user looking at a project they chose to keep
         // sections in while those sections disappear behind them.
-        onClose={() => { if (!withdrawInFlight) closeCancelConfirm(); }}
+        onClose={() => { if (!withdrawInFlight) closeExitConfirm(); }}
         data-testid="cancel-confirm-dialog"
         actions={
           <>
             <Button
-              onClick={closeCancelConfirm}
+              onClick={closeExitConfirm}
               disabled={withdrawInFlight}
               className={importSecondaryButtonClass}
               data-testid="cancel-confirm-continue"
@@ -3030,14 +2907,14 @@ export default function DmpNewImportDialog({
       {/* Back confirmation. No "keep" here: the step Back returns to re-imports
           from scratch on the way forward, so keeping would duplicate. */}
       <AlertDialog
-        open={showBackConfirm}
+        open={wizard.exit?.kind === 'back'}
         title={t('dialogs.dmpNewImport.backWizard')}
-        onClose={() => { if (!withdrawInFlight) closeBackConfirm(); }}
+        onClose={() => { if (!withdrawInFlight) closeExitConfirm(); }}
         data-testid="back-confirm-dialog"
         actions={
           <>
             <Button
-              onClick={closeBackConfirm}
+              onClick={closeExitConfirm}
               disabled={withdrawInFlight}
               className={importSecondaryButtonClass}
               data-testid="back-confirm-continue"
