@@ -5,7 +5,7 @@ import { getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { formatVolume } from '../../utils/formatGas';
-import { GAS_NEAR, GAS_FAR } from '../../utils/gasReach';
+import { GAS_NEAR, GAS_FAR, stageDropReached } from '../../utils/gasReach';
 import { GAS_DIM_ALPHA } from './surveyLayer/customRender/shaders';
 import { segmentColor } from '../../utils/segmentColors';
 import { U_TURN_ARROW_PATH } from '../common/icons';
@@ -176,6 +176,20 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
               <path
                 d="M3 6h18L12 20z"
                 fill="#e08a1e"
+                stroke="#ffffff"
+                strokeWidth="1.5"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </KeyRow>
+        )}
+        {/* The grey drop the dive never gets to (#576 RV8c-2-D3): keyed only when one is drawn. */}
+        {field.stage_drop_refs.some((_ref, i) => !stageDropReached(field, i)) && (
+          <KeyRow label={t('map.gasLegend.key.stageDropNotReached')}>
+            <svg width="11" height="11" viewBox="0 0 24 24" aria-hidden="true" style={{ flexShrink: 0 }}>
+              <path
+                d="M3 6h18L12 20z"
+                fill="#8a8f98"
                 stroke="#ffffff"
                 strokeWidth="1.5"
                 strokeLinejoin="round"

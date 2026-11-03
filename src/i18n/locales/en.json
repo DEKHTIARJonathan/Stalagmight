@@ -2974,6 +2974,7 @@
       "key": {
         "beyondRange": "Beyond gas range",
         "stageDrop": "Stage drop",
+        "stageDropNotReached": "Stage drop not reached",
         "finalTurn": "Turnaround",
         "route": "Planned route",
         "routeJump": "Jump leg (swum shortcut)",
