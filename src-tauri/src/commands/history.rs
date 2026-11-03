@@ -21,14 +21,14 @@ pub async fn redo<R: Runtime>(app: AppHandle<R>) -> Result<HistoryOutcome, Comma
 
 /// Check if undo is available
 #[tauri::command]
-pub async fn can_undo<R: Runtime>(app: AppHandle<R>) -> bool {
-    pool::run_infallible(app, |state| state.settled_read(|| state.can_undo())).await
+pub async fn can_undo<R: Runtime>(app: AppHandle<R>) -> Result<bool, CommandError> {
+    pool::run(app, |state| Ok(state.settled_read(|| state.can_undo()))).await
 }
 
 /// Check if redo is available
 #[tauri::command]
-pub async fn can_redo<R: Runtime>(app: AppHandle<R>) -> bool {
-    pool::run_infallible(app, |state| state.settled_read(|| state.can_redo())).await
+pub async fn can_redo<R: Runtime>(app: AppHandle<R>) -> Result<bool, CommandError> {
+    pool::run(app, |state| Ok(state.settled_read(|| state.can_redo()))).await
 }
 
 /// Get the undo stack as a list of history items
@@ -37,15 +37,25 @@ pub async fn can_redo<R: Runtime>(app: AppHandle<R>) -> bool {
 /// Read between commands (#576 C2): an undo in flight has popped its entry and
 /// not yet pushed it onto the redo stack.
 #[tauri::command]
-pub async fn get_undo_stack<R: Runtime>(app: AppHandle<R>) -> Vec<UndoHistoryItem> {
-    pool::run_infallible(app, |state| state.settled_read(|| state.get_undo_stack())).await
+pub async fn get_undo_stack<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<Vec<UndoHistoryItem>, CommandError> {
+    pool::run(app, |state| {
+        Ok(state.settled_read(|| state.get_undo_stack()))
+    })
+    .await
 }
 
 /// Get the redo stack as a list of history items
 /// Index 0 = most recent undone action (first to redo)
 #[tauri::command]
-pub async fn get_redo_stack<R: Runtime>(app: AppHandle<R>) -> Vec<UndoHistoryItem> {
-    pool::run_infallible(app, |state| state.settled_read(|| state.get_redo_stack())).await
+pub async fn get_redo_stack<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<Vec<UndoHistoryItem>, CommandError> {
+    pool::run(app, |state| {
+        Ok(state.settled_read(|| state.get_redo_stack()))
+    })
+    .await
 }
 
 /// Undo to a specific index in the undo stack

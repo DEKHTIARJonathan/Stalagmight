@@ -13,12 +13,16 @@
 //! command itself with a `tauri::test` app (`MockRuntime`), not a hand-written
 //! twin of its body (#576 C9).
 //!
-//! A panic in a body becomes the command's failure where its answer has one
-//! ([`PanicReply`]: `Result<_, CommandError>` - `INTERNAL_ERROR` - and the
-//! settings commands' `Result<_, String>`); an answer with no
-//! failure shape (`bool`, a list, `()`) re-raises it on the async task
-//! ([`run_infallible`]), so that IPC call never resolves - what a panicking
-//! `async` command does - instead of the panic unwinding through the handler.
+//! A panic in a body becomes the command's failure ([`PanicReply`]:
+//! `Result<_, CommandError>` - `INTERNAL_ERROR` - and the settings commands'
+//! `Result<_, String>`), so every call answers. That is why even a read that
+//! cannot otherwise fail (`can_undo`, `check_project_integrity`) or a command that
+//! only records something (`set_workspace_mode`) answers a `Result`: the frontend
+//! awaits such calls inside its edit queue (`runSerialized`), and a call that never
+//! answered held every later edit behind it, silently, for the rest of the session
+//! (#576 RV5-6). [`run_infallible`] - which re-raises the panic on the async task,
+//! so that call never resolves - is left for `get_config` alone, which the frontend
+//! reads outside that queue.
 //!
 //! What a body may read, and how, is the read-consistency rule in
 //! docs/architecture.md ("Where commands run"): a read of the project takes
@@ -96,7 +100,8 @@ where
     }
 }
 
-/// [`run`] for a command that needs no [`AppState`] (a file parse, a hash).
+/// [`run`] for a command that needs no [`AppState`] (a file parse, a hash; another
+/// managed state is reached through an `AppHandle` moved into `f`).
 pub(crate) async fn run_stateless<T>(f: impl FnOnce() -> T + Send + 'static) -> T
 where
     T: PanicReply + Send + 'static,
@@ -107,8 +112,14 @@ where
     }
 }
 
-/// [`run`] for an answer with no failure shape (`bool`, a list, `()`): a panic is
-/// re-raised on the async task rather than fabricated into an answer.
+/// [`run`] for an answer with no failure shape: a panic is re-raised on the async
+/// task rather than fabricated into an answer, so that IPC call never resolves.
+///
+/// Only `get_config` (`commands/config.rs`) still answers this way. Its one caller,
+/// the frontend's `loadConfig`, runs at startup and after a settings or
+/// recent-projects change, never inside the edit queue, so a crash there leaves the
+/// settings unloaded rather than every later edit waiting on it. A new command answers a `Result` through [`run`]
+/// or [`run_stateless`] instead (#576 RV5-6).
 pub(crate) async fn run_infallible<R, T>(
     app: AppHandle<R>,
     f: impl FnOnce(&AppState) -> T + Send + 'static,
@@ -118,17 +129,6 @@ where
     T: Send + 'static,
 {
     match spawn(move || f(app.state::<AppState>().inner())).await {
-        Ok(answer) => answer,
-        Err(crash) => reraise(crash),
-    }
-}
-
-/// [`run_infallible`] for a command that needs no [`AppState`] (another managed
-/// state is reached through an `AppHandle` moved into `f`).
-pub(crate) async fn run_stateless_infallible<T: Send + 'static>(
-    f: impl FnOnce() -> T + Send + 'static,
-) -> T {
-    match spawn(f).await {
         Ok(answer) => answer,
         Err(crash) => reraise(crash),
     }
@@ -172,5 +172,70 @@ fn reraise<T>(crash: tauri::Error) -> T {
             std::panic::resume_unwind(join.into_panic())
         }
         other => std::panic::resume_unwind(Box::new(other.to_string())),
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod tests {
+    //! [#576 RV5-6] A command whose body panics on the pool answers `INTERNAL_ERROR`.
+    //!
+    //! The crash is real, in the registered command itself: the app has no state
+    //! managed, so the body's first step on the pool thread - `app.state::<T>()` -
+    //! panics (tauri's `Manager::state`, "state() called before manage()"). These
+    //! commands used to re-raise that panic, and the call never resolved.
+
+    use tauri::test::mock_app;
+
+    use crate::commands::command_tests::{h, run};
+    use crate::commands::{history, internal_error, launch, project, validation};
+    use crate::core::{CommandError, CommandErrorCode, WorkspaceMode};
+
+    fn assert_crash_answered<T>(command: &str, answer: Result<T, CommandError>) {
+        let err = answer.err().expect("a crashed body answers a failure");
+        println!("{command} with a crashed body -> {err:?}");
+        assert_eq!(err.code, CommandErrorCode::InternalError, "{command}");
+        assert!(
+            err.message.starts_with("The operation failed unexpectedly"),
+            "{command}: {}",
+            err.message
+        );
+    }
+
+    /// The reads and the recorder the frontend awaits inside its edit queue, and the
+    /// banner's internal-error status read (awaited at startup).
+    #[test]
+    fn a_command_the_edit_queue_awaits_answers_a_crash() {
+        let app = mock_app();
+        assert_crash_answered("can_undo", run(history::can_undo(h(&app))));
+        assert_crash_answered("can_redo", run(history::can_redo(h(&app))));
+        assert_crash_answered(
+            "check_project_integrity",
+            run(validation::check_project_integrity(h(&app))),
+        );
+        assert_crash_answered(
+            "set_workspace_mode",
+            run(project::set_workspace_mode(h(&app), WorkspaceMode::Plan)),
+        );
+        assert_crash_answered(
+            "get_internal_error_status",
+            run(internal_error::get_internal_error_status(h(&app))),
+        );
+    }
+
+    /// The same through [`super::run_stateless`]: the managed state a stateless
+    /// body reaches through its `AppHandle` is missing too.
+    #[test]
+    fn a_stateless_command_answers_a_crash() {
+        let app = mock_app();
+        assert_crash_answered(
+            "take_pending_launch_files",
+            run(launch::take_pending_launch_files(h(&app))),
+        );
     }
 }

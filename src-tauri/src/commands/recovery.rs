@@ -46,10 +46,10 @@ pub async fn attempt_repair(path: PathBuf) -> Result<RepairResult, CommandError>
 /// `.tmp`, and the files earlier restores replaced (`.pre-restore.N`); each says
 /// what it is and whether it can be restored (#576 C15).
 #[tauri::command]
-pub async fn list_backups(path: PathBuf) -> Vec<BackupInfo> {
-    pool::run_stateless_infallible(move || {
+pub async fn list_backups(path: PathBuf) -> Result<Vec<BackupInfo>, CommandError> {
+    pool::run_stateless(move || {
         tracing::info!(path = ?path, "IPC: list_backups");
-        Database::list_backups(&path)
+        Ok(Database::list_backups(&path))
     })
     .await
 }

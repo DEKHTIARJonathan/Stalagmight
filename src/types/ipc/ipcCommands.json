@@ -55,8 +55,8 @@
         "ts": "boolean"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -69,8 +69,8 @@
         "ts": "boolean"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -83,8 +83,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -148,8 +148,8 @@
         "ts": "IntegrityCheckResult"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1405,8 +1405,8 @@
         "ts": "InternalErrorNotice | null"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1447,8 +1447,8 @@
         "ts": "ProjectState | null"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1475,8 +1475,8 @@
         "ts": "Array<ProjectWarning>"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1539,8 +1539,8 @@
         "ts": "Array<string>"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1561,8 +1561,8 @@
         "ts": "LogsSince"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1575,8 +1575,8 @@
         "ts": "Array<UndoHistoryItem>"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1721,8 +1721,8 @@
         "ts": "TileFetchStatsResponse"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1735,8 +1735,8 @@
         "ts": "Array<TileProviderInfo>"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1749,8 +1749,8 @@
         "ts": "Array<UndoHistoryItem>"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1763,8 +1763,8 @@
         "ts": "boolean"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1877,8 +1877,8 @@
         "ts": "boolean"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1899,8 +1899,8 @@
         "ts": "Array<BackupInfo>"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -1927,8 +1927,8 @@
         "ts": "Array<ProjectMetadata>"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2472,8 +2472,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -2979,8 +2979,8 @@
         "ts": "null"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -3416,8 +3416,8 @@
         "ts": "OpenFileFlags"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4179,8 +4179,8 @@
         "ts": "Array<string>"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "crate::core::CommandError",
+        "ts": "CommandError"
       }
     },
     {
@@ -4201,8 +4201,8 @@
         "ts": "Array<UnrecognisedShotKind>"
       },
       "error": {
-        "rust": "!",
-        "ts": "never"
+        "rust": "CommandError",
+        "ts": "CommandError"
       }
     },
     {

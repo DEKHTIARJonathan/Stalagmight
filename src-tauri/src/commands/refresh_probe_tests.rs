@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use tauri::Manager;
 
-use super::command_tests::{h, run};
+use super::command_tests::{h, read, run};
 use super::{project, validation};
 use crate::core::state::{AppState, VirtualShotMode};
 use crate::core::Command;
@@ -122,7 +122,7 @@ fn refresh_cycle_probe() {
             }
 
             let t = Instant::now();
-            let refreshed = run(project::get_project_state(h(&app))).unwrap();
+            let refreshed = read(project::get_project_state(h(&app))).unwrap();
             read_state.push(ms(t.elapsed()));
             if !Arc::ptr_eq(&refreshed.project, &state.project_snapshot().unwrap()) {
                 copies_on_state_read += 1;
@@ -130,7 +130,7 @@ fn refresh_cycle_probe() {
             drop(refreshed);
 
             let t = Instant::now();
-            let warnings = run(validation::get_project_warnings(h(&app)));
+            let warnings = read(validation::get_project_warnings(h(&app)));
             read_warnings.push(ms(t.elapsed()));
             drop(warnings);
 
@@ -174,7 +174,7 @@ fn refresh_payload_probe() {
         let (mut json_bytes, mut binary_bytes) = (0, 0);
         for _ in 0..7 {
             let t = Instant::now();
-            let state = run(project::get_project_state(h(&app))).unwrap();
+            let state = read(project::get_project_state(h(&app))).unwrap();
             let json = serde_json::to_string(&state).unwrap();
             json_ms.push(ms(t.elapsed()));
             json_bytes = json.len();

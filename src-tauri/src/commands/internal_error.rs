@@ -11,12 +11,13 @@ use tauri::{AppHandle, Runtime};
 
 use crate::commands::pool;
 use crate::core::events::InternalErrorNotice;
+use crate::core::CommandError;
 
 /// The first lock a crash poisoned this session, or `None` when nothing has.
 /// The same notice the `internal-error` event carries.
 #[tauri::command]
 pub async fn get_internal_error_status<R: Runtime>(
     app: AppHandle<R>,
-) -> Option<InternalErrorNotice> {
-    pool::run_infallible(app, |state| state.internal_error_status()).await
+) -> Result<Option<InternalErrorNotice>, CommandError> {
+    pool::run(app, |state| Ok(state.internal_error_status())).await
 }

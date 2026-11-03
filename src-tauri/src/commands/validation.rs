@@ -13,11 +13,13 @@ pub use crate::models::warning::ProjectWarning;
 
 /// Get all validation warnings for the current project
 #[tauri::command]
-pub async fn get_project_warnings<R: Runtime>(app: AppHandle<R>) -> Vec<ProjectWarning> {
+pub async fn get_project_warnings<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<Vec<ProjectWarning>, CommandError> {
     // One settled snapshot (#576 C2): the warnings are computed on it with no lock held.
-    pool::run_infallible(app, |state| {
+    pool::run(app, |state| {
         let Some(project) = state.settled_snapshot() else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
 
         // Delegate to AppState method (uses self.database since project is already loaded)
@@ -27,7 +29,7 @@ pub async fn get_project_warnings<R: Runtime>(app: AppHandle<R>) -> Vec<ProjectW
             purpose = "surface validation issues",
             "Computed project validation warnings"
         );
-        warnings
+        Ok(warnings)
     })
     .await
 }
@@ -36,13 +38,15 @@ pub async fn get_project_warnings<R: Runtime>(app: AppHandle<R>) -> Vec<ProjectW
 /// first). Empty when the project is sound. The frontend uses a non-empty
 /// result after load to warn the user and offer a repair.
 #[tauri::command]
-pub async fn check_project_integrity<R: Runtime>(app: AppHandle<R>) -> IntegrityCheckResult {
-    pool::run_infallible(app, |state| {
-        state
+pub async fn check_project_integrity<R: Runtime>(
+    app: AppHandle<R>,
+) -> Result<IntegrityCheckResult, CommandError> {
+    pool::run(app, |state| {
+        Ok(state
             .settled_snapshot()
             .map_or_else(IntegrityCheckResult::default, |project| {
                 AppState::integrity_check_of(&project)
-            })
+            }))
     })
     .await
 }

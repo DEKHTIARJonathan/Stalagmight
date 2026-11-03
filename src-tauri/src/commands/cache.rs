@@ -204,8 +204,9 @@ pub(crate) async fn fetch_tile_impl(
 /// indicating whether any required API key environment variable is set.
 /// No app state access needed - the registry is static.
 #[tauri::command]
-pub async fn get_tile_providers() -> Vec<crate::tile_providers::TileProviderInfo> {
-    pool::run_stateless_infallible(crate::tile_providers::get_all_provider_info).await
+pub async fn get_tile_providers(
+) -> Result<Vec<crate::tile_providers::TileProviderInfo>, CommandError> {
+    pool::run_stateless(|| Ok(crate::tile_providers::get_all_provider_info())).await
 }
 
 /// Get the attribution a tile provider's imagery must be displayed with.
@@ -251,8 +252,10 @@ pub struct TileFetchStatsResponse {
 /// Returns real-time metrics from the native tile protocol handler including
 /// in-flight count, latency, and error counts.
 #[tauri::command]
-pub async fn get_tile_fetch_stats<R: Runtime>(app: tauri::AppHandle<R>) -> TileFetchStatsResponse {
-    pool::run_infallible(app, |state| {
+pub async fn get_tile_fetch_stats<R: Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<TileFetchStatsResponse, CommandError> {
+    pool::run(app, |state| {
         let stats = state.tile_fetch_stats();
         let snap = stats.snapshot();
         let avg_latency_ms = if snap.total_fetched > 0 {
@@ -260,13 +263,13 @@ pub async fn get_tile_fetch_stats<R: Runtime>(app: tauri::AppHandle<R>) -> TileF
         } else {
             0
         };
-        TileFetchStatsResponse {
+        Ok(TileFetchStatsResponse {
             in_flight: snap.in_flight,
             avg_latency_ms,
             last_latency_ms: snap.last_latency_ms,
             total_fetched: snap.total_fetched,
             total_errors: snap.total_errors,
-        }
+        })
     })
     .await
 }
@@ -371,7 +374,7 @@ mod tests {
 
     #[test]
     fn test_get_tile_providers_command() {
-        let providers = tauri::async_runtime::block_on(get_tile_providers());
+        let providers = tauri::async_runtime::block_on(get_tile_providers()).unwrap();
         assert!(!providers.is_empty());
         let esri = providers.iter().find(|p| p.name == "esri");
         assert!(esri.is_some());
@@ -380,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_get_tile_providers_serializes_correctly() {
-        let providers = tauri::async_runtime::block_on(get_tile_providers());
+        let providers = tauri::async_runtime::block_on(get_tile_providers()).unwrap();
         let json = serde_json::to_value(&providers).unwrap();
         let arr = json.as_array().unwrap();
         assert!(!arr.is_empty());

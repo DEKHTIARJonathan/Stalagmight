@@ -38,8 +38,8 @@ pub async fn flush_telemetry<R: Runtime>(app: AppHandle<R>) -> Result<(), Comman
 /// Returns true when the telemetry feature is compiled in.
 /// The frontend uses this to detect feature availability.
 #[tauri::command]
-pub async fn is_telemetry_available() -> bool {
-    pool::run_stateless_infallible(|| cfg!(feature = "telemetry")).await
+pub async fn is_telemetry_available() -> Result<bool, CommandError> {
+    pool::run_stateless(|| Ok(cfg!(feature = "telemetry"))).await
 }
 
 /// Update the telemetry enabled state (called when user toggles in settings).

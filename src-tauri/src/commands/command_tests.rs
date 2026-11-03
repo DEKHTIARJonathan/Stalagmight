@@ -47,6 +47,14 @@ pub(super) fn run<F: std::future::Future>(command: F) -> F::Output {
     tauri::async_runtime::block_on(command)
 }
 
+/// [`run`] for a command that fails only when its body crashes (a read such as
+/// `can_undo`, or a recorder such as `set_workspace_mode`): its answer is a
+/// `Result` so a crash still answers (#576 RV5-6), and a test of its ordinary path
+/// wants the value.
+pub(super) fn read<T>(command: impl std::future::Future<Output = Result<T, CommandError>>) -> T {
+    run(command).expect("the command answers")
+}
+
 pub(super) fn with_config_lock<T>(f: impl FnOnce() -> T) -> T {
     // Redirect the config path to a fresh temp dir for the duration, so a test
     // neither reads nor pollutes the real ~/.config/stalagmight/config.toml.
@@ -1191,13 +1199,13 @@ fn test_load_display_settings_returns_all() {
 #[test]
 fn test_can_undo_false_initial() {
     let app = app_with_state();
-    assert!(!run(history::can_undo(h(&app))));
+    assert!(!read(history::can_undo(h(&app))));
 }
 
 #[test]
 fn test_can_redo_false_initial() {
     let app = app_with_state();
-    assert!(!run(history::can_redo(h(&app))));
+    assert!(!read(history::can_redo(h(&app))));
 }
 
 #[test]
@@ -1219,7 +1227,7 @@ fn test_can_undo_true_after_create_section() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
-    assert!(run(history::can_undo(h(&app))));
+    assert!(read(history::can_undo(h(&app))));
 }
 
 #[test]
@@ -1239,7 +1247,7 @@ fn test_can_redo_true_after_undo() {
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(1.0)]);
     let _ = run(history::undo(h(&app)));
-    assert!(run(history::can_redo(h(&app))));
+    assert!(read(history::can_redo(h(&app))));
 }
 
 #[test]
@@ -1250,7 +1258,7 @@ fn test_redo_restores_section() {
     let _ = run(history::undo(h(&app)));
     let redo_result = run(history::redo(h(&app)));
     assert_success(&redo_result);
-    let project_state = run(project::get_project_state(h(&app))).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 1);
 }
 
@@ -1293,7 +1301,7 @@ fn test_undo_to_index_2_undoes_three_operations() {
     let _section_3 = create_section_with_shots(&app, vec![shot_data(3.0)]);
 
     // Verify we have 3 sections
-    let project_state = run(project::get_project_state(h(&app))).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 3);
 
     // Undo to index 2 should undo all 3 sections (indices 0, 1, 2)
@@ -1301,7 +1309,7 @@ fn test_undo_to_index_2_undoes_three_operations() {
     assert_success(&result);
 
     // All sections should be removed
-    let project_state = run(project::get_project_state(h(&app))).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 0);
 }
 
@@ -1327,7 +1335,7 @@ fn test_redo_to_index_0_redoes_one_operation() {
     let _ = run(history::undo(h(&app)));
 
     // Verify section is gone
-    let project_state = run(project::get_project_state(h(&app))).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 0);
 
     // Redo to index 0 should redo just the most recent undone action
@@ -1335,7 +1343,7 @@ fn test_redo_to_index_0_redoes_one_operation() {
     assert_success(&result);
 
     // Section should be restored
-    let project_state = run(project::get_project_state(h(&app))).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 1);
 }
 
@@ -1353,7 +1361,7 @@ fn test_redo_to_index_2_redoes_three_operations() {
     let _ = run(history::undo_to(h(&app), 2));
 
     // Verify all sections are gone
-    let project_state = run(project::get_project_state(h(&app))).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 0);
 
     // Redo to index 2 should redo all 3 sections (indices 0, 1, 2)
@@ -1361,7 +1369,7 @@ fn test_redo_to_index_2_redoes_three_operations() {
     assert_success(&result);
 
     // All sections should be restored
-    let project_state = run(project::get_project_state(h(&app))).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 3);
 }
 
@@ -1388,7 +1396,7 @@ fn test_redo_to_fails_when_stack_empty() {
 #[test]
 fn test_get_project_state_none_when_no_project() {
     let app = app_with_state();
-    assert!(run(project::get_project_state(h(&app))).is_none());
+    assert!(read(project::get_project_state(h(&app))).is_none());
 }
 
 /// The depth stats the frontend gets are the ABSOLUTE station range, matching
@@ -1406,7 +1414,7 @@ fn test_get_project_state_depth_stats_match_station_z() {
         ],
     );
 
-    let project_state = run(project::get_project_state(h(&app))).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     let depths: Vec<f64> = project_state
         .stations
         .iter()
@@ -1422,7 +1430,7 @@ fn test_close_project_clears_state() {
     let app = app_with_state();
     create_project(&app);
     assert_success(&run(project::close_project(h(&app), None)));
-    assert!(run(project::get_project_state(h(&app))).is_none());
+    assert!(read(project::get_project_state(h(&app))).is_none());
 }
 
 #[test]
@@ -1468,7 +1476,7 @@ fn test_open_project_loads_saved_project() {
         let app2 = app_with_state();
         let result = open_project(state(&app2), saved_path);
         assert_success(&result);
-        let project_state = run(project::get_project_state(h(&app2))).expect("project state");
+        let project_state = read(project::get_project_state(h(&app2))).expect("project state");
         assert_eq!(project_state.project.name, "Test Cave");
     });
 }
@@ -1504,7 +1512,7 @@ fn test_project_lifecycle_persists_undo_and_state() {
         let update_result = run(shot::update_shot(h(&app), section_a, 0, updates));
         assert_success(&update_result);
 
-        let undo_before = run(history::get_undo_stack(h(&app)));
+        let undo_before = read(history::get_undo_stack(h(&app)));
         assert!(!undo_before.is_empty());
         assert_eq!(undo_before[0].command_type, "update_shot");
 
@@ -1518,7 +1526,7 @@ fn test_project_lifecycle_persists_undo_and_state() {
         let open_result = open_project(state(&app), saved_path);
         assert_success(&open_result);
 
-        let project_state = run(project::get_project_state(h(&app))).expect("project state");
+        let project_state = read(project::get_project_state(h(&app))).expect("project state");
         assert_eq!(project_state.project.sections.len(), 2);
         assert_eq!(project_state.project.station_merges.len(), 1);
         assert_eq!(project_state.project.zero_datums.len(), 1);
@@ -1530,7 +1538,7 @@ fn test_project_lifecycle_persists_undo_and_state() {
         assert!((section.shots[0].length - 12.5).abs() < f64::EPSILON);
         assert_eq!(section.shots[0].comment.as_deref(), Some("recalc"));
 
-        let undo_after = run(history::get_undo_stack(h(&app)));
+        let undo_after = read(history::get_undo_stack(h(&app)));
         assert_eq!(undo_after.len(), undo_before.len());
         assert_eq!(undo_after[0].command_type, "update_shot");
     });
@@ -1551,7 +1559,7 @@ fn test_get_project_state_emits_positional_wire_refs() {
             StationRef::new(section_b, 1),
         )));
 
-        let project_state = run(project::get_project_state(h(&app))).expect("project state");
+        let project_state = read(project::get_project_state(h(&app))).expect("project state");
 
         // The IPC payload (ProjectState) must carry the positional StationRef
         // wire shape: `station_index` present, no StationKey `anchor`.
@@ -1735,7 +1743,7 @@ fn test_save_project_persists_sections() {
 
         let app2 = app_with_state();
         let _ = open_project(state(&app2), saved_path);
-        let project_state = run(project::get_project_state(h(&app2))).expect("project state");
+        let project_state = read(project::get_project_state(h(&app2))).expect("project state");
         assert_eq!(project_state.project.sections.len(), 1);
     });
 }
@@ -2168,7 +2176,7 @@ fn test_list_recent_projects_includes_saved() {
             create_project(&app);
             let dir = TempDir::new().unwrap();
             let saved_path = save_project_to_temp(&app, &dir);
-            let recent = run(project::list_recent_projects(h(&app)));
+            let recent = read(project::list_recent_projects(h(&app)));
             assert!(recent.iter().any(|p| p.file_path == saved_path));
         });
     });
@@ -2204,7 +2212,7 @@ fn test_remove_from_recent_projects_success() {
                 saved_path.clone(),
             ));
             assert_success(&remove_result);
-            let recent = run(project::list_recent_projects(h(&app)));
+            let recent = read(project::list_recent_projects(h(&app)));
             assert!(!recent.iter().any(|p| p.file_path == saved_path));
         });
     });
@@ -2230,7 +2238,7 @@ fn test_delete_project_removes_file_and_recent() {
                 !saved_path.exists(),
                 "project file should be deleted from disk"
             );
-            let recent = run(project::list_recent_projects(h(&app)));
+            let recent = read(project::list_recent_projects(h(&app)));
             assert!(!recent.iter().any(|p| p.file_path == saved_path));
         });
     });
@@ -2266,7 +2274,7 @@ fn test_delete_project_leaves_a_same_stem_tml_alone() {
             let dir = TempDir::new().unwrap();
             let saved_path = save_project_to_temp(&app, &dir);
             assert!(
-                run(project::list_recent_projects(h(&app)))
+                read(project::list_recent_projects(h(&app)))
                     .iter()
                     .any(|p| p.file_path == saved_path),
                 "precondition: saved project is listed in recents"
@@ -2283,7 +2291,7 @@ fn test_delete_project_leaves_a_same_stem_tml_alone() {
                 "an unrelated same-stem .tml must be left alone"
             );
             assert!(
-                !run(project::list_recent_projects(h(&app)))
+                !read(project::list_recent_projects(h(&app)))
                     .iter()
                     .any(|p| p.file_path == saved_path),
                 "recents must be pruned"
@@ -2407,7 +2415,7 @@ fn test_delete_project_of_open_project_tears_down_the_session() {
             assert_success(&run(history::undo(h(&app))));
 
             assert_eq!(
-                run(project::get_project_state(h(&app)))
+                read(project::get_project_state(h(&app)))
                     .expect("precondition: a project is open")
                     .project
                     .file_path
@@ -2420,11 +2428,11 @@ fn test_delete_project_of_open_project_tears_down_the_session() {
                 "precondition: the project database handle is live"
             );
             assert!(
-                run(history::can_undo(h(&app))),
+                read(history::can_undo(h(&app))),
                 "precondition: the undo stack is non-empty"
             );
             assert!(
-                run(history::can_redo(h(&app))),
+                read(history::can_redo(h(&app))),
                 "precondition: the redo stack is non-empty"
             );
 
@@ -2434,7 +2442,7 @@ fn test_delete_project_of_open_project_tears_down_the_session() {
             assert!(!saved_path.exists(), "project .stalx should be trashed");
 
             assert!(
-                run(project::get_project_state(h(&app))).is_none(),
+                read(project::get_project_state(h(&app))).is_none(),
                 "the open project must be dropped when its file is deleted"
             );
             let db_err = run(raw_data::get_raw_table_names(h(&app))).expect_err(
@@ -2445,26 +2453,26 @@ fn test_delete_project_of_open_project_tears_down_the_session() {
                 "expected the no-database error, got: {db_err}"
             );
             assert!(
-                !run(history::can_undo(h(&app))),
+                !read(history::can_undo(h(&app))),
                 "the undo stack LEAKED ({} entries): an undo must never be able to \
                  replay against a deleted project",
-                run(history::get_undo_stack(h(&app))).len()
+                read(history::get_undo_stack(h(&app))).len()
             );
             assert!(
-                run(history::get_undo_stack(h(&app))).is_empty(),
+                read(history::get_undo_stack(h(&app))).is_empty(),
                 "the undo stack LEAKED: {:?}",
-                run(history::get_undo_stack(h(&app)))
+                read(history::get_undo_stack(h(&app)))
             );
             assert!(
-                !run(history::can_redo(h(&app))),
+                !read(history::can_redo(h(&app))),
                 "the redo stack LEAKED ({} entries): a redo must never be able to \
                  replay against a deleted project",
-                run(history::get_redo_stack(h(&app))).len()
+                read(history::get_redo_stack(h(&app))).len()
             );
             assert!(
-                run(history::get_redo_stack(h(&app))).is_empty(),
+                read(history::get_redo_stack(h(&app))).is_empty(),
                 "the redo stack LEAKED: {:?}",
-                run(history::get_redo_stack(h(&app)))
+                read(history::get_redo_stack(h(&app)))
             );
         });
     });
@@ -2498,7 +2506,7 @@ fn test_delete_project_tears_down_before_removing_the_file() {
             let saved_path = save_project_to_temp(&app, &dir);
             create_section_with_shots(&app, vec![shot_data(1.0)]);
             assert!(
-                run(history::can_undo(h(&app))),
+                read(history::can_undo(h(&app))),
                 "precondition: there is real undo history to tear down"
             );
 
@@ -2525,7 +2533,7 @@ fn test_delete_project_tears_down_before_removing_the_file() {
             // The removal never happened, yet the session is gone - so the teardown
             // must have run before it.
             assert!(
-                run(project::get_project_state(h(&app))).is_none(),
+                read(project::get_project_state(h(&app))).is_none(),
                 "the teardown must precede the file removal: the project is still open, \
                  so the close can only have been sequenced AFTER the (failed) delete"
             );
@@ -2536,16 +2544,16 @@ fn test_delete_project_tears_down_before_removing_the_file() {
                  (failed) delete"
             );
             assert!(
-                !run(history::can_undo(h(&app))),
+                !read(history::can_undo(h(&app))),
                 "the teardown must precede the file removal: the undo stack still has \
                  {} entries",
-                run(history::get_undo_stack(h(&app))).len()
+                read(history::get_undo_stack(h(&app))).len()
             );
 
             // The documented cost of closing first: recents is left untouched on this
             // branch, so the user can reopen the project that survived.
             assert!(
-                run(project::list_recent_projects(h(&app)))
+                read(project::list_recent_projects(h(&app)))
                     .iter()
                     .any(|p| p.file_path == saved_path),
                 "a failed delete must leave the recents entry so the surviving project \
@@ -2605,7 +2613,7 @@ fn test_delete_project_reports_whether_it_closed_the_session() {
                 "deleting an unrelated project must not report - or perform - a close"
             );
             assert!(
-                run(project::get_project_state(h(&app))).is_some(),
+                read(project::get_project_state(h(&app))).is_some(),
                 "the OPEN project must survive an unrelated delete"
             );
             assert!(
@@ -2613,7 +2621,7 @@ fn test_delete_project_reports_whether_it_closed_the_session() {
                 "the open project's database handle must survive an unrelated delete"
             );
             assert!(
-                run(history::can_undo(h(&app))),
+                read(history::can_undo(h(&app))),
                 "the open project's undo stack must survive an unrelated delete"
             );
 
@@ -2624,7 +2632,7 @@ fn test_delete_project_reports_whether_it_closed_the_session() {
                 "deleting the OPEN project's own .stalx must report the close"
             );
             assert!(
-                run(project::get_project_state(h(&app))).is_none(),
+                read(project::get_project_state(h(&app))).is_none(),
                 "precondition for the flag: the session really was torn down"
             );
         });
@@ -2654,7 +2662,7 @@ fn test_delete_project_matches_an_alias_of_the_open_path() {
             let saved_path = save_project_to_temp(&app, &dir);
             create_section_with_shots(&app, vec![shot_data(1.0)]);
             assert!(
-                run(history::can_undo(h(&app))),
+                read(history::can_undo(h(&app))),
                 "precondition: there is real undo history to tear down"
             );
 
@@ -2677,7 +2685,7 @@ fn test_delete_project_matches_an_alias_of_the_open_path() {
             );
             assert!(!saved_path.exists(), "the aliased .stalx should be trashed");
             assert!(
-                run(project::get_project_state(h(&app))).is_none(),
+                read(project::get_project_state(h(&app))).is_none(),
                 "the open project must be dropped when an alias of its path is deleted"
             );
             assert!(
@@ -2685,9 +2693,9 @@ fn test_delete_project_matches_an_alias_of_the_open_path() {
                 "the database handle LEAKED: still open on a file that was just deleted"
             );
             assert!(
-                !run(history::can_undo(h(&app))),
+                !read(history::can_undo(h(&app))),
                 "the undo stack LEAKED ({} entries)",
-                run(history::get_undo_stack(h(&app))).len()
+                read(history::get_undo_stack(h(&app))).len()
             );
             // The recents prune matches on file identity too, so the entry stored
             // under the plain path goes with it - see
@@ -2783,7 +2791,7 @@ fn test_delete_project_by_an_alias_prunes_the_recents_entry() {
                  different file, so no session was torn down"
             );
             assert!(
-                run(project::get_project_state(h(&app))).is_some(),
+                read(project::get_project_state(h(&app))).is_some(),
                 "the unrelated open project must survive"
             );
             assert!(other_path.exists(), "and so must its .stalx");
@@ -2863,7 +2871,7 @@ fn test_delete_project_of_a_symlink_to_the_open_project_spares_the_referent() {
             let saved_path = save_project_to_temp(&app, &dir);
             create_section_with_shots(&app, vec![shot_data(1.0)]);
             assert!(
-                run(history::can_undo(h(&app))),
+                read(history::can_undo(h(&app))),
                 "precondition: there is real undo history that must NOT be torn down"
             );
 
@@ -2897,7 +2905,7 @@ fn test_delete_project_of_a_symlink_to_the_open_project_spares_the_referent() {
                  be torn down - and the frontend must not be told it was"
             );
             assert_eq!(
-                run(project::get_project_state(h(&app)))
+                read(project::get_project_state(h(&app)))
                     .expect("the open project must survive the deletion of a link to it")
                     .project
                     .file_path
@@ -2910,7 +2918,7 @@ fn test_delete_project_of_a_symlink_to_the_open_project_spares_the_referent() {
                 "the database handle must survive: its file was never deleted"
             );
             assert!(
-                run(history::can_undo(h(&app))),
+                read(history::can_undo(h(&app))),
                 "the undo history must survive: nothing was destroyed that it could \
                  replay against"
             );
@@ -2957,7 +2965,7 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
             create_section_with_shots(&app, vec![shot_data(1.0)]);
 
             assert_eq!(
-                run(project::get_project_state(h(&app)))
+                read(project::get_project_state(h(&app)))
                     .expect("precondition: a project is open")
                     .project
                     .file_path
@@ -2993,7 +3001,7 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
                  no longer exists"
             );
             assert!(
-                run(project::get_project_state(h(&app))).is_none(),
+                read(project::get_project_state(h(&app))).is_none(),
                 "precondition for the flag: the session really was torn down"
             );
             assert!(
@@ -3001,9 +3009,9 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
                 "the database handle LEAKED: still open through a link that is gone"
             );
             assert!(
-                !run(history::can_undo(h(&app))),
+                !read(history::can_undo(h(&app))),
                 "the undo stack LEAKED ({} entries)",
-                run(history::get_undo_stack(h(&app))).len()
+                read(history::get_undo_stack(h(&app))).len()
             );
 
             let recents_after = run(config::get_config(h(&app))).general.recent_projects;
@@ -3053,7 +3061,7 @@ fn test_delete_project_through_a_symlinked_parent_dir_matches_by_identity() {
             );
             create_section_with_shots(&app, vec![shot_data(1.0)]);
             assert!(
-                run(history::can_undo(h(&app))),
+                read(history::can_undo(h(&app))),
                 "precondition: there is real undo history to tear down"
             );
 
@@ -3086,7 +3094,7 @@ fn test_delete_project_through_a_symlinked_parent_dir_matches_by_identity() {
                  is alive"
             );
             assert!(
-                run(project::get_project_state(h(&app))).is_none(),
+                read(project::get_project_state(h(&app))).is_none(),
                 "the open project must be dropped when its file is deleted through a \
                  symlinked parent directory"
             );
@@ -3095,9 +3103,9 @@ fn test_delete_project_through_a_symlinked_parent_dir_matches_by_identity() {
                 "the database handle LEAKED: still open on a file that was just deleted"
             );
             assert!(
-                !run(history::can_undo(h(&app))),
+                !read(history::can_undo(h(&app))),
                 "the undo stack LEAKED ({} entries)",
-                run(history::get_undo_stack(h(&app))).len()
+                read(history::get_undo_stack(h(&app))).len()
             );
             assert!(
                 !run(config::get_config(h(&app)))
@@ -3314,7 +3322,7 @@ fn test_move_segment_moves_connected_sections() {
         StationRef::new(section_b, 0),
     )));
 
-    let before = run(project::get_project_state(h(&app))).expect("project state");
+    let before = read(project::get_project_state(h(&app))).expect("project state");
     let offset_a_before = before
         .project
         .section_offsets()
@@ -3331,7 +3339,7 @@ fn test_move_segment_moves_connected_sections() {
     let delta = Coordinates::new(3.0, -2.0, 0.0);
     assert_success(&run(section::move_segment(h(&app), section_a, delta)));
 
-    let after = run(project::get_project_state(h(&app))).expect("project state");
+    let after = read(project::get_project_state(h(&app))).expect("project state");
     let offset_a_after = after
         .project
         .section_offsets()
@@ -4346,7 +4354,7 @@ fn test_fetch_tile_unknown_provider_errors() {
 #[test]
 fn test_get_project_warnings_empty_when_no_project() {
     let app = app_with_state();
-    let warnings = run(validation::get_project_warnings(h(&app)));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.is_empty());
 }
 
@@ -4355,7 +4363,7 @@ fn test_get_project_warnings_detects_zero_length() {
     let app = app_with_state();
     let project = project_with_section(vec![shot_data(0.0)]);
     set_project_for_tests(&app, project);
-    let warnings = run(validation::get_project_warnings(h(&app)));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "ZERO_LENGTH"));
 }
 
@@ -4364,7 +4372,7 @@ fn test_get_project_warnings_detects_negative_length() {
     let app = app_with_state();
     let project = project_with_section(vec![shot_data(-1.0)]);
     set_project_for_tests(&app, project);
-    let warnings = run(validation::get_project_warnings(h(&app)));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LENGTH"));
 }
 
@@ -4373,7 +4381,7 @@ fn test_get_project_warnings_detects_short_shot() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(0.05)]);
-    let warnings = run(validation::get_project_warnings(h(&app)));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "SHORT_SHOT"));
 }
 
@@ -4382,7 +4390,7 @@ fn test_get_project_warnings_detects_long_shot() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data(100.0)]);
-    let warnings = run(validation::get_project_warnings(h(&app)));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "LONG_SHOT"));
 }
 
@@ -4391,7 +4399,7 @@ fn test_get_project_warnings_orders_error_before_warning() {
     let app = app_with_state();
     let project = project_with_section(vec![shot_data(0.0), shot_data(0.05)]);
     set_project_for_tests(&app, project);
-    let warnings = run(validation::get_project_warnings(h(&app)));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(!warnings.is_empty());
     assert_eq!(warnings[0].severity, crate::core::WarningSeverity::Error);
 }
@@ -4401,7 +4409,7 @@ fn test_get_project_warnings_includes_shot_index() {
     let app = app_with_state();
     let project = project_with_section(vec![shot_data(0.0), shot_data(0.0)]);
     set_project_for_tests(&app, project);
-    let warnings = run(validation::get_project_warnings(h(&app)));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.shot_index == 0));
     assert!(warnings.iter().any(|w| w.shot_index == 1));
 }
@@ -4419,7 +4427,7 @@ fn test_get_project_warnings_multiple_sections_sorted_by_section_id() {
         ..Default::default()
     });
     set_project_for_tests(&app, project);
-    let warnings = run(validation::get_project_warnings(h(&app)));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.len() >= 2);
     assert!(warnings[0].section_id <= warnings[1].section_id);
 }
@@ -4429,7 +4437,7 @@ fn test_get_project_warnings_detects_large_depth_change() {
     let app = app_with_state();
     create_project(&app);
     create_section_with_shots(&app, vec![shot_data_with_depth(5.0, 0.0, 20.0)]);
-    let warnings = run(validation::get_project_warnings(h(&app)));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "LARGE_DEPTH_CHANGE"));
 }
 
@@ -4464,7 +4472,7 @@ fn test_resolve_warning_marks_resolved_in_list() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warnings = run(validation::get_project_warnings(h(&app)));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     let warning = warnings
         .iter()
         .find(|w| w.code == "SHORT_SHOT")
@@ -4480,7 +4488,7 @@ fn test_resolve_warning_marks_resolved_in_list() {
     ))
     .unwrap();
 
-    let warnings_after = run(validation::get_project_warnings(h(&app)));
+    let warnings_after = read(validation::get_project_warnings(h(&app)));
     let warning_after = warnings_after
         .iter()
         .find(|w| w.code == "SHORT_SHOT")
@@ -4509,7 +4517,7 @@ fn test_resolve_warning_refuses_when_shot_missing() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warning = run(validation::get_project_warnings(h(&app)))
+    let warning = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .find(|w| w.code == "SHORT_SHOT")
         .expect("short shot warning");
@@ -4539,7 +4547,7 @@ fn test_unresolve_warning_clears_resolved_flag() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warning = run(validation::get_project_warnings(h(&app)))
+    let warning = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .find(|w| w.code == "SHORT_SHOT")
         .expect("short shot warning");
@@ -4561,7 +4569,7 @@ fn test_unresolve_warning_clears_resolved_flag() {
     ))
     .unwrap();
 
-    let warnings_after = run(validation::get_project_warnings(h(&app)));
+    let warnings_after = read(validation::get_project_warnings(h(&app)));
     let warning_after = warnings_after
         .iter()
         .find(|w| w.code == "SHORT_SHOT")
@@ -4579,7 +4587,7 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warning = run(validation::get_project_warnings(h(&app)))
+    let warning = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .find(|w| w.code == "SHORT_SHOT")
         .expect("short shot warning");
@@ -4594,7 +4602,7 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
         None,
     ))
     .unwrap();
-    assert!(run(validation::get_project_warnings(h(&app)))
+    assert!(read(validation::get_project_warnings(h(&app)))
         .iter()
         .any(|w| w.code == "SHORT_SHOT" && w.is_resolved));
 
@@ -4603,7 +4611,7 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
     renumbered.sections[0].shots[0].id = original_shot_id + 1000;
     state(&app).inner().set_project_for_tests(renumbered);
 
-    let after = run(validation::get_project_warnings(h(&app)));
+    let after = read(validation::get_project_warnings(h(&app)));
     let w = after
         .iter()
         .find(|w| w.code == "SHORT_SHOT")
@@ -4627,7 +4635,7 @@ fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warning = run(validation::get_project_warnings(h(&app)))
+    let warning = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .find(|w| w.code == "SHORT_SHOT")
         .expect("short shot warning");
@@ -4650,7 +4658,7 @@ fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
         })
         .unwrap();
 
-    let after = run(validation::get_project_warnings(h(&app)));
+    let after = read(validation::get_project_warnings(h(&app)));
     let w = after
         .iter()
         .find(|w| w.code == "SHORT_SHOT")
@@ -4671,7 +4679,7 @@ fn test_is_resolved_for_matches_uuid_and_legacy_position_branches() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warnings = run(validation::get_project_warnings(h(&app)));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     let mut zero: Vec<_> = warnings
         .into_iter()
         .filter(|w| w.code == "SHORT_SHOT")
@@ -4710,7 +4718,7 @@ fn test_is_resolved_for_matches_uuid_and_legacy_position_branches() {
         })
         .unwrap();
 
-    let after = run(validation::get_project_warnings(h(&app)));
+    let after = read(validation::get_project_warnings(h(&app)));
     let a = after
         .iter()
         .find(|w| w.code == "SHORT_SHOT" && w.shot_id == shot_uuid_hit.shot_id)
@@ -4739,7 +4747,7 @@ fn test_resolved_warning_survives_save() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warning = run(validation::get_project_warnings(h(&app)))
+    let warning = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .find(|w| w.code == "SHORT_SHOT")
         .expect("short shot warning");
@@ -4756,7 +4764,7 @@ fn test_resolved_warning_survives_save() {
     let dir = tempfile::tempdir().unwrap();
     let _saved = save_project_to_temp(&app, &dir);
 
-    let after = run(validation::get_project_warnings(h(&app)));
+    let after = read(validation::get_project_warnings(h(&app)));
     let w = after
         .iter()
         .find(|w| w.code == "SHORT_SHOT")
@@ -4790,7 +4798,7 @@ fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
     let app = app_with_custom_state(app_state);
 
     // Ignore the SHORT_SHOT warning in each section.
-    let zero: Vec<_> = run(validation::get_project_warnings(h(&app)))
+    let zero: Vec<_> = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .filter(|w| w.code == "SHORT_SHOT")
         .collect();
@@ -4814,7 +4822,7 @@ fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
     let dir = tempfile::tempdir().unwrap();
     let _ = save_project_to_temp(&app, &dir);
 
-    let after = run(validation::get_project_warnings(h(&app)));
+    let after = read(validation::get_project_warnings(h(&app)));
     let surviving = after
         .iter()
         .find(|w| w.section_id == surviving_section && w.code == "SHORT_SHOT")
@@ -4906,7 +4914,7 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     let app = app_with_custom_state(app_state);
 
     // Ignore BOTH shots' SHORT_SHOT warnings (stored by UUID at positions 0 & 1).
-    let zero: Vec<_> = run(validation::get_project_warnings(h(&app)))
+    let zero: Vec<_> = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .filter(|w| w.code == "SHORT_SHOT")
         .collect();
@@ -4939,7 +4947,7 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     let _ = save_project_to_temp(&app, &dir);
 
     // The survivor's ignore must persist...
-    let after = run(validation::get_project_warnings(h(&app)));
+    let after = read(validation::get_project_warnings(h(&app)));
     let survivor = after
         .iter()
         .find(|w| w.code == "SHORT_SHOT")
@@ -4973,7 +4981,7 @@ fn test_project_validation_drives_warnings_and_persists() {
     let app = app_with_custom_state(app_state);
 
     // A 1.0 m shot is not short under the default 0.3 m minimum.
-    assert!(run(validation::get_project_warnings(h(&app)))
+    assert!(read(validation::get_project_warnings(h(&app)))
         .iter()
         .all(|w| w.code != "SHORT_SHOT"));
 
@@ -4990,7 +4998,7 @@ fn test_project_validation_drives_warnings_and_persists() {
     )));
 
     // Now it's flagged - warnings use the PROJECT's thresholds, not the global.
-    assert!(run(validation::get_project_warnings(h(&app)))
+    assert!(read(validation::get_project_warnings(h(&app)))
         .iter()
         .any(|w| w.code == "SHORT_SHOT"));
 
@@ -5023,7 +5031,7 @@ fn test_update_project_settings_is_undoable() {
         None,
     )));
     assert!(
-        run(history::can_undo(h(&app))),
+        read(history::can_undo(h(&app))),
         "settings change must be undoable"
     );
     let applied = state(&app).get_project_state().unwrap();
@@ -5083,7 +5091,7 @@ fn test_resolve_warning_refuses_error_severity_codes() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warning = run(validation::get_project_warnings(h(&app)))
+    let warning = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .find(|w| w.code == "ZERO_LENGTH")
         .expect("zero length warning");
@@ -5103,7 +5111,7 @@ fn test_resolve_warning_refuses_error_severity_codes() {
             .is_empty(),
         "an error-severity warning must never be persisted as ignored"
     );
-    let after = run(validation::get_project_warnings(h(&app)));
+    let after = read(validation::get_project_warnings(h(&app)));
     assert!(
         !after
             .iter()
@@ -5140,7 +5148,7 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let warnings = run(validation::get_project_warnings(h(&app)));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     let a_warning = warnings
         .iter()
         .find(|w| w.section_id == a && w.code == "SHORT_SHOT")
@@ -5158,7 +5166,7 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
     ))
     .unwrap();
 
-    let after = run(validation::get_project_warnings(h(&app)));
+    let after = read(validation::get_project_warnings(h(&app)));
     assert!(
         after
             .iter()
@@ -5199,7 +5207,7 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
         "SHORT_SHOT".to_string(),
     ))
     .unwrap();
-    let cleared = run(validation::get_project_warnings(h(&app)));
+    let cleared = read(validation::get_project_warnings(h(&app)));
     assert!(
         !cleared
             .iter()
@@ -5256,7 +5264,7 @@ fn test_over_anchoring_warning_is_never_suppressible() {
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
     let app = app_with_custom_state(app_state);
 
-    let datum_warning = run(validation::get_project_warnings(h(&app)))
+    let datum_warning = read(validation::get_project_warnings(h(&app)))
         .into_iter()
         .find(|w| w.code == crate::models::MULTIPLE_DATUMS_PER_MERGE_COMPONENT)
         .expect("over-anchored merge component must raise a warning");
@@ -5276,7 +5284,7 @@ fn test_over_anchoring_warning_is_never_suppressible() {
         })
         .unwrap();
 
-    let after = run(validation::get_project_warnings(h(&app)));
+    let after = read(validation::get_project_warnings(h(&app)));
     let w = after
         .iter()
         .find(|w| w.code == crate::models::MULTIPLE_DATUMS_PER_MERGE_COMPONENT)
@@ -5294,7 +5302,7 @@ fn test_get_project_warnings_detects_invalid_azimuth() {
     let mut shot = shot_data(1.0);
     shot.azimuth_in = -1.0;
     create_section_with_shots(&app, vec![shot]);
-    let warnings = run(validation::get_project_warnings(h(&app)));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "INVALID_AZIMUTH"));
 }
 
@@ -5305,7 +5313,7 @@ fn test_get_project_warnings_detects_negative_lrud() {
     let mut shot = shot_data(1.0);
     shot.left = Some(-1.0);
     create_section_with_shots(&app, vec![shot]);
-    let warnings = run(validation::get_project_warnings(h(&app)));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "NEGATIVE_LRUD"));
 }
 
@@ -5317,7 +5325,7 @@ fn test_get_project_warnings_detects_azimuth_deviation() {
     shot.azimuth_in = 0.0;
     shot.azimuth_out = 45.0; // 45° difference exceeds 10° threshold
     create_section_with_shots(&app, vec![shot]);
-    let warnings = run(validation::get_project_warnings(h(&app)));
+    let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "AZIMUTH_DEVIATION"));
 }
 
@@ -5382,7 +5390,7 @@ fn test_create_section_and_merge_success() {
 
     assert_success(&result);
     let new_section_id = result.expect("new section id").section_id;
-    let project_state = run(project::get_project_state(h(&app))).expect("project state");
+    let project_state = read(project::get_project_state(h(&app))).expect("project state");
     assert_eq!(project_state.project.sections.len(), 2);
     assert_eq!(project_state.project.station_merges.len(), 1);
 

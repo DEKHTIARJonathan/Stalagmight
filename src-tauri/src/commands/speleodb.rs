@@ -543,8 +543,8 @@ pub async fn speleodb_link_status(app: AppHandle) -> Result<SpeleoLinkStatus, Co
 #[tauri::command]
 pub async fn speleodb_open_file_flags<R: tauri::Runtime>(
     app: AppHandle<R>,
-) -> crate::core::loading::OpenFileFlags {
-    crate::commands::pool::run_infallible(app, AppState::open_file_flags).await
+) -> Result<crate::core::loading::OpenFileFlags, CommandError> {
+    crate::commands::pool::run(app, |state| Ok(state.open_file_flags())).await
 }
 
 /// Detach the open project from SpeleoDB, turning it into a plain unmanaged

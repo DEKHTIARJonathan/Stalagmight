@@ -138,18 +138,22 @@ pub async fn close_project<R: Runtime>(
 /// the byte envelope. Both read the settled snapshot through `measured_state`, so
 /// they cannot disagree. See docs/architecture.md, "Reading the project back".
 #[tauri::command]
-pub async fn get_project_state<R: Runtime>(app: tauri::AppHandle<R>) -> Option<ProjectState> {
-    pool::run_infallible(app, |state| {
-        let project = state.settled_snapshot()?;
+pub async fn get_project_state<R: Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<Option<ProjectState>, CommandError> {
+    pool::run(app, |state| {
+        let Some(project) = state.settled_snapshot() else {
+            return Ok(None);
+        };
         let (stations, stats) = measured_state(state, &project);
         let frozen_shots = project.compute_frozen_shots();
 
-        Some(ProjectState {
+        Ok(Some(ProjectState {
             project,
             stations,
             stats,
             frozen_shots,
-        })
+        }))
     })
     .await
 }
@@ -293,8 +297,10 @@ pub(crate) fn settle_blocking<T, E: std::fmt::Display>(
 
 /// Get list of recent projects
 #[tauri::command]
-pub async fn list_recent_projects<R: Runtime>(app: tauri::AppHandle<R>) -> Vec<ProjectMetadata> {
-    pool::run_infallible(app, AppState::get_recent_projects).await
+pub async fn list_recent_projects<R: Runtime>(
+    app: tauri::AppHandle<R>,
+) -> Result<Vec<ProjectMetadata>, CommandError> {
+    pool::run(app, |state| Ok(state.get_recent_projects())).await
 }
 
 /// Remove a project from the recent projects list
@@ -502,8 +508,12 @@ pub async fn load_project_full_binary(
 /// Cancel any active loading operation.
 /// Idempotent - safe to call anytime, even when no load is active.
 #[tauri::command]
-pub async fn cancel_loading<R: Runtime>(app: tauri::AppHandle<R>) {
-    pool::run_infallible(app, AppState::cancel_loading).await;
+pub async fn cancel_loading<R: Runtime>(app: tauri::AppHandle<R>) -> Result<(), CommandError> {
+    pool::run(app, |state| {
+        state.cancel_loading();
+        Ok(())
+    })
+    .await
 }
 
 /// Create a persisted project with full progress reporting.
@@ -552,8 +562,8 @@ pub async fn cancel_loading<R: Runtime>(app: tauri::AppHandle<R>) {
 pub async fn take_unrecognised_shot_kinds<R: Runtime>(
     app: tauri::AppHandle<R>,
     loading_id: u64,
-) -> Vec<crate::models::UnrecognisedShotKind> {
-    pool::run_infallible(app, move |state| {
+) -> Result<Vec<crate::models::UnrecognisedShotKind>, CommandError> {
+    pool::run(app, move |state| {
         let found = state.take_unrecognised_shot_kinds(loading_id);
         if !found.is_empty() {
             tracing::info!(
@@ -562,7 +572,7 @@ pub async fn take_unrecognised_shot_kinds<R: Runtime>(
                 "Handing unrecognised shot kinds to the frontend"
             );
         }
-        found
+        Ok(found)
     })
     .await
 }
@@ -583,8 +593,8 @@ pub async fn take_unrecognised_shot_kinds<R: Runtime>(
 /// No `loading_id` for the same reason: the flag is written under the same `project`
 /// mutex acquisition that commits the project, so it cannot describe a different one.
 #[tauri::command]
-pub async fn history_discarded<R: Runtime>(app: tauri::AppHandle<R>) -> bool {
-    pool::run_infallible(app, AppState::history_discarded).await
+pub async fn history_discarded<R: Runtime>(app: tauri::AppHandle<R>) -> Result<bool, CommandError> {
+    pool::run(app, |state| Ok(state.history_discarded())).await
 }
 
 /// [#576 C5] The frontend reports its workspace mode (`survey` / `plan` /
@@ -597,8 +607,12 @@ pub async fn history_discarded<R: Runtime>(app: tauri::AppHandle<R>) -> bool {
 pub async fn set_workspace_mode<R: Runtime>(
     app: tauri::AppHandle<R>,
     mode: crate::core::WorkspaceMode,
-) {
-    pool::run_infallible(app, move |state| state.set_workspace_mode(mode)).await;
+) -> Result<(), CommandError> {
+    pool::run(app, move |state| {
+        state.set_workspace_mode(mode);
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
