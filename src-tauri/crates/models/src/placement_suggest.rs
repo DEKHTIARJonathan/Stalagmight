@@ -452,6 +452,19 @@ fn score_cmp(a: f64, b: f64) -> std::cmp::Ordering {
         .unwrap_or_else(|| b.is_nan().cmp(&a.is_nan()))
 }
 
+/// [#576 NF-W10BE-1] Whether a candidate's score clears the bar to be offered.
+///
+/// A NaN score never does. Both admission checks used to read
+/// `score < min_aggregate_score`, which is false for NaN, so a NaN-scored
+/// candidate was offered (sorted last by [`score_cmp`], serialised as JSON
+/// null) - and, kept first at a dedupe or endpoint-pair key, it would keep a
+/// later finite candidate with that key out, since `finite > NaN` is false too.
+/// Filtered here, at admission, it takes no part in the dedupe, the
+/// suppressions, the sort or the cap.
+fn admitted(score: f64, config: &SuggestionConfig) -> bool {
+    score >= config.min_aggregate_score
+}
+
 /// Compute the angular difference between two azimuths in [0, 180].
 fn angular_difference(a: f64, b: f64) -> f64 {
     let diff = (a - b).rem_euclid(360.0);
@@ -1391,7 +1404,7 @@ fn suggest_placements_among<'a>(
                         config,
                     );
 
-                    if result.matched_count == 0 || result.score < config.min_aggregate_score {
+                    if result.matched_count == 0 || !admitted(result.score, config) {
                         continue;
                     }
 
@@ -1439,7 +1452,7 @@ fn suggest_placements_among<'a>(
                     suggestion.preferred_merge_offset = preferred_offset;
                     suggestion.score *= context_multiplier;
 
-                    if suggestion.score < config.min_aggregate_score {
+                    if !admitted(suggestion.score, config) {
                         continue;
                     }
 
@@ -1667,17 +1680,10 @@ mod tests {
         );
     }
 
-    /// [#576 NF-W9PERF-1] A NaN reading made a candidate's score NaN, and the
-    /// score sorts took NaN as "equal" to every score: equal to 1.3 and to 0.6,
-    /// which are not equal to each other. That is no order, and the standard
-    /// sort panics when it sees it ("does not correctly implement a total
-    /// order"), so one bad azimuth panicked the whole suggestion pass.
-    ///
-    /// Synthetic scene, shaped like the differential gate's seed 0x736: short
+    /// A synthetic scene shaped like the differential gate's seed 0x736: short
     /// straight sections of 5 m and 3 m legs with one NaN azimuth each, so the
-    /// pass yields multi-shot, single-shot and NaN-scored candidates together.
-    #[test]
-    fn a_nan_reading_neither_panics_the_score_sorts_nor_moves_the_finite_candidates() {
+    /// matcher yields multi-shot, single-shot and NaN-scored candidates together.
+    fn nan_scene() -> (Vec<ExistingSection>, Vec<ImportSectionForSuggestion>) {
         // Level legs, and 3 m legs that climb (`up`) or drop (`down`) 3 m.
         let depth = 29.3;
         let leg = |az: f64, length: f64| make_shot_data(az, az, length, depth, depth);
@@ -1745,6 +1751,21 @@ mod tests {
             azimuth_reference: None,
         })
         .collect();
+        (existing, imports)
+    }
+
+    /// [#576 NF-W9PERF-1] A NaN reading made a candidate's score NaN, and the
+    /// score sorts took NaN as "equal" to every score: equal to 1.3 and to 0.6,
+    /// which are not equal to each other. That is no order, and the standard
+    /// sort panics when it sees it ("does not correctly implement a total
+    /// order"), so one bad azimuth panicked the whole suggestion pass.
+    ///
+    /// The scene is [`nan_scene`]. Its NaN-scored candidate is no longer offered
+    /// (#576 NF-W10BE-1, [`a_nan_scored_candidate_is_not_offered`]); the matcher's
+    /// own sort still sees it.
+    #[test]
+    fn a_nan_reading_neither_panics_the_score_sorts_nor_moves_the_finite_candidates() {
+        let (existing, imports) = nan_scene();
 
         let found = suggest_all_placements(
             &imports,
@@ -1755,23 +1776,97 @@ mod tests {
 
         let scores: Vec<f64> = found.iter().map(|s| s.score).collect();
         println!("suggestion scores, in order: {scores:?}");
-        let finite = scores.iter().take_while(|s| !s.is_nan()).count();
-        let distinct_finite = {
-            let mut bits: Vec<u64> = scores[..finite].iter().map(|s| s.to_bits()).collect();
+        let distinct = {
+            let mut bits: Vec<u64> = scores.iter().map(|s| s.to_bits()).collect();
             bits.dedup();
             bits.len()
         };
         assert!(
-            finite < scores.len() && distinct_finite >= 2,
-            "the scene must mix NaN with distinct finite scores to test the order: {scores:?}"
+            distinct >= 2 && scores.iter().all(|s| s.is_finite()),
+            "the scene must yield distinct finite scores to test the order: {scores:?}"
         );
         assert!(
-            scores[finite..].iter().all(|s| s.is_nan()),
-            "every NaN-scored candidate sorts after every finite one: {scores:?}"
-        );
-        assert!(
-            scores[..finite].windows(2).all(|w| w[0] >= w[1]),
+            scores.windows(2).all(|w| w[0] >= w[1]),
             "the finite candidates stay best first: {scores:?}"
+        );
+    }
+
+    /// [#576 NF-W10BE-1] A candidate whose score is NaN is not offered. A NaN
+    /// reading gives the matcher a NaN score, and `NaN < min_aggregate_score` is
+    /// false, so both admission checks let it through and it was offered (sorted
+    /// last, serialised as JSON null).
+    #[test]
+    fn a_nan_scored_candidate_is_not_offered() {
+        let (existing, imports) = nan_scene();
+        let config = PlacementSuggestionConfig::default();
+        let inner = SuggestionConfig::from(&config);
+
+        // Precondition: the matcher itself scores some candidate of this scene NaN,
+        // so what keeps it out below is the admission, not the scene.
+        let existing_shots: Vec<MatchShot> = existing[0]
+            .shots
+            .iter()
+            .map(|s| MatchShot::from_shot(s, existing[0].azimuth_reference))
+            .collect();
+        let mut nan_candidates = 0;
+        for import in &imports {
+            let shots: Vec<MatchShot> = import
+                .shots
+                .iter()
+                .map(|s| MatchShot::from_shot_data(s, AzimuthReference::default()))
+                .collect();
+            let max_ref = inner.max_reference_shots.min(shots.len());
+            let from_0 = shots[..max_ref].to_vec();
+            let from_n: Vec<MatchShot> = shots[shots.len() - max_ref..]
+                .iter()
+                .rev()
+                .map(MatchShot::reversed)
+                .collect();
+            for leaf in [&from_0, &from_n] {
+                for start in 0..existing_shots.len() {
+                    for direction in [MatchDirection::Forward, MatchDirection::Reverse] {
+                        let m = try_match_sequence(leaf, &existing_shots, start, direction, &inner);
+                        nan_candidates += usize::from(m.matched_count > 0 && m.score.is_nan());
+                    }
+                }
+            }
+        }
+
+        let all = suggest_all_placements(&imports, AzimuthReference::default(), &existing, &config);
+        let per_import: Vec<Vec<f64>> = imports
+            .iter()
+            .map(|import| {
+                suggest_placements(
+                    &import.shots,
+                    AzimuthReference::default(),
+                    &existing,
+                    &config,
+                )
+                .iter()
+                .map(|s| s.score)
+                .collect()
+            })
+            .collect();
+        let all_scores: Vec<f64> = all.iter().map(|s| s.score).collect();
+        println!(
+            "NaN-scored matcher candidates: {nan_candidates}; suggest_placements scores per \
+             import: {per_import:?}; suggest_all_placements scores: {all_scores:?}"
+        );
+        assert!(
+            nan_candidates > 0,
+            "precondition: the matcher scores a candidate of this scene NaN"
+        );
+        assert!(
+            per_import.iter().flatten().all(|s| !s.is_nan()),
+            "suggest_placements offers no NaN-scored suggestion: {per_import:?}"
+        );
+        assert!(
+            all_scores.iter().all(|s| !s.is_nan()),
+            "suggest_all_placements offers no NaN-scored suggestion: {all_scores:?}"
+        );
+        assert!(
+            all_scores.iter().any(|s| *s >= inner.min_aggregate_score),
+            "the finite suggestions are still offered: {all_scores:?}"
         );
     }
 

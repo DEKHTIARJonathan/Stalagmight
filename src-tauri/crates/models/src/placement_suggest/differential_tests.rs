@@ -1226,16 +1226,19 @@ fn optimised_pipeline_matches_the_reference_at_worst_case_sizes() {
 }
 
 /// The base (b83b12de5) crossing pipeline, verbatim but for the work counter,
-/// the crossing log, the `pub(super)` the harness needs and the score order
+/// the crossing log, the `pub(super)` the harness needs, the score order
 /// (`score_cmp`, #576 NF-W9PERF-1: the old `partial_cmp`, made total, as in
-/// production - it orders two numbers exactly as before).
+/// production - it orders two numbers exactly as before) and the admission
+/// (`admitted`, #576 NF-W10BE-1: the old `score < min_aggregate_score` test,
+/// which also turns a NaN score away, as in production - it admits every
+/// number exactly as before).
 mod reference {
     use super::super::crossing::{
         crossing_prefilter_margin, max_segment_extent, pair_crosses_too_close, segment_box,
         trace_is_finite,
     };
     use super::super::{
-        ignored_crossing_pairs_for_suggestion, log_crossing_check, merge_offset_pairs,
+        admitted, ignored_crossing_pairs_for_suggestion, log_crossing_check, merge_offset_pairs,
         merge_station_pair_for_offsets, score_cmp, section_trace_points,
         station_context_multiplier, suppress_duplicate_endpoint_pairs,
         suppress_equivalent_single_front_reverses, try_match_sequence, CrossSectionSuggestion,
@@ -1761,7 +1764,7 @@ mod reference {
                             config,
                         );
 
-                        if result.matched_count == 0 || result.score < config.min_aggregate_score {
+                        if result.matched_count == 0 || !admitted(result.score, config) {
                             continue;
                         }
 
@@ -1804,7 +1807,7 @@ mod reference {
                         suggestion.preferred_merge_offset = preferred_offset;
                         suggestion.score *= context_multiplier;
 
-                        if suggestion.score < config.min_aggregate_score {
+                        if !admitted(suggestion.score, config) {
                             continue;
                         }
 
