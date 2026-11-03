@@ -125,6 +125,11 @@ export function useAnalyticalOverlays({
       setDistanceFieldFailed(false);
       return undefined;
     }
+    // [#576 RV9b-2] A new fetch is under way, so nothing has failed yet and the
+    // computing cue shows for it: an edit, a re-root or an include_reference_legs
+    // flip after a failure used to recompute with the flag still set. The layer
+    // is already base after that failure and 'hold' keeps it there - no blink.
+    setDistanceFieldFailed(false);
     let cancelled = false;
     invokeIpc(
       'get_station_distances_from',

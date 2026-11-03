@@ -145,4 +145,31 @@ describe('distance gradient: a field that cannot be computed (#576 C7-MSG)', () 
     expect(invokeIpcMock).toHaveBeenCalledTimes(2);
     expect(result.current.distanceFieldFailed).toBe(false);
   });
+
+  // [#576 RV9b-2] Only the switch-off cleared it: an edit, a re-root or an
+  // include_reference_legs flip after a failure recomputed with the flag still set,
+  // so the computing cue stayed hidden for the whole recompute.
+  it('a recompute after a failure (an edit) clears the failure while it runs, and a second failure is still one burst', async () => {
+    const setDistanceField = vi.fn();
+    invokeIpcMock.mockRejectedValueOnce(new Error('distance field failed (test)'));
+    const { result, rerender } = renderHook((props: Options) => useAnalyticalOverlays(props), {
+      initialProps: options('t1', setDistanceField),
+    });
+    await actMicrotasks(5);
+    expect(result.current.distanceFieldFailed).toBe(true);
+
+    // An edit: the recompute is in flight, and nothing has failed yet.
+    let failRecompute: (e: Error) => void = () => {};
+    invokeIpcMock.mockReturnValueOnce(new Promise((_resolve, reject) => { failRecompute = reject; }));
+    rerender(options('t2', setDistanceField));
+    await actMicrotasks(5);
+    expect(invokeIpcMock).toHaveBeenCalledTimes(2);
+    expect(result.current.distanceFieldFailed).toBe(false);
+
+    // It fails too: failed again, and still the one toast for the burst.
+    failRecompute(new Error('distance field failed again (test)'));
+    await actMicrotasks(5);
+    expect(result.current.distanceFieldFailed).toBe(true);
+    expect(failureToasts()).toHaveLength(1);
+  });
 });
