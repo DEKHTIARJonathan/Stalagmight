@@ -8,7 +8,7 @@
  * the shared `globalViewMap` fake has no `on()`, which every draggable drop marker subscribes with.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { renderHook } from '@testing-library/react';
+import { fireEvent, renderHook } from '@testing-library/react';
 import type maplibregl from 'maplibre-gl';
 
 vi.mock('maplibre-gl', () => {
@@ -39,6 +39,7 @@ vi.mock('maplibre-gl', () => {
 
 import '../../../i18n';
 import { useGasPlanDropMarkers } from '../useGasPlanDropMarkers';
+import { useGasPlanStore } from '../../../store/gasPlanStore';
 import { makeStation, stationRef } from '../../../test/factories/survey';
 import type { GasReachField } from '../../../types/ipc.generated';
 
@@ -109,5 +110,46 @@ describe('useGasPlanDropMarkers: a drop the dive does not reach (#576 RV8c-2-D3)
     expect(past.title).toContain('not reached');
     unmount();
     expect(document.querySelectorAll('[data-testid="gas-drop-marker"]')).toHaveLength(0);
+  });
+
+  it('puts a not-reached drop past the end of its slider: Left pulls it onto the turnaround, Right does nothing (#576 RV9b-4)', () => {
+    const map = { project: () => ({ x: 0, y: 0 }) } as unknown as maplibregl.Map;
+    const stations = [0, 1, 2, 3, 4].map((i) =>
+      makeStation({ station_ref: stationRef(1, i), coordinates: { x: 10 * i, y: 0, z: 0 } }),
+    );
+    const setStageDropOverride = vi.fn();
+    useGasPlanStore.setState({ stageDropOverrides: [null, stationRef(1, 4)] });
+    const { unmount } = renderHook(() =>
+      useGasPlanDropMarkers({
+        map,
+        mapLoaded: true,
+        showGasPlan: true,
+        gasReachField: field(),
+        activeStations: stations,
+        gpsOrigin: null,
+        setStageDropOverride,
+      }),
+    );
+    const markers = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="gas-drop-marker"]'));
+    const [onRoute, past] = markers as [HTMLElement, HTMLElement];
+    // Route 1:0 -> 1:1 -> 1:2: the slider runs 0..2. The pin at 1:4 is beyond the turnaround.
+    expect(past.getAttribute('aria-valuemax')).toBe('2');
+    expect(past.getAttribute('aria-valuenow')).toBe('2');
+    expect(past.getAttribute('aria-valuetext')).toContain('not reached');
+    fireEvent.keyDown(past, { key: 'ArrowRight' });
+    fireEvent.keyDown(past, { key: 'ArrowUp' });
+    expect(setStageDropOverride).not.toHaveBeenCalled();
+    fireEvent.keyDown(past, { key: 'ArrowLeft' });
+    expect(setStageDropOverride).toHaveBeenCalledTimes(1);
+    expect(setStageDropOverride).toHaveBeenCalledWith(1, stationRef(1, 2));
+    // A drop on the route keeps its own position and steps both ways as before.
+    expect(onRoute.getAttribute('aria-valuenow')).toBe('1');
+    expect(onRoute.hasAttribute('aria-valuetext')).toBe(false);
+    fireEvent.keyDown(onRoute, { key: 'ArrowRight' });
+    expect(setStageDropOverride).toHaveBeenLastCalledWith(0, stationRef(1, 2));
+    fireEvent.keyDown(onRoute, { key: 'ArrowLeft' });
+    expect(setStageDropOverride).toHaveBeenLastCalledWith(0, stationRef(1, 0));
+    unmount();
+    useGasPlanStore.setState({ stageDropOverrides: [] });
   });
 });

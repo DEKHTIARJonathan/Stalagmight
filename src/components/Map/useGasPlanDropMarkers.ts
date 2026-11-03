@@ -132,12 +132,26 @@ export function useGasPlanDropMarkers({
       el.setAttribute('role', 'slider');
       el.setAttribute('tabindex', '0');
       el.setAttribute('aria-label', t('gasPanel.map.dropAria', { n: i + 1 }));
-      const curIndex = routeRefs.findIndex(
-        (r) => r.section_id === ref.section_id && r.station_index === ref.station_index
-      );
+      // A drop the dive does not reach (#576 RV8c-2-D3) stands at its pin past the turnaround, one
+      // step beyond the slider's last station: it reads the maximum with the not-reached text,
+      // Left/Down pulls it back onto the turnaround, and Right/Up has nowhere deeper to go on the
+      // route. (Its pin is not a route station, so looking it up on the route found nothing and the
+      // slider read the origin, with Right moving the pin back to the route's first leg.)
+      const curIndex = reached
+        ? Math.max(
+            0,
+            routeRefs.findIndex(
+              (r) => r.section_id === ref.section_id && r.station_index === ref.station_index
+            )
+          )
+        : routeRefs.length;
+      const lastIndex = Math.max(0, routeRefs.length - 1);
       el.setAttribute('aria-valuemin', '0');
-      el.setAttribute('aria-valuemax', String(Math.max(0, routeRefs.length - 1)));
-      el.setAttribute('aria-valuenow', String(curIndex < 0 ? 0 : curIndex));
+      el.setAttribute('aria-valuemax', String(lastIndex));
+      el.setAttribute('aria-valuenow', String(Math.min(curIndex, lastIndex)));
+      if (!reached) {
+        el.setAttribute('aria-valuetext', t('gasPanel.map.dropNotReachedTooltip', { n: i + 1 }));
+      }
       el.title = !reached
         ? t('gasPanel.map.dropNotReachedTooltip', { n: i + 1 })
         : overReserve
@@ -185,9 +199,9 @@ export function useGasPlanDropMarkers({
               (r) => r.section_id === pending.section_id && r.station_index === pending.station_index
             )
           : -1;
-        const from = pendingIdx >= 0 ? pendingIdx : curIndex < 0 ? 0 : curIndex;
-        const j = Math.min(routeRefs.length - 1, Math.max(0, from + delta));
-        if (j === from) return;
+        const from = pendingIdx >= 0 ? pendingIdx : curIndex;
+        const j = from + delta;
+        if (j < 0 || j > routeRefs.length - 1) return;
         const target = routeRefs[j];
         if (!target) return;
         pendingDropFocusRef.current = i;
