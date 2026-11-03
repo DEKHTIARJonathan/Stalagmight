@@ -1,5 +1,6 @@
 import { useRef, useEffect, useMemo, useState, memo, useCallback } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { useVirtualizerUnmountGuard } from '../common/useVirtualizerUnmountGuard';
 import { useTranslation } from 'react-i18next';
 import { type Section, type SectionId } from '../../types/project';
 import { useUIStore } from '../../store/uiStore';
@@ -199,6 +200,9 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     estimateSize: () => SECTION_ROW_ESTIMATED_HEIGHT,
     overscan: 8,
   });
+  // Rows are measured, so a reveal still pending when the panel unmounts (a
+  // selection, then Plan mode) would throw from its frame (#576 NF-W8E3-1).
+  useVirtualizerUnmountGuard(rowVirtualizer);
 
   // Reveal a row by index, then move keyboard focus to it. When the target is
   // already mounted (adjacent step within the overscan window) it focuses
