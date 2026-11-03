@@ -61,6 +61,21 @@ fn every_open_path_waits_at_least_five_seconds_for_a_busy_file() {
             Database::open_for_recovery(&path).unwrap(),
         ),
         ("in_memory", Database::in_memory().unwrap()),
+        (
+            "open_existing_to_read",
+            Database::open_existing_to_read(&path).unwrap(),
+        ),
+        // [#576 RV6b-R1-D1] An older file is read through an upgraded copy in
+        // memory: that handle waits too.
+        ("open_existing_to_read (older file, in memory)", {
+            let older = dir.path().join("CaveOld.stalx");
+            std::fs::copy(&path, &older).unwrap();
+            rusqlite::Connection::open(&older)
+                .unwrap()
+                .execute_batch("UPDATE project SET schema_version = 16; PRAGMA user_version = 16;")
+                .unwrap();
+            Database::open_existing_to_read(&older).unwrap()
+        }),
         // [#576 NF-FIX5-3] The restore check sets the timeout itself: handed a
         // connection that would not wait at all, it still waits.
         ("for_candidate_check", {

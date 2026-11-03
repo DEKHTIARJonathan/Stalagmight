@@ -659,6 +659,14 @@ mod crash_history_save_tests;
 mod internal_error_status_tests;
 #[cfg(test)]
 #[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              listings are the evidence a run captures"
+)]
+mod merge_source_read_only_tests;
+#[cfg(test)]
+#[expect(
     clippy::unwrap_used,
     clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point, and the printed \

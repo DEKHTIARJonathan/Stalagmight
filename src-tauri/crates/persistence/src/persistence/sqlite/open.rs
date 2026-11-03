@@ -130,6 +130,91 @@ impl Database {
         Self::open_existing_with(path, Some(refusal))
     }
 
+    /// [#576 RV6b-R1-D1] Open an existing project only to READ it: nothing is
+    /// written to the file or beside it, wherever it is.
+    ///
+    /// A file this build reads as it is opens exactly as [`Self::open_existing`]
+    /// opens it. One the open would upgrade in place - the migration chain, and
+    /// the `.pre-v<N>.backup` copy it keeps beside the file first - is instead
+    /// copied into memory (`VACUUM INTO` from a read-only connection) and the
+    /// upgrade runs on that copy; the handle reads the upgraded copy and the file
+    /// is left byte-for-byte as it was. For a caller that consumes a project and
+    /// never writes it back (a merge source). The usual checks - quick_check, a
+    /// project inside, foreign keys - run either way, and a file from before the
+    /// first public release is refused as by every other open.
+    ///
+    /// The one write that can still happen is SQLite rolling back a hot journal
+    /// left by a crashed writer, which every open of such a file does to read it.
+    pub fn open_existing_to_read(path: &Path) -> Result<Self> {
+        const READ_ONLY_HERE: &str = "opened only to be read (merge source)";
+        match Self::open_existing_with(path, Some(READ_ONLY_HERE)) {
+            Err(e) if e.downcast_ref::<super::UpgradeRefused>().is_some() => {
+                tracing::info!(
+                    path = ?path,
+                    purpose = "read an older project without upgrading it in place (#576 RV6b-R1)",
+                    "Reading an older-format project through an upgraded copy in memory"
+                );
+                Self::upgraded_copy_in_memory(path)
+            }
+            opened => opened,
+        }
+    }
+
+    /// The file at `path`, copied into a private in-memory database and upgraded
+    /// there. See [`Self::open_existing_to_read`].
+    fn upgraded_copy_in_memory(path: &Path) -> Result<Self> {
+        use rusqlite::OpenFlags;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COPIES: AtomicU64 = AtomicU64::new(0);
+        // A shared-cache in-memory database under a name no other open uses: the
+        // handle below keeps it alive, and the source connection's `VACUUM INTO`
+        // reaches the same database by that name. Both connections parse URIs,
+        // which is what makes the name a memory database and not a file; the
+        // source path is made absolute so it can never be read as a URI itself.
+        let name = format!(
+            "file:stalagmight-read-{}-{}?mode=memory&cache=shared",
+            std::process::id(),
+            COPIES.fetch_add(1, Ordering::Relaxed)
+        );
+        let uri = OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        let conn = Connection::open_with_flags(
+            &name,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE | uri,
+        )
+        .context("Failed to create an in-memory copy of the project")?;
+        let source_path = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .context("Failed to resolve the project path")?
+                .join(path)
+        };
+        let source =
+            Connection::open_with_flags(&source_path, OpenFlags::SQLITE_OPEN_READ_ONLY | uri)
+                .context("Failed to open the project read-only")?;
+        source
+            .execute("VACUUM INTO ?1", [&name])
+            .context("Failed to copy the project into memory")?;
+        drop(source);
+        // The upgrade's pre-upgrade copy is keyed off the database's own file name,
+        // which an in-memory database does not have; refuse rather than let a
+        // copy land anywhere if that ever stops holding.
+        if conn.path().is_some_and(|p| !p.is_empty()) {
+            anyhow::bail!("The in-memory copy of the project unexpectedly has a file name");
+        }
+
+        let db = Self { conn };
+        db.enable_foreign_keys()?;
+        db.validate_integrity()
+            .context("Database file may be corrupted")?;
+        if !db.has_project_data()? {
+            anyhow::bail!("File does not contain a valid Stalagmight project");
+        }
+        db.ensure_schema_version()?;
+        db.validate_foreign_keys()?;
+        Ok(db)
+    }
+
     fn open_existing_with(path: &Path, refuse_upgrade: Option<&str>) -> Result<Self> {
         // Verbose open-time logging is debug-only - it fires on every
         // project load and every recent-projects metadata read, which

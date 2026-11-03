@@ -56,9 +56,15 @@ impl AppState {
         }
 
         // Load all source projects
+        //
+        // [#576 RV6b-R1-D1] Read, never written: a source an older build saved is
+        // upgraded on a copy in memory, not in place, so neither the file nor a
+        // `.pre-v<N>.backup` beside it is written - in a user's folder, the app's
+        // own folders or a system folder alike, and whether or not the originals
+        // are archived afterwards.
         let mut source_projects: Vec<Project> = Vec::new();
         for path in &source_paths {
-            let db = match Database::open_existing(path) {
+            let db = match Database::open_existing_to_read(path) {
                 Ok(db) => db,
                 Err(e) => {
                     return CommandResult::failure(format!(

@@ -13,12 +13,19 @@ use std::path::{Path, PathBuf};
 
 /// Constructors the busy-timeout test cannot reach, with why that is safe. Keep it
 /// this short: anything here is a construction no test pins the timeout of.
-const NOT_AN_OPEN_PATH: &[(&str, &str)] = &[(
-    "open_existing_with",
-    "private to open.rs: the one body of open_existing and \
+const NOT_AN_OPEN_PATH: &[(&str, &str)] = &[
+    (
+        "open_existing_with",
+        "private to open.rs: the one body of open_existing and \
          open_existing_refusing_upgrade (#576 RV4-R-M3-OPEN), which are its only callers \
          and are both opened in the busy-timeout test",
-)];
+    ),
+    (
+        "upgraded_copy_in_memory",
+        "private to open.rs: the older-file branch of open_existing_to_read (#576 \
+         RV6b-R1-D1), its only caller, which the busy-timeout test opens on an older file",
+    ),
+];
 
 /// The production `.rs` files of the `sqlite` module: `sqlite.rs` and every file
 /// under `sqlite/`, at any depth (#576 RV6a-14: a constructor in a future
