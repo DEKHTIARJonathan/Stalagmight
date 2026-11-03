@@ -6,6 +6,8 @@
 //! anywhere and is not written; an older-format file - one the open would upgrade
 //! in place, keeping a backup copy beside it first - is refused before the first
 //! write, with its own code and the refusal as the message, and left as it was.
+//! The load-time repairs of a current file (#576 RV4-R-M3-D2) are made in memory
+//! only there, as for a file a newer build saved.
 //!
 //! All data is synthetic: a project built in memory, saved by this build, then
 //! re-stamped as an older file. No fixture is read or written.
@@ -220,4 +222,145 @@ fn an_unstamped_project_where_nothing_may_be_written_is_not_called_older() {
     assert_eq!(error.message, UNSTAMPED_REFUSAL, "shown as-is");
     assert_eq!(after, before, "the file is left as it was");
     assert_eq!(files_in(dir.path()), ["CaveL.stalx"]);
+}
+
+/// [#576 RV4-R-M3-D2, RV6b-R2] The repairs a load makes to a CURRENT file, one
+/// file each: `(what, surgery)`. `{sid}` is the section's id, `{shot0}` the first
+/// shot's in-memory id, `{ignores}` the table the "Ignore" choices live in.
+const REPAIRS: &[(&str, &str)] = &[
+    (
+        "a legacy ignore keyed by position (the UUID backfill)",
+        "INSERT INTO {ignores} (section_id, shot_id, warning_code, resolved_at) \
+         VALUES ({sid}, {shot0}, 'SHORT_SHOT', '2026-01-01T00:00:00+00:00');",
+    ),
+    (
+        "a shot kind this build cannot read (the Reference repair)",
+        "UPDATE shots SET kind = 9 WHERE sequence_order = (SELECT MAX(sequence_order) FROM shots);",
+    ),
+    (
+        "a pending Jump/Reference classification (the kind backfill)",
+        "UPDATE shots SET kind = 1 WHERE sequence_order = (SELECT MAX(sequence_order) FROM shots); \
+         INSERT INTO project_settings (key, value) VALUES ('pending_kind_classification', '1');",
+    ),
+    (
+        "a SpeleoDB link with no undo mode recorded (the undo-mode materialization)",
+        "INSERT INTO speleo_link (id, endpoint, project_id, project_name, has_unpushed_edits) \
+         VALUES (1, 'https://example.invalid', '11111111-1111-1111-1111-111111111111', 'CaveL', 0);",
+    ),
+];
+
+/// A current file whose first shot is short (it raises `SHORT_SHOT`) and whose
+/// shots carry persisted UUIDs, with `surgery` applied (see [`REPAIRS`]).
+fn file_needing_a_repair(dir: &Path, surgery: &str) -> PathBuf {
+    let path = dir.join("CaveL.stalx");
+    let mut project = Project::new("CaveL".to_owned(), None);
+    project.add_section(SectionData {
+        name: Some("SectionA".to_owned()),
+        color: "#123456".to_owned(),
+        shots: vec![
+            ShotData {
+                length: 0.1,
+                ..Default::default()
+            },
+            ShotData {
+                length: 7.0,
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    });
+    project.ensure_shot_uuids();
+    let mut db = Database::open(&path).expect("create");
+    db.save_project(&project).expect("write");
+    let saved = db.load_project().expect("read back");
+    drop(db);
+    let conn = rusqlite::Connection::open(&path).expect("reopen");
+    let ignores: String = conn
+        .query_row(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'resolved%'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("the ignore table");
+    conn.execute_batch(
+        &surgery
+            .replace("{ignores}", &ignores)
+            .replace("{sid}", &saved.sections[0].id.to_string())
+            .replace("{shot0}", &saved.sections[0].shots[0].id.to_string()),
+    )
+    .expect("surgery");
+    path
+}
+
+#[test]
+fn a_load_where_nothing_may_be_written_keeps_its_repairs_in_memory() {
+    let mut wrong = Vec::new();
+    for (what, surgery) in REPAIRS {
+        let _cfg = crate::test_helpers::isolated_config();
+        // The control: the same file where a user keeps projects is repaired on
+        // disk, so each case really is a write the load makes.
+        let control_dir = TempDir::new().expect("dir");
+        let control = file_needing_a_repair(control_dir.path(), surgery);
+        let control_before = std::fs::read(&control).expect("read");
+        let opened = state_with_sink().do_load_project_full_with(control.clone(), None);
+        assert!(opened.is_ok(), "{what}: the control opens");
+        let control_written = std::fs::read(&control).expect("read") != control_before;
+
+        let dir = TempDir::new().expect("dir");
+        let path = file_needing_a_repair(dir.path(), surgery);
+        let before = std::fs::read(&path).expect("read");
+        let state = state_with_sink();
+        let loaded = state
+            .do_load_project_full_with(path.clone(), Some(&refusal()))
+            .unwrap_or_else(|e| panic!("{what}: it must open: {} {}", e.code, e.message));
+        let unchanged = std::fs::read(&path).expect("read") == before;
+        let shots = &loaded.project.sections[0].shots;
+        let in_memory = match *what {
+            w if w.starts_with("a legacy ignore") => loaded
+                .warnings
+                .iter()
+                .find(|w| w.code == "SHORT_SHOT")
+                .map(|w| format!("SHORT_SHOT ignored: {}", w.is_resolved)),
+            w if w.starts_with("a shot kind") => Some(format!(
+                "kind {:?}, flagged for the user: {}",
+                shots[1].kind,
+                state.take_unrecognised_shot_kinds(loaded.loading_id).len()
+            )),
+            w if w.starts_with("a pending") => Some(format!("kind {:?}", shots[1].kind)),
+            _ => Some(format!("undo policy {:?}", state.undo_policy())),
+        };
+        let expected = match *what {
+            w if w.starts_with("a legacy ignore") => "SHORT_SHOT ignored: true".to_owned(),
+            w if w.starts_with("a shot kind") => {
+                "kind Reference, flagged for the user: 1".to_owned()
+            }
+            w if w.starts_with("a pending") => "kind Reference".to_owned(),
+            _ => format!(
+                "undo policy {:?}",
+                state.undo_policy_for(Some(&crate::models::SpeleoLink {
+                    endpoint: String::new(),
+                    project_id: String::new(),
+                    project_name: String::new(),
+                    base_commit_sha: None,
+                    has_unpushed_edits: false,
+                    last_edit_at: None,
+                    last_verify_at: None,
+                    undo_mode: None,
+                }))
+            ),
+        };
+        println!(
+            "{what}: written where a user keeps projects: {control_written}; where nothing may \
+             be written: file unchanged {unchanged}, folder {:?}, in memory: {in_memory:?}",
+            files_in(dir.path())
+        );
+        if !control_written
+            || !unchanged
+            || files_in(dir.path()) != ["CaveL.stalx"]
+            || in_memory.as_deref() != Some(expected.as_str())
+        {
+            wrong.push(*what);
+        }
+    }
+    assert!(wrong.is_empty(), "wrong for: {wrong:?}");
 }

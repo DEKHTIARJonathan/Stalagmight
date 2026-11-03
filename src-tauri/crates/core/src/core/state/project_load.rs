@@ -553,6 +553,13 @@ impl AppState {
         };
         check_cancelled!();
         progress.complete_phase(LoadingPhase::OpeningDatabase);
+        // [#576 RV4-R-M3-D2] A file where nothing may be written (the app's own
+        // folders, a system folder): the load writes nothing to it either. The
+        // repairs below that would write - the legacy ignore-UUID backfill, the
+        // unreadable-kind repair, the kind-classification persist and the undo-mode
+        // materialization - are kept in memory only, as for a file a newer build
+        // saved; the next save in a writable place persists them.
+        let protected = upgrade_refusal.is_some();
 
         // === PHASE 1: Loading project data (20%) ===
         progress.start_phase(LoadingPhase::LoadingProjectData);
@@ -607,9 +614,12 @@ impl AppState {
         // minted UUIDs persist on the next save (matching save_project's call).
         project.ensure_shot_uuids();
         // [#576 B6-D1] A write - skipped on a newer file, which is never written.
+        // [#576 RV4-R-M3-D2] And where nothing may be written: the legacy rows stay
+        // keyed by position, which still suppresses their warnings this session
+        // (the position fallback), and a save re-keys them by UUID.
         let backfilled = match newer_schema {
-            None => db.backfill_resolved_warning_uuids(&live_shot_uuids),
-            Some(_) => Ok(0),
+            None if !protected => db.backfill_resolved_warning_uuids(&live_shot_uuids),
+            _ => Ok(0),
         };
         match backfilled {
             Ok(n) if n > 0 => tracing::info!(
@@ -674,7 +684,16 @@ impl AppState {
                     // writes the fail-closed value, not a choice taken from the
                     // user - picking anything else stays an ordinary undoable
                     // SetShotKind on top.
-                    match db.repair_unrecognised_shot_kinds() {
+                    //
+                    // [#576 RV4-R-M3-D2] Not where nothing may be written: the
+                    // substitution stays session-only there, and the user is still
+                    // asked.
+                    let repaired = if protected {
+                        Ok(0)
+                    } else {
+                        db.repair_unrecognised_shot_kinds()
+                    };
+                    match repaired {
                         Ok(n) if n > 0 => tracing::info!(
                             repaired = n,
                             purpose = "persist the fail-closed substitution (#27)",
@@ -740,6 +759,10 @@ impl AppState {
             // shots by their stored rank; a rank gap in a legacy file made the
             // two differ, and a miss here is permanent because the flag is
             // cleared with it (B35(f), #576).
+            //
+            // [#576 RV4-R-M3-D2] Where nothing may be written the verdicts stay in
+            // memory and the flag stays set, so the pass runs again on the next
+            // open - exactly what a failed persist below leads to.
             let verdicts: Vec<_> = project
                 .sections
                 .iter()
@@ -752,7 +775,13 @@ impl AppState {
                         .map(|(position, shot)| (section.id, position as u32, shot.kind))
                 })
                 .collect();
-            if let Err(e) = db.persist_backfilled_shot_kinds(&verdicts) {
+            if protected {
+                tracing::info!(
+                    reclassified,
+                    purpose = "load a project where nothing may be written (#576 RV4-R-M3-D2)",
+                    "Kept the classified shot kinds in memory only"
+                );
+            } else if let Err(e) = db.persist_backfilled_shot_kinds(&verdicts) {
                 // Non-fatal: the flag is cleared in the same transaction as
                 // the writes, so a failure here leaves both undone and the
                 // (idempotent) backfill simply runs again on the next open.
@@ -883,7 +912,14 @@ impl AppState {
             }
         };
         if let Some(link) = &mut speleo_link {
-            self.materialize_undo_mode(&db, link);
+            if protected {
+                // [#576 RV4-R-M3-D2, RV6b-R2] The legacy NULL mode is resolved for
+                // this session only: writing it would rewrite the link row of a
+                // file where nothing may be written.
+                link.undo_mode = Some(self.effective_undo_mode(link.undo_mode));
+            } else {
+                self.materialize_undo_mode(&db, link);
+            }
         }
         let history_row_cap = self.history_load_row_cap(speleo_link.as_ref());
 
