@@ -31,40 +31,12 @@ vi.mock('../DialogWrapper', () => ({
 }));
 
 import DmpSelectionDialog from '../DmpSelectionDialog';
-import type { DmpFile, DmpSection, DmpShot } from '../../../types/commands';
+import type { DmpFile, DmpSection } from '../../../types/commands';
 import en from '../../../i18n/locales/en.json';
-
-function dmpShot(): DmpShot {
-  return {
-    shot_type: 'Standard',
-    heading_in: 10,
-    heading_out: 10,
-    length: 5,
-    depth_in: 0,
-    depth_out: 0,
-    pitch_in: 0,
-    pitch_out: 0,
-    left: 0,
-    right: 0,
-    up: 0,
-    down: 0,
-    temperature: 0,
-    hour: 0,
-    minute: 0,
-    second: 0,
-    marker_index: 0,
-  };
-}
+import { makeDmpSection, makeDmpShots } from '../../../test/factories/dmp';
 
 function section(name: string): DmpSection {
-  return {
-    version: 5,
-    name,
-    direction: 'in',
-    date: '2026-01-01',
-    shots: Array.from({ length: 3 }, dmpShot),
-    content_hash: `hash-${name}`,
-  };
+  return makeDmpSection({ version: 5, name, shots: makeDmpShots(3), content_hash: `hash-${name}` });
 }
 
 const CUT_SHORT =

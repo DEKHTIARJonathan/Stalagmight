@@ -35,38 +35,13 @@ vi.mock('../DialogWrapper', () => ({
 }));
 
 import DmpSelectionDialog from '../DmpSelectionDialog';
-import type { DmpFile, DmpSection, DmpShot } from '../../../types/commands';
+import type { DmpSection } from '../../../types/commands';
+import { makeDmpFile, makeDmpSection, makeDmpShots } from '../../../test/factories/dmp';
 
-const shot = (): DmpShot => ({
-  shot_type: 'Standard',
-  heading_in: 10,
-  heading_out: 10,
-  length: 5,
-  depth_in: 0,
-  depth_out: 0,
-  pitch_in: 0,
-  pitch_out: 0,
-  left: 0,
-  right: 0,
-  up: 0,
-  down: 0,
-  temperature: 0,
-  hour: 0,
-  minute: 0,
-  second: 0,
-  marker_index: 0,
-});
+const section = (name: string): DmpSection =>
+  makeDmpSection({ version: 5, name, shots: makeDmpShots(3), content_hash: `hash-${name}` });
 
-const section = (name: string): DmpSection => ({
-  version: 5,
-  name,
-  direction: 'in',
-  date: '2026-01-01',
-  shots: Array.from({ length: 3 }, shot),
-  content_hash: `hash-${name}`,
-});
-
-const file = { version: 5, sections: [section('AAA'), section('BBB')], warnings: [] } as DmpFile;
+const file = makeDmpFile({ version: 5, sections: [section('AAA'), section('BBB')] });
 
 const renderDialog = () =>
   render(<DmpSelectionDialog dmpFile={file} filePath="/tmp/dive.dmp" onCancel={vi.fn()} onContinue={vi.fn()} />);

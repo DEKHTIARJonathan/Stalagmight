@@ -28,30 +28,28 @@ import type { OrphanPlacementSuggestion } from '../../../types/commands';
 import { accepted, type CommandOutcome } from '../../../store/commandResult';
 import type { EditOutcome } from '../../../types/ipc/EditOutcome';
 import type { Project, Shot } from '../../../types/project';
+import { makeShot } from '../../../test/factories/survey';
 
 const f32 = (v: number) => Math.fround(v);
 const ORPHAN_ID = 1;
 const TARGET_ID = 2;
 
 /** A shot as the store holds it after a binary load or refresh. */
-const storeShot = (id: number, length: number): Shot => ({
-  id,
-  azimuth_in: f32(123.4),
-  azimuth_out: f32(303.3),
-  length: f32(length),
-  depth_in: f32(10.1),
-  depth_out: f32(11.7),
-  pitch_in: f32(-3.3),
-  pitch_out: f32(3.1),
-  left: f32(0.7),
-  right: f32(1.3),
-  up: f32(0.2),
-  down: f32(2.9),
-  comment: null,
-  kind: 'Normal',
-  marker_index: null,
-  temperature: null,
-});
+const storeShot = (id: number, length: number): Shot =>
+  makeShot({
+    id,
+    azimuth_in: f32(123.4),
+    azimuth_out: f32(303.3),
+    length: f32(length),
+    depth_in: f32(10.1),
+    depth_out: f32(11.7),
+    pitch_in: f32(-3.3),
+    pitch_out: f32(3.1),
+    left: f32(0.7),
+    right: f32(1.3),
+    up: f32(0.2),
+    down: f32(2.9),
+  });
 
 const section = (id: number, shots: Shot[]) => ({
   id,

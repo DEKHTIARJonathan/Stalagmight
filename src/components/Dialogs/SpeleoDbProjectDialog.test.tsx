@@ -19,6 +19,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { Permission, SpeleoProjectMetadata } from '../../types/ipc.generated';
 import { invokeIpcMock, stubGetErrorMessage, errorMessageOrString } from '../../test/factories/ipc';
+import { makeSpeleoLink } from '../../test/factories/speleo';
 
 const META: SpeleoProjectMetadata = {
   name: 'Cave A',
@@ -30,20 +31,7 @@ const META: SpeleoProjectMetadata = {
   exclude_geojson: false,
 };
 
-const LINK: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
-  editState: 'read-only',
-  lockHolder: null,
-  lockedByOther: false,
-  hasUnpushedEdits: false,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-};
+const LINK: SpeleoLinkState = makeSpeleoLink();
 
 /** The local file backing project A - the project every test below opens ON. */
 const PATH_A = '/caves/a.stalx';

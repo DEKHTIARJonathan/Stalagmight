@@ -23,6 +23,7 @@ import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
+import { makeSpeleoLink } from '../../test/factories/speleo';
 
 // The real dialog actions, captured before `beforeEach` swaps in spies. The [#303]
 // hand-off at the bottom of this file moves the user BETWEEN two dialogs, so
@@ -30,20 +31,7 @@ import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/facto
 const REAL_OPEN_DIALOG = useUIStore.getState().openDialog;
 const REAL_CLOSE_DIALOG = useUIStore.getState().closeDialog;
 
-const LINK: SpeleoLinkState = {
-  permission: 'READ_AND_WRITE',
-  editState: 'editing',
-  lockHolder: null,
-  lockedByOther: false,
-  hasUnpushedEdits: true,
-  unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
-  undoMode: 'full',
-  remoteState: 'up_to_date',
-  noAccess: false,
-  serverError: null,
-};
+const LINK: SpeleoLinkState = makeSpeleoLink({ editState: 'editing', hasUnpushedEdits: true });
 
 const seedLink = (o: Partial<SpeleoLinkState> = {}) =>
   useSpeleoStore.setState({ link: { ...LINK, ...o }, banner: null, busy: false });

@@ -28,27 +28,10 @@ vi.mock('../DialogWrapper', () => ({
 import ZeroDatumSelectionDialog from '../ZeroDatumSelectionDialog';
 import type { DmpFile, DmpShot } from '../../../types/commands';
 import type { DmpSelectionConfig } from '../DmpSelectionDialog';
+import { makeDmpShot } from '../../../test/factories/dmp';
 
 function dmpShot(heading: number, length: number, depthIn: number, depthOut: number): DmpShot {
-  return {
-    shot_type: 'Standard',
-    heading_in: heading,
-    heading_out: heading,
-    length,
-    depth_in: depthIn,
-    depth_out: depthOut,
-    pitch_in: 0,
-    pitch_out: 0,
-    left: 0,
-    right: 0,
-    up: 0,
-    down: 0,
-    temperature: 0,
-    hour: 0,
-    minute: 0,
-    second: 0,
-    marker_index: 0,
-  };
+  return makeDmpShot({ heading_in: heading, heading_out: heading, length, depth_in: depthIn, depth_out: depthOut });
 }
 
 /** The extent of the card's drawn centreline, in SVG pixels. */
