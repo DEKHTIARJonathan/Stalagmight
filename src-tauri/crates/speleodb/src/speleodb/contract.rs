@@ -284,6 +284,12 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         }
         _ => (None, None),
     };
+    // [#576 A8] Exhaustive, and kept so by the compiler: a wildcard arm here is what
+    // silently routes the NEXT routing variant (like `AdoptAriane` -> Adopt or
+    // `WouldDiscardLocalEdits` -> UnpushedLocalEdits) to Fatal, so the lint denies one.
+    // A new `SpeleoDbError` variant is then a compile error until someone decides
+    // its action.
+    #[deny(clippy::wildcard_enum_match_arm)]
     let (action, status, message) = match err {
         // Status: carry the parsed human detail WITHOUT the "SpeleoDB returned HTTP
         // N:" wrapper - the frontend frames it per operation ("Login to SpeleoDB
@@ -362,10 +368,6 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::expect_used,
-    reason = "unit test fixtures fail loudly on setup errors"
-)]
 mod tests {
     use super::{dto_for_error, map_status, Endpoint, SpeleoDbAction, TransportCause};
     use crate::speleodb::SpeleoDbError;
@@ -613,43 +615,6 @@ mod tests {
         let adopt = dto_for_error(Endpoint::DownloadDump, &SpeleoDbError::AdoptAriane);
         assert_eq!(adopt.action, SpeleoDbAction::Adopt);
         assert_eq!(adopt.status, None);
-    }
-
-    #[test]
-    fn the_action_match_is_exhaustive_so_a_new_variant_cannot_default_to_fatal() {
-        // The fail-closed arm used to be `_ =>`, sitting directly under two arms that
-        // exist precisely because a ROUTING signal must not reach the user as `Fatal`
-        // (`AdoptAriane` → Adopt, `WouldDiscardLocalEdits` → UnpushedLocalEdits). A
-        // wildcard is what silently routes the NEXT such variant wrongly: it compiles
-        // clean, lands in Fatal, and the frontend toasts a dead end instead of offering
-        // the choice the variant was added to offer.
-        //
-        // Guarded at the source, because "this match has no wildcard" is not observable
-        // from its results - and rustc's own exhaustiveness check is the real enforcement
-        // the moment the wildcard is gone.
-        let src = include_str!("contract.rs");
-        let start = src
-            .find("let (action, status, message) = match err {")
-            .expect("the action match is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    };\n").expect("the match terminates")];
-        // Anchor the slice before trusting the absence check below. `!contains` passes
-        // vacuously on an empty or short body, so a `cargo fmt` reflow that moves the
-        // `\n    };\n` terminator would turn this test green while guarding nothing -
-        // the one failure mode a source-level tripwire must not have. These two arms
-        // are the routing signals the wildcard used to swallow, so requiring them
-        // proves we sliced the right match.
-        for arm in ["AdoptAriane", "WouldDiscardLocalEdits"] {
-            assert!(
-                body.contains(arm),
-                "sliced the wrong region: the action match must contain the `{arm}` arm"
-            );
-        }
-        assert!(
-            !body.contains("_ =>"),
-            "the action match must stay exhaustive - a wildcard lets a new SpeleoDbError \
-             variant default to Fatal without anyone deciding that it should"
-        );
     }
 
     /// [#576 C4] A verb refused by a core refusal reaches the frontend with that
