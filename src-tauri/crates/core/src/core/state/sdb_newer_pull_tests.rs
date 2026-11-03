@@ -61,7 +61,9 @@ fn a_pulled_newer_file_gets_no_link_row_and_no_display_settings() {
     // downloaded file with this build's link row (INSERT OR REPLACE with this
     // build's columns) and the preserved display settings. Into a file a newer
     // build saved, that write resets any link column the newer build added - the
-    // downgrade a newer file is otherwise protected from (#576 B6-D1).
+    // downgrade a newer file is otherwise protected from (#576 B6-D1). Only a
+    // first-time Open installs one now (#576 RV4-R-S7-D2; the rest refuse it
+    // before the swap), so this is that Open's stamp.
     let dir = TempDir::new().expect("tempdir");
     let path = newer_file(dir.path());
     let before = written(&path);

@@ -132,9 +132,15 @@ pub(super) fn restore_display_settings(
 /// [#576 NF-PNEWER-2] A file a NEWER build saved gets neither: the link upsert
 /// writes this build's columns over the newer build's row (resetting any column it
 /// added), and the newer file is otherwise never written by this build (#576
-/// B6-D1). It opens read-only like any newer file; without the link it is not
-/// treated as a remote copy, which a build that can neither edit nor push it could
-/// not use anyway.
+/// B6-D1).
+///
+/// That branch is the first-time Open's (#576 RV4-R-S7-D2): the only pull that
+/// installs a newer file, because it has no linked copy to protect. The file opens
+/// read-only with the newer-version notice, and without the link it is not treated
+/// as a remote copy, which a build that can neither edit nor push it could not use
+/// anyway. Every path that would replace a linked copy - a re-open over one, the
+/// fast-forward, the revision View / Restore - refuses a newer download before the
+/// swap (`speleodb_pull::refuse_a_newer_download`) and never gets here with one.
 pub(super) fn stamp_pulled_file(
     db: &crate::persistence::Database,
     preserved_view: &HashMap<String, String>,
