@@ -383,9 +383,12 @@ behaves differently. The same rules apply to new code:
   say so in the type, `prop?: T | undefined`, rather than reshaping the
   values.
 
-**Not covered.** `telemetry-worker/tsconfig.json` does not extend the base: the
-worker is a standalone pnpm project with its own install, and
+**Copied, not extended.** `telemetry-worker/tsconfig.json` does not extend the
+base: the worker is a standalone pnpm project with its own install, and
 `.github/workflows/telemetry-worker.yml` re-runs only on `telemetry-worker/**`
-changes, so a root file it depended on could change its result unseen.
-`vite.config.ts`, `scripts/**/*.ts` and `src-tauri/bindings/` are in no
+changes, so a root file it depended on could change its result unseen. It
+carries a copy of the base's strictness flags instead (#576 NF-W9E11-1): a flag
+added to or dropped from the base is changed there too, by hand.
+
+**Not covered.** `vite.config.ts`, `scripts/**/*.ts` and `src-tauri/bindings/` are in no
 program at all (see [Testing recipes: Typecheck](testing-recipes.md#typecheck)).

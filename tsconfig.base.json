@@ -9,7 +9,8 @@
   //
   // telemetry-worker/tsconfig.json does not extend it: the worker is a
   // standalone pnpm project with its own install and a path-filtered workflow
-  // that only re-runs on telemetry-worker/** changes.
+  // that only re-runs on telemetry-worker/** changes. It carries a copy of the
+  // strictness flags below: change both.
   "compilerOptions": {
     "module": "ESNext",
     "moduleResolution": "bundler",
