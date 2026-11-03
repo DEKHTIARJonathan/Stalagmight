@@ -26,12 +26,14 @@ const invokeIpcMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: invokeIpcMock }));
 
-/** Undo and redo fail with `failure`; every refresh round trip answers an empty project. */
+/** Every history verb fails with `failure`; every refresh round trip answers an empty project. */
 function failWith(failure: CommandError) {
   invokeIpcMock.mockImplementation(async (command: string) => {
     switch (command) {
       case 'undo':
       case 'redo':
+      case 'undo_to':
+      case 'redo_to':
         throw failure;
       case 'get_project_state_binary':
         return projectStateEnvelope({
@@ -111,5 +113,33 @@ describe('a failed single undo/redo (#576 NF-W2S-2)', () => {
 
     expect(useProjectStore.getState().isDirty).toBe(false);
     expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+  });
+
+  // [#576 C4] A body that panicked on the backend's pool answers INTERNAL_ERROR with no
+  // `remote_link` (the crash skipped the link read). Before the coded envelope it was an
+  // untagged failure, which a single step counted as having run: the step may have half-run.
+  const CRASH: CommandError = {
+    code: 'INTERNAL_ERROR',
+    message: 'The operation failed unexpectedly (task 7 panicked)',
+  };
+
+  it.each(['undo', 'redo'] as const)('marks the project dirty when the %s crashed', async (verb) => {
+    failWith(CRASH);
+
+    const result = await useProjectStore.getState()[verb]();
+
+    expect(result).toMatchObject({ success: false, code: 'INTERNAL_ERROR' });
+    expect(useProjectStore.getState().isDirty).toBe(true);
+    // The SpeleoDB bits are the backend's alone, and a crash reported none.
+    expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+  });
+
+  it.each(['undoTo', 'redoTo'] as const)('marks nothing when a %s jump crashed: no failed step was reported', async (verb) => {
+    failWith(CRASH);
+
+    const result = await useProjectStore.getState()[verb](0);
+
+    expect(result).toMatchObject({ success: false, code: 'INTERNAL_ERROR' });
+    expect(useProjectStore.getState().isDirty).toBe(false);
   });
 });

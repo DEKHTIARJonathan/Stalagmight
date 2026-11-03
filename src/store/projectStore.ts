@@ -783,7 +783,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // refusal (nothing to undo, the edit gate, the re-verify divergence, the
         // refusal after an internal error) ran no step.
         const failedStep = result.code === 'HISTORY_STEP_FAILED' ? (result.failure?.history_step?.failed_step ?? 1) : null;
-        if (failedStep !== null) set({ isDirty: true });
+        // `INTERNAL_ERROR` on a single undo/redo: its body crashed, possibly with the step
+        // half-run, so it counts as having changed the project (#576 C4: before the coded
+        // envelope it was an untagged failure, which dirtied). A jump's crash reports no
+        // failed step and keeps the jump's rule: only `HISTORY_STEP_FAILED` dirties it.
+        const singleStepCrashed = result.code === 'INTERNAL_ERROR' && (command === 'undo' || command === 'redo');
+        if (failedStep !== null || singleStepCrashed) set({ isDirty: true });
         if (failedStep !== null && failedStep > 1) {
           // A partial multi-step failure still renumbered: the steps BEFORE the
           // failing one already flipped their sections and cannot be rolled back,
