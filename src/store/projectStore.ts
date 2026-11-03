@@ -23,6 +23,7 @@ import { emptyCommandResult, refusedLocally, settleCommand, type CommandOutcome 
 import { useExportStore } from './exportStore';
 import { refuseMutationDuringCarry, refuseStaleCarryCommit, takeMoveCarryCommit, type MoveCarryCommit } from './moveCarry';
 import { runSerialized } from './mutationQueue';
+import { noteProjectSessionChanged, projectSessionEpoch } from './projectSession';
 import type {
   Project,
   ProjectMetadata,
@@ -556,6 +557,7 @@ function noteImportResolvedDeferredSave(
  * from drifting.
  */
 function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): void {
+  noteProjectSessionChanged();
   set({
     project: null,
     projectTreeGeneration: nextProjectTreeGeneration(),
@@ -1023,6 +1025,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
         // Apply ALL state from single response
         const tSetStart = performance.now();
+        // [#576 NF-FIX5-1] A new session: an answer issued for the previous project is stale.
+        noteProjectSessionChanged();
         set({
           project: result.project,
           projectTreeGeneration: nextProjectTreeGeneration(),
@@ -1299,6 +1303,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
       // Apply project state from result. Fresh project has no shots /
       // stations yet, so `surveyData` starts as an empty SoA.
+      noteProjectSessionChanged(); // [#576 NF-FIX5-1] see loadProject
       set({
         project: result.project,
         projectTreeGeneration: nextProjectTreeGeneration(),
@@ -1573,13 +1578,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // lazy `shots`, exactly as after a load. Null when no project is open.
       refreshRequestCounter += 1;
       const request = refreshRequestCounter;
+      const session = projectSessionEpoch();
       const { fetchProjectStateBinary } = await import('../utils/loadProjectBinary');
       const state = await fetchProjectStateBinary();
       debugLog('[projectStore] refreshProjectState: got state, sections:', state?.project.sections.length);
       // [#576 RV5-8] A newer refresh already landed: this answer is older than
       // what the store shows, so applying it would roll the project back.
       // A newer "no project open" answer counts too: it supersedes an older state.
-      const superseded = request < refreshAppliedRequest;
+      // [#576 NF-FIX5-1] So does a project switch: a load, create or close since
+      // this refresh was issued replaced the project it describes, and none of them
+      // runs a refresh of its own for the guard above to order against.
+      const superseded = request < refreshAppliedRequest || session !== projectSessionEpoch();
       if (!superseded) refreshAppliedRequest = request;
       if (state && !superseded) {
         set({
