@@ -11,10 +11,18 @@
 //! raw read of an old file would be silently wrong.
 //!
 //! The input is treated as hostile. Before the app's load path runs, a file
-//! that defines views, triggers or virtual tables is refused, because those
-//! would run SQL the file chose. The load itself runs on a connection in
-//! defensive mode with `trusted_schema` off, with a cap on any value SQLite
-//! produces, and a deadline that interrupts any statement still running past it.
+//! that defines views, triggers, virtual tables or generated columns is
+//! refused, because those would run SQL the file chose. Every connection to the
+//! copy runs in defensive mode with `trusted_schema` off, a cap on any value
+//! SQLite produces, and a deadline that interrupts any statement still running
+//! past it; the load connection also skips memory-mapping and keeps temporary
+//! data on disk.
+//!
+//! **The deadline covers SQLite only.** The steps after the load (the app's
+//! post-load normalisation, the conversion, and optional station positions) are
+//! plain Rust and have no time or memory bound here; some are super-linear in
+//! counts the file controls (#597, #596). A server should run each read in a
+//! worker it can kill on its own wall-clock and memory limits.
 //!
 //! Files written by a newer schema than this crate knows are refused with
 //! [`ReadError::NewerSchema`]; upgrade the crate to read them.
@@ -59,7 +67,8 @@ pub struct ReadOptions {
     pub max_file_bytes: u64,
     /// A statement still running this long after the copy is opened is
     /// interrupted and the read fails. SQLite checks it every 1,000 VM steps per
-    /// statement, so it bounds long statements, not the sum of many short ones.
+    /// statement, so it bounds long statements, not the sum of many short ones,
+    /// and nothing after the load (see the crate docs).
     pub deadline: Duration,
     /// Also compute measured (unadjusted) station positions into [`Survey::stations`].
     pub with_stations: bool,
@@ -118,13 +127,21 @@ pub fn read_file(path: &Path) -> Result<Survey, ReadError> {
     read_file_with(path, &ReadOptions::default())
 }
 
-/// Read a `.stalx` file. Reads at most `max_file_bytes + 1` bytes from `path`.
+/// Read a `.stalx` file. Streams at most `max_file_bytes + 1` bytes from `path`
+/// straight into the private copy, so the input is never held in memory.
 pub fn read_file_with(path: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
-    let mut bytes = Vec::new();
-    std::fs::File::open(path)?
-        .take(options.max_file_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)?;
-    read_bytes(&bytes, options)
+    let dir = tempfile::tempdir()?;
+    let copy = dir.path().join("project.stalx");
+    let written = std::io::copy(
+        &mut std::fs::File::open(path)?.take(options.max_file_bytes.saturating_add(1)),
+        &mut std::fs::File::create(&copy)?,
+    )?;
+    if written > options.max_file_bytes {
+        return Err(ReadError::TooLarge {
+            max: options.max_file_bytes,
+        });
+    }
+    read_copy(&copy, options)
 }
 
 /// Read a `.stalx` file held in memory (e.g. an upload).
@@ -134,12 +151,17 @@ pub fn read_bytes(bytes: &[u8], options: &ReadOptions) -> Result<Survey, ReadErr
             max: options.max_file_bytes,
         });
     }
-
     let dir = tempfile::tempdir()?;
     let copy = dir.path().join("project.stalx");
     std::fs::File::create(&copy)?.write_all(bytes)?;
+    read_copy(&copy, options)
+}
 
-    let schema_version = inspect(&copy)?;
+/// Read the private copy. The caller keeps the temp dir alive across this call;
+/// every connection to the copy is dropped before it returns.
+fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
+    let max_value_bytes = i32::try_from(options.max_file_bytes).unwrap_or(i32::MAX);
+    let schema_version = inspect(copy, max_value_bytes, options.deadline)?;
     if schema_version > SCHEMA_VERSION {
         return Err(ReadError::NewerSchema {
             found: schema_version,
@@ -147,14 +169,15 @@ pub fn read_bytes(bytes: &[u8], options: &ReadOptions) -> Result<Survey, ReadErr
         });
     }
 
-    let max_value_bytes = i32::try_from(options.max_file_bytes).unwrap_or(i32::MAX);
-    let db = Database::open_existing_untrusted(&copy, max_value_bytes, options.deadline)
+    let db = Database::open_existing_untrusted(copy, max_value_bytes, options.deadline)
         .map_err(invalid)?;
     let mut project = db.load_project().map_err(invalid)?;
-    // The two post-load steps of the app's own open (`project_load.rs`) that
-    // change what this crate reports: re-derive drifted section offsets, and
-    // the one-shot Jump/Reference classification an old file's migration left
-    // pending. Both are in-memory only; the copy is discarded.
+    // The post-load steps of the app's own open (`project_load.rs`) that change
+    // what this crate reports: ids for legacy closures, re-derived section
+    // offsets (which also re-anchors refs and turns orphan closures into
+    // merges), and the one-shot Jump/Reference classification an old file's
+    // migration left pending. All in-memory; the copy is discarded.
+    project.assign_closure_ids();
     project.redrive_offsets_after_load();
     if db.is_kind_classification_pending() {
         project.classify_virtual_shots(&ClassifyScope::WholeProject);
@@ -171,17 +194,31 @@ pub fn read_bytes(bytes: &[u8], options: &ReadOptions) -> Result<Survey, ReadErr
 ///
 /// The version follows the app's own rule: `PRAGMA user_version`, or when that
 /// is 0 (files from before the pragma), the `project.schema_version` column.
-fn inspect(path: &Path) -> Result<i32, ReadError> {
+fn inspect(path: &Path, max_value_bytes: i32, deadline: Duration) -> Result<i32, ReadError> {
+    use rusqlite::config::DbConfig;
+    use rusqlite::limits::Limit;
+
     let sql_err = |e: rusqlite::Error| ReadError::Invalid(e.to_string());
     let conn =
         rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(sql_err)?;
+    // Same hardening as the load connection: this one parses the file's schema too.
+    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)
+        .map_err(sql_err)?;
+    conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)
+        .map_err(sql_err)?;
+    conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, max_value_bytes);
+    let expires = std::time::Instant::now() + deadline;
+    conn.progress_handler(1_000, Some(move || std::time::Instant::now() > expires));
 
+    // Decided by what SQLite PARSED, not by the stored `sql` text: SQLite accepts
+    // `CREATE/**/VIRTUAL TABLE` and other spellings a text match would miss.
+    // `pragma_table_list` reports each object's parsed type without connecting it.
     let refused: i64 = conn
         .query_row(
-            "SELECT COUNT(*) FROM sqlite_master \
-             WHERE type IN ('view', 'trigger') \
-                OR (type = 'table' AND sql LIKE 'CREATE VIRTUAL TABLE%')",
+            "SELECT (SELECT COUNT(*) FROM pragma_table_list \
+                     WHERE type IN ('view', 'virtual', 'shadow')) \
+                  + (SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger')",
             [],
             |row| row.get(0),
         )

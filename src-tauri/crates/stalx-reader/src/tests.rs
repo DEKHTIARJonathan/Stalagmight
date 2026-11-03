@@ -288,6 +288,11 @@ fn views_triggers_and_virtual_tables_are_refused() {
            SELECT * FROM real_shots, n;",
         "CREATE TRIGGER t AFTER UPDATE ON shots BEGIN UPDATE shots SET length = 0; END;",
         "CREATE VIRTUAL TABLE v USING rtree(id, a, b);",
+        // A non-canonical spelling SQLite still parses as a virtual table, which
+        // a match on the stored text would miss.
+        "PRAGMA writable_schema = ON;
+         INSERT INTO sqlite_master (type, name, tbl_name, rootpage, sql)
+           VALUES ('table', 'v2', 'v2', 0, 'CREATE/**/VIRTUAL  TABLE v2 USING rtree(id, a, b)');",
     ] {
         let err = read_file(&with_schema_sql(sql)).unwrap_err();
         assert!(
@@ -421,4 +426,26 @@ fn drifted_section_offsets_are_re_derived_before_positions() {
         (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6,
         "merged stations coincide: {a:?} vs {b:?}"
     );
+}
+
+#[test]
+fn legacy_closures_get_ids_like_the_app_assigns() {
+    let path = with_schema_sql("UPDATE loop_closures SET id = 0;");
+
+    let survey = read_file(&path).unwrap();
+
+    assert_eq!(survey.loop_closures.len(), 1);
+    assert_ne!(survey.loop_closures[0].id, 0);
+}
+
+#[test]
+fn an_oversized_file_is_refused_without_buffering_it() {
+    // `read_file_with` streams into the copy and stops one byte past the cap.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("big.stalx");
+    std::fs::write(&path, vec![0u8; 4096]).unwrap();
+
+    let err = read_file_with(&path, &ReadOptions::default().max_file_bytes(1024)).unwrap_err();
+
+    assert!(matches!(err, ReadError::TooLarge { max: 1024 }), "{err}");
 }
