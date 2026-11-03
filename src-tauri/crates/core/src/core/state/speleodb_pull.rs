@@ -17,6 +17,8 @@
 //! guard. Note that the guard runs BEFORE the download on the pull path, so a
 //! refusal costs no bytes - the download takes the guard's proof (#576 A8).
 
+use std::path::Path;
+
 use super::speleodb::{local_dto, validate_project_id, DumpAt};
 use super::speleodb_cache::{stamp_pulled_file, InheritedUndo, LocalEditsPolicy};
 use super::speleodb_revisions::validate_hexsha;
@@ -175,16 +177,22 @@ pub(super) fn probe_inputs_valid(project_id: &str, hexsha: Option<&str>) -> bool
 }
 
 /// [#576 RV4-R-S7, decision RV4-R-S7-D1] THE NEWER-FORMAT REFUSAL: refuse a
-/// downloaded `entry` that a NEWER Stalagmight saved, BEFORE it replaces anything.
+/// downloaded `entry` that a NEWER Stalagmight saved, BEFORE it replaces a linked
+/// copy.
 ///
-/// Called by every path that installs a server `.stalx` over the cache copy - the
-/// pull, the fast-forward (Start editing, Update, Take remote, Discard) and the
-/// revision View / Restore - after the entry is chosen and before the replace. A
-/// newer file used to be installed and then left unlinked (this build never stamps
-/// one, `stamp_pulled_file`), so a fast-forward ended in a "session moved" retry and
-/// a revision swap dropped the copy's SpeleoDB identity mid-session. Refused here,
-/// the linked copy - its file, BASE, un-pushed mark and Unwind position - stays as
-/// it was, and the error is the newer-version refusal (`NEWER_FILE_READ_ONLY`).
+/// Called by every path that installs a server `.stalx` over a linked cache copy -
+/// the pull when one is there ([`AppState::speleodb_pull_replaces_a_linked_copy`]),
+/// the fast-forward (Start editing, Update, Take remote, Discard) and the revision
+/// View / Restore - after the entry is chosen and before the replace. A newer file
+/// used to be installed and then left unlinked (this build never stamps one,
+/// `stamp_pulled_file`), so a fast-forward ended in a "session moved" retry and a
+/// revision swap dropped the copy's SpeleoDB identity mid-session. Refused here, the
+/// linked copy - its file, BASE, un-pushed mark and Unwind position - stays as it
+/// was, and the error is the newer-version refusal (`NEWER_FILE_READ_ONLY`).
+///
+/// [#576 RV4-R-S7-D2] Not the first-time Open: with no linked copy to protect, the
+/// newer file is installed unlinked and opens read-only with the newer-version
+/// notice, as it did before this refusal existed.
 ///
 /// Reads only the entry's database header, so it costs no extraction.
 pub(super) fn refuse_a_newer_download(
@@ -270,6 +278,18 @@ pub(super) fn resolve_dump_entry(
 }
 
 impl AppState {
+    /// [#576 RV4-R-S7-D2] Whether the pull would install over a LINKED copy of
+    /// `project_id` at `dest`: one whose link row reads (on disk, or the open
+    /// project's live link for this very file). `false` only for a first-time Open -
+    /// no file, or a file with no link row (an earlier newer download, which this
+    /// build never stamps). A file whose state cannot be read counts as linked: the
+    /// newer-format refusal stands in front of a replace, so it fails closed like
+    /// the un-pushed-edits guard does on the same reading.
+    fn speleodb_pull_replaces_a_linked_copy(&self, project_id: &str, dest: &Path) -> bool {
+        self.local_copy_state(project_id, dest)
+            .is_none_or(|local| local.has_local_copy)
+    }
+
     /// [#258] Which entry of this dump to use, consulting - and then updating - the
     /// choice this session has already made for `project_id`.
     ///
@@ -709,8 +729,13 @@ impl AppState {
                 StalxAmbiguity::Ask,
             )
             .map_err(local_dto)?;
-        // [#576 RV4-R-S7] Before the replace: a newer build's file is refused.
-        refuse_a_newer_download(&mut dump, &entry).map_err(local_dto)?;
+        // [#576 RV4-R-S7] Before the replace: a newer build's file is refused when it
+        // would replace a linked copy. [RV4-R-S7-D2] A first-time Open has none, so it
+        // installs the file, which `stamp_pulled_file` leaves unlinked and the open
+        // that follows shows read-only with the newer-version notice.
+        if self.speleodb_pull_replaces_a_linked_copy(&project_id, &dest) {
+            refuse_a_newer_download(&mut dump, &entry).map_err(local_dto)?;
+        }
 
         // Carry the user's local view toggles across the download-replace (a re-open
         // of a previously-customized remote project shouldn't reset their view -

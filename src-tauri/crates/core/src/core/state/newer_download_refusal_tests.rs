@@ -1,5 +1,5 @@
-//! [#576 RV4-R-S7, decision RV4-R-S7-D1] A SpeleoDB download a NEWER Stalagmight
-//! saved is refused before it replaces anything.
+//! [#576 RV4-R-S7, decisions RV4-R-S7-D1 and -D2] A SpeleoDB download a NEWER
+//! Stalagmight saved is refused before it replaces a linked copy.
 //!
 //! A pull, the Start editing fast-forward and a revision View / Restore used to
 //! install such a file over the cache copy and then leave it unlinked (this build
@@ -9,6 +9,11 @@
 //! with no way back to the tip. Now each fails with the newer-version refusal
 //! (`NEWER_FILE_READ_ONLY`) and the linked copy - its file, BASE, un-pushed mark
 //! and Unwind position - stays exactly as it was.
+//!
+//! The one path with no linked copy to protect, a first-time Open from the
+//! SpeleoDB list (decision RV4-R-S7-D2), still downloads such a file and hands it
+//! over unlinked: it opens read-only with the newer-version notice, as it did
+//! before the refusal existed.
 //!
 //! Driven end to end against a loopback stub that answers like SpeleoDB: the
 //! revision history (a tip on top of our BASE), the lock, and every dump with a
@@ -196,6 +201,11 @@ fn a_pull_of_a_newer_file_is_refused_and_the_linked_copy_is_untouched() {
 }
 
 #[test]
+fn a_first_time_open_of_a_newer_file_opens_it_read_only_and_unlinked() {
+    run_child("first_open");
+}
+
+#[test]
 fn a_start_editing_fast_forward_to_a_newer_file_is_refused_and_the_copy_is_untouched() {
     run_child("start_editing");
 }
@@ -252,8 +262,24 @@ fn newer_download_body_in_a_process_of_its_own() {
     let dest = super::speleodb_local_state::cache_path_in(&cache, REMOTE_ID);
     std::fs::create_dir_all(dest.parent().expect("cache dir")).expect("create cache dir");
 
-    // The canonical cache copy, linked at BASE, clean, with an Unwind position.
     let (base, _listener, seen) = routing_stub(newer_dump());
+    let downloads = || {
+        seen.lock()
+            .expect("request log")
+            .iter()
+            .filter(|r| r.contains("/download/"))
+            .count()
+    };
+    let state = AppState::new().expect("state");
+    state.set_event_sink(Arc::new(NoListener));
+    *state.speleodb.lock() = authed_session_at(&base);
+
+    if scenario == "first_open" {
+        first_open_of_a_newer_file(&state, &dest, downloads);
+        return;
+    }
+
+    // The canonical cache copy, linked at BASE, clean, with an Unwind position.
     project_file(&dest, "Local Copy", "LocalSection");
     let db = Database::open_existing(&dest).expect("reopen");
     db.save_speleo_link(Some(&SpeleoLink {
@@ -271,10 +297,6 @@ fn newer_download_body_in_a_process_of_its_own() {
         .expect("unwind position");
     drop(db);
     let before = copy_on_disk(&dest);
-
-    let state = AppState::new().expect("state");
-    state.set_event_sink(Arc::new(NoListener));
-    *state.speleodb.lock() = authed_session_at(&base);
 
     let answer = match scenario.as_str() {
         "pull" => state
@@ -316,12 +338,7 @@ fn newer_download_body_in_a_process_of_its_own() {
     let after = copy_on_disk(&dest);
     let open_name = state.get_project_state().map(|p| p.name);
     let open_link = state.speleodb_open_link().ok().map(|l| l.base_commit_sha);
-    let downloads = seen
-        .lock()
-        .expect("request log")
-        .iter()
-        .filter(|r| r.contains("/download/"))
-        .count();
+    let downloads = downloads();
     println!(
         "[RV4-R-S7] {scenario} of a newer-format file -> {:?}; downloads {downloads}; \
          cache copy (name, BASE, un-pushed, Unwind position) before {before:?}, after \
@@ -357,4 +374,58 @@ fn newer_download_body_in_a_process_of_its_own() {
             "no edit session was opened over it"
         );
     }
+}
+
+/// [#576 RV4-R-S7-D2] No cache copy yet: the Open downloads the newer file and
+/// hands it over unlinked, and opening it gives the read-only newer-version file.
+/// `downloads` counts the dumps fetched once the Open has returned.
+fn first_open_of_a_newer_file(state: &AppState, dest: &Path, downloads: impl Fn() -> usize) {
+    assert!(!dest.exists(), "fixture: no cache copy yet");
+    let answer = state.speleodb_open_project(
+        REMOTE_ID.to_owned(),
+        "Remote".to_owned(),
+        Some(TIP_SHA.to_owned()),
+        None,
+    );
+    let downloaded = downloads();
+    let on_disk = dest.exists().then(|| copy_on_disk(dest));
+    let opened = state.open_project(dest.to_path_buf()).success;
+    let flags = state.open_file_flags();
+    let open_name = state.get_project_state().map(|p| p.name);
+    let linked = state.speleodb_open_link().is_ok();
+    println!(
+        "[RV4-R-S7-D2] first-time open of a newer-format file -> {:?}; downloads {downloaded}; \
+         cache copy (name, link, Unwind position) {on_disk:?}; opened {opened}, open project \
+         {open_name:?}, newer schema {:?}, linked {linked} (expected Ok, the server copy \
+         unlinked, newer, not linked)",
+        answer
+            .as_ref()
+            .map(|r| r.local_path.clone())
+            .map_err(|e| (e.code, e.message.clone())),
+        flags.newer_schema_version
+    );
+
+    let opened_at = answer.expect("a first-time open of a newer file is not refused");
+    assert_eq!(downloaded, 1, "the newer file was downloaded once");
+    assert_eq!(
+        Path::new(&opened_at.local_path),
+        dest,
+        "it was handed over at the cache path"
+    );
+    assert_eq!(
+        on_disk,
+        Some(CopyOnDisk {
+            project: "Server Copy".to_owned(),
+            link: None,
+            unwound_from: None,
+        }),
+        "the server's file, not stamped with this build's link"
+    );
+    assert!(opened, "the downloaded file opens");
+    assert_eq!(open_name.as_deref(), Some("Server Copy"));
+    assert!(
+        flags.newer_schema_version.is_some(),
+        "as a newer-format file: read-only, with the newer-version notice"
+    );
+    assert!(!linked, "and not as a remote copy");
 }

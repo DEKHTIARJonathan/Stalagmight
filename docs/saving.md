@@ -100,6 +100,12 @@ opens the project **read-only** and never writes the file (#576 B6-D1):
 - **Nor a merge that reads it.** Merge Projects writes its output at this build's
   schema, so a newer file among the sources is refused (whether or not it is open)
   before any output is written or any source archived.
+- **A SpeleoDB download of one** opens this way only from a first-time Open in the
+  SpeleoDB list: no linked copy is there, so the file is installed without a
+  SpeleoDB link and opens read-only (#576 RV4-R-S7-D2). A re-open over a linked
+  copy, a Start editing / Update / Take remote fast-forward and a revision View /
+  Restore would replace that copy, so each refuses the download before the swap
+  with `NEWER_FILE_READ_ONLY` and the linked copy stays as it was (RV4-R-S7-D1).
 - **Viewing and export work** as for any read-only project, and closing it or
   opening another project ends the read-only state.
 
