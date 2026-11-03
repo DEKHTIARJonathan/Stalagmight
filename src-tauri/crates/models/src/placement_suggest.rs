@@ -1051,6 +1051,55 @@ fn charge_work(units: usize) {
 #[inline(always)]
 fn charge_work(_: usize) {}
 
+/// [#576 NF-W4U-3] Test-only log of every crossing check `best_merge_offset`
+/// makes, in call order, so the differential test can show an optimised
+/// pipeline rejects exactly the candidates its reference copy does. Off until
+/// a test starts it.
+#[cfg(test)]
+mod crossing_log {
+    use std::cell::RefCell;
+
+    use super::SectionId;
+
+    /// (existing section, import station, existing station, clear).
+    pub(super) type Entry = (SectionId, usize, usize, bool);
+
+    thread_local! {
+        static LOG: RefCell<Option<Vec<Entry>>> = const { RefCell::new(None) };
+    }
+
+    pub(super) fn start() {
+        LOG.with(|log| *log.borrow_mut() = Some(Vec::new()));
+    }
+
+    pub(super) fn record(entry: Entry) {
+        LOG.with(|log| {
+            if let Some(entries) = log.borrow_mut().as_mut() {
+                entries.push(entry);
+            }
+        });
+    }
+
+    /// The checks logged since `start`, and logging off again.
+    pub(super) fn take() -> Vec<Entry> {
+        LOG.with(|log| log.borrow_mut().take().unwrap_or_default())
+    }
+}
+
+#[cfg(test)]
+fn log_crossing_check(
+    section: SectionId,
+    import_station: usize,
+    existing_station: usize,
+    clear: bool,
+) {
+    crossing_log::record((section, import_station, existing_station, clear));
+}
+
+#[cfg(not(test))]
+#[inline(always)]
+fn log_crossing_check(_: SectionId, _: usize, _: usize, _: bool) {}
+
 /// Result of trying to match a sequence of import shots against existing shots.
 struct SequenceMatch {
     score: f64,
@@ -1541,7 +1590,7 @@ fn best_merge_offset(
     ranked
         .into_iter()
         .find(|&(_, _, merge_import_station, merge_existing_station)| {
-            placement_crossing_clearance_ok(
+            let clear = placement_crossing_clearance_ok(
                 import_trace,
                 existing_trace,
                 prefilter,
@@ -1549,7 +1598,14 @@ fn best_merge_offset(
                 merge_existing_station,
                 &ignored_crossing_pairs,
                 config,
-            )
+            );
+            log_crossing_check(
+                suggestion.existing_section_id,
+                merge_import_station,
+                merge_existing_station,
+                clear,
+            );
+            clear
         })
         .map(|(context_multiplier, import_offset, _, _)| (context_multiplier, import_offset))
 }
@@ -1759,6 +1815,10 @@ fn suggest_placements_among<'a>(
 #[cfg(test)]
 #[expect(clippy::print_stdout)]
 mod perf_tests;
+
+#[cfg(test)]
+#[expect(clippy::print_stdout)]
+mod differential_tests;
 
 #[cfg(test)]
 mod tests {
