@@ -1156,6 +1156,11 @@ impl AppState {
     /// `command_lock`, like `delete_project`'s check-and-teardown: checking through
     /// `open_project_path` and closing through `close_project` re-took the lock in
     /// between, so a load finishing in that gap had ITS session torn down instead.
+    ///
+    /// [#576 RV6a-5] Test builds only: the one production caller, the cache
+    /// replace, closes inside its own `command_lock` span
+    /// ([`Self::close_project_if_open_at_held`]).
+    #[cfg(test)]
     pub(super) fn close_project_if_open_at(&self, dest: &Path) -> bool {
         let commands = self.hold_commands();
         self.close_project_if_open_at_held(&commands, dest)
