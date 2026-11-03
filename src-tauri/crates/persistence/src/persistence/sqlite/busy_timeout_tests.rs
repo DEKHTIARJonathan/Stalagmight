@@ -38,7 +38,14 @@ fn every_open_path_waits_at_least_five_seconds_for_a_busy_file() {
         ("open_existing", Database::open_existing(&path).unwrap()),
         (
             "open_existing_refusing_upgrade",
-            Database::open_existing_refusing_upgrade(&path, "not upgraded here").unwrap(),
+            Database::open_existing_refusing_upgrade(
+                &path,
+                &crate::persistence::UpgradeRefusal {
+                    older_format: "not upgraded here".to_owned(),
+                    unstamped: "not completed here".to_owned(),
+                },
+            )
+            .unwrap(),
         ),
         (
             "open_existing + into_read_only",

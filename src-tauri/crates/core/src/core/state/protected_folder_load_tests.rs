@@ -17,10 +17,22 @@ use tempfile::TempDir;
 
 use super::AppState;
 use crate::models::{CommandErrorCode, Project, SectionData, ShotData};
-use crate::persistence::Database;
+use crate::persistence::{Database, UpgradeRefusal};
 
 const REFUSAL: &str = "CaveL.stalx was saved by an older version of Stalagmight (test refusal). \
                        Copy the project to a folder of your own and open the copy.";
+/// [#576 RV6b-R3] The message for an unstamped file the open would complete.
+const UNSTAMPED_REFUSAL: &str = "CaveL.stalx has no file-format version stamp (test refusal). \
+                                 Copy the project to a folder of your own and open the copy.";
+
+/// What the load commands hand the load for a protected folder.
+fn refusal() -> UpgradeRefusal {
+    UpgradeRefusal {
+        older_format: REFUSAL.to_owned(),
+        unstamped: UNSTAMPED_REFUSAL.to_owned(),
+    }
+}
+
 const OLDER_FORMAT: &str = "UPDATE project SET schema_version = 16; PRAGMA user_version = 16;";
 
 /// `do_load_project_full_with` reports progress through the installed sink;
@@ -98,7 +110,7 @@ fn a_current_project_where_nothing_may_be_written_opens_and_is_not_written() {
     let before = std::fs::read(&path).expect("read");
 
     let state = state_with_sink();
-    let loaded = state.do_load_project_full_with(path.clone(), Some(REFUSAL));
+    let loaded = state.do_load_project_full_with(path.clone(), Some(&refusal()));
     let after = std::fs::read(&path).expect("read");
     println!(
         "current-format project, upgrade refused here: opened={} shots={:?}; file unchanged: {}; folder: {:?}",
@@ -126,7 +138,7 @@ fn an_older_project_where_nothing_may_be_written_is_refused_untouched() {
     let before = std::fs::read(&path).expect("read");
 
     let state = state_with_sink();
-    let Err(error) = state.do_load_project_full_with(path.clone(), Some(REFUSAL)) else {
+    let Err(error) = state.do_load_project_full_with(path.clone(), Some(&refusal())) else {
         panic!("an older file must not be upgraded there");
     };
     let after = std::fs::read(&path).expect("read");
@@ -172,4 +184,40 @@ fn without_a_refusal_the_same_older_project_is_upgraded_as_before() {
         files_in(dir.path()).contains(&"CaveL.stalx.pre-v16.backup".to_owned()),
         "with its pre-upgrade copy"
     );
+}
+
+/// [#576 RV6b-R3] No file-format stamp, but a project row claiming this build's
+/// version: the open would only complete the tables in place (no backup copy, no
+/// stamp), so the user is not told the file is an older one.
+const UNSTAMPED: &str = "PRAGMA user_version = 0;";
+
+#[test]
+fn an_unstamped_project_where_nothing_may_be_written_is_not_called_older() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let dir = TempDir::new().expect("dir");
+    let path = write_project(dir.path(), UNSTAMPED);
+    let before = std::fs::read(&path).expect("read");
+
+    let state = state_with_sink();
+    let Err(error) = state.do_load_project_full_with(path.clone(), Some(&refusal())) else {
+        panic!("an unstamped file is not completed in place there either");
+    };
+    let after = std::fs::read(&path).expect("read");
+    println!(
+        "unstamped project claiming the current version, upgrade refused here: code={} \
+         message={:?}; file unchanged: {}; folder: {:?}",
+        error.code,
+        error.message,
+        after == before,
+        files_in(dir.path())
+    );
+    assert_eq!(error.code, CommandErrorCode::UpgradeRefused);
+    assert!(
+        !error.message.contains("older version") && !error.message.contains("backup"),
+        "the message must not call the file older or promise a backup: {:?}",
+        error.message
+    );
+    assert_eq!(error.message, UNSTAMPED_REFUSAL, "shown as-is");
+    assert_eq!(after, before, "the file is left as it was");
+    assert_eq!(files_in(dir.path()), ["CaveL.stalx"]);
 }

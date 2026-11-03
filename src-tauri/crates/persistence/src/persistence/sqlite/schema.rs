@@ -7,8 +7,8 @@ use rusqlite::{params, Connection, DatabaseName, Transaction, TransactionBehavio
 use crate::models::FEATURE_ID_STRIDE;
 
 use super::{
-    Database, PreReleaseFile, UpgradeRefused, OLDEST_SUPPORTED_SCHEMA_VERSION, SCHEMA_VERSION,
-    UNDO_FORMAT_SAFE_VERSION,
+    Database, PreReleaseFile, UpgradeRefusal, UpgradeRefused, OLDEST_SUPPORTED_SCHEMA_VERSION,
+    SCHEMA_VERSION, UNDO_FORMAT_SAFE_VERSION,
 };
 
 /// Columns of `speleo_link` that MUST survive every future SCHEMA_VERSION bump
@@ -1263,10 +1263,14 @@ impl Database {
     }
 
     /// [`Self::ensure_schema_version`], refusing the upgrade with `refuse_upgrade`
-    /// (an [`UpgradeRefused`] carrying it) when it would write - the migration
-    /// chain and the pre-upgrade copy alike (#576 RV4-R-M3-OPEN). A file it would
-    /// not write to (current, newer, unstamped on read-only media) passes as before.
-    pub(super) fn ensure_schema_version_with(&self, refuse_upgrade: Option<&str>) -> Result<()> {
+    /// (an [`UpgradeRefused`] carrying the message that fits the file) when it would
+    /// write - the migration chain and the pre-upgrade copy alike (#576
+    /// RV4-R-M3-OPEN). A file it would not write to (current, newer, unstamped on
+    /// read-only media) passes as before.
+    pub(super) fn ensure_schema_version_with(
+        &self,
+        refuse_upgrade: Option<&UpgradeRefusal>,
+    ) -> Result<()> {
         // Two different claims, and only one of them is evidence that migrations
         // RAN. `PRAGMA user_version` is written by this app in exactly two places:
         // at the end of a completed migration chain (below), and on a file it just
@@ -1395,14 +1399,25 @@ impl Database {
         // caller placed where nothing may be written is refused here, untouched,
         // with no pre-upgrade copy beside it.
         if let Some(refusal) = refuse_upgrade {
+            // [#576 RV6b-R3] An unstamped file whose row claims this version or a
+            // newer one is not an older file, and gets no copy below: say what the
+            // open would really have done.
+            let unstamped = claimed_only && current >= SCHEMA_VERSION;
             tracing::warn!(
                 version = current,
                 expected = SCHEMA_VERSION,
-                purpose = "refuse to upgrade a project where nothing may be written (#576 RV4-R-M3)",
-                "Not upgrading an older project in place: it is in a folder the app does not write to"
+                unstamped,
+                purpose =
+                    "refuse to upgrade a project where nothing may be written (#576 RV4-R-M3)",
+                "Not upgrading a project in place: it is in a folder the app does not write to"
             );
+            let message = if unstamped {
+                &refusal.unstamped
+            } else {
+                &refusal.older_format
+            };
             return Err(UpgradeRefused {
-                refusal: refusal.to_owned(),
+                refusal: message.clone(),
             }
             .into());
         }

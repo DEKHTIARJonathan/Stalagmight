@@ -72,10 +72,20 @@ fn only_the_app_folders_and_system_folders_refuse_the_upgrade() {
         if got.is_some() != refused {
             wrong.push(what);
         }
-        if let Some(message) = got {
+        if let Some(refusal) = got {
+            for message in [&refusal.older_format, &refusal.unstamped] {
+                assert!(
+                    message.starts_with("CaveL.stalx ") && message.contains("Copy the project"),
+                    "{what}: the message names the file and says what to do: {message}"
+                );
+            }
+            // [#576 RV6b-R3] An unstamped file is not an older one, and the open
+            // would keep no backup copy of it.
             assert!(
-                message.starts_with("CaveL.stalx ") && message.contains("Copy the project"),
-                "{what}: the message names the file and says what to do: {message}"
+                refusal.older_format.contains("older version")
+                    && !refusal.unstamped.contains("older version")
+                    && !refusal.unstamped.contains("backup"),
+                "{what}: each message describes its own case: {refusal:?}"
             );
         }
     }
@@ -95,7 +105,7 @@ fn both_load_commands_hand_the_location_to_the_load() {
             .and_then(|rest| rest.split("\n}\n").next())
             .unwrap_or_default();
         let refusal = body.find("load_upgrade_refusal(&path)");
-        let load = body.find("do_load_project_full_with(path, upgrade_refusal.as_deref())");
+        let load = body.find("do_load_project_full_with(path, upgrade_refusal.as_ref())");
         println!("{command}: refusal at {refusal:?}, load at {load:?}");
         assert!(
             refusal.is_some() && refusal < load,

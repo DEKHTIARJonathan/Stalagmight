@@ -21,6 +21,7 @@
 use std::path::{Component, Path, PathBuf};
 
 use crate::export::{ImageFormat, ProfileFormat};
+use crate::persistence::UpgradeRefusal;
 
 /// What a command is about to write, which decides the extension it must have.
 #[derive(Debug, Clone, Copy)]
@@ -131,23 +132,35 @@ pub(crate) fn check_write_path_with(
 /// to that upgrade alone: it is refused there with this message, before anything
 /// is written, and the file is left as it was. The extension rule does not apply:
 /// the open dialog offers "All Files", and a load creates no file of that name.
-pub(crate) fn load_upgrade_refusal(path: &Path) -> Option<String> {
+///
+/// [#576 RV6b-R3] Two messages, one per write the open would make: the load
+/// refuses with the one that fits the file. An unstamped file whose project row
+/// claims this version is not an older file and gets no backup copy, so it is not
+/// told either.
+pub(crate) fn load_upgrade_refusal(path: &Path) -> Option<UpgradeRefusal> {
     load_upgrade_refusal_with(path, &AppDirs::current())
 }
 
 /// [`load_upgrade_refusal`] against given app directories (the testable core).
-pub(crate) fn load_upgrade_refusal_with(path: &Path, dirs: &AppDirs) -> Option<String> {
+pub(crate) fn load_upgrade_refusal_with(path: &Path, dirs: &AppDirs) -> Option<UpgradeRefusal> {
     let why = location_refusal(path, true, dirs)?;
     let name = path.file_name().map_or_else(
         || path.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
     );
-    Some(format!(
-        "{name} was saved by an older version of Stalagmight, and opening it would upgrade \
-         it to the current file format in place and keep a backup copy beside it - but {why}, \
-         where Stalagmight does not write. The file was left as it was. Copy the project to a \
-         folder of your own (for example Documents) and open the copy."
-    ))
+    let what_to_do = "where Stalagmight does not write. The file was left as it was. Copy the \
+                      project to a folder of your own (for example Documents) and open the copy.";
+    Some(UpgradeRefusal {
+        older_format: format!(
+            "{name} was saved by an older version of Stalagmight, and opening it would upgrade \
+             it to the current file format in place and keep a backup copy beside it - but \
+             {why}, {what_to_do}"
+        ),
+        unstamped: format!(
+            "{name} has no file-format version stamp, so opening it would bring its file \
+             format up to date in place - but {why}, {what_to_do}"
+        ),
+    })
 }
 
 /// Why `path` is in a place no command may write, or `None`. `project` lets a

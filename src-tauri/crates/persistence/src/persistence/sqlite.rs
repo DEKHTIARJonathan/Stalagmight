@@ -148,6 +148,21 @@ impl std::fmt::Display for UpgradeRefused {
 
 impl std::error::Error for UpgradeRefused {}
 
+/// [#576 RV4-R-M3-OPEN] What to tell the user when an open would write a file that
+/// sits where nothing may be written - one message for each reason it would write.
+/// [`Database::open_existing_refusing_upgrade`] refuses with the one that fits the
+/// file (an [`UpgradeRefused`] carrying it) and writes nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UpgradeRefusal {
+    /// A file an older build saved: the open would run the migration chain in
+    /// place and keep a `.pre-v<N>.backup` copy beside the file first.
+    pub older_format: String,
+    /// [#576 RV6b-R3] A file with no file-format stamp whose project row claims
+    /// this build's version or a newer one: it is not an older file, and the open
+    /// would only complete its tables in place - no backup copy, no stamp.
+    pub unstamped: String,
+}
+
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///
 /// v7 changed the `ShotUpdates` JSON wire format: nullable fields now use a

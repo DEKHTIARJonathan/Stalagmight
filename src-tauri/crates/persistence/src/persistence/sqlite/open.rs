@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
-use super::{Database, SCHEMA_VERSION};
+use super::{Database, UpgradeRefusal, SCHEMA_VERSION};
 
 /// Whether `path` names a `.stalx` project file, in any letter case.
 ///
@@ -123,10 +123,9 @@ impl Database {
     /// can read as it is opens exactly as it would anywhere, but one the open would
     /// UPGRADE in place - the migration chain, and the pre-upgrade copy it keeps
     /// beside the file - is refused before the first write, with
-    /// an [`UpgradeRefused`](super::UpgradeRefused) carrying `refusal`, and left as
-    /// it was. `refusal` is the
-    /// user-facing message.
-    pub fn open_existing_refusing_upgrade(path: &Path, refusal: &str) -> Result<Self> {
+    /// an [`UpgradeRefused`](super::UpgradeRefused) carrying the `refusal` message
+    /// that fits the file, and left as it was.
+    pub fn open_existing_refusing_upgrade(path: &Path, refusal: &UpgradeRefusal) -> Result<Self> {
         Self::open_existing_with(path, Some(refusal))
     }
 
@@ -146,8 +145,12 @@ impl Database {
     /// The one write that can still happen is SQLite rolling back a hot journal
     /// left by a crashed writer, which every open of such a file does to read it.
     pub fn open_existing_to_read(path: &Path) -> Result<Self> {
-        const READ_ONLY_HERE: &str = "opened only to be read (merge source)";
-        match Self::open_existing_with(path, Some(READ_ONLY_HERE)) {
+        // Never shown: the refusal only routes the file to the in-memory copy.
+        let read_only_here = UpgradeRefusal {
+            older_format: "opened only to be read (an older file)".to_owned(),
+            unstamped: "opened only to be read (an unstamped file)".to_owned(),
+        };
+        match Self::open_existing_with(path, Some(&read_only_here)) {
             Err(e) if e.downcast_ref::<super::UpgradeRefused>().is_some() => {
                 tracing::info!(
                     path = ?path,
@@ -215,7 +218,7 @@ impl Database {
         Ok(db)
     }
 
-    fn open_existing_with(path: &Path, refuse_upgrade: Option<&str>) -> Result<Self> {
+    fn open_existing_with(path: &Path, refuse_upgrade: Option<&UpgradeRefusal>) -> Result<Self> {
         // Verbose open-time logging is debug-only - it fires on every
         // project load and every recent-projects metadata read, which
         // adds up.  The error paths still log at error/warn.

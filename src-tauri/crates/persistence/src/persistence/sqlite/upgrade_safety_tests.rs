@@ -293,3 +293,52 @@ fn an_upgrade_is_refused_when_only_its_copy_is_blocked() {
         "no copy was kept, so none may be listed"
     );
 }
+
+/// [#576 RV6b-R3] A refused upgrade carries the message for the write it refused:
+/// an older file would be upgraded with a backup copy beside it; an unstamped file
+/// whose row claims this version (or a newer one) would only have its tables
+/// completed in place. Either way the file and its folder are left as they were.
+#[test]
+fn a_refused_upgrade_says_which_write_it_refused() {
+    let refusal = super::UpgradeRefusal {
+        older_format: "older: refused".to_owned(),
+        unstamped: "unstamped: refused".to_owned(),
+    };
+    let future = SCHEMA_VERSION + 1;
+    let cases = [
+        (
+            "older (stamped v16)",
+            "UPDATE project SET schema_version = 16; PRAGMA user_version = 16;".to_owned(),
+            "older: refused",
+        ),
+        (
+            "unstamped, row claims this version",
+            "PRAGMA user_version = 0;".to_owned(),
+            "unstamped: refused",
+        ),
+        (
+            "unstamped, row claims a newer version",
+            format!("UPDATE project SET schema_version = {future}; PRAGMA user_version = 0;"),
+            "unstamped: refused",
+        ),
+    ];
+    for (what, surgery, expected) in cases {
+        let dir = TempDir::new().unwrap();
+        let path = b6_build_file(dir.path(), "CaveA.stalx", &surgery);
+        let before = std::fs::read(&path).unwrap();
+        let message = Database::open_existing_refusing_upgrade(&path, &refusal)
+            .err()
+            .and_then(|e| {
+                e.downcast_ref::<super::UpgradeRefused>()
+                    .map(ToString::to_string)
+            });
+        let unchanged = std::fs::read(&path).unwrap() == before;
+        println!(
+            "{what}: refusal {message:?}; file unchanged: {unchanged}; folder: {:?}",
+            b6_dir_listing(dir.path())
+        );
+        assert_eq!(message.as_deref(), Some(expected), "{what}");
+        assert!(unchanged, "{what}: the file is left as it was");
+        assert_eq!(b6_dir_listing(dir.path()), ["CaveA.stalx"], "{what}");
+    }
+}

@@ -361,13 +361,15 @@ impl AppState {
     /// [#576 RV4-R-M3-OPEN] `upgrade_refusal` is for a file in a place nothing may
     /// be written (the app's own folders, a system folder): it opens as anywhere
     /// else, but an older-format file - one the open would upgrade in place and
-    /// copy beside itself first - is refused with the code `UPGRADE_REFUSED` and this
-    /// message, untouched. `None` everywhere a user keeps projects.
+    /// copy beside itself first - is refused with the code `UPGRADE_REFUSED` and its
+    /// `older_format` message, untouched; an unstamped file the open would complete
+    /// in place, with its `unstamped` message (#576 RV6b-R3). `None` everywhere a
+    /// user keeps projects.
     ///
     pub fn do_load_project_full_with(
         &self,
         path: PathBuf,
-        upgrade_refusal: Option<&str>,
+        upgrade_refusal: Option<&crate::persistence::UpgradeRefusal>,
     ) -> Result<crate::core::loading::LoadProjectFullResult, crate::core::loading::LoadError> {
         use crate::core::loading::{
             DisplaySettings, LoadError, LoadProjectFullResult, LoadingPhase, ProgressEmitter,

@@ -441,7 +441,7 @@ pub async fn load_project_full(
     let result: Result<Result<LoadProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
             let state = app_handle.state::<AppState>();
-            state.do_load_project_full_with(path, upgrade_refusal.as_deref())
+            state.do_load_project_full_with(path, upgrade_refusal.as_ref())
         })
         .await;
     let handler_elapsed = t_start.elapsed();
@@ -479,7 +479,7 @@ pub async fn load_project_full_binary(
     let result: Result<Result<LoadProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
             let state = app_handle.state::<AppState>();
-            state.do_load_project_full_with(path, upgrade_refusal.as_deref())
+            state.do_load_project_full_with(path, upgrade_refusal.as_ref())
         })
         .await;
     let handler_elapsed = t_start.elapsed();
