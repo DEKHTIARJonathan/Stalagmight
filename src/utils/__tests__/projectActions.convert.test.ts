@@ -1,16 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
 const saveDialogMock = vi.hoisted(() => vi.fn());
 const surfaceSaveFailureMock = vi.hoisted(() => vi.fn());
 const existsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@tauri-apps/plugin-fs', () => ({ exists: existsMock }));
 
-vi.mock('../ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../ipc');
+stubGetErrorMessage(fallbackOr('error'));
 vi.mock('../fileDialogs', () => ({
   saveDialog: saveDialogMock,
   ensureExtension: (p: string) => (p.endsWith('.stalx') ? p : `${p}.stalx`),
@@ -28,6 +25,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { useOverwritePromptStore } from '../overwriteGuard';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 
 /**
  * The detach flow's data-safety ORDER, under Save-a-Copy semantics (an explicit

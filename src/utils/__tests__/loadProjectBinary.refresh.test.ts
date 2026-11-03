@@ -12,9 +12,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 import { projectStateEnvelope, type ProjectStateLike } from '../../test/projectStateEnvelope';
+import { invokeIpcMock as invokeIpc } from '../../test/factories/ipc';
 
-const invokeIpc = vi.hoisted(() => vi.fn());
-vi.mock('../ipc', () => ({ invokeIpc }));
+vi.mock('../ipc');
 const invoke = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/api/core', () => ({ invoke }));
 

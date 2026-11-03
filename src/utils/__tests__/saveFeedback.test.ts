@@ -1,9 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('../ipc', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../ipc')>()),
-  invokeIpc: vi.fn(),
-}));
+vi.mock('../ipc');
 
 import {
   autosaveFailureMessage,
@@ -19,14 +16,12 @@ import {
   type ImportReceiptWithUnanchoredCount,
 } from '../saveFeedback';
 import { importReceiptSummaryParts } from '../importReceipt';
-import { invokeIpc } from '../ipc';
 import i18n from '../../i18n';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import type { ValidationWarning } from '../../types/ipc/ValidationWarning';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
-
-const invokeIpcMock = vi.mocked(invokeIpc);
+import { invokeIpcMock } from '../../test/factories/ipc';
 
 const mockUi = (): ImportDialogUi & { [K in keyof ImportDialogUi]: ReturnType<typeof vi.fn> } => ({
   closeDialog: vi.fn(),

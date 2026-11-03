@@ -22,8 +22,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('./ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('./ipc');
 
 const routeOpenedFileMock = vi.hoisted(() =>
   vi.fn(async (_path: string, _title?: string) => {}),
@@ -62,6 +61,7 @@ import {
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
+import { invokeIpcMock } from '../test/factories/ipc';
 
 /** Captured backend-event handler, so a test can fire the nudge itself. */
 let emitToApp: (() => void) | null = null;

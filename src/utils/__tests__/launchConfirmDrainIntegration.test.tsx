@@ -19,11 +19,8 @@ import { renderHook } from '@testing-library/react';
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue({}) }));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ open: vi.fn().mockResolvedValue(null) }));
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, fallback?: string) => fallback ?? 'error',
-}));
+vi.mock('../ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 const listenMock = vi.hoisted(() => vi.fn(async () => () => {}));
 vi.mock('@tauri-apps/api/event', () => ({ listen: listenMock }));
@@ -43,6 +40,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import LaunchOpenConfirmDialog from '../../components/Dialogs/LaunchOpenConfirmDialog';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 
 let queued: string[] = [];
 let loadProject: ReturnType<typeof vi.fn>;

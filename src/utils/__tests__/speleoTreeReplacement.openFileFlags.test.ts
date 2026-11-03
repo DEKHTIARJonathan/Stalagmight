@@ -10,15 +10,13 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
-}));
+vi.mock('../ipc');
+stubGetErrorMessage(errorMessageOrString);
 
 import { useProjectStore } from '../../store/projectStore';
 import { speleoProjectSessionIssuedFor, useSpeleoStore } from '../../store/speleoStore';
 import { applySpeleoTreeReplacement } from '../speleoTreeReplacement';
+import { invokeIpcMock, stubGetErrorMessage, errorMessageOrString } from '../../test/factories/ipc';
 
 function serveFlags(flags: { newerSchemaVersion: number | null; speleoLinkUnreadable: boolean }) {
   invokeIpcMock.mockImplementation(async (cmd: string) =>
