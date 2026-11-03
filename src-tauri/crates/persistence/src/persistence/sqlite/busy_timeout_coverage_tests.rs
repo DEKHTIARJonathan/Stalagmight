@@ -105,41 +105,6 @@ fn reached_as(src: &str, name: &str) -> Reached {
     }
 }
 
-/// `src` with every `//` comment and every string literal blanked to spaces (same
-/// length, so byte offsets still line up): a constructor named in prose or in an
-/// entry's label is not a call to it.
-fn code_only(src: &str) -> String {
-    let mut out = String::with_capacity(src.len());
-    let mut chars = src.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '/' && chars.peek() == Some(&'/') {
-            out.push(' ');
-            for rest in chars.by_ref() {
-                if rest == '\n' {
-                    out.push('\n');
-                    break;
-                }
-                out.push_str(&" ".repeat(rest.len_utf8()));
-            }
-        } else if c == '"' {
-            out.push(' ');
-            while let Some(inner) = chars.next() {
-                out.push_str(&" ".repeat(inner.len_utf8()));
-                if inner == '\\' {
-                    if let Some(escaped) = chars.next() {
-                        out.push_str(&" ".repeat(escaped.len_utf8()));
-                    }
-                } else if inner == '"' {
-                    break;
-                }
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
 fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
@@ -211,7 +176,9 @@ fn chain_root(code: &str, dot: usize) -> Option<&str> {
 /// associated function only by its own `Database::` path (not `TestDatabase::`),
 /// and a consuming method only on a chain rooted at `Database::`.
 fn calls(covered: &str, name: &str, reached: Reached) -> bool {
-    let code = code_only(covered);
+    // [#576 RV9a-9] The shared blanking: block comments, raw strings and char
+    // literals too, which the local one this used missed.
+    let code = crate::models::source_scan::code_only(covered);
     match reached {
         Reached::ByPath => code
             .match_indices(&format!("Database::{name}("))
@@ -323,6 +290,20 @@ fn only_a_real_call_of_the_constructor_counts_as_covering_it() {
             "into_read_only",
             Reached::OnADatabase,
             "// .into_read_only(&path)",
+        ),
+        // [#576 RV9a-9] The shapes the local blanking missed: a block comment, a
+        // raw string, and a char literal `'"'` that opened a phantom string, so
+        // the real string after it was read as code.
+        ("open", Reached::ByPath, "/* Database::open(&path) */"),
+        (
+            "open",
+            Reached::ByPath,
+            "let label = r#\"Database::open(&path)\"#;",
+        ),
+        (
+            "open",
+            Reached::ByPath,
+            "let q = '\"'; let label = \"Database::open(&path)\";",
         ),
     ];
     let mut miscounted = Vec::new();
