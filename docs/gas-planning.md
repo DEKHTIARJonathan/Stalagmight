@@ -237,11 +237,27 @@ endpoint (D2 routes it through the pins first), and the way to a pin is transit,
 so it carries no dot, as the way to a way point does not. The pinned route does
 not depend on the budget, so less gas only takes stations off the map, and its
 gas price for a station is never below the plan without pins, so no pin paints a
-station that plan leaves dark. The cost, accepted with the decision: a pin is a
-way point for the overlay even when it sits on its own default station, so
-pinning a drop where the default already is can change the overlay (stations up
-another branch now price the way back from the pin) while the budget and the drop
-stay those of the default.
+station that plan cannot afford on gas.
+
+The scooter range is priced on the same walk (RV9a-1): every station the pinned
+dive passes on the way to its turn, and the turn, is painted, and nothing the
+range does not reach along that walk is. Round a loop this can light a station
+the plan without pins leaves dark on range alone, because that plan prices the
+range along its own gas-cheapest way. In the review's seed 0x9a0058be a stage
+pinned on a deep loop takes the dive 312 m round it to 0:5, 796 m of a 1484 m
+range, where the shallow line - the cheaper gas - is 684 m long and has spent
+1158 m of range by 0:4: the pinned plan turns at 0:5 and paints it, the plan
+without pins turns at 0:4 and leaves 0:5 dark. Before, the pinned plan kept the
+other plan's masks, so its dive turned on a station its own map left dark
+(`rv9a_1_a_scootered_dive_pinned_round_a_loop_is_painted_to_its_turn`; the loop
+sweep `a_pinned_plan_round_a_loop_never_reaches_further_on_less_gas_or_scooter_range`
+checks every route to the turn is painted). In a cave without loops there is one
+way to each station, and the pinned overlay stays inside the other one.
+
+The cost of D4, accepted with the decision: a pin is a way point for the overlay
+even when it sits on its own default station, so pinning a drop where the default
+already is can change the overlay (stations up another branch now price the way
+back from the pin) while the budget and the drop stay those of the default.
 
 What each kind of pin does to the plan:
 

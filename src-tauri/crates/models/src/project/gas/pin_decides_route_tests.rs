@@ -23,8 +23,8 @@
 use super::model::{CylRole, Cylinder, Diver, GasReachField, PlanSegment, TankMaterial};
 use super::physics::deliverable_gas;
 use super::route_sweep_tests::{scooter, two_branch_cave};
-use crate::config::{GasConfig, ReservePreset};
-use crate::{Project, SectionData, ShotData, StationRef};
+use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset};
+use crate::{ClosureStrategy, Project, SectionData, ShotData, StationRef};
 
 fn cyl(volume: f64, rated: f64, fill: f64, role: CylRole) -> Cylinder {
     Cylinder::new(volume, rated, fill, TankMaterial::Steel, role, None).unwrap()
@@ -1015,4 +1015,179 @@ fn two_drops_pinned_on_one_station_still_carry_on_beyond_it() {
     assert_eq!(pinned.final_turn_ref, Some(trunk_end));
     assert_eq!(route_of(&pinned).last(), Some(&trunk_end));
     assert_eq!(pinned.stage_drop_refs, vec![trunk_end, trunk_end]);
+}
+
+/// The independent review's seed 0x9a0058be (RV9a-1), rebuilt with lengths and depths as its
+/// probe drew them, to the millimetre: a shallow seven-leg line 0:0..0:7, and a deep two-leg
+/// passage that leaves it at 0:5 (merged with 1:0) and comes back to the entrance (1:2 tied to
+/// 0:0 by a loop closure). So 0:5 is two swims away: 684 m along the line, shallow and the
+/// cheaper gas, or 312 m round the deep loop. Returns the project, the line's id and the loop's.
+fn rv9a_loop_cave() -> (Project, u32, u32) {
+    let mut p = Project::new("Gas".to_string(), None);
+    let line = p
+        .add_section(SectionData {
+            shots: vec![
+                shot(65.363, 0.907, 8.441),
+                shot(54.387, 8.441, 11.557),
+                shot(186.697, 11.557, 4.145),
+                shot(147.776, 4.145, 1.837),
+                shot(230.089, 1.837, 0.509),
+                shot(114.586, 0.509, 8.687),
+                shot(124.955, 8.687, 7.812),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let deep = p
+        .add_section(SectionData {
+            shots: vec![shot(172.062, 25.740, 34.368), shot(140.259, 34.368, 43.000)],
+            ..Default::default()
+        })
+        .id;
+    p.merge_stations(StationRef::new(line, 5), StationRef::new(deep, 0))
+        .unwrap();
+    p.create_loop_closure(
+        StationRef::new(deep, 2),
+        StationRef::new(line, 0),
+        ClosureStrategy::Batch,
+    )
+    .unwrap();
+    (p, line, deep)
+}
+
+/// The seed's plan: OneStage under the conservative cap, the endpoint at 0:6, one scootered
+/// segment at 16.787 m/min - below both units' cruise, so a metre of line costs 2.55 m of range -
+/// and the review's rig. `range_reserve` is the DPV's reserve fraction (0.267 in the seed).
+fn rv9a_plan(
+    project: &Project,
+    line: u32,
+    range_reserve: f64,
+    pins: &[Option<StationRef>],
+) -> GasReachField {
+    let mut cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        conservative_tank_gas: true,
+        dpv: Some(DpvRig {
+            primary: DpvUnit {
+                speed_m_per_min: 26.712,
+                burn_minutes: 75.836,
+            },
+            backup: DpvUnit {
+                speed_m_per_min: 48.313,
+                burn_minutes: 47.324,
+            },
+            range_reserve_fraction: range_reserve,
+        }),
+        ..GasConfig::default()
+    };
+    cfg.reserve_profile.stage_reserve_bar = 1.753;
+    cfg.normalize();
+    let rig = [
+        cyl(16.373, 176.0, 91.946, CylRole::BackGas),
+        cyl(16.565, 300.0, 272.541, CylRole::BackGas),
+        cyl(21.398, 207.0, 121.556, CylRole::Stage),
+        cyl(7.383, 176.0, 166.773, CylRole::Stage),
+    ];
+    project.compute_gas_reach_field_with_overrides(
+        Some(&StationRef::new(line, 0)),
+        Some(&StationRef::new(line, 6)),
+        &[],
+        &[PlanSegment {
+            speed_m_per_min: Some(16.787),
+            on_scooter: true,
+        }],
+        &Diver::new(28.044, None).unwrap(),
+        &rig,
+        &cfg,
+        pins,
+    )
+}
+
+/// The stations of `f`'s route up to and including its turnaround that the overlay leaves dark.
+fn dark_on_route(f: &GasReachField) -> Vec<String> {
+    route_of(f)
+        .into_iter()
+        .chain(f.final_turn_ref)
+        .filter(|&s| !is_reachable(f, s))
+        .map(name)
+        .collect()
+}
+
+#[test]
+fn rv9a_1_a_scootered_dive_pinned_round_a_loop_is_painted_to_its_turn() {
+    // #576 RV9a-1, D4 with a scooter. The stage pinned at 1:1 sends the dive round the deep loop:
+    // more gas than the line, far less range. Before D4 the pinned plan kept the masks of the plan
+    // without pins, whose range rides the gas-cheapest path - along the line, 1158 m of range to
+    // 0:4 and out of range at 0:5 - so the dive turned at 0:5 (796 m of range on its own route) on
+    // a station the map left dark, and passed 1:0 dark too. The overlay is now priced on the
+    // pinned walk for the range as well as the gas: the route to the turn and the turn are
+    // painted, and with less range the dive turns sooner and nothing past its range is painted.
+    let (project, line, deep) = rv9a_loop_cave();
+    let line_at = |i: u32| StationRef::new(line, i);
+    let deep_at = |i: u32| StationRef::new(deep, i);
+    let pins = [Some(deep_at(1))];
+    let pinned = rv9a_plan(&project, line, 0.267, &pins);
+    let pin_free = rv9a_plan(&project, line, 0.267, &[]);
+    println!("RV9a-1 {}", describe("pinned 1:1", &pinned));
+    println!(
+        "RV9a-1   scooter {:.2} of {:.2} m, gas at 1:0 {:.1} L",
+        pinned.scooter_distance_m,
+        pinned.scooter_range_limit_m.unwrap(),
+        gas_of(&pinned, deep_at(0))
+    );
+    println!("RV9a-1 {}", describe("pin-free", &pin_free));
+    assert_eq!(
+        route_of(&pinned),
+        vec![line_at(0), deep_at(2), deep_at(1), deep_at(0), line_at(5)],
+        "round the loop through the pin, on toward 0:6"
+    );
+    assert_eq!(pinned.final_turn_ref, Some(line_at(5)));
+    assert!(pinned.scooter_distance_m <= pinned.scooter_range_limit_m.unwrap());
+    assert!(
+        dark_on_route(&pinned).is_empty(),
+        "the pinned dive passes or turns on stations the map leaves dark: {:?}",
+        dark_on_route(&pinned)
+    );
+    // The plan without pins prices 0:5 along the line: on gas it could (1810 L against 2524 L),
+    // on range it cannot, so it turns at 0:4 and leaves 0:5 dark. The pinned plan paints 0:5 on
+    // its own walk's range; on gas it never pays less than the plan without pins.
+    assert!(pin_free.turn_on_scooter_range);
+    assert_eq!(pin_free.final_turn_ref, Some(line_at(4)));
+    assert!(!is_reachable(&pin_free, line_at(5)));
+    assert!(gas_of(&pin_free, line_at(5)) <= pin_free.budget_litres);
+    assert!(pinned.budget_litres <= pin_free.budget_litres);
+    for (i, (with, without)) in pinned
+        .gas_to_reach
+        .iter()
+        .zip(&pin_free.gas_to_reach)
+        .enumerate()
+    {
+        if let (Some(with), Some(without)) = (with, without) {
+            assert!(
+                with + 1e-9 >= *without,
+                "the pin priced {} below the plan without it",
+                name(pinned.station_refs[i])
+            );
+        }
+    }
+
+    // Less range (a 70% reserve, 608 m): 1:1 is 358 m of range in, 1:0 796 m. The dive reaches its
+    // pin and turns there on the range; 1:0 and 0:5 are affordable on gas but out of range along
+    // the pinned walk, so they stay dark.
+    let short = rv9a_plan(&project, line, 0.7, &pins);
+    println!(
+        "RV9a-1 {}",
+        describe("pinned 1:1, 70% range reserve", &short)
+    );
+    assert_eq!(short.final_turn_ref, Some(deep_at(1)));
+    assert!(short.turn_on_scooter_range);
+    assert!(dark_on_route(&short).is_empty());
+    for s in [deep_at(0), line_at(5)] {
+        assert!(
+            gas_of(&short, s) <= short.budget_litres,
+            "{} on gas",
+            name(s)
+        );
+        assert!(!is_reachable(&short, s), "{} painted out of range", name(s));
+    }
 }

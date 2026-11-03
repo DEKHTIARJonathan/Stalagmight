@@ -7,19 +7,34 @@
 //! deciding the route (D1-D3) the route does not depend on the gas at all, so for one fixed pinned
 //! plan lowering a gas input can only shrink it.
 //!
-//! The sweep: random tree caves, rigs, endpoints, way points, scooters and pins (anywhere,
-//! including off every route), one input lowered at a time - a back-gas fill, a stage fill, a
-//! cylinder's size. Fills stay where the strategy's own per-cylinder credit is monotone in them:
-//! at or below the rating under the conservative cap, up to 300 bar without it. Above the rating
-//! under the cap, and under Free with a usable allowance below the fill, the decided gauge rule
-//! (#576 A18(e)) credits a LOWER fill MORE even without a pin - the same usable bar sits lower on
-//! the Z curve - so there only the cylinder's size is lowered. The pin-free plan's budget never
-//! rising is asserted too, as the check that each case is in that domain. What is asserted for
-//! every lowering, with nothing set aside: the budget never rises, no station is newly painted
-//! (the overlay is priced on the route through the pins, D4), the turn never moves later, and the
-//! pinned plan never has more budget or reach than the same plan without its pins. The sweep is a
-//! fixed 2,500 plans from a fixed seed, so it runs the same cases in the same few seconds every
-//! time.
+//! Two sweeps share one set of checks. The tree sweep: random tree caves, rigs, endpoints, way
+//! points, scooters and pins (anywhere, including off every route), one input lowered at a time -
+//! a back-gas fill, a stage fill, a cylinder's size. Fills stay where the strategy's own
+//! per-cylinder credit is monotone in them: at or below the rating under the conservative cap, up
+//! to 300 bar without it. Above the rating under the cap, and under Free with a usable allowance
+//! below the fill, the decided gauge rule (#576 A18(e)) credits a LOWER fill MORE even without a
+//! pin - the same usable bar sits lower on the Z curve - so there only the cylinder's size is
+//! lowered. The loop sweep (#576 RV9a-1): caves with a deep loop off a shallow line - closed by a
+//! loop closure or a merge - so a station on the line is reached two ways, along the line on less
+//! gas or round the loop on less scooter range; most plans scootered, with the range set near the
+//! line's length, half the drops pinned on the loop and most endpoints on the line beyond it; the
+//! same inputs lowered, and the scooter's range too (a unit's burn time, or a larger reserve).
+//!
+//! What is asserted for every lowering, with nothing set aside: the budget never rises, no station
+//! is newly painted (the overlay is priced on the route through the pins, D4), the turn never moves
+//! later. For every plan: the pinned plan never has more budget than the same plan without its
+//! pins, never prices a station below it, and paints only stations it affords on gas. Every station
+//! of a plan's route up to its turnaround, and the turnaround, is painted, and the turn spends no
+//! more scooter range than the rig has (RV9a-1: the pinned dive turned round a loop on a station
+//! the overlay left dark). Each sweep is a fixed set of plans from a fixed seed, so it runs the
+//! same cases in the same few seconds every time.
+//!
+//! One difference from the plan without pins is allowed, and only round a loop on a scooter: the
+//! overlay prices the range along the pinned walk, while the plan without pins prices it along its
+//! own gas-cheapest path. Round a loop the pinned walk can reach a station on less range than that
+//! path, so it paints a station the plan without pins leaves dark on range alone - the pinned dive
+//! does get there in range - never one that plan cannot afford on gas. In a tree cave there is one
+//! way to each station, so there the pinned overlay stays inside the other one entirely.
 //!
 //! The corner this sweep used to set aside is asserted now (#576 RV8c-2-D5, decided "next stage
 //! starts at pin"): a stage pinned past its own tank-empty point ahead of a later stage. Its drop
@@ -35,7 +50,7 @@
 
 use super::model::{CylRole, Cylinder, Diver, GasReachField, PlanSegment, TankMaterial};
 use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset};
-use crate::{Project, SectionData, ShotData, StationRef};
+use crate::{ClosureStrategy, Project, SectionData, ShotData, StationRef};
 
 struct Rng(u64);
 impl Rng {
@@ -55,6 +70,21 @@ impl Rng {
     }
     fn pick(&mut self, n: usize) -> usize {
         (self.next() % n as u64) as usize
+    }
+}
+
+fn random_shot(r: &mut Rng, depth: &mut f64, length: (f64, f64), drift: (f64, f64)) -> ShotData {
+    let from = *depth;
+    let length = r.range(length.0, length.1);
+    let azimuth_in = r.range(0.0, 360.0);
+    *depth = (*depth + r.range(drift.0, drift.1)).max(0.0);
+    ShotData {
+        length,
+        azimuth_in,
+        azimuth_out: 0.0,
+        depth_in: from,
+        depth_out: *depth,
+        ..Default::default()
     }
 }
 
@@ -97,6 +127,108 @@ fn random_cave(r: &mut Rng) -> (Project, StationRef, Vec<StationRef>) {
     (p, origin, stations)
 }
 
+/// A cave with a loop (#576 RV9a-1): a shallow line from the origin, a deep loop of two or three
+/// legs that leaves it at one station and comes back to it two to five stations on - closed by a
+/// loop closure or by merging its last station with the line's - and up to two side passages,
+/// some of them tied back into the cave too. A station past the loop is reached two ways: along
+/// the line, shallow, the cheaper gas; or round the loop, shorter, the cheaper scooter range.
+struct LoopCave {
+    project: Project,
+    origin: StationRef,
+    stations: Vec<StationRef>,
+    /// The loop's own stations, short of the one it closes on.
+    on_loop: Vec<StationRef>,
+    /// The line's stations past the loop, and the line's length to where the loop closes.
+    beyond_loop: Vec<StationRef>,
+    to_loop_end_m: f64,
+}
+
+fn random_loop_cave(r: &mut Rng) -> LoopCave {
+    let mut p = Project::new("Gas".to_string(), None);
+    let legs = 5 + r.pick(5);
+    let mut depth = r.range(0.0, 10.0);
+    let line_shots: Vec<ShotData> = (0..legs)
+        .map(|_| {
+            let mut s = random_shot(r, &mut depth, (50.0, 250.0), (-3.0, 3.0));
+            s.depth_out = s.depth_out.min(15.0);
+            depth = s.depth_out;
+            s
+        })
+        .collect();
+    let lengths: Vec<f64> = line_shots.iter().map(|s| s.length).collect();
+    let line = p
+        .add_section(SectionData {
+            shots: line_shots,
+            ..Default::default()
+        })
+        .id;
+    let line_at = |i: usize| StationRef::new(line, i as u32);
+    let leaves = r.pick(legs - 1);
+    let closes = (leaves + 2 + r.pick(4)).min(legs);
+    let loop_legs = 2 + r.pick(2);
+    let mut depth = r.range(25.0, 45.0);
+    let loop_shots: Vec<ShotData> = (0..loop_legs)
+        .map(|_| random_shot(r, &mut depth, (40.0, 150.0), (-5.0, 5.0)))
+        .collect();
+    let deep = p
+        .add_section(SectionData {
+            shots: loop_shots,
+            ..Default::default()
+        })
+        .id;
+    // One end merged onto the line, the other tied to it by a loop closure (a merge refuses to
+    // join two stations already connected), either way round.
+    let (first, last) = (
+        StationRef::new(deep, 0),
+        StationRef::new(deep, loop_legs as u32),
+    );
+    let (merged, tied) = if r.unit() < 0.5 {
+        ((line_at(leaves), first), (last, line_at(closes)))
+    } else {
+        ((line_at(closes), last), (first, line_at(leaves)))
+    };
+    p.merge_stations(merged.0, merged.1).unwrap();
+    p.create_loop_closure(tied.0, tied.1, ClosureStrategy::Batch)
+        .unwrap();
+    let mut stations: Vec<StationRef> = (0..=legs).map(line_at).collect();
+    stations.extend((0..=loop_legs).map(|i| StationRef::new(deep, i as u32)));
+    for _ in 0..r.pick(3) {
+        let side_legs = 1 + r.pick(4);
+        let mut depth = r.range(0.0, 20.0);
+        let shots: Vec<ShotData> = (0..side_legs)
+            .map(|_| random_shot(r, &mut depth, (20.0, 200.0), (-5.0, 8.0)))
+            .collect();
+        let id = p
+            .add_section(SectionData {
+                shots,
+                ..Default::default()
+            })
+            .id;
+        let at = stations[r.pick(stations.len())];
+        p.merge_stations(at, StationRef::new(id, 0)).unwrap();
+        if r.unit() < 0.3 {
+            let to = stations[r.pick(stations.len())];
+            // A tie the model refuses (the two are already one station) leaves a plain branch.
+            let _ = p.create_loop_closure(
+                StationRef::new(id, side_legs as u32),
+                to,
+                ClosureStrategy::Batch,
+            );
+        }
+        stations.extend((0..=side_legs).map(|i| StationRef::new(id, i as u32)));
+    }
+    LoopCave {
+        project: p,
+        origin: line_at(0),
+        stations,
+        on_loop: (1..loop_legs)
+            .map(|i| StationRef::new(deep, i as u32))
+            .collect(),
+        beyond_loop: (closes + 1..=legs).map(line_at).collect(),
+        to_loop_end_m: lengths[..closes].iter().sum(),
+    }
+}
+
 fn random_cylinder(r: &mut Rng, role: CylRole, conservative: bool) -> Cylinder {
     let rated = [176.0, 200.0, 207.0, 232.0, 300.0][r.pick(5)];
     let fill = if conservative {
@@ -115,6 +247,200 @@ fn random_cylinder(r: &mut Rng, role: CylRole, conservative: bool) -> Cylinder {
             None,
         )
         .unwrap()
+    }
+}
+
+/// One drawn plan: everything a field is computed from, bar the cylinders and the config the
+/// sweep lowers.
+struct Plan {
+    project: Project,
+    origin: StationRef,
+    endpoint: Option<StationRef>,
+    waypoints: Vec<StationRef>,
+    segments: Vec<PlanSegment>,
+    pins: Vec<Option<StationRef>>,
+    preset: ReservePreset,
+    conservative: bool,
+    backs: usize,
+    rig: Vec<Cylinder>,
+    cfg: GasConfig,
+    /// Whether the cave has a loop (the loop sweep's always do).
+    has_loop: bool,
+}
+
+impl Plan {
+    fn field(
+        &self,
+        rig: &[Cylinder],
+        cfg: &GasConfig,
+        pins: &[Option<StationRef>],
+    ) -> GasReachField {
+        self.project.compute_gas_reach_field_with_overrides(
+            Some(&self.origin),
+            self.endpoint.as_ref(),
+            &self.waypoints,
+            &self.segments,
+            &Diver::new(20.0, None).unwrap(),
+            rig,
+            cfg,
+            pins,
+        )
+    }
+
+    fn scootered(&self) -> bool {
+        self.cfg.dpv.is_some()
+    }
+}
+
+/// The strategy, the rig and the stage reserve, drawn the same way for both sweeps.
+fn random_rig(r: &mut Rng) -> (ReservePreset, bool, usize, Vec<Cylinder>, GasConfig) {
+    let preset = [
+        ReservePreset::OneStage,
+        ReservePreset::TwoStage,
+        ReservePreset::Free,
+    ][r.pick(3)];
+    let conservative = r.unit() < 0.7;
+    let backs = 1 + r.pick(2);
+    let mut rig: Vec<Cylinder> = (0..backs)
+        .map(|_| random_cylinder(r, CylRole::BackGas, conservative))
+        .collect();
+    rig.extend((0..=r.pick(3)).map(|_| random_cylinder(r, CylRole::Stage, conservative)));
+    let mut cfg = GasConfig {
+        default_reserve: preset,
+        conservative_tank_gas: conservative,
+        ..GasConfig::default()
+    };
+    cfg.reserve_profile.stage_reserve_bar = r.range(0.0, 60.0);
+    (preset, conservative, backs, rig, cfg)
+}
+
+/// The tree sweep's plan, drawn exactly as the sweep always has.
+fn tree_plan(r: &mut Rng) -> Plan {
+    let (project, origin, stations) = random_cave(r);
+    let (preset, conservative, backs, rig, mut cfg) = random_rig(r);
+    let scootered = r.unit() < 0.25;
+    if scootered {
+        cfg.dpv = Some(DpvRig {
+            primary: DpvUnit {
+                speed_m_per_min: r.range(25.0, 60.0),
+                burn_minutes: r.range(5.0, 60.0),
+            },
+            backup: DpvUnit {
+                speed_m_per_min: r.range(25.0, 60.0),
+                burn_minutes: r.range(5.0, 60.0),
+            },
+            range_reserve_fraction: r.range(0.0, 0.4),
+        });
+    }
+    cfg.normalize();
+    let endpoint = (r.unit() < 0.5).then(|| stations[r.pick(stations.len())]);
+    let waypoints: Vec<StationRef> = if r.unit() < 0.25 {
+        vec![stations[r.pick(stations.len())]]
+    } else {
+        Vec::new()
+    };
+    let segments: Vec<PlanSegment> = (0..=waypoints.len())
+        .map(|_| PlanSegment {
+            speed_m_per_min: None,
+            on_scooter: scootered && r.unit() < 0.7,
+        })
+        .collect();
+    let pins: Vec<Option<StationRef>> = (0..=r.pick(2))
+        .map(|_| (r.unit() < 0.85).then(|| stations[r.pick(stations.len())]))
+        .collect();
+    Plan {
+        project,
+        origin,
+        endpoint,
+        waypoints,
+        segments,
+        pins,
+        preset,
+        conservative,
+        backs,
+        rig,
+        cfg,
+        has_loop: false,
+    }
+}
+
+/// The loop sweep's plan: a [`random_loop_cave`], a scooter on four plans in five, ridden below
+/// both units' cruise so a metre of line costs more than a metre of range, with the usable range
+/// set to between 0.3 and 1.5 times the line's length to the loop's end; most endpoints on the
+/// line past the loop, half the pins on the loop.
+fn loop_plan(r: &mut Rng) -> Plan {
+    let cave = random_loop_cave(r);
+    let (preset, conservative, backs, rig, mut cfg) = random_rig(r);
+    let scootered = r.unit() < 0.8;
+    let speed = r.range(10.0, 22.0);
+    if scootered {
+        // A unit ridden at `speed`, below its cruise, covers `speed x burn` of line; the rig's
+        // reach in line is the shorter unit's, less the reserve.
+        let reserve = r.range(0.0, 0.4);
+        let line_m = r.range(0.3, 1.5) * cave.to_loop_end_m;
+        let short_burn = line_m / ((1.0 - reserve) * speed);
+        let long_burn = short_burn * r.range(1.0, 2.0);
+        let (primary_burn, backup_burn) = if r.unit() < 0.5 {
+            (short_burn, long_burn)
+        } else {
+            (long_burn, short_burn)
+        };
+        cfg.dpv = Some(DpvRig {
+            primary: DpvUnit {
+                speed_m_per_min: r.range(25.0, 60.0),
+                burn_minutes: primary_burn,
+            },
+            backup: DpvUnit {
+                speed_m_per_min: r.range(25.0, 60.0),
+                burn_minutes: backup_burn,
+            },
+            range_reserve_fraction: reserve,
+        });
+    }
+    cfg.normalize();
+    let stations = &cave.stations;
+    let endpoint = (r.unit() < 0.8).then(|| {
+        if !cave.beyond_loop.is_empty() && r.unit() < 0.7 {
+            cave.beyond_loop[r.pick(cave.beyond_loop.len())]
+        } else {
+            stations[r.pick(stations.len())]
+        }
+    });
+    let waypoints: Vec<StationRef> = if r.unit() < 0.15 {
+        vec![stations[r.pick(stations.len())]]
+    } else {
+        Vec::new()
+    };
+    let segments: Vec<PlanSegment> = (0..=waypoints.len())
+        .map(|_| PlanSegment {
+            speed_m_per_min: Some(speed),
+            on_scooter: scootered && r.unit() < 0.9,
+        })
+        .collect();
+    let pins: Vec<Option<StationRef>> = (0..=r.pick(2))
+        .map(|_| {
+            (r.unit() < 0.85).then(|| {
+                if r.unit() < 0.5 {
+                    cave.on_loop[r.pick(cave.on_loop.len())]
+                } else {
+                    stations[r.pick(stations.len())]
+                }
+            })
+        })
+        .collect();
+    Plan {
+        project: cave.project,
+        origin: cave.origin,
+        endpoint,
+        waypoints,
+        segments,
+        pins,
+        preset,
+        conservative,
+        backs,
+        rig,
+        cfg,
+        has_loop: true,
     }
 }
 
@@ -158,116 +484,193 @@ fn turn_gas(f: &GasReachField) -> Option<f64> {
     )
 }
 
-#[test]
-fn lowering_any_gas_input_never_lets_a_pinned_plan_reach_further() {
-    let diver = Diver::new(20.0, None).unwrap();
-    let mut r = Rng(0x2545_F491_4F6C_DD1D);
-    let mut runs = 0usize;
-    let mut lowered_budget = 0usize;
-    let mut drained_corner = 0usize;
-    let mut violations: Vec<String> = Vec::new();
-    for case in 0..2500 {
-        let (project, origin, stations) = random_cave(&mut r);
-        let preset = [
-            ReservePreset::OneStage,
-            ReservePreset::TwoStage,
-            ReservePreset::Free,
-        ][r.pick(3)];
-        let conservative = r.unit() < 0.7;
-        let backs = 1 + r.pick(2);
-        let mut rig: Vec<Cylinder> = (0..backs)
-            .map(|_| random_cylinder(&mut r, CylRole::BackGas, conservative))
-            .collect();
-        rig.extend((0..=r.pick(3)).map(|_| random_cylinder(&mut r, CylRole::Stage, conservative)));
-        let mut cfg = GasConfig {
-            default_reserve: preset,
-            conservative_tank_gas: conservative,
-            ..GasConfig::default()
-        };
-        cfg.reserve_profile.stage_reserve_bar = r.range(0.0, 60.0);
-        let scootered = r.unit() < 0.25;
-        if scootered {
-            cfg.dpv = Some(DpvRig {
-                primary: DpvUnit {
-                    speed_m_per_min: r.range(25.0, 60.0),
-                    burn_minutes: r.range(5.0, 60.0),
-                },
-                backup: DpvUnit {
-                    speed_m_per_min: r.range(25.0, 60.0),
-                    burn_minutes: r.range(5.0, 60.0),
-                },
-                range_reserve_fraction: r.range(0.0, 0.4),
-            });
+/// RV9a-1: every station of `f`'s route up to its turnaround, and the turnaround, is painted, and
+/// the turn spends no more scooter range than the rig has. Returns how many route stations it
+/// checked, or what it found wrong. A plan with no turnaround has no route to check.
+fn route_is_painted(f: &GasReachField) -> Result<usize, String> {
+    let Some(turn) = f.final_turn_ref else {
+        return Ok(0);
+    };
+    if let Some(limit) = f.scooter_range_limit_m {
+        if f.scooter_distance_m > limit + 1e-6 {
+            return Err(format!(
+                "the turn spends {:.2} m of a {limit:.2} m scooter range",
+                f.scooter_distance_m
+            ));
         }
-        cfg.normalize();
-        let endpoint = (r.unit() < 0.5).then(|| stations[r.pick(stations.len())]);
-        let waypoints: Vec<StationRef> = if r.unit() < 0.25 {
-            vec![stations[r.pick(stations.len())]]
+    }
+    let route: Vec<StationRef> = f
+        .route
+        .first()
+        .map(|l| l.from)
+        .into_iter()
+        .chain(f.route.iter().map(|l| l.to))
+        .chain([turn])
+        .collect();
+    for s in &route {
+        let i = f.station_refs.iter().position(|r| r == s).unwrap();
+        if !f.reachable[i] {
+            return Err(format!("route station {s:?} is dark (turn {turn:?})"));
+        }
+    }
+    Ok(route.len())
+}
+
+/// Lower one input of `plan`: a cylinder's fill (only where the strategy's own credit is monotone
+/// in it, module doc) or size, or - with `lower_range` - the scooter's range. Returns what it did,
+/// the lowered rig and config, and the cylinder it lowered, if it was one.
+fn lower_one(
+    r: &mut Rng,
+    plan: &Plan,
+    lower_range: bool,
+) -> (String, Vec<Cylinder>, GasConfig, Option<usize>) {
+    let mut rig = plan.rig.clone();
+    let mut cfg = plan.cfg.clone();
+    if lower_range && plan.scootered() && r.unit() < 0.3 {
+        let dpv = cfg.dpv.as_mut().unwrap();
+        let what = match r.pick(3) {
+            0 => {
+                let from = dpv.primary.burn_minutes;
+                dpv.primary.burn_minutes = (from * r.range(0.3, 0.99)).max(1.0);
+                format!(
+                    "primary burn {from:.2} -> {:.2} min",
+                    dpv.primary.burn_minutes
+                )
+            }
+            1 => {
+                let from = dpv.backup.burn_minutes;
+                dpv.backup.burn_minutes = (from * r.range(0.3, 0.99)).max(1.0);
+                format!(
+                    "backup burn {from:.2} -> {:.2} min",
+                    dpv.backup.burn_minutes
+                )
+            }
+            _ => {
+                let from = dpv.range_reserve_fraction;
+                dpv.range_reserve_fraction = (from + r.range(0.01, 0.4)).min(0.9);
+                format!(
+                    "range reserve {from:.3} -> {:.3}",
+                    dpv.range_reserve_fraction
+                )
+            }
+        };
+        return (what, rig, cfg, None);
+    }
+    let i = r.pick(rig.len());
+    let c = &mut rig[i];
+    let fill_is_monotone = plan.preset != ReservePreset::Free
+        && (!plan.conservative || c.fill_bar <= c.rated_pressure_bar);
+    let what = if fill_is_monotone && r.unit() < 0.6 {
+        let from = c.fill_bar;
+        c.fill_bar = (from * r.range(0.4, 0.99)).max(5.0);
+        format!("{:?} {i} fill {from:.2} -> {:.2}", c.role, c.fill_bar)
+    } else {
+        let from = c.water_volume_l;
+        c.water_volume_l = (from * r.range(0.4, 0.99)).max(0.5);
+        format!(
+            "{:?} {i} size {from:.3} -> {:.3} L",
+            c.role, c.water_volume_l
+        )
+    };
+    (what, rig, cfg, Some(i))
+}
+
+#[derive(Default)]
+struct Tally {
+    plans: usize,
+    runs: usize,
+    lowered_budget: usize,
+    lowered_range: usize,
+    drained_corner: usize,
+    scootered: usize,
+    range_bound_turns: usize,
+    route_stations: usize,
+    /// Stations a pinned plan paints that the plan without its pins leaves dark on range alone
+    /// (round a loop on a scooter only; see the module doc).
+    range_only: usize,
+    violations: Vec<String>,
+}
+
+/// The pinned plan never exceeds the plan without its pins: never more budget, never a station
+/// priced cheaper, never one painted that the plan without pins cannot afford on gas - nor, but
+/// round a loop on a scooter, one it leaves dark at all.
+fn check_against_pin_free(
+    plan: &Plan,
+    pinned: &GasReachField,
+    pin_free: &GasReachField,
+    t: &mut Tally,
+) -> Vec<String> {
+    let mut found = Vec::new();
+    if pinned.budget_litres > pin_free.budget_litres + 1e-9 {
+        found.push(format!(
+            "pinned budget {:.3} L above the pin-free {:.3} L",
+            pinned.budget_litres, pin_free.budget_litres
+        ));
+    }
+    for (i, (with, without)) in pinned
+        .gas_to_reach
+        .iter()
+        .zip(&pin_free.gas_to_reach)
+        .enumerate()
+    {
+        let s = pinned.station_refs[i];
+        match (with, without) {
+            (Some(with), Some(without)) if *with < without - 1e-6 * without.max(1.0) => {
+                found.push(format!("pin priced {s:?} at {with:.3} < {without:.3} L"));
+            }
+            (Some(_), None) => found.push(format!("pin priced unreachable {s:?}")),
+            _ => {}
+        }
+        if !pinned.reachable[i] || pin_free.reachable[i] {
+            continue;
+        }
+        let on_gas = without.is_some_and(|g| g <= pin_free.budget_litres);
+        if on_gas && plan.scootered() && plan.has_loop {
+            t.range_only += 1;
         } else {
-            Vec::new()
-        };
-        let segments: Vec<PlanSegment> = (0..=waypoints.len())
-            .map(|_| PlanSegment {
-                speed_m_per_min: None,
-                on_scooter: scootered && r.unit() < 0.7,
-            })
-            .collect();
-        let pins: Vec<Option<StationRef>> = (0..=r.pick(2))
-            .map(|_| (r.unit() < 0.85).then(|| stations[r.pick(stations.len())]))
-            .collect();
-        let field = |rig: &[Cylinder], pins: &[Option<StationRef>]| {
-            project.compute_gas_reach_field_with_overrides(
-                Some(&origin),
-                endpoint.as_ref(),
-                &waypoints,
-                &segments,
-                &diver,
-                rig,
-                &cfg,
-                pins,
-            )
-        };
-        let pinned = field(&rig, &pins);
-        let pin_free = field(&rig, &[]);
+            found.push(format!("pin made {s:?} reachable"));
+        }
+    }
+    for (f, which) in [(pinned, "pinned"), (pin_free, "pin-free")] {
+        match route_is_painted(f) {
+            Ok(n) => t.route_stations += n,
+            Err(e) => found.push(format!("{which}: {e}")),
+        }
+    }
+    found
+}
+
+fn sweep(seed: u64, plans: usize, draw: fn(&mut Rng) -> Plan, lower_range: bool) -> Tally {
+    let mut r = Rng(seed);
+    let mut t = Tally {
+        plans,
+        ..Tally::default()
+    };
+    for case in 0..plans {
+        let plan = draw(&mut r);
+        let pins = &plan.pins;
+        let pinned = plan.field(&plan.rig, &plan.cfg, pins);
+        let pin_free = plan.field(&plan.rig, &plan.cfg, &[]);
+        t.scootered += usize::from(plan.scootered());
+        t.range_bound_turns += usize::from(pinned.turn_on_scooter_range);
         let label = |what: &str| {
             format!(
-                "case {case} {preset:?} cons {conservative} end {endpoint:?} wp {waypoints:?} \
-                 pins {pins:?}: {what}"
+                "case {case} {:?} cons {} dpv {} end {:?} wp {:?} pins {pins:?}: {what}",
+                plan.preset,
+                plan.conservative,
+                plan.scootered(),
+                plan.endpoint,
+                plan.waypoints
             )
         };
-        // (c) A pinned plan never exceeds the plan without its pins.
-        if pinned.budget_litres > pin_free.budget_litres + 1e-9 {
-            violations.push(label(&format!(
-                "pinned budget {:.3} L above the pin-free {:.3} L",
-                pinned.budget_litres, pin_free.budget_litres
-            )));
-        }
-        if let Some(s) = reach_within(&pinned, &pin_free) {
-            violations.push(label(&format!("pin made {s:?} reachable")));
-        }
+        let found = check_against_pin_free(&plan, &pinned, &pin_free, &mut t);
+        t.violations.extend(found.iter().map(|f| label(f)));
         for _ in 0..3 {
-            let budget_cyls: Vec<usize> = (0..rig.len()).collect();
-            let i = budget_cyls[r.pick(budget_cyls.len())];
-            let mut lower = rig.clone();
-            let c = &mut lower[i];
-            // Fills only where the strategy's own credit is monotone in them (module doc).
-            let fill_is_monotone = preset != ReservePreset::Free
-                && (!conservative || c.fill_bar <= c.rated_pressure_bar);
-            let what = if fill_is_monotone && r.unit() < 0.6 {
-                let from = c.fill_bar;
-                c.fill_bar = (from * r.range(0.4, 0.99)).max(5.0);
-                format!("{:?} {i} fill {from:.2} -> {:.2}", c.role, c.fill_bar)
-            } else {
-                let from = c.water_volume_l;
-                c.water_volume_l = (from * r.range(0.4, 0.99)).max(0.5);
-                format!(
-                    "{:?} {i} size {from:.3} -> {:.3} L",
-                    c.role, c.water_volume_l
-                )
-            };
-            runs += 1;
-            let after = field(&lower, &pins);
-            let free_after = field(&lower, &[]);
+            let (what, rig, cfg, lowered_cyl) = lower_one(&mut r, &plan, lower_range);
+            t.runs += 1;
+            t.lowered_range += usize::from(lowered_cyl.is_none());
+            let after = plan.field(&rig, &cfg, pins);
+            let free_after = plan.field(&rig, &cfg, &[]);
             assert!(
                 free_after.budget_litres <= pin_free.budget_litres + 1e-9,
                 "test domain: the pin-free budget rose ({what}), {:.3} -> {:.3} L",
@@ -275,7 +678,7 @@ fn lowering_any_gas_input_never_lets_a_pinned_plan_reach_further() {
                 free_after.budget_litres
             );
             if after.budget_litres < pinned.budget_litres - 1e-9 {
-                lowered_budget += 1;
+                t.lowered_budget += 1;
             }
             let mut found: Vec<String> = Vec::new();
             if after.budget_litres > pinned.budget_litres + 1e-9 {
@@ -295,34 +698,95 @@ fn lowering_any_gas_input_never_lets_a_pinned_plan_reach_further() {
                 (None, Some(_)) => found.push(format!("{what}: a turnaround appeared")),
                 _ => {}
             }
-            let stage_k = (rig[i].role == CylRole::Stage).then(|| i - backs);
-            if drains_ahead_of_another(stage_k, &pins, [&pinned, &after]) {
-                drained_corner += 1;
+            let lowered = check_against_pin_free(&plan, &after, &free_after, &mut t);
+            found.extend(lowered.iter().map(|f| format!("{what}: lowered: {f}")));
+            let stage_k = lowered_cyl
+                .filter(|&i| plan.rig[i].role == CylRole::Stage)
+                .map(|i| i - plan.backs);
+            if drains_ahead_of_another(stage_k, pins, [&pinned, &after]) {
+                t.drained_corner += 1;
             }
-            violations.extend(found.iter().map(|f| label(f)));
+            t.violations.extend(found.iter().map(|f| label(f)));
         }
     }
+    t
+}
+
+fn report(name: &str, t: &Tally) {
     println!(
-        "pinned monotonicity sweep: {runs} lowered inputs over 2500 pinned plans, {lowered_budget} \
-         lowered the budget, {drained_corner} in the D5 corner (a stage drained ahead of another), \
-         0 set aside, {} violations",
-        violations.len()
+        "pinned monotonicity sweep, {name}: {} lowered inputs ({} of them the scooter's range) \
+         over {} pinned plans ({} scootered, {} turning on the range), {} lowered the budget, {} in \
+         the D5 corner (a stage drained ahead of another), {} route stations up to the turn \
+         checked painted, {} stations painted that the plan without pins leaves dark on range \
+         alone, 0 set aside, {} violations",
+        t.runs,
+        t.lowered_range,
+        t.plans,
+        t.scootered,
+        t.range_bound_turns,
+        t.lowered_budget,
+        t.drained_corner,
+        t.route_stations,
+        t.range_only,
+        t.violations.len()
     );
-    for v in violations.iter().take(8) {
+    for v in t.violations.iter().take(8) {
         println!("  {v}");
     }
+}
+
+#[test]
+fn lowering_any_gas_input_never_lets_a_pinned_plan_reach_further() {
+    let t = sweep(0x2545_F491_4F6C_DD1D, 2500, tree_plan, false);
+    report("tree caves", &t);
     assert!(
-        runs >= 7500 && lowered_budget > runs / 4,
+        t.runs >= 7500 && t.lowered_budget > t.runs / 4,
         "the sweep must bite"
     );
     assert!(
-        drained_corner > 100,
-        "the sweep must reach the D5 corner ({drained_corner})"
+        t.drained_corner > 100,
+        "the sweep must reach the D5 corner ({})",
+        t.drained_corner
+    );
+    assert_eq!(t.range_only, 0, "a tree cave has one way to each station");
+    assert!(
+        t.violations.is_empty(),
+        "{} pinned plans reached further on less gas, past the plan without their pins, or turned \
+         on a station the map leaves dark",
+        t.violations.len()
+    );
+}
+
+#[test]
+fn a_pinned_plan_round_a_loop_never_reaches_further_on_less_gas_or_scooter_range() {
+    // #576 RV9a-1: the sweep above round a deep loop, where the pinned walk and the plan without
+    // pins take different ways to a station, most plans scootered, and the range lowered too.
+    let t = sweep(0x9A1C_0FFE_E5EE_D001, 2500, loop_plan, true);
+    report("caves with a loop", &t);
+    assert!(
+        t.runs >= 7500 && t.lowered_budget > t.runs / 5,
+        "the sweep must bite"
     );
     assert!(
-        violations.is_empty(),
-        "{} pinned plans reached further on less gas, or past the plan without their pins",
-        violations.len()
+        t.scootered > 1750 && t.lowered_range > 1000 && t.range_bound_turns > 300,
+        "the sweep must fly scooters round the loops ({} scootered, {} range lowerings, {} turns \
+         on the range)",
+        t.scootered,
+        t.lowered_range,
+        t.range_bound_turns
+    );
+    assert!(
+        t.violations.is_empty(),
+        "{} pinned plans reached further on less gas or range, past the plan without their pins \
+         on gas, or turned on a station the map leaves dark",
+        t.violations.len()
+    );
+    // The geometry RV9a-1 needs: a station the pinned walk reaches in range round the loop and
+    // the plan without pins, along the line, does not.
+    assert!(
+        t.range_only > 100,
+        "the sweep must reach the stations only the pinned walk reaches in range ({})",
+        t.range_only
     );
 }
 

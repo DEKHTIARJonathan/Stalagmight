@@ -411,10 +411,13 @@ impl Project {
         // A pinned plan's masks, route, turnaround and drop markers all come from the pinned walk
         // ([`pinned::pinned_view`]): the overlay paints only where the dive through the pins can be,
         // each station priced at its pass or after the pins, as a way point prices it (#576
-        // RV8c-2-D4) - a pin that strands gas shrinks it, and no pin can grow it. That includes the
-        // dive that runs out of gas before a pin (#576 RV8c-2-D3): it turns where the gas says on
-        // the way there, and the drop it never reaches is reported past the turnaround
-        // (`full_route` keeps the stations up to the pin for exactly that).
+        // RV8c-2-D4) - a pin that strands gas shrinks it, and no pin can grow it on gas. That
+        // includes the dive that runs out of gas before a pin (#576 RV8c-2-D3): it turns where the
+        // gas says on the way there, and the drop it never reaches is reported past the turnaround
+        // (`full_route` keeps the stations up to the pin for exactly that). The scooter range is
+        // priced on the same walk, so every station the pinned dive passes or turns at is painted;
+        // round a loop that walk can reach a station on less range than the gas-cheapest way the
+        // plan without pins prices it on, and paint it where that plan does not (#576 RV9a-1).
         let plain_view = budget_view(&walk, endpoint_idx, budget_litres, scooter_limit);
         let (view, full_route) = match &pinned {
             Some(p) => pinned::pinned_view(
