@@ -14,7 +14,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { invokeIpcMock as invokeIpc, stubGetErrorMessage } from '../../test/factories/ipc';
 
-vi.mock('../../utils/ipc');
+// A factory, not a factory-less vi.mock: vitest keeps a factory's result across
+// vi.resetModules(), so the stores each test re-imports call the invokeIpc scripted
+// below. A factory-less mock would be re-evaluated and hand them a fresh vi.fn.
+vi.mock('../../utils/ipc', () => import('../../utils/__mocks__/ipc'));
 stubGetErrorMessage((e: unknown, fallback?: string) => (e instanceof Error ? e.message : (fallback ?? String(e))));
 
 beforeEach(() => {
