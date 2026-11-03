@@ -7,7 +7,10 @@
 //! mutation and its epilogue (orphan conversion, reframe, reconcile, undo push)
 //! computed on a project no user ever sees. Here an edit is parked in exactly that
 //! window (the `park_after_mutation` seam) while each read runs on another thread:
-//! a settled read waits for the edit, an unsettled one answers inside it.
+//! a settled read waits for the edit, an unsettled one answers inside it. The
+//! along-line read is probed against a held `command_lock` instead (RV6a-11, see
+//! the test): through a parked edit its adjusted solve always waited, so that
+//! probe could not tell a settled topology read from an unsettled one.
 //!
 //! All data is synthetic, built in memory.
 
@@ -87,21 +90,57 @@ fn answered_inside_an_edit(read: impl Fn(&AppState) + Sync) -> bool {
     })
 }
 
+/// Hold `command_lock` on this thread - as a command in flight holds it from its
+/// mutation through its epilogue - run `read` on another thread, and report
+/// whether the read answered while the lock was held.
+fn answered_while_a_command_holds_the_lock(
+    state: &AppState,
+    read: impl Fn(&AppState) + Sync,
+) -> bool {
+    let read = &read;
+    std::thread::scope(|scope| {
+        let in_flight = state.hold_commands();
+        let (done_tx, done_rx) = mpsc::channel();
+        let reader = scope.spawn(move || {
+            read(state);
+            let _ = done_tx.send(());
+        });
+        let inside = done_rx.recv_timeout(Duration::from_millis(300)).is_ok();
+        drop(in_flight);
+        reader.join().unwrap();
+        inside
+    })
+}
+
 #[test]
 fn the_three_project_reads_wait_for_a_command_in_flight() {
     let distance = answered_inside_an_edit(|state| {
         assert!(state.distance_field_checked(None).unwrap().is_some());
     });
-    let along_line = answered_inside_an_edit(|state| {
+    // [#576 RV6a-11] The along-line read is probed against `command_lock` itself.
+    // Through a parked edit it could not fail: every `execute()` drops the adjusted
+    // cache before its mutation, so the read's adjusted-stations solve waited for
+    // the lock even while its topology snapshot was taken mid-command (and asking
+    // for the section id inside the read waited too). Here the cache is warm (no
+    // command ran since it was filled) and the section id is known up front, so
+    // only the topology read can make the along-line read wait for a command.
+    let along_line = {
+        let (state, section_id, _) = surveyed();
+        assert!(
+            state.adjusted_stations_checked().unwrap().is_some(),
+            "warm the adjusted cache"
+        );
         let station = |index| RulerEndpoint {
-            section_id: state.get_project_state().unwrap().sections[0].id,
+            section_id,
             station_index: Some(index),
             shot_id: None,
             t: None,
         };
-        let (a, b) = (station(0), station(3));
-        assert!(state.along_line_between_checked(a, b).unwrap().is_some());
-    });
+        answered_while_a_command_holds_the_lock(&state, |state| {
+            let (a, b) = (station(0), station(3));
+            assert!(state.along_line_between_checked(a, b).unwrap().is_some());
+        })
+    };
     let gas = answered_inside_an_edit(|state| {
         let diver = Diver::new(20.0, None).unwrap();
         assert!(state
@@ -119,7 +158,8 @@ fn the_three_project_reads_wait_for_a_command_in_flight() {
     });
     println!(
         "answered while an edit was parked between its mutation and its epilogue: \
-         distance field {distance}, along-line {along_line}, gas reach {gas}"
+         distance field {distance}, gas reach {gas}; while a command held command_lock: \
+         along-line {along_line}"
     );
     assert!(!distance, "the distance field read a mid-command project");
     assert!(
