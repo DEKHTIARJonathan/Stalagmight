@@ -495,35 +495,80 @@ impl AppState {
         ),
         SpeleoDbError,
     > {
-        let _commands = self.hold_commands();
-        // 2. Relocate the open project's working copy into the SpeleoDB cache. A remote
-        //    project's canonical file lives at `speleodb_cache_path` (open/fast-forward
-        //    both extract there), and the push machinery reads exactly that path.
-        //    `save_project(Some(dest))` writes a fresh `.stalx` there AND switches the
-        //    active database + `project.file_path` to it.
-        let save = self.save_project(Some(dest.to_path_buf()));
-        if !save.success {
-            // The save's own refusal, shown as written (as `speleodb_flush_before_push`
-            // does): wrapped in `Io` it read "filesystem error: failed to write project
-            // into the SpeleoDB cache: <marker>", hiding a coded save refusal (such as
-            // the unread-settings marker) behind a disk-error prefix (#576 RV4-R-NITS
-            // S-9).
-            return Err(super::speleodb::refused_by_save(
-                save,
-                "the project could not be written into the SpeleoDB cache",
-            ));
+        // [#576 A8] The order is the types': the relocation needs the span's proof,
+        // and the stamp needs the relocation's.
+        let commands = self.hold_commands();
+        let (relocated, relocation_losses) =
+            self.speleodb_publish_relocate_into(&commands, dest)?;
+        let link = self.speleodb_publish_stamp(&commands, relocated, make_link)?;
+        Ok((link, relocation_losses))
+    }
+}
+
+/// [#576 A8] Publish's local half as types: the relocation takes the caller's
+/// `command_lock` proof, and the stamp takes the relocation's [`Relocated`] proof,
+/// made only here. Stamping first - which would turn the relocation into a Save a
+/// Copy, leaving the session on the user's original file - does not compile.
+mod publish_order {
+    use std::path::Path;
+
+    use super::super::session_commit::CommandsHeld;
+    use super::AppState;
+    use crate::core::ValidationWarning;
+    use crate::speleodb::SpeleoDbError;
+
+    /// Proof that the open project was relocated into the cache while still UNLINKED.
+    pub(super) struct Relocated {
+        _saved: (),
+    }
+
+    impl AppState {
+        /// 2. Relocate the open project's working copy into the SpeleoDB cache. A
+        ///    remote project's canonical file lives at `speleodb_cache_path`
+        ///    (open/fast-forward both extract there), and the push machinery reads
+        ///    exactly that path. `save_project(Some(dest))` writes a fresh `.stalx`
+        ///    there AND switches the active database + `project.file_path` to it.
+        pub(super) fn speleodb_publish_relocate_into(
+            &self,
+            _commands: &CommandsHeld<'_>,
+            dest: &Path,
+        ) -> Result<(Relocated, Vec<ValidationWarning>), SpeleoDbError> {
+            let save = self.save_project(Some(dest.to_path_buf()));
+            if !save.success {
+                // The save's own refusal, shown as written (as
+                // `speleodb_flush_before_push` does): wrapped in `Io` it read
+                // "filesystem error: failed to write project into the SpeleoDB cache:
+                // <marker>", hiding a coded save refusal (such as the unread-settings
+                // marker) behind a disk-error prefix (#576 RV4-R-NITS S-9).
+                return Err(super::super::speleodb::refused_by_save(
+                    save,
+                    "the project could not be written into the SpeleoDB cache",
+                ));
+            }
+            Ok((Relocated { _saved: () }, save.warnings))
         }
-        let db_guard = self.database.lock();
-        let db = db_guard.as_ref().ok_or_else(|| {
-            SpeleoDbError::Io("no open database after writing the cache file".to_owned())
-        })?;
-        // [#303] A new link materializes the application default immediately.
-        // Re-publishing a detached managed copy preserves its explicit project value.
-        let link =
-            make_link(self.effective_undo_mode(super::speleodb_cache::preserved_undo_mode(db)));
-        db.save_speleo_link(Some(&link))
-            .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
-        Ok((link, save.warnings))
+
+        /// 3. Stamp the hand-off link onto the relocated copy, through the live handle
+        ///    the relocation switched to.
+        pub(super) fn speleodb_publish_stamp(
+            &self,
+            _commands: &CommandsHeld<'_>,
+            _relocated: Relocated,
+            make_link: impl FnOnce(crate::models::UndoMode) -> crate::models::SpeleoLink,
+        ) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
+            let db_guard = self.database.lock();
+            let db = db_guard.as_ref().ok_or_else(|| {
+                SpeleoDbError::Io("no open database after writing the cache file".to_owned())
+            })?;
+            // [#303] A new link materializes the application default immediately.
+            // Re-publishing a detached managed copy preserves its explicit project value.
+            let link = make_link(
+                self.effective_undo_mode(super::super::speleodb_cache::preserved_undo_mode(db)),
+            );
+            db.save_speleo_link(Some(&link))
+                .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
+            Ok(link)
+        }
     }
 }
 
@@ -680,44 +725,6 @@ mod tests {
         assert_eq!(
             body.get("visibility").and_then(|v| v.as_str()),
             Some("PUBLIC")
-        );
-    }
-
-    #[test]
-    fn publish_relocates_into_the_cache_before_it_stamps_the_link() {
-        // save_project treats "linked + explicit destination" as Save a Copy (the
-        // copy is written WITHOUT the link and the session stays put). Publish's
-        // relocate-into-cache is an explicit-destination save, so it is only a
-        // real relocate because the project is STILL UNLINKED when it runs - the
-        // link is stamped after. Reorder those two steps and publish silently
-        // stops relocating (the cache gets an unlinked copy while the session
-        // stays on the user's original file). Guarded by ORDER in the source, the
-        // same idiom the pull-guard test uses: a behavioural version needs the
-        // process-global app dirs.
-        // (Both steps live in `speleodb_publish_relocate`, publish's local half.)
-        let src = include_str!("speleodb_project.rs");
-        let start = src
-            .find("fn speleodb_publish_relocate")
-            .expect("the publish local half is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-        let commands = body
-            .find("self.hold_commands()")
-            .expect("publish's local half holds command_lock (#576 NF-W4C-1)");
-        let relocate = body
-            .find("self.save_project(Some(")
-            .expect("publish relocates via an explicit-destination save");
-        let stamp = body
-            .find(".save_speleo_link(Some(")
-            .expect("publish stamps the fresh link");
-        assert!(
-            relocate < stamp,
-            "publish must relocate into the cache BEFORE the link exists - a linked \
-             explicit-destination save is a copy save and would not relocate"
-        );
-        assert!(
-            commands < relocate,
-            "the relocation and the stamp share one command_lock span"
         );
     }
 }
