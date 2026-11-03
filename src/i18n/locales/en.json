@@ -1907,7 +1907,6 @@
       "hideAlternatives": "Hide alternatives",
       "confirm": "Confirm",
       "skip": "Skip",
-      "noSuggestions": "No more automatic connections found.",
       "suggestionsFailed": "Placement suggestions could not be computed: {{reason}}",
       "placeManually": "Place manually",
       "handoffMessage": "{{count}} sections will be configured manually.",

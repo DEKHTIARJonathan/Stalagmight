@@ -34,4 +34,12 @@ describe('dead code stays removed (D27-32(e))', () => {
     expect(v).not.toHaveProperty('shot');
     expect(v).not.toHaveProperty('section');
   });
+
+  // #576 NF-W8D4-2: the DMP wizard's "no more automatic connections" frame
+  // (`wizard-no-suggestions`) was its only render site, and it is gone.
+  it('drops the DMP wizard string only the removed no-suggestions frame used', () => {
+    const wizard = (en as unknown as { dialogs: { dmpNewImport: Record<string, unknown> } }).dialogs.dmpNewImport;
+    expect(wizard).not.toHaveProperty('noSuggestions');
+    expect(wizard).toHaveProperty('suggestionsFailed');
+  });
 });
