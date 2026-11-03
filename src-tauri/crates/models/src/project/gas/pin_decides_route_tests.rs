@@ -779,3 +779,42 @@ fn a_pin_past_the_end_of_the_route_turns_the_dive_on_the_way_there() {
         assert_eq!(f.stage_drop_over_reserve, vec![false], "{why}");
     }
 }
+
+#[test]
+fn two_drops_pinned_on_one_station_still_carry_on_beyond_it() {
+    // TwoStage, both drops pinned at the trunk end (a dead end, 1200 L in). Drop 2 is passed on
+    // the way to drop 1 - the same station - so it is dropped there full, and the dive goes no
+    // further than the passage beyond that pin: it turns at the trunk end. Given a zero-length leg
+    // of its own, "beyond" the second pin would be every direction, and the dive would double back
+    // down the trunk as the deepest station "through" it.
+    let (project, origin, trunk_end, _side_end) = two_branch_cave();
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::TwoStage,
+        ..GasConfig::default()
+    };
+    let rig = [
+        cyl(12.0, 232.0, 232.0, CylRole::BackGas),
+        cyl(12.0, 232.0, 232.0, CylRole::BackGas),
+        cyl(11.0, 207.0, 207.0, CylRole::Stage),
+        cyl(11.0, 207.0, 207.0, CylRole::Stage),
+    ];
+    let pinned = project.compute_gas_reach_field_with_overrides(
+        Some(&origin),
+        None,
+        &[],
+        &[],
+        &diver,
+        &rig,
+        &cfg,
+        &[Some(trunk_end), Some(trunk_end)],
+    );
+    println!(
+        "SAME-STATION {}",
+        describe("both pinned at trunk:6", &pinned)
+    );
+    assert!(pinned.budget_litres > 1200.0, "the trunk end is affordable");
+    assert_eq!(pinned.final_turn_ref, Some(trunk_end));
+    assert_eq!(route_of(&pinned).last(), Some(&trunk_end));
+    assert_eq!(pinned.stage_drop_refs, vec![trunk_end, trunk_end]);
+}

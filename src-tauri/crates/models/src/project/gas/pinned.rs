@@ -103,8 +103,12 @@ pub(super) fn pinned_walk(
                 pin_chain_idx.push(first_pass(w, si));
                 continue;
             }
+            // Passed before this leg starts - or, after another pin, AT its start: a second pin on
+            // the station the previous one sits on is the same place, and a zero-length leg of its
+            // own would make "beyond the last pin" every direction.
             let start = leg.checked_sub(1).map_or(Some(legs_start), leg_end);
-            if first_pass(w, si).zip(start).is_some_and(|(f, s)| f < s) {
+            let passed = |(f, s): (usize, usize)| f < s || (leg > 0 && f == s);
+            if first_pass(w, si).zip(start).is_some_and(passed) {
                 passed_before_its_leg.get_or_insert(k);
             }
             pin_chain_idx.push(leg_end(leg));
