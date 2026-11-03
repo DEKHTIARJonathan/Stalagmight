@@ -1019,7 +1019,7 @@ impl AppState {
     /// dump, import its `ariane.tml` through the existing TML importer, save a new
     /// `.stalx` at the same cache path a pull would use, stamp the hand-off link,
     /// push it with its Ariane sidecar, release the mutex, flip the server project
-    /// `type` ariane→other, and close so the webview's own load is a real load.
+    /// `type` ariane→stalagmight, and close so the webview's own load is a real load.
     ///
     /// It DOES push - that is the point of taking the lock first, and of taking it
     /// before the download rather than after the import. Only the routes that cannot
@@ -1657,9 +1657,9 @@ impl AppState {
     ) -> AdoptFinalize {
         let (needs_flip, mut holder) =
             match client::get_project(endpoint, token, insecure_http, project_id) {
-                // Already managed (`stalagmight`, or the legacy `other` the next push
-                // relabels): the push's heal got there first, which is the ordinary
-                // path. Nothing to do, and nothing to report but success - but the holder
+                // Already `stalagmight`: the push's heal got there first, which is the
+                // ordinary path. (A legacy `other` is not managed - SpeleoDB never maps
+                // it - so it falls through to the PATCH below.) Nothing to do, and nothing to report but success - but the holder
                 // still comes back, because the release verdict needs it either way.
                 Ok(fetched) if type_says_managed(Some(&fetched.kind)) => {
                     return AdoptFinalize {

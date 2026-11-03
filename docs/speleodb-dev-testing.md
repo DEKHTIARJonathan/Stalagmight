@@ -143,8 +143,9 @@ Checked against the SpeleoDB server source; these override the stale issue text:
 - **`permission` is a STRING label** - `"WEB_VIEWER" | "READ_ONLY" |
   "READ_AND_WRITE" | "ADMIN"` - and the field is **absent** (not null) when the user
   has no permission. (Issues #188/#203 say "parse the integer" - wrong.)
-- **Project `type`** is a string enum: `ariane | compass | stickmaps | therion |
-  walls | other`.
+- **Project `type`** is a string enum: `ariane | compass | stalagmight | stickmaps |
+  therion | walls | other` (`stalagmight` confirmed in the production `/api/schema/`,
+  2026-11-03). Stalagmight writes `stalagmight`; `other` is the legacy managed type.
 - **The `.stalx` lands at `misc/project.stalx`** in the dump ZIP. Locate it by the
   `.stalx` **suffix**, never the hard-coded `misc/` path (survives a server
   `TARGET_FOLDER` change).

@@ -461,9 +461,9 @@ impl SpeleoDbSession {
 /// `stalagmight` is the one it maps from the `.stalx` (via `stalx-reader`, #593).
 pub(super) const MANAGED_PROJECT_TYPE: &str = "stalagmight";
 
-/// The managed type before SpeleoDB had a Stalagmight type. Projects adopted or
-/// published under it still read as managed; the next landed push relabels them
-/// (`type_needs_managed_label`), because SpeleoDB never maps an `other` project.
+/// The managed type before SpeleoDB had a Stalagmight type. SpeleoDB never maps
+/// an `other` project, so it is NOT treated as managed: the next landed push
+/// (`type_needs_managed_label`) and an adoption's finalize both relabel it.
 const LEGACY_MANAGED_PROJECT_TYPE: &str = "other";
 
 /// The PATCH body that labels a project as Stalagmight-managed.
@@ -473,17 +473,13 @@ pub(super) fn managed_type_patch() -> String {
 
 /// Is the server already calling this a project we manage?
 ///
-/// The inverse of [`type_still_says_ariane`] only for the types that flow
-/// through adoption; deliberately NOT `!type_still_says_ariane`, which answers
-/// "yes" for `compass`, `therion` and anything the API grows next. Adoption used
-/// that inverse to decide it had nothing to do, so a project re-typed under it
-/// mid-run was reported as flipped with the server left untouched.
+/// Only [`MANAGED_PROJECT_TYPE`] counts: the legacy `other` still needs the
+/// relabel. Deliberately NOT `!type_still_says_ariane`, which answers "yes" for
+/// `compass`, `therion` and anything the API grows next. Adoption used that
+/// inverse to decide it had nothing to do, so a project re-typed under it mid-run
+/// was reported as flipped with the server left untouched.
 pub(super) fn type_says_managed(server_kind: Option<&str>) -> bool {
-    server_kind.is_some_and(|kind| {
-        let kind = kind.trim();
-        kind.eq_ignore_ascii_case(MANAGED_PROJECT_TYPE)
-            || kind.eq_ignore_ascii_case(LEGACY_MANAGED_PROJECT_TYPE)
-    })
+    server_kind.is_some_and(|kind| kind.trim().eq_ignore_ascii_case(MANAGED_PROJECT_TYPE))
 }
 
 /// Should a push that just landed rewrite the server type to
@@ -2694,10 +2690,10 @@ mod tests {
         // Same case-insensitivity the Ariane side needs, and for the same reason.
         assert!(type_says_managed(Some("STALAGMIGHT")));
         assert!(type_says_managed(Some(" Stalagmight ")));
-        // The legacy managed type still counts, so a project adopted before the
-        // relabel is not offered Adopt again.
-        assert!(type_says_managed(Some("other")));
-        assert!(type_says_managed(Some("OTHER")));
+        assert!(
+            !type_says_managed(Some("other")),
+            "the legacy type is never mapped, so adoption's finalize must relabel it"
+        );
 
         assert!(
             !type_says_managed(Some("ariane")),
@@ -2747,8 +2743,36 @@ mod tests {
     /// The PATCH body names the managed type and nothing else.
     #[test]
     fn the_managed_type_patch_is_exactly_the_type_field() {
-        let body: serde_json::Value = serde_json::from_str(&managed_type_patch()).unwrap();
-        assert_eq!(body, serde_json::json!({ "type": "stalagmight" }));
+        assert_eq!(managed_type_patch(), r#"{"type":"stalagmight"}"#);
+    }
+
+    /// The predicate and body above only matter if the writers use them. The heal
+    /// gates on `type_needs_managed_label` (so a legacy `other` is relabelled, not
+    /// only an unfinished `ariane`), and no SpeleoDB source writes a hand-made type
+    /// body that could drift back to `other`.
+    #[test]
+    fn the_type_writers_go_through_the_shared_helpers() {
+        let src = push_prod_source();
+        let heal = src
+            .find("fn speleodb_heal_managed_type")
+            .expect("the heal is defined");
+        let heal_body = &src[heal..];
+        let heal_body = &heal_body[..heal_body.find("\n    }\n").expect("heal body ends")];
+        assert!(
+            heal_body.contains("if !type_needs_managed_label(server_kind)"),
+            "the heal must relabel the legacy type too, not only `ariane`"
+        );
+        assert!(heal_body.contains("&managed_type_patch()"));
+        assert_eq!(
+            speleodb_prod_matches("&managed_type_patch()", &[]),
+            2,
+            "the heal and adoption's finalize both PATCH through the helper"
+        );
+        assert_eq!(
+            speleodb_prod_matches(r#"{"type":"#, &[]),
+            0,
+            "no hand-written type PATCH body in the SpeleoDB sources"
+        );
     }
 
     /// The heal has to run on EVERY arm that concludes an upload landed, and "landed"

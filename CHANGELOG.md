@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Fixed
+
+- **SpeleoDB:** projects Stalagmight publishes or adopts are now typed `stalagmight` on SpeleoDB instead of `other`, a type SpeleoDB never builds maps for. Projects already adopted as `other` are relabelled on their next push. Their maps update once SpeleoDB generates maps for Stalagmight projects.
+
 ## [0.5.0] - 2026-08-13
 
 The first release with builds for all three platforms. The headline additions are

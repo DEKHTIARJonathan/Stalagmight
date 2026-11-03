@@ -1014,13 +1014,14 @@ impl AppState {
             Ok(_) => tracing::info!(
                 project_id,
                 from = server_kind.unwrap_or_default(),
-                purpose = "finish an adoption whose own push never ran",
+                purpose =
+                    "label a landed project stalagmight (unfinished adoption or legacy other)",
                 "speleodb: relabelled the server project type to stalagmight after a landed push"
             ),
             Err(e) => tracing::warn!(
                 error = %e,
                 project_id,
-                purpose = "finish an adoption whose own push never ran",
+                purpose = "label a landed project stalagmight (unfinished adoption or legacy other)",
                 "speleodb: could not flip the project type after a landed push; the next push retries"
             ),
         }
