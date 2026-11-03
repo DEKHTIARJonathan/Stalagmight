@@ -89,20 +89,20 @@ and document that fact at the call site, the way that function does.
 ### Profile harnesses
 
 `profile_tml_import_full` and `profile_stalx_load` live in
-`src-tauri/crates/core/src/core/state/tests.rs`. They are unit tests with `#[ignore]` -
+`src-tauri/crates/core/src/core/state/tests/profile_harness_tests.rs`. They are unit tests with `#[ignore]` -
 they never run with `cargo test` unless explicitly opted in:
 
 ```bash
 # Profile a TML import end-to-end (parse + convert + execute_import_sections)
 STALAGMIGHT_PROFILE_TML=/path/to/file.tml \
   cargo test --release --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
-  core::state::tests::profile_tml_import_full -- --nocapture --ignored
+  core::state::tests::profile_harness_tests::profile_tml_import_full -- --nocapture --ignored
 
 # Profile a stalx load end-to-end (open + load + station coords + warnings +
 # undo/redo + binary encode)
 STALAGMIGHT_PROFILE_STALX=/path/to/file.stalx \
   cargo test --release --manifest-path src-tauri/Cargo.toml -p stalagmight-core --lib \
-  core::state::tests::profile_stalx_load -- --nocapture --ignored
+  core::state::tests::profile_harness_tests::profile_stalx_load -- --nocapture --ignored
 ```
 
 Combine with `RUST_LOG=stalagmight=debug` to also get the in-code sub-phase

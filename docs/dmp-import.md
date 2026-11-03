@@ -494,4 +494,4 @@ cases); the overlap-mode write:
 `src/components/Dialogs/__tests__/DmpNewImportDialog.overlapModeWrite.test.tsx`;
 existing-data readings: `src/utils/__tests__/overlapTreatmentExistingData.test.ts`.
 
-Backend integration test for overlap interpolation: `src-tauri/crates/core/src/core/state/tests.rs` (`kb5_import_overlap_interpolation_integration`, currently `#[ignore]`).
+Backend integration test for overlap interpolation: `src-tauri/crates/core/src/core/state/tests/delete_section_cascade_tests.rs` (`kb5_import_overlap_interpolation_integration`, currently `#[ignore]`).

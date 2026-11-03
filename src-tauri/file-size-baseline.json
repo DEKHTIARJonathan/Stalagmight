@@ -229,7 +229,7 @@
     "src-tauri/crates/core/src/core/state/reverse_tests.rs": 1430,
     "src-tauri/crates/core/src/core/state/save_sidecar_tests.rs": 579,
     "src-tauri/crates/core/src/core/state/shot_uuid_tests.rs": 1334,
-    "src-tauri/crates/core/src/core/state/tests.rs": 21464,
+    "src-tauri/crates/core/src/core/state/tests.rs": 403,
     "src-tauri/crates/core/src/core/state/unreadable_link_open_tests.rs": 104,
     "src-tauri/crates/core/src/core/state/workspace_mode_tests.rs": 180,
     "src-tauri/crates/core/src/test_helpers.rs": 317,

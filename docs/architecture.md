@@ -389,8 +389,9 @@ Whole **test files** are measured too, under their own thresholds (warn 3000 / f
 5000 code LOC, the baseline's `test_files` section): a file under `src-tauri/tests/`, or a
 `tests.rs` / `*_tests.rs` / `*_fuzz.rs` / `test_helpers.rs` that its parent declares
 under `#[cfg(test)]` (a production file merely *named* `*_tests.rs` is measured as
-production). The six test monoliths at/above 3000 (led by `core/state/tests.rs`) are
-frozen: new tests go into a new submodule, not into them. The scan also covers the
+production). The five test monoliths at/above 3000 (led by `models/project/tests.rs`) are
+frozen: new tests go into a new submodule, not into them. (`core/state/tests.rs`, once the
+largest, is now a module root over topic files in `core/state/tests/`, #576 E1.) The scan also covers the
 first-party Rust outside the crates' `src/`: the build scripts, `src-tauri/examples`,
 the agent harness's OS helper and `scripts/lib/slice-rs`.
 
