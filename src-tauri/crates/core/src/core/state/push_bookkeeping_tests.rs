@@ -96,8 +96,15 @@ fn a_landed_upload_is_recorded_whatever_an_autosave_is_doing() {
                 250 * u64::try_from(round % 12).unwrap(),
             ));
             let push_start = chrono::Utc::now().to_rfc3339();
-            let recorded =
-                state.speleodb_record_landed_upload(Some(LANDED), &push_start, &push_start, None);
+            // [#576 A8] Recording a landing takes the proof that one was concluded.
+            let landed = state.speleodb_revision_landed("push-bookkeeping");
+            let recorded = state.speleodb_record_landed_upload(
+                &landed,
+                Some(LANDED),
+                &push_start,
+                &push_start,
+                None,
+            );
             let after = saves.load(Ordering::Relaxed) + 2;
             while saves.load(Ordering::Relaxed) < after {
                 std::thread::yield_now();

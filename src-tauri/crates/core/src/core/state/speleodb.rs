@@ -31,6 +31,26 @@ use super::speleodb_cache::LocalEditsPolicy;
 // `speleodb_push`; the lock + edit gate here still consults its outcome type and
 // its empty-tip-tolerant head read.
 use super::speleodb_push::{head_with_empty_retry, PushOutcome};
+
+/// [#576 A8] Proof that a push arm has CONCLUDED an upload landed, and dropped the
+/// remembered dump choice that landing made stale.
+///
+/// Made only by [`AppState::speleodb_note_prior_push_landed`] (its field is private
+/// to this module). Every step that may only follow a landing takes one - the
+/// managed-type heal and each arm's link write - so writing one of them above the
+/// landing it records is a compile error, not a source-text tripwire. That is also
+/// what puts the invalidation ahead of every fallible local write (#258).
+#[must_use = "a concluded landing is what the arm's later steps and its outcome are built on"]
+pub(super) struct Landed {
+    _concluded: (),
+}
+
+impl Landed {
+    /// What an arm that concluded a landing reports.
+    pub(super) fn outcome(&self) -> PushOutcome {
+        PushOutcome::Confirmed
+    }
+}
 use super::AppState;
 use crate::speleodb::auth::{account_key, SecretStoreError, TokenStore, TokenTier};
 use crate::speleodb::client;
@@ -1363,9 +1383,8 @@ impl AppState {
     /// belongs in front of it. Each arm therefore binds the outcome here and returns
     /// it unchanged after its write, which keeps concluding and invalidating together
     /// while putting both ahead of anything fallible.
-    pub(super) fn speleodb_revision_landed(&self, project_id: &str) -> PushOutcome {
-        self.speleodb_note_prior_push_landed(project_id);
-        PushOutcome::Confirmed
+    pub(super) fn speleodb_revision_landed(&self, project_id: &str) -> Landed {
+        self.speleodb_note_prior_push_landed(project_id)
     }
 
     /// The invalidation on its own, for the arm that concludes a landing WITHOUT
@@ -1383,8 +1402,9 @@ impl AppState {
     /// fail, and the upload it continues into can come back ambiguous - and on either
     /// path the function returns having proved a revision exists that our remembered
     /// choice predates, with the choice still standing.
-    pub(super) fn speleodb_note_prior_push_landed(&self, project_id: &str) {
+    pub(super) fn speleodb_note_prior_push_landed(&self, project_id: &str) -> Landed {
         self.speleodb_forget_dump_entry(project_id);
+        Landed { _concluded: () }
     }
 
     /// [Track C] (#188, C5): centralized session-level 401 auto-drop handler.
@@ -2855,57 +2875,19 @@ mod tests {
     /// have lost). An arm that stops healing leaves the half-state standing silently,
     /// which is the failure this whole mechanism exists to end.
     ///
-    /// Structural, like the sibling tripwire on the recall invalidation: reaching the
-    /// real thing needs a server, and what is being guarded is someone adding a landing
-    /// arm without the finishing move.
+    /// [#576 A8] That a heal can only FOLLOW its landing is the type's job now: the
+    /// heal takes the [`super::Landed`] proof only the landing makes. What stays a
+    /// sanctioned source scan (docs/testing-recipes.md, "Source scans") is the site
+    /// inventory, which no type can say: exactly the 200 and 304 arms heal.
     #[test]
     fn every_landing_upload_arm_finishes_the_adoption() {
-        // One definition plus the two landing arms inside `speleodb_upload`: the 200
-        // and the 304. Both are points at which the `.stalx` is provably on the server.
         assert_eq!(
             speleodb_prod_matches("speleodb_heal_managed_type(", &[]),
             3,
-            "expected one definition plus the 200 and 304 landing arms"
+            "RULE (finish the adoption on every landing upload): one definition plus the \
+             200 and 304 landing arms of `speleodb_upload` - a landing arm added without \
+             the heal, or a heal added outside one, changes this count"
         );
-        // Never BEFORE a landing: flipping ahead of one recreates the state the flip
-        // exists to avoid - a project typed `other` whose only file is the Ariane one
-        // that type says to disregard. Checked arm by arm rather than once, so a heal
-        // added ahead of its landing cannot hide behind an earlier well-formed pair.
-        let src = push_prod_source();
-        let upload = src
-            .find("fn speleodb_upload")
-            .expect("the upload is defined");
-        let helper = src
-            .find("fn speleodb_heal_managed_type")
-            .expect("the helper is defined");
-        // Asserted, not assumed: `find` answers presence, not position, so slicing
-        // straight from one to the other turns "the helper moved above the upload"
-        // into a start>end slice PANIC - a real failure, reported as the wrong thing.
-        assert!(
-            upload < helper,
-            "this tripwire slices from the upload to the helper, so the helper has to \
-             be defined after it"
-        );
-        let body = &src[upload..helper];
-        let landings: Vec<_> = body
-            .match_indices("let landed = self.speleodb_revision_landed(")
-            .map(|(at, _)| at)
-            .collect();
-        let heals: Vec<_> = body
-            .match_indices("self.speleodb_heal_managed_type(")
-            .map(|(at, _)| at)
-            .collect();
-        assert_eq!(
-            landings.len(),
-            heals.len(),
-            "every landing the upload concludes must be followed by the finishing move"
-        );
-        for (landed, heal) in landings.iter().zip(&heals) {
-            assert!(
-                landed < heal,
-                "the heal must follow the landing it is evidence of, never precede it"
-            );
-        }
     }
 
     #[test]
@@ -3721,9 +3703,10 @@ mod tests {
         //     1. push 200 confirmed - advance to the adopted hexsha (never BACKWARD
         //        to the empty-repo sentinel: a None there would fence the next push
         //        to Diverged against our own landed commit)
-        //     2. push ancestry Landed - advance BASE to tip
-        //     3. push ancestry Landed - already-up-to-date sub-case
-        //     4. speleodb_publish recovery - adopt the server tip when the
+        //     2. push ancestry Landed - advance BASE to tip, for BOTH adoption plans
+        //        (`AdoptThenUpload`, `AdoptConfirmed`) through their one write step,
+        //        `speleodb_adopt_tip_after_landing` (#576 A8: it takes the landing)
+        //     3. speleodb_publish recovery - adopt the server tip when the
         //        best-effort initial push did not confirm, so a just-published
         //        project does not open the divergence prompt on its first edit
         //   struct-init `base_commit_sha:` (a fresh SpeleoLink):
@@ -3741,59 +3724,22 @@ mod tests {
         // Counted across the WHOLE speleodb family, not just this file: BASE writes
         // that move to a sibling module must keep being counted here, or the split
         // that moved them would silently retire the guard (#275).
+        //
+        // A sanctioned source scan (#576 A8-D2, docs/testing-recipes.md "Source scans"):
+        // "BASE moves only at these triggers" is a site inventory no type expresses.
         assert_eq!(
             speleodb_prod_matches("base_commit_sha =", &[]),
-            4,
-            "unexpected BASE mutate-advance count (sanctioned: push-200, ancestry-landed x2, publish tip recovery)"
+            3,
+            "RULE (BASE advances only at sanctioned triggers, #192/#193/#197): unexpected \
+             BASE mutate-advance count (sanctioned: push-200, the ancestry-landed write \
+             step, publish tip recovery)"
         );
         assert_eq!(
             speleodb_prod_matches("base_commit_sha:", &[]),
             5,
-            "unexpected BASE stamp count (sanctioned: open-on-pull, fast-forward restamp, publish-create, adopt-ariane, revision-restore)"
-        );
-    }
-
-    #[test]
-    fn push_flushes_to_disk_before_snapshotting() {
-        // #195 quiescent-point invariant: the push must flush in-memory edits to the
-        // live .stalx (save_project) BEFORE taking the VACUUM snapshot, or the
-        // uploaded snapshot would miss the last edit (data loss). The snapshot - NOT
-        // the live bytes - is then what upload_auto streams. The ordering can't be
-        // observed without a client seam, so pin it structurally (like the
-        // BASE-advance tripwire); the live round-trips prove the behaviour itself.
-        let src = push_prod_source();
-        let upload = src
-            .split_once("fn speleodb_upload")
-            .map(|(_, rest)| rest)
-            .and_then(|rest| rest.split("\n    fn ").next())
-            .expect("speleodb_upload body precedes the next method");
-        // [#576 NF-W2SAVE-1] The flush is its own helper (so its refusal can carry the
-        // save's reason); it must still be a `save_project` of the live file.
-        let save = upload
-            .find("self.speleodb_flush_before_push()")
-            .expect("push flushes via the pre-push save");
-        let flush = src
-            .split_once("fn speleodb_flush_before_push")
-            .map(|(_, rest)| rest)
-            .and_then(|rest| rest.split("\n    fn ").next())
-            .expect("the pre-push flush helper is present");
-        assert!(
-            flush.contains("self.save_project(None)"),
-            "the pre-push flush saves the live file in place"
-        );
-        let vacuum = upload
-            .find("vacuum_snapshot(")
-            .expect("push snapshots via vacuum_snapshot");
-        let upload_call = upload
-            .find("upload_auto(")
-            .expect("push streams via upload_auto");
-        assert!(
-            save < vacuum,
-            "save_project (flush) must precede vacuum_snapshot - the snapshot must be quiescent (#195)"
-        );
-        assert!(
-            vacuum < upload_call,
-            "the VACUUM snapshot must be taken before upload_auto streams it (#195)"
+            "RULE (BASE is stamped only at sanctioned triggers, #192/#193/#197): unexpected \
+             BASE stamp count (sanctioned: open-on-pull, fast-forward restamp, \
+             publish-create, adopt-ariane, revision-restore)"
         );
     }
 

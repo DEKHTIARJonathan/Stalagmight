@@ -4252,23 +4252,6 @@ mod tests {
         );
     }
 
-    /// Invalidating is not enough on its own - it has to happen BEFORE the fallible
-    /// link write each arm performs, or a disk/db failure returns while a choice we
-    /// already know is stale stays standing (and the next discarding open extracts
-    /// that pre-push entry and re-stamps it). Inlining the call into the arm's return
-    /// expression is exactly what puts it last, so require every arm to bind it to a
-    /// local instead: the binding cannot sit after the `?` and still be returned.
-    #[test]
-    fn no_landing_arm_defers_the_invalidation_behind_its_link_write() {
-        assert_eq!(
-            speleodb_prod_matches("Ok(self.speleodb_revision_landed(", &[]),
-            0,
-            "a landing arm is returning `speleodb_revision_landed` inline, which \
-             places the invalidation AFTER its `speleodb_mutate_link(..)?`. Bind it \
-             to a local before the write and return that local instead."
-        );
-    }
-
     /// [#258] The probe's answer is advisory, but the request that produces it is
     /// authenticated: `hexsha` lands in the URL path, so anything that could reshape
     /// that path is rejected before the request is built - the same guard the restore

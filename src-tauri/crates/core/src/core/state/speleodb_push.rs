@@ -22,7 +22,7 @@
 
 use std::path::Path;
 
-use super::speleodb::local_dto;
+use super::speleodb::{local_dto, Landed};
 use super::speleodb_cache::LocalEditsPolicy;
 use super::AppState;
 use crate::core::events::IpcEvent as _;
@@ -961,14 +961,11 @@ impl AppState {
                 // Ahead of the fallible write for the usual reason, and ahead of the
                 // upload below because that upload can come back ambiguous and return
                 // without concluding anything.
-                self.speleodb_note_prior_push_landed(project_id);
+                let landed = self.speleodb_note_prior_push_landed(project_id);
                 // [#576 B35(d)] Under `command_lock`, like every link write of the push:
                 // an autosave copies the link at its start and renames a fresh file over
                 // the live one, so a write landing inside it was lost.
-                let commands = self.hold_commands();
-                self.speleodb_mutate_link(|l| l.base_commit_sha = tip.clone())
-                    .map_err(local_dto)?;
-                drop(commands);
+                self.speleodb_adopt_tip_after_landing(&landed, tip.clone(), false)?;
             }
             // Forward-compatible only (unreachable while push-start is unpersisted):
             // the prior push landed and no edit followed, so adopt the tip and clear
@@ -980,14 +977,8 @@ impl AppState {
                 // the adoption locally must not be what leaves it standing.
                 let landed = self.speleodb_revision_landed(project_id);
                 // [#576 B35(d)] Under `command_lock`; see the arm above.
-                let _commands = self.hold_commands();
-                self.speleodb_mutate_link(|l| {
-                    l.base_commit_sha = tip.clone();
-                    l.has_unpushed_edits = false;
-                    l.last_edit_at = None;
-                })
-                .map_err(local_dto)?;
-                return Ok(landed);
+                self.speleodb_adopt_tip_after_landing(&landed, tip.clone(), true)?;
+                return Ok(landed.outcome());
             }
             // A stranger's commit, a gap this session cannot prove it pushed (#576
             // B32), OR a server inconsistency (non-linear / multi-root / a recorded
@@ -1019,6 +1010,28 @@ impl AppState {
     /// save's warnings (what it could not keep) are logged and handed back: the
     /// Done / Push answer carries them so the frontend shows them like a normal
     /// save's (they are one-shot - the save after the push does not repeat them).
+    /// [#576 A8] The adoption plans' link write (`AdoptThenUpload`, `AdoptConfirmed`):
+    /// BASE moves to the tip a prior upload landed, under `command_lock` like every
+    /// link write of the push, and `clear_dirty` clears the dirty bit with it. It takes
+    /// the [`Landed`] proof so the invalidation that landing implies cannot be put
+    /// after this fallible write (#258).
+    fn speleodb_adopt_tip_after_landing(
+        &self,
+        _landed: &Landed,
+        tip: Option<String>,
+        clear_dirty: bool,
+    ) -> Result<(), SpeleoErrorDto> {
+        let _commands = self.hold_commands();
+        self.speleodb_mutate_link(|l| {
+            l.base_commit_sha = tip;
+            if clear_dirty {
+                l.has_unpushed_edits = false;
+                l.last_edit_at = None;
+            }
+        })
+        .map_err(local_dto)
+    }
+
     pub(super) fn speleodb_flush_before_push(
         &self,
     ) -> Result<Vec<ValidationWarning>, SpeleoErrorDto> {
@@ -1114,7 +1127,7 @@ impl AppState {
         let dir = live
             .parent()
             .ok_or_else(|| local_dto(SpeleoDbError::Io("cache path has no parent".to_owned())))?;
-        let snapshot = dir.join("snapshot.stalx");
+        let snapshot_path = dir.join("snapshot.stalx");
         let tml = dir.join("ariane.tml");
 
         // [#576 B35(d)] The LOCAL half of the push - the name fold, the push-start
@@ -1144,13 +1157,14 @@ impl AppState {
         // shot identity + geometry. Rendering first would ship a `.tml` built from
         // the un-healed project for a legacy file carrying within-section duplicate
         // UUIDs or non-finite values (#196).
-        save_warnings.extend(self.speleodb_flush_before_push()?);
+        let (flushed, flush_losses) = self.speleodb_flush_for_snapshot()?;
+        save_warnings.extend(flush_losses);
         self.speleodb_render_tml(&tml).map_err(local_dto)?;
 
         // Self-contained snapshot of the live `.stalx` (#195), dirty bit cleared in
-        // the COPY so it never rides to the server.
-        crate::persistence::Database::vacuum_snapshot(&live, &snapshot)
-            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        // the COPY so it never rides to the server. It takes the flush's proof, so it
+        // cannot be taken ahead of the flush (#576 A8).
+        let snapshot = push_snapshot::PushSnapshot::take(flushed, &live, snapshot_path)?;
 
         // Derive policy and history cleanup from the file just captured, never from the
         // live handle or stack. `save_project` can return success with a
@@ -1160,7 +1174,7 @@ impl AppState {
         // An edit can land after save_project and before this point: it is absent from the
         // snapshot and must retain its undo entry after the confirmed push. Sampling the
         // live stack here included that edit in the cutoff even though it was not uploaded.
-        let snapshot_db = crate::persistence::Database::open_for_metadata(&snapshot)
+        let snapshot_db = crate::persistence::Database::open_for_metadata(snapshot.path())
             .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
         let (keep_undo, inherited_through) =
             snapshot_undo_metadata(self, &snapshot_db).map_err(local_dto)?;
@@ -1180,17 +1194,16 @@ impl AppState {
         // FATAL if it fails: an unsanitized snapshot still carries the pusher's redo
         // history (and a stale dirty bit) and must never be uploaded. In Disabled mode
         // the undo history is fatal to leak too; in Full mode it is the payload.
-        clear_snapshot_dirty(&snapshot, keep_undo, inherited_through.as_deref())
+        clear_snapshot_dirty(snapshot.path(), keep_undo, inherited_through.as_deref())
             .map_err(local_dto)?;
 
         let result = self.speleodb_handle_auth(
             Endpoint::UploadAuto,
-            client::upload_auto(
+            snapshot.upload(
                 endpoint,
                 token,
                 insecure_http,
                 project_id,
-                &snapshot,
                 &tml,
                 &commit_message,
             ),
@@ -1213,6 +1226,7 @@ impl AppState {
                 // "landed" conclusion and the invalidation still cannot drift apart.
                 let landed = self.speleodb_revision_landed(project_id);
                 self.speleodb_heal_managed_type(
+                    &landed,
                     endpoint,
                     token,
                     insecure_http,
@@ -1246,13 +1260,14 @@ impl AppState {
                     );
                 }
                 self.speleodb_record_landed_upload(
+                    &landed,
                     new_base.as_deref(),
                     &push_start,
                     &undo_cutoff,
                     snapshot_newest,
                 )
                 .map_err(local_dto)?;
-                Ok(landed)
+                Ok(landed.outcome())
             }
             Err(e) => {
                 // 304: the remote tree already matches - clear dirty (same push-start
@@ -1265,6 +1280,7 @@ impl AppState {
                     // fallible link write for the same reason as the 200 arm.
                     let landed = self.speleodb_revision_landed(project_id);
                     self.speleodb_heal_managed_type(
+                        &landed,
                         endpoint,
                         token,
                         insecure_http,
@@ -1273,13 +1289,14 @@ impl AppState {
                     );
                     // BASE unchanged: the tree already matched.
                     self.speleodb_record_landed_upload(
+                        &landed,
                         None,
                         &push_start,
                         &undo_cutoff,
                         snapshot_newest,
                     )
                     .map_err(local_dto)?;
-                    return Ok(landed);
+                    return Ok(landed.outcome());
                 }
                 // Ambiguous (retried-then-exhausted 5xx, or a transport drop): we
                 // don't know whether it landed - stay dirty, recover via ancestry
@@ -1340,6 +1357,7 @@ impl AppState {
     /// included - over work that already landed.
     fn speleodb_heal_managed_type(
         &self,
+        _landed: &Landed,
         endpoint: &str,
         token: &str,
         insecure_http: bool,
@@ -1383,6 +1401,7 @@ impl AppState {
     /// revision that landed, and skipped the history cut so it rode again).
     pub(super) fn speleodb_record_landed_upload(
         &self,
+        _landed: &Landed,
         new_base: Option<&str>,
         push_start: &str,
         undo_cutoff: &str,
@@ -1480,6 +1499,80 @@ impl AppState {
             purpose = "avoid duplicating pushed history in the next commit (#303)",
             "Persisted the undo cleanup for a confirmed push"
         );
+    }
+}
+
+/// [#576 A8] The push's quiescent-point chain (#195) as types: the VACUUM snapshot
+/// takes the flush's proof, and the upload streams only a snapshot taken that way.
+/// Moving the snapshot above the flush, or the upload above the snapshot, is a
+/// compile error. Both proofs are made only here.
+mod push_snapshot {
+    use std::path::{Path, PathBuf};
+
+    use super::super::speleodb::local_dto;
+    use super::AppState;
+    use crate::core::ValidationWarning;
+    use crate::speleodb::{client, SpeleoDbError, SpeleoErrorDto};
+
+    /// Proof that the pre-push save flushed the in-memory edits to the live file.
+    /// Made only by [`AppState::speleodb_flush_for_snapshot`], below.
+    pub(super) struct Flushed {
+        _saved: (),
+    }
+
+    impl AppState {
+        /// [`AppState::speleodb_flush_before_push`] as the upload runs it: the save,
+        /// and the [`Flushed`] proof the snapshot requires.
+        pub(super) fn speleodb_flush_for_snapshot(
+            &self,
+        ) -> Result<(Flushed, Vec<ValidationWarning>), SpeleoErrorDto> {
+            let saved = self.speleodb_flush_before_push()?;
+            Ok((Flushed { _saved: () }, saved))
+        }
+    }
+
+    /// The self-contained snapshot of the live `.stalx` that the upload streams.
+    pub(super) struct PushSnapshot {
+        path: PathBuf,
+    }
+
+    impl PushSnapshot {
+        /// VACUUM the live file into `path`. Takes the flush's proof: a snapshot of a
+        /// file the last edits never reached would upload without them.
+        pub(super) fn take(
+            _flushed: Flushed,
+            live: &Path,
+            path: PathBuf,
+        ) -> Result<Self, SpeleoErrorDto> {
+            crate::persistence::Database::vacuum_snapshot(live, &path)
+                .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+            Ok(Self { path })
+        }
+
+        pub(super) fn path(&self) -> &Path {
+            &self.path
+        }
+
+        /// Stream this snapshot (and the `.tml` beside it) as one commit.
+        pub(super) fn upload(
+            &self,
+            endpoint: &str,
+            token: &str,
+            insecure_http: bool,
+            project_id: &str,
+            tml: &Path,
+            commit_message: &str,
+        ) -> Result<crate::speleodb::models::Project, SpeleoDbError> {
+            client::upload_auto(
+                endpoint,
+                token,
+                insecure_http,
+                project_id,
+                &self.path,
+                tml,
+                commit_message,
+            )
+        }
     }
 }
 
