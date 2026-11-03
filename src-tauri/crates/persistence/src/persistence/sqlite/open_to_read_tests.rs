@@ -92,6 +92,43 @@ fn an_older_file_is_read_through_an_upgraded_copy_and_left_as_it_was() {
 }
 
 #[test]
+fn an_older_file_in_wal_mode_leaves_nothing_beside_it() {
+    // [#576 RV8a-3] The copy into memory is a `VACUUM INTO` run on a second
+    // connection to the source. Opened READ-ONLY, that connection created the WAL
+    // index of a file in WAL journal mode and could not remove it on close, so
+    // `<name>-wal` and `<name>-shm` were left beside a file this open promises to
+    // leave as it was, folder included.
+    let dir = TempDir::new().unwrap();
+    let path = project_file(
+        dir.path(),
+        &format!("{OLDER_FORMAT} PRAGMA journal_mode = WAL;"),
+    );
+    let before = std::fs::read(&path).unwrap();
+    let folder_before = files_in(dir.path());
+
+    let db = Database::open_existing_to_read(&path).unwrap();
+    let copy_version = db.get_user_version().unwrap();
+    drop(db);
+    let folder_after = files_in(dir.path());
+    println!(
+        "older WAL-mode file opened to read: copy at v{copy_version}; file unchanged: {}; \
+         folder before {folder_before:?}, after {folder_after:?}",
+        std::fs::read(&path).unwrap() == before
+    );
+    assert_eq!(
+        copy_version, SCHEMA_VERSION,
+        "the copy read is the upgraded one"
+    );
+    assert_eq!(folder_before, ["CaveR.stalx"], "fixture: nothing beside it");
+    assert_eq!(folder_after, folder_before, "and still nothing beside it");
+    assert_eq!(
+        std::fs::read(&path).unwrap(),
+        before,
+        "the file is unchanged"
+    );
+}
+
+#[test]
 fn a_current_file_opens_as_open_existing_opens_it() {
     let dir = TempDir::new().unwrap();
     let path = project_file(dir.path(), "");

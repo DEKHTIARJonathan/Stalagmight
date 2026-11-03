@@ -135,7 +135,7 @@ impl Database {
     /// A file this build reads as it is opens exactly as [`Self::open_existing`]
     /// opens it. One the open would upgrade in place - the migration chain, and
     /// the `.pre-v<N>.backup` copy it keeps beside the file first - is instead
-    /// copied into memory (`VACUUM INTO` from a read-only connection) and the
+    /// copied into memory (`VACUUM INTO`, which writes only the copy) and the
     /// upgrade runs on that copy; the handle reads the upgraded copy and the file
     /// is left byte-for-byte as it was. For a caller that consumes a project and
     /// never writes it back (a merge source). The usual checks - quick_check, a
@@ -192,9 +192,14 @@ impl Database {
                 .context("Failed to resolve the project path")?
                 .join(path)
         };
+        // [#576 RV8a-3] READ_WRITE, though it writes nothing: `VACUUM INTO` writes
+        // only its target. A read-only connection to a file in WAL journal mode
+        // creates the `-wal` / `-shm` beside it and cannot remove them when it
+        // closes; a read-write one removes them as every other open's last close
+        // does, so the source's folder is left as it was.
         let source =
-            Connection::open_with_flags(&source_path, OpenFlags::SQLITE_OPEN_READ_ONLY | uri)
-                .context("Failed to open the project read-only")?;
+            Connection::open_with_flags(&source_path, OpenFlags::SQLITE_OPEN_READ_WRITE | uri)
+                .context("Failed to open the project to copy it")?;
         source
             .execute("VACUUM INTO ?1", [&name])
             .context("Failed to copy the project into memory")?;
