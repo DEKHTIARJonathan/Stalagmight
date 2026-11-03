@@ -69,6 +69,12 @@ async function latestPersistedWidth(page: Page, colKey: string): Promise<number 
   return widths?.[colKey];
 }
 
+/** Resolve on the page's next animation frame: everything a discrete input event
+ *  committed is on screen by then (#576 RV7b-13). */
+async function nextFrame(page: Page): Promise<void> {
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+}
+
 /** How many recorded view-save calls carry a width for `colKey`. A bare call count
  *  races the data table's own settling snapshot, which carries an EMPTY
  *  columnWidths and flaked this test on its first run. */
@@ -433,11 +439,16 @@ test.describe('Data table column preferences', () => {
     const fitted = await headerWidth('depth_in');
     expect(await truncated('depth_in')).toBe(0);
 
+    // The first fit has gone all the way round (debounced save, config echo), so
+    // nothing still in flight can move the width after the second fit's read.
+    await expect.poll(async () => latestPersistedWidth(page, 'depth_in'), { timeout: 5000 }).toBe(fitted);
+
     // Fitting is idempotent: a second double-click leaves the width alone.
     await page.getByTestId('grid-col-resize-depth_in').dblclick();
-    // settle: proves the width does NOT change; a poll would accept the
-    // pre-update width.
-    await page.waitForTimeout(200);
+    // [#576 RV7b-13] The fit measures and commits inside the dblclick handler, a
+    // discrete update React commits before the next frame: one frame on, the
+    // width it produced is on screen. A real condition, not a sleep.
+    await nextFrame(page);
     expect(await headerWidth('depth_in')).toBe(fitted);
 
     // Same on a column that starts at its declared width: repeated
@@ -445,9 +456,8 @@ test.describe('Data table column preferences', () => {
     const widths: number[] = [];
     for (let i = 0; i < 3; i++) {
       await page.getByTestId('grid-col-resize-length').dblclick();
-      // settle: each re-fit must leave the width where it was, which only a
-      // read after the fit would have landed can show.
-      await page.waitForTimeout(200);
+      // Each re-fit has committed one frame on (see above).
+      await nextFrame(page);
       widths.push(await headerWidth('length'));
     }
     expect(widths[1]).toBe(widths[0]);
