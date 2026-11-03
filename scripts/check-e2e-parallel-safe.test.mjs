@@ -106,6 +106,14 @@ test('a nested destructure does NOT fire on a read name, a non-fs source, or an 
   assert.deepEqual(ids("const opts = { promises: { open: true } };\nconst { a } = fs;"), []);
 });
 
+// #576 RV9b-7: the guarded import may name the module with its extension.
+test('unguarded-test accepts the guarded import with a .js / .ts suffix', () => {
+  for (const ext of ['.js', '.ts', '.mjs']) {
+    assert.deepEqual(rawIds(`import { test, expect } from './fixtures/coverage${ext}';\ntest('a', async () => {});`), [], ext);
+  }
+  assert.deepEqual(rawIds("import { test } from './fixtures/coverage.json';"), ['unguarded-test'], 'not a module suffix');
+});
+
 test('the import / bracket checks do NOT fire on a read import, a namespace import, an object key, or a non-fs open', () => {
   assert.deepEqual(ids("import { readFileSync } from 'node:fs';"), []);
   assert.deepEqual(ids("import * as fs from 'fs';"), []);

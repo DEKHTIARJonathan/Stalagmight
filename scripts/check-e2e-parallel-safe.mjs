@@ -127,8 +127,9 @@ function fsImportLines(code) {
 // import of `test` (nor a default / namespace import) from '@playwright/test' - a
 // type-only import is fine. Returns the 0-based lines to report.
 const SPEC_FILE_RE = /\.spec\.ts$/;
+// The module may be named with its extension, `./fixtures/coverage.js` (#576 RV9b-7).
 const GUARDED_TEST_IMPORT_RE =
-  /\bimport\s*\{[^}]*\btest\b[^}]*\}\s*from\s*(['"`])(?:\.\.?\/)+(?:[\w.-]+\/)*fixtures\/coverage\1/;
+  /\bimport\s*\{[^}]*\btest\b[^}]*\}\s*from\s*(['"`])(?:\.\.?\/)+(?:[\w.-]+\/)*fixtures\/coverage(?:\.[cm]?[jt]s)?\1/;
 const PLAYWRIGHT_IMPORT_RE = /\bimport\s+(type\s+)?([^;]*?)\s*from\s*(['"`])@playwright\/test\3/g;
 function unguardedTestLines(code, rel) {
   const lines = new Set();
