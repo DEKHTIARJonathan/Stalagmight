@@ -44,7 +44,20 @@ export async function invokeInApp<T = unknown>(
       }
       invoke(cmd, cmdArgs)
         .then((value) => done({ value }))
-        .catch((err: unknown) => done({ __agentError: String(err) }));
+        .catch((err: unknown) => {
+          // [#576 RV7a-1] A command's failure is a CommandError OBJECT ({ code, message }),
+          // which String() renders as "[object Object]": say `code: message`. A plain
+          // string (Tauri's own argument errors) stays as it is. Inline, not a helper:
+          // WebDriver ships this function's source alone into the page.
+          const e = err as { code?: unknown; message?: unknown } | null;
+          const text =
+            typeof e === 'object' && e !== null && !(e instanceof Error) && typeof e.message === 'string'
+              ? typeof e.code === 'string'
+                ? `${e.code}: ${e.message}`
+                : e.message
+              : String(err);
+          done({ __agentError: text });
+        });
     },
     command,
     args,
@@ -71,9 +84,14 @@ export async function evalInApp<T = unknown>(
       'done',
       `try {
         const fn = async (...args) => { ${body} };
+        // [#576 RV7a-1] A rethrown CommandError object reads as code: message, as in invokeInApp.
+        const describe = (err) =>
+          typeof err === 'object' && err !== null && !(err instanceof Error) && typeof err.message === 'string'
+            ? (typeof err.code === 'string' ? err.code + ': ' + err.message : err.message)
+            : String(err);
         Promise.resolve(fn(...fnArgs))
           .then((value) => done({ value }))
-          .catch((err) => done({ __agentError: String(err) }));
+          .catch((err) => done({ __agentError: describe(err) }));
       } catch (err) {
         done({ __agentError: String(err) });
       }`,
