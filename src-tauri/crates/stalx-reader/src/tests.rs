@@ -430,7 +430,7 @@ fn drifted_section_offsets_are_re_derived_before_positions() {
 
 #[test]
 fn legacy_closures_get_ids_like_the_app_assigns() {
-    let path = with_schema_sql("UPDATE loop_closures SET id = 0;");
+    let path = with_schema_sql("UPDATE loop_closures SET closure_id = 0;");
 
     let survey = read_file(&path).unwrap();
 

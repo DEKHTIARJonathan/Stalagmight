@@ -50,9 +50,13 @@ Stalagmight app --push .stalx--> SpeleoDB (stored as-is, versioned)
 - Exposes its own small types: project metadata, sections, shots, station merges, zero datums,
   loop closures, station comments. Optional: measured (unadjusted) station positions.
 - Never loads undo/redo history (old-file migrations may still drop it from the copy).
-- Hostile input: refuses files that define views, triggers or virtual tables; loads on a
-  connection with defensive mode, `trusted_schema` off, a value-size cap and a statement
-  deadline; size-capped input (64 MiB default); refuses newer schemas.
+- Hostile input: refuses files that define views, triggers, virtual tables or generated
+  columns (by parsed type, not text); every connection runs in defensive mode with
+  `trusted_schema` off, a value-size cap and a statement deadline; no mmap, temp data on disk,
+  `cell_size_check` on; size-capped, streamed input (64 MiB default); refuses newer schemas.
+- **Not bounded:** the deadline covers SQLite only. The post-load steps are plain Rust and
+  some are super-linear in file-controlled counts (#597 P1, #596), and the bundled SQLite is
+  old (#598). SpeleoDB should run each read in a worker it can kill.
 - Semver. A `.stalx` schema bump is a crate release; SpeleoDB upgrades the crate to read new files.
 - License: AGPL-3.0-or-later, same as both projects.
 
