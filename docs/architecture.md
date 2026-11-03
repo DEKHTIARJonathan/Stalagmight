@@ -24,8 +24,8 @@ The layering is strict and one-way - models -> telemetry / parsers /
 persistence -> export / speleodb -> core -> tiles -> app, where `->` reads "is
 depended on by" - so a lower crate never imports from a higher one. The workspace root also carries the shared
 `[workspace.dependencies]`, the `[workspace.lints]` policy every member
-inherits, and the `telemetry` feature, which forwards to the members that
-implement it (`stalagmight-telemetry`, `stalagmight-speleodb`).
+inherits, and the `telemetry` feature, which forwards to the member that
+implements it (`stalagmight-telemetry`).
 
 ## State Flow
 

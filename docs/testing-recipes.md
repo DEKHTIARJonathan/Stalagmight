@@ -639,7 +639,7 @@ cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-export dpi
 ```
 
 `--features telemetry` only combines with the packages that define the feature -
-`stalagmight` (the app), `stalagmight-telemetry` and `stalagmight-speleodb`;
+`stalagmight` (the app) and `stalagmight-telemetry`;
 cargo rejects it for any other `-p` selection (the error lists the packages
 that have it). The formerly-`#[cfg(test)]` shared helpers (`TestDb`,
 `isolated_config`, the AppState test setters) are stalagmight-core's
