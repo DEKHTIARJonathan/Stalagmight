@@ -7,17 +7,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown, f?: string) =>
-    (e as { message?: string })?.message ?? f ?? 'error',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(messageOr('error'));
 
 import { useRevertRevision, type RevertOutcome, type RevertRevisionArgs } from '../useRevertRevision';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factories/ipc';
 
 const LINK: SpeleoLinkState = {
   permission: 'READ_AND_WRITE',

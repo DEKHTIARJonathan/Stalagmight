@@ -18,16 +18,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'mock error',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(fallbackOr('mock error'));
 
 import { useUnwindTarget, type ChainTarget } from '../useUnwindTarget';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import type { SpeleoUnwindTarget } from '../../types/ipc.generated';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 
 /** A reply the test lands by hand, so ordering is stated rather than timed. */
 function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {

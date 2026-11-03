@@ -9,18 +9,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { failOnRefreshErrors } from '../test/refreshGuard';
 import { renderHook } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../utils/ipc', () => ({
-  // [#576 NF-W6A-5] The refresh every edit/import ends with reads bytes; a test that
-  // gives none answers "no project open" rather than making the decoder throw.
-  invokeIpc: (...args: unknown[]) =>
-    args[0] === 'get_project_state_binary'
-      ? Promise.resolve(invokeIpcMock(...args)).then((answer: unknown) =>
-          answer instanceof ArrayBuffer || answer instanceof Uint8Array ? answer : new ArrayBuffer(0),
-        )
-      : invokeIpcMock(...args),
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../utils/ipc');
+// [#576 NF-W6A-5] The refresh every edit/import ends with reads bytes; a test that
+// gives none answers "no project open" rather than making the decoder throw.
+emptyBinaryRefresh();
+stubGetErrorMessage(fallbackOr('error'));
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({ close: vi.fn(async () => {}), destroy: vi.fn(async () => {}) }),
 }));
@@ -31,6 +24,7 @@ import { useSpeleoStore, selectSpeleoReadOnly, type SpeleoLinkState } from '../s
 import { useUIStore } from '../store/uiStore';
 import { guardQuit } from '../utils/quit';
 import type { SpeleoProjectSummary } from '../types/ipc.generated';
+import { emptyBinaryRefresh, fallbackOr, invokeIpcMock, stubGetErrorMessage } from '../test/factories/ipc';
 
 // The genuine store action, captured before `beforeEach` swaps in the spy - so one
 // case can exercise the real seed end to end (seed -> guardQuit).

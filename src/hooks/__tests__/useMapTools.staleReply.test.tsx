@@ -26,12 +26,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { MapMouseEvent } from 'maplibre-gl';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown, fallback?: string) =>
-    (e as { message?: string })?.message ?? fallback ?? 'unknown error',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(messageOr('unknown error'));
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue({}),
@@ -43,6 +39,7 @@ import type { MeasureEndpoint } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import type { Project, Station } from '../../types/project';
 import type { AlongLineResult } from '../../types/ipc/AlongLineResult';
+import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factories/ipc';
 
 function makeProject(overrides: Partial<Project> = {}): Project {
   return {

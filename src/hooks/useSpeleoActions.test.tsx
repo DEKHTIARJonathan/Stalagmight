@@ -14,17 +14,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  // The one-arg call (humanizeSpeleoError) must still yield a string.
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'mock error',
-}));
+vi.mock('../utils/ipc');
+// The one-arg call (humanizeSpeleoError) must still yield a string.
+stubGetErrorMessage(fallbackOr('mock error'));
 
 import { useSpeleoActions } from './useSpeleoActions';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../test/factories/ipc';
 
 let saveProjectMock: ReturnType<typeof vi.fn>;
 

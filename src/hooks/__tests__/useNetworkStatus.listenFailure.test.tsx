@@ -23,10 +23,11 @@ vi.mock('@tauri-apps/api/event', () => ({
     return listenState.impl!(event, handler);
   },
 }));
-vi.mock('../../utils/ipc', () => ({ invokeIpc: vi.fn(async () => true) }));
+vi.mock('../../utils/ipc');
 
 import { useNetworkStatus } from '../useNetworkStatus';
 import { useNetworkStore } from '../../store/networkStore';
+import { invokeIpcMock } from '../../test/factories/ipc';
 
 /** Let pending rejections settle and Node's unhandled-rejection check run. */
 async function settle() {
@@ -40,6 +41,8 @@ const onUnhandled = (reason: unknown) => {
 };
 
 beforeEach(() => {
+  // Every IPC call answers true. Re-armed per test: the afterEach restoreAllMocks drops it.
+  invokeIpcMock.mockImplementation(async () => true);
   listenState.impl = null;
   listenState.events = [];
   unhandled = [];

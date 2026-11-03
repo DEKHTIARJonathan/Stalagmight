@@ -21,11 +21,8 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({ close: vi.fn(async () => {}), destroy: vi.fn(async () => {}) }),
 }));
@@ -39,6 +36,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;

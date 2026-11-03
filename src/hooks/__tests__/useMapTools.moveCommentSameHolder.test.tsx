@@ -16,12 +16,8 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import type { MapMouseEvent } from 'maplibre-gl';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown, fallback?: string) =>
-    (e as { message?: string })?.message ?? fallback ?? 'unknown error',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(messageOr('unknown error'));
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue({}),
@@ -31,6 +27,7 @@ import { useMapTools } from '../useMapTools';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import type { Project, Section, Station } from '../../types/project';
+import { invokeIpcMock, stubGetErrorMessage, messageOr } from '../../test/factories/ipc';
 
 const SECTION_ID = 1;
 const SHOT_A = 1;

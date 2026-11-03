@@ -34,10 +34,8 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({
   save: vi.fn(async () => null),
   confirm: vi.fn(async () => false),
 }));
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: vi.fn(),
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 import { useProject } from '../useProject';
 import { guardQuit, resetQuitConfirmationForTests } from '../../utils/quit';
@@ -46,6 +44,7 @@ import { newProjectGuarded } from '../../utils/projectActions';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
+import { stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 
 const link = (o: Partial<SpeleoLinkState>): SpeleoLinkState => ({
   permission: 'READ_AND_WRITE',

@@ -9,16 +9,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, renderHook, waitFor } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(errorMessageOrString);
 
 import { useSpeleoProjectMetadata } from '../useSpeleoProjectMetadata';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import type { SpeleoProjectMetadata } from '../../types/ipc.generated';
+import { invokeIpcMock, stubGetErrorMessage, errorMessageOrString } from '../../test/factories/ipc';
 
 const META: SpeleoProjectMetadata = {
   name: 'CaveA',

@@ -11,17 +11,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({
-  invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'mock error',
-}));
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(fallbackOr('mock error'));
 
 import { useSpeleoActions } from '../useSpeleoActions';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import i18n from '../../i18n';
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 
 const LOST_DISPLAY = {
   code: 'DISPLAY_SETTINGS_NOT_SAVED',
