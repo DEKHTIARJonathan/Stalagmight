@@ -14,7 +14,8 @@
 //     addInitScript, waitForFunction, $eval, ...). Any bare reference to
 //     `setTimeout` or `setInterval` counts, not only a call, so an alias
 //     (`const st = setTimeout`), `promisify(setTimeout)` and a setInterval
-//     sleep do too (#576 RV4-FE-FEB-2);
+//     sleep do too (#576 RV4-FE-FEB-2) - but not `typeof setTimeout` or an
+//     object key named `setTimeout`, which name no timer (#576 RV9b-5);
 //   - an import of `timers/promises`, whose `setTimeout` is a sleep under any
 //     alias;
 //   - a string expression that spells `waitForTimeout`: a lone literal or a
@@ -201,6 +202,25 @@ function isStatement(code, start) {
   return before === '' || /[;{}]$/.test(before);
 }
 
+// [#576 RV9b-5] A reference that names no timer: a type position (`typeof
+// setTimeout`) or an object literal's key (`{ setTimeout: false }`). A
+// destructuring key (`const { setTimeout: nap } = globalThis`) binds the timer, so
+// it still counts, as do a shorthand property and a value position.
+function namesNoTimer(code, at, len) {
+  if (/\btypeof\s+$/.test(code.slice(Math.max(0, at - 32), at))) return true;
+  if (!/[{,]$/.test(code.slice(0, at).trimEnd()) || !/^:(?!:)/.test(code.slice(at + len).trimStart())) return false;
+  let depth = 0;
+  for (let i = at - 1; i >= 0; i--) {
+    const c = code[i];
+    if (c === '}' || c === ')' || c === ']') depth++;
+    else if (c === '{' || c === '(' || c === '[') {
+      if (depth-- > 0) continue;
+      return c === '{' && !/^\s*=(?![=>])/.test(code.slice(matchForward(code, i)));
+    }
+  }
+  return false;
+}
+
 const isWaitChain = (names) => names.some((n) => WAIT_METHODS.has(n)) || names[names.length - 1] === 'expect';
 // `() => true` / `(e) => false` / `() => { return false; }`: a boolean outcome.
 const BOOLEAN_HANDLER_RE = /^\s*(?:async\s+)?(?:\([^)]*\)|[\w$]+)\s*=>\s*(?:(?:true|false)|\{\s*return\s+(?:true|false)\s*;?\s*\})\s*$/;
@@ -275,6 +295,7 @@ export function findSleeps(text, rel = '') {
     while ((m = TIMER_RE.exec(joined)) !== null) {
       const at = m.index + m[0].length - m[1].length;
       if (browser.some(([a, b]) => a < at && at < b)) continue;
+      if (namesNoTimer(joined, at, m[1].length)) continue;
       const line = joined.slice(0, at).split('\n').length - 1;
       // `import { setTimeout as sleep } from 'timers/promises'` names that
       // module's export, and the line is already counted once above.

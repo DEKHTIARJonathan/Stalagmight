@@ -188,6 +188,15 @@ test('NOT a sleep: a wait that can fail, a rethrowing catch, a boolean probe, a 
   assert.deepEqual(bad('try {\n  JSON.parse(raw);\n} catch {\n  // not JSON\n}\ntry { expect(a).toBe(1); } catch { }'), []);
 });
 
+// #576 RV9b-5: a type position or an object key named setTimeout is not a timer.
+test('typeof setTimeout and a setTimeout object key are not sleeps; a value use still is', () => {
+  assert.deepEqual(bad('let handle: ReturnType<typeof setTimeout> | null = null;'), []);
+  assert.deepEqual(bad('const cfg = { setTimeout: false, retries: 2 };\nmock({\n  setInterval: 0,\n});'), []);
+  assert.deepEqual(bad('const { setTimeout: nap } = globalThis;'), [1], 'a destructuring alias is the timer');
+  assert.deepEqual(bad('const t = fast ? setTimeout : queueMicrotask;'), [1], 'a ternary operand is the timer');
+  assert.deepEqual(bad('const timers = { setTimeout };\nconst more = { nap: setTimeout };'), [1, 2], 'a shorthand or a value is the timer');
+});
+
 test('a regex literal holding /* does not hide a later sleep (shared stripper)', () => {
   assert.deepEqual(bad('const LEAD = /^\\/*/;\nawait page.waitForTimeout(5);\n/* end */'), [2]);
 });
