@@ -136,10 +136,11 @@ export default function DmpSelectionDialog({
   // Why a duplicate check could not run (#576 NF-AN4-N4). The checks are
   // advisory, so the user may still continue - but a failed one used to be
   // swallowed, which reads as "no duplicates" and lets them re-import sections
-  // the project already holds without a word.
+  // the project already holds without a word. Each check has its own notice
+  // (#576 DMP-1): only a failed section check means sections already in the
+  // project are not flagged.
   const [sectionCheckError, setSectionCheckError] = useState<string | null>(null);
   const [fileCheckError, setFileCheckError] = useState<string | null>(null);
-  const duplicateCheckError = fileCheckError ?? sectionCheckError;
 
   // Check section content hashes for duplicates on mount
   useEffect(() => {
@@ -414,13 +415,21 @@ export default function DmpSelectionDialog({
           </div>
         )}
 
-        {/* A duplicate check that could not run (#576 NF-AN4-N4) */}
-        {duplicateCheckError && (
+        {/* A duplicate check that could not run (#576 NF-AN4-N4), one notice per check (#576 DMP-1) */}
+        {fileCheckError && (
           <div
             className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm"
-            data-testid="duplicate-check-failed"
+            data-testid="file-duplicate-check-failed"
           >
-            {'\u26A0'} {t('dialogs.dmpSelection.duplicateCheckFailed', { reason: duplicateCheckError })}
+            {'\u26A0'} {t('dialogs.dmpSelection.fileCheckFailed', { reason: fileCheckError })}
+          </div>
+        )}
+        {sectionCheckError && (
+          <div
+            className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm"
+            data-testid="section-duplicate-check-failed"
+          >
+            {'\u26A0'} {t('dialogs.dmpSelection.sectionCheckFailed', { reason: sectionCheckError })}
           </div>
         )}
 
