@@ -787,6 +787,94 @@ early component tests on leaf components to avoid heavy setup.
 This tier mocks IPC - persistence is owned by the Rust tier, see
 [Rust patterns](#rust-patterns).
 
+### Factories and the shared IPC mock
+
+Fakes and data builders that more than one test needs live in
+`src/test/factories/` (#576 E15); a new test takes them from there instead of
+pasting a copy. Each module is imported by path (there is no barrel):
+
+| Module | What it gives you |
+|--------|-------------------|
+| `ipc.ts` | `invokeIpcMock` and the `getErrorMessage` switches for the shared `utils/ipc` mock (below) |
+| `survey.ts` | `makeShot`, `makeSection`, `makeProject`, `makeStation`, `stationRef`: the survey data the backend sends, typed against `src/types/ipc/` |
+| `speleo.ts` | `makeSpeleoLink`: the speleo store's `SpeleoLinkState` |
+| `dmp.ts` | `makeDmpShot`, `makeDmpShots`, `makeDmpSection`, `makeDmpFile`: a parsed mNemo dump |
+| `fakeMap.ts` | `makeFakeMap`: a recording MapLibre stand-in for the controller and layer tests |
+| `globalViewMap.ts` | The fake `maplibre-gl` module and `GlobalSurveyLayer` the `GlobalViewMap` component tests run against |
+| `virtualizer.ts` | A `@tanstack/react-virtual` that renders every row (jsdom has no layout) |
+| `dom.ts` | `NoopResizeObserver`, for a component that measures itself but whose test never resizes it |
+
+**Builders** return a complete object: every required field at a neutral
+default, overridden by the argument (a shallow merge), optional fields absent
+unless given, keys in the generated type's order. Pass the fields your test is
+about, not the whole object - `makeShot({ id: 3, length: 7.5 })` - and a file
+that builds many of the same shape keeps a one-line wrapper over the factory
+(`const shot = (id: number) => makeShot({ id, azimuth_in: 10 })`). A field the
+backend adds to the generated type is then a compile error in one place.
+
+**Fakes** take their per-test differences as options rather than as a fork of
+the fake. `makeFakeMap({ layers, visibility, onAdd, omit, dom })` seeds the
+stock layers and their visibility, says how `addLayer` runs a custom layer's
+`onAdd` (`'map'`, `'bare'`, `'skip'`), and leaves out members the code probes
+for: `omit: ['on', 'off']` for a map nothing can subscribe to, `omit: ['style']`
+for one without a live style. The map is a plain object, so a member it lacks
+throws when called - a superset fake must not quietly accept a call a test
+relies on being impossible. It records `added`, `addCalls` (with `beforeId`),
+`removed`, `paintCalls`, `visibility`, `setDataCount`, `repaintCount` and the
+`on`/`off` listeners (`listeners(type)`, `emit(type, e)`). The virtualizer is a
+whole module: `vi.mock('@tanstack/react-virtual', () => import('<rel>/test/factories/virtualizer'))`,
+or `fakeVirtualizer({ headerOffset: 0 })` / `fakeVirtualizer({ renderRows: false })`
+behind an `async` factory for the other layouts.
+
+**The `utils/ipc` mock.** `src/utils/__mocks__/ipc.ts` is a manual mock: a
+`vi.mock` of `utils/ipc` with no factory loads it in place of the real module,
+fresh for each test file. Fake the backend with
+
+```ts
+import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
+
+vi.mock('../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error')); // only if the file needs a stubbed reader
+
+beforeEach(() => {
+  invokeIpcMock.mockReset();
+  invokeIpcMock.mockImplementation(async (cmd: string) => (cmd === 'list_recent_projects' ? [] : undefined));
+});
+```
+
+- `invokeIpcMock` is the `vi.fn` the code under test calls as `invokeIpc`. It is
+  typed like a bare `vi.fn()`, so a test scripts any command's answer, and it
+  answers `undefined` until scripted. `src/test/factories/ipc.ts` throws at import
+  in a file that forgot the `vi.mock`, rather than hand out the real IPC.
+- `getErrorMessage` is the real reader unless the file calls
+  `stubGetErrorMessage(reader)`, once, at the top level. It is a plain function,
+  not a `vi.fn`, so `vi.resetAllMocks()` / `vi.restoreAllMocks()` leave a stub in
+  place. Presets cover the readers the old inline stubs used: `fallbackOr(text)`
+  (`fallback ?? text`), `messageOr(text)` (`e.message ?? fallback ?? text`),
+  `errorMessageOrString`, `stringOfError`.
+- `emptyBinaryRefresh()` answers a `get_project_state_binary` the test did not
+  script with bytes (`new ArrayBuffer(0)`, no project open) instead of a value the
+  decoder throws on; pair it with `failOnRefreshErrors()`
+  (`src/test/refreshGuard.ts`). The call is still recorded.
+- A default answer for every call (`invokeIpc: vi.fn(async () => true)` in the old
+  idiom) is `invokeIpcMock.mockImplementation(...)` at the top level - or in
+  `beforeEach` when the file calls `vi.restoreAllMocks()`, which drops it.
+- A file that calls `vi.resetModules()` mocks with
+  `vi.mock('<rel>/utils/ipc', () => import('<rel>/utils/__mocks__/ipc'))` instead.
+  The reset re-evaluates a factory-less mock, so a module the test re-imports
+  would get a fresh `vi.fn` rather than the `invokeIpcMock` it scripted; a
+  factory's result survives the reset (`storeLoadOrder.test.ts`).
+- Do not reintroduce `vi.hoisted(() => vi.fn())` plus a `vi.mock` factory for
+  `utils/ipc`. The exceptions on purpose: the DMP wizard tests (being rewritten),
+  and `useInternalErrorEvent.pull.test.tsx`, whose `invokeIpc` is a plain function
+  because a `vi.fn` attaches a handler to the promises it returns and would hide
+  the unhandled rejection that file watches for.
+
+One-line module stubs (the identity `t` of a `react-i18next` mock, a
+`DialogWrapper` or `Button` stub, `maplibre-gl` as `{ default: {} }`, a
+`@tauri-apps/api/core` `invoke` stub) stay inline: a shared module would replace
+one line with one line plus an import.
+
 ## Playwright patterns
 
 Specs live in `e2e-playwright/`, flat, one file per feature area, alongside:
