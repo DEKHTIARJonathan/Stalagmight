@@ -738,6 +738,7 @@ mod settled_reads_tests;
 #[expect(
     clippy::expect_used,
     clippy::print_stdout,
+    clippy::panic,
     reason = "test module: panics on a failed assumption are the point, and the printed \
               answers are the evidence a run captures"
 )]

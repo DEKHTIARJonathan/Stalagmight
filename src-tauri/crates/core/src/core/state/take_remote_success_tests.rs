@@ -18,7 +18,9 @@
 
 use std::io::{Read as _, Write as _};
 use std::path::Path;
+use std::process::{Command as ChildCommand, Output, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use tempfile::TempDir;
 
@@ -95,7 +97,7 @@ fn routing_stub(zip: Vec<u8>) -> (String, std::net::TcpListener, Arc<Mutex<Vec<S
     let json = project_json();
     std::thread::spawn(move || {
         while let Ok((mut stream, _)) = accept_on.accept() {
-            let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(150)));
             let mut request = Vec::new();
             let mut chunk = vec![0u8; 8 * 1024];
             while let Ok(n) = stream.read(&mut chunk) {
@@ -130,20 +132,112 @@ fn routing_stub(zip: Vec<u8>) -> (String, std::net::TcpListener, Arc<Mutex<Vec<S
     (format!("http://127.0.0.1:{port}"), listener, seen)
 }
 
+/// How long a child-process test body may run before it is killed and its test
+/// fails. Each takes well under a second; this is only ever a hang.
+pub(super) const CHILD_DEADLINE: Duration = Duration::from_secs(120);
+
+/// [#576 RV8a-F1] `command`'s output, as `Command::output` gives it, except that a
+/// child still running after `limit` is killed and the test fails with what it
+/// printed so far. `output()` waits forever, so a deadlock in the verb under test
+/// hung this test - and the whole test run - until the CI job timeout, and left
+/// the child orphaned if the harness then killed the parent.
+pub(super) fn output_within(command: &mut ChildCommand, limit: Duration) -> Output {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start the child process");
+    // Both pipes drain on their own threads, so a child that prints more than a
+    // pipe holds cannot stall on a full one while this side waits for it to exit.
+    let mut stdout = child.stdout.take().expect("the child's stdout");
+    let mut stderr = child.stderr.take().expect("the child's stderr");
+    let out = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+    let err = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes);
+        bytes
+    });
+    let deadline = Instant::now() + limit;
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll the child process") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let stdout = out.join().unwrap_or_default();
+            let stderr = err.join().unwrap_or_default();
+            panic!(
+                "the child process was still running after {limit:?} and was killed:\n{}\n{}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    Output {
+        status,
+        stdout: out.join().expect("the child's stdout"),
+        stderr: err.join().expect("the child's stderr"),
+    }
+}
+
+/// The environment variable that makes [`a_child_that_never_finishes`] hang.
+const SLEEPER_ENV: &str = "STALAGMIGHT_CHILD_SLEEPER";
+const SLEEPER_TEST: &str = "core::state::take_remote_success_tests::a_child_that_never_finishes";
+
+#[test]
+#[ignore = "the hung child of a_child_past_its_deadline_is_killed_and_fails_its_test: it \
+            sleeps when its env var is set"]
+fn a_child_that_never_finishes() {
+    if std::env::var_os(SLEEPER_ENV).is_some() {
+        std::thread::sleep(Duration::from_secs(20));
+    }
+}
+
+#[test]
+fn a_child_past_its_deadline_is_killed_and_fails_its_test() {
+    let exe = std::env::current_exe().expect("this test binary");
+    let mut command = ChildCommand::new(exe);
+    command
+        .args([SLEEPER_TEST, "--exact", "--ignored", "--nocapture"])
+        .env(SLEEPER_ENV, "1");
+    let started = Instant::now();
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        output_within(&mut command, Duration::from_millis(500))
+    }));
+    let elapsed = started.elapsed();
+    println!(
+        "[RV8a-F1] a child that sleeps 20 s, waited for with a 500 ms deadline: failed the \
+         test: {}; returned after {elapsed:?}",
+        outcome.is_err()
+    );
+    assert!(outcome.is_err(), "a child past its deadline fails the test");
+    assert!(
+        elapsed < Duration::from_secs(10),
+        "it is killed at the deadline, not waited for: {elapsed:?}"
+    );
+}
+
 #[test]
 fn take_remote_lands_the_server_tip_and_discards_the_local_edits() {
     let exe = std::env::current_exe().expect("this test binary");
-    let output = std::process::Command::new(exe)
-        .args([
-            CHILD_TEST,
-            "--exact",
-            "--ignored",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(CHILD_ENV, "1")
-        .output()
-        .expect("run the body in a process of its own");
+    let output = output_within(
+        ChildCommand::new(exe)
+            .args([
+                CHILD_TEST,
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD_ENV, "1"),
+        CHILD_DEADLINE,
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     println!("{stdout}");

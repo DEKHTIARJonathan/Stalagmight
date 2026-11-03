@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 use super::speleodb::{authed_session_at, REMOTE_ID};
+use super::take_remote_success_tests::{output_within, CHILD_DEADLINE};
 use super::AppState;
 use crate::models::{CommandErrorCode, Project, SectionData, ShotData, SpeleoLink, UndoMode};
 use crate::persistence::Database;
@@ -160,20 +161,22 @@ impl crate::core::events::EventSink for NoListener {
     }
 }
 
-/// Re-run this test binary on the child body with `scenario`.
+/// Re-run this test binary on the child body with `scenario` - killed, and the
+/// test failed, if it is still running at the deadline (#576 RV8a-F1).
 fn run_child(scenario: &str) {
     let exe = std::env::current_exe().expect("this test binary");
-    let output = std::process::Command::new(exe)
-        .args([
-            CHILD_TEST,
-            "--exact",
-            "--ignored",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(CHILD_ENV, scenario)
-        .output()
-        .expect("run the body in a process of its own");
+    let output = output_within(
+        std::process::Command::new(exe)
+            .args([
+                CHILD_TEST,
+                "--exact",
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(CHILD_ENV, scenario),
+        CHILD_DEADLINE,
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     println!("{stdout}");
