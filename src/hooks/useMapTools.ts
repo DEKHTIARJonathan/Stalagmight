@@ -17,6 +17,7 @@ import { setSource } from '../utils/telemetry';
 import type { SurveyLayerCallbacks } from '../components/Map/SurveyLayer';
 import { projectParamOnSegment } from '../components/Map/surveyLayer/hitTest';
 import { TOAST_KEYS } from '../utils/toastKeys';
+import { refusedMergeOffersClosure } from '../utils/mergeConnectivity';
 
 /**
  * #395: what a plain Plan-mode select-click does to the gas plan pins.
@@ -407,7 +408,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             stationA,
             stationB,
           });
-        } else if (result.connected || result.reason === 'Both sections have fixed coordinates') {
+        } else if (refusedMergeOffersClosure(result)) {
           // Connected (or both sections fixed) - redirect to closure dialog
           setSource('map');
           openDialog('closure', {

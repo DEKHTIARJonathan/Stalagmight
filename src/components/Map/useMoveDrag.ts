@@ -19,6 +19,7 @@ import { beginMoveCarry, commitMoveCarry, endMoveCarry, isMoveCarryLive } from '
 import { getErrorMessage } from '../../utils/ipc';
 import { metersToMapCoords, mapCoordsToMeters } from '../../utils/coordinates';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { refusedMergeOffersClosure } from '../../utils/mergeConnectivity';
 import type SurveyLayer from './SurveyLayer';
 
 interface MoveDragState {
@@ -581,7 +582,7 @@ export function useMoveDrag({
           : {};
         if (result.can_merge) {
           openDialog('merge', { stationA: originStation, stationB: targetStation, ...extra });
-        } else if (result.connected || result.reason === 'Both sections have fixed coordinates') {
+        } else if (refusedMergeOffersClosure(result)) {
           openDialog('closure', {
             stationA: originStation,
             stationB: targetStation,

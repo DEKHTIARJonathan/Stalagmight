@@ -830,6 +830,36 @@ pub struct ClosurePreview {
     pub vertical_misclosure: f64,
 }
 
+/// [#576 NF-W7E-1] Why a merge of a station pair is refused: what the frontend
+/// routes on. [`ConnectivityResult::reason`] carries the same refusal as display
+/// text, which nothing parses.
+///
+/// No TS export of its own: [`ConnectivityResult::reason_code`] spells the union
+/// of its wire names out, and the core crate's `the_ts_union_names_every_code`
+/// pins that union to [`Self::ALL`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MergeBlockReason {
+    /// The stations are already connected, so a merge would close a survey loop.
+    CreatesSurveyLoop,
+    /// Both stations' merge groups are fixed by a zero datum, so a merge would
+    /// have to move one of them.
+    BothFixedCoordinates,
+}
+
+impl MergeBlockReason {
+    /// Every code, for the wire-name tests.
+    pub const ALL: [Self; 2] = [Self::CreatesSurveyLoop, Self::BothFixedCoordinates];
+
+    /// The display text [`ConnectivityResult::reason`] carries for this refusal.
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::CreatesSurveyLoop => "Creates survey loop",
+            Self::BothFixedCoordinates => "Both sections have fixed coordinates",
+        }
+    }
+}
+
 /// Result of a connectivity check between two stations
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ConnectivityResult {
@@ -838,7 +868,13 @@ pub struct ConnectivityResult {
     /// Whether merge is allowed for the given station pair
     #[serde(default)]
     pub can_merge: bool,
-    /// Explanation when merge is not allowed
+    /// Explanation when merge is not allowed. Display-only: route on
+    /// [`Self::reason_code`].
     #[serde(default)]
     pub reason: Option<String>,
+    /// [#576 NF-W7E-1] Why merge is not allowed, as a code: set exactly when
+    /// `can_merge` is false, together with `reason`.
+    #[serde(default)]
+    #[ts(type = "\"CREATES_SURVEY_LOOP\" | \"BOTH_FIXED_COORDINATES\" | null")]
+    pub reason_code: Option<MergeBlockReason>,
 }

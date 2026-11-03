@@ -2059,7 +2059,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (mockConnectivity) {
               return mockConnectivity satisfies MockReply<'check_merge_connectivity'>;
             }
-            return { connected: false, preview: null, can_merge: true, reason: null } satisfies MockReply<'check_merge_connectivity'>;
+            return { connected: false, preview: null, can_merge: true, reason: null, reason_code: null } satisfies MockReply<'check_merge_connectivity'>;
           }
 
           case 'create_loop_closure': {

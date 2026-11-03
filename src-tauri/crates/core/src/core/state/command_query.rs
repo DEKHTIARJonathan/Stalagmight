@@ -1,5 +1,5 @@
 use super::AppState;
-use crate::models::{ConnectivityResult, SectionId, StationRef};
+use crate::models::{ConnectivityResult, MergeBlockReason, SectionId, StationRef};
 
 impl AppState {
     /// Check merge connectivity between two stations (read-only)
@@ -53,25 +53,23 @@ impl AppState {
             .any(|zd| merged_b.contains(&zd.station_ref.section_id));
 
         // Determine can_merge and reason with zero datum priority
-        let (can_merge, reason) = if connected {
+        let reason_code = if connected {
             // Already connected - merging would create a survey loop
-            (false, Some("Creates survey loop".to_string()))
+            Some(MergeBlockReason::CreatesSurveyLoop)
         } else if a_has_zd && b_has_zd {
             // Both sections have fixed coordinates - cannot merge
-            (
-                false,
-                Some("Both sections have fixed coordinates".to_string()),
-            )
+            Some(MergeBlockReason::BothFixedCoordinates)
         } else {
             // Not connected and zero datum check passed - merge allowed
-            (true, None)
+            None
         };
 
         Ok(ConnectivityResult {
             connected,
             preview,
-            can_merge,
-            reason,
+            can_merge: reason_code.is_none(),
+            reason: reason_code.map(|code| code.message().to_string()),
+            reason_code,
         })
     }
 

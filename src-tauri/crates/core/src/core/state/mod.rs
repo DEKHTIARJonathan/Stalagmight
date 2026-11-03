@@ -213,6 +213,14 @@ mod load_json_newer_tests;
 )]
 mod load_repairs_tests;
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod merge_block_reason_tests;
+#[cfg(test)]
 mod metamorphic_undo_tests;
 #[cfg(test)]
 mod mock_narrowing_tests;
