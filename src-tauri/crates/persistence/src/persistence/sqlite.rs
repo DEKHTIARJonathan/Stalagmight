@@ -92,7 +92,10 @@ use std::path::Path;
 /// fenced table, so the carry-forward fence is unaffected, and the persisted
 /// undo payloads keep their meaning (`SectionIdentity` gained an OPTIONAL field,
 /// absent in every pre-v18 entry), so the stacks are NOT dropped.
-const SCHEMA_VERSION: i32 = 18;
+///
+/// Public so readers outside the app (the `stalx-reader` crate) can refuse a
+/// file written by a newer schema instead of misreading it.
+pub const SCHEMA_VERSION: i32 = 18;
 
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///
