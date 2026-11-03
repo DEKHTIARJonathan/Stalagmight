@@ -7712,8 +7712,11 @@ fn migrate_v12_preserves_null_pitch_and_does_not_launder_a_blunder() {
 
 /// The standard legs of a parsed DMP section as `SectionData`, for the v12
 /// migration test below. The parser crate's own `to_section_data` was removed with
-/// #576 B24 (the import path converts in the wizard); this keeps the same mapping
-/// for the one test that builds a project straight from a parsed dump.
+/// #576 B24 (the import path converts in the wizard). This keeps its shot mapping
+/// (`to_shot_data`: wrapped azimuths, pitches, LRUD, marker, temperature) and its
+/// name, date and quality, but NOT its section fields the test does not read: the
+/// direction is `None` (the removed fn mapped the dump's In/Out) and the color is
+/// empty (it took the caller's). The v12 test reads only the shots' pitches.
 fn flat_dmp_section_data(section: &stalagmight_parsers::parsers::dmp::DmpSection) -> SectionData {
     use stalagmight_parsers::parsers::dmp::DmpShotType;
     SectionData {
