@@ -140,8 +140,8 @@ rejection. `ContextMenu`'s raw `geometryMode` check sits inside a branch already
 scoped to `appMode === 'survey'`, where it is equivalent.
 
 A third carve-out covers the SpeleoDB verbs that swap the survey tree
-(#576 RV4-FE-SP4, RV5-F4-8): Discard (`refuseSurveySwapOutsideSurvey` in
-`useSpeleoActions.ts`), Restore and the Revert built on it (`useRevertRevision.ts`,
+(#576 RV4-FE-SP4, RV5-F4-8): Discard and Take remote (both
+`refuseSurveySwapOutsideSurvey` in `useSpeleoActions.ts`), Restore and the Revert built on it (`useRevertRevision.ts`,
 `SpeleoRevisionHistory.tsx`) and their hamburger entries (`useSpeleoMenuItems.tsx`).
 They gate on the workspace alone (`appMode !== 'survey'`), not on
 `useEditingBlocked()`: they must work without the write lock - they take it
