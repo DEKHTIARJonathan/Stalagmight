@@ -16,6 +16,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { failOnRefreshErrors } from '../../../test/refreshGuard';
 import { screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import en from '../../../i18n/locales/en.json';
 
 // SectionPreview and the map panel pull maplibre-gl (WebGL) at module load,
 // which jsdom cannot execute. Nothing here asserts on anything drawn.
@@ -24,6 +26,8 @@ vi.mock('../SectionPreview', async (importOriginal) => ({
   default: () => null,
 }));
 vi.mock('maplibre-gl', () => ({ default: {} }));
+// jsdom does not implement scrollIntoView; the portal Select calls it on open.
+Element.prototype.scrollIntoView = vi.fn();
 vi.mock('../WizardMapPanel', () => ({
   WizardMapPanel: () => null,
   MAP_PANEL_DEFAULT_WIDTH: 400,
@@ -81,5 +85,70 @@ describe('DMP wizard: a handoff with no placement payload (#576 NF-W9FE-3)', () 
     expect.soft(warn).toHaveBeenCalledWith('[dmpImport] no placement payload for anchor section', 9);
     openDialog.mockRestore();
     warn.mockRestore();
+  });
+});
+
+/**
+ * #576 NF-W9FE-3-D1: the manual-placing screen says why the segment cannot go on the
+ * map. The one condition that leaves no placement payload is an anchor naming a
+ * section the file does not have (`anchorSectionIn`, shared with the payload
+ * builder); the line shows exactly then, and goes away when the anchor moves to a
+ * section the file has.
+ */
+describe('DMP wizard: the manual-placing screen says why a segment cannot be placed on the map (#576 NF-W9FE-3-D1)', () => {
+  const REASON = 'wizard-cannot-place-on-map';
+  const KEY = 'dialogs.dmpNewImport.manualPlacing.cannotPlaceOnMap';
+
+  beforeEach(() => {
+    useUIStore.setState({ activeDialog: 'dmp-import-new', dialogData: { filePath: '/tmp/dive.dmp' }, placementMode: null });
+  });
+
+  it('states the reason when the anchor names a section the file does not have', async () => {
+    renderWizard(savedState({ segmentQueue: [[1]], segmentAnchor: { sectionIndex: 9, stationIndex: 0 } }), {
+      selected: [0, 1],
+    });
+
+    await waitFor(() => expect(screen.getByTestId('wizard-manual-placing')).toBeVisible());
+    expect(screen.queryByTestId(REASON)).toHaveTextContent(KEY);
+  });
+
+  it('after the auto-start handoff found nothing to place, the settled screen states it', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    renderWizard(savedState({ segmentQueue: [[1]], segmentAnchor: { sectionIndex: 9, stationIndex: 0 } }), {
+      selected: [0, 1],
+      autoStartManualPlacement: true,
+    });
+
+    await waitFor(() => expect(screen.getByTestId('wizard-manual-placing')).toBeVisible());
+    expect(screen.queryByTestId(REASON)).toHaveTextContent(KEY);
+    warn.mockRestore();
+  });
+
+  it('is not shown when the anchor section is in the file', async () => {
+    renderWizard(savedState({ segmentQueue: [[1]], segmentAnchor: { sectionIndex: 1, stationIndex: 0 } }), {
+      selected: [0, 1],
+    });
+
+    await waitFor(() => expect(screen.getByTestId('wizard-manual-placing')).toBeVisible());
+    expect(screen.queryByTestId(REASON)).toBeNull();
+  });
+
+  it('goes away once the anchor moves to a section the file has', async () => {
+    renderWizard(savedState({ segmentQueue: [[1, 2]], segmentAnchor: { sectionIndex: 9, stationIndex: 0 } }), {
+      selected: [0, 1, 2],
+    });
+    await waitFor(() => expect(screen.queryByTestId(REASON)).toBeVisible());
+
+    await userEvent.click(screen.getByTestId('manual-import-section-select'));
+    await userEvent.click(screen.getByTestId('manual-import-section-select-option-2'));
+
+    await waitFor(() => expect(screen.queryByTestId(REASON)).toBeNull());
+  });
+
+  it('reads as one plain line with the way on (en.json)', () => {
+    expect(en.dialogs.dmpNewImport.manualPlacing.cannotPlaceOnMap).toBe(
+      'This segment cannot be placed on the map: its anchor section is not in the DMP file. ' +
+        'Click a station in the preview to set another anchor, or choose Do not place.',
+    );
   });
 });

@@ -34,6 +34,16 @@ export interface SegmentAnchor {
   stationIndex: number;
 }
 
+/**
+ * The file's section `anchor` names, or undefined when the file has none at that
+ * index. Map placement draws the segment from this section, so without it no
+ * placement payload can be built - the one reason a segment cannot go on the map,
+ * which the manual-placing screen then states (#576 NF-W9FE-3-D1).
+ */
+export function anchorSectionIn<S>(sections: readonly S[], anchor: SegmentAnchor): S | undefined {
+  return sections[anchor.sectionIndex];
+}
+
 /** A queue of segments (each a list of DMP section indices) that is never empty. */
 export type SegmentQueue = [number[], ...number[][]];
 

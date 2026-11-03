@@ -44,7 +44,7 @@ import { WizardFooter } from './dmpWizard/WizardFooter';
 import { LateImportRetryAction, StatusStep, SuggestionsFailedActions } from './dmpWizard/WizardStatus';
 import { targetDoublyAnchored } from './dmpWizard/doublyAnchored';
 import { useSectionEditor, type RowCountChange } from './dmpWizard/useSectionEditor';
-import { initialWizardState, segmentQueue, useWizardState, type SegmentChoices } from './dmpWizard/wizardState';
+import { anchorSectionIn, initialWizardState, segmentQueue, useWizardState, type SegmentChoices } from './dmpWizard/wizardState';
 import { adjustConnectionsForEdits, buildEffectiveDmpSection } from './dmpWizard/effectiveSections';
 import {
   normalizeSkippedSuggestionEntry,
@@ -1014,7 +1014,8 @@ export default function DmpNewImportDialog({
 
   const buildSegmentPlacementPayload = useCallback(
     (segment: number[], anchor: { sectionIndex: number; stationIndex: number }) => {
-      const anchorDmpSection = dmpFile.sections[anchor.sectionIndex];
+      // The manual-placing screen reads the same condition for its reason line.
+      const anchorDmpSection = anchorSectionIn(dmpFile.sections, anchor);
       if (!anchorDmpSection) {
         return null;
       }
@@ -1172,7 +1173,8 @@ export default function DmpNewImportDialog({
       // [#576 NF-W9FE-3] Nothing to put on the map (the anchor section is not in
       // the file). Leave the wizard as it is: reopening it and then closing it
       // below ended the run without a word, and from the auto-start handoff the
-      // settled window now shows this segment's manual-placing screen instead.
+      // settled window now shows this segment's manual-placing screen instead,
+      // which says why (#576 NF-W9FE-3-D1).
       console.warn('[dmpImport] no placement payload for anchor section', segmentAnchor.sectionIndex);
       return;
     }

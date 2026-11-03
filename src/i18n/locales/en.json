@@ -1973,7 +1973,8 @@
         "noSections": "No existing sections available",
         "doNotPlace": "Do not place",
         "doNotPlaceDescription": "Skip this segment entirely - its sections will not be imported",
-        "next": "Next"
+        "next": "Next",
+        "cannotPlaceOnMap": "This segment cannot be placed on the map: its anchor section is not in the DMP file. Click a station in the preview to set another anchor, or choose Do not place."
       }
     },
     "compassImport": {

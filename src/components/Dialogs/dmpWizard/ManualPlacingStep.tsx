@@ -29,7 +29,7 @@ import { SegmentPlacementModes, type SegmentPlacementMode } from '../SegmentPlac
 import { usePreviewSize } from '../usePreviewSize';
 import { buildFromExistingContext } from './fromExistingContext';
 import { adjustConnectionsForEdits, buildEffectiveDmpSection } from './effectiveSections';
-import type { ManualPlacingPhase, SegmentAnchor } from './wizardState';
+import { anchorSectionIn, type ManualPlacingPhase, type SegmentAnchor } from './wizardState';
 import type { SkippedSuggestionPlacement } from './wizardTypes';
 import { WIZARD_SECONDARY_BUTTON_CLASS as importSecondaryButtonClass } from './WizardFooter';
 
@@ -170,6 +170,10 @@ export function ManualPlacingStep({
     onCommitAnchor({ sectionIndex: idx, stationIndex: visibleAnchorStation(idx, stationIndex) });
   }, [currentSegment, onCommitAnchor, visibleAnchorStation]);
 
+  // [#576 NF-W9FE-3-D1] The payload builder's own condition: with no such section
+  // in the file the segment cannot go on the map, and the screen says so.
+  const cannotPlaceOnMap = anchorSectionIn(dmpFile.sections, segmentAnchor) === undefined;
+
   // Section names in current segment (for display)
   const segmentSectionNames = useMemo(() => {
     if (!currentSegment) return [];
@@ -220,6 +224,12 @@ export function ManualPlacingStep({
         {error && (
           <div className="text-sm text-error" role="alert" data-testid="wizard-error">
             {error}
+          </div>
+        )}
+
+        {cannotPlaceOnMap && (
+          <div className="text-sm text-warning" role="status" data-testid="wizard-cannot-place-on-map">
+            {t('dialogs.dmpNewImport.manualPlacing.cannotPlaceOnMap')}
           </div>
         )}
 
