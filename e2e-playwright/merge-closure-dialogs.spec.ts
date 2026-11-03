@@ -229,7 +229,12 @@ test.describe('Merge and Closure Dialogs', () => {
 
     // Set connectivity result to NOT connected (merge path)
     await page.evaluate(() => {
-      (window as E2EWindow).__MOCK_CONNECTIVITY_RESULT__ = { connected: false, preview: null };
+      (window as E2EWindow).__MOCK_CONNECTIVITY_RESULT__ = {
+        connected: false,
+        preview: null,
+        can_merge: true,
+        reason: null,
+      };
     });
 
     // Simulate merge tool flow: call checkAndOpenMergeDialog via project store
@@ -292,6 +297,8 @@ test.describe('Merge and Closure Dialogs', () => {
           horizontal_misclosure: 0.2,
           vertical_misclosure: 0.1,
         },
+        can_merge: true,
+        reason: null,
       };
     });
 

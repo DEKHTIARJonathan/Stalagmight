@@ -8,17 +8,15 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 import type { E2EWindow } from './helpers/e2eWindow';
+import type { Section } from '../src/types/ipc/Section';
 
 /**
- * The id=0 fixtures below are not complete `Section`s: they carry no `quality`,
- * `next_shot_id`, `reverse_parity`, `gauge_shot_uuid` or `gauge_neighbour_uuid`.
- * The store's own `setState` type refuses them, so the injections write through
- * this view, which names the keys written and takes their values as given.
+ * [#576 NF-W7F-3] The id=0 fixtures are complete wire `Section`s (`satisfies Section`),
+ * written through the store's own `setState`, so a field the backend always sends and
+ * the fixture lacks fails typecheck:playwright instead of reaching the app as undefined.
+ * They used to carry no `quality`, `next_shot_id`, `reverse_parity`, `gauge_shot_uuid`
+ * or `gauge_neighbour_uuid`, behind a window view that took any value as given.
  */
-type FixtureWriteWindow = typeof window & {
-  __E2E_TEST__: { projectStore: { setState: (patch: { project: unknown; stations?: unknown[] }) => void } };
-};
-
 /**
  * Helper to create a new project
  */
@@ -52,7 +50,13 @@ async function injectId0Fixture(page: Page) {
       surveyor: 'Test Surveyor',
       date: '2026-01-20',
       color: '#4ecdc4',
-      direction: 'in' as const,
+      direction: 'in',
+      quality: 1,
+      // Section 0's id band starts at 0 (`id * FEATURE_ID_STRIDE`); one shot minted.
+      next_shot_id: 1,
+      reverse_parity: false,
+      gauge_shot_uuid: null,
+      gauge_neighbour_uuid: null,
       shots: [{
         id: 0,
         azimuth_in: 90,
@@ -71,7 +75,7 @@ async function injectId0Fixture(page: Page) {
         marker_index: 0,
         temperature: null,
       }]
-    };
+    } satisfies Section;
 
     // Get current state - project is guaranteed non-null by waitForFunction
     const store = (window as E2EWindow).__E2E_TEST__.projectStore.getState();
@@ -110,7 +114,7 @@ async function injectId0Fixture(page: Page) {
     ];
 
     // Update store state atomically
-    (window as FixtureWriteWindow).__E2E_TEST__.projectStore.setState({
+    (window as E2EWindow).__E2E_TEST__.projectStore.setState({
       project,
       stations: newStations,
     });
@@ -317,17 +321,23 @@ test.describe('ID=0 Bug Fixes', () => {
     await page.evaluate(() => {
       const store = (window as E2EWindow).__E2E_TEST__.projectStore;
       const project = store.getState().project;
+      if (!project) throw new Error('Project is null - cannot add the second section');
       const otherSection = {
         id: 1,
         name: 'One Section',
         surveyor: 'Test Surveyor',
         date: '2026-01-20',
         color: '#ff6b6b',
-        direction: 'in' as const,
+        direction: 'in',
+        quality: 1,
+        next_shot_id: 100000,
+        reverse_parity: false,
+        gauge_shot_uuid: null,
+        gauge_neighbour_uuid: null,
         shots: [],
-      };
-      (window as FixtureWriteWindow).__E2E_TEST__.projectStore.setState({
-        project: { ...project, sections: [...project!.sections, otherSection] },
+      } satisfies Section;
+      (window as E2EWindow).__E2E_TEST__.projectStore.setState({
+        project: { ...project, sections: [...project.sections, otherSection] },
       });
       (window as E2EWindow).__E2E_TEST__.uiStore.getState().setSelection({ type: 'section', sectionId: 1 });
     });

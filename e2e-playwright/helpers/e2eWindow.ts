@@ -61,10 +61,12 @@ export type E2EWindow = typeof window & {
    */
   __MOCK_IPC_OVERRIDES__?: Record<string, unknown>;
   /**
-   * What `check_merge_connectivity` returns instead of the mock's default. The
-   * mock passes it through as given, so a spec may set only some fields.
+   * What `check_merge_connectivity` returns instead of the mock's default, passed
+   * through as given - so it is a whole `ConnectivityResult` (#576 NF-W7F-3: a reply
+   * without `can_merge` / `reason` is not one the backend sends, and the merge tools
+   * read both).
    */
-  __MOCK_CONNECTIVITY_RESULT__?: Partial<ConnectivityResult>;
+  __MOCK_CONNECTIVITY_RESULT__?: ConnectivityResult;
   /** The mock's call logs: each entry is one call's `commands` (execute_batch) or `args`. */
   __MOCK_EXECUTE_BATCH_CALLS__?: unknown[];
   __MOCK_CREATE_SHOT_CALLS__?: unknown[];
