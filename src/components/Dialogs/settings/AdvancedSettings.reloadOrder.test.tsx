@@ -61,6 +61,25 @@ describe('Settings > Advanced: Reload from disk waits for a settings save in fli
     await waitFor(() => expect(useProjectStore.getState().config).toBe(RELOADED));
   });
 
+  it('stores the reloaded config even when the tab unmounts mid-reload (#576 NF-W10FE-2)', async () => {
+    // The backend has reloaded its config by the time the answer arrives; the store
+    // is global, so it must take that config whether or not this tab is still open.
+    let answer: (config: Config) => void = () => {};
+    invokeIpcMock.mockImplementation((cmd: string) =>
+      cmd === 'reload_config' ? new Promise<Config>((resolve) => { answer = resolve; }) : Promise.resolve(null),
+    );
+    const { unmount } = renderAdvanced();
+
+    fireEvent.click(screen.getByTestId('reload-config-button'));
+    await waitFor(() => expect(reloadCalls()).toHaveLength(1));
+    unmount();
+    answer(RELOADED);
+    await actMicrotasks(5);
+
+    console.log(`[NF-W10FE-2] store config after an unmounted reload: max_directory_size_mb=${String(useProjectStore.getState().config?.logging.max_directory_size_mb)} (reloaded 321)`);
+    expect(useProjectStore.getState().config).toBe(RELOADED);
+  });
+
   it('pin: with nothing in flight it reloads at once', async () => {
     renderAdvanced();
 

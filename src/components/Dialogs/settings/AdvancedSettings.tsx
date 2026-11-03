@@ -311,9 +311,12 @@ export function AdvancedSettings({
       // (`reloadConfigInOrder`): issued while a settings save is in flight, it
       // could answer with the file before the save and land in the store after
       // the save's re-read. The store write is part of the same step.
+      // [#576 NF-W10FE-2] Unconditional: the backend has reloaded whether or not
+      // this tab is still open, and the store is global - skipping it after an
+      // unmount left the app on the old config until the next re-read.
       const newConfig = await chainSettingWrite(SETTING_KEYS.config, async () => {
         const fresh = await invokeIpc('reload_config', undefined, { purpose: 'reload config from disk' });
-        if (mountedRef.current) setConfig(fresh);
+        setConfig(fresh);
         return fresh;
       });
 
