@@ -12,6 +12,7 @@ import { encodeFeatureId } from '../ids';
 import type { SurveyData } from '../../types/survey-data';
 import type { GasReachField } from '../../types/ipc.generated';
 import type { StationRef } from '../../types/project';
+import { stationRef } from '../../test/factories/survey';
 
 describe('buildGasReachFeatureState', () => {
   // Section 1: shots id10 (st0→st1), id11 (st1→st2). Section 2: shot id20 (st0→st1).
@@ -167,8 +168,8 @@ describe('reachableStationKeySet', () => {
 });
 
 describe('nearestOriginShotEndpoint (nearest to the CURRENT origin, not always the entrance)', () => {
-  const a: StationRef = { section_id: 1, station_index: 0 };
-  const b: StationRef = { section_id: 1, station_index: 1 };
+  const a: StationRef = stationRef(1, 0);
+  const b: StationRef = stationRef(1, 1);
 
   const fieldWith = (aGas: number | null, bGas: number | null): GasReachField =>
     ({

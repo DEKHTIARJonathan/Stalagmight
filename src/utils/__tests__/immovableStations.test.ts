@@ -3,6 +3,7 @@ import type { Section } from '../../types/ipc/Section';
 import type { Station } from '../../types/ipc/Station';
 import { surveyDataFromLegacy, lazyStationArray } from '../../types/survey-data';
 import { computeImmovableStationKeys } from '../immovableStations';
+import { makeStation } from '../../test/factories/survey';
 
 /**
  * Regression coverage for the SoA immovable-station BFS (#customRender, Codex
@@ -50,15 +51,13 @@ const st = (
   section_id: number,
   station_index: number,
   opts: Partial<Station> = {},
-): Station => ({
-  station_ref: { section_id, station_index },
-  coordinates: { x: station_index, y: section_id, z: 0 },
-  is_zero_datum: false,
-  gps_coordinates: null,
-  merged_with: [],
-  closures_with: [],
-  ...opts,
-});
+): Station =>
+  makeStation({
+    station_ref: { section_id, station_index },
+    coordinates: { x: station_index, y: section_id, z: 0 },
+    closures_with: [],
+    ...opts,
+  });
 
 /** One section per station so `next_shot_id`/shots don't matter; the BFS only
  *  reads station topology. Each station needs a section shell to exist in SoA. */

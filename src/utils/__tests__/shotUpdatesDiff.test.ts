@@ -15,6 +15,7 @@ import type { ConfirmedOverlapInfo, SectionEditState } from '../batchImportHelpe
 import type { CrossSectionSuggestion, DmpFile } from '../../types/commands';
 import type { EditableShot } from '../../components/common/ShotTableEditor';
 import type { Project, Shot } from '../../types/project';
+import { makeDmpFile } from '../../test/factories/dmp';
 
 const f32 = (v: number) => Math.fround(v);
 
@@ -118,7 +119,7 @@ describe('DMP wizard - overlap treatment of an existing section', () => {
       },
     ],
   ]);
-  const dmpFile: DmpFile = { version: 1, sections: [], warnings: [] };
+  const dmpFile: DmpFile = makeDmpFile();
 
   beforeEach(() => {
     useProjectStore.setState({ project });

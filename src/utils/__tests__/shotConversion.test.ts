@@ -3,28 +3,10 @@ import type { DmpShot } from '../../types/commands';
 import { blankEditableShot } from '../../components/common/editableShot';
 import { convertToEditableShots, editableShotToShotData } from '../shotConversion';
 import { validateEditableShot } from '../validation';
+import { makeDmpShot as dmpShotOf } from '../../test/factories/dmp';
 
 function makeDmpShot(overrides?: Partial<DmpShot>): DmpShot {
-  return {
-    shot_type: 'Standard',
-    heading_in: 0,
-    heading_out: 0,
-    length: 2,
-    depth_in: 0,
-    depth_out: 0,
-    pitch_in: 0,
-    pitch_out: 0,
-    left: 0,
-    right: 0,
-    up: 0,
-    down: 0,
-    temperature: 0,
-    hour: 0,
-    minute: 0,
-    second: 0,
-    marker_index: 0,
-    ...overrides,
-  };
+  return dmpShotOf({ heading_in: 0, heading_out: 0, length: 2, ...overrides });
 }
 
 describe('convertToEditableShots', () => {

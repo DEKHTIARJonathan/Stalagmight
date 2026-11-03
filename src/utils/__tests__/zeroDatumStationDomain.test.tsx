@@ -27,38 +27,14 @@ import { blankEditableShot } from '../../components/common/editableShot';
 import { isEmittedShot } from '../../components/common/emittedShots';
 import type { DmpSection, DmpShot } from '../../types/commands';
 import type { EditableShot } from '../../components/common/ShotTableEditor';
+import { makeDmpSection, makeDmpShot } from '../../test/factories/dmp';
 
 function standardShot(length: number): DmpShot {
-  return {
-    shot_type: 'Standard',
-    heading_in: 10,
-    heading_out: 10,
-    length,
-    depth_in: 0,
-    depth_out: 0,
-    pitch_in: 0,
-    pitch_out: 0,
-    left: 0,
-    right: 0,
-    up: 0,
-    down: 0,
-    temperature: 0,
-    hour: 0,
-    minute: 0,
-    second: 0,
-    marker_index: 0,
-  };
+  return makeDmpShot({ length });
 }
 
 function section(shots: DmpShot[]): DmpSection {
-  return {
-    version: 1,
-    name: 'Anchor',
-    direction: 'in',
-    date: '2026-01-01',
-    shots,
-    content_hash: 'hash-anchor',
-  };
+  return makeDmpSection({ shots });
 }
 
 /** The dialog's `stationCount`: one station per EMITTED shot, plus the far end.
