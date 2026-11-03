@@ -3,6 +3,7 @@ import { isUnreadableRefusal, saveErrorKind, type SaveErrorKind } from './saveEr
 import { trackDialogComplete } from './telemetry';
 import { getErrorMessage, invokeIpc } from './ipc';
 import { errorCode } from './commandError';
+import { isEditGateCode } from './editErrors';
 import type { CommandErrorCode } from '../types/ipc/CommandErrorCode';
 import i18n from '../i18n';
 import { importReceiptSummaryParts, isEmptyImportReceipt } from './importReceipt';
@@ -406,6 +407,8 @@ export async function finishImportWithoutOrphanSuggestions(
  * - `command`: the backend refused the import (the store's refused outcome: its
  *   line and its code) - the dialog's work is
  *   over, so it closes (with its completion telemetry) before the error dialog.
+ *   An edit-gate refusal gets no error dialog: the store already showed the
+ *   read-only notice (#576 NF-W7E-2).
  *   It does NOT run the rest of the exit sequence: `setView`/fit dropped the
  *   user into the empty project the import had just created, fitted the map to
  *   nothing, and only THEN said why (#411 C2).
@@ -495,6 +498,12 @@ export function surfaceImportFailure(
         ui.showToast(i18n.t('dialogs.importFailure.cancelled'), TOAST_KEYS.IMPORT_CANCELLED, 'info');
         return;
       }
+      // [#576 NF-W7E-2] Refused by the edit gate (a read-only SpeleoDB project, the
+      // Plan/Export workspace, a newer file, an adoption hand-over): the store's edit
+      // path already showed the read-only notice, the surface the command-failure
+      // contract gives those codes (docs/notifications.md). One event, one surface -
+      // and a blocked edit is not an "Import failed" error with a bug-report hint.
+      if (isEditGateCode(failure.code)) return;
       // Unlike 'empty', 'command' is NOT a safe class to blanket-hide the
       // report-a-bug hint for (#447 review): execute_tml_import (and its
       // Compass/Walls/GPX siblings) refuse with the same uncoded `FAILED` for a
