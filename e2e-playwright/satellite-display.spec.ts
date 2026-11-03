@@ -325,10 +325,13 @@ test.describe('Satellite Display', () => {
       await openAppMenu(page);
       await page.getByTestId('back-button').click();
 
-      // Handle unsaved changes dialog if it appears
+      // Close Project decides at the click (useProject's handleCloseProject reads
+      // isDirty there): a dirty project asks about unsaved changes, a clean one
+      // goes straight to GlobalView. Wait for whichever it did, instead of giving
+      // an optional dialog 1.5 s to show up (#576 NF-W10FE-1).
       const discardButton = page.locator('button:has-text("Discard Changes")');
-      const needsDiscard = await discardButton.waitFor({ state: 'visible', timeout: 1500 }).then(() => true).catch(() => false);
-      if (needsDiscard) {
+      await expect(discardButton.or(page.getByTestId('global-view'))).toBeVisible({ timeout: 8000 });
+      if (await discardButton.isVisible()) {
         await discardButton.click();
       }
 

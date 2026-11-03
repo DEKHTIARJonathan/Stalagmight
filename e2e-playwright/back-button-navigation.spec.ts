@@ -197,11 +197,12 @@ test.describe('Back Button Navigation', () => {
     await openMenu(page);
     const backButton = page.locator('[data-testid="back-button"]');
 
-    // The first click navigates (and closes the menu); the menu item then
-    // disappears, so the extra force-clicks should be ignored gracefully.
+    // The first click navigates and closes the menu, so the item is gone and a
+    // repeat click has nothing to land on. (Two force-clicks used to follow it:
+    // each timed out after 1 s on the vanished item, failure swallowed, without
+    // clicking anything - #576 NF-W10FE-1.)
     await backButton.click();
-    await backButton.click({ force: true, timeout: 1000 }).catch(() => {});
-    await backButton.click({ force: true, timeout: 1000 }).catch(() => {});
+    await expect(backButton).toHaveCount(0);
 
     // Should still end up at Global View with no errors
     await expect(page.locator('[data-testid="global-view"]')).toBeVisible({ timeout: 10000 });
