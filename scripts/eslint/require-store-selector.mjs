@@ -18,7 +18,13 @@
 //                                               useUIStore((s) => s.list.map(f))
 //     zustand compares a selector's answers with Object.is, so a new object on
 //     every call is a new answer on every store write - a whole-store
-//     subscription, exactly like no selector;
+//     subscription, exactly like no selector. [#576 RV6a-8] A block body counts
+//     when EVERY `return` in it builds a fresh value, however many statements
+//     lead up to it; `.slice` / `.concat` on a value that is evidently a STRING
+//     (`String(x)`, a template, a string literal, a string method's answer, or a
+//     `.concat` of string literals only) answer a primitive and are not fresh.
+//     The receiver is read by syntax: `s.name.slice(0, 3)` on a string field
+//     still reads as an array slice (wrap it in String() or select the field);
 //   - [#576 RV5-LS-3] useShallow over a copy of the whole state:
 //                                               useUIStore(useShallow((s) => ({ ...s })))
 //
@@ -74,6 +80,66 @@ function selectorResult(node) {
 const FRESH_ARRAY_METHODS = new Set(['map', 'filter', 'flatMap', 'slice', 'concat']);
 const FRESH_ARRAY_STATICS = new Set(['keys', 'values', 'entries']);
 
+// [#576 RV6a-8] String methods whose answer is a string (a primitive).
+const STRING_METHODS = new Set([
+  'slice', 'concat', 'substring', 'toLowerCase', 'toUpperCase', 'trim', 'trimStart', 'trimEnd',
+  'padStart', 'padEnd', 'replace', 'replaceAll', 'repeat', 'toString',
+]);
+const isStringLiteral = (e) => e?.type === 'TemplateLiteral' || (e?.type === 'Literal' && typeof e.value === 'string');
+
+// An expression that is evidently a string: a string literal or template, `String(x)`,
+// or a string method called on one.
+function isStringExpr(e) {
+  if (!e) return false;
+  if (isStringLiteral(e)) return true;
+  if (e.type !== 'CallExpression') return false;
+  if (e.callee.type === 'Identifier') return e.callee.name === 'String';
+  return (
+    e.callee.type === 'MemberExpression' &&
+    !e.callee.computed &&
+    STRING_METHODS.has(e.callee.property.name) &&
+    isStringExpr(e.callee.object)
+  );
+}
+
+// `x.slice(...)` / `x.concat(...)` answering a string: on an evident string, or a
+// `.concat` of string literals only (`s.mode.concat('-x')`).
+const isStringSliceOrConcat = (call) =>
+  isStringExpr(call.callee.object) ||
+  (call.callee.property.name === 'concat' && call.arguments.length > 0 && call.arguments.every(isStringLiteral));
+
+// [#576 RV6a-8] Every `return` argument of a block-bodied function, not looking into
+// nested functions; null when a `return` has no argument.
+function blockReturns(block) {
+  const out = [];
+  let bare = false;
+  const visit = (node) => {
+    if (!node || typeof node.type !== 'string') return;
+    if (node.type === 'FunctionDeclaration' || node.type === 'FunctionExpression' || node.type === 'ArrowFunctionExpression') {
+      return;
+    }
+    if (node.type === 'ReturnStatement') {
+      if (node.argument) out.push(node.argument);
+      else bare = true;
+      return;
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (key === 'parent') continue;
+      if (Array.isArray(value)) value.forEach(visit);
+      else if (value && typeof value === 'object') visit(value);
+    }
+  };
+  block.body.forEach(visit);
+  return bare ? null : out;
+}
+
+// The answers a selector can give: its expression body, or every `return` of its block.
+function selectorResults(node) {
+  if (node?.type !== 'ArrowFunctionExpression' && node?.type !== 'FunctionExpression') return [];
+  if (node.body.type !== 'BlockStatement') return [node.body];
+  return blockReturns(node.body) ?? [];
+}
+
 // [#576 RV5-LS-3] An expression that evaluates to a new object or array on every
 // call: a literal, `x.map(...)` and friends, `Object.keys(...)` and friends.
 function isFresh(expr) {
@@ -88,6 +154,7 @@ function isFresh(expr) {
   if (e.type === 'ConditionalExpression') return isFresh(e.consequent) && isFresh(e.alternate);
   if (e.type === 'CallExpression' && e.callee.type === 'MemberExpression' && !e.callee.computed) {
     const method = e.callee.property.name;
+    if ((method === 'slice' || method === 'concat') && isStringSliceOrConcat(e)) return false;
     if (FRESH_ARRAY_METHODS.has(method)) return true;
     if (e.callee.object.type === 'Identifier' && e.callee.object.name === 'Object' && FRESH_ARRAY_STATICS.has(method)) {
       return true;
@@ -112,7 +179,13 @@ function isShallowWholeSpread(node) {
 // A selector that builds a fresh value and has nothing to compare it shallowly:
 // not under useShallow (that is a call, not a function) and no equality function
 // passed after it.
-const isFreshUnshallowed = (selector, equalityFn) => equalityFn === undefined && isFresh(selectorResult(selector));
+// [#576 RV6a-8] Every answer, so a block body's last `return` after a few
+// statements counts too.
+const isFreshUnshallowed = (selector, equalityFn) => {
+  if (equalityFn !== undefined) return false;
+  const results = selectorResults(selector);
+  return results.length > 0 && results.every(isFresh);
+};
 
 export default {
   meta: {

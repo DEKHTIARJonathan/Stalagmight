@@ -52,11 +52,16 @@ function typeContract(): void {
  * `IpcCallArgs<K> | undefined` for every command, so a command with a required
  * argument could be queued with none and tsc stayed green, while `invokeIpc`
  * itself refuses that. Never called.
+ *
+ * [#576 RV6a-12] Each `@ts-expect-error` below guards its own regression: `none`
+ * fails if the args become omittable for every command again (the RV5-PI-6
+ * typing); `empty` fails if they become partial (`Partial<IpcCallArgs<K>>` for a
+ * command with required arguments), which the RV5-PI-6 typing did not do.
  */
 function queueContract(): void {
   // @ts-expect-error delete_section takes a required sectionId: it cannot be queued with no args
   const none: QueuedCallArgs<'delete_section'> = undefined;
-  // @ts-expect-error a required argument is missing
+  // @ts-expect-error the queue takes the same required keys invokeIpc does: none may be left out
   const empty: QueuedCallArgs<'delete_section'> = {};
   const given: QueuedCallArgs<'delete_section'> = { sectionId: 1 };
   // A command with no required argument may still be queued with none.

@@ -432,6 +432,28 @@ await test('require-store-selector: a fresh value under useShallow or with an eq
   assert.deepEqual(hits, []);
 });
 
+// [#576 RV6a-8] `.slice` / `.concat` on a STRING answer a primitive, which
+// Object.is compares by value: not a fresh value. And a block-bodied selector that
+// builds its answer in more than one statement is still a fresh-value selector.
+await test('require-store-selector: string slice/concat are clean, a multi-statement fresh selector is an error', async () => {
+  const hits = await storeHits(SRC, `
+    import { useUIStore } from '../../store/uiStore';
+    import { useProjectStore } from '../../store/projectStore';
+    export function useProbe() {
+      const a = useUIStore((s) => String(s.appMode).slice(0, 3));
+      const b = useUIStore((s) => s.appMode.concat('-mode'));
+      const c = useUIStore((s) => \`\${s.appMode}\`.slice(1));
+      const d = useUIStore((s) => { const m = s.appMode; return { m }; });
+      const e = useProjectStore((s) => { if (!s.project) return [s.isDirty]; return [s.project.name]; });
+      const f = useProjectStore((s) => { const p = s.project; return p?.name; });
+      const g = useProjectStore((s) => { if (!s.project) return []; return s.project.sections; });
+      const h = useProjectStore((s) => s.project?.sections.slice(1));
+      return [a, b, c, d, e, f, g, h];
+    }
+  `);
+  assert.deepEqual(hits.map((h) => h.line), [8, 9, 12], JSON.stringify(hits));
+});
+
 await test('require-store-selector: covers src tests too, not the e2e trees', async () => {
   const code = `
     import { useProjectStore } from '../src/store/projectStore';
@@ -459,6 +481,20 @@ await test('require-disable-reason: an eslint-disable directive with no reason a
   assert.ok(src.every((h) => h.severity === 2));
   assert.match(src[0].message, /needs a reason/);
   assert.deepEqual((await reasonHits(PW, code)).map((h) => h.line), [2, 4, 5]);
+});
+
+// [#576 RV6a-7] ESLint reads a LINE comment as a directive only when it is
+// eslint-disable-line / eslint-disable-next-line; `// eslint-disable ...` is prose
+// to it. A block comment opening with eslint-disable is a directive.
+await test('require-disable-reason: a line comment that opens with the bare word is prose, a block one is a directive', async () => {
+  const code = `
+    // eslint-disable is not allowed in this file, see docs/linting.md
+    export const f = 1;
+    /* eslint-disable @typescript-eslint/no-explicit-any */
+    export const g = (x: any) => x;
+  `;
+  const hits = await reasonHits(SRC, code);
+  assert.deepEqual(hits.map((h) => h.line), [4], JSON.stringify(hits));
 });
 
 await test('require-disable-reason: a directive with a reason, and eslint-enable, are clean', async () => {
