@@ -199,7 +199,7 @@ fn deleting_a_project_the_server_no_longer_has_counts_as_deleted() {
         status: 404,
         len: 2,
     }]);
-    let result = client::delete_project(&stub.base, "tok", false, PROJECT_ID);
+    let result = client::delete_project(&stub.base, "tok", false, PROJECT_ID, &stub.base);
     println!("delete answered 404 -> {result:?}");
     assert!(result.is_ok(), "a 404 from DELETE is 'already deleted'");
 }
@@ -216,7 +216,7 @@ fn a_delete_whose_reply_was_lost_is_retried_and_its_404_is_done() {
             len: 2,
         },
     ]);
-    let result = client::delete_project(&stub.base, "tok", false, PROJECT_ID);
+    let result = client::delete_project(&stub.base, "tok", false, PROJECT_ID, &stub.base);
     let requests = stub.requests();
     println!("delete attempts: {} -> {result:?}", requests.len());
     assert_eq!(requests.len(), 2, "the lost reply is retried once");

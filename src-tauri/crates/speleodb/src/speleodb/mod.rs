@@ -502,7 +502,8 @@ mod live_tests {
     impl Drop for ProjectCleanup<'_> {
         #[expect(clippy::print_stderr, reason = "ignored live integration test cleanup")]
         fn drop(&mut self) {
-            if let Err(e) = client::delete_project(self.url, self.token, false, &self.id) {
+            if let Err(e) = client::delete_project(self.url, self.token, false, &self.id, self.url)
+            {
                 eprintln!("cleanup: failed to delete test project {}: {e:?}", self.id);
             }
         }

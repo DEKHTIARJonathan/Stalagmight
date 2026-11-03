@@ -7895,7 +7895,7 @@ mod tests {
     }
     impl Drop for OrchCleanup {
         fn drop(&mut self) {
-            let _ = client::delete_project(&self.url, &self.token, false, &self.id);
+            let _ = client::delete_project(&self.url, &self.token, false, &self.id, &self.url);
         }
     }
 

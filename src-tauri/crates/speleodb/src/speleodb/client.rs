@@ -251,8 +251,8 @@ pub mod spec {
         Category::CreateProject,
         Retry::Once,
     );
-    /// `DELETE projects/{id}/`: idempotent, and a 404 means it is already gone
-    /// (#576 B5-D2).
+    /// `DELETE projects/{id}/`: idempotent, and a 404 from the project's own server
+    /// means it is already gone (#576 B5-D2, RV4-R-S4).
     pub const DELETE_PROJECT: EndpointSpec = EndpointSpec::write(
         Endpoint::DeleteProject,
         Category::DeleteProject,
@@ -1212,19 +1212,40 @@ fn post_no_body_project(
 /// idempotent: when the first request lands and its reply is lost, the retry (the
 /// transport's own, or the user's next click) finds the project gone. Reporting
 /// that 404 as a failure left the local copy linked to a project the server no
-/// longer has, because the caller only unlinks on success. For the ADMIN acting on
-/// the project they have open - the only caller - a 404 can only mean it is gone.
+/// longer has, because the caller only unlinks on success.
+///
+/// [#576 RV4-R-S4] Only from the server the project LIVES on: `project_endpoint` is
+/// the deployment `project_id` belongs to (the open copy's link). The request goes
+/// to `base`, the server the session is signed in to, and a 404 from any other
+/// server says only that IT has no such project - the project may still exist where
+/// it lives. That 404 is refused with an error saying the session is signed in to
+/// another server, so the caller keeps the copy linked.
 pub fn delete_project(
     base: &str,
     token: &str,
     insecure_http: bool,
     project_id: &str,
+    project_endpoint: &str,
 ) -> Result<(), SpeleoDbError> {
     let url = api_url(base, &format!("projects/{project_id}/"));
     let (status, body) = send(base, insecure_http, &spec::DELETE_PROJECT, || {
         bare(http::Method::DELETE, &url, token)
     })?;
     if status == 404 {
+        if super::auth::normalize_endpoint(base)
+            != super::auth::normalize_endpoint(project_endpoint)
+        {
+            tracing::warn!(
+                project_id,
+                purpose = "a 404 from another server is not the project's own (#576 RV4-R-S4)",
+                "SpeleoDB answered 404 to the project delete from a server the project is not linked to"
+            );
+            return Err(SpeleoDbError::refused(format!(
+                "{base} has no such project, but this project is on {project_endpoint}: you are \
+                 signed in to another server. Nothing was deleted and the project stays linked; \
+                 sign in to {project_endpoint} to delete it."
+            )));
+        }
         tracing::info!(
             project_id,
             purpose = "a DELETE whose project is already gone has done its job (#576 B5-D2)",
@@ -2469,7 +2490,7 @@ mod tests {
     fn loopback_delete_project_is_bare_delete() {
         let mut stub = LoopbackStub::start(vec![200]);
         let base = stub.base.clone();
-        delete_project(&base, "tok", false, WIRE_PID).expect("200 -> Ok(())");
+        delete_project(&base, "tok", false, WIRE_PID, &base).expect("200 -> Ok(())");
         stub.join();
         let wire = String::from_utf8_lossy(&stub.captured()[0]).into_owned();
         assert!(

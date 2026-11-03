@@ -339,12 +339,20 @@ impl AppState {
     ///
     /// [#576 NF-AN3-3] A project the server already deleted (a first DELETE whose
     /// reply was lost) answers 404, which the client reports as done - so the copy
-    /// is unlinked here instead of staying linked to a project that is gone.
+    /// is unlinked here instead of staying linked to a project that is gone. Only a
+    /// 404 from the server the copy is linked to (#576 RV4-R-S4): the session may be
+    /// signed in to another one, whose 404 proves nothing about this project.
     pub fn speleodb_delete_project(&self) -> Result<(), SpeleoErrorDto> {
         let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
         self.speleodb_handle_auth(
             client::spec::DELETE_PROJECT.category,
-            client::delete_project(&endpoint, &token, insecure_http, &link.project_id),
+            client::delete_project(
+                &endpoint,
+                &token,
+                insecure_http,
+                &link.project_id,
+                &link.endpoint,
+            ),
         )
         .map_err(|e| dto_for_error(client::spec::DELETE_PROJECT.category, &e))?;
         // Now local-only: drop the persisted link + reopen the edit gate (reuses the
