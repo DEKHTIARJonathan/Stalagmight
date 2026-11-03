@@ -9,7 +9,8 @@ import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../utils/ipc');
-stubGetErrorMessage(fallbackOr());
+// The real reader's shape: a crash inside the dialog (RV6a-6) must reach the toast as text.
+stubGetErrorMessage((e, f) => (e instanceof Error ? e.message : (f ?? String(e))));
 
 // jsdom does not implement scrollIntoView; the Select component calls it on open.
 Element.prototype.scrollIntoView = vi.fn();
@@ -27,7 +28,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { TOAST_KEYS } from '../../utils/toastKeys';
-import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
+import { invokeIpcMock, stubGetErrorMessage } from '../../test/factories/ipc';
 
 /** `speleodb_publish`'s answer as the wire carries it (`SpeleoPublishReport`, #576
  *  RV6a-6): the outcome and what its saves could not keep (nothing here). */

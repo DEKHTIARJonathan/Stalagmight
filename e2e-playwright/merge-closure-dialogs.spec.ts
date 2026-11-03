@@ -234,6 +234,7 @@ test.describe('Merge and Closure Dialogs', () => {
         preview: null,
         can_merge: true,
         reason: null,
+        reason_code: null,
       };
     });
 
@@ -299,6 +300,7 @@ test.describe('Merge and Closure Dialogs', () => {
         },
         can_merge: true,
         reason: null,
+        reason_code: null,
       };
     });
 
