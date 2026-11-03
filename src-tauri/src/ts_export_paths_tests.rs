@@ -13,7 +13,8 @@
 //! alone writes `src/types/ipc/`.
 //!
 //! A source scan, so it also covers a crate whose tests did not run: it reads
-//! every `#[ts(...)]` attribute under `src-tauri/src` and
+//! every `#[ts(...)]` attribute - also one a `#[cfg_attr(.., ts(...))]` carries
+//! (#576 RV6a-9) - under `src-tauri/src` and
 //! `src-tauri/crates/*/src`, keeps the ones that generate an export test (a bare
 //! `export` among the arguments) and resolves their target the way ts-rs does.
 
@@ -47,47 +48,135 @@ fn lexical(path: &Path) -> PathBuf {
     out
 }
 
-/// Every `#[ts(...)]` attribute in `source` that generates an export test:
-/// `(line, export_to)`, `None` when it takes ts-rs's default (`bindings/`).
-fn exporting_attributes(source: &str) -> Vec<(usize, Option<String>)> {
-    let mut found = Vec::new();
-    let mut rest = source;
-    let mut offset = 0;
-    while let Some(at) = rest.find("#[ts(") {
-        let start = at + "#[ts(".len();
-        let mut depth = 1usize;
-        let mut end = start;
-        for (i, c) in rest[start..].char_indices() {
+/// The index just past the bracket that closes the one at the start of `text`
+/// (`(` or `[`), skipping string literals; `None` if it never closes.
+fn closing(text: &str) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (i, c) in text.char_indices() {
+        if in_string {
             match c {
-                '(' => depth += 1,
-                ')' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = start + i;
-                        break;
-                    }
-                }
+                _ if escaped => escaped = false,
+                '\\' => escaped = true,
+                '"' => in_string = false,
                 _ => {}
             }
+            continue;
         }
-        let args = &rest[start..end];
-        // An attribute starts its line; a mention in a comment or a string does not.
-        let before = &source[..offset + at];
-        let line_start = before.rfind('\n').map_or(0, |i| i + 1);
-        let is_attribute = before[line_start..].trim().is_empty();
-        let exports = args.split(',').any(|arg| arg.trim() == "export");
-        if is_attribute && exports {
-            let export_to = args
-                .split(',')
-                .map(str::trim)
-                .find(|arg| arg.starts_with("export_to"))
-                .and_then(|arg| arg.split('"').nth(1))
-                .map(str::to_owned);
-            let line = before.matches('\n').count() + 1;
-            found.push((line, export_to));
+        match c {
+            '"' => in_string = true,
+            '(' | '[' => depth += 1,
+            ')' | ']' => {
+                depth = depth.checked_sub(1)?;
+                if depth == 0 {
+                    return Some(i + 1);
+                }
+            }
+            _ => {}
         }
-        offset += end;
-        rest = &source[offset..];
+    }
+    None
+}
+
+/// `text` split at its top-level commas (not inside brackets or strings).
+fn top_level_items(text: &str) -> Vec<&str> {
+    let mut items = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    while i < text.len() {
+        let rest = &text[i..];
+        if rest.starts_with(['(', '[', '"']) {
+            i += if rest.starts_with('"') {
+                // A string on its own: close it like a one-character bracket pair.
+                rest[1..].find('"').map_or(rest.len(), |n| n + 2)
+            } else {
+                closing(rest).unwrap_or(rest.len())
+            };
+            continue;
+        }
+        if rest.starts_with(',') {
+            items.push(&text[start..i]);
+            start = i + 1;
+        }
+        i += rest.chars().next().map_or(1, char::len_utf8);
+    }
+    items.push(&text[start..]);
+    items
+}
+
+/// The argument lists of every `ts(...)` an attribute's content applies: the
+/// attribute itself, or each attribute a `cfg_attr(predicate, ..)` carries (at
+/// any depth).
+fn ts_arguments(attribute: &str) -> Vec<&str> {
+    let attribute = attribute.trim();
+    let inner = |name: &str| {
+        attribute
+            .strip_prefix(name)
+            .map(str::trim_start)
+            .filter(|rest| rest.starts_with('('))
+            .and_then(|rest| closing(rest).map(|end| &rest[1..end - 1]))
+    };
+    if let Some(args) = inner("ts") {
+        return vec![args];
+    }
+    if let Some(items) = inner("cfg_attr") {
+        return top_level_items(items)
+            .into_iter()
+            .skip(1)
+            .flat_map(ts_arguments)
+            .collect();
+    }
+    Vec::new()
+}
+
+/// Whether `prefix` (the text of a line before an attribute) holds nothing but
+/// whitespace and complete attributes - so the attribute is code, not a mention
+/// in a comment or a string.
+fn only_attributes(prefix: &str) -> bool {
+    let mut rest = prefix.trim_start();
+    while !rest.is_empty() {
+        let Some(attribute) = rest.strip_prefix('#') else {
+            return false;
+        };
+        let Some(end) = closing(attribute).filter(|_| attribute.starts_with('[')) else {
+            return false;
+        };
+        rest = attribute[end..].trim_start();
+    }
+    true
+}
+
+/// Every attribute in `source` that generates a ts-rs export test - a `#[ts(..)]`
+/// or a `#[cfg_attr(.., ts(..))]` (#576 RV6a-9) whose arguments include a bare
+/// `export` - as `(line, export_to)`, `None` when it takes ts-rs's default
+/// (`bindings/`).
+fn exporting_attributes(source: &str) -> Vec<(usize, Option<String>)> {
+    let mut found = Vec::new();
+    for (at, _) in source.match_indices("#[") {
+        // An attribute starts its line (after any other attributes); a mention in
+        // a comment or a string does not.
+        let line_start = source[..at].rfind('\n').map_or(0, |i| i + 1);
+        if !only_attributes(&source[line_start..at]) {
+            continue;
+        }
+        let Some(end) = closing(&source[at + 1..]) else {
+            continue;
+        };
+        let content = &source[at + 2..at + end];
+        let line = source[..at].matches('\n').count() + 1;
+        for args in ts_arguments(content) {
+            let items = top_level_items(args);
+            if items.iter().any(|arg| arg.trim() == "export") {
+                let export_to = items
+                    .iter()
+                    .map(|arg| arg.trim())
+                    .find(|arg| arg.starts_with("export_to"))
+                    .and_then(|arg| arg.split('"').nth(1))
+                    .map(str::to_owned);
+                found.push((line, export_to));
+            }
+        }
     }
     found
 }
@@ -173,5 +262,23 @@ fn the_attribute_scan_reads_export_and_export_to() {
     assert_eq!(
         lexical(Path::new("/a/src-tauri/../../src/types/ipc/")),
         PathBuf::from("/src/types/ipc")
+    );
+}
+
+#[test]
+fn the_attribute_scan_reads_an_export_inside_cfg_attr() {
+    // [#576 RV6a-9] `cfg_attr` keeps an export test that cargo fmt leaves on one
+    // line, and two attributes can share a line; a mention in a comment is still
+    // not an attribute.
+    let source = "#[cfg_attr(test, ts(export, export_to = \"../../../../y/\"))]\nstruct E;\n\
+                  #[cfg_attr(feature = \"x\", derive(TS), ts(export))]\nstruct F;\n\
+                  #[derive(TS)] #[ts(export)]\nstruct G;\n\
+                  #[cfg_attr(test, ts(export_to = \"bindings/H.ts\"))]\nstruct H;\n\
+                  /// see #[cfg_attr(test, ts(export))]\nstruct I;\n";
+    let found = exporting_attributes(source);
+    println!("exports found in the cfg_attr fixture: {found:?}");
+    assert_eq!(
+        found,
+        vec![(1, Some("../../../../y/".to_owned())), (3, None), (5, None)]
     );
 }
