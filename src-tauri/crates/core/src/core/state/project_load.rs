@@ -558,7 +558,10 @@ impl AppState {
         // repairs below that would write - the legacy ignore-UUID backfill, the
         // unreadable-kind repair, the kind-classification persist and the undo-mode
         // materialization - are kept in memory only, as for a file a newer build
-        // saved; the next save in a writable place persists them.
+        // saved. Only the LOAD's own writes are refused: the session is an ordinary
+        // writable one (RV4-R-M3-OPEN), so the next save persists them - an in-place
+        // save (Ctrl+S, an autosave, the save on close) into this same file
+        // included - and a display toggle writes this file at once, with no save.
         let protected = upgrade_refusal.is_some();
 
         // === PHASE 1: Loading project data (20%) ===
