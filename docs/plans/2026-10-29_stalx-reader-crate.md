@@ -44,11 +44,15 @@ Stalagmight app --push .stalx--> SpeleoDB (stored as-is, versioned)
 
 ### Crate (Stalagmight)
 
-- Read-only. Opens `.stalx` from every shipped schema version (currently v18).
-- Exposes: project metadata, sections, shots, station merges, zero datums, loop closures,
-  station comments. Optional: measured (unadjusted) station coordinates.
-- Never reads undo/redo history.
-- Hardened for untrusted input: read-only open, the app's existing gzip and id-bound limits.
+- Never writes the source. Copies the input to a private temp file and runs the app's own
+  load path on the copy (integrity check, forward migrations, foreign keys), so every shipped
+  schema version reads correctly (currently v18; v12 changed the pitch sign convention).
+- Exposes its own small types: project metadata, sections, shots, station merges, zero datums,
+  loop closures, station comments. Optional: measured (unadjusted) station positions.
+- Never loads undo/redo history (old-file migrations may still drop it from the copy).
+- Hostile input: refuses files that define views, triggers or virtual tables; loads on a
+  connection with defensive mode, `trusted_schema` off, a value-size cap and a statement
+  deadline; size-capped input (64 MiB default); refuses newer schemas.
 - Semver. A `.stalx` schema bump is a crate release; SpeleoDB upgrades the crate to read new files.
 - License: AGPL-3.0-or-later, same as both projects.
 
@@ -97,6 +101,7 @@ about 4% of the upload limit (more if undo history is pushed).
 1. SpeleoDB: does the crate's model (above) cover what `StalagmightInterface` needs? Anything missing?
 2. SpeleoDB: should the crate expose computed station coordinates, or does SpeleoDB compute them?
 3. Both: where does the reference stub live (the crate's `examples/`, or a separate repo)?
-4. Both: crate distribution: crates.io, or a git dependency pinned by tag?
+4. Both: crate distribution: a git dependency pinned by tag (works today), or crates.io (also
+   needs `stalagmight-models` and `stalagmight-persistence` published)?
 5. Integration owner: is item 1 under "Changes on the Stalagmight side" safe for already-adopted
    projects?
