@@ -8,6 +8,7 @@ import type { GpsOrigin } from '../../types/config';
 import type { GasReachField } from '../../types/ipc.generated';
 import type { Station, StationRef } from '../../types/project';
 import { metersToMapCoords } from '../../utils/coordinates';
+import { stageDropReached } from '../../utils/gasReach';
 
 /**
  * The Plan workspace's staged-strategy ▼ drop markers (#233) plus the distinct final-turn marker
@@ -112,7 +113,11 @@ export function useGasPlanDropMarkers({
     gasReachField.stage_drop_refs.forEach((ref, i) => {
       const lngLat = lngLatFor(ref);
       if (!lngLat) return;
-      const overReserve = gasReachField.stage_drop_over_reserve[i] === true;
+      // A pinned drop the dive turns short of (#576 RV8c-2-D3) stands at its pin, past the
+      // turnaround, greyed: the stage is carried the whole dive. The engine never flags one
+      // over-reserve; the guard keeps the two states from ever drawing together.
+      const reached = stageDropReached(gasReachField, i);
+      const overReserve = reached && gasReachField.stage_drop_over_reserve[i] === true;
       // Read the override fresh from the store: this effect rebuilds on the recomputed FIELD (not on
       // the override write, see the deps note), so the store is the current source at rebuild time.
       const overridden = useGasPlanStore.getState().stageDropOverrides[i] != null;
@@ -120,6 +125,7 @@ export function useGasPlanDropMarkers({
       el.setAttribute('data-testid', 'gas-drop-marker');
       el.setAttribute('data-drop-index', String(i));
       el.setAttribute('data-over-reserve', String(overReserve));
+      el.setAttribute('data-reached', String(reached));
       el.setAttribute('data-overridden', String(overridden));
       // A slider along the route: draggable with the mouse, nudged one station with the arrow keys,
       // reset with Delete/Escape. valuemin/max/now expose the position on the route to AT.
@@ -132,13 +138,16 @@ export function useGasPlanDropMarkers({
       el.setAttribute('aria-valuemin', '0');
       el.setAttribute('aria-valuemax', String(Math.max(0, routeRefs.length - 1)));
       el.setAttribute('aria-valuenow', String(curIndex < 0 ? 0 : curIndex));
-      el.title = overReserve
-        ? t('gasPanel.map.dropOverReserveTooltip', { n: i + 1 })
-        : t('gasPanel.map.dropDraggableTooltip', { n: i + 1 });
+      el.title = !reached
+        ? t('gasPanel.map.dropNotReachedTooltip', { n: i + 1 })
+        : overReserve
+          ? t('gasPanel.map.dropOverReserveTooltip', { n: i + 1 })
+          : t('gasPanel.map.dropDraggableTooltip', { n: i + 1 });
       el.style.cssText =
         'line-height:0;cursor:grab;touch-action:none;filter:drop-shadow(0 0 1px rgba(0,0,0,0.6));';
-      // Downward triangle = "drop the stage here"; red when the diver dragged it over-reserve (#246).
-      const fill = overReserve ? '#d64545' : '#e08a1e';
+      // Downward triangle = "drop the stage here"; red when the diver dragged it over-reserve (#246),
+      // grey when the dive never gets there (#576 RV8c-2-D3).
+      const fill = !reached ? '#8a8f98' : overReserve ? '#d64545' : '#e08a1e';
       el.innerHTML =
         '<svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">' +
         `<path d="M3 6h18L12 20z" fill="${fill}" stroke="#ffffff" stroke-width="1.5" ` +

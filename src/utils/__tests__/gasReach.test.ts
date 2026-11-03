@@ -5,6 +5,7 @@ import {
   gasBeyondReachFeatureIds,
   reachableStationKeySet,
   nearestOriginShotEndpoint,
+  stageDropReached,
   UNREACHABLE_GAS,
   BEYOND_GAS_RANGE,
 } from '../gasReach';
@@ -240,5 +241,34 @@ describe('nearestOriginShotEndpoint (nearest to the CURRENT origin, not always t
     ];
     expect(nearestOriginShotEndpoint(a, b, null, stations)).toBe(a);
     expect(nearestOriginShotEndpoint(b, a, null, stations)).toBe(b);
+  });
+});
+
+describe('stageDropReached (#576 RV8c-2-D3)', () => {
+  // A route of two legs: stations 0, 1, 2. The engine reports a pinned drop the dive turns short
+  // of at its pin past the turnaround, i.e. with a route index beyond 2.
+  const leg = (from: number, to: number) => ({
+    from: stationRef(1, from),
+    to: stationRef(1, to),
+    is_jump: false,
+  });
+  const field = (indices: number[]) =>
+    ({
+      route: [leg(0, 1), leg(1, 2)],
+      stage_drop_route_indices: indices,
+    }) as unknown as GasReachField;
+
+  it('reads a drop on the route, the turnaround included, as reached', () => {
+    expect(stageDropReached(field([0, 2]), 0)).toBe(true);
+    expect(stageDropReached(field([0, 2]), 1)).toBe(true);
+  });
+
+  it('reads a drop past the turnaround as not reached', () => {
+    expect(stageDropReached(field([1, 3]), 1)).toBe(false);
+    expect(stageDropReached(field([5]), 0)).toBe(false);
+  });
+
+  it('treats a drop the field carries no index for as reached (an older or partial field)', () => {
+    expect(stageDropReached(field([]), 0)).toBe(true);
   });
 });

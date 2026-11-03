@@ -3473,6 +3473,8 @@
       "resetDrop": "reset",
       "resetDropHint": "Move this stage drop back to its strategy-computed point.",
       "overReserveWarning": "A drop was moved past its reserve point: breathing the stage that far uses its reserve gas. The plan does not count that gas, so the reach stays that of the default drop.",
+      "dropNotReached": "not reached",
+      "dropNotReachedWarning": "A pinned drop is past the turnaround: the gas runs out on the way there, so the dive turns early and the stage is carried the whole dive.",
       "budget": "Turn budget",
       "maxPenetration": "Gas to farthest point",
       "maxPenetrationHint": "Gas consumed to reach the deepest in-budget station (a volume, not a distance).",
@@ -3490,6 +3492,7 @@
     "map": {
       "dropDraggableTooltip": "Stage {{n}} drop: drag or arrow-key to move; Delete to reset",
       "dropOverReserveTooltip": "Stage {{n}} drop: moved past reserve (breathing into reserve gas)",
+      "dropNotReachedTooltip": "Stage {{n}} drop: not reached - the dive turns before this pin and carries the stage",
       "dropAria": "Stage {{n}} drop point: drag or use arrow keys to move it along the route, Delete to reset",
       "finalTurnTooltip": "Turn around here",
       "scooterDropTooltip": "Scooters parked here - the passage beyond is swum",
