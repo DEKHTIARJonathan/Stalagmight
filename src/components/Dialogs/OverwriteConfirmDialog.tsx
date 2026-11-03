@@ -10,6 +10,16 @@ import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { isPermissionError } from '../../utils/saveErrors';
 import { useShallow } from 'zustand/react/shallow';
 
+/**
+ * [#576 RV6b-F4] The file name inside the message's `<name>` tag. It renders its
+ * own `value` and ignores the children `<Trans>` hands it: Trans interpolates the
+ * string, then each of its text nodes AGAIN with the same values, so a name that
+ * itself contained "{{fileName}}" came out substituted twice.
+ */
+function FileName({ value }: { value: string }) {
+  return <span className="font-medium text-text-primary">{value}</span>;
+}
+
 export default function OverwriteConfirmDialog() {
   const { t } = useTranslation();
   const { closeDialog, dialogData, openDialog: showDialog } = useUIStore(
@@ -83,14 +93,15 @@ export default function OverwriteConfirmDialog() {
           data-testid={existenceUnknown ? 'overwrite-confirm-unknown' : 'overwrite-confirm-message'}
         >
           {/* [#576 NF-W6-1] The file name is user text: escaped before Trans parses
-              the string for its tags, unescaped after, so "CaveA <B>.stalx" renders
-              as typed instead of as a tag (the DeleteProjectDialog rule). */}
+              the string for its tags, unescaped after, so "CaveA <B>.stalx" cannot
+              open a tag (the DeleteProjectDialog rule). [#576 RV6b-F4] What shows is
+              `FileName`'s own value, never the re-interpolated tag content. */}
           <Trans
             i18nKey={existenceUnknown ? 'dialogs.overwriteConfirm.messageUnknown' : 'dialogs.overwriteConfirm.message'}
             values={{ fileName }}
             tOptions={{ interpolation: { escapeValue: true } }}
             shouldUnescape
-            components={{ name: <span className="font-medium text-text-primary" /> }}
+            components={{ name: <FileName value={fileName ?? ''} /> }}
           />
         </p>
 

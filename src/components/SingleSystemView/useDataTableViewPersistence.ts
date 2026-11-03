@@ -244,8 +244,9 @@ export function useDataTableViewPersistence(
           { purpose: 'persist data-table view state' }
         )
           // Re-sync the in-memory config: a remount re-seeds from it, so a stale
-          // copy would silently revert what was just saved to disk.
-          .then(() => useProjectStore.getState().loadConfig())
+          // copy would silently revert what was just saved to disk. In the config
+          // chain, behind the settings saves made before it ([#576 RV6b-3]).
+          .then(() => useProjectStore.getState().reloadConfigInOrder())
       )
         .catch((e) => {
           if (lastSavedViewRef.current === snapshot) {
@@ -254,7 +255,7 @@ export function useDataTableViewPersistence(
             // success path does. Without it a remount would seed from values
             // that never reached disk and treat them as saved, which is exactly
             // the retry the rollback above exists to preserve (#357 item 5).
-            void useProjectStore.getState().loadConfig();
+            void useProjectStore.getState().reloadConfigInOrder();
           }
           console.error('Failed to save data-table view state:', e);
           // #357 item 5: the rollback above makes a later change RETRY, but on its

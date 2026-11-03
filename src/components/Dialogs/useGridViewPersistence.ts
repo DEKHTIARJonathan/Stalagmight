@@ -143,14 +143,15 @@ export function useGridViewPersistence(
           command,
           { columnOrder, hiddenColumns: hidden, columnWidths },
           { purpose: `persist ${toastKey} grid view state` }
-        ).then(() => useProjectStore.getState().loadConfig())
+          // In the config chain, behind the settings saves made before it ([#576 RV6b-3]).
+        ).then(() => useProjectStore.getState().reloadConfigInOrder())
       )
         .catch((e) => {
           if (lastSavedRef.current === snapshot) {
             lastSavedRef.current = previouslySaved;
             // Undo the optimistic publish from DISK, so a remount cannot seed
             // from values that never landed and treat them as saved.
-            void useProjectStore.getState().loadConfig();
+            void useProjectStore.getState().reloadConfigInOrder();
           }
           console.error(`Failed to save ${toastKey} view state:`, e);
           showToast(t('dataTable.viewSaveFailed'), toastKey, 'error');

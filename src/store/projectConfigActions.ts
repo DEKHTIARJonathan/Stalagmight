@@ -25,6 +25,13 @@ import { TOAST_KEYS } from '../utils/toastKeys';
 export interface ProjectConfigActions {
   loadConfig: () => Promise<void>;
   /**
+   * [#576 RV6b-3] `loadConfig` in the config chain: after every config save (and
+   * its own re-read) made before this call. A writer outside that chain - the
+   * data-table and grid-view layouts - re-reads through here, so its answer cannot
+   * land after a later save's re-read and show the store a config without it.
+   */
+  reloadConfigInOrder: () => Promise<void>;
+  /**
    * Save the settings in which `config` differs from this store's config (#576
    * D27-32(c)). Only those settings are sent (`patchConfig`), and the backend
    * applies them onto its LIVE config, so a value it recorded since this store last
@@ -149,6 +156,8 @@ export function createProjectConfigActions(
         console.error('Failed to load config:', e);
       }
     },
+
+    reloadConfigInOrder: () => chainSettingWrite(SETTING_KEYS.config, () => get().loadConfig()),
 
     updateConfig: async (config: Config) => {
       const base = get().config;

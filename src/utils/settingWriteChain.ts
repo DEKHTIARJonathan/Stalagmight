@@ -8,9 +8,16 @@
  * flushed on unmount - could have its EARLIER value land last and be what the
  * next launch reads. Each write here waits for the previous write of the same key
  * to settle (succeeded or failed) before it starts, so the last one made is the
- * last one applied. Different keys stay independent: the backend applies each
- * write to its own fields under one lock (`modify_config`), so only same-key
- * order matters.
+ * last one applied. Different keys stay independent: the config writers apply
+ * each write to its own fields under one lock (`modify_config`), and a display
+ * setting is one row of the open project's database, written under the command
+ * lock (`save_display_setting`, not `modify_config`; per project - see
+ * `chainProjectSettingWrite`), so only same-key order matters.
+ *
+ * [#576 RV6b-3] A config RE-READ after a write belongs in the config chain
+ * (`reloadConfigInOrder`), not in the writer's own: two re-reads in flight answer
+ * in either order, and one issued before a settings save landed could otherwise
+ * answer after that save's re-read and put a config without it back.
  *
  * The gas-planning fields are not routed through here: `utils/gasConfigDisk.ts`
  * is their one writer and already serializes (and coalesces) its own writes.
