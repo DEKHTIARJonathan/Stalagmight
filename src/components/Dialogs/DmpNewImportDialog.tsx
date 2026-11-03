@@ -818,7 +818,7 @@ export default function DmpNewImportDialog({
 
   // Store selectors
   const config = useProjectStore((s) => s.config);
-  const updateConfig = useProjectStore((s) => s.updateConfig);
+  const patchConfig = useProjectStore((s) => s.patchConfig);
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   // #357 item 9: seed new sections from the palette legible on this theme's
   // MAP CANVAS, not its chrome - a section keeps whatever color it was
@@ -1727,13 +1727,17 @@ export default function DmpNewImportDialog({
     return true;
   }, [applyShotEdit, currentShots, frozenShotIndices, refuseFrozenDelete]);
 
-  // Persist overlap mode to config on change
+  // Persist the overlap mode on change: this one setting, sent as chosen (#576
+  // RV6b-1). Handing `updateConfig` the whole config sent only what differed
+  // from the store's copy, which is re-read only once a save has landed - so
+  // switching the mode and straight back found nothing to send, and the first
+  // choice was the one saved. Config writes run one at a time in the order they
+  // were made (`chainSettingWrite`), so the last choice is the last write.
+  const configLoaded = config != null;
   const handleOverlapModeChange = useCallback((value: OverlapMode) => {
     setOverlapMode(value);
-    if (config) {
-      updateConfig({ ...config, import: { ...config.import, overlap_mode: value } });
-    }
-  }, [config, updateConfig]);
+    if (configLoaded) void patchConfig([{ path: ['import', 'overlap_mode'], value }]);
+  }, [configLoaded, patchConfig]);
 
   // Auto-switch to 'existing_data' when a doubly-anchored target disables the current mode
   useEffect(() => {
