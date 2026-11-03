@@ -14,6 +14,7 @@
 use std::time::Instant;
 
 use super::Project;
+use crate::test_fixtures::straight_shot;
 use crate::{SectionData, SectionId, ShotData, StationAnchor, StationKey, StationMerge};
 
 /// xorshift64* - deterministic, dependency-free.
@@ -35,14 +36,7 @@ impl Rng {
 }
 
 fn shot(i: usize) -> ShotData {
-    ShotData {
-        azimuth_in: (i * 37 % 360) as f64,
-        azimuth_out: (i * 37 % 360) as f64,
-        length: 2.0 + (i % 7) as f64,
-        depth_in: 10.0,
-        depth_out: 10.0,
-        ..Default::default()
-    }
+    straight_shot((i * 37 % 360) as f64, 2.0 + (i % 7) as f64).with_depths(10.0, 10.0)
 }
 
 fn section_data(shots: usize) -> SectionData {

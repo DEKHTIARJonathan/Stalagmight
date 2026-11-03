@@ -796,6 +796,7 @@ impl Section {
 #[expect(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::test_fixtures::{heading_shot, shot};
     use crate::{ShotData, ShotKind};
 
     // === SurveyDirection Tests ===
@@ -877,38 +878,10 @@ mod tests {
 
     // === Helper Functions ===
 
-    fn test_shot_data(length: f64) -> ShotData {
-        ShotData {
-            azimuth_in: 45.0,
-            azimuth_out: 225.0,
-            length,
-            depth_in: 10.0,
-            depth_out: 11.0,
-            ..Default::default()
-        }
-    }
-
-    fn test_shot_data_with_depths(length: f64, depth_in: f64, depth_out: f64) -> ShotData {
-        ShotData {
-            azimuth_in: 45.0,
-            azimuth_out: 225.0,
-            length,
-            depth_in,
-            depth_out,
-            ..Default::default()
-        }
-    }
-
     fn test_shot_data_of_kind(length: f64, kind: ShotKind) -> ShotData {
-        ShotData {
-            azimuth_in: 0.0,
-            azimuth_out: 180.0,
-            length,
-            depth_in: 5.0,
-            depth_out: 5.0,
-            kind,
-            ..Default::default()
-        }
+        heading_shot(0.0, length)
+            .with_depths(5.0, 5.0)
+            .with_kind(kind)
     }
 
     fn test_reference_shot_data(length: f64) -> ShotData {
@@ -961,11 +934,7 @@ mod tests {
     #[test]
     fn test_section_new_with_shots() {
         let data = SectionData {
-            shots: vec![
-                test_shot_data(5.0),
-                test_shot_data(7.0),
-                test_shot_data(3.0),
-            ],
+            shots: vec![shot(5.0), shot(7.0), shot(3.0)],
             ..Default::default()
         };
 
@@ -1012,7 +981,7 @@ mod tests {
     fn test_add_shot() {
         let mut section = Section::new(0, SectionData::default());
 
-        let shot = section.add_shot(test_shot_data(10.0));
+        let shot = section.add_shot(shot(10.0));
 
         assert_eq!(shot.id, 0);
         assert_eq!(shot.length, 10.0);
@@ -1024,9 +993,9 @@ mod tests {
     fn test_add_multiple_shots() {
         let mut section = Section::new(0, SectionData::default());
 
-        section.add_shot(test_shot_data(5.0));
-        section.add_shot(test_shot_data(7.0));
-        section.add_shot(test_shot_data(3.0));
+        section.add_shot(shot(5.0));
+        section.add_shot(shot(7.0));
+        section.add_shot(shot(3.0));
 
         assert_eq!(section.shots.len(), 3);
         assert_eq!(section.next_shot_id, 3);
@@ -1040,13 +1009,13 @@ mod tests {
         let mut section = Section::new(
             0,
             SectionData {
-                shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+                shots: vec![shot(5.0), shot(7.0)],
                 ..Default::default()
             },
         );
 
         // Insert after shot 0
-        let inserted = section.insert_shot_after_with_id(0, test_shot_data(10.0), None, None);
+        let inserted = section.insert_shot_after_with_id(0, shot(10.0), None, None);
 
         assert!(inserted.is_some());
         let inserted = inserted.unwrap();
@@ -1064,12 +1033,12 @@ mod tests {
         let mut section = Section::new(
             0,
             SectionData {
-                shots: vec![test_shot_data(5.0)],
+                shots: vec![shot(5.0)],
                 ..Default::default()
             },
         );
 
-        let result = section.insert_shot_after_with_id(999, test_shot_data(10.0), None, None);
+        let result = section.insert_shot_after_with_id(999, shot(10.0), None, None);
 
         assert!(result.is_none());
         assert_eq!(section.shots.len(), 1); // Unchanged
@@ -1080,7 +1049,7 @@ mod tests {
         let section = Section::new(
             0,
             SectionData {
-                shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+                shots: vec![shot(5.0), shot(7.0)],
                 ..Default::default()
             },
         );
@@ -1098,7 +1067,7 @@ mod tests {
         let mut section = Section::new(
             0,
             SectionData {
-                shots: vec![test_shot_data(5.0)],
+                shots: vec![shot(5.0)],
                 ..Default::default()
             },
         );
@@ -1117,11 +1086,7 @@ mod tests {
         let mut section = Section::new(
             0,
             SectionData {
-                shots: vec![
-                    test_shot_data(5.0),
-                    test_shot_data(7.0),
-                    test_shot_data(3.0),
-                ],
+                shots: vec![shot(5.0), shot(7.0), shot(3.0)],
                 ..Default::default()
             },
         );
@@ -1140,7 +1105,7 @@ mod tests {
         let mut section = Section::new(
             0,
             SectionData {
-                shots: vec![test_shot_data(5.0)],
+                shots: vec![shot(5.0)],
                 ..Default::default()
             },
         );
@@ -1245,7 +1210,7 @@ mod tests {
         let section = Section::new(
             0,
             SectionData {
-                shots: vec![test_shot_data_with_depths(10.0, 5.0, 8.0)],
+                shots: vec![shot(10.0).with_depths(5.0, 8.0)],
                 ..Default::default()
             },
         );
@@ -1263,9 +1228,9 @@ mod tests {
             0,
             SectionData {
                 shots: vec![
-                    test_shot_data_with_depths(5.0, 10.0, 12.0),
-                    test_shot_data_with_depths(7.0, 12.0, 15.0),
-                    test_shot_data_with_depths(3.0, 15.0, 8.0),
+                    shot(5.0).with_depths(10.0, 12.0),
+                    shot(7.0).with_depths(12.0, 15.0),
+                    shot(3.0).with_depths(15.0, 8.0),
                 ],
                 ..Default::default()
             },
@@ -1283,9 +1248,9 @@ mod tests {
             0,
             SectionData {
                 shots: vec![
-                    test_shot_data(5.0),
+                    shot(5.0),
                     test_reference_shot_data(3.0),
-                    test_shot_data(7.0),
+                    shot(7.0),
                     test_reference_shot_data(2.0),
                 ],
                 ..Default::default()
@@ -1309,7 +1274,7 @@ mod tests {
             0,
             SectionData {
                 shots: vec![
-                    test_shot_data(5.0),
+                    shot(5.0),
                     test_jump_shot_data(3.0),
                     test_reference_shot_data(2.0),
                 ],
@@ -1339,7 +1304,7 @@ mod tests {
             color: "#ff0000".to_string(),
             direction: Some(SurveyDirection::Out),
             quality: 1.0,
-            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+            shots: vec![shot(5.0), shot(7.0)],
         };
 
         let section = Section::new(1, original_data);
@@ -1430,7 +1395,7 @@ mod tests {
         let section = Section::new(
             0,
             SectionData {
-                shots: vec![test_shot_data(10.0)],
+                shots: vec![shot(10.0)],
                 ..Default::default()
             },
         );
@@ -1471,11 +1436,11 @@ mod tests {
             0,
             SectionData {
                 shots: vec![
-                    test_shot_data(5.0),
-                    test_shot_data(7.0),
-                    test_shot_data(3.0), // shot to delete (index 2)
-                    test_shot_data(4.0),
-                    test_shot_data(6.0),
+                    shot(5.0),
+                    shot(7.0),
+                    shot(3.0), // shot to delete (index 2)
+                    shot(4.0),
+                    shot(6.0),
                 ],
                 ..Default::default()
             },
@@ -1500,11 +1465,7 @@ mod tests {
         let section = Section::new(
             0,
             SectionData {
-                shots: vec![
-                    test_shot_data(5.0),
-                    test_shot_data(7.0),
-                    test_shot_data(3.0),
-                ],
+                shots: vec![shot(5.0), shot(7.0), shot(3.0)],
                 ..Default::default()
             },
         );
@@ -1518,11 +1479,7 @@ mod tests {
         let section = Section::new(
             0,
             SectionData {
-                shots: vec![
-                    test_shot_data(5.0),
-                    test_shot_data(7.0),
-                    test_shot_data(3.0),
-                ],
+                shots: vec![shot(5.0), shot(7.0), shot(3.0)],
                 ..Default::default()
             },
         );
@@ -1536,7 +1493,7 @@ mod tests {
         let section = Section::new(
             0,
             SectionData {
-                shots: vec![test_shot_data(5.0)],
+                shots: vec![shot(5.0)],
                 ..Default::default()
             },
         );
@@ -1551,9 +1508,9 @@ mod tests {
             0,
             SectionData {
                 shots: vec![
-                    test_shot_data(5.0),
-                    test_shot_data(7.0), // shot to delete
-                    test_shot_data(3.0),
+                    shot(5.0),
+                    shot(7.0), // shot to delete
+                    shot(3.0),
                 ],
                 ..Default::default()
             },
@@ -1577,9 +1534,7 @@ mod tests {
         Section::new(
             id,
             SectionData {
-                shots: (0..shot_count)
-                    .map(|i| test_shot_data(1.0 + i as f64))
-                    .collect(),
+                shots: (0..shot_count).map(|i| shot(1.0 + i as f64)).collect(),
                 ..Default::default()
             },
         )
@@ -1610,10 +1565,10 @@ mod tests {
         let first = section.shots[0].id;
 
         let forced = section
-            .insert_shot_after_with_id(first, test_shot_data(7.0), Some(ShotId::MAX), None)
+            .insert_shot_after_with_id(first, shot(7.0), Some(ShotId::MAX), None)
             .unwrap()
             .id;
-        let appended = section.add_shot(test_shot_data(8.0)).id;
+        let appended = section.add_shot(shot(8.0)).id;
 
         assert_ne!(forced, ShotId::MAX, "the out-of-window id was kept");
         assert_eq!(
@@ -1633,7 +1588,7 @@ mod tests {
         let (first, second) = (section.shots[0].id, section.shots[1].id);
 
         let inserted = section
-            .insert_shot_before_with_id(second, test_shot_data(7.0), Some(first), None)
+            .insert_shot_before_with_id(second, shot(7.0), Some(first), None)
             .unwrap()
             .id;
 
@@ -1653,17 +1608,17 @@ mod tests {
         let top = base + FEATURE_ID_STRIDE - 1;
         let last = section.shots[1].id;
         let kept = section
-            .insert_shot_after_with_id(last, test_shot_data(7.0), Some(top), None)
+            .insert_shot_after_with_id(last, shot(7.0), Some(top), None)
             .unwrap()
             .id;
         assert_eq!(kept, top, "a free id inside the window is honoured");
 
-        let minted = section.add_shot(test_shot_data(8.0)).id;
+        let minted = section.add_shot(shot(8.0)).id;
 
         assert_eq!(minted, base + 2, "the lowest free id in the window");
         assert_eq!(section.next_shot_id, minted + 1);
         assert_ids_unique_and_in_window(&section);
-        let after = section.add_shot(test_shot_data(9.0)).id;
+        let after = section.add_shot(shot(9.0)).id;
         assert_eq!(after, base + 3);
         assert_ids_unique_and_in_window(&section);
     }

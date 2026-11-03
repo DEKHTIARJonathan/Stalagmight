@@ -2030,25 +2030,18 @@ impl UnionFind {
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use crate::models::test_fixtures::straight_shot;
     use crate::models::{GpsCoordinates, SectionData, ShotData, ShotKind, StationMerge};
     use tempfile::NamedTempFile;
 
     fn make_shot(length: f64, azimuth: f64, is_virtual: bool) -> ShotData {
-        ShotData {
-            azimuth_in: azimuth,
-            azimuth_out: azimuth,
-            length,
-            depth_in: 0.0,
-            depth_out: 0.0,
-            // Image export only cares about virtual-vs-not, so either virtual
-            // kind exercises the same paths; Jump is the migration default.
-            kind: if is_virtual {
-                ShotKind::Jump
-            } else {
-                ShotKind::Normal
-            },
-            ..Default::default()
-        }
+        // Image export only cares about virtual-vs-not, so either virtual
+        // kind exercises the same paths; Jump is the migration default.
+        straight_shot(azimuth, length).with_kind(if is_virtual {
+            ShotKind::Jump
+        } else {
+            ShotKind::Normal
+        })
     }
 
     fn simple_project() -> Project {

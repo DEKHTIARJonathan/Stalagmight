@@ -20,6 +20,7 @@
 
 use serde_json::Value;
 
+use crate::test_fixtures::bare_shot;
 use crate::{AzimuthReference, Project, SectionData, SectionId, ShotData, StationRef};
 
 /// The shared table. It lives with the TS tests because that is where the
@@ -45,14 +46,9 @@ fn shot_data(shot: &Value) -> ShotData {
     // The model has no "missing" reading: a lone leg is committed on both legs,
     // and that is the walk the frontend has to reproduce for its own NaN leg.
     let azimuth_out = shot["azimuth_out"].as_f64().unwrap_or(azimuth_in);
-    ShotData {
-        azimuth_in,
-        azimuth_out,
-        length: number(shot, "length"),
-        depth_in: number(shot, "depth_in"),
-        depth_out: number(shot, "depth_out"),
-        ..Default::default()
-    }
+    bare_shot(number(shot, "length"))
+        .with_azimuths(azimuth_in, azimuth_out)
+        .with_depths(number(shot, "depth_in"), number(shot, "depth_out"))
 }
 
 fn project_for(vector: &Value) -> (Project, SectionId) {

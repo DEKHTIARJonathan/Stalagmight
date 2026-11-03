@@ -16,6 +16,7 @@ use super::{
     required_stages, route_metrics, stage_drop_plans, usable_oc_gas,
 };
 use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset, ReserveProfile};
+use crate::test_fixtures::bare_shot;
 use crate::{
     Coordinates, GpsCoordinates, Project, SectionData, ShotData, ShotKind, StationRef, ZeroDatum,
 };
@@ -168,12 +169,7 @@ fn team_holds_divers_cylinders_and_mode() {
 // ---- Phase 1: gas reachability field ------------------------------------------------
 
 fn make_shot(length: f64, depth_in: f64, depth_out: f64) -> ShotData {
-    ShotData {
-        length,
-        depth_in,
-        depth_out,
-        ..Default::default()
-    }
+    bare_shot(length).with_depths(depth_in, depth_out)
 }
 
 /// One straight section of 3 shots descending 0 → 10 → 20 → 30 m, 100 m each (4 stations).

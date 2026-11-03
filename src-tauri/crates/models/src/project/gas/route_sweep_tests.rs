@@ -15,27 +15,21 @@
 
 use super::model::{CylRole, Cylinder, Diver, PlanSegment, TankMaterial};
 use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset};
-use crate::{Project, SectionData, ShotData, StationRef};
-
-fn leg(length: f64) -> ShotData {
-    ShotData {
-        length,
-        ..Default::default()
-    }
-}
+use crate::test_fixtures::bare_shot;
+use crate::{Project, SectionData, StationRef};
 
 /// A trunk of 6 x 100 m and a side line of 2 x 205 m, joined at the origin.
 pub(super) fn two_branch_cave() -> (Project, StationRef, StationRef, StationRef) {
     let mut project = Project::new("Gas".to_string(), None);
     let trunk = project
         .add_section(SectionData {
-            shots: (0..6).map(|_| leg(100.0)).collect(),
+            shots: (0..6).map(|_| bare_shot(100.0)).collect(),
             ..Default::default()
         })
         .id;
     let side = project
         .add_section(SectionData {
-            shots: vec![leg(205.0), leg(205.0)],
+            shots: vec![bare_shot(205.0), bare_shot(205.0)],
             ..Default::default()
         })
         .id;

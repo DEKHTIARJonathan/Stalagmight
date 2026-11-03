@@ -1,15 +1,11 @@
 use super::*;
+use crate::test_fixtures::bare_shot;
 use crate::{ClosureStrategy, ShotKind};
 
 fn shot(azimuth_in: f64, azimuth_out: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
-    ShotData {
-        azimuth_in,
-        azimuth_out,
-        length,
-        depth_in,
-        depth_out,
-        ..Default::default()
-    }
+    bare_shot(length)
+        .with_azimuths(azimuth_in, azimuth_out)
+        .with_depths(depth_in, depth_out)
 }
 
 /// Rewrite the first merge in place, for the integrity tests that need a forged

@@ -426,18 +426,12 @@ impl Project {
 mod tests {
     use super::*;
     use crate::config::ClosureAdjustmentConfig;
+    use crate::test_fixtures::straight_shot;
     use crate::{ClosureStrategy, LoopClosure, SectionData, ShotData, Station, StationMerge};
     use chrono::Utc;
 
     fn shot(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
-        ShotData {
-            azimuth_in: azimuth,
-            azimuth_out: azimuth,
-            length,
-            depth_in,
-            depth_out,
-            ..Default::default()
-        }
+        straight_shot(azimuth, length).with_depths(depth_in, depth_out)
     }
 
     fn project_with_shots(shots: Vec<ShotData>) -> (Project, SectionId) {

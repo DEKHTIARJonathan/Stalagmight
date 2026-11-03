@@ -968,17 +968,9 @@ impl Project {
 )]
 mod tests {
     use super::*;
+    use crate::test_fixtures::straight_shot;
     use crate::{LoopClosure, SectionData, ShotData, StationMerge};
     use chrono::Utc;
-
-    fn shot(azimuth: f64, length: f64) -> ShotData {
-        ShotData {
-            azimuth_in: azimuth,
-            azimuth_out: azimuth,
-            length,
-            ..Default::default()
-        }
-    }
 
     fn add_section(project: &mut Project, shots: Vec<ShotData>) -> SectionId {
         project
@@ -1019,9 +1011,9 @@ mod tests {
     /// end), so this is the fixture the incidence tie-break exists for.
     fn project_with_a_one_shot_loop() -> (Project, SectionId, SectionId) {
         let mut project = Project::new("one-shot loop".to_string(), None);
-        let a = add_section(&mut project, vec![shot(0.0, 10.0)]);
+        let a = add_section(&mut project, vec![straight_shot(0.0, 10.0)]);
         // 0.25 m longer, so the loop does not quite close.
-        let b = add_section(&mut project, vec![shot(0.0, 10.25)]);
+        let b = add_section(&mut project, vec![straight_shot(0.0, 10.25)]);
         project.ensure_shot_uuids();
         project.station_merges.push(StationMerge {
             station_a: project.key_for_ref(StationRef::new(a, 0)).unwrap(),
@@ -1105,10 +1097,14 @@ mod tests {
     #[test]
     fn the_gauge_of_an_untouched_project_is_the_legacy_one() {
         let mut project = Project::new("mixed".to_string(), None);
-        let one = add_section(&mut project, vec![shot(0.0, 10.0)]);
+        let one = add_section(&mut project, vec![straight_shot(0.0, 10.0)]);
         let three = add_section(
             &mut project,
-            vec![shot(0.0, 10.0), shot(90.0, 10.0), shot(180.0, 10.0)],
+            vec![
+                straight_shot(0.0, 10.0),
+                straight_shot(90.0, 10.0),
+                straight_shot(180.0, 10.0),
+            ],
         );
         project.ensure_shot_uuids();
         project.station_merges.push(StationMerge {
@@ -1140,7 +1136,11 @@ mod tests {
         let mut project = Project::new("append".to_string(), None);
         let s = add_section(
             &mut project,
-            vec![shot(0.0, 10.0), shot(90.0, 10.0), shot(180.0, 10.0)],
+            vec![
+                straight_shot(0.0, 10.0),
+                straight_shot(90.0, 10.0),
+                straight_shot(180.0, 10.0),
+            ],
         );
         project.ensure_shot_uuids();
         // Capture happens on save; do it directly here.
@@ -1151,7 +1151,7 @@ mod tests {
         assert_eq!(anchor_index(&project, s), 3, "station 0 is now station 3");
 
         // Extending the passage must not disturb it.
-        project.add_shot(s, shot(270.0, 10.0)).unwrap();
+        project.add_shot(s, straight_shot(270.0, 10.0)).unwrap();
         assert_eq!(
             anchor_index(&project, s),
             3,
@@ -1167,7 +1167,7 @@ mod tests {
     #[test]
     fn the_gauge_of_a_one_shot_section_follows_a_reverse() {
         let mut project = Project::new("one shot".to_string(), None);
-        let s = add_section(&mut project, vec![shot(0.0, 10.0)]);
+        let s = add_section(&mut project, vec![straight_shot(0.0, 10.0)]);
         project.ensure_shot_uuids();
         project.capture_missing_gauge_anchors();
         assert!(
@@ -1192,7 +1192,10 @@ mod tests {
     #[test]
     fn an_uncaptured_section_still_uses_the_legacy_gauge() {
         let mut project = Project::new("legacy".to_string(), None);
-        let s = add_section(&mut project, vec![shot(0.0, 10.0), shot(90.0, 10.0)]);
+        let s = add_section(
+            &mut project,
+            vec![straight_shot(0.0, 10.0), straight_shot(90.0, 10.0)],
+        );
         project.ensure_shot_uuids();
         assert!(project.sections[0].gauge_shot_uuid.is_none());
         assert_eq!(anchor_index(&project, s), 0);
@@ -1209,7 +1212,11 @@ mod tests {
         let mut project = Project::new("one section".to_string(), None);
         let s = add_section(
             &mut project,
-            vec![shot(0.0, 10.0), shot(90.0, 10.0), shot(180.0, 10.0)],
+            vec![
+                straight_shot(0.0, 10.0),
+                straight_shot(90.0, 10.0),
+                straight_shot(180.0, 10.0),
+            ],
         );
         project.ensure_shot_uuids();
 
@@ -1235,7 +1242,11 @@ mod tests {
         let mut project = Project::new("due north".to_string(), None);
         let s = add_section(
             &mut project,
-            vec![shot(0.0, 10.0), shot(0.0, 10.0), shot(0.0, 10.0)],
+            vec![
+                straight_shot(0.0, 10.0),
+                straight_shot(0.0, 10.0),
+                straight_shot(0.0, 10.0),
+            ],
         );
         project.ensure_shot_uuids();
 

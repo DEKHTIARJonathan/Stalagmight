@@ -30,9 +30,10 @@
 
 use std::io::Read as _;
 
+use crate::models::test_fixtures::straight_shot;
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, LoopClosure, Project, SectionData, ShotData, ShotKind,
-    StationMerge, StationRef, ZeroDatum,
+    ClosureStrategy, GpsCoordinates, LoopClosure, Project, SectionData, ShotKind, StationMerge,
+    StationRef, ZeroDatum,
 };
 
 use super::tml::{export_tml, export_tml_for_speleodb};
@@ -68,18 +69,6 @@ const ARIANE_SPELLINGS: &[(&str, &str)] = &[
     ("UU", "UUID"),
 ];
 
-fn shot(uuid: &str, azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
-    ShotData {
-        uuid: Some(uuid.to_string()),
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        length,
-        depth_in,
-        depth_out,
-        ..Default::default()
-    }
-}
-
 fn merge(a: (u32, u32), b: (u32, u32)) -> StationMerge {
     StationMerge {
         station_a: StationRef::new(a.0, a.1).into(),
@@ -96,23 +85,23 @@ fn golden_project() -> Project {
     project.surface_elevation = Some(12.5);
 
     // Section 0: the root, split at its zero datum on station 2.
-    let mut first = shot("00000000-0000-4000-8000-000000000001", 10.0, 5.0, 1.0, 2.5);
+    let mut first = straight_shot(10.0, 5.0)
+        .with_depths(1.0, 2.5)
+        .with_uuid("00000000-0000-4000-8000-000000000001");
     // Two different forward readings: the file carries a single azimuth.
     first.azimuth_out = 20.0;
     first.pitch_in = Some(-4.0);
     first.left = Some(1.5);
     first.down = Some(0.25);
     first.comment = Some("first line\nsecond line".to_string());
-    let mut second = shot("00000000-0000-4000-8000-000000000002", 95.5, 4.0, 2.5, 3.0);
+    let mut second = straight_shot(95.5, 4.0)
+        .with_depths(2.5, 3.0)
+        .with_uuid("00000000-0000-4000-8000-000000000002");
     second.right = Some(2.0);
     second.up = Some(0.0);
-    let third = shot(
-        "00000000-0000-4000-8000-000000000003",
-        350.0,
-        6.25,
-        3.0,
-        2.0,
-    );
+    let third = straight_shot(350.0, 6.25)
+        .with_depths(3.0, 2.0)
+        .with_uuid("00000000-0000-4000-8000-000000000003");
     project.add_section(SectionData {
         name: Some("Main".to_string()),
         surveyor: Some("Diver A / Diver B".to_string()),
@@ -130,8 +119,12 @@ fn golden_project() -> Project {
         date: None,
         color: "#00ff00".to_string(),
         shots: vec![
-            shot("00000000-0000-4000-8000-000000000011", 180.0, 3.0, 2.0, 2.5),
-            shot("00000000-0000-4000-8000-000000000012", 200.0, 2.0, 2.0, 1.5),
+            straight_shot(180.0, 3.0)
+                .with_depths(2.0, 2.5)
+                .with_uuid("00000000-0000-4000-8000-000000000011"),
+            straight_shot(200.0, 2.0)
+                .with_depths(2.0, 1.5)
+                .with_uuid("00000000-0000-4000-8000-000000000012"),
         ],
         ..Default::default()
     });
@@ -145,15 +138,21 @@ fn golden_project() -> Project {
         color: "not-a-colour".to_string(),
         shots: vec![
             // Not a v4: the sidecar drops it, the user file keeps it verbatim.
-            shot("legacy-id-21", 45.0, 2.5, 0.5, 1.0),
-            shot("00000000-0000-4000-8000-000000000022", 60.0, 1.5, 1.0, 2.5),
+            straight_shot(45.0, 2.5)
+                .with_depths(0.5, 1.0)
+                .with_uuid("legacy-id-21"),
+            straight_shot(60.0, 1.5)
+                .with_depths(1.0, 2.5)
+                .with_uuid("00000000-0000-4000-8000-000000000022"),
         ],
         ..Default::default()
     });
     project.station_merges.push(merge((0, 1), (2, 2)));
 
     // Section 3: merged at its station 0 onto side station 2; a jump.
-    let mut jump = shot("00000000-0000-4000-8000-000000000031", 270.0, 7.0, 1.5, 1.5);
+    let mut jump = straight_shot(270.0, 7.0)
+        .with_depths(1.5, 1.5)
+        .with_uuid("00000000-0000-4000-8000-000000000031");
     jump.kind = ShotKind::Jump;
     project.add_section(SectionData {
         name: Some("Branch".to_string()),
@@ -171,13 +170,9 @@ fn golden_project() -> Project {
         surveyor: Some("Diver D \u{220e} Team".to_string()),
         date: chrono::NaiveDate::from_ymd_opt(1890, 6, 1),
         color: "#123456".to_string(),
-        shots: vec![shot(
-            "00000000-0000-4000-8000-000000000041",
-            0.0,
-            9.0,
-            4.0,
-            4.0,
-        )],
+        shots: vec![straight_shot(0.0, 9.0)
+            .with_depths(4.0, 4.0)
+            .with_uuid("00000000-0000-4000-8000-000000000041")],
         ..Default::default()
     });
 

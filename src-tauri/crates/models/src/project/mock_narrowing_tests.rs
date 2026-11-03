@@ -16,19 +16,11 @@
 use chrono::Utc;
 
 use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset};
+use crate::test_fixtures::straight_shot;
 use crate::{
     ClosureStrategy, CylRole, Cylinder, Diver, LoopClosure, PlanSegment, Project, SectionData,
     SectionId, ShotData, StationMerge, StationRef, TankMaterial,
 };
-
-fn shot(azimuth: f64, length: f64) -> ShotData {
-    ShotData {
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        length,
-        ..Default::default()
-    }
-}
 
 fn add(project: &mut Project, shots: Vec<ShotData>) -> SectionId {
     project
@@ -45,8 +37,11 @@ fn add(project: &mut Project, shots: Vec<ShotData>) -> SectionId {
 #[test]
 fn a_reverse_moves_only_the_reversed_sections_anchor() {
     let mut project = Project::new("CaveA".to_string(), None);
-    let a = add(&mut project, vec![shot(90.0, 10.0), shot(0.0, 5.0)]);
-    let b = add(&mut project, vec![shot(45.0, 7.0)]);
+    let a = add(
+        &mut project,
+        vec![straight_shot(90.0, 10.0), straight_shot(0.0, 5.0)],
+    );
+    let b = add(&mut project, vec![straight_shot(45.0, 7.0)]);
     project.ensure_shot_uuids();
     project.set_section_offset(a, (1.0, 2.0));
     project.set_section_offset(b, (3.0, 4.0));
@@ -72,7 +67,10 @@ fn a_reverse_moves_only_the_reversed_sections_anchor() {
 #[test]
 fn reversing_twice_restores_the_section_anchor() {
     let mut project = Project::new("CaveA".to_string(), None);
-    let a = add(&mut project, vec![shot(30.0, 10.0), shot(120.0, 6.0)]);
+    let a = add(
+        &mut project,
+        vec![straight_shot(30.0, 10.0), straight_shot(120.0, 6.0)],
+    );
     project.ensure_shot_uuids();
     project.set_section_offset(a, (5.0, -3.0));
 
@@ -99,8 +97,11 @@ fn reversing_twice_restores_the_section_anchor() {
 #[test]
 fn a_reverse_carries_a_loop_closure_to_the_mirrored_station() {
     let mut project = Project::new("CaveA".to_string(), None);
-    let a = add(&mut project, vec![shot(0.0, 10.0), shot(0.0, 10.0)]);
-    let b = add(&mut project, vec![shot(180.0, 20.5)]);
+    let a = add(
+        &mut project,
+        vec![straight_shot(0.0, 10.0), straight_shot(0.0, 10.0)],
+    );
+    let b = add(&mut project, vec![straight_shot(180.0, 20.5)]);
     project.ensure_shot_uuids();
     project.station_merges.push(StationMerge {
         station_a: project.key_for_ref(StationRef::new(a, 2)).unwrap(),
@@ -169,7 +170,7 @@ fn descent(project: &mut Project) -> SectionId {
 fn turn_toward_endpoint_is_false_for_both_deepest_fallbacks() {
     let mut project = Project::new("CaveA".to_string(), None);
     let sec = descent(&mut project);
-    let island = add(&mut project, vec![shot(0.0, 50.0)]);
+    let island = add(&mut project, vec![straight_shot(0.0, 50.0)]);
     let entrance = StationRef::new(sec, 0);
     let diver = Diver::new(20.0, None).unwrap();
     let rig = [unlimited_backgas()];

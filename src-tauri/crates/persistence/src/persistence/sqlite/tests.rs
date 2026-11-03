@@ -1,4 +1,5 @@
 use super::*;
+use crate::models::test_fixtures::straight_shot;
 use crate::models::ShotData;
 use crate::models::ShotKind;
 use crate::models::StationAnchor;
@@ -6904,18 +6905,18 @@ fn migrate_v13_converts_is_reference_to_kind_and_flags_backfill() {
     project.add_section(SectionData {
         name: Some("Bounded".to_string()),
         shots: vec![
-            legacy_shot(ShotKind::Normal),
-            legacy_shot(ShotKind::Reference),
-            legacy_shot(ShotKind::Normal),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Normal),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Reference),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Normal),
         ],
         ..Default::default()
     });
     project.add_section(SectionData {
         name: Some("Dangling".to_string()),
         shots: vec![
-            legacy_shot(ShotKind::Normal),
-            legacy_shot(ShotKind::Reference),
-            legacy_shot(ShotKind::Reference),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Normal),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Reference),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Reference),
         ],
         ..Default::default()
     });
@@ -6979,9 +6980,9 @@ fn unrecognised_shot_kinds_are_reported_with_their_raw_value() {
     project.add_section(SectionData {
         name: Some("Main".to_string()),
         shots: vec![
-            legacy_shot(ShotKind::Normal),
-            legacy_shot(ShotKind::Jump),
-            legacy_shot(ShotKind::Reference),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Normal),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Jump),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Reference),
         ],
         ..Default::default()
     });
@@ -7086,7 +7087,10 @@ fn unrecognised_shot_kinds_are_repaired_on_disk() {
 
     let mut project = Project::new("Corrupt".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![legacy_shot(ShotKind::Normal), legacy_shot(ShotKind::Jump)],
+        shots: vec![
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Normal),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Jump),
+        ],
         ..Default::default()
     });
 
@@ -7135,10 +7139,10 @@ fn migrate_v13_carries_every_truthy_legacy_reference_value() {
     let mut project = Project::new("Legacy".to_string(), None);
     project.add_section(SectionData {
         shots: vec![
-            legacy_shot(ShotKind::Normal),
-            legacy_shot(ShotKind::Normal),
-            legacy_shot(ShotKind::Normal),
-            legacy_shot(ShotKind::Normal),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Normal),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Normal),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Normal),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Normal),
         ],
         ..Default::default()
     });
@@ -7189,7 +7193,7 @@ fn migrate_v13_materialises_show_jumps_from_the_old_single_toggle() {
 
     let mut project = Project::new("Legacy".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![legacy_shot(ShotKind::Reference)],
+        shots: vec![straight_shot(0.0, 10.0).with_kind(ShotKind::Reference)],
         ..Default::default()
     });
 
@@ -7238,8 +7242,8 @@ fn migrate_v13_drops_persisted_undo_history() {
     let mut project = Project::new("Legacy".to_string(), None);
     project.add_section(SectionData {
         shots: vec![
-            legacy_shot(ShotKind::Normal),
-            legacy_shot(ShotKind::Reference),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Normal),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Reference),
         ],
         ..Default::default()
     });
@@ -7305,17 +7309,17 @@ fn backfilled_shot_kinds_land_on_the_right_rows_and_survive_a_reopen() {
     project.add_section(SectionData {
         name: Some("First".to_string()),
         shots: vec![
-            legacy_shot(ShotKind::Normal),
-            legacy_shot(ShotKind::Reference),
-            legacy_shot(ShotKind::Normal),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Normal),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Reference),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Normal),
         ],
         ..Default::default()
     });
     project.add_section(SectionData {
         name: Some("Second".to_string()),
         shots: vec![
-            legacy_shot(ShotKind::Normal),
-            legacy_shot(ShotKind::Reference),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Normal),
+            straight_shot(0.0, 10.0).with_kind(ShotKind::Reference),
         ],
         ..Default::default()
     });
@@ -7609,18 +7613,6 @@ fn pending_kind_classification_flag_clears_once() {
     // Idempotent: clearing an already-clear flag is not an error.
     db.clear_pending_kind_classification().unwrap();
     assert!(!db.is_kind_classification_pending());
-}
-
-fn legacy_shot(kind: ShotKind) -> ShotData {
-    ShotData {
-        azimuth_in: 0.0,
-        azimuth_out: 0.0,
-        length: 10.0,
-        depth_in: 0.0,
-        depth_out: 0.0,
-        kind,
-        ..Default::default()
-    }
 }
 
 /// Opening a pre-v12 project normalises only the sections whose pitch is stored
