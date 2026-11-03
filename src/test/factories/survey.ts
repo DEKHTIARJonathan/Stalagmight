@@ -40,8 +40,9 @@ export function makeShot(overrides: Partial<Shot> = {}): Shot {
 }
 
 /**
- * Section 1, surveyed "in", with no shots unless given. `next_shot_id` defaults to
- * one past the highest shot id (1 for an empty section), as the backend keeps it.
+ * Section 1, unnamed, surveyed "in", with no shots unless given. `next_shot_id`
+ * defaults to one past the highest shot id (1 for an empty section), as the
+ * backend keeps it.
  */
 export function makeSection(overrides: Partial<Section> = {}): Section {
   const shots = overrides.shots ?? [];
@@ -50,9 +51,9 @@ export function makeSection(overrides: Partial<Section> = {}): Section {
     name: null,
     surveyor: null,
     date: null,
-    color: '#888888',
+    color: '#3388ff',
     direction: 'in',
-    quality: 1,
+    quality: 0,
     shots,
     next_shot_id: shots.reduce((max, s) => Math.max(max, s.id + 1), 1),
     reverse_parity: false,
