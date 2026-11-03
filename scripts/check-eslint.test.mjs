@@ -206,15 +206,14 @@ await test('generated IPC types are ignored', async () => {
 const PW = 'e2e-playwright/__eslint_fixture__.spec.ts';
 const AGENT = 'e2e/agent/__eslint_fixture__.ts';
 
-await test('recommended: `any` is an error in src and a (ratcheted) warning in the e2e trees', async () => {
+// [#576 NF-W7F-5] The e2e trees carried no `any` left (the baseline held no
+// no-explicit-any row), so the rule is an error there too, like in src.
+await test('recommended: `any` is an error in src and in both e2e trees', async () => {
   const code = 'export const x: any = 1;\n';
-  const inSrc = ruleHits(await lint(SRC, code), '@typescript-eslint/no-explicit-any');
-  assert.equal(inSrc.length, 1);
-  assert.equal(inSrc[0].severity, 2);
-  for (const rel of [PW, AGENT]) {
+  for (const rel of [SRC, PW, AGENT]) {
     const hits = ruleHits(await lint(rel, code), '@typescript-eslint/no-explicit-any');
     assert.equal(hits.length, 1, rel);
-    assert.equal(hits[0].severity, 1, rel);
+    assert.equal(hits[0].severity, 2, rel);
   }
 });
 

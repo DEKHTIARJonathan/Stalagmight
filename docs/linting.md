@@ -167,9 +167,10 @@ program).
 
 Severity is per tree. In `src/` every recommended rule is an error (the set
 found three findings there, fixed when it landed). In `e2e-playwright/` and
-`e2e/`, `no-explicit-any` and `no-unused-vars` are ratcheted warnings: the set
-found 236 `any` across 22 Playwright specs and 25 unused names, which is test
-debt to pay down file by file, not a reason to keep the gate off those trees.
+`e2e/`, `no-unused-vars` is a ratcheted warning: the set found 236 `any` across
+22 Playwright specs and 25 unused names, which is test debt to pay down file by
+file, not a reason to keep the gate off those trees. The `any`s are paid down,
+so `no-explicit-any` is an error there too (#576 NF-W7F-5).
 
 - **`stalagmight/no-render-ref-write`** - error, `src/` only; the repo's own
   rule (`scripts/eslint/`, registered in `eslint.config.js` as the

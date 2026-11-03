@@ -23,10 +23,11 @@
 //     one that subscribes to the whole store anyway (identity, a fresh object or
 //     array without useShallow, useShallow over `{ ...s }`), which re-renders its
 //     component on every store update.
-//   - in the test-automation trees, no-explicit-any and no-unused-vars are
-//     warnings, ratcheted the same way: the recommended set found ~260 there
-//     when it landed (236 `any` across 22 Playwright specs, 25 unused names).
-//     src/ had three findings, fixed, and keeps every recommended rule an error.
+//   - in the test-automation trees, no-unused-vars is a warning, ratcheted the
+//     same way: the recommended set found ~260 findings there when it landed
+//     (236 `any` across 22 Playwright specs, 25 unused names). The `any`s are
+//     gone, so no-explicit-any is an error there too (#576 NF-W7F-5). src/ had
+//     three findings, fixed, and keeps every recommended rule an error.
 // An `eslint-disable` needs a reason after ` -- ` (stalagmight/require-disable-reason,
 // error, src and both test-automation trees), and an unused or unknown-rule
 // directive is an error (reportUnusedDisableDirectives).
@@ -81,7 +82,6 @@ export default [
   {
     files: E2E,
     rules: {
-      '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-unused-vars': ['warn', UNUSED_VARS],
     },
   },
