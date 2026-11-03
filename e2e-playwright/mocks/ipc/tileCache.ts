@@ -120,6 +120,20 @@ export const tileCacheCommands: MockCommandFamily = (ctx) => {
           live: false,
         } satisfies MockReply<'get_tile_attribution'>;
 
+      // No spec drives a real tile fetch: the map's tiles are served by the stub the core
+      // routes for the stalagmight-tiles protocol. An empty body and idle counters.
+      case 'fetch_tile':
+        return [] satisfies MockReply<'fetch_tile'>;
+
+      case 'get_tile_fetch_stats':
+        return {
+          in_flight: 0,
+          avg_latency_ms: 0,
+          last_latency_ms: 0,
+          total_fetched: 0,
+          total_errors: 0,
+        } satisfies MockReply<'get_tile_fetch_stats'>;
+
       default:
         return ctx.unhandled;
     }

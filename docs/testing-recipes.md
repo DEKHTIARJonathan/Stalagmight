@@ -1100,43 +1100,95 @@ works before blaming your test.
 ## Mocked IPC conventions
 
 `e2e-playwright/mocks/tauri-ipc.ts` intercepts `__TAURI_INTERNALS__.invoke()`
-and hand-simulates the Rust backend for every Playwright spec.
+and stands in for the Rust backend in every Playwright spec. It is transport
+plus canned reads: it stores what the app writes and hands it back in the
+wire's shapes, answers reads from fixed fixtures, and records calls so a spec
+can assert what reached the backend. It does not re-run the backend's
+computations (see "What the mock fakes" below); those are pinned by the Rust
+tests.
 
 Its own `switch (cmd)` handles the project lifecycle, load and edit commands.
 The command families under `mocks/ipc/` (config, Plan mode, the DMP parse, tile
-cache, SpeleoDB - #576 E8) each own their commands and the state only they use;
-the core asks them in turn about any command its switch does not handle. A
-family runs in the page like the core, serialized with
-`Function.prototype.toString`, so it may use only its `ctx` argument
+cache, SpeleoDB, history, recovery - #576 E8, E3) each own their commands and
+the state only they use; the core asks them in turn about any command its
+switch does not handle. A family runs in the page like the core, serialized
+with `Function.prototype.toString`, so it may use only its `ctx` argument
 (`mocks/ipc/types.ts`) and browser globals, never an import. A new command goes
 into the family it belongs to, or into the core when it reads or replaces the
 open project's lifecycle state.
 
 ### A new IPC command needs a mock case
 
-Unknown commands hit `default: console.warn(...); return null`, so
-`result.success` is falsy and the UI silently takes its failure path - the spec
-fails for the wrong reason, or worse, passes vacuously.
+A command no case answers fails the test that reached it (#576 E3-D2). The
+mock still answers it `null`, so the flow under test is not derailed mid-test,
+but records it, and the auto fixture in `e2e-playwright/fixtures/coverage.ts`
+(every spec imports `test` from there) fails the test at teardown naming the
+command:
 
-```typescript
-case 'your_new_command': {
-  const param = args?.param_name as string;
-  return { success: true, warnings: [], error: null, section_ids: [] } satisfies MockReply<'your_new_command'>;
-}
+```text
+Error: This test reached IPC command(s) the Playwright mock does not answer:
+plugin:webview|set_webview_zoom. Add a case to e2e-playwright/mocks/tauri-ipc.ts ...
 ```
 
-`MockReply<'name'>` (`e2e-playwright/mocks/ipc/types.ts`) is the command's
-result type from the generated command manifest (`src/types/ipc/IpcCommands.ts`,
-#576 C3), so `pnpm typecheck:playwright` fails when a reply drifts from what the
-backend returns. `src/test/__tests__/mockContract.test.ts` (vitest) enforces the
-names in both directions: it compares the manifest's `IPC_COMMAND_NAMES` with
-the mock's `switch` cases and fails on drift, with reasoned allowlists and
-stale-allowlist self-checks. **Adding or removing a `#[tauri::command]` fails
-vitest until the mock and the allowlist agree** (after `pnpm gen:ipc-types`).
+Tauri plugin bridge calls (`plugin:dialog|confirm`, `plugin:opener|open_url`,
+...) count too. A command the app may call but no spec needs anything from
+goes in `mocks/ipc/inert.ts` with its fixed reply and a reason (today:
+telemetry and the console log bridge) - not into a silent default.
 
-It is gated from both sides: `check` runs it as part of the vitest suite when
-Rust or `src/` changes, and `smoke` runs it on its own (`pnpm test:mock-contract`)
-when `e2e-playwright/**` changes, which `check` path-ignores.
+```typescript
+case 'your_new_command':
+  return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'your_new_command'>;
+```
+
+Every reply is written `satisfies MockReply<'name'>`
+(`e2e-playwright/mocks/ipc/types.ts`): the command's result type from the
+generated command manifest (`src/types/ipc/IpcCommands.ts`, #576 C3), so
+`pnpm typecheck:playwright` fails when a reply drifts from what the backend
+returns. The core and every family switch on a `MockCommandName` (`keyof
+IpcCommands`), so a `case` for a command the backend does not register fails
+the typecheck too.
+
+`src/test/__tests__/mockContract.test.ts` (vitest, `pnpm test:mock-contract`)
+holds the rest of the contract against the manifest:
+
+- every registered command has a mock case, an inert entry, or a reason in
+  `UNMOCKED_COMMAND_REASONS` - and that list may hold only commands no frontend
+  code names (the test scans `src/` for the name), so a command with a UI path
+  can never be allowlisted;
+- every command the frontend names is answered (a case or an inert entry);
+- every mock case and inert entry names a registered command;
+- every `return` in a case is typed with `MockReply` (or is a rejection).
+
+**Adding or removing a `#[tauri::command]` fails vitest until the mock agrees**
+(after `pnpm gen:ipc-types`). It is gated from both sides: `check` runs it as
+part of the vitest suite when Rust or `src/` changes, and `smoke` runs it on
+its own when `e2e-playwright/**` changes, which `check` path-ignores.
+
+A spec seeds a reply the defaults do not give with `setIpcOverrides(page, {
+command: reply })` (`helpers/ipcOverrides.ts`); `{ __reject: { code, message }
+}` is a backend refusal (a `CommandError`), `{ __throw: msg }` a transport
+failure.
+
+### What the mock fakes
+
+Know these before asserting on a value the mock produced - an assertion on mock
+arithmetic tests the mock, not the app. Pin the computation in a Rust test and
+assert in Playwright only that the UI sent the right request and rendered the
+reply it got.
+
+| Area | What the mock does | Where the real behaviour is pinned |
+|------|--------------------|------------------------------------|
+| Undo/redo | Inert: `can_undo`/`can_redo` false, both stacks empty; undo, redo, undo_to and redo_to are recorded (`__MOCK_GET_UNDO_REDO_CALLS__`) and change nothing. Seed `can_undo` / `get_undo_stack` with an override to enable the UI. | Rust undo fuzz gate, history command tests |
+| Moves | `move_station`, `move_segment`, `move_section` record the call (`__MOCK_MOVE_CALLS__`) and move nothing; assert on the recorded offset, not a coordinate read-back. | Rust move tests (`docs/move-tools.md`) |
+| Station geometry | Placeholder layout: station `i` of a section at `x = i * 10`, `y = 0`, `z = 0`, whatever the shots say. `get_segment_geometry` is one canned line, `get_survey_geometry_for_file` two canned shots. Merges, closures and datums are echoed onto the stations that name them. | Rust geometry and load tests |
+| Saving | `save_project` always succeeds unless a spec overrides it (or a newer-file / unreadable-link state refuses it). | Rust save and persistence tests (`docs/saving.md`) |
+| Recovery | No backups, nothing salvaged, a repair that changes nothing. | `src-tauri/src/commands/recovery_tests.rs` |
+| SpeleoDB | Logged out and local by default; the write workflow answers the happy path (open lands, push accepted, update up to date). | `crates/speleodb`, `core/state/speleodb*.rs`, the env-gated live tests |
+| Exports | Recorded and acknowledged; nothing is written. | The export crate's tests |
+
+Station `z` is always 0 in `get_project_state`, so any e2e reading a station
+depth sees 0 regardless of the seed: assert that a depth row renders, and pin
+the depth math in Rust.
 
 ### Do not copy backend shapes into a test
 
@@ -1193,15 +1245,10 @@ force a scenario (`__MOCK_SET_GEOMETRY_ERROR__`, `__MOCK_SET_INTEGRITY_ISSUES__`
 resets. Grep the mock for `__MOCK_` for the current list; follow the existing
 naming when you add one.
 
-The `move_*` handlers are **no-ops that do not mutate the project** (the app
-refetches generated coordinates), so assert on the *recorded* call, not on a
-coordinate read-back.
-
-The mock also hardcodes station `z = 0` in `get_project_state` - it does not
-derive station depth from the seeded shot `depth_in`/`depth_out`, even though
-the stored *shots* carry them. Any e2e reading a station `z` or a depth readout
-sees `0` regardless of the seed. Assert that a depth row *renders*; pin the depth
-math in a Rust unit test.
+For a command without a hook of its own, `recordIpcCalls(page, ['cmd'])` /
+`waitForIpcCall` (`helpers/ipcRecorder.ts`) record what the app sent at the
+invoke boundary, overrides included - prefer them to scraping the mock's
+console log.
 
 ### Common mock scenarios
 
@@ -1215,10 +1262,13 @@ case 'get_survey_geometry_for_file': {
     origin: [-81.78, 24.55],
   };
 }
+```
 
-// The undo/redo stacks
-case 'get_undo_stack': {
-  return [{
+```typescript
+// A populated undo stack, seeded from the spec (the mock's history is inert)
+await setIpcOverrides(page, {
+  can_undo: true,
+  get_undo_stack: [{
     index: 0,
     description: 'Create section "Main Line"',
     timestamp: new Date().toISOString(),
@@ -1227,8 +1277,8 @@ case 'get_undo_stack': {
       changes: [{ field: 'name', oldValue: '', newValue: 'Main Line' }],
       additionalChanges: 0,
     },
-  }];
-}
+  }] satisfies MockReply<'get_undo_stack'>,
+});
 ```
 
 Mocked specs run with a non-null `gpsOrigin`, which changes how station

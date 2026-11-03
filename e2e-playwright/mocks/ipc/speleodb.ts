@@ -183,6 +183,40 @@ export const speleodbCommands: MockCommandFamily = (ctx) => {
           needs_storage_choice: false,
         } satisfies MockReply<'speleodb_login'>;
 
+      // The write workflow (#576 E3): canned happy-path answers - the open lands on the
+      // mock's cached copy, a push/done is accepted, an update finds nothing new, and the
+      // project has no revisions or dump candidates. The lock, divergence and cache
+      // semantics behind them are the backend's (crates/speleodb, core/state/speleodb*.rs
+      // and the env-gated live tests, docs/speleodb-dev-testing.md); a spec that needs
+      // another outcome seeds it with __MOCK_IPC_OVERRIDES__.
+      case 'speleodb_open_project':
+      case 'speleodb_open_project_discarding_local':
+      case 'speleodb_restore_revision':
+        return { local_path: '/mock/project.stalx', concurrent_session: false } satisfies MockReply<'speleodb_open_project'> &
+          MockReply<'speleodb_open_project_discarding_local'> &
+          MockReply<'speleodb_restore_revision'>;
+      case 'speleodb_adopt_ariane':
+        return {
+          local_path: '/mock/project.stalx',
+          type_flipped: false,
+          concurrent_session: false,
+          upload: { kind: 'pushed' },
+        } satisfies MockReply<'speleodb_adopt_ariane'>;
+      case 'speleodb_push':
+        return { result: { kind: 'pushed' }, save_warnings: [] } satisfies MockReply<'speleodb_push'>;
+      case 'speleodb_done':
+        return { result: { kind: 'released' }, save_warnings: [] } satisfies MockReply<'speleodb_done'>;
+      case 'speleodb_start_editing':
+        return { kind: 'editing' } satisfies MockReply<'speleodb_start_editing'>;
+      case 'speleodb_update':
+        return { kind: 'up_to_date' } satisfies MockReply<'speleodb_update'>;
+      case 'speleodb_force_edit':
+        return null satisfies MockReply<'speleodb_force_edit'>;
+      case 'speleodb_get_revisions':
+        return [] satisfies MockReply<'speleodb_get_revisions'>;
+      case 'speleodb_dump_candidates':
+        return null satisfies MockReply<'speleodb_dump_candidates'>;
+
       default:
         return ctx.unhandled;
     }

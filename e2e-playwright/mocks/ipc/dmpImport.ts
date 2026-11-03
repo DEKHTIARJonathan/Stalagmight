@@ -10,8 +10,7 @@ import type { MockCommandFamily, MockReply } from './types';
 export const dmpImportCommands: MockCommandFamily = (ctx) => {
   return (cmd, args) => {
     switch (cmd) {
-      case 'import_dmp':
-      case 'parse_dmp': {
+      case 'import_dmp': {
         return {
           version: 5,
           // shape not checked: two sections deliberately omit LRUD fields on some shots (off-wire,

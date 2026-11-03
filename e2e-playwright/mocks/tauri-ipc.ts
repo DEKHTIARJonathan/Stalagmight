@@ -6,15 +6,18 @@ import type { CommandError } from '../../src/types/ipc/CommandError';
 import type { RemoteLinkBits } from '../../src/types/ipc/RemoteLinkBits';
 import type { TmlFile } from '../../src/types/ipc/TmlFile';
 import type { TmlShot } from '../../src/types/ipc/TmlShot';
-import type { MockCommandFamily, MockIpcContext, MockReply } from './ipc/types';
+import type { MockCommandFamily, MockCommandName, MockIpcContext, MockReply } from './ipc/types';
 import { defaultConfig } from '../../src/types/ipc/defaultConfig';
 import { compassImportCommands } from './ipc/compassImport';
 import { configCommands } from './ipc/config';
 import { dmpImportCommands } from './ipc/dmpImport';
 import { gasPlanCommands } from './ipc/gasPlan';
+import { historyCommands } from './ipc/history';
+import { recoveryCommands } from './ipc/recovery';
 import { speleodbCommands } from './ipc/speleodb';
 import { tileCacheCommands } from './ipc/tileCache';
 import { buildMockShot } from './ipc/shots';
+import { INERT_COMMANDS } from './ipc/inert';
 
 declare global {
   interface Window {
@@ -121,6 +124,8 @@ const MOCK_COMMAND_FAMILIES: MockCommandFamily[] = [
   tileCacheCommands,
   speleodbCommands,
   compassImportCommands,
+  historyCommands,
+  recoveryCommands,
 ];
 
 /**
@@ -169,7 +174,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
     content: `window.__MOCK_DEFAULT_CONFIG__ = ${JSON.stringify(defaultConfig)};`,
   });
 
-  const installTauriIpcMock = (families: MockCommandFamily[], buildShot: typeof buildMockShot) => {
+  const installTauriIpcMock = (
+    families: MockCommandFamily[],
+    buildShot: typeof buildMockShot,
+    inertCommands: Record<string, { reply: unknown; reason: string }>,
+  ) => {
     // Event listener registry for mock Tauri events (plugin:event|listen/emit/unlisten)
     // This is defined early so it can be used by both mockHandler and __tauriEventMock
     interface EventListener {
@@ -724,13 +733,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       (window as unknown as Record<string, unknown>).__MOCK_RESET_UNMERGE_STATION_PAIR_CALLS__ = () => {
         unmergeStationPairCalls = [];
       };
-      // Records undo/redo invocations so specs can prove the shortcuts are inert in the
-      // read-only workspaces (zero calls in Plan/Export, then one back in Survey).
-      let undoRedoCalls: string[] = [];
-      (window as unknown as Record<string, unknown>).__MOCK_GET_UNDO_REDO_CALLS__ = () => [...undoRedoCalls];
-      (window as unknown as Record<string, unknown>).__MOCK_RESET_UNDO_REDO_CALLS__ = () => {
-        undoRedoCalls = [];
-      };
       // Counts native file-picker opens so a spec can prove the read-only-map guard
       // blocks Import (Ctrl+I) in Plan/Export before the picker even opens (#243).
       // Incremented inside the dialog `open` mock below (same init-script closure).
@@ -1072,6 +1074,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // commands and the state only they use, and is asked in turn about any command the
       // switch below does not handle.
       const UNHANDLED = {};
+      // [#576 E3-D2] Every command no case, family or inert entry answered, in call order.
+      // The teardown fixture reads it (and gets each one live through the
+      // __E2E_REPORT_UNMOCKED_IPC__ binding, which survives a reload).
+      const unhandledCommands: string[] = [];
+      (window as unknown as Record<string, unknown>).__MOCK_UNHANDLED_COMMANDS__ = unhandledCommands;
       const familyContext: MockIpcContext = {
         unhandled: UNHANDLED,
         currentProject: () => currentProject,
@@ -1082,9 +1089,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       const familyHandlers = families.map((family) => family(familyContext));
 
       return function mockCommand(
-        cmd: string,
+        name: string,
         args?: Record<string, unknown>
       ): unknown {
+        // [#576 E3-D3] Typed as a registered command (or a Tauri plugin bridge call), so a
+        // `case` below for a command the backend does not register fails typecheck:playwright.
+        const cmd = name as MockCommandName | `plugin:${string}`;
         // Skip logging for push_frontend_log to avoid infinite loop with console capture
         if (cmd !== 'push_frontend_log') {
           console.log(`[Mock IPC] Command: ${cmd}`, args);
@@ -1620,11 +1630,29 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // DebugDialog expects string[] log lines prefixed with a level.
             return ['INFO [mock] app started', 'DEBUG [mock] project loaded'] satisfies MockReply<'get_recent_logs'>;
 
+          // The debug memory probe: an idle backend and no WebKit children to enumerate.
+          case 'get_memory_stats':
+            return {
+              backend: {
+                pid: 1,
+                name: 'stalagmight',
+                rss_kb: 0,
+                vm_size_kb: 0,
+                vm_peak_kb: 0,
+                vm_rss_anon_kb: 0,
+                vm_rss_file_kb: 0,
+                vm_rss_shmem_kb: 0,
+                role: 'backend',
+              },
+              webkit_processes: [],
+              total_rss_kb: 0,
+              webkit_enumeration_supported: false,
+            } satisfies MockReply<'get_memory_stats'>;
+
           case 'get_internal_error_status':
             // [#576 RV5-PI-3] No crash in a mocked session: no banner to raise.
             return null satisfies MockReply<'get_internal_error_status'>;
 
-          case 'get_project':
           case 'get_project_state': {
             // [#576 NF-W5I-1] No project open: the backend resolves the whole reply null
             // (ProjectState | null), not a state whose project is null.
@@ -1962,6 +1990,38 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               },
             } satisfies MockReply<'execute_walls_import'>;
           }
+
+          // A one-survey Walls project, canned: what the parser reads out of a real file
+          // is pinned by the parsers crate's Walls tests.
+          case 'parse_walls':
+            return {
+              project_name: 'CaveA',
+              book_count: 1,
+              survey_count: 1,
+              resolved_survey_count: 1,
+              shot_count: 3,
+              splay_count: 0,
+              has_georeference: false,
+              datum: null,
+              utm_zone: null,
+              fixed_station_count: 0,
+              missing_file_count: 0,
+              skipped_attachment_count: 0,
+              any_feet_units: false,
+              surveys: [
+                {
+                  name: 'A1',
+                  title: 'Survey A1',
+                  date: '2024-03-01',
+                  segment: '',
+                  shot_count: 3,
+                  splay_count: 0,
+                  fixed_station_count: 0,
+                  resolved: true,
+                },
+              ],
+              warnings: [],
+            } satisfies MockReply<'parse_walls'>;
 
           // File hash tracking for duplicate detection
           case 'calculate_file_hash':
@@ -2799,11 +2859,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'move_station'>;
           }
 
-          case 'move_shot':
-            // Mock move shot - just return success
-            console.log('[Mock IPC] move_shot called with:', args);
-            return { success: true };
-
           case 'get_anchored_section_ids':
             // Return section IDs that have zero datums
             console.log('[Mock IPC] get_anchored_section_ids called');
@@ -2880,6 +2935,52 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'set_station_comment'>;
           }
 
+          // [#576 E3] Canned: a section moves alone, has no relationships to warn about, and
+          // a warning (un)resolve or a comment move is acknowledged without changing the
+          // project. Which sections are rigidly tied, what a delete would sever and how a
+          // comment move swaps holders are the backend's, pinned by its Rust tests.
+          case 'get_rigid_connected_section_ids':
+            return [Number(args?.sectionId)] satisfies MockReply<'get_rigid_connected_section_ids'>;
+
+          case 'get_section_relationships':
+            return {
+              merges: [],
+              closures: [],
+              has_section_offset: false,
+              station_offset_count: 0,
+              zero_datum_count: 0,
+            } satisfies MockReply<'get_section_relationships'>;
+
+          case 'resolve_warning':
+          case 'unresolve_warning':
+          case 'move_comment':
+            return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'resolve_warning'> &
+              MockReply<'unresolve_warning'> &
+              MockReply<'move_comment'>;
+
+          case 'create_section_and_merge': {
+            // The new section lands as create_section lands one, and the merge it asks
+            // for is stored as merge_stations stores one.
+            sectionCounter++;
+            const rawShots = Array.isArray(args?.shots) ? (args?.shots as Array<Record<string, unknown>>) : [];
+            currentProject?.sections.push({
+              id: sectionCounter,
+              name: (args?.name as string | null | undefined) ?? `Section ${sectionCounter}`,
+              surveyor: 'Test Surveyor',
+              date: new Date().toISOString().split('T')[0],
+              color: (args?.color as string | undefined) ?? '#3b82f6',
+              shots: rawShots.map((shot, index) => buildShot(mockShotId(sectionCounter, index), shot)),
+            });
+            const target = args?.targetStation as { section_id: number; station_index: number } | undefined;
+            if (target) {
+              (currentProject?.station_merges as unknown[] | undefined)?.push({
+                station_a: { section_id: sectionCounter, station_index: Number(args?.importStationIndex ?? 0) },
+                station_b: target,
+              });
+            }
+            return { section_id: sectionCounter, warnings: [], remote_link: remoteLink() } satisfies MockReply<'create_section_and_merge'>;
+          }
+
           case 'check_section_hashes': {
             const hashes = (Array.isArray(args?.hashes) ? args?.hashes : []) as string[];
             return hashes.map(() => false) satisfies MockReply<'check_section_hashes'>;
@@ -2908,21 +3009,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ],
             } satisfies MockReply<'get_segment_geometry'>;
 
-          case 'undo':
-          case 'redo':
-            undoRedoCalls.push(cmd);
-            return { reversed_steps: [], warnings: [], remote_link: remoteLink() } satisfies MockReply<'undo'> & MockReply<'redo'>;
-
-          case 'can_undo':
-            return false satisfies MockReply<'can_undo'>;
-
-          case 'can_redo':
-            return false satisfies MockReply<'can_redo'>;
-
-          case 'get_undo_state':
-            return { can_undo: false, can_redo: false };
-
-          case 'get_recent_projects':
           case 'list_recent_projects':
             // `station_count: 0` / `is_remote: false` are what the UI read (`?? 0`, falsy)
             // while these rows omitted the two fields the backend always sends.
@@ -2991,7 +3077,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 : p
             ) satisfies MockReply<'list_recent_projects'>;
 
-          case 'get_warnings':
           case 'get_project_warnings':
             return [] satisfies MockReply<'get_project_warnings'>;
 
@@ -3093,9 +3178,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             windowCloseCount += 1;
             return null;
 
-          case 'get_stations':
-            return [];
-
           // Plugin commands
           case 'plugin:dialog|open':
             // Count picker opens so a spec can prove the read-only-map guard (#243)
@@ -3128,7 +3210,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'plugin:fs|exists':
             return false;
 
+          // The native UI zoom (`getCurrentWebview().setZoom`, src/utils/uiScale.ts): there is
+          // no native webview to zoom in a browser; acknowledged so the scale is applied as set.
+          case 'plugin:webview|set_webview_zoom':
+            return null;
+
+          // The native confirm (useBeforeUnload's tier-1 close question): declined, which is
+          // what the unanswered call read as before #576 E3. A spec that needs a yes
+          // overrides `plugin:dialog|confirm`.
+          case 'plugin:dialog|confirm':
+            return false;
+
           // Opener plugin commands
+          case 'plugin:opener|open_url':
+            console.log('[Mock IPC] open_url called with:', args);
+            return undefined;
+
           case 'plugin:opener|reveal_item_in_dir':
             console.log('[Mock IPC] reveal_item_in_dir called with:', args);
             return undefined;
@@ -3145,6 +3242,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'export_json':
             console.log('[Mock IPC] export_json called with:', args);
             return null satisfies MockReply<'export_json'>;
+
+          // The Ariane writer's notes (#576 E3): none. What lands in the file is pinned by
+          // the export crate's TML tests; a spec asserts the call and its path.
+          case 'export_tml':
+            return [] satisfies MockReply<'export_tml'>;
 
           // Dive-profile export (#299). Records the call so a spec can assert the plan INPUTS
           // reached the backend - the real command recomputes the reach field from them rather
@@ -3857,17 +3959,24 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // would mask a real regression in that path.
             return [] satisfies MockReply<'take_unrecognised_shot_kinds'>;
 
-          // Silent no-ops: commands that should succeed without side-effects
-          case 'push_frontend_log':
-            return null satisfies MockReply<'push_frontend_log'>;
-
-          default:
+          default: {
             for (const handle of familyHandlers) {
-              const result = handle(cmd, args);
+              const result = handle(cmd as MockCommandName, args);
               if (result !== UNHANDLED) return result;
             }
+            // Answered on purpose with a fixed no-op (`./ipc/inert.ts`, each with its reason).
+            if (Object.prototype.hasOwnProperty.call(inertCommands, cmd)) {
+              return inertCommands[cmd]!.reply;
+            }
+            // [#576 E3-D2] No case answers this command: record it, and the auto fixture in
+            // `../fixtures/coverage.ts` fails the test at teardown naming it. Still null here,
+            // so the flow under test is not derailed mid-test by the mock itself.
             console.warn(`[Mock IPC] Unhandled command: ${cmd}`);
+            unhandledCommands.push(cmd);
+            const report = (window as unknown as Record<string, unknown>).__E2E_REPORT_UNMOCKED_IPC__;
+            if (typeof report === 'function') (report as (command: string) => void)(cmd);
             return null;
+          }
         }
       };
     })();
@@ -3994,7 +4103,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
   // The page runs the core above with every command family, each serialized the way
   // addInitScript serializes a function.
   const families = MOCK_COMMAND_FAMILIES.map((family) => family.toString()).join(',\n');
-  await page.addInitScript({ content: `(${installTauriIpcMock.toString()})([${families}], ${buildMockShot.toString()});` });
+  await page.addInitScript({
+    content: `(${installTauriIpcMock.toString()})([${families}], ${buildMockShot.toString()}, ${JSON.stringify(INERT_COMMANDS)});`,
+  });
 }
 
 export { createMockProject, createMockSection };

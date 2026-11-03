@@ -383,6 +383,7 @@ test.describe('Export Dialog', () => {
       );
     });
 
+    await recordIpcCalls(page, ['export_tml']);
     await page.keyboard.press('Control+e');
     const exportDialog = page.locator('[data-testid="export-dialog"]');
     await expect(exportDialog).toBeVisible({ timeout: 5000 });
@@ -393,9 +394,17 @@ test.describe('Export Dialog', () => {
 
     await page.getByTestId('export-button').click();
     await expect(page.getByTestId('tml-unanchored-warning-dialog')).toBeVisible();
+    // Nothing is written while the warning is up.
+    expect(await getIpcCalls(page, 'export_tml')).toHaveLength(0);
 
     await page.getByTestId('tml-unanchored-warning-continue').click();
+    // [#576 E3] The export ran, once, with the path the picker chose: the mocked picker
+    // answers /mock/saved-project.stalx and its known extension becomes .tml (#576 D35).
+    // A closed dialog alone also holds when the export never ran.
+    const [call] = await waitForIpcCall(page, 'export_tml');
+    expect(call.args.path).toBe('/mock/saved-project.tml');
     await expect(exportDialog).not.toBeVisible({ timeout: 5000 });
+    expect(await getIpcCalls(page, 'export_tml')).toHaveLength(1);
   });
 
   test('should close dialog on Cancel', async ({ page }) => {

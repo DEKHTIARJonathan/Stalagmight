@@ -36,7 +36,13 @@ export interface MockIpcContext {
   remoteLink(): RemoteLinkBits | null;
 }
 
-export type MockCommandHandler = (cmd: string, args?: Record<string, unknown>) => unknown;
+/**
+ * A command name the backend registers. The core and every family switch on it, so a
+ * `case` for a command that does not exist fails `typecheck:playwright` (#576 E3-D3).
+ */
+export type MockCommandName = keyof IpcCommands;
+
+export type MockCommandHandler = (cmd: MockCommandName, args?: Record<string, unknown>) => unknown;
 
 /** Runs in the page (serialized with `Function.prototype.toString`): only `ctx` and browser globals. */
 export type MockCommandFamily = (ctx: MockIpcContext) => MockCommandHandler;

@@ -139,7 +139,7 @@ export const configCommands: MockCommandFamily = (ctx) => {
             ...mockImportShotsView,
             },
             ...(mockGasConfig ? { gas: mockGasConfig } : {}),
-          });
+          }) satisfies MockReply<'get_config'>;
         }
         // The fixture: what E2E runs with where it differs from Config::default() (onboarding off,
         // the data table closed, ...), laid over the wire defaults like every answer here.
@@ -403,7 +403,7 @@ export const configCommands: MockCommandFamily = (ctx) => {
           },
           // Spread LAST so a stored `[gas]` block wins over the literal's own.
           ...(mockGasConfig ? { gas: mockGasConfig } : {}),
-        });
+        }) satisfies MockReply<'get_config'>;
 
       case 'update_config':
         // Mock update_config - store config and return the real command's shape:
@@ -575,7 +575,7 @@ export const configCommands: MockCommandFamily = (ctx) => {
             ...mockImportShotsView,
             },
             ...(mockGasConfig ? { gas: mockGasConfig } : {}),
-          });
+          }) satisfies MockReply<'reload_config'>;
         }
         // Return mock config with any test overrides applied
         // This allows tests to modify config values via __MOCK_SET_CONFIG_OVERRIDES__
@@ -832,8 +832,16 @@ export const configCommands: MockCommandFamily = (ctx) => {
           ...(mockGasConfig ? { gas: mockGasConfig } : {}),
         };
         // Laid over the wire defaults, like get_config's fixture.
-        return wholeConfig(baseConfig);
+        return wholeConfig(baseConfig) satisfies MockReply<'reload_config'>;
       }
+
+      // Dock/panel layout persistence (#576 E3): acknowledged, not stored - the round
+      // trip is pinned by uiStore.savePanelSizes.test.ts, and no spec reads it back.
+      case 'update_panel_layout':
+        return null satisfies MockReply<'update_panel_layout'>;
+
+      case 'update_panel_sizes':
+        return null satisfies MockReply<'update_panel_sizes'>;
 
       default:
         return ctx.unhandled;
