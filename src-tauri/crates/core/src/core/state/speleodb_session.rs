@@ -1951,31 +1951,105 @@ mod tests {
         crate::models::source_scan::prod_region(&src, "fn ").to_owned()
     }
 
+    /// [#576 NF-W9E1-3] The modules `mod_rs` declares for the production build:
+    /// every top-level `mod <name>;` whose attributes carry no test cfg
+    /// (`cfg(test)`, `cfg(any(test, ..))`, `cfg(all(test, ..))`). A file no
+    /// declaration names is never compiled, so it can write no slot; one declared
+    /// under a test cfg is test code (the shared test dump, the test-fixture module
+    /// whose setters write the slot freely, every `*_tests.rs`).
+    fn production_modules(mod_rs: &str) -> Vec<String> {
+        let mut modules = Vec::new();
+        let mut attrs = String::new();
+        let mut depth = 0usize;
+        for line in mod_rs.lines() {
+            let trimmed = line.trim();
+            if depth > 0 || trimmed.starts_with("#[") {
+                // An attribute, possibly over several lines (`#[expect(\n ..\n)]`).
+                attrs.push_str(trimmed);
+                attrs.push('\n');
+                depth += trimmed.matches('[').count();
+                depth = depth.saturating_sub(trimmed.matches(']').count());
+                continue;
+            }
+            if trimmed.is_empty() || trimmed.starts_with("//") {
+                continue;
+            }
+            let declared = line
+                .strip_prefix("pub ")
+                .or_else(|| line.strip_prefix("pub(super) "))
+                .or_else(|| line.strip_prefix("pub(crate) "))
+                .unwrap_or(line)
+                .strip_prefix("mod ")
+                .and_then(|rest| rest.strip_suffix(';'));
+            if let Some(name) = declared {
+                let test_only = ["cfg(test)", "cfg(any(test", "cfg(all(test"]
+                    .iter()
+                    .any(|gate| attrs.contains(gate));
+                if !test_only {
+                    modules.push(name.trim().to_owned());
+                }
+            }
+            attrs.clear();
+        }
+        modules
+    }
+
+    #[test]
+    fn production_modules_are_the_declarations_without_a_test_cfg() {
+        let mod_rs = "mod app_state;\n\
+             pub mod dive_plan;\n\
+             // a comment between items\n\
+             #[cfg(test)]\n\
+             mod tests;\n\
+             #[cfg(test)]\n\
+             #[expect(\n\
+                 clippy::expect_used,\n\
+                 reason = \"test module\"\n\
+             )]\n\
+             mod sdb_endpoint_tests;\n\
+             #[cfg(any(test, feature = \"test-support\"))]\n\
+             mod tests_support;\n\
+             #[expect(clippy::too_many_lines, reason = \"production\")]\n\
+             mod session_commit;\n\
+             pub use app_state::AppState;\n";
+        assert_eq!(
+            production_modules(mod_rs),
+            ["app_state", "dive_plan", "session_commit"],
+            "test-gated declarations (one-line or multi-line attributes) are left out"
+        );
+    }
+
     #[test]
     fn bump_sites_are_exactly_the_known_set() {
         // D7's lesson from the abandoned attempt: an incomplete bump-site
         // inventory is invisible until the missed site re-opens the bug. Every
         // file that commits into or clears the project slot must either bump or
         // be on the classified DO-NOT-BUMP list below.
+        //
+        // [#576 NF-W9E1-3] Over the modules `mod.rs` declares for the production
+        // build, not every `.rs` in the directory: a stray file (a throwaway, a
+        // draft) is never compiled and failed this scan with a slot-write verdict
+        // about code that does not exist.
         let dir = format!("{}/src/core/state", env!("CARGO_MANIFEST_DIR"));
+        let mod_rs = std::fs::read_to_string(format!("{dir}/mod.rs")).expect("read mod.rs");
+        let modules = production_modules(&mod_rs);
+        for known in ["app_state", "session_commit", "speleodb_logout"] {
+            assert!(
+                modules.iter().any(|m| m == known),
+                "RULE (the scan must see the slot writers it classifies): `{known}` is not \
+                 among the production modules read off mod.rs: {modules:?}"
+            );
+        }
         let mut bumping: Vec<String> = Vec::new();
         let mut writing: Vec<String> = Vec::new();
-        for entry in std::fs::read_dir(&dir).expect("read state dir") {
-            let entry = entry.expect("dir entry");
-            let name = entry.file_name().into_string().expect("utf-8 name");
-            // Skip the shared test dump, THIS module (the scan needles appear
-            // in this very test's source), and the test-fixture module: its
-            // AppState setters write the slot freely and legitimately, and its
-            // `any(test, feature = "test-support")` gate (for the root crate's
-            // tests) means the truncation below no longer hides them.
-            if !name.ends_with(".rs")
-                || name == "tests.rs"
-                || name == "speleodb_session.rs"
-                || name == "tests_support.rs"
-            {
+        for module in modules {
+            let name = format!("{module}.rs");
+            // THIS module: the scan needles appear in this very test's source.
+            if name == "speleodb_session.rs" {
                 continue;
             }
-            let src = std::fs::read_to_string(entry.path()).expect("read source");
+            let src = std::fs::read_to_string(format!("{dir}/{name}"))
+                .unwrap_or_else(|e| panic!("read {name}: {e}"));
             // Production code only: this tree keeps test modules at the bottom of
             // the file, so truncating at the first test gate is enough for a
             // tripwire (fixtures write the slot freely and legitimately).
