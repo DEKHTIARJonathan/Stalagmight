@@ -1,33 +1,22 @@
 {
+  // The app program (src/). Shared options: tsconfig.base.json.
+  "extends": "./tsconfig.base.json",
   "compilerOptions": {
+    // The strictness flags below are app-only until the e2e programs reach
+    // parity (#576 E11); each moves to tsconfig.base.json with its e2e fixes.
     "target": "ES2020",
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "moduleResolution": "bundler",
+    "exactOptionalPropertyTypes": true,
     "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
+    "noUncheckedIndexedAccess": true,
     "jsx": "react-jsx",
     "types": ["vite/client"],
     "incremental": true,
-    "tsBuildInfoFile": "./node_modules/.cache/tsc/tsconfig.tsbuildinfo",
-
-    "strict": true,
-    "strictNullChecks": true,
-    "strictFunctionTypes": true,
-    "strictBindCallApply": true,
-    "strictPropertyInitialization": true,
-    "noImplicitAny": true,
-    "noImplicitThis": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedIndexedAccess": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "exactOptionalPropertyTypes": true,
-
-    "skipLibCheck": true
+    "tsBuildInfoFile": "./node_modules/.cache/tsc/tsconfig.tsbuildinfo"
   },
   "include": ["src"]
 }
