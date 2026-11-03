@@ -4,17 +4,13 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_holding, state_with_project};
 
 // === Shot Operations Tests ===
 
 #[test]
 fn test_create_shot() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: Some("Section".to_string()),
@@ -29,7 +25,7 @@ fn test_create_shot() {
 
     let result = state.execute(Command::CreateShot {
         section_id,
-        shot: test_shot_data(10.0),
+        shot: shot(10.0),
         after_shot_id: None,
         before_shot_id: None,
     });
@@ -43,12 +39,7 @@ fn test_create_shot() {
 
 #[test]
 fn test_update_shot() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -56,7 +47,7 @@ fn test_update_shot() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -85,12 +76,7 @@ fn test_update_shot() {
 
 #[test]
 fn test_delete_shot() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -98,7 +84,7 @@ fn test_delete_shot() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        shots: vec![shot(5.0), shot(7.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -118,12 +104,7 @@ fn test_delete_shot() {
 
 #[test]
 fn test_delete_first_shot_preserves_station_positions() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -131,7 +112,7 @@ fn test_delete_first_shot_preserves_station_positions() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        shots: vec![shot(5.0), shot(7.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -191,12 +172,7 @@ fn test_delete_first_shot_preserves_station_positions() {
 
 #[test]
 fn test_delete_shot_rewires_merges() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let sec_a = state
         .execute(Command::CreateSection {
@@ -205,7 +181,7 @@ fn test_delete_shot_rewires_merges() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+            shots: vec![shot(5.0), shot(7.0)],
         })
         .section_id
         .unwrap();
@@ -217,7 +193,7 @@ fn test_delete_shot_rewires_merges() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(6.0)],
+            shots: vec![shot(6.0)],
         })
         .section_id
         .unwrap();
@@ -229,7 +205,7 @@ fn test_delete_shot_rewires_merges() {
             date: None,
             color: "#0000ff".to_string(),
             direction: None,
-            shots: vec![test_shot_data(8.0)],
+            shots: vec![shot(8.0)],
         })
         .section_id
         .unwrap();
@@ -290,14 +266,14 @@ fn test_delete_shot_rejects_frozen_shot() {
     let sec_a = project
         .add_section(SectionData {
             color: "#ff0000".to_string(),
-            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+            shots: vec![shot(5.0), shot(7.0)],
             ..Default::default()
         })
         .id;
     let sec_b = project
         .add_section(SectionData {
             color: "#00ff00".to_string(),
-            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+            shots: vec![shot(5.0), shot(7.0)],
             ..Default::default()
         })
         .id;
@@ -347,8 +323,7 @@ fn test_delete_shot_rejects_frozen_shot() {
         .shots
         .len();
 
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
 
     // The delete must be refused with a clear frozen message.
     let result = state.execute(Command::DeleteShot {
@@ -390,22 +365,14 @@ fn test_delete_shot_and_split_rejects_frozen_shot() {
     let sec_a = project
         .add_section(SectionData {
             color: "#ff0000".to_string(),
-            shots: vec![
-                test_shot_data(5.0),
-                test_shot_data(7.0),
-                test_shot_data(4.0),
-            ],
+            shots: vec![shot(5.0), shot(7.0), shot(4.0)],
             ..Default::default()
         })
         .id;
     let sec_b = project
         .add_section(SectionData {
             color: "#00ff00".to_string(),
-            shots: vec![
-                test_shot_data(5.0),
-                test_shot_data(7.0),
-                test_shot_data(4.0),
-            ],
+            shots: vec![shot(5.0), shot(7.0), shot(4.0)],
             ..Default::default()
         })
         .id;
@@ -452,8 +419,7 @@ fn test_delete_shot_and_split_rejects_frozen_shot() {
     let shots_before = sec_a_shots.len();
     let sections_before = project.sections.len();
 
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
 
     let result = state.execute_delete_shot_and_split(
         sec_a,
@@ -500,7 +466,7 @@ fn test_split_shot_at_distance_happy_path() {
         .add_section(SectionData {
             color: "#ff0000".to_string(),
             shots: vec![
-                test_shot_data(5.0),
+                shot(5.0),
                 ShotData {
                     uuid: None,
                     azimuth_in: 30.0,
@@ -519,7 +485,7 @@ fn test_split_shot_at_distance_happy_path() {
                     marker_index: Some(3),
                     temperature: Some(15.0),
                 },
-                test_shot_data(5.0),
+                shot(5.0),
             ],
             ..Default::default()
         })
@@ -529,8 +495,7 @@ fn test_split_shot_at_distance_happy_path() {
     let target_shot_id = target.id;
     let target_uuid = target.uuid;
 
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
 
     let result = state.execute_split_shot_at_distance(sec, target_shot_id, 4.0);
     assert!(result.success, "{:?}", result.error);
@@ -622,7 +587,7 @@ fn test_split_shot_at_distance_preserves_anchor_on_endpoint_station() {
                     depth_out: 0.0,
                     ..Default::default()
                 },
-                test_shot_data(5.0),
+                shot(5.0),
             ],
             ..Default::default()
         })
@@ -630,7 +595,7 @@ fn test_split_shot_at_distance_preserves_anchor_on_endpoint_station() {
     let sec_b = project
         .add_section(SectionData {
             color: "#00ff00".to_string(),
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
             ..Default::default()
         })
         .id;
@@ -650,8 +615,7 @@ fn test_split_shot_at_distance_preserves_anchor_on_endpoint_station() {
         .station_comments
         .insert(endpoint_key, "endpoint note".to_string());
 
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
 
     let result = state.execute_split_shot_at_distance(sec_a, target_shot_id, 1.0);
     assert!(result.success, "{:?}", result.error);
@@ -720,7 +684,7 @@ fn test_split_shot_at_distance_preserves_loop_closure_anchor_on_endpoint_station
                     depth_out: 0.0,
                     ..Default::default()
                 },
-                test_shot_data(5.0),
+                shot(5.0),
             ],
             ..Default::default()
         })
@@ -742,8 +706,7 @@ fn test_split_shot_at_distance_preserves_loop_closure_anchor_on_endpoint_station
         is_aligned: false,
     });
 
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
 
     let result = state.execute_split_shot_at_distance(sec_a, target_shot_id, 1.0);
     assert!(result.success, "{:?}", result.error);
@@ -769,14 +732,14 @@ fn test_split_shot_at_distance_first_shot_keeps_section_start_anchor() {
     let sec_a = project
         .add_section(SectionData {
             color: "#ff0000".to_string(),
-            shots: vec![test_shot_data(10.0), test_shot_data(5.0)],
+            shots: vec![shot(10.0), shot(5.0)],
             ..Default::default()
         })
         .id;
     let sec_b = project
         .add_section(SectionData {
             color: "#00ff00".to_string(),
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
             ..Default::default()
         })
         .id;
@@ -794,8 +757,7 @@ fn test_split_shot_at_distance_first_shot_keeps_section_start_anchor() {
         gps: GpsCoordinates::new(45.0, -73.0, 100.0).unwrap(),
     });
 
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
 
     let result = state.execute_split_shot_at_distance(sec_a, target_shot_id, 4.0);
     assert!(result.success, "{:?}", result.error);
@@ -827,15 +789,14 @@ fn test_split_shot_at_distance_rejects_invalid_distances() {
     let mut project = Project::new("Invalid".to_string(), None);
     project.add_section(SectionData {
         color: "#ff0000".to_string(),
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
         ..Default::default()
     });
     let sec = project.sections[0].id;
     let shot_id = project.sections[0].shots[0].id;
     let before_json = serde_json::to_string(&project).unwrap();
 
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
 
     // 0.005 and length - 0.005 = 9.995 both fall under the MIN_SPLIT_CHILD_LENGTH_M
     // (0.01m) floor and must be rejected even though they are strictly between
@@ -860,14 +821,13 @@ fn test_split_shot_at_distance_accepts_exact_min_child_length_boundary() {
     let mut project = Project::new("Boundary".to_string(), None);
     project.add_section(SectionData {
         color: "#ff0000".to_string(),
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
     let sec = project.sections[0].id;
     let shot_id = project.sections[0].shots[0].id;
 
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
 
     let result = state.execute_split_shot_at_distance(sec, shot_id, MIN_SPLIT_CHILD_LENGTH_M);
     assert!(result.success, "{:?}", result.error);
@@ -887,22 +847,14 @@ fn test_split_shot_at_distance_rejects_frozen_shot() {
     let sec_a = project
         .add_section(SectionData {
             color: "#ff0000".to_string(),
-            shots: vec![
-                test_shot_data(5.0),
-                test_shot_data(7.0),
-                test_shot_data(4.0),
-            ],
+            shots: vec![shot(5.0), shot(7.0), shot(4.0)],
             ..Default::default()
         })
         .id;
     let sec_b = project
         .add_section(SectionData {
             color: "#00ff00".to_string(),
-            shots: vec![
-                test_shot_data(5.0),
-                test_shot_data(7.0),
-                test_shot_data(4.0),
-            ],
+            shots: vec![shot(5.0), shot(7.0), shot(4.0)],
             ..Default::default()
         })
         .id;
@@ -936,8 +888,7 @@ fn test_split_shot_at_distance_rejects_frozen_shot() {
     let target_shot_id = project.sections[0].shots[1].id;
     let shots_before = project.sections[0].shots.len();
 
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
 
     let result = state.execute_split_shot_at_distance(sec_a, target_shot_id, 3.0);
     assert!(!result.success, "splitting a frozen shot must be refused");
@@ -957,22 +908,14 @@ fn test_split_shot_at_distance_rejects_frozen_shot() {
 
 #[test]
 fn test_split_shot_at_distance_undo_redo_round_trip() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Split Undo".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Split Undo");
     let create_result = state.execute(Command::CreateSection {
         name: Some("Main".to_string()),
         surveyor: None,
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![
-            test_shot_data(5.0),
-            test_shot_data(10.0),
-            test_shot_data(5.0),
-        ],
+        shots: vec![shot(5.0), shot(10.0), shot(5.0)],
     });
     let section_id = create_result.section_id.unwrap();
 
@@ -1020,11 +963,7 @@ fn test_split_shot_at_distance_undo_redo_round_trip() {
 
 #[test]
 fn test_split_shot_at_distance_preserves_downstream_geometry() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Geo".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Geo");
     let create_result = state.execute(Command::CreateSection {
         name: Some("Main".to_string()),
         surveyor: None,
@@ -1097,15 +1036,14 @@ fn test_split_shot_at_distance_reference_shot_both_children_reference() {
         color: "#ff0000".to_string(),
         shots: vec![ShotData {
             kind: ShotKind::Jump,
-            ..test_shot_data(10.0)
+            ..shot(10.0)
         }],
         ..Default::default()
     });
     let sec = project.sections[0].id;
     let shot_id = project.sections[0].shots[0].id;
 
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
 
     let result = state.execute_split_shot_at_distance(sec, shot_id, 4.0);
     assert!(result.success, "{:?}", result.error);
@@ -1128,14 +1066,13 @@ fn test_split_shot_at_distance_rejects_at_max_shots_cap() {
     let max = crate::models::FEATURE_ID_STRIDE as usize - 1;
     project.add_section(SectionData {
         color: "#ff0000".to_string(),
-        shots: vec![test_shot_data(1.0); max],
+        shots: vec![shot(1.0); max],
         ..Default::default()
     });
     let sec = project.sections[0].id;
     let shot_id = project.sections[0].shots[0].id;
 
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
 
     let result = state.execute_split_shot_at_distance(sec, shot_id, 0.5);
     assert!(
@@ -1172,7 +1109,7 @@ fn test_legacy_project_seeds_validation_from_global_config() {
         {
             let mut project = Project::new("Legacy".to_string(), None);
             project.add_section(SectionData {
-                shots: vec![test_shot_data(1.0)],
+                shots: vec![shot(1.0)],
                 ..Default::default()
             });
             let mut db = Database::open(&legacy_path).unwrap();
@@ -1226,7 +1163,7 @@ fn test_legacy_project_seeds_validation_from_global_config() {
                 ..crate::config::ValidationConfig::default()
             };
             project.add_section(SectionData {
-                shots: vec![test_shot_data(1.0)],
+                shots: vec![shot(1.0)],
                 ..Default::default()
             });
             let mut db = Database::open(&explicit_path).unwrap();

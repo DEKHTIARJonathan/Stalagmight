@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // ============================================================================
 // Coverage gap tests: merge_projects edge cases
@@ -16,12 +17,12 @@ fn test_merge_projects_output_already_exists() {
     // Create two source projects
     let mut proj_a = Project::new("A".to_string(), None);
     proj_a.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
     let mut proj_b = Project::new("B".to_string(), None);
     proj_b.add_section(SectionData {
-        shots: vec![test_shot_data(2.0)],
+        shots: vec![shot(2.0)],
         ..Default::default()
     });
 
@@ -59,12 +60,12 @@ fn test_merge_projects_extension_less_output_detects_existing_stalx() {
 
     let mut proj_a = Project::new("A".to_string(), None);
     proj_a.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
     let mut proj_b = Project::new("B".to_string(), None);
     proj_b.add_section(SectionData {
-        shots: vec![test_shot_data(2.0)],
+        shots: vec![shot(2.0)],
         ..Default::default()
     });
     let source_a = temp_dir.path().join("a.stalx");
@@ -103,7 +104,7 @@ fn test_merge_projects_source_missing() {
 
     let mut proj_a = Project::new("A".to_string(), None);
     proj_a.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
     let source_a = temp_dir.path().join("a.stalx");
@@ -131,12 +132,12 @@ fn test_merge_projects_combines_locations() {
 
     let mut proj_a = Project::new("A".to_string(), Some("Cave Alpha".to_string()));
     proj_a.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
     let mut proj_b = Project::new("B".to_string(), Some("Cave Beta".to_string()));
     proj_b.add_section(SectionData {
-        shots: vec![test_shot_data(2.0)],
+        shots: vec![shot(2.0)],
         ..Default::default()
     });
 
@@ -178,12 +179,12 @@ fn test_merge_projects_no_archive() {
 
     let mut proj_a = Project::new("A".to_string(), None);
     proj_a.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
     let mut proj_b = Project::new("B".to_string(), None);
     proj_b.add_section(SectionData {
-        shots: vec![test_shot_data(2.0)],
+        shots: vec![shot(2.0)],
         ..Default::default()
     });
 
@@ -218,14 +219,14 @@ fn test_merge_projects_preserves_station_merges() {
     let sec_a1 = proj_a
         .add_section(SectionData {
             name: Some("A1".to_string()),
-            shots: vec![test_shot_data(1.0), test_shot_data(1.5)],
+            shots: vec![shot(1.0), shot(1.5)],
             ..Default::default()
         })
         .id;
     let sec_a2 = proj_a
         .add_section(SectionData {
             name: Some("A2".to_string()),
-            shots: vec![test_shot_data(2.0)],
+            shots: vec![shot(2.0)],
             ..Default::default()
         })
         .id;
@@ -241,7 +242,7 @@ fn test_merge_projects_preserves_station_merges() {
     let mut proj_b = Project::new("B".to_string(), None);
     proj_b.add_section(SectionData {
         name: Some("B1".to_string()),
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
         ..Default::default()
     });
     let source_b = temp_dir.path().join("b.stalx");
@@ -296,11 +297,7 @@ fn test_merge_projects_preserves_station_merges() {
 
 #[test]
 fn test_execute_create_and_merge_success() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     // Create an existing section to merge with
     state.execute(Command::CreateSection {
         name: Some("Existing".to_string()),
@@ -308,7 +305,7 @@ fn test_execute_create_and_merge_success() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let existing_section_id = state.get_project_state().unwrap().sections[0].id;
 
@@ -318,7 +315,7 @@ fn test_execute_create_and_merge_success() {
         None,
         "#00ff00".to_string(),
         None,
-        vec![test_shot_data(3.0)],
+        vec![shot(3.0)],
         0,                                       // import station 0
         StationRef::new(existing_section_id, 1), // merge to station 1 of existing
         ClosureStrategy::Batch,
@@ -348,18 +345,14 @@ fn test_execute_create_and_merge_success() {
 
 #[test]
 fn test_execute_create_and_merge_rollback_on_merge_failure() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     state.execute(Command::CreateSection {
         name: Some("Existing".to_string()),
         surveyor: None,
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let sections_before = state.get_project_state().unwrap().sections.len();
 
@@ -370,7 +363,7 @@ fn test_execute_create_and_merge_rollback_on_merge_failure() {
         None,
         "#00ff00".to_string(),
         None,
-        vec![test_shot_data(3.0)],
+        vec![shot(3.0)],
         0,
         StationRef::new(9999, 0), // nonexistent section
         ClosureStrategy::Batch,
@@ -395,7 +388,7 @@ fn test_execute_create_and_merge_no_project_open() {
         None,
         "#ff0000".to_string(),
         None,
-        vec![test_shot_data(3.0)],
+        vec![shot(3.0)],
         0,
         StationRef::new(1, 0),
         ClosureStrategy::Batch,
@@ -413,11 +406,7 @@ fn test_execute_import_sections_origin_placement() {
     use crate::models::ImportPlacement;
     use crate::models::ImportSectionConfig;
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let sections = vec![
         ImportSectionConfig {
@@ -429,7 +418,7 @@ fn test_execute_import_sections_origin_placement() {
             color: "#ff0000".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
             station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
@@ -443,7 +432,7 @@ fn test_execute_import_sections_origin_placement() {
             color: "#00ff00".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![test_shot_data(3.0)],
+            shots: vec![shot(3.0)],
             station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
@@ -484,11 +473,7 @@ fn test_execute_import_sections_origin_placement() {
 fn test_execute_import_sections_unresolvable_closure_is_skipped_on_receipt() {
     use crate::models::{ImportClosure, ImportPlacement, ImportSectionConfig};
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let sections = vec![ImportSectionConfig {
         reverse: false,
@@ -499,7 +484,7 @@ fn test_execute_import_sections_unresolvable_closure_is_skipped_on_receipt() {
         color: "#ff0000".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
@@ -547,16 +532,12 @@ fn test_execute_import_sections_unresolvable_closure_is_skipped_on_receipt() {
 fn imported_shot_kinds_survive_an_undo_redo_round_trip() {
     use crate::models::{ImportPlacement, ImportSectionConfig, ShotKind};
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Real - virtual - real: the chain rule calls the middle shot a Jump.
     let virtual_shot = ShotData {
         kind: ShotKind::Reference,
-        ..test_shot_data(4.0)
+        ..shot(4.0)
     };
     let sections = vec![ImportSectionConfig {
         section_index: 0,
@@ -566,7 +547,7 @@ fn imported_shot_kinds_survive_an_undo_redo_round_trip() {
         color: "#ff0000".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(5.0), virtual_shot, test_shot_data(6.0)],
+        shots: vec![shot(5.0), virtual_shot, shot(6.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
         reverse: false,
@@ -607,11 +588,7 @@ fn imported_shot_kinds_survive_an_undo_redo_round_trip() {
 fn importing_a_second_file_leaves_existing_shot_kinds_alone() {
     use crate::models::{ImportPlacement, ImportSectionConfig, ShotKind};
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let config = |name: &str, shots: Vec<ShotData>| ImportSectionConfig {
         section_index: 0,
@@ -629,7 +606,7 @@ fn importing_a_second_file_leaves_existing_shot_kinds_alone() {
     };
     let reference_shot = ShotData {
         kind: ShotKind::Reference,
-        ..test_shot_data(4.0)
+        ..shot(4.0)
     };
 
     // First file: a bounded virtual run, which the user then demotes by hand to
@@ -637,11 +614,7 @@ fn importing_a_second_file_leaves_existing_shot_kinds_alone() {
     let first = state.execute_import_sections(
         vec![config(
             "First",
-            vec![
-                test_shot_data(5.0),
-                reference_shot.clone(),
-                test_shot_data(6.0),
-            ],
+            vec![shot(5.0), reference_shot.clone(), shot(6.0)],
         )],
         Vec::new(),
         None,
@@ -700,11 +673,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
     use crate::models::ImportSectionConfig;
     use crate::models::ShotUpdates;
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let seed = ImportSectionConfig {
         reverse: false,
@@ -715,7 +684,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
         color: "#ff0000".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
@@ -743,7 +712,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
         color: "#00ff00".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
@@ -789,11 +758,7 @@ fn test_execute_import_sections_from_importing_placement() {
     use crate::models::ImportPlacement;
     use crate::models::ImportSectionConfig;
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let sections = vec![
         ImportSectionConfig {
@@ -805,7 +770,7 @@ fn test_execute_import_sections_from_importing_placement() {
             color: "#ff0000".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            shots: vec![shot(5.0), shot(3.0)],
             station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
@@ -819,7 +784,7 @@ fn test_execute_import_sections_from_importing_placement() {
             color: "#00ff00".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![test_shot_data(4.0)],
+            shots: vec![shot(4.0)],
             station_comments: Vec::new(),
             placement: ImportPlacement::FromImporting {
                 import_station: 0,
@@ -850,11 +815,7 @@ fn test_execute_import_sections_from_existing_placement() {
     use crate::models::ImportPlacement;
     use crate::models::ImportSectionConfig;
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     // Create existing section to merge with
     state.execute(Command::CreateSection {
         name: Some("Existing".to_string()),
@@ -862,7 +823,7 @@ fn test_execute_import_sections_from_existing_placement() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+        shots: vec![shot(5.0), shot(3.0)],
     });
     let existing_id = state.get_project_state().unwrap().sections[0].id;
 
@@ -875,7 +836,7 @@ fn test_execute_import_sections_from_existing_placement() {
         color: "#00ff00".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(4.0)],
+        shots: vec![shot(4.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::FromExisting {
             import_station: 0,
@@ -903,11 +864,7 @@ fn test_execute_import_sections_manual_with_offset() {
     use crate::models::ImportPlacement;
     use crate::models::ImportSectionConfig;
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let sections = vec![ImportSectionConfig {
         reverse: false,
@@ -918,7 +875,7 @@ fn test_execute_import_sections_manual_with_offset() {
         color: "#ff0000".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Manual {
             align_station_index: 0,
@@ -958,11 +915,7 @@ fn test_execute_import_sections_zero_datum_placement() {
     use crate::models::ImportPlacement;
     use crate::models::ImportSectionConfig;
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let gps = GpsCoordinates::new(10.0, 20.0, 5.0).unwrap();
     let sections = vec![ImportSectionConfig {
@@ -974,7 +927,7 @@ fn test_execute_import_sections_zero_datum_placement() {
         color: "#ff0000".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::ZeroDatum {
             coordinates: gps,
@@ -1014,14 +967,10 @@ fn test_execute_import_sections_zero_datum_placement() {
 /// therefore cannot tell a placement that works from one that does nothing.
 #[test]
 fn test_execute_import_sections_zero_datum_placement_at_non_origin_station() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let gps = GpsCoordinates::new(10.0, 20.0, 5.0).unwrap();
-    let imported_shot = test_shot_data(5.0);
+    let imported_shot = shot(5.0);
     let sections = vec![ImportSectionConfig {
         reverse: false,
         section_index: 0,
@@ -1083,11 +1032,7 @@ fn test_execute_import_sections_rollback_on_failure() {
     use crate::models::ImportPlacement;
     use crate::models::ImportSectionConfig;
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // First section succeeds, second fails (merge to nonexistent existing section)
     let sections = vec![
@@ -1100,7 +1045,7 @@ fn test_execute_import_sections_rollback_on_failure() {
             color: "#ff0000".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
             station_comments: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
@@ -1114,7 +1059,7 @@ fn test_execute_import_sections_rollback_on_failure() {
             color: "#00ff00".to_string(),
             direction: None,
             quality: 1.0,
-            shots: vec![test_shot_data(3.0)],
+            shots: vec![shot(3.0)],
             station_comments: Vec::new(),
             placement: ImportPlacement::FromExisting {
                 import_station: 0,
@@ -1148,11 +1093,7 @@ fn test_execute_import_sections_rollback_on_failure() {
 
 #[test]
 fn test_execute_import_sections_empty_is_noop() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let result = state.execute_import_sections(
         vec![],
@@ -1180,7 +1121,7 @@ fn test_execute_import_sections_no_project() {
         color: "#ff0000".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
@@ -1203,18 +1144,14 @@ fn test_execute_import_sections_manual_snap_placement() {
     use crate::models::ImportPlacement;
     use crate::models::ImportSectionConfig;
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     state.execute(Command::CreateSection {
         name: Some("Existing".to_string()),
         surveyor: None,
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let existing_id = state.get_project_state().unwrap().sections[0].id;
 
@@ -1227,7 +1164,7 @@ fn test_execute_import_sections_manual_snap_placement() {
         color: "#00ff00".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(4.0)],
+        shots: vec![shot(4.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::ManualSnap {
             align_station_index: 0,

@@ -4,17 +4,14 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project, straight_shot};
 
 // === Station Ref Shifting Tests ===
 
 /// Helper: create a project with two sections, each with 2 shots, merged at station 0 of each.
 /// Returns (state, section_a_id, section_b_id).
 fn setup_merged_project() -> (AppState, u32, u32) {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Shift Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Shift Test");
 
     // Section A with 2 shots
     let result_a = state.execute(Command::CreateSection {
@@ -23,7 +20,7 @@ fn setup_merged_project() -> (AppState, u32, u32) {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0), test_shot_data(20.0)],
+        shots: vec![shot(10.0), shot(20.0)],
     });
     let sec_a = result_a.section_id.unwrap();
 
@@ -34,7 +31,7 @@ fn setup_merged_project() -> (AppState, u32, u32) {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(15.0), test_shot_data(25.0)],
+        shots: vec![shot(15.0), shot(25.0)],
     });
     let sec_b = result_b.section_id.unwrap();
 
@@ -64,7 +61,7 @@ fn test_insert_before_shifts_station_merge() {
     // Insert shot before first shot of section A
     let insert_result = state.execute(Command::CreateShot {
         section_id: sec_a,
-        shot: test_shot_data(5.0),
+        shot: shot(5.0),
         after_shot_id: None,
         before_shot_id: Some(first_shot_id),
     });
@@ -85,11 +82,7 @@ fn test_insert_before_shifts_station_merge() {
 
 #[test]
 fn test_insert_before_shifts_zero_datum() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "ZD Shift Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("ZD Shift Test");
 
     let result = state.execute(Command::CreateSection {
         name: Some("Section".to_string()),
@@ -97,7 +90,7 @@ fn test_insert_before_shifts_zero_datum() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0), test_shot_data(20.0)],
+        shots: vec![shot(10.0), shot(20.0)],
     });
     let sec_id = result.section_id.unwrap();
 
@@ -117,7 +110,7 @@ fn test_insert_before_shifts_zero_datum() {
     // Insert shot before first shot
     let insert_result = state.execute(Command::CreateShot {
         section_id: sec_id,
-        shot: test_shot_data(5.0),
+        shot: shot(5.0),
         after_shot_id: None,
         before_shot_id: Some(first_shot_id),
     });
@@ -133,11 +126,7 @@ fn test_insert_before_shifts_zero_datum() {
 
 #[test]
 fn test_insert_before_shifts_station_offset() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Offset Shift Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Offset Shift Test");
 
     let result = state.execute(Command::CreateSection {
         name: Some("Section".to_string()),
@@ -145,7 +134,7 @@ fn test_insert_before_shifts_station_offset() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0), test_shot_data(20.0)],
+        shots: vec![shot(10.0), shot(20.0)],
     });
     let sec_id = result.section_id.unwrap();
 
@@ -169,7 +158,7 @@ fn test_insert_before_shifts_station_offset() {
     // Insert before first shot
     let insert_result = state.execute(Command::CreateShot {
         section_id: sec_id,
-        shot: test_shot_data(5.0),
+        shot: shot(5.0),
         after_shot_id: None,
         before_shot_id: Some(first_shot_id),
     });
@@ -201,7 +190,7 @@ fn test_insert_before_shifts_loop_closure() {
         date: None,
         color: "#0000ff".to_string(),
         direction: None,
-        shots: vec![test_shot_data(12.0)],
+        shots: vec![shot(12.0)],
     });
     let sec_c = result_c.section_id.unwrap();
 
@@ -229,7 +218,7 @@ fn test_insert_before_shifts_loop_closure() {
     let first_shot_id = proj.sections.iter().find(|s| s.id == sec_a).unwrap().shots[0].id;
     let insert_result = state.execute(Command::CreateShot {
         section_id: sec_a,
-        shot: test_shot_data(5.0),
+        shot: shot(5.0),
         after_shot_id: None,
         before_shot_id: Some(first_shot_id),
     });
@@ -290,7 +279,7 @@ fn test_insert_before_undo_restores_refs() {
     // Insert before first shot of section A
     let insert_result = state.execute(Command::CreateShot {
         section_id: sec_a,
-        shot: test_shot_data(5.0),
+        shot: shot(5.0),
         after_shot_id: None,
         before_shot_id: Some(first_shot_id),
     });
@@ -326,7 +315,7 @@ fn test_insert_before_redo_shifts_refs_again() {
     // Insert before first shot
     let insert_result = state.execute(Command::CreateShot {
         section_id: sec_a,
-        shot: test_shot_data(5.0),
+        shot: shot(5.0),
         after_shot_id: None,
         before_shot_id: Some(first_shot_id),
     });
@@ -372,7 +361,7 @@ fn test_insert_after_only_shifts_refs_beyond() {
     // This should shift station refs >= station 2 (pos+2=2)
     let insert_result = state.execute(Command::CreateShot {
         section_id: sec_a,
-        shot: test_shot_data(7.0),
+        shot: shot(7.0),
         after_shot_id: Some(first_shot_id),
         before_shot_id: None,
     });
@@ -482,11 +471,7 @@ fn test_delete_shot_undo_redo_with_snapshot() {
 
 #[test]
 fn test_insert_before_pos0_adjusts_section_offsets() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Offset Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Offset Test");
 
     // Section with 2 shots heading north (azimuth 0)
     let result = state.execute(Command::CreateSection {
@@ -495,10 +480,7 @@ fn test_insert_before_pos0_adjusts_section_offsets() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![
-            directional_shot_data(0.0, 10.0),
-            directional_shot_data(0.0, 5.0),
-        ],
+        shots: vec![straight_shot(0.0, 10.0), straight_shot(0.0, 5.0)],
     });
     let sec_a = result.section_id.unwrap();
 
@@ -529,7 +511,7 @@ fn test_insert_before_pos0_adjusts_section_offsets() {
     let first_shot_id = proj.sections.iter().find(|s| s.id == sec_a).unwrap().shots[0].id;
     let insert_result = state.execute(Command::CreateShot {
         section_id: sec_a,
-        shot: directional_shot_data(90.0, 3.0),
+        shot: straight_shot(90.0, 3.0),
         after_shot_id: None,
         before_shot_id: Some(first_shot_id),
     });
@@ -612,11 +594,7 @@ fn test_insert_before_pos0_adjusts_section_offsets() {
 
 #[test]
 fn test_insert_before_pos0_adjusts_merged_section_offsets() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Merged Offset Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Merged Offset Test");
 
     // Section A: 2 shots north
     let result_a = state.execute(Command::CreateSection {
@@ -625,10 +603,7 @@ fn test_insert_before_pos0_adjusts_merged_section_offsets() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![
-            directional_shot_data(0.0, 10.0),
-            directional_shot_data(0.0, 5.0),
-        ],
+        shots: vec![straight_shot(0.0, 10.0), straight_shot(0.0, 5.0)],
     });
     let sec_a = result_a.section_id.unwrap();
 
@@ -639,7 +614,7 @@ fn test_insert_before_pos0_adjusts_merged_section_offsets() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![directional_shot_data(90.0, 8.0)],
+        shots: vec![straight_shot(90.0, 8.0)],
     });
     let sec_b = result_b.section_id.unwrap();
 
@@ -671,7 +646,7 @@ fn test_insert_before_pos0_adjusts_merged_section_offsets() {
     let first_shot_id = proj.sections.iter().find(|s| s.id == sec_a).unwrap().shots[0].id;
     let insert_result = state.execute(Command::CreateShot {
         section_id: sec_a,
-        shot: directional_shot_data(90.0, 3.0),
+        shot: straight_shot(90.0, 3.0),
         after_shot_id: None,
         before_shot_id: Some(first_shot_id),
     });
@@ -719,11 +694,7 @@ fn test_insert_before_pos0_adjusts_merged_section_offsets() {
 
 #[test]
 fn test_insert_before_pos0_undo_restores_offsets() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Undo Offset Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Undo Offset Test");
 
     let result = state.execute(Command::CreateSection {
         name: Some("Section A".to_string()),
@@ -731,7 +702,7 @@ fn test_insert_before_pos0_undo_restores_offsets() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![directional_shot_data(0.0, 10.0)],
+        shots: vec![straight_shot(0.0, 10.0)],
     });
     let sec_a = result.section_id.unwrap();
 
@@ -751,7 +722,7 @@ fn test_insert_before_pos0_undo_restores_offsets() {
     let first_shot_id = proj.sections.iter().find(|s| s.id == sec_a).unwrap().shots[0].id;
     let insert_result = state.execute(Command::CreateShot {
         section_id: sec_a,
-        shot: directional_shot_data(90.0, 5.0),
+        shot: straight_shot(90.0, 5.0),
         after_shot_id: None,
         before_shot_id: Some(first_shot_id),
     });
@@ -845,11 +816,7 @@ fn test_insert_before_pos0_undo_restores_offsets() {
 
 #[test]
 fn test_insert_before_pos_gt0_no_offset_adjustment() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "No Offset Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("No Offset Test");
 
     let result = state.execute(Command::CreateSection {
         name: Some("Section A".to_string()),
@@ -857,10 +824,7 @@ fn test_insert_before_pos_gt0_no_offset_adjustment() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![
-            directional_shot_data(0.0, 10.0),
-            directional_shot_data(0.0, 5.0),
-        ],
+        shots: vec![straight_shot(0.0, 10.0), straight_shot(0.0, 5.0)],
     });
     let sec_a = result.section_id.unwrap();
 
@@ -878,7 +842,7 @@ fn test_insert_before_pos_gt0_no_offset_adjustment() {
     let second_shot_id = proj.sections.iter().find(|s| s.id == sec_a).unwrap().shots[1].id;
     let insert_result = state.execute(Command::CreateShot {
         section_id: sec_a,
-        shot: directional_shot_data(90.0, 3.0),
+        shot: straight_shot(90.0, 3.0),
         after_shot_id: None,
         before_shot_id: Some(second_shot_id),
     });

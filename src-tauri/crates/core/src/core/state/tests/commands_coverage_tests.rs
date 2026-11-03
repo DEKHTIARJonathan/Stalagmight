@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // ============================================================================
 // Coverage gap tests: commands.rs - batch edge cases
@@ -11,22 +12,14 @@ use super::*;
 
 #[test]
 fn test_batch_empty_is_noop() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     let result = state.execute(Command::Batch { commands: vec![] });
     assert!(result.success);
 }
 
 #[test]
 fn test_batch_disallowed_command_save_project() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     let result = state.execute(Command::Batch {
         commands: vec![Command::SaveProject {
             path: Some(PathBuf::from("/tmp/test.stalx")),
@@ -41,11 +34,7 @@ fn test_batch_disallowed_command_save_project() {
 
 #[test]
 fn test_batch_partial_failure_rolls_back() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let sections_before = state.get_project_state().unwrap().sections.len();
 
@@ -58,7 +47,7 @@ fn test_batch_partial_failure_rolls_back() {
                 date: None,
                 color: "#ff0000".to_string(),
                 direction: None,
-                shots: vec![test_shot_data(5.0)],
+                shots: vec![shot(5.0)],
             },
             Command::MergeStations {
                 station_a: StationRef::new(9999, 0),
@@ -86,11 +75,7 @@ fn test_batch_partial_failure_rolls_back() {
 /// them, not the last one.
 #[test]
 fn batched_section_deletes_are_one_undo_entry() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Withdraw".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Withdraw");
 
     let make = |name: &str| {
         state
@@ -100,7 +85,7 @@ fn batched_section_deletes_are_one_undo_entry() {
                 date: None,
                 color: "#ff0000".to_string(),
                 direction: None,
-                shots: vec![test_shot_data(5.0)],
+                shots: vec![shot(5.0)],
             })
             .section_id
             .unwrap()
@@ -154,11 +139,7 @@ fn batched_section_deletes_are_one_undo_entry() {
 /// exists. This is that claim as a test rather than as prose.
 #[test]
 fn a_batch_may_reverse_a_section_and_then_delete_it() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Mixed".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Mixed");
 
     let doomed = state
         .execute(Command::CreateSection {
@@ -167,7 +148,7 @@ fn a_batch_may_reverse_a_section_and_then_delete_it() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+            shots: vec![shot(5.0), shot(7.0)],
         })
         .section_id
         .unwrap();
@@ -178,7 +159,7 @@ fn a_batch_may_reverse_a_section_and_then_delete_it() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(9.0)],
+            shots: vec![shot(9.0)],
         })
         .section_id
         .unwrap();
@@ -231,11 +212,7 @@ fn a_batch_may_reverse_a_section_and_then_delete_it() {
 /// a delete if the delete makes every later reference fail.
 #[test]
 fn a_batch_that_reverses_a_section_after_deleting_it_rolls_back() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Mixed".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Mixed");
 
     let section_id = state
         .execute(Command::CreateSection {
@@ -244,7 +221,7 @@ fn a_batch_that_reverses_a_section_after_deleting_it_rolls_back() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -292,11 +269,7 @@ fn a_batch_that_reverses_a_section_after_deleting_it_rolls_back() {
 /// refuses a second datum inside one merge group.
 #[test]
 fn test_batch_second_zero_datum_lands_on_the_origin_the_first_established() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let north = |length: f64| ShotData {
         azimuth_in: 0.0,
@@ -390,11 +363,7 @@ fn test_batch_second_zero_datum_lands_on_the_origin_the_first_established() {
 
 #[test]
 fn test_create_section_rejects_negative_length_shot() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     let result = state.execute(Command::CreateSection {
         name: Some("Bad".to_string()),
         surveyor: None,
@@ -416,11 +385,7 @@ fn test_create_section_rejects_negative_length_shot() {
 
 #[test]
 fn test_create_shot_rejects_zero_length() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     let section_id = {
         let result = state.execute(Command::CreateSection {
             name: None,
@@ -428,7 +393,7 @@ fn test_create_shot_rejects_zero_length() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         });
         result.section_id.unwrap()
     };
@@ -452,11 +417,7 @@ fn test_create_shot_rejects_zero_length() {
 
 #[test]
 fn test_update_shot_rejects_zero_resulting_length() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     let section_id = {
         let result = state.execute(Command::CreateSection {
             name: None,
@@ -464,7 +425,7 @@ fn test_update_shot_rejects_zero_resulting_length() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         });
         result.section_id.unwrap()
     };
@@ -494,11 +455,7 @@ fn test_update_shot_rejects_zero_resulting_length() {
 /// the update SETTING one.
 #[test]
 fn test_update_shot_rejects_an_explicitly_negative_length() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     let section_id = state
         .execute(Command::CreateSection {
             name: None,
@@ -506,7 +463,7 @@ fn test_update_shot_rejects_an_explicitly_negative_length() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -547,7 +504,7 @@ fn section_holding_a_zero_length_shot(state: &AppState) -> (SectionId, [ShotId; 
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0), test_shot_data(4.0)],
+            shots: vec![shot(5.0), shot(4.0)],
         })
         .section_id
         .unwrap();
@@ -565,11 +522,7 @@ fn section_holding_a_zero_length_shot(state: &AppState) -> (SectionId, [ShotId; 
 /// locked the invalid length out of the very edits that could correct it (#413).
 #[test]
 fn test_update_shot_allows_a_kind_only_edit_on_a_zero_length_shot() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     let (section_id, [_, zero_length]) = section_holding_a_zero_length_shot(&state);
 
     let result = state.execute(Command::UpdateShot {
@@ -594,11 +547,7 @@ fn test_update_shot_allows_a_kind_only_edit_on_a_zero_length_shot() {
 /// every older entry underneath it is sealed off.
 #[test]
 fn test_undo_of_a_kind_change_on_a_zero_length_shot_leaves_the_history_usable() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     let (section_id, [normal, zero_length]) = section_holding_a_zero_length_shot(&state);
 
     // The older entry, so a wedge is visible as the step BENEATH the failed one.
@@ -670,11 +619,7 @@ fn test_undo_of_a_kind_change_on_a_zero_length_shot_leaves_the_history_usable() 
 
 #[test]
 fn test_move_station_rejects_zero_length_result() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     let result = state.execute(Command::CreateSection {
         name: None,
         surveyor: None,
@@ -710,18 +655,14 @@ fn test_move_station_rejects_zero_length_result() {
 
 #[test]
 fn test_move_station_last_station() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     let result = state.execute(Command::CreateSection {
         name: None,
         surveyor: None,
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+        shots: vec![shot(5.0), shot(3.0)],
     });
     let section_id = result.section_id.unwrap();
 
@@ -752,18 +693,14 @@ fn test_move_station_last_station() {
 
 #[test]
 fn test_move_station_invalid_index() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     let result = state.execute(Command::CreateSection {
         name: None,
         surveyor: None,
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_id = result.section_id.unwrap();
 

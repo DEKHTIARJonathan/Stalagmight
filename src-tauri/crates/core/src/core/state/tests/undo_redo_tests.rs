@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // === #41 synthetic repro: deleting a shot must not shift unrelated/upstream geometry ===
 //
@@ -36,11 +37,7 @@ use super::*;
 /// always read off B.
 #[test]
 fn delete_shot_does_not_shift_independent_component() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "T".to_string(),
-        location: None,
-    });
+    let state = state_with_project("T");
 
     let a = state
         .execute(Command::CreateSection {
@@ -49,7 +46,7 @@ fn delete_shot_does_not_shift_independent_component() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+            shots: vec![shot(5.0), shot(7.0)],
         })
         .section_id
         .unwrap();
@@ -60,7 +57,7 @@ fn delete_shot_does_not_shift_independent_component() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+            shots: vec![shot(4.0), shot(6.0)],
         })
         .section_id
         .unwrap();
@@ -141,11 +138,7 @@ fn delete_shot_does_not_shift_independent_component() {
 /// head and a neighbor merged onto that head must not move.
 #[test]
 fn delete_tail_shot_does_not_shift_merged_head_neighbor() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "T".to_string(),
-        location: None,
-    });
+    let state = state_with_project("T");
 
     let a = state
         .execute(Command::CreateSection {
@@ -154,7 +147,7 @@ fn delete_tail_shot_does_not_shift_merged_head_neighbor() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+            shots: vec![shot(5.0), shot(7.0)],
         })
         .section_id
         .unwrap();
@@ -165,7 +158,7 @@ fn delete_tail_shot_does_not_shift_merged_head_neighbor() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+            shots: vec![shot(4.0), shot(6.0)],
         })
         .section_id
         .unwrap();
@@ -234,11 +227,7 @@ fn delete_tail_shot_does_not_shift_merged_head_neighbor() {
 /// must not over-propagate into a global shift.
 #[test]
 fn delete_first_shot_keeps_downstream_merged_neighbor_put() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "T".to_string(),
-        location: None,
-    });
+    let state = state_with_project("T");
 
     let a = state
         .execute(Command::CreateSection {
@@ -247,7 +236,7 @@ fn delete_first_shot_keeps_downstream_merged_neighbor_put() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+            shots: vec![shot(5.0), shot(7.0)],
         })
         .section_id
         .unwrap();
@@ -258,7 +247,7 @@ fn delete_first_shot_keeps_downstream_merged_neighbor_put() {
             date: None,
             color: "#0000ff".to_string(),
             direction: None,
-            shots: vec![test_shot_data(8.0)],
+            shots: vec![shot(8.0)],
         })
         .section_id
         .unwrap();
@@ -349,12 +338,7 @@ fn unrecognised_shot_kinds_are_scoped_to_their_load() {
 
 #[test]
 fn test_set_shot_kind() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -362,7 +346,7 @@ fn test_set_shot_kind() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -388,12 +372,7 @@ fn test_set_shot_kind() {
 
 #[test]
 fn test_undo_create_section() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     state.execute(Command::CreateSection {
         name: Some("To Undo".to_string()),
@@ -401,7 +380,7 @@ fn test_undo_create_section() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     assert_eq!(state.get_project_state().unwrap().sections.len(), 1);
@@ -415,12 +394,7 @@ fn test_undo_create_section() {
 
 #[test]
 fn test_undo_delete_section() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: Some("Will Delete".to_string()),
@@ -428,7 +402,7 @@ fn test_undo_delete_section() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -447,12 +421,7 @@ fn test_undo_delete_section() {
 
 #[test]
 fn test_undo_update_shot() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -460,7 +429,7 @@ fn test_undo_update_shot() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -492,12 +461,7 @@ fn test_undo_update_shot() {
 
 #[test]
 fn test_redo_create_section() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     state.execute(Command::CreateSection {
         name: Some("Redo Me".to_string()),
@@ -520,12 +484,7 @@ fn test_redo_create_section() {
 
 #[test]
 fn test_undo_nothing() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     assert!(!state.can_undo());
 
@@ -536,12 +495,7 @@ fn test_undo_nothing() {
 
 #[test]
 fn test_redo_nothing() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     assert!(!state.can_redo());
 
@@ -552,12 +506,7 @@ fn test_redo_nothing() {
 
 #[test]
 fn test_redo_cleared_on_new_command() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     state.execute(Command::CreateSection {
         name: Some("First".to_string()),
@@ -632,7 +581,7 @@ fn test_project_snapshot_pair_undo_redo_roundtrip() {
         color: "#ff0000".to_string(),
         direction: Some(SurveyDirection::In),
         quality: 1.0,
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
     });
 
     let mut after = Project::new("After".to_string(), None);
@@ -643,7 +592,7 @@ fn test_project_snapshot_pair_undo_redo_roundtrip() {
         color: "#00ff00".to_string(),
         direction: Some(SurveyDirection::Out),
         quality: 1.0,
-        shots: vec![test_shot_data(2.0), test_shot_data(3.0)],
+        shots: vec![shot(2.0), shot(3.0)],
     });
 
     let before_json = serde_json::to_string(&before).unwrap();
@@ -784,12 +733,7 @@ fn test_undo_merge_info_fails_when_project_lock_poisoned() {
 
 #[test]
 fn test_project_modification_tracking() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let initial_modified = state.get_project_state().unwrap().modified_at;
 

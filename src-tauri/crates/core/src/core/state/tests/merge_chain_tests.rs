@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project, straight_shot};
 
 // === Merge chain tests ===
 
@@ -24,11 +25,7 @@ use super::*;
 /// geometry within each section is preserved exactly.
 #[test]
 fn test_merge_chain_transitive_offsets_are_correct() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Chain".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Chain");
 
     let a = state
         .execute(Command::CreateSection {
@@ -37,7 +34,7 @@ fn test_merge_chain_transitive_offsets_are_correct() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![directional_shot_data(90.0, 10.0)],
+            shots: vec![straight_shot(90.0, 10.0)],
         })
         .section_id
         .unwrap();
@@ -49,7 +46,7 @@ fn test_merge_chain_transitive_offsets_are_correct() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![directional_shot_data(0.0, 5.0)],
+            shots: vec![straight_shot(0.0, 5.0)],
         })
         .section_id
         .unwrap();
@@ -61,7 +58,7 @@ fn test_merge_chain_transitive_offsets_are_correct() {
             date: None,
             color: "#0000ff".to_string(),
             direction: None,
-            shots: vec![directional_shot_data(90.0, 3.0)],
+            shots: vec![straight_shot(90.0, 3.0)],
         })
         .section_id
         .unwrap();
@@ -180,11 +177,7 @@ fn test_merge_chain_transitive_offsets_are_correct() {
 /// point to B.1, because all existing stations shifted up by one.
 #[test]
 fn test_insert_before_pos0_shifts_merge_refs_in_chain() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "ShiftChain".to_string(),
-        location: None,
-    });
+    let state = state_with_project("ShiftChain");
 
     let a = state
         .execute(Command::CreateSection {
@@ -193,7 +186,7 @@ fn test_insert_before_pos0_shifts_merge_refs_in_chain() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![directional_shot_data(90.0, 10.0)],
+            shots: vec![straight_shot(90.0, 10.0)],
         })
         .section_id
         .unwrap();
@@ -205,7 +198,7 @@ fn test_insert_before_pos0_shifts_merge_refs_in_chain() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![directional_shot_data(0.0, 5.0)],
+            shots: vec![straight_shot(0.0, 5.0)],
         })
         .section_id
         .unwrap();
@@ -217,7 +210,7 @@ fn test_insert_before_pos0_shifts_merge_refs_in_chain() {
             date: None,
             color: "#0000ff".to_string(),
             direction: None,
-            shots: vec![directional_shot_data(90.0, 3.0)],
+            shots: vec![straight_shot(90.0, 3.0)],
         })
         .section_id
         .unwrap();
@@ -241,7 +234,7 @@ fn test_insert_before_pos0_shifts_merge_refs_in_chain() {
     // Insert a new shot at the very start of section B (before_shot_id = first shot)
     let insert_result = state.execute(Command::CreateShot {
         section_id: b,
-        shot: directional_shot_data(270.0, 2.0),
+        shot: straight_shot(270.0, 2.0),
         after_shot_id: None,
         before_shot_id: Some(first_b_shot_id),
     });
@@ -314,11 +307,7 @@ fn test_insert_before_pos0_shifts_merge_refs_in_chain() {
 /// merge edges (A↔B and B↔C), leaving A and C isolated.
 #[test]
 fn test_delete_middle_section_removes_both_merge_edges() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "DeleteMiddle".to_string(),
-        location: None,
-    });
+    let state = state_with_project("DeleteMiddle");
 
     let a = state
         .execute(Command::CreateSection {
@@ -327,7 +316,7 @@ fn test_delete_middle_section_removes_both_merge_edges() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -339,7 +328,7 @@ fn test_delete_middle_section_removes_both_merge_edges() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(3.0)],
+            shots: vec![shot(3.0)],
         })
         .section_id
         .unwrap();
@@ -351,7 +340,7 @@ fn test_delete_middle_section_removes_both_merge_edges() {
             date: None,
             color: "#0000ff".to_string(),
             direction: None,
-            shots: vec![test_shot_data(4.0)],
+            shots: vec![shot(4.0)],
         })
         .section_id
         .unwrap();
@@ -408,11 +397,7 @@ fn test_delete_middle_section_removes_both_merge_edges() {
 /// B and C colocated at their merge point.
 #[test]
 fn test_unmerge_in_chain_does_not_leave_stale_offset() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "UnmergeChain".to_string(),
-        location: None,
-    });
+    let state = state_with_project("UnmergeChain");
 
     // A: 1 shot east (10m)
     let a = state
@@ -422,7 +407,7 @@ fn test_unmerge_in_chain_does_not_leave_stale_offset() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![directional_shot_data(90.0, 10.0)],
+            shots: vec![straight_shot(90.0, 10.0)],
         })
         .section_id
         .unwrap();
@@ -435,7 +420,7 @@ fn test_unmerge_in_chain_does_not_leave_stale_offset() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![directional_shot_data(0.0, 5.0)],
+            shots: vec![straight_shot(0.0, 5.0)],
         })
         .section_id
         .unwrap();
@@ -448,7 +433,7 @@ fn test_unmerge_in_chain_does_not_leave_stale_offset() {
             date: None,
             color: "#0000ff".to_string(),
             direction: None,
-            shots: vec![directional_shot_data(90.0, 3.0)],
+            shots: vec![straight_shot(90.0, 3.0)],
         })
         .section_id
         .unwrap();
@@ -544,11 +529,7 @@ fn test_unmerge_in_chain_does_not_leave_stale_offset() {
 /// Assert A.0 remains at its original coordinates after the merge.
 #[test]
 fn test_merge_datum_section_does_not_move() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "DatumAware".to_string(),
-        location: None,
-    });
+    let state = state_with_project("DatumAware");
 
     // A: shot heading east
     let a = state
@@ -558,7 +539,7 @@ fn test_merge_datum_section_does_not_move() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![directional_shot_data(90.0, 10.0)],
+            shots: vec![straight_shot(90.0, 10.0)],
         })
         .section_id
         .unwrap();
@@ -571,7 +552,7 @@ fn test_merge_datum_section_does_not_move() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![directional_shot_data(0.0, 5.0)],
+            shots: vec![straight_shot(0.0, 5.0)],
         })
         .section_id
         .unwrap();
@@ -679,11 +660,7 @@ fn test_merge_datum_section_does_not_move() {
 /// an undo. After undo the shot must still be virtual.
 #[test]
 fn test_reference_shot_survives_merge_then_undo() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "RefShot".to_string(),
-        location: None,
-    });
+    let state = state_with_project("RefShot");
 
     let a = state
         .execute(Command::CreateSection {
@@ -692,7 +669,7 @@ fn test_reference_shot_survives_merge_then_undo() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            shots: vec![shot(5.0), shot(3.0)],
         })
         .section_id
         .unwrap();
@@ -704,7 +681,7 @@ fn test_reference_shot_survives_merge_then_undo() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(4.0)],
+            shots: vec![shot(4.0)],
         })
         .section_id
         .unwrap();
@@ -790,11 +767,7 @@ fn test_reference_shot_survives_merge_then_undo() {
 
 #[test]
 fn test_set_station_comment_set_update_remove() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Comments".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Comments");
     let sec = state
         .execute(Command::CreateSection {
             name: Some("A".to_string()),
@@ -802,7 +775,7 @@ fn test_set_station_comment_set_update_remove() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -871,11 +844,7 @@ fn test_set_station_comment_set_update_remove() {
 
 #[test]
 fn test_set_station_comment_invalid_refs_fail() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "BadComments".to_string(),
-        location: None,
-    });
+    let state = state_with_project("BadComments");
     let sec = state
         .execute(Command::CreateSection {
             name: None,
@@ -883,7 +852,7 @@ fn test_set_station_comment_invalid_refs_fail() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(3.0)],
+            shots: vec![shot(3.0)],
         })
         .section_id
         .unwrap();
@@ -910,11 +879,7 @@ fn test_set_station_comment_invalid_refs_fail() {
 
 #[test]
 fn test_station_comment_survives_unrelated_undo_redo() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "CommentUndo".to_string(),
-        location: None,
-    });
+    let state = state_with_project("CommentUndo");
     let sec = state
         .execute(Command::CreateSection {
             name: Some("A".to_string()),
@@ -922,7 +887,7 @@ fn test_station_comment_survives_unrelated_undo_redo() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            shots: vec![shot(5.0), shot(3.0)],
         })
         .section_id
         .unwrap();
@@ -938,7 +903,7 @@ fn test_station_comment_survives_unrelated_undo_redo() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(2.0)],
+        shots: vec![shot(2.0)],
     });
     assert!(state.undo().success);
     assert_eq!(
@@ -966,11 +931,7 @@ fn test_station_comment_survives_unrelated_undo_redo() {
 fn test_station_comment_persists_across_save_open() {
     let temp_dir = TempDir::new().unwrap();
     let save_path = temp_dir.path().join("comments.stalx");
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "CommentPersist".to_string(),
-        location: None,
-    });
+    let state = state_with_project("CommentPersist");
     let sec = state
         .execute(Command::CreateSection {
             name: Some("A".to_string()),
@@ -978,7 +939,7 @@ fn test_station_comment_persists_across_save_open() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -1004,11 +965,7 @@ fn test_station_comment_persists_across_save_open() {
 #[test]
 fn test_move_comment_transfers_between_stations() {
     use crate::core::command::CommentHolder;
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "MoveComment".to_string(),
-        location: None,
-    });
+    let state = state_with_project("MoveComment");
     let sec = state
         .execute(Command::CreateSection {
             name: Some("A".to_string()),
@@ -1016,7 +973,7 @@ fn test_move_comment_transfers_between_stations() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            shots: vec![shot(5.0), shot(3.0)],
         })
         .section_id
         .unwrap();
@@ -1047,11 +1004,7 @@ fn test_move_comment_transfers_between_stations() {
 #[test]
 fn test_move_comment_swap_exchanges_comments() {
     use crate::core::command::CommentHolder;
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "SwapComment".to_string(),
-        location: None,
-    });
+    let state = state_with_project("SwapComment");
     let sec = state
         .execute(Command::CreateSection {
             name: Some("A".to_string()),
@@ -1059,7 +1012,7 @@ fn test_move_comment_swap_exchanges_comments() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            shots: vec![shot(5.0), shot(3.0)],
         })
         .section_id
         .unwrap();

@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{heading_shot, shot, state_with_project};
 
 #[test]
 fn undo_unmerge_restores_converted_closure_and_position() {
@@ -12,11 +13,7 @@ fn undo_unmerge_restores_converted_closure_and_position() {
     // closure-that-became-a-merge AND the original section position must all come
     // back, with no leftover merge cycle. (User report: undoing the unmerge left
     // the converted merge in place and the geometry shifted.)
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "X".to_string(),
-        location: None,
-    });
+    let state = state_with_project("X");
     let a = state
         .execute(Command::CreateSection {
             name: Some("A".to_string()),
@@ -24,7 +21,7 @@ fn undo_unmerge_restores_converted_closure_and_position() {
             date: None,
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            shots: vec![shot(5.0), shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -35,7 +32,7 @@ fn undo_unmerge_restores_converted_closure_and_position() {
             date: None,
             color: "#222222".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -128,11 +125,7 @@ fn undo_unmerge_singular_restores_converted_closure_and_position() {
     // Same round-trip as the pair variant, but via the singular Command::UnmergeStations
     // (which removes ALL merges on a station). It shares the conversion + snapshot path,
     // so this guards against the two unmerge variants diverging.
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "X".to_string(),
-        location: None,
-    });
+    let state = state_with_project("X");
     let a = state
         .execute(Command::CreateSection {
             name: Some("A".to_string()),
@@ -140,7 +133,7 @@ fn undo_unmerge_singular_restores_converted_closure_and_position() {
             date: None,
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            shots: vec![shot(5.0), shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -151,7 +144,7 @@ fn undo_unmerge_singular_restores_converted_closure_and_position() {
             date: None,
             color: "#222222".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -208,11 +201,7 @@ fn undo_merge_restores_aligned_closure_section_outside_merge_groups() {
     // drifted on undo - and realign_merges() can't self-heal closure drift (it inspects
     // merges only). With the full-snapshot undo, undo must restore EVERY section the
     // cascade could touch.
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "X".to_string(),
-        location: None,
-    });
+    let state = state_with_project("X");
     let a = state
         .execute(Command::CreateSection {
             name: Some("A".to_string()),
@@ -220,7 +209,7 @@ fn undo_merge_restores_aligned_closure_section_outside_merge_groups() {
             date: None,
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -231,7 +220,7 @@ fn undo_merge_restores_aligned_closure_section_outside_merge_groups() {
             date: None,
             color: "#222222".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -242,7 +231,7 @@ fn undo_merge_restores_aligned_closure_section_outside_merge_groups() {
             date: None,
             color: "#333333".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -307,11 +296,7 @@ fn undo_move_station_restores_pitch_and_adjacent_shots() {
     // The old lightweight StationMoveInfo undo restored azimuth/length/depth but
     // NOT pitch_in/pitch_out, so undo left pitch corrupted. Full-snapshot undo must
     // restore every field.
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "X".to_string(),
-        location: None,
-    });
+    let state = state_with_project("X");
     let a = state
         .execute(Command::CreateSection {
             name: Some("A".to_string()),
@@ -319,12 +304,12 @@ fn undo_move_station_restores_pitch_and_adjacent_shots() {
             date: None,
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            shots: vec![shot(5.0), shot(5.0)],
         })
         .section_id
         .unwrap();
 
-    // test_shot_data leaves pitch unset (None). Capture the adjacent shots' state.
+    // `shot` leaves pitch unset (None). Capture the adjacent shots' state.
     let before = state.get_project_state().unwrap();
     let sec_before = before.get_section(a).unwrap();
     let shot0_before = sec_before.shots[0].clone();
@@ -387,11 +372,7 @@ fn split_converts_orphaned_bridge_closure_immediately() {
     // The split path bypasses execute()'s reconcile; confirm it still converts a
     // closure that the split strands as a section's sole bridge (the reported
     // "not transformed immediately on split" bug).
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "X".to_string(),
-        location: None,
-    });
+    let state = state_with_project("X");
     // Section A: 3 shots → stations 0..3 (so we can split at the middle shot).
     let a = state
         .execute(Command::CreateSection {
@@ -400,11 +381,7 @@ fn split_converts_orphaned_bridge_closure_immediately() {
             date: None,
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![
-                test_shot_data(5.0),
-                test_shot_data(5.0),
-                test_shot_data(5.0),
-            ],
+            shots: vec![shot(5.0), shot(5.0), shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -415,7 +392,7 @@ fn split_converts_orphaned_bridge_closure_immediately() {
             date: None,
             color: "#222222".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -451,19 +428,6 @@ fn split_converts_orphaned_bridge_closure_immediately() {
     assert!(p.check_orphan_closures().is_empty());
 }
 
-/// A level shot on a fixed heading. Keeps the split/merge topology regressions
-/// below easy to reason about: every section is a straight, flat run.
-fn heading_shot(azimuth: f64, length: f64) -> ShotData {
-    ShotData {
-        azimuth_in: azimuth,
-        azimuth_out: (azimuth + 180.0) % 360.0,
-        length,
-        depth_in: 10.0,
-        depth_out: 10.0,
-        ..Default::default()
-    }
-}
-
 #[test]
 fn split_section_does_not_promote_a_bridge_closure_across_two_anchored_components() {
     // The split rewrites every cross-reference through `map_station_refs`, which
@@ -474,11 +438,7 @@ fn split_section_does_not_promote_a_bridge_closure_across_two_anchored_component
     // closure into a rigid merge - fusing two independently GPS-anchored
     // components ("Merged stations X and Y are N m apart" + "Merge-connected group
     // has 2 zero datums").
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Bridge".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Bridge");
     let mk = |name: &str, color: &str, azimuth: f64| {
         state
             .execute(Command::CreateSection {
@@ -580,12 +540,8 @@ fn split_section_does_not_promote_a_bridge_closure_across_two_anchored_component
 
 #[test]
 fn create_section_rejects_non_finite_geometry() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "X".to_string(),
-        location: None,
-    });
-    let mut bad = test_shot_data(5.0);
+    let state = state_with_project("X");
+    let mut bad = shot(5.0);
     bad.length = f64::NAN;
     let r = state.execute(Command::CreateSection {
         name: None,
@@ -605,11 +561,7 @@ fn create_section_rejects_non_finite_geometry() {
 
 #[test]
 fn move_station_rejects_non_finite_offset() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "X".to_string(),
-        location: None,
-    });
+    let state = state_with_project("X");
     let a = state
         .execute(Command::CreateSection {
             name: None,
@@ -617,7 +569,7 @@ fn move_station_rejects_non_finite_offset() {
             date: None,
             color: "#ffffff".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -635,11 +587,7 @@ fn move_station_rejects_non_finite_offset() {
 
 #[test]
 fn redo_insert_shot_keeps_merged_stations_aligned() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Align".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Align");
 
     // Section A (id 0): two shots → stations A0, A1, A2.
     let a = state
@@ -649,7 +597,7 @@ fn redo_insert_shot_keeps_merged_stations_aligned() {
             date: None,
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+            shots: vec![shot(5.0), shot(7.0)],
         })
         .section_id
         .unwrap();
@@ -661,7 +609,7 @@ fn redo_insert_shot_keeps_merged_stations_aligned() {
             date: None,
             color: "#222222".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -691,7 +639,7 @@ fn redo_insert_shot_keeps_merged_stations_aligned() {
     let after_id = state.get_project_state().unwrap().sections[0].shots[0].id;
     let ins = state.execute(Command::CreateShot {
         section_id: a,
-        shot: test_shot_data(6.0),
+        shot: shot(6.0),
         after_shot_id: Some(after_id),
         before_shot_id: None,
     });
@@ -708,12 +656,7 @@ fn redo_insert_shot_keeps_merged_stations_aligned() {
 
 #[test]
 fn test_create_section_returns_id() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let result = state.execute(Command::CreateSection {
         name: Some("First".to_string()),
@@ -760,12 +703,7 @@ fn test_create_section_no_project() {
 
 #[test]
 fn test_delete_section() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: Some("To Delete".to_string()),
@@ -773,7 +711,7 @@ fn test_delete_section() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -787,12 +725,7 @@ fn test_delete_section() {
 
 #[test]
 fn test_delete_nonexistent_section() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let result = state.execute(Command::DeleteSection { section_id: 999 });
     assert!(!result.success);
@@ -800,12 +733,7 @@ fn test_delete_nonexistent_section() {
 
 #[test]
 fn test_update_section_metadata() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: Some("Original".to_string()),

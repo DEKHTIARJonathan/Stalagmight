@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 #[test]
 fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
@@ -13,7 +14,7 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
     let mut project = Project::new("Restore".to_string(), None);
     let section_id = project
         .add_section(SectionData {
-            shots: vec![test_shot_data(2.0)],
+            shots: vec![shot(2.0)],
             ..Default::default()
         })
         .id;
@@ -193,7 +194,7 @@ fn opening_a_count_window_project_reads_only_the_newest_window_of_a_bloated_tabl
         project.add_section(SectionData {
             shots: vec![ShotData {
                 comment: Some("edit 399".to_string()),
-                ..test_shot_data(2.0)
+                ..shot(2.0)
             }],
             ..Default::default()
         });
@@ -336,18 +337,12 @@ fn opening_a_count_window_project_reads_only_the_newest_window_of_a_bloated_tabl
 /// (pre-v7) undo entry would silently clear under the v7 `double_option`
 /// null-means-clear semantics.
 fn shot_with_nullable_fields() -> ShotData {
-    ShotData {
-        pitch_in: Some(5.0),
-        pitch_out: Some(-5.0),
-        left: Some(1.5),
-        right: Some(2.5),
-        up: Some(0.5),
-        down: Some(3.5),
-        comment: Some("original".to_string()),
-        marker_index: Some(2),
-        temperature: Some(14.5),
-        ..test_shot_data(2.0)
-    }
+    shot(2.0)
+        .with_pitches(Some(5.0), Some(-5.0))
+        .with_lrud(Some(1.5), Some(2.5), Some(0.5), Some(3.5))
+        .with_comment("original")
+        .with_marker_index(2)
+        .with_temperature(14.5)
 }
 
 #[test]
@@ -560,7 +555,7 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
     let section_a = project_a
         .add_section(SectionData {
             name: Some("Section A".to_string()),
-            shots: vec![test_shot_data(1.0)],
+            shots: vec![shot(1.0)],
             ..Default::default()
         })
         .id;
@@ -589,7 +584,7 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
     let section_b = project_b
         .add_section(SectionData {
             name: Some("Section B".to_string()),
-            shots: vec![test_shot_data(2.0)],
+            shots: vec![shot(2.0)],
             ..Default::default()
         })
         .id;
@@ -718,15 +713,7 @@ fn merge_projects_does_not_renormalise_the_open_project() {
     let temp_dir = TempDir::new().unwrap();
 
     // The OPEN project: two free-floating sections, no datum anywhere.
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "Open".to_string(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("Open");
     let open_a = state
         .execute(Command::CreateSection {
             name: Some("Open A".to_string()),
@@ -734,7 +721,7 @@ fn merge_projects_does_not_renormalise_the_open_project() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(7.0)],
+            shots: vec![shot(7.0)],
         })
         .section_id
         .unwrap();
@@ -745,7 +732,7 @@ fn merge_projects_does_not_renormalise_the_open_project() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(9.0)],
+            shots: vec![shot(9.0)],
         })
         .section_id
         .unwrap();
@@ -773,7 +760,7 @@ fn merge_projects_does_not_renormalise_the_open_project() {
     let source_section_a = source_project_a
         .add_section(SectionData {
             name: Some("Source Section A".to_string()),
-            shots: vec![test_shot_data(1.0)],
+            shots: vec![shot(1.0)],
             ..Default::default()
         })
         .id;
@@ -789,7 +776,7 @@ fn merge_projects_does_not_renormalise_the_open_project() {
     let source_section_b = source_project_b
         .add_section(SectionData {
             name: Some("Source Section B".to_string()),
-            shots: vec![test_shot_data(2.0)],
+            shots: vec![shot(2.0)],
             ..Default::default()
         })
         .id;
@@ -863,7 +850,7 @@ fn test_merge_projects_preserves_station_comments() {
     let section_a = project_a
         .add_section(SectionData {
             name: Some("Section A".to_string()),
-            shots: vec![test_shot_data(1.0)],
+            shots: vec![shot(1.0)],
             ..Default::default()
         })
         .id;
@@ -879,7 +866,7 @@ fn test_merge_projects_preserves_station_comments() {
     let section_b = project_b
         .add_section(SectionData {
             name: Some("Section B".to_string()),
-            shots: vec![test_shot_data(2.0)],
+            shots: vec![shot(2.0)],
             ..Default::default()
         })
         .id;

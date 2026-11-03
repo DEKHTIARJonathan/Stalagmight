@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{section_with_shots, shot, state_with_project, straight_shot};
 
 // === Wedge healing: entries `undo()` cannot apply (Q8) ===
 
@@ -13,11 +14,7 @@ use super::*;
 /// pushes it straight back, so every older entry is unreachable forever.
 #[test]
 fn a_persisted_none_entry_does_not_block_the_history_beneath_it() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Wedged".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Wedged");
     for name in ["First", "Second"] {
         let created = state.execute(Command::CreateSection {
             name: Some(name.to_string()),
@@ -25,7 +22,7 @@ fn a_persisted_none_entry_does_not_block_the_history_beneath_it() {
             date: None,
             color: "#4ecdc4".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         });
         assert!(created.success);
     }
@@ -88,11 +85,7 @@ fn a_persisted_none_entry_does_not_block_the_history_beneath_it() {
 /// onto the undo stack, or the wedge is recreated at runtime.
 #[test]
 fn redoing_an_unundoable_entry_does_not_re_wedge_the_undo_stack() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Redo Wedge".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Redo Wedge");
 
     // A shot-less (waypoint-style) section, so the redone reverse is a no-op.
     let waypoint = state.execute(Command::CreateSection {
@@ -111,7 +104,7 @@ fn redoing_an_unundoable_entry_does_not_re_wedge_the_undo_stack() {
         date: None,
         color: "#4ecdc4".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let real_id = real.section_id.unwrap();
 
@@ -153,11 +146,7 @@ fn redoing_an_unundoable_entry_does_not_re_wedge_the_undo_stack() {
 /// so it must be cleared even though nothing was pushed.
 #[test]
 fn a_no_undo_data_command_still_clears_the_redo_branch() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Redo Clear".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Redo Clear");
 
     let mut ids: Vec<SectionId> = Vec::new();
     for name in ["A", "B", "C"] {
@@ -167,7 +156,7 @@ fn a_no_undo_data_command_still_clears_the_redo_branch() {
             date: None,
             color: "#4ecdc4".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         });
         assert!(created.success);
         ids.push(created.section_id.unwrap());
@@ -203,11 +192,7 @@ fn a_no_undo_data_command_still_clears_the_redo_branch() {
 /// harness all reach `execute` without passing the dialog's filter.
 #[test]
 fn a_shotless_reverse_leaves_the_redo_branch_intact() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "No-op Reverse".to_string(),
-        location: None,
-    });
+    let state = state_with_project("No-op Reverse");
 
     let waypoint = state.execute(Command::CreateSection {
         name: Some("Waypoint".to_string()),
@@ -225,7 +210,7 @@ fn a_shotless_reverse_leaves_the_redo_branch_intact() {
         date: None,
         color: "#4ecdc4".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     assert!(real.success);
 
@@ -440,15 +425,7 @@ fn test_update_config_leaves_an_explicitly_cleared_shortcut_empty() {
 /// undo must restore every offset exactly.
 #[test]
 fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_removed() {
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "datum frame".to_string(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("datum frame");
 
     let section = |name: &str| {
         state
@@ -458,7 +435,7 @@ fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_remov
                 date: None,
                 color: "#111111".to_string(),
                 direction: Some(SurveyDirection::In),
-                shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+                shots: vec![shot(5.0), shot(5.0)],
             })
             .section_id
             .unwrap()
@@ -571,43 +548,6 @@ fn finding_26_a_shot_edit_does_not_translate_a_group_whose_first_datum_was_remov
 // #413 finding 7, second half: a jump reconciles after EVERY step
 // ===========================================================================
 
-/// A shot with plain, easily-recognised geometry.
-fn straight_shot(azimuth: f64, length: f64) -> ShotData {
-    ShotData {
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        length,
-        depth_in: 0.0,
-        depth_out: 0.0,
-        ..Default::default()
-    }
-}
-
-/// An `AppState` with an empty project open, ready for commands.
-fn state_with_project() -> AppState {
-    let state = AppState::new().unwrap();
-    let created = state.execute(Command::CreateProject {
-        name: "JumpEpilogue".to_string(),
-        location: None,
-    });
-    assert!(created.success, "CreateProject failed: {:?}", created.error);
-    state
-}
-
-/// Create a section with `shots` and return its id.
-fn section_with_shots(state: &AppState, name: &str, shots: Vec<ShotData>) -> SectionId {
-    let created = state.execute(Command::CreateSection {
-        name: Some(name.to_string()),
-        surveyor: None,
-        date: None,
-        color: "#3388FF".to_string(),
-        direction: None,
-        shots,
-    });
-    assert!(created.success, "CreateSection failed: {:?}", created.error);
-    created.section_id.expect("CreateSection returned no id")
-}
-
 /// How many merges the project currently reports as misaligned.
 fn misaligned_merges(state: &AppState) -> usize {
     let guard = state.project.lock();
@@ -661,7 +601,7 @@ fn inject_drift(state: &AppState, partner: SectionId) {
 /// live one. After this runs, the only way back to the drift is that restore -
 /// which is exactly the shape a jump's INTERMEDIATE step has.
 fn history_recorded_over_drift() -> (AppState, SectionId) {
-    let state = state_with_project();
+    let state = state_with_project("JumpEpilogue");
     let (anchored, partner) = two_merged_sections(&state);
     inject_drift(&state, partner);
     let moved = state.execute(Command::MoveStation {
@@ -751,7 +691,7 @@ fn undo_to_reconciles_after_every_step_so_a_failed_jump_leaves_no_drift() {
 /// hold - is a snapshot that carries it.
 #[test]
 fn redo_to_reconciles_after_every_step_so_a_failed_jump_leaves_no_drift() {
-    let state = state_with_project();
+    let state = state_with_project("JumpEpilogue");
     let (_anchored, partner) = two_merged_sections(&state);
     inject_drift(&state, partner);
     let drifted = state
@@ -826,7 +766,7 @@ fn redo_to_reconciles_after_every_step_so_a_failed_jump_leaves_no_drift() {
 #[test]
 fn undo_to_lands_where_the_same_number_of_single_undos_lands_over_a_drifted_step() {
     fn build() -> (AppState, SectionId, SectionId) {
-        let state = state_with_project();
+        let state = state_with_project("JumpEpilogue");
         let (anchored, partner) = two_merged_sections(&state);
         inject_drift(&state, partner);
         for step in 0..2 {
@@ -899,7 +839,7 @@ fn undo_to_lands_where_the_same_number_of_single_undos_lands_over_a_drifted_step
 /// comes back under a fresh id there, keeping its uuid.
 #[test]
 fn redo_of_a_created_shot_with_the_maximum_id_remints_it_inside_the_window() {
-    let state = state_with_project();
+    let state = state_with_project("JumpEpilogue");
     let section = section_with_shots(&state, "A", vec![]);
 
     {
@@ -968,7 +908,7 @@ fn redo_of_a_created_shot_with_the_maximum_id_remints_it_inside_the_window() {
 /// never leaves it.
 #[test]
 fn undo_of_a_shot_snapshot_with_the_maximum_id_remints_it_inside_the_window() {
-    let state = state_with_project();
+    let state = state_with_project("JumpEpilogue");
     let section = section_with_shots(&state, "A", vec![straight_shot(0.0, 5.0)]);
 
     {
@@ -1029,7 +969,7 @@ fn undo_of_a_shot_snapshot_with_the_maximum_id_remints_it_inside_the_window() {
 /// section's window, so the inserted shot gets a fresh id there instead.
 #[test]
 fn an_anchored_redo_forcing_the_maximum_shot_id_remints_it_inside_the_window() {
-    let state = state_with_project();
+    let state = state_with_project("JumpEpilogue");
     let section = section_with_shots(
         &state,
         "A",
@@ -1113,7 +1053,7 @@ fn an_anchored_redo_forcing_the_maximum_shot_id_remints_it_inside_the_window() {
 /// already on `u32::MAX` the two could share an id.
 #[test]
 fn a_shot_added_after_an_out_of_window_restore_gets_a_fresh_id_in_its_window() {
-    let state = state_with_project();
+    let state = state_with_project("JumpEpilogue");
     let section = section_with_shots(&state, "A", vec![straight_shot(0.0, 5.0)]);
     {
         let mut stack = state.undo_stack.lock();
@@ -1207,7 +1147,7 @@ fn section_shot_lengths(state: &AppState, section_id: SectionId) -> Vec<f64> {
 /// what every `StationKey::AfterShot` and the Ariane export resolve by.
 #[test]
 fn undo_of_create_section_re_reads_the_live_shots_so_redo_keeps_uuids_on_their_own_shots() {
-    let state = state_with_project();
+    let state = state_with_project("JumpEpilogue");
     let section = section_with_shots(
         &state,
         "A",

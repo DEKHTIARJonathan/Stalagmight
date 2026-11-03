@@ -4,17 +4,13 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // === CreateShot undo/redo ID preservation tests ===
 
 #[test]
 fn test_create_shot_undo_redo_preserves_id() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create a section first
     let section_result = state.execute(Command::CreateSection {
@@ -23,7 +19,7 @@ fn test_create_shot_undo_redo_preserves_id() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_id = section_result.section_id.unwrap();
 
@@ -34,7 +30,7 @@ fn test_create_shot_undo_redo_preserves_id() {
     // Create a new shot
     state.execute(Command::CreateShot {
         section_id,
-        shot: test_shot_data(10.0),
+        shot: shot(10.0),
         after_shot_id: None,
         before_shot_id: None,
     });
@@ -66,12 +62,7 @@ fn test_create_shot_undo_redo_preserves_id() {
 
 #[test]
 fn test_create_shot_mid_section_undo_redo_preserves_position() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create a section with 3 shots
     let section_result = state.execute(Command::CreateSection {
@@ -80,11 +71,7 @@ fn test_create_shot_mid_section_undo_redo_preserves_position() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![
-            test_shot_data(1.0),
-            test_shot_data(2.0),
-            test_shot_data(3.0),
-        ],
+        shots: vec![shot(1.0), shot(2.0), shot(3.0)],
     });
     let section_id = section_result.section_id.unwrap();
 
@@ -96,7 +83,7 @@ fn test_create_shot_mid_section_undo_redo_preserves_position() {
     // Insert a shot after the first shot (mid-section insert)
     state.execute(Command::CreateShot {
         section_id,
-        shot: test_shot_data(99.0),
+        shot: shot(99.0),
         after_shot_id: Some(first_shot_id),
         before_shot_id: None,
     });
@@ -142,12 +129,7 @@ fn test_create_shot_mid_section_undo_redo_preserves_position() {
 
 #[test]
 fn test_create_shot_double_undo_redo_cycle() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let section_result = state.execute(Command::CreateSection {
         name: Some("Double Cycle".to_string()),
@@ -155,14 +137,14 @@ fn test_create_shot_double_undo_redo_cycle() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_id = section_result.section_id.unwrap();
 
     // Create a shot
     state.execute(Command::CreateShot {
         section_id,
-        shot: test_shot_data(20.0),
+        shot: shot(20.0),
         after_shot_id: None,
         before_shot_id: None,
     });
@@ -198,12 +180,7 @@ fn test_create_shot_double_undo_redo_cycle() {
 
 #[test]
 fn test_create_shot_undo_redo_then_edit() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let section_result = state.execute(Command::CreateSection {
         name: Some("Edit After Redo".to_string()),
@@ -218,7 +195,7 @@ fn test_create_shot_undo_redo_then_edit() {
     // Create a shot
     state.execute(Command::CreateShot {
         section_id,
-        shot: test_shot_data(15.0),
+        shot: shot(15.0),
         after_shot_id: None,
         before_shot_id: None,
     });
@@ -247,12 +224,7 @@ fn test_create_shot_undo_redo_then_edit() {
 
 #[test]
 fn test_create_shot_undo_redo_then_delete() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let section_result = state.execute(Command::CreateSection {
         name: Some("Delete After Redo".to_string()),
@@ -267,7 +239,7 @@ fn test_create_shot_undo_redo_then_delete() {
     // Create a shot
     state.execute(Command::CreateShot {
         section_id,
-        shot: test_shot_data(15.0),
+        shot: shot(15.0),
         after_shot_id: None,
         before_shot_id: None,
     });
@@ -294,12 +266,7 @@ fn test_create_shot_undo_redo_then_delete() {
 fn test_create_shot_created_snapshot_distinct_from_shot_snapshot() {
     // Verify that CreateShot uses CreatedShotSnapshot while
     // DeleteShot uses ProjectSnapshotPair
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let section_result = state.execute(Command::CreateSection {
         name: Some("Variant Check".to_string()),
@@ -307,14 +274,14 @@ fn test_create_shot_created_snapshot_distinct_from_shot_snapshot() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_id = section_result.section_id.unwrap();
 
     // Create a shot
     state.execute(Command::CreateShot {
         section_id,
-        shot: test_shot_data(10.0),
+        shot: shot(10.0),
         after_shot_id: None,
         before_shot_id: None,
     });
@@ -355,12 +322,7 @@ fn test_create_shot_created_snapshot_distinct_from_shot_snapshot() {
 
 #[test]
 fn test_insert_shot_before_first_position_and_undo_redo() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let section_result = state.execute(Command::CreateSection {
         name: Some("Before Insert".to_string()),
@@ -368,7 +330,7 @@ fn test_insert_shot_before_first_position_and_undo_redo() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0), test_shot_data(20.0)],
+        shots: vec![shot(10.0), shot(20.0)],
     });
     let section_id = section_result.section_id.unwrap();
 
@@ -378,7 +340,7 @@ fn test_insert_shot_before_first_position_and_undo_redo() {
     // Insert before the first shot (position 0 / prepend)
     let result = state.execute(Command::CreateShot {
         section_id,
-        shot: test_shot_data(5.0),
+        shot: shot(5.0),
         after_shot_id: None,
         before_shot_id: Some(first_shot_id),
     });
@@ -422,12 +384,7 @@ fn test_insert_shot_before_first_position_and_undo_redo() {
 
 #[test]
 fn test_prepend_shot_undo_preserves_geometry() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let section_result = state.execute(Command::CreateSection {
         name: Some("Prepend Geometry".to_string()),
@@ -495,12 +452,7 @@ fn test_prepend_shot_undo_preserves_geometry() {
 
 #[test]
 fn test_create_shot_rejects_both_after_and_before() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let section_result = state.execute(Command::CreateSection {
         name: Some("Reject Both".to_string()),
@@ -508,13 +460,13 @@ fn test_create_shot_rejects_both_after_and_before() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0), test_shot_data(20.0)],
+        shots: vec![shot(10.0), shot(20.0)],
     });
     let section_id = section_result.section_id.unwrap();
 
     let result = state.execute(Command::CreateShot {
         section_id,
-        shot: test_shot_data(5.0),
+        shot: shot(5.0),
         after_shot_id: Some(0),
         before_shot_id: Some(1),
     });
@@ -529,12 +481,7 @@ fn test_create_shot_rejects_both_after_and_before() {
 #[test]
 fn test_delete_shot_undo_redo_still_works() {
     // Regression test: ensure DeleteShot undo/redo behavior is unchanged
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let section_result = state.execute(Command::CreateSection {
         name: Some("Delete Shot Regression".to_string()),
@@ -542,7 +489,7 @@ fn test_delete_shot_undo_redo_still_works() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0), test_shot_data(10.0)],
+        shots: vec![shot(5.0), shot(10.0)],
     });
     let section_id = section_result.section_id.unwrap();
 
@@ -586,11 +533,7 @@ fn test_delete_shot_undo_redo_still_works() {
 #[test]
 fn test_check_merge_connectivity_both_zero_datums_blocked() {
     // Both sections have zero datum → can_merge=false
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "BothZD".to_string(),
-        location: None,
-    });
+    let state = state_with_project("BothZD");
 
     let result_a = state.execute(Command::CreateSection {
         name: None,
@@ -598,7 +541,7 @@ fn test_check_merge_connectivity_both_zero_datums_blocked() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
     });
     let a = result_a.section_id.unwrap();
 
@@ -608,7 +551,7 @@ fn test_check_merge_connectivity_both_zero_datums_blocked() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let b = result_b.section_id.unwrap();
 
@@ -643,11 +586,7 @@ fn test_check_merge_connectivity_both_zero_datums_blocked() {
 #[test]
 fn test_check_merge_connectivity_one_zero_datum_allowed() {
     // Only one section has zero datum → can_merge=true
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "OneZD".to_string(),
-        location: None,
-    });
+    let state = state_with_project("OneZD");
 
     let result_a = state.execute(Command::CreateSection {
         name: None,
@@ -655,7 +594,7 @@ fn test_check_merge_connectivity_one_zero_datum_allowed() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
     });
     let a = result_a.section_id.unwrap();
 
@@ -665,7 +604,7 @@ fn test_check_merge_connectivity_one_zero_datum_allowed() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let b = result_b.section_id.unwrap();
 
@@ -690,11 +629,7 @@ fn test_check_merge_connectivity_one_zero_datum_allowed() {
 #[test]
 fn test_check_merge_connectivity_neither_zero_datum_no_loop() {
     // Neither section has zero datum, no loop → can_merge=true
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "NoZD".to_string(),
-        location: None,
-    });
+    let state = state_with_project("NoZD");
 
     let result_a = state.execute(Command::CreateSection {
         name: None,
@@ -702,7 +637,7 @@ fn test_check_merge_connectivity_neither_zero_datum_no_loop() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
     });
     let a = result_a.section_id.unwrap();
 
@@ -712,7 +647,7 @@ fn test_check_merge_connectivity_neither_zero_datum_no_loop() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let b = result_b.section_id.unwrap();
 
@@ -731,11 +666,7 @@ fn test_check_merge_connectivity_neither_zero_datum_no_loop() {
 #[test]
 fn test_check_merge_connectivity_connected_creates_loop() {
     // Connected sections (neither has zero datum, loop exists) → can_merge=false
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Loop".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Loop");
 
     let result_a = state.execute(Command::CreateSection {
         name: None,
@@ -743,7 +674,7 @@ fn test_check_merge_connectivity_connected_creates_loop() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
     });
     let a = result_a.section_id.unwrap();
 
@@ -753,7 +684,7 @@ fn test_check_merge_connectivity_connected_creates_loop() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let b = result_b.section_id.unwrap();
 
@@ -784,11 +715,7 @@ fn test_check_merge_connectivity_connected_creates_loop() {
 fn test_check_merge_connectivity_both_zd_and_connected() {
     // When sections are connected AND both have zero datums, zero datum
     // takes priority for reason, but connected/preview remain correct.
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "BothZDConnected".to_string(),
-        location: None,
-    });
+    let state = state_with_project("BothZDConnected");
 
     // Create sections A (with ZD), C (no ZD, will bridge), B (with ZD)
     let result_a = state.execute(Command::CreateSection {
@@ -797,7 +724,7 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
     });
     let a = result_a.section_id.unwrap();
 
@@ -807,7 +734,7 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let b = result_b.section_id.unwrap();
 
@@ -817,7 +744,7 @@ fn test_check_merge_connectivity_both_zd_and_connected() {
         date: None,
         color: "#0000ff".to_string(),
         direction: None,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
     });
     let c = result_c.section_id.unwrap();
 

@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // ============================================================================
 // Delete section cascade tests
@@ -11,11 +12,7 @@ use super::*;
 
 #[test]
 fn test_delete_section_cascades_merges() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create two sections
     let sec_a = state
@@ -25,7 +22,7 @@ fn test_delete_section_cascades_merges() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -37,7 +34,7 @@ fn test_delete_section_cascades_merges() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(3.0)],
+            shots: vec![shot(3.0)],
         })
         .section_id
         .unwrap();
@@ -65,11 +62,7 @@ fn test_delete_section_cascades_merges() {
 
 #[test]
 fn test_delete_section_cascades_closures_and_offsets() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let sec_a = state
         .execute(Command::CreateSection {
@@ -78,7 +71,7 @@ fn test_delete_section_cascades_closures_and_offsets() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            shots: vec![shot(5.0), shot(3.0)],
         })
         .section_id
         .unwrap();
@@ -90,7 +83,7 @@ fn test_delete_section_cascades_closures_and_offsets() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(4.0)],
+            shots: vec![shot(4.0)],
         })
         .section_id
         .unwrap();
@@ -140,11 +133,7 @@ fn test_delete_section_cascades_closures_and_offsets() {
 
 #[test]
 fn test_delete_section_undo_restores_merges_and_datums() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let sec_a = state
         .execute(Command::CreateSection {
@@ -153,7 +142,7 @@ fn test_delete_section_undo_restores_merges_and_datums() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -165,7 +154,7 @@ fn test_delete_section_undo_restores_merges_and_datums() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(3.0)],
+            shots: vec![shot(3.0)],
         })
         .section_id
         .unwrap();
@@ -207,11 +196,7 @@ fn test_delete_section_undo_restores_merges_and_datums() {
 
 #[test]
 fn test_unmerge_removes_only_specific_merge() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let sec_a = state
         .execute(Command::CreateSection {
@@ -220,7 +205,7 @@ fn test_unmerge_removes_only_specific_merge() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -232,7 +217,7 @@ fn test_unmerge_removes_only_specific_merge() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(3.0)],
+            shots: vec![shot(3.0)],
         })
         .section_id
         .unwrap();
@@ -244,7 +229,7 @@ fn test_unmerge_removes_only_specific_merge() {
             date: None,
             color: "#0000ff".to_string(),
             direction: None,
-            shots: vec![test_shot_data(4.0)],
+            shots: vec![shot(4.0)],
         })
         .section_id
         .unwrap();
@@ -279,11 +264,7 @@ fn test_unmerge_removes_only_specific_merge() {
 
 #[test]
 fn test_unmerge_undo_restores_merge() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let sec_a = state
         .execute(Command::CreateSection {
@@ -292,7 +273,7 @@ fn test_unmerge_undo_restores_merge() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -304,7 +285,7 @@ fn test_unmerge_undo_restores_merge() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(3.0)],
+            shots: vec![shot(3.0)],
         })
         .section_id
         .unwrap();
@@ -384,11 +365,7 @@ fn kb5_import_overlap_interpolation_integration() {
     assert_eq!(shots_002.len(), 364);
 
     // ── Step 1: Create project and import section 002 at origin ──
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "KB5 Overlap Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("KB5 Overlap Test");
 
     let result_002 = state.execute_import_sections(
         vec![ImportSectionConfig {

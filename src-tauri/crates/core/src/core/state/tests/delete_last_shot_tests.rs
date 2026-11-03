@@ -4,16 +4,13 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // === delete_last_shot_and_section tests ===
 
 #[test]
 fn test_delete_last_shot_removes_section() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Delete Last Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Delete Last Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: Some("Single".to_string()),
@@ -21,7 +18,7 @@ fn test_delete_last_shot_removes_section() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     assert!(create_result.success);
     let section_id = create_result.section_id.unwrap();
@@ -48,11 +45,7 @@ fn test_delete_last_shot_removes_section() {
 
 #[test]
 fn test_delete_last_shot_fails_if_multiple_shots() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Multi Shot Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Multi Shot Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: Some("Multi".to_string()),
@@ -60,7 +53,7 @@ fn test_delete_last_shot_fails_if_multiple_shots() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        shots: vec![shot(5.0), shot(7.0)],
     });
     assert!(create_result.success);
     let section_id = create_result.section_id.unwrap();
@@ -77,11 +70,7 @@ fn test_delete_last_shot_fails_if_multiple_shots() {
 
 #[test]
 fn test_delete_last_shot_undo_restores() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Undo Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Undo Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: Some("WillDelete".to_string()),
@@ -89,7 +78,7 @@ fn test_delete_last_shot_undo_restores() {
         date: None,
         color: "#aabbcc".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_id = create_result.section_id.unwrap();
 
@@ -129,11 +118,7 @@ fn test_delete_last_shot_undo_restores() {
 
 #[test]
 fn test_delete_last_shot_cleans_up_offsets() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Offset Cleanup Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Offset Cleanup Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: Some("WithOffset".to_string()),
@@ -141,7 +126,7 @@ fn test_delete_last_shot_cleans_up_offsets() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_id = create_result.section_id.unwrap();
 
@@ -170,11 +155,7 @@ fn test_delete_last_shot_cleans_up_offsets() {
 
 #[test]
 fn test_delete_last_shot_cleans_up_merges() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Merge Cleanup Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Merge Cleanup Test");
 
     // Create two sections
     let create_a = state.execute(Command::CreateSection {
@@ -183,7 +164,7 @@ fn test_delete_last_shot_cleans_up_merges() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_a_id = create_a.section_id.unwrap();
 
@@ -193,7 +174,7 @@ fn test_delete_last_shot_cleans_up_merges() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(4.0)],
+        shots: vec![shot(4.0)],
     });
     let section_b_id = create_b.section_id.unwrap();
 
@@ -238,11 +219,7 @@ fn test_delete_last_shot_cleans_up_merges() {
 
 #[test]
 fn test_delete_last_shot_cleans_up_station_offsets() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Station Offset Cleanup Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Station Offset Cleanup Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: Some("WithStationOffset".to_string()),
@@ -250,7 +227,7 @@ fn test_delete_last_shot_cleans_up_station_offsets() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_id = create_result.section_id.unwrap();
 
@@ -287,11 +264,7 @@ fn test_delete_last_shot_cleans_up_station_offsets() {
 
 #[test]
 fn test_delete_last_shot_cleans_up_closures() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Closure Cleanup Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Closure Cleanup Test");
 
     // Create two sections
     let create_a = state.execute(Command::CreateSection {
@@ -300,7 +273,7 @@ fn test_delete_last_shot_cleans_up_closures() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_a_id = create_a.section_id.unwrap();
 
@@ -310,7 +283,7 @@ fn test_delete_last_shot_cleans_up_closures() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(4.0), test_shot_data(3.0)],
+        shots: vec![shot(4.0), shot(3.0)],
     });
     let section_b_id = create_b.section_id.unwrap();
 
@@ -368,11 +341,7 @@ fn test_delete_last_shot_cleans_up_closures() {
 
 #[test]
 fn test_delete_last_shot_undo_restores_references() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Undo Refs Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Undo Refs Test");
 
     // Create two sections
     let create_a = state.execute(Command::CreateSection {
@@ -381,7 +350,7 @@ fn test_delete_last_shot_undo_restores_references() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_a_id = create_a.section_id.unwrap();
 
@@ -391,7 +360,7 @@ fn test_delete_last_shot_undo_restores_references() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(4.0)],
+        shots: vec![shot(4.0)],
     });
     let section_b_id = create_b.section_id.unwrap();
 
@@ -514,11 +483,7 @@ fn test_delete_last_shot_undo_restores_references() {
 fn test_delete_section_undo_restores_relationships() {
     // Delete a section with merges, closures, offsets, zero datums.
     // Undo should restore all of them.
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Cleanup Undo Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Cleanup Undo Test");
 
     // Create two sections
     let sec_a_result = state.execute(Command::CreateSection {
@@ -527,7 +492,7 @@ fn test_delete_section_undo_restores_relationships() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let sec_a = sec_a_result.section_id.unwrap();
 
@@ -537,7 +502,7 @@ fn test_delete_section_undo_restores_relationships() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
     });
     let sec_b = sec_b_result.section_id.unwrap();
 

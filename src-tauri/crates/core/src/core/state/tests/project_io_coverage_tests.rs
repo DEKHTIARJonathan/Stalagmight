@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // ============================================================================
 // Coverage gap tests: project_io.rs
@@ -19,11 +20,7 @@ fn test_save_project_no_project_open() {
 
 #[test]
 fn test_save_project_no_path_specified() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     // No file_path on project and no path argument
     let result = state.save_project(None);
     assert!(!result.success);
@@ -37,11 +34,7 @@ fn test_save_project_implicit_first_save_autorename_when_target_exists() {
     let expected_autorenamed_path = temp_dir.path().join("existing_1.stalx");
     std::fs::write(&existing_path, b"ORIGINAL").unwrap();
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Simulate deferred-create behavior: reserved file_path, no open database yet,
     // and the explicit flag `create_project_full` sets for exactly this state.
@@ -81,11 +74,7 @@ fn test_save_project_implicit_first_save_autorename_when_target_exists() {
 fn session_after_a_failed_reopen() -> (AppState, PathBuf, TempDir) {
     let temp_dir = TempDir::new().unwrap();
     let path = temp_dir.path().join("X.stalx");
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "X".to_string(),
-        location: None,
-    });
+    let state = state_with_project("X");
     assert!(
         state
             .execute(Command::CreateSection {
@@ -94,7 +83,7 @@ fn session_after_a_failed_reopen() -> (AppState, PathBuf, TempDir) {
                 date: None,
                 color: "#ff0000".to_string(),
                 direction: None,
-                shots: vec![test_shot_data(5.0)],
+                shots: vec![shot(5.0)],
             })
             .success
     );
@@ -125,7 +114,7 @@ fn session_after_a_failed_reopen() -> (AppState, PathBuf, TempDir) {
                 date: None,
                 color: "#00ff00".to_string(),
                 direction: None,
-                shots: vec![test_shot_data(3.0)],
+                shots: vec![crate::test_fixtures::shot(3.0)],
             })
             .success
     );
@@ -242,11 +231,7 @@ fn an_implicit_save_is_refused_when_the_missing_handle_cannot_be_reopened() {
 #[test]
 fn test_save_project_adds_stalx_extension() {
     let temp_dir = TempDir::new().unwrap();
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
     // Save without .stalx extension
     let save_path = temp_dir.path().join("myproject");
     let result = state.save_project(Some(save_path));
@@ -291,19 +276,11 @@ fn save_as_with_an_uppercase_extension_does_not_replace_the_lowercase_project() 
     let lower = temp_dir.path().join("CaveA.stalx");
     let upper = temp_dir.path().join("CaveA.STALX");
 
-    let first = AppState::new().unwrap();
-    first.execute(Command::CreateProject {
-        name: "Project One".to_string(),
-        location: None,
-    });
+    let first = state_with_project("Project One");
     assert!(first.save_project(Some(lower.clone())).success);
     let lower_before = std::fs::read(&lower).unwrap();
 
-    let second = AppState::new().unwrap();
-    second.execute(Command::CreateProject {
-        name: "Project Two".to_string(),
-        location: None,
-    });
+    let second = state_with_project("Project Two");
     let result = second.save_project(Some(upper.clone()));
     assert!(result.success, "Save As failed: {:?}", result.error);
 
@@ -353,7 +330,7 @@ fn saving_a_project_opened_with_an_uppercase_extension_writes_that_file() {
                 date: None,
                 color: "#ff0000".to_string(),
                 direction: None,
-                shots: vec![test_shot_data(5.0)],
+                shots: vec![shot(5.0)],
             })
             .success
     );
@@ -383,11 +360,7 @@ fn saving_a_project_opened_with_an_uppercase_extension_writes_that_file() {
 #[test]
 fn test_save_project_cleans_up_temp_on_reopen_failure() {
     let temp_dir = TempDir::new().unwrap();
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     state.execute(Command::CreateSection {
         name: Some("Sec".to_string()),
@@ -395,7 +368,7 @@ fn test_save_project_cleans_up_temp_on_reopen_failure() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     let save_path = temp_dir.path().join("project.stalx");
@@ -417,18 +390,14 @@ fn test_save_project_cleans_up_temp_on_reopen_failure() {
 #[test]
 fn test_save_project_atomic_rename_preserves_original_on_temp_failure() {
     let temp_dir = TempDir::new().unwrap();
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Original".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Original");
     state.execute(Command::CreateSection {
         name: Some("Sec".to_string()),
         surveyor: None,
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
     });
 
     // First save
@@ -443,7 +412,7 @@ fn test_save_project_atomic_rename_preserves_original_on_temp_failure() {
         date: None,
         color: "#0000ff".to_string(),
         direction: None,
-        shots: vec![test_shot_data(4.0)],
+        shots: vec![shot(4.0)],
     });
 
     // Save again - should succeed and update the file
@@ -459,11 +428,7 @@ fn test_save_project_atomic_rename_preserves_original_on_temp_failure() {
 #[test]
 fn test_save_project_persists_undo_redo_stacks() {
     let temp_dir = TempDir::new().unwrap();
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "UndoPersist".to_string(),
-        location: None,
-    });
+    let state = state_with_project("UndoPersist");
 
     // Create section (pushes to undo stack)
     state.execute(Command::CreateSection {
@@ -472,7 +437,7 @@ fn test_save_project_persists_undo_redo_stacks() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     // Create another section, then undo it (creates redo entry)
@@ -482,7 +447,7 @@ fn test_save_project_persists_undo_redo_stacks() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
     });
     state.undo();
 
@@ -516,18 +481,14 @@ fn failed_atomic_history_replacement_falls_back_to_empty_stacks() {
     )])
     .unwrap();
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "History fallback".to_owned(),
-        location: None,
-    });
+    let state = state_with_project("History fallback");
     state.execute(Command::CreateSection {
         name: Some("Redo candidate".to_owned()),
         surveyor: None,
         date: None,
         color: "#ff0000".to_owned(),
         direction: None,
-        shots: vec![test_shot_data(2.0)],
+        shots: vec![shot(2.0)],
     });
     state.undo();
 
@@ -772,18 +733,14 @@ fn restoring_a_snapshot_keeps_the_live_file_path() {
 
 #[test]
 fn persisted_split_snapshot_carries_no_local_filesystem_path() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Private split".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Private split");
     let created = state.execute(Command::CreateSection {
         name: Some("Single".to_string()),
         surveyor: None,
         date: None,
         color: "#123456".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
     });
     let section_id = created.section_id.unwrap();
     let shot_id = state.get_project_state().unwrap().sections[0].shots[0].id;
@@ -808,18 +765,14 @@ fn persisted_split_snapshot_carries_no_local_filesystem_path() {
 
 #[test]
 fn persisted_delete_last_snapshot_carries_no_local_filesystem_path() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Private delete".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Private delete");
     let created = state.execute(Command::CreateSection {
         name: Some("Single".to_string()),
         surveyor: None,
         date: None,
         color: "#654321".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_id = created.section_id.unwrap();
     let shot_id = state.get_project_state().unwrap().sections[0].shots[0].id;
@@ -884,7 +837,7 @@ fn full_mode_save_persists_both_stacks() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     state.execute(Command::CreateSection {
         name: Some("Undone".to_string()),
@@ -892,7 +845,7 @@ fn full_mode_save_persists_both_stacks() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
     });
     state.undo();
     assert!(
@@ -930,20 +883,15 @@ fn test_open_project_missing_file() {
 #[test]
 fn test_open_project_clears_previous_state() {
     let temp_dir = TempDir::new().unwrap();
-    let state = AppState::new().unwrap();
-
     // Create and save project A
-    state.execute(Command::CreateProject {
-        name: "Project A".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Project A");
     state.execute(Command::CreateSection {
         name: Some("SecA".to_string()),
         surveyor: None,
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let path_a = temp_dir.path().join("a.stalx");
     state.save_project(Some(path_a.clone()));
@@ -959,7 +907,7 @@ fn test_open_project_clears_previous_state() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
     });
     state.execute(Command::CreateSection {
         name: Some("SecB2".to_string()),
@@ -967,7 +915,7 @@ fn test_open_project_clears_previous_state() {
         date: None,
         color: "#0000ff".to_string(),
         direction: None,
-        shots: vec![test_shot_data(4.0)],
+        shots: vec![shot(4.0)],
     });
     let path_b = temp_dir.path().join("b.stalx");
     state.save_project(Some(path_b.clone()));
@@ -982,18 +930,14 @@ fn test_open_project_clears_previous_state() {
 
 #[test]
 fn test_close_project_clears_all_state() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "ToClose".to_string(),
-        location: None,
-    });
+    let state = state_with_project("ToClose");
     state.execute(Command::CreateSection {
         name: Some("Sec".to_string()),
         surveyor: None,
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     let result = state.close_project();
@@ -1005,18 +949,14 @@ fn test_close_project_clears_all_state() {
 
 #[test]
 fn test_close_project_clears_adjusted_cache() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "ToClose".to_string(),
-        location: None,
-    });
+    let state = state_with_project("ToClose");
     state.execute(Command::CreateSection {
         name: Some("Sec".to_string()),
         surveyor: None,
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     // Warm the memoized closure-adjusted coordinates cache. For a large project

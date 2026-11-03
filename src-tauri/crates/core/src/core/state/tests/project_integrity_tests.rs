@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 #[test]
 fn save_blocks_on_dangling_refs() {
@@ -24,7 +25,7 @@ fn save_blocks_on_dangling_refs() {
     let a = project
         .add_section(SectionData {
             name: Some("Main".to_string()),
-            shots: vec![test_shot_data(1.0)],
+            shots: vec![shot(1.0)],
             ..Default::default()
         })
         .id;
@@ -55,7 +56,7 @@ fn repair_open_project_integrity_is_undoable_and_redoable() {
     let a = project
         .add_section(SectionData {
             name: Some("Main".to_string()),
-            shots: vec![test_shot_data(1.0)],
+            shots: vec![shot(1.0)],
             ..Default::default()
         })
         .id;
@@ -124,14 +125,14 @@ fn redo_batch_preserves_double_anchored_bridge_closure() {
     let a = project
         .add_section(SectionData {
             name: Some("A".to_string()),
-            shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
+            shots: vec![shot(1.0), shot(2.0)],
             ..Default::default()
         })
         .id;
     let b = project
         .add_section(SectionData {
             name: Some("B".to_string()),
-            shots: vec![test_shot_data(3.0), test_shot_data(4.0)],
+            shots: vec![shot(3.0), shot(4.0)],
             ..Default::default()
         })
         .id;
@@ -206,13 +207,13 @@ fn update_shot_reconciles_datum_less_merge() {
     let mut project = Project::new("NoDatum".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            shots: vec![shot(5.0), shot(5.0)],
             ..Default::default()
         })
         .id;
     let b = project
         .add_section(SectionData {
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
             ..Default::default()
         })
         .id;
@@ -265,13 +266,13 @@ fn metadata_only_update_shot_does_not_heal_drift() {
     let mut project = Project::new("Drift".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            shots: vec![shot(5.0), shot(5.0)],
             ..Default::default()
         })
         .id;
     let b = project
         .add_section(SectionData {
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
             ..Default::default()
         })
         .id;
@@ -344,13 +345,13 @@ fn metadata_only_update_shot_batch_does_not_heal_drift() {
     let mut project = Project::new("DriftBatch".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            shots: vec![shot(5.0), shot(5.0)],
             ..Default::default()
         })
         .id;
     let b = project
         .add_section(SectionData {
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
             ..Default::default()
         })
         .id;
@@ -402,7 +403,7 @@ fn repair_noop_on_clean_project_reports_unchanged() {
     let state = AppState::new().unwrap();
     let mut project = Project::new("Clean".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
     project.ensure_shot_uuids();
@@ -431,7 +432,7 @@ fn save_remints_duplicate_shot_uuids_before_persisting() {
     let mut project = Project::new("Dup".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
+            shots: vec![shot(1.0), shot(2.0)],
             ..Default::default()
         })
         .id;
@@ -485,11 +486,7 @@ fn restore_snapshot_canonicalizes_legacy_index_anchors() {
     let mut project = Project::new("Legacy".to_string(), None);
     let s = project
         .add_section(SectionData {
-            shots: vec![
-                test_shot_data(1.0),
-                test_shot_data(2.0),
-                test_shot_data(3.0),
-            ],
+            shots: vec![shot(1.0), shot(2.0), shot(3.0)],
             ..Default::default()
         })
         .id;
@@ -528,7 +525,7 @@ fn repair_serializes_under_command_lock() {
     let state = Arc::new(AppState::new().unwrap());
     let mut project = Project::new("LockRepair".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
     project.ensure_shot_uuids();
@@ -563,7 +560,7 @@ fn save_drops_orphan_section_offset() {
     let state = AppState::new().unwrap();
     let mut project = Project::new("Orphan".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
     project.ensure_shot_uuids();
@@ -612,7 +609,7 @@ fn opening_drops_a_legacy_sub_gate_section_offset() {
             let mut project = Project::new("LegacyDust".to_string(), None);
             let section_id = project
                 .add_section(SectionData {
-                    shots: vec![test_shot_data(10.0)],
+                    shots: vec![shot(10.0)],
                     ..Default::default()
                 })
                 .id;
@@ -701,7 +698,7 @@ fn save_sanitizes_non_finite_geometry() {
     let state = AppState::new().unwrap();
     let mut project = Project::new("NonFinite".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
     project.ensure_shot_uuids();
@@ -738,7 +735,7 @@ fn save_sanitizes_non_finite_section_offset() {
     let mut project = Project::new("NonFiniteOffset".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![test_shot_data(1.0)],
+            shots: vec![shot(1.0)],
             ..Default::default()
         })
         .id;
@@ -790,7 +787,7 @@ fn blocked_save_does_not_mutate_non_finite_geometry() {
     let mut project = Project::new("BlockedNoMutate".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![test_shot_data(1.0)],
+            shots: vec![shot(1.0)],
             ..Default::default()
         })
         .id;
@@ -827,7 +824,7 @@ fn undo_of_duplicate_uuid_repair_restores_the_duplicates() {
     let mut project = Project::new("DupRepairUndo".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
+            shots: vec![shot(1.0), shot(2.0)],
             ..Default::default()
         })
         .id;
@@ -881,11 +878,7 @@ fn restore_snapshot_mints_null_uuids_before_reanchor() {
     let mut project = Project::new("LegacyNullUuid".to_string(), None);
     let s = project
         .add_section(SectionData {
-            shots: vec![
-                test_shot_data(1.0),
-                test_shot_data(2.0),
-                test_shot_data(3.0),
-            ],
+            shots: vec![shot(1.0), shot(2.0), shot(3.0)],
             ..Default::default()
         })
         .id;
@@ -925,7 +918,7 @@ fn finalize_structural_edit_ignores_pre_existing_critical() {
     let state = AppState::new().unwrap();
     let mut project = Project::new("AlreadyCritical".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
     project.ensure_shot_uuids();
@@ -957,7 +950,7 @@ fn redo_legacy_prepend_createshot_reanchors_section_start() {
     let mut project = Project::new("LegacyRedo".to_string(), None);
     let a = project
         .add_section(SectionData {
-            shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
+            shots: vec![shot(1.0), shot(2.0)],
             ..Default::default()
         })
         .id;
@@ -978,14 +971,14 @@ fn redo_legacy_prepend_createshot_reanchors_section_start() {
         command_bytes: None,
         command: Command::CreateShot {
             section_id: a,
-            shot: test_shot_data(5.0),
+            shot: shot(5.0),
             after_shot_id: None,
             before_shot_id: None,
         },
         undo_data: UndoData::CreatedShotSnapshot {
             section_id: a,
             shot_id: 999,
-            shot_data: test_shot_data(5.0),
+            shot_data: shot(5.0),
             position: 0,
             station_shift_from: 0,
             after_shot_id: None,
@@ -1042,12 +1035,7 @@ fn test_open_project_fails_on_invalid_file() {
 #[test]
 fn test_save_project_persists_display_settings_cache() {
     let temp_dir = TempDir::new().unwrap();
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Cache Save".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Cache Save");
 
     state.save_display_setting("showStations", "false").unwrap();
 
@@ -1202,13 +1190,8 @@ fn test_create_project_without_location() {
 
 #[test]
 fn test_close_project() {
-    let state = AppState::new().unwrap();
-
     // Create a project first
-    state.execute(Command::CreateProject {
-        name: "To Close".to_string(),
-        location: None,
-    });
+    let state = state_with_project("To Close");
 
     // Close it
     let result = state.execute(Command::CloseProject);

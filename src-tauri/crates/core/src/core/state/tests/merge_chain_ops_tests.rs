@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // ==========================================================================
 // Group 3: Multi-section merge chain operations
@@ -13,11 +14,7 @@ use super::*;
 /// Verify A and C become disconnected with no dangling merge references.
 #[test]
 fn test_delete_middle_section_in_merge_chain() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "ChainDelete".to_string(),
-        location: None,
-    });
+    let state = state_with_project("ChainDelete");
 
     let sec_a = state
         .execute(Command::CreateSection {
@@ -26,7 +23,7 @@ fn test_delete_middle_section_in_merge_chain() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -38,7 +35,7 @@ fn test_delete_middle_section_in_merge_chain() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(4.0)],
+            shots: vec![shot(4.0)],
         })
         .section_id
         .unwrap();
@@ -50,7 +47,7 @@ fn test_delete_middle_section_in_merge_chain() {
             date: None,
             color: "#0000ff".to_string(),
             direction: None,
-            shots: vec![test_shot_data(6.0)],
+            shots: vec![shot(6.0)],
         })
         .section_id
         .unwrap();
@@ -134,11 +131,7 @@ fn test_delete_middle_section_in_merge_chain() {
 /// Set zero datum in a 3-section chain, then change GPS - verify all sections move together.
 #[test]
 fn test_zero_datum_in_chain_positions_all_sections() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "ChainDatum".to_string(),
-        location: None,
-    });
+    let state = state_with_project("ChainDatum");
 
     let sec_a = state
         .execute(Command::CreateSection {
@@ -147,7 +140,7 @@ fn test_zero_datum_in_chain_positions_all_sections() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -159,7 +152,7 @@ fn test_zero_datum_in_chain_positions_all_sections() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(4.0)],
+            shots: vec![shot(4.0)],
         })
         .section_id
         .unwrap();
@@ -171,7 +164,7 @@ fn test_zero_datum_in_chain_positions_all_sections() {
             date: None,
             color: "#0000ff".to_string(),
             direction: None,
-            shots: vec![test_shot_data(6.0)],
+            shots: vec![shot(6.0)],
         })
         .section_id
         .unwrap();
@@ -275,11 +268,7 @@ fn test_zero_datum_in_chain_positions_all_sections() {
 /// while the remaining merge stays intact.
 #[test]
 fn test_undo_merge_in_chain_disconnects_correctly() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "UndoChainMerge".to_string(),
-        location: None,
-    });
+    let state = state_with_project("UndoChainMerge");
 
     let sec_a = state
         .execute(Command::CreateSection {
@@ -288,7 +277,7 @@ fn test_undo_merge_in_chain_disconnects_correctly() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -300,7 +289,7 @@ fn test_undo_merge_in_chain_disconnects_correctly() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(4.0)],
+            shots: vec![shot(4.0)],
         })
         .section_id
         .unwrap();
@@ -312,7 +301,7 @@ fn test_undo_merge_in_chain_disconnects_correctly() {
             date: None,
             color: "#0000ff".to_string(),
             direction: None,
-            shots: vec![test_shot_data(6.0)],
+            shots: vec![shot(6.0)],
         })
         .section_id
         .unwrap();
@@ -388,11 +377,7 @@ fn test_merge_chain_survives_save_reopen() {
     let temp_dir = TempDir::new().unwrap();
     let save_path = temp_dir.path().join("chain.stalx");
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "ChainPersist".to_string(),
-        location: None,
-    });
+    let state = state_with_project("ChainPersist");
 
     let sec_a = state
         .execute(Command::CreateSection {
@@ -401,7 +386,7 @@ fn test_merge_chain_survives_save_reopen() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -413,7 +398,7 @@ fn test_merge_chain_survives_save_reopen() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(4.0)],
+            shots: vec![shot(4.0)],
         })
         .section_id
         .unwrap();
@@ -425,7 +410,7 @@ fn test_merge_chain_survives_save_reopen() {
             date: None,
             color: "#0000ff".to_string(),
             direction: None,
-            shots: vec![test_shot_data(6.0)],
+            shots: vec![shot(6.0)],
         })
         .section_id
         .unwrap();
@@ -506,11 +491,7 @@ fn test_merge_chain_survives_save_reopen() {
 /// connected group, and that all references remain valid.
 #[test]
 fn test_triangle_topology_with_loop_closure() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Triangle".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Triangle");
 
     let sec_a = state
         .execute(Command::CreateSection {
@@ -519,7 +500,7 @@ fn test_triangle_topology_with_loop_closure() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            shots: vec![shot(5.0), shot(3.0)],
         })
         .section_id
         .unwrap();
@@ -531,7 +512,7 @@ fn test_triangle_topology_with_loop_closure() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+            shots: vec![shot(4.0), shot(6.0)],
         })
         .section_id
         .unwrap();
@@ -543,7 +524,7 @@ fn test_triangle_topology_with_loop_closure() {
             date: None,
             color: "#0000ff".to_string(),
             direction: None,
-            shots: vec![test_shot_data(7.0), test_shot_data(2.0)],
+            shots: vec![shot(7.0), shot(2.0)],
         })
         .section_id
         .unwrap();

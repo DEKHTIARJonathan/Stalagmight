@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // === Full pipeline: transitive closures through AppState ===
 
@@ -32,12 +33,7 @@ fn test_transitive_closures_in_computed_stations() {
     //   Wait - C.1 is NOT merged with anything. C.0 is merged with B.1.
     //   So C.1 gets direct closure to A.1, and transitive closure to B.0 (via A.1).
 
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "TransitiveTest".to_string(),
-        location: None,
-    });
+    let state = state_with_project("TransitiveTest");
 
     // Create section A with 2 shots (stations: A.0, A.1, A.2)
     let result_a = state.execute(Command::CreateSection {
@@ -46,7 +42,7 @@ fn test_transitive_closures_in_computed_stations() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0), test_shot_data(8.0)],
+        shots: vec![shot(10.0), shot(8.0)],
     });
     let a = result_a.section_id.unwrap();
 
@@ -57,7 +53,7 @@ fn test_transitive_closures_in_computed_stations() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let b = result_b.section_id.unwrap();
 
@@ -68,7 +64,7 @@ fn test_transitive_closures_in_computed_stations() {
         date: None,
         color: "#0000ff".to_string(),
         direction: None,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
     });
     let c = result_c.section_id.unwrap();
 
@@ -229,11 +225,7 @@ fn test_transitive_closures_serialization_preserves_data() {
     // non-empty list any data.
     use crate::models::Station;
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "SerTest".to_string(),
-        location: None,
-    });
+    let state = state_with_project("SerTest");
 
     let result_a = state.execute(Command::CreateSection {
         name: Some("A".to_string()),
@@ -241,7 +233,7 @@ fn test_transitive_closures_serialization_preserves_data() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
     });
     let a = result_a.section_id.unwrap();
 
@@ -251,7 +243,7 @@ fn test_transitive_closures_serialization_preserves_data() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let b = result_b.section_id.unwrap();
 
@@ -268,7 +260,7 @@ fn test_transitive_closures_serialization_preserves_data() {
         date: None,
         color: "#0000ff".to_string(),
         direction: None,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
     });
     let c = result_c.section_id.unwrap();
 
@@ -389,11 +381,7 @@ fn test_transitive_closures_serialization_preserves_data() {
 
 #[test]
 fn test_move_segment() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create two sections and merge them so they form a segment
     let r1 = state.execute(Command::CreateSection {
@@ -402,7 +390,7 @@ fn test_move_segment() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let sid_a = r1.section_id.unwrap();
 
@@ -412,7 +400,7 @@ fn test_move_segment() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
     });
     let sid_b = r2.section_id.unwrap();
 
@@ -476,11 +464,7 @@ fn test_move_segment() {
 
 #[test]
 fn test_move_segment_undo_redo() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create two sections and merge
     let r1 = state.execute(Command::CreateSection {
@@ -489,7 +473,7 @@ fn test_move_segment_undo_redo() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let sid_a = r1.section_id.unwrap();
 
@@ -499,7 +483,7 @@ fn test_move_segment_undo_redo() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
     });
     let sid_b = r2.section_id.unwrap();
 
@@ -611,11 +595,7 @@ fn test_move_segment_undo_redo() {
 
 #[test]
 fn test_move_segment_nonexistent_section() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let result = state.execute(Command::MoveSegment {
         section_id: 999,
@@ -630,11 +610,7 @@ fn test_move_segment_nonexistent_section() {
 #[test]
 fn test_move_segment_unaligned_closure_independent() {
     // Sections connected only via an unaligned loop closure should move independently
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let r1 = state.execute(Command::CreateSection {
         name: Some("A".to_string()),
@@ -642,7 +618,7 @@ fn test_move_segment_unaligned_closure_independent() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let sid_a = r1.section_id.unwrap();
 
@@ -652,7 +628,7 @@ fn test_move_segment_unaligned_closure_independent() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
     });
     let sid_b = r2.section_id.unwrap();
 
@@ -730,11 +706,7 @@ fn test_move_segment_unaligned_closure_independent() {
 #[test]
 fn test_move_segment_aligned_closure_connectivity() {
     // Sections connected via an aligned loop closure should move together
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let r1 = state.execute(Command::CreateSection {
         name: Some("A".to_string()),
@@ -742,7 +714,7 @@ fn test_move_segment_aligned_closure_connectivity() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let sid_a = r1.section_id.unwrap();
 
@@ -752,7 +724,7 @@ fn test_move_segment_aligned_closure_connectivity() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
     });
     let sid_b = r2.section_id.unwrap();
 
@@ -837,11 +809,7 @@ fn test_move_segment_blocked_by_datum_over_a_closure_only_link() {
     // a reachable bug: it fails if the guard ever stops covering the set
     // move_segment actually offsets. The closure is pushed directly for exactly
     // that reason - the command path would convert it away.
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "ClosureDatum".to_string(),
-        location: None,
-    });
+    let state = state_with_project("ClosureDatum");
 
     let sid_a = state
         .execute(Command::CreateSection {
@@ -850,7 +818,7 @@ fn test_move_segment_blocked_by_datum_over_a_closure_only_link() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -861,7 +829,7 @@ fn test_move_segment_blocked_by_datum_over_a_closure_only_link() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(3.0)],
+            shots: vec![shot(3.0)],
         })
         .section_id
         .unwrap();
@@ -926,11 +894,7 @@ fn test_move_segment_blocked_by_datum_over_a_closure_only_link() {
 #[test]
 fn test_move_segment_isolated() {
     // An unconnected section should NOT be moved when moving a segment
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create two sections WITHOUT merging them
     let r1 = state.execute(Command::CreateSection {
@@ -939,7 +903,7 @@ fn test_move_segment_isolated() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let sid_a = r1.section_id.unwrap();
 
@@ -949,7 +913,7 @@ fn test_move_segment_isolated() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
     });
     let sid_b = r2.section_id.unwrap();
 
@@ -1010,11 +974,7 @@ fn test_move_segment_isolated() {
 #[test]
 fn test_move_segment_accumulates() {
     // Multiple MoveSegment calls should accumulate offsets
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let r1 = state.execute(Command::CreateSection {
         name: Some("A".to_string()),
@@ -1022,7 +982,7 @@ fn test_move_segment_accumulates() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let sid_a = r1.section_id.unwrap();
 
@@ -1105,11 +1065,7 @@ fn test_move_segment_accumulates() {
 
 #[test]
 fn test_batch_rollback_on_failure() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create a section first
     let r1 = state.execute(Command::CreateSection {
@@ -1118,7 +1074,7 @@ fn test_batch_rollback_on_failure() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let _existing_id = r1.section_id.unwrap();
 
@@ -1157,11 +1113,7 @@ fn test_batch_rollback_on_failure() {
 
 #[test]
 fn test_batch_disallowed_command() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Try to open a project inside a batch (should be rejected by whitelist)
     let result = state.execute(Command::Batch {

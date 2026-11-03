@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_holding, state_with_project};
 
 // ============================================================================
 // Performance profiler (not a unit test - a measurement harness)
@@ -52,8 +53,7 @@ fn profile_tml_import_full() {
     let db_path = temp.path().join("profile.stalx");
     let mut db = Database::open(&db_path).unwrap();
     db.save_project(&project).unwrap();
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
     state.set_database_for_tests(db);
     let t3 = Instant::now();
 
@@ -156,8 +156,7 @@ fn profile_stalx_load() {
 
     // === Phase 4: warnings (via AppState because the impl is on AppState) ===
     project.file_path = Some(PathBuf::from(&path));
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project.clone());
+    let state = state_holding(project.clone());
     let warnings = state.compute_project_warnings(&project, Some(&db));
     let t5 = Instant::now();
 
@@ -248,11 +247,7 @@ fn redo_create_shot_preserves_uuid_all_insert_modes() {
     // cross-references and Ariane matching anchor on it. Each mode hits a
     // distinct redo branch (append: Shot::with_uuid; after/before: the forced
     // uuid threaded through insert_shot_*).
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "X".to_string(),
-        location: None,
-    });
+    let state = state_with_project("X");
     let sid = state
         .execute(Command::CreateSection {
             name: Some("A".to_string()),
@@ -260,7 +255,7 @@ fn redo_create_shot_preserves_uuid_all_insert_modes() {
             date: None,
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            shots: vec![shot(5.0), shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -292,19 +287,19 @@ fn redo_create_shot_preserves_uuid_all_insert_modes() {
         // (after_shot_id, before_shot_id) → append / insert_after / prepend
         Command::CreateShot {
             section_id: sid,
-            shot: test_shot_data(3.0),
+            shot: shot(3.0),
             after_shot_id: None,
             before_shot_id: None,
         },
         Command::CreateShot {
             section_id: sid,
-            shot: test_shot_data(3.0),
+            shot: shot(3.0),
             after_shot_id: Some(last_id),
             before_shot_id: None,
         },
         Command::CreateShot {
             section_id: sid,
-            shot: test_shot_data(3.0),
+            shot: shot(3.0),
             after_shot_id: None,
             before_shot_id: Some(first_id),
         },
@@ -332,11 +327,7 @@ fn repair_open_project_integrity_reports_fixed_and_remaining() {
     // Repair returns the genuine before→after delta over the FULL violation set,
     // so a repairable issue counts as `fixed` and a detect-only one (a drifted
     // aligned loop closure) counts as `remaining`.
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "X".to_string(),
-        location: None,
-    });
+    let state = state_with_project("X");
     let a = state
         .execute(Command::CreateSection {
             name: Some("A".to_string()),
@@ -344,7 +335,7 @@ fn repair_open_project_integrity_reports_fixed_and_remaining() {
             date: None,
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -386,11 +377,7 @@ fn repair_command_demotes_a_double_anchoring_bridge_merge() {
     // own datum), so before this repair the project reported `merge_misaligned` +
     // `multiple_datums_per_merge_component` on every check and Repair could never
     // clear them. Fully synthetic: three sections built by command, welded by hand.
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Damaged".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Damaged");
     let section = |name: &str| {
         state
             .execute(Command::CreateSection {
@@ -399,7 +386,7 @@ fn repair_command_demotes_a_double_anchoring_bridge_merge() {
                 date: None,
                 color: "#111111".to_string(),
                 direction: Some(SurveyDirection::In),
-                shots: vec![test_shot_data(10.0), test_shot_data(10.0)],
+                shots: vec![shot(10.0), shot(10.0)],
             })
             .section_id
             .unwrap()

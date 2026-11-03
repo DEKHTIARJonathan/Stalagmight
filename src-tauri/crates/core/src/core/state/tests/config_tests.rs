@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_holding, state_with_project};
 
 // === Config Tests ===
 
@@ -151,13 +152,8 @@ fn test_webkit_memory_normalize_resets_kill_below_strict() {
 
 #[test]
 fn test_display_settings_cache() {
-    let state = AppState::new().unwrap();
-
     // Create a project (no database, so settings go to cache)
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Save a display setting
     let result = state.save_display_setting("test_key", "test_value");
@@ -178,7 +174,7 @@ fn test_save_project_prefers_database_display_settings_over_cache() {
     let db_path = temp_dir.path().join("source.stalx");
     let mut project = Project::new("Display Settings".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
 
@@ -187,8 +183,7 @@ fn test_save_project_prefers_database_display_settings_over_cache() {
     db.save_display_setting("showStations", "false").unwrap();
     drop(db);
 
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
     let db = Database::open_existing(&db_path).unwrap();
     state.set_database_for_tests(db);
 
@@ -214,7 +209,7 @@ fn test_save_project_failure_does_not_change_existing_file() {
 
     let mut project = Project::new("Original".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
 
@@ -224,8 +219,7 @@ fn test_save_project_failure_does_not_change_existing_file() {
 
     project.file_path = Some(original_path.clone());
 
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project.clone());
+    let state = state_holding(project.clone());
 
     let blocked_path = temp_dir.path().join("blocked.stalx");
     std::fs::create_dir_all(&blocked_path).unwrap();
@@ -513,11 +507,10 @@ fn save_into_unwritable_dir_reports_permission_code() {
 
     let mut project = Project::new("Perm".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
 
     let result = state.save_project(Some(locked.join("p.stalx")));
 
@@ -578,11 +571,10 @@ fn save_into_missing_dir_is_not_a_permission_error() {
 
     let mut project = Project::new("Missing".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
-    let state = AppState::new().unwrap();
-    state.set_project_for_tests(project);
+    let state = state_holding(project);
 
     let result = state.save_project(Some(missing));
 
@@ -753,11 +745,7 @@ fn test_remove_recent_project_absent_is_idempotent_success() {
 fn test_import_tracking_recovers_a_poisoned_project_lock() {
     // [#576 A11] Recovered, not refused: the bookkeeping reaches the project the lock
     // still holds.
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "CaveA".to_string(),
-        location: None,
-    });
+    let state = state_with_project("CaveA");
     poison_mutex(&state.project);
 
     assert!(!state.check_duplicate_import("hash").unwrap());

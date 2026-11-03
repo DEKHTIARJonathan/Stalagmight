@@ -13,19 +13,8 @@ use crate::models::{
     MIN_SPLIT_CHILD_LENGTH_M,
 };
 use crate::persistence::Database;
+use crate::test_fixtures::shot;
 use tempfile::TempDir;
-
-/// Helper to create a basic shot data for testing
-pub(super) fn test_shot_data(length: f64) -> ShotData {
-    ShotData {
-        azimuth_in: 45.0,
-        azimuth_out: 225.0,
-        length,
-        depth_in: 10.0,
-        depth_out: 11.0,
-        ..Default::default()
-    }
-}
 
 fn assert_coords_close(a: Coordinates, b: Coordinates) {
     let eps = 1e-6;
@@ -68,29 +57,6 @@ fn refused_after_crash(what: &str) -> String {
     )
 }
 
-fn shot_data_with_azimuth(length: f64, az_in: f64, az_out: f64) -> ShotData {
-    ShotData {
-        azimuth_in: az_in,
-        azimuth_out: az_out,
-        length,
-        depth_in: 10.0,
-        depth_out: 11.0,
-        ..Default::default()
-    }
-}
-
-/// Create a shot with a known azimuth and length (both readings same = no ambiguity)
-fn directional_shot_data(azimuth: f64, length: f64) -> ShotData {
-    ShotData {
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        length,
-        depth_in: 0.0,
-        depth_out: 0.0,
-        ..Default::default()
-    }
-}
-
 use crate::core::CommandError;
 use crate::models::{CommandErrorCode, SpeleoLink};
 
@@ -119,7 +85,7 @@ fn remote_fixture() -> (AppState, SectionId, ShotId, TempDir) {
     let mut project = Project::new("Remote Cave".to_string(), None);
     let section_id = project
         .add_section(SectionData {
-            shots: vec![test_shot_data(2.0), test_shot_data(2.0)],
+            shots: vec![shot(2.0), shot(2.0)],
             ..Default::default()
         })
         .id;
@@ -268,7 +234,7 @@ pub(super) fn probe_mutation_entrypoints(
         color: "#00ff00".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
@@ -402,7 +368,7 @@ pub(super) fn probe_mutation_entrypoints(
                 None,
                 "#00ff00".to_string(),
                 None,
-                vec![test_shot_data(3.0)],
+                vec![shot(3.0)],
                 0,
                 StationRef::new(sid, 1),
                 ClosureStrategy::Batch,

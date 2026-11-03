@@ -4,17 +4,13 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // === Batch Command Tests ===
 
 #[test]
 fn test_batch_create_sections() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let result = state.execute(Command::Batch {
         commands: vec![
@@ -24,7 +20,7 @@ fn test_batch_create_sections() {
                 date: None,
                 color: "#ff0000".to_string(),
                 direction: None,
-                shots: vec![test_shot_data(5.0)],
+                shots: vec![shot(5.0)],
             },
             Command::CreateSection {
                 name: Some("Second".to_string()),
@@ -32,7 +28,7 @@ fn test_batch_create_sections() {
                 date: None,
                 color: "#00ff00".to_string(),
                 direction: None,
-                shots: vec![test_shot_data(7.0)],
+                shots: vec![shot(7.0)],
             },
         ],
     });
@@ -46,12 +42,7 @@ fn test_batch_create_sections() {
 
 #[test]
 fn test_batch_fails_on_first_error() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // First command succeeds, second fails (delete nonexistent section)
     let result = state.execute(Command::Batch {
@@ -75,12 +66,7 @@ fn test_batch_fails_on_first_error() {
 
 #[test]
 fn test_merge_stations_same_section_fails() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -88,7 +74,7 @@ fn test_merge_stations_same_section_fails() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        shots: vec![shot(5.0), shot(7.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -110,12 +96,7 @@ fn test_merge_stations_same_section_fails() {
 
 #[test]
 fn test_set_and_remove_zero_datum() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -123,7 +104,7 @@ fn test_set_and_remove_zero_datum() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -151,12 +132,7 @@ fn test_set_and_remove_zero_datum() {
 
 #[test]
 fn test_remove_nonexistent_zero_datum() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -164,7 +140,7 @@ fn test_remove_nonexistent_zero_datum() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -181,12 +157,7 @@ fn test_remove_nonexistent_zero_datum() {
 
 #[test]
 fn test_move_section() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -194,7 +165,7 @@ fn test_move_section() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -230,12 +201,7 @@ fn test_move_section() {
 
 #[test]
 fn test_move_section_undo_redo() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -243,7 +209,7 @@ fn test_move_section_undo_redo() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -293,11 +259,7 @@ fn move_section_moves_the_whole_merged_group_and_sticks() {
     // (MoveSection) must move the WHOLE merge group together so the merge stays
     // aligned and the move isn't snapped back by the post-command reconcile - not
     // shove one member off the other (finding #6).
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Merged".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Merged");
 
     let mk = |name: &str, color: &str| Command::CreateSection {
         name: Some(name.to_string()),
@@ -305,7 +267,7 @@ fn move_section_moves_the_whole_merged_group_and_sticks() {
         date: None,
         color: color.to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     };
     let a = state.execute(mk("A", "#ff0000")).section_id.unwrap();
     let b = state.execute(mk("B", "#00ff00")).section_id.unwrap();
@@ -371,12 +333,7 @@ fn move_section_moves_the_whole_merged_group_and_sticks() {
 
 #[test]
 fn test_move_nonexistent_section() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let result = state.execute(Command::MoveSection {
         section_id: 999,
@@ -390,12 +347,7 @@ fn test_move_nonexistent_section() {
 
 #[test]
 fn test_create_section_rejects_zero_length_shot() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create a section with a zero-length shot (should be rejected)
     let result = state.execute(Command::CreateSection {
@@ -422,12 +374,7 @@ fn test_create_section_rejects_zero_length_shot() {
 
 #[test]
 fn test_undo_delete_shot_restores_at_correct_position() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -435,11 +382,7 @@ fn test_undo_delete_shot_restores_at_correct_position() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![
-            test_shot_data(5.0),
-            test_shot_data(7.0),
-            test_shot_data(9.0),
-        ],
+        shots: vec![shot(5.0), shot(7.0), shot(9.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -469,12 +412,7 @@ fn test_undo_delete_shot_restores_at_correct_position() {
 
 #[test]
 fn test_multiple_undo_redo_sequence() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create 3 sections
     for i in 1..=3 {

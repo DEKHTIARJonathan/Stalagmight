@@ -4,17 +4,13 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // === Section Operations Tests ===
 
 #[test]
 fn test_create_section() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let result = state.execute(Command::CreateSection {
         name: Some("Section A".to_string()),
@@ -22,7 +18,7 @@ fn test_create_section() {
         date: None,
         color: "#4ecdc4".to_string(),
         direction: Some(SurveyDirection::In),
-        shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        shots: vec![shot(5.0), shot(7.0)],
     });
 
     assert!(result.success);
@@ -42,18 +38,14 @@ fn get_adjusted_stations_none_without_project() {
 
 #[test]
 fn get_adjusted_stations_caches_and_invalidates() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Adj".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Adj");
     state.execute(Command::CreateSection {
         name: Some("A".to_string()),
         surveyor: None,
         date: None,
         color: "#111111".to_string(),
         direction: Some(SurveyDirection::In),
-        shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        shots: vec![shot(5.0), shot(5.0)],
     });
 
     // Two consecutive calls return the same result (second served from cache).
@@ -72,7 +64,7 @@ fn get_adjusted_stations_caches_and_invalidates() {
         date: None,
         color: "#222222".to_string(),
         direction: Some(SurveyDirection::In),
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let adj2 = state
         .get_adjusted_stations()
@@ -94,18 +86,14 @@ fn distance_field_none_without_project() {
 fn distance_field_from_origin_over_appstate() {
     // End-to-end through the atomic accessor (#34): one reconciled snapshot →
     // adjusted coords → distance_field_from, all at a single consistent version.
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Dist".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Dist");
     state.execute(Command::CreateSection {
         name: Some("A".to_string()),
         surveyor: None,
         date: None,
         color: "#111111".to_string(),
         direction: Some(SurveyDirection::In),
-        shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        shots: vec![shot(5.0), shot(5.0)],
     });
     let section_id = state.get_project_state().unwrap().sections[0].id;
     let origin = StationRef::new(section_id, 0);
@@ -129,18 +117,14 @@ fn distance_field_from_origin_over_appstate() {
 #[test]
 fn repair_invalidates_adjusted_cache() {
     use std::sync::atomic::Ordering::SeqCst;
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Repair".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Repair");
     state.execute(Command::CreateSection {
         name: Some("A".to_string()),
         surveyor: None,
         date: None,
         color: "#111111".to_string(),
         direction: Some(SurveyDirection::In),
-        shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+        shots: vec![shot(5.0), shot(5.0)],
     });
 
     // Populate the adjusted cache.
@@ -169,11 +153,7 @@ fn repair_invalidates_adjusted_cache() {
 fn unmerge_converts_orphaned_bridge_closure() {
     // Deleting the merge that was a loop's other path strands the section onto
     // the closure - which must then become a merge (same #8 principle as delete).
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "X".to_string(),
-        location: None,
-    });
+    let state = state_with_project("X");
     let a = state
         .execute(Command::CreateSection {
             name: Some("A".to_string()),
@@ -181,7 +161,7 @@ fn unmerge_converts_orphaned_bridge_closure() {
             date: None,
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            shots: vec![shot(5.0), shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -192,7 +172,7 @@ fn unmerge_converts_orphaned_bridge_closure() {
             date: None,
             color: "#222222".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -271,11 +251,7 @@ fn coordinates_new_checked_rejects_non_finite() {
 
 #[test]
 fn move_section_and_segment_reject_non_finite_offset() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "X".to_string(),
-        location: None,
-    });
+    let state = state_with_project("X");
     let a = state
         .execute(Command::CreateSection {
             name: Some("A".to_string()),
@@ -283,7 +259,7 @@ fn move_section_and_segment_reject_non_finite_offset() {
             date: None,
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -323,11 +299,7 @@ fn merge_allowed_across_inert_closure_but_rejected_across_aligned() {
     // connectivity walk followed inert closures and wrongly rejected it, forcing the
     // sole-bridge-closure-that-should-be-a-merge bug (catalog #8).
     fn setup(aligned: bool) -> (AppState, SectionId, SectionId) {
-        let state = AppState::new().unwrap();
-        state.execute(Command::CreateProject {
-            name: "X".to_string(),
-            location: None,
-        });
+        let state = state_with_project("X");
         let a = state
             .execute(Command::CreateSection {
                 name: Some("A".to_string()),
@@ -335,7 +307,7 @@ fn merge_allowed_across_inert_closure_but_rejected_across_aligned() {
                 date: None,
                 color: "#111111".to_string(),
                 direction: Some(SurveyDirection::In),
-                shots: vec![test_shot_data(5.0)],
+                shots: vec![shot(5.0)],
             })
             .section_id
             .unwrap();
@@ -346,7 +318,7 @@ fn merge_allowed_across_inert_closure_but_rejected_across_aligned() {
                 date: None,
                 color: "#222222".to_string(),
                 direction: Some(SurveyDirection::In),
-                shots: vec![test_shot_data(5.0)],
+                shots: vec![shot(5.0)],
             })
             .section_id
             .unwrap();
@@ -407,11 +379,7 @@ fn restore_snapshot_into_rebuilds_transient_caches() {
     // mis-resolves a section (catalog #14/#39). The merge adjacency is not a
     // field here - it is derived on demand - so the restored project must answer
     // merge-group queries correctly with no rebuild call at all.
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "X".to_string(),
-        location: None,
-    });
+    let state = state_with_project("X");
     let a = state
         .execute(Command::CreateSection {
             name: Some("A".to_string()),
@@ -419,7 +387,7 @@ fn restore_snapshot_into_rebuilds_transient_caches() {
             date: None,
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
+            shots: vec![shot(5.0), shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -430,7 +398,7 @@ fn restore_snapshot_into_rebuilds_transient_caches() {
             date: None,
             color: "#222222".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -489,11 +457,7 @@ fn a_snapshot_restore_is_bit_exact() {
     // ULP boundary and cover the plain (non-optional) measurement fields.
     let pitch = -26.759_999_999_999_998_f64;
     let length = 26.759_999_999_999_998_f64;
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "bits".to_string(),
-        location: None,
-    });
+    let state = state_with_project("bits");
     state.execute(Command::CreateSection {
         name: Some("A".to_string()),
         surveyor: None,
@@ -544,7 +508,7 @@ fn a_snapshot_restore_is_bit_exact() {
 fn restore_snapshot_carries_current_surface_elevation_over_a_legacy_blob() {
     let mut project = Project::new("Legacy".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
     let mut legacy_json = serde_json::to_value(&project).unwrap();
@@ -580,7 +544,7 @@ fn restore_snapshot_carries_current_surface_elevation_over_a_legacy_blob() {
 fn restore_snapshot_clears_surface_elevation_when_the_modern_snapshot_says_none() {
     let mut project = Project::new("Cleared".to_string(), None);
     project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         ..Default::default()
     });
     project.surface_elevation = None;

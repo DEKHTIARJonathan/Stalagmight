@@ -4,16 +4,13 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // === Import hash tracking tests ===
 
 #[test]
 fn test_import_tracking_happy_path() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Hashes".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Hashes");
     let hash = "abc123deadbeef".to_string();
     assert!(!state.check_duplicate_import(&hash).unwrap());
     assert!(state.track_imported_file(hash.clone()).success);
@@ -22,11 +19,7 @@ fn test_import_tracking_happy_path() {
 
 #[test]
 fn test_import_tracking_idempotent() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "IdempHash".to_string(),
-        location: None,
-    });
+    let state = state_with_project("IdempHash");
     let hash = "deadbeef".to_string();
     state.track_imported_file(hash.clone());
     state.track_imported_file(hash.clone());
@@ -42,11 +35,7 @@ fn test_import_tracking_idempotent() {
 
 #[test]
 fn test_section_hash_tracking_batch() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "SectionHashes".to_string(),
-        location: None,
-    });
+    let state = state_with_project("SectionHashes");
     let hashes = vec!["h1".to_string(), "h2".to_string(), "h3".to_string()];
     assert_eq!(
         state.check_section_hashes(&hashes).unwrap(),
@@ -95,11 +84,7 @@ fn test_track_imported_file_no_project_fails() {
 /// duplicate: the obvious retry silently offered nothing to import.
 #[test]
 fn a_withdrawal_forgets_the_import_tracking_and_undo_restores_it() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Withdraw".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Withdraw");
 
     let section_id = state
         .execute(Command::CreateSection {
@@ -108,7 +93,7 @@ fn a_withdrawal_forgets_the_import_tracking_and_undo_restores_it() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -160,11 +145,7 @@ fn a_withdrawal_forgets_the_import_tracking_and_undo_restores_it() {
 /// whole withdrawal batch.
 #[test]
 fn untracking_an_unknown_hash_succeeds() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Withdraw".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Withdraw");
 
     let result = state.execute(Command::Batch {
         commands: vec![Command::UntrackImport {
@@ -183,18 +164,14 @@ fn test_undo_actually_works_after_project_reopen() {
     let temp_dir = TempDir::new().unwrap();
     let save_path = temp_dir.path().join("undo-restart.stalx");
     // Session 1
-    let state1 = AppState::new().unwrap();
-    state1.execute(Command::CreateProject {
-        name: "UndoRestart".to_string(),
-        location: None,
-    });
+    let state1 = state_with_project("UndoRestart");
     let create_result = state1.execute(Command::CreateSection {
         name: Some("Main".to_string()),
         surveyor: None,
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     assert!(create_result.success);
     let section_id = create_result.section_id.unwrap();
@@ -226,11 +203,7 @@ fn test_undo_actually_works_after_project_reopen() {
 /// and merge alignment is maintained via cascade offset propagation.
 #[test]
 fn test_insert_shot_before_merged_station_shifts_merge_ref() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "InsertBeforeMerge".to_string(),
-        location: None,
-    });
+    let state = state_with_project("InsertBeforeMerge");
 
     // Section A: 3 shots (stations 0,1,2,3)
     let sec_a = state
@@ -240,11 +213,7 @@ fn test_insert_shot_before_merged_station_shifts_merge_ref() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![
-                test_shot_data(5.0),
-                test_shot_data(3.0),
-                test_shot_data(4.0),
-            ],
+            shots: vec![shot(5.0), shot(3.0), shot(4.0)],
         })
         .section_id
         .unwrap();
@@ -257,7 +226,7 @@ fn test_insert_shot_before_merged_station_shifts_merge_ref() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(6.0)],
+            shots: vec![shot(6.0)],
         })
         .section_id
         .unwrap();
@@ -285,7 +254,7 @@ fn test_insert_shot_before_merged_station_shifts_merge_ref() {
     // Insert a new shot before shot 1 - this adds a station, shifting station 2 to 3
     let insert_r = state.execute(Command::CreateShot {
         section_id: sec_a,
-        shot: test_shot_data(2.0),
+        shot: shot(2.0),
         after_shot_id: None,
         before_shot_id: Some(shot_id_1),
     });
@@ -349,11 +318,7 @@ fn test_insert_shot_before_merged_station_shifts_merge_ref() {
 /// Insert a shot after a merged station - verify merge ref stays unchanged.
 #[test]
 fn test_insert_shot_after_merged_station_keeps_merge_ref() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "InsertAfterMerge".to_string(),
-        location: None,
-    });
+    let state = state_with_project("InsertAfterMerge");
 
     let sec_a = state
         .execute(Command::CreateSection {
@@ -362,7 +327,7 @@ fn test_insert_shot_after_merged_station_keeps_merge_ref() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            shots: vec![shot(5.0), shot(3.0)],
         })
         .section_id
         .unwrap();
@@ -374,7 +339,7 @@ fn test_insert_shot_after_merged_station_keeps_merge_ref() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(6.0)],
+            shots: vec![shot(6.0)],
         })
         .section_id
         .unwrap();
@@ -403,7 +368,7 @@ fn test_insert_shot_after_merged_station_keeps_merge_ref() {
         state
             .execute(Command::CreateShot {
                 section_id: sec_a,
-                shot: test_shot_data(2.0),
+                shot: shot(2.0),
                 after_shot_id: Some(shot_id_0),
                 before_shot_id: None,
             })
@@ -432,11 +397,7 @@ fn test_insert_shot_after_merged_station_keeps_merge_ref() {
 /// no dangling station references remain after the section splits.
 #[test]
 fn test_delete_mid_shot_splits_section_with_merge_intact() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "DeleteMidMerge".to_string(),
-        location: None,
-    });
+    let state = state_with_project("DeleteMidMerge");
 
     // Section A: 3 shots (stations 0,1,2,3)
     let sec_a = state
@@ -446,11 +407,7 @@ fn test_delete_mid_shot_splits_section_with_merge_intact() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![
-                test_shot_data(5.0),
-                test_shot_data(3.0),
-                test_shot_data(4.0),
-            ],
+            shots: vec![shot(5.0), shot(3.0), shot(4.0)],
         })
         .section_id
         .unwrap();
@@ -463,7 +420,7 @@ fn test_delete_mid_shot_splits_section_with_merge_intact() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(6.0)],
+            shots: vec![shot(6.0)],
         })
         .section_id
         .unwrap();
@@ -527,11 +484,7 @@ fn test_delete_mid_shot_splits_section_with_merge_intact() {
 /// existing stations visually in place and merged partner remains colocated.
 #[test]
 fn test_insert_shot_at_position_0_adjusts_offset_for_merge() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "InsertPos0Merge".to_string(),
-        location: None,
-    });
+    let state = state_with_project("InsertPos0Merge");
 
     let sec_a = state
         .execute(Command::CreateSection {
@@ -540,7 +493,7 @@ fn test_insert_shot_at_position_0_adjusts_offset_for_merge() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -552,7 +505,7 @@ fn test_insert_shot_at_position_0_adjusts_offset_for_merge() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(6.0)],
+            shots: vec![shot(6.0)],
         })
         .section_id
         .unwrap();
@@ -583,7 +536,7 @@ fn test_insert_shot_at_position_0_adjusts_offset_for_merge() {
         state
             .execute(Command::CreateShot {
                 section_id: sec_a,
-                shot: test_shot_data(3.0),
+                shot: shot(3.0),
                 after_shot_id: None,
                 before_shot_id: Some(shot_id_0),
             })
@@ -632,11 +585,7 @@ fn test_insert_shot_at_position_0_adjusts_offset_for_merge() {
 /// when section has merges - verify merges are cleaned up.
 #[test]
 fn test_delete_last_shot_and_section_cleans_merges() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "DeleteLastMerged".to_string(),
-        location: None,
-    });
+    let state = state_with_project("DeleteLastMerged");
 
     let sec_a = state
         .execute(Command::CreateSection {
@@ -645,7 +594,7 @@ fn test_delete_last_shot_and_section_cleans_merges() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0)],
+            shots: vec![shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -657,7 +606,7 @@ fn test_delete_last_shot_and_section_cleans_merges() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(6.0)],
+            shots: vec![shot(6.0)],
         })
         .section_id
         .unwrap();
@@ -714,11 +663,7 @@ fn test_delete_last_shot_and_section_cleans_merges() {
 /// Insert shot with a zero datum present - verify datum station ref shifts correctly.
 #[test]
 fn test_insert_shot_before_zero_datum_shifts_datum_ref() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "InsertBeforeDatum".to_string(),
-        location: None,
-    });
+    let state = state_with_project("InsertBeforeDatum");
 
     let sec = state
         .execute(Command::CreateSection {
@@ -727,7 +672,7 @@ fn test_insert_shot_before_zero_datum_shifts_datum_ref() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            shots: vec![shot(5.0), shot(3.0)],
         })
         .section_id
         .unwrap();
@@ -749,7 +694,7 @@ fn test_insert_shot_before_zero_datum_shifts_datum_ref() {
         state
             .execute(Command::CreateShot {
                 section_id: sec,
-                shot: test_shot_data(2.0),
+                shot: shot(2.0),
                 after_shot_id: None,
                 before_shot_id: Some(shot_id_0),
             })

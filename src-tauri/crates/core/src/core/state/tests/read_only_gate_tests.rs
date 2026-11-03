@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // ===========================================================================
 // #191 - read-only edit gate + dirty bit + chokepoint enumeration (Track B).
@@ -56,7 +57,7 @@ fn edit_enabled_defaults_true_and_local_project_passes() {
         date: None,
         color: "#abcdef".to_string(),
         direction: None,
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
     });
     assert!(result.success, "local project edits succeed");
 }
@@ -101,15 +102,7 @@ fn logout_leaves_local_project_editable() {
     // logout writes the config to clear the rehydrate seed and now reports a failure
     // to do so, so it needs a config file of its own.
     crate::test_helpers::with_isolated_config(|| {
-        let state = AppState::new().unwrap();
-        assert!(
-            state
-                .execute(Command::CreateProject {
-                    name: "Local".to_string(),
-                    location: None,
-                })
-                .success
-        );
+        let state = state_with_project("Local");
         assert!(state.edit_enabled(), "local project editable");
         state.speleodb_logout().expect("logout");
         assert!(
@@ -326,7 +319,7 @@ fn dirty_bit_noop_for_local_only_project() {
     let mut project = Project::new("Local".to_string(), None);
     let sid = project
         .add_section(SectionData {
-            shots: vec![test_shot_data(2.0)],
+            shots: vec![shot(2.0)],
             ..Default::default()
         })
         .id;
@@ -547,15 +540,7 @@ fn save_as_on_an_unlinked_project_still_relocates_the_session() {
     // The pre-existing Save As contract for plain local projects, pinned so the
     // copy_only branch cannot leak into it.
     let temp = TempDir::new().unwrap();
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "Local".to_string(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("Local");
 
     let dest = temp.path().join("relocated.stalx");
     let result = state.save_project(Some(dest.clone()));

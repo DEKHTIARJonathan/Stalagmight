@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // === Project Operations Tests ===
 
@@ -34,11 +35,7 @@ fn creating_a_project_clears_a_previous_projects_discarded_history_flag() {
 /// ...and closing one does too, so the banner cannot outlive the project it describes.
 #[test]
 fn closing_a_project_clears_the_discarded_history_flag() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Doomed".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Doomed");
     state.set_history_discarded(true);
 
     state.execute(Command::CloseProject);
@@ -78,7 +75,7 @@ fn test_merge_projects_archives_sources_and_adds_extension() {
         color: "#4ecdc4".to_string(),
         direction: Some(SurveyDirection::In),
         quality: 1.0,
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
     });
 
     let mut project_b = Project::new("B".to_string(), None);
@@ -89,7 +86,7 @@ fn test_merge_projects_archives_sources_and_adds_extension() {
         color: "#4ecdc4".to_string(),
         direction: Some(SurveyDirection::Out),
         quality: 1.0,
-        shots: vec![test_shot_data(2.0)],
+        shots: vec![shot(2.0)],
     });
 
     let source_a = temp_dir.path().join("a.stalx");
@@ -155,7 +152,7 @@ fn merge_two_surface_elevations(
         color: "#4ecdc4".to_string(),
         direction: Some(SurveyDirection::In),
         quality: 1.0,
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
     });
 
     let mut project_b = Project::new("B".to_string(), None);
@@ -167,7 +164,7 @@ fn merge_two_surface_elevations(
         color: "#4ecdc4".to_string(),
         direction: Some(SurveyDirection::Out),
         quality: 1.0,
-        shots: vec![test_shot_data(2.0)],
+        shots: vec![shot(2.0)],
     });
 
     let source_a = temp_dir.path().join("a.stalx");
@@ -214,7 +211,7 @@ fn test_merge_projects_carries_each_sections_resolved_azimuth_reference() {
     let temp_dir = TempDir::new().unwrap();
 
     // Due north, level, so the walked bearing IS the applied correction.
-    // `test_shot_data`'s 45/225 pair is deliberately antipodal (its circular
+    // `shot`'s 45/225 pair is deliberately antipodal (its circular
     // mean resolves to 315) and would make the geometry assertion unreadable.
     let due_north = |length: f64| ShotData {
         azimuth_in: 0.0,
@@ -357,11 +354,7 @@ fn test_merge_projects_keeps_each_sections_gauge_station() {
         ..Default::default()
     };
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "CaveA".to_string(),
-        location: None,
-    });
+    let state = state_with_project("CaveA");
     let section_id = state
         .execute(Command::CreateSection {
             name: Some("Loop".to_string()),
@@ -683,11 +676,7 @@ fn test_start_new_load_cancels_previous_and_clear_is_identity_safe() {
 
 #[test]
 fn test_close_project_succeeds_with_poisoned_database_lock() {
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     poison_mutex(&state.database);
 

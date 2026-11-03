@@ -4,18 +4,14 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // === Undo/Redo Tests for fn-35-f4v.1 ===
 
 #[test]
 fn test_undo_delete_shot() {
     // Verify undoing DeleteShot restores the shot
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -23,7 +19,7 @@ fn test_undo_delete_shot() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0), test_shot_data(10.0)],
+        shots: vec![shot(5.0), shot(10.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -53,12 +49,7 @@ fn test_undo_delete_shot() {
 #[test]
 fn test_undo_merge_stations() {
     // Verify undoing MergeStations removes the merge
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create two sections
     let result_a = state.execute(Command::CreateSection {
@@ -67,7 +58,7 @@ fn test_undo_merge_stations() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        shots: vec![shot(5.0), shot(7.0)],
     });
     let section_a_id = result_a.section_id.unwrap();
 
@@ -77,7 +68,7 @@ fn test_undo_merge_stations() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+        shots: vec![shot(4.0), shot(6.0)],
     });
     let section_b_id = result_b.section_id.unwrap();
 
@@ -113,12 +104,7 @@ fn test_undo_merge_stations() {
 #[test]
 fn test_multiple_undo_sequence() {
     // Verify multiple undos in LIFO order
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create sections in sequence
     state.execute(Command::CreateSection {
@@ -179,12 +165,7 @@ fn test_multiple_undo_sequence() {
 #[test]
 fn test_redo_clears_on_new_command() {
     // Verify new command clears redo stack
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create a section
     state.execute(Command::CreateSection {
@@ -380,12 +361,7 @@ fn test_undo_failure_preserves_entry_at_top_lifo_order() {
     // After a failed undo, the entry must be at the TOP of the undo stack.
     // Push two entries: a valid one at the bottom and an invalid one at the top.
     // After the failed undo, the invalid entry must still be on top (LIFO preserved).
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Push a valid section create (will be at bottom of undo stack)
     state.execute(Command::CreateSection {
@@ -503,12 +479,7 @@ fn test_redo_failure_preserves_entry_at_top_lifo_order() {
 fn test_undo_to_partial_completion_stops_at_failed_step() {
     // undo_to() calls undo() in a loop. If an intermediate step fails,
     // it should stop and return an enhanced error message with step count.
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create 3 valid sections (3 undo entries)
     for i in 0..3 {
@@ -617,12 +588,7 @@ fn test_undo_to_partial_completion_stops_at_failed_step() {
 fn test_redo_to_partial_completion_stops_at_failed_step() {
     // redo_to() calls redo() in a loop. If an intermediate step fails,
     // it should stop and return an enhanced error message with step count.
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create 2 sections, then undo both so they're on the redo stack
     state.execute(Command::CreateSection {
@@ -815,12 +781,7 @@ fn test_redo_failure_with_project_lock_preserves_entry() {
 fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
     // Verify that calling SetZeroDatum on an existing datum captures previous_gps = Some(old)
     // and previous_offsets correctly in the undo data.
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create a section with shots
     let result_a = state.execute(Command::CreateSection {
@@ -829,7 +790,7 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
     });
     let section_a = result_a.section_id.unwrap();
 
@@ -911,12 +872,7 @@ fn test_set_zero_datum_update_captures_previous_gps_and_offsets() {
 #[test]
 fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
     // After updating a zero datum, undo should restore the previous GPS and section offsets.
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let result_a = state.execute(Command::CreateSection {
         name: Some("A".to_string()),
@@ -924,7 +880,7 @@ fn test_set_zero_datum_update_undo_restores_previous_gps_and_offsets() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
     });
     let section_a = result_a.section_id.unwrap();
 
@@ -1024,12 +980,7 @@ fn test_set_zero_datum_no_change_still_creates_undo_entry() {
     // The backend always executes SetZeroDatum and always creates an undo entry.
     // This test confirms that calling SetZeroDatum with the same GPS coordinates
     // still produces an undo entry (the guard must be tested in E2E).
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let result_a = state.execute(Command::CreateSection {
         name: Some("A".to_string()),
@@ -1037,7 +988,7 @@ fn test_set_zero_datum_no_change_still_creates_undo_entry() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
     });
     let section_a = result_a.section_id.unwrap();
 

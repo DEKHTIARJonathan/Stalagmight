@@ -4,17 +4,13 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // === CreateLoopClosure undo/redo tests ===
 
 #[test]
 fn test_undo_create_loop_closure() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create two sections
     let result_a = state.execute(Command::CreateSection {
@@ -23,7 +19,7 @@ fn test_undo_create_loop_closure() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
     });
     let section_a = result_a.section_id.unwrap();
 
@@ -33,7 +29,7 @@ fn test_undo_create_loop_closure() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_b = result_b.section_id.unwrap();
 
@@ -87,12 +83,7 @@ fn test_undo_create_loop_closure() {
 
 #[test]
 fn test_undo_create_loop_closure_has_closure_info() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let result_a = state.execute(Command::CreateSection {
         name: Some("A".to_string()),
@@ -100,7 +91,7 @@ fn test_undo_create_loop_closure_has_closure_info() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
     });
     let section_a = result_a.section_id.unwrap();
 
@@ -110,7 +101,7 @@ fn test_undo_create_loop_closure_has_closure_info() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_b = result_b.section_id.unwrap();
 
@@ -141,12 +132,7 @@ fn test_undo_create_loop_closure_has_closure_info() {
 
 #[test]
 fn test_create_loop_closure_deferred_strategy_is_rejected() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "DistUndo".to_string(),
-        location: None,
-    });
+    let state = state_with_project("DistUndo");
 
     let result = state.execute(Command::CreateSection {
         name: Some("A".to_string()),
@@ -154,7 +140,7 @@ fn test_create_loop_closure_deferred_strategy_is_rejected() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0), test_shot_data(6.0)],
+        shots: vec![shot(10.0), shot(6.0)],
     });
     let section_id = result.section_id.unwrap();
 
@@ -187,12 +173,7 @@ fn test_create_loop_closure_deferred_strategy_is_rejected() {
 
 #[test]
 fn test_undo_unmerge_restores_removed_closures() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let result_a = state.execute(Command::CreateSection {
         name: Some("A".to_string()),
@@ -200,7 +181,7 @@ fn test_undo_unmerge_restores_removed_closures() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
     });
     let section_a = result_a.section_id.unwrap();
 
@@ -210,7 +191,7 @@ fn test_undo_unmerge_restores_removed_closures() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_b = result_b.section_id.unwrap();
 
@@ -291,12 +272,7 @@ fn test_undo_unmerge_restores_removed_closures() {
 
 #[test]
 fn test_move_station_updates_shot_data() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create section with a shot pointing due east (azimuth 90°), length 10
     let create_result = state.execute(Command::CreateSection {
@@ -374,12 +350,7 @@ fn test_move_station_updates_shot_data() {
 
 #[test]
 fn test_move_station_zero_updates_section_offset() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create section with a shot pointing due east (azimuth 90°), length 10
     let create_result = state.execute(Command::CreateSection {
@@ -450,12 +421,7 @@ fn test_move_station_zero_updates_section_offset() {
 
 #[test]
 fn test_move_station_undo() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Due east shot, length 10
     let create_result = state.execute(Command::CreateSection {
@@ -521,12 +487,7 @@ fn test_move_station_undo() {
 
 #[test]
 fn test_move_station_redo() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Due east shot, length 10
     let create_result = state.execute(Command::CreateSection {
@@ -591,12 +552,7 @@ fn test_move_station_redo() {
 
 #[test]
 fn test_station_offset_applied_in_coordinates() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -604,7 +560,7 @@ fn test_station_offset_applied_in_coordinates() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -653,12 +609,7 @@ fn test_station_offset_applied_in_coordinates() {
 
 #[test]
 fn test_create_section_undo_redo_preserves_id() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create a section with shots
     let create_result = state.execute(Command::CreateSection {
@@ -667,7 +618,7 @@ fn test_create_section_undo_redo_preserves_id() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0), test_shot_data(10.0)],
+        shots: vec![shot(5.0), shot(10.0)],
     });
 
     let original_section_id = create_result.section_id.unwrap();
@@ -708,12 +659,7 @@ fn test_create_section_undo_redo_preserves_id() {
 
 #[test]
 fn test_create_section_double_undo_redo_cycle() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create a section with shots
     let create_result = state.execute(Command::CreateSection {
@@ -722,11 +668,7 @@ fn test_create_section_double_undo_redo_cycle() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![
-            test_shot_data(3.0),
-            test_shot_data(7.0),
-            test_shot_data(11.0),
-        ],
+        shots: vec![shot(3.0), shot(7.0), shot(11.0)],
     });
 
     let original_section_id = create_result.section_id.unwrap();
@@ -762,12 +704,7 @@ fn test_create_section_double_undo_redo_cycle() {
 
 #[test]
 fn test_create_section_undo_redo_then_edit() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: Some("Editable".to_string()),
@@ -775,7 +712,7 @@ fn test_create_section_undo_redo_then_edit() {
         date: None,
         color: "#0000ff".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -804,12 +741,7 @@ fn test_create_section_undo_redo_then_edit() {
 
 #[test]
 fn test_create_section_undo_redo_then_delete() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: Some("Deletable".to_string()),
@@ -836,12 +768,7 @@ fn test_create_section_undo_redo_then_delete() {
 fn test_create_section_created_snapshot_distinct_from_section_snapshot() {
     // Verify that CreateSection uses CreatedSectionSnapshot while
     // DeleteSection still uses SectionSnapshot
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create a section
     let create_result = state.execute(Command::CreateSection {
@@ -850,7 +777,7 @@ fn test_create_section_created_snapshot_distinct_from_section_snapshot() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
     });
     let section_id = create_result.section_id.unwrap();
 
@@ -885,12 +812,7 @@ fn test_create_section_created_snapshot_distinct_from_section_snapshot() {
 #[test]
 fn test_delete_section_undo_redo_still_works() {
     // Regression test: ensure DeleteSection undo/redo behavior is unchanged
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: Some("Delete Test".to_string()),
@@ -898,7 +820,7 @@ fn test_delete_section_undo_redo_still_works() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     let section_id = create_result.section_id.unwrap();

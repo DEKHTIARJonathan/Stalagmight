@@ -4,6 +4,7 @@
 //! moved verbatim; shared helpers live in the module root (`tests.rs`).
 
 use super::*;
+use crate::test_fixtures::{shot, state_with_project};
 
 // === Command Execution Tests (fn-34-nvq spec) ===
 // These tests verify specific command behaviors as specified in the epic.
@@ -12,12 +13,7 @@ use super::*;
 fn test_execute_create_section_command() {
     // Verify CreateSection creates section correctly with all fields
     use chrono::NaiveDate;
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let test_date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
     let result = state.execute(Command::CreateSection {
@@ -26,11 +22,7 @@ fn test_execute_create_section_command() {
         date: Some(test_date),
         color: "#00ff00".to_string(),
         direction: Some(SurveyDirection::Out),
-        shots: vec![
-            test_shot_data(10.0),
-            test_shot_data(15.0),
-            test_shot_data(8.0),
-        ],
+        shots: vec![shot(10.0), shot(15.0), shot(8.0)],
     });
 
     assert!(result.success);
@@ -55,12 +47,7 @@ fn test_execute_create_section_command() {
 #[test]
 fn test_execute_merge_stations_command() {
     // Verify MergeStations updates section offsets correctly
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create two sections
     let result_a = state.execute(Command::CreateSection {
@@ -69,7 +56,7 @@ fn test_execute_merge_stations_command() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
+        shots: vec![shot(5.0), shot(7.0)],
     });
     let section_a_id = result_a.section_id.unwrap();
 
@@ -79,7 +66,7 @@ fn test_execute_merge_stations_command() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+        shots: vec![shot(4.0), shot(6.0)],
     });
     let section_b_id = result_b.section_id.unwrap();
 
@@ -112,12 +99,7 @@ fn test_execute_merge_stations_command() {
 #[test]
 fn test_execute_set_zero_datum_command() {
     // Verify SetZeroDatum stores GPS coordinates correctly
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -125,7 +107,7 @@ fn test_execute_set_zero_datum_command() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -153,12 +135,7 @@ fn test_execute_set_zero_datum_command() {
 fn test_undo_set_zero_datum_restores_section_offsets() {
     // Verify undo restores exact previous section_offsets, including
     // removing keys that were newly created by the command
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create two sections with shots
     let result_a = state.execute(Command::CreateSection {
@@ -167,7 +144,7 @@ fn test_undo_set_zero_datum_restores_section_offsets() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
     });
     let section_a = result_a.section_id.unwrap();
 
@@ -177,7 +154,7 @@ fn test_undo_set_zero_datum_restores_section_offsets() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(10.0)],
+        shots: vec![shot(10.0)],
     });
     let section_b = result_b.section_id.unwrap();
 
@@ -283,12 +260,7 @@ fn test_undo_set_zero_datum_restores_section_offsets() {
 #[test]
 fn test_execute_update_shot_command() {
     // Verify UpdateShot modifies shot data correctly
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -353,11 +325,7 @@ fn test_update_shot_rejects_non_finite_nested_field_atomically() {
     // `Option<Option<f64>>` field (pitch_in), not just the flat `length` case
     // covered elsewhere. The whole update is rejected atomically: a valid field
     // set alongside the poisoned one (azimuth_in) must NOT be partially applied.
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "T".to_string(),
-        location: None,
-    });
+    let state = state_with_project("T");
     let create = state.execute(Command::CreateSection {
         name: None,
         surveyor: None,
@@ -405,11 +373,7 @@ fn test_update_shot_rejects_non_finite_nested_field_atomically() {
 fn test_update_shot_rejects_positive_infinity() {
     // Only NaN was covered before; +inf must be rejected too (`all_finite`
     // checks `is_finite`, which is false for both).
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "T".to_string(),
-        location: None,
-    });
+    let state = state_with_project("T");
     let create = state.execute(Command::CreateSection {
         name: None,
         surveyor: None,
@@ -455,11 +419,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
     use crate::models::ImportPlacement;
     use crate::models::ImportSectionConfig;
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "T".to_string(),
-        location: None,
-    });
+    let state = state_with_project("T");
 
     let seed = ImportSectionConfig {
         reverse: false,
@@ -470,7 +430,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
         color: "#ff0000".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(5.0), test_shot_data(6.0)],
+        shots: vec![shot(5.0), shot(6.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
@@ -500,7 +460,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
         color: "#00ff00".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(3.0)],
+        shots: vec![shot(3.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
@@ -558,11 +518,7 @@ fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
     // `zero_datums` data, and this is the cheapest fixture that produces it.
     use crate::models::ZeroDatum;
 
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "T".to_string(),
-        location: None,
-    });
+    let state = state_with_project("T");
 
     let a = state
         .execute(Command::CreateSection {
@@ -571,12 +527,7 @@ fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
             date: None,
             color: "#111111".to_string(),
             direction: Some(SurveyDirection::In),
-            shots: vec![
-                test_shot_data(5.0),
-                test_shot_data(5.0),
-                test_shot_data(5.0),
-                test_shot_data(5.0),
-            ],
+            shots: vec![shot(5.0), shot(5.0), shot(5.0), shot(5.0)],
         })
         .section_id
         .unwrap();
@@ -611,7 +562,7 @@ fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
         color: "#222222".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(1.0)],
+        shots: vec![shot(1.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
@@ -660,11 +611,7 @@ fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
 fn zero_datum_import_placement_sets_receipt_zero_datum_created() {
     // F12c: a section placed via `ImportPlacement::ZeroDatum` must name itself
     // on the receipt, not just in the trace logs.
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "T".to_string(),
-        location: None,
-    });
+    let state = state_with_project("T");
 
     let config = ImportSectionConfig {
         reverse: false,
@@ -675,7 +622,7 @@ fn zero_datum_import_placement_sets_receipt_zero_datum_created() {
         color: "#333333".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::ZeroDatum {
             coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
@@ -706,11 +653,7 @@ fn zero_datum_import_placement_sets_receipt_zero_datum_created() {
 fn multiple_zero_datum_placements_name_the_first_and_count_the_rest() {
     // F12c/item-9: a batch that creates more than one zero datum must not
     // let naming only the first one read as a claim of completeness.
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "T".to_string(),
-        location: None,
-    });
+    let state = state_with_project("T");
 
     let make = |name: &str, station_index: u32| ImportSectionConfig {
         reverse: false,
@@ -721,7 +664,7 @@ fn multiple_zero_datum_placements_name_the_first_and_count_the_rest() {
         color: "#333333".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::ZeroDatum {
             coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
@@ -752,11 +695,7 @@ fn multiple_zero_datum_placements_name_the_first_and_count_the_rest() {
 fn import_with_no_zero_datum_placement_leaves_receipt_field_none() {
     // Negative case for F12c: an ordinary Origin-placed import must not claim
     // a zero datum was created.
-    let state = AppState::new().unwrap();
-    state.execute(Command::CreateProject {
-        name: "T".to_string(),
-        location: None,
-    });
+    let state = state_with_project("T");
 
     let config = ImportSectionConfig {
         reverse: false,
@@ -767,7 +706,7 @@ fn import_with_no_zero_datum_placement_leaves_receipt_field_none() {
         color: "#444444".to_string(),
         direction: None,
         quality: 1.0,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
@@ -790,12 +729,7 @@ fn import_with_no_zero_datum_placement_leaves_receipt_field_none() {
 #[test]
 fn test_execute_delete_shot_command() {
     // Verify DeleteShot removes shot and maintains section integrity
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -803,11 +737,7 @@ fn test_execute_delete_shot_command() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![
-            test_shot_data(5.0),
-            test_shot_data(7.0),
-            test_shot_data(9.0),
-        ],
+        shots: vec![shot(5.0), shot(7.0), shot(9.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -847,12 +777,7 @@ fn test_execute_delete_shot_command() {
 #[test]
 fn test_execute_create_shot_command() {
     // Verify CreateShot inserts shot at correct position
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -860,7 +785,7 @@ fn test_execute_create_shot_command() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0), test_shot_data(10.0)],
+        shots: vec![shot(5.0), shot(10.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -872,7 +797,7 @@ fn test_execute_create_shot_command() {
     // Insert a new shot after the first shot
     let result = state.execute(Command::CreateShot {
         section_id,
-        shot: test_shot_data(7.5), // Intermediate length
+        shot: shot(7.5), // Intermediate length
         after_shot_id: Some(first_shot_id),
         before_shot_id: None,
     });
@@ -894,12 +819,7 @@ fn test_execute_create_shot_command() {
 #[test]
 fn test_execute_delete_section_command() {
     // Verify DeleteSection cleans up merges and related data
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     // Create two sections
     let result_a = state.execute(Command::CreateSection {
@@ -908,7 +828,7 @@ fn test_execute_delete_section_command() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_a_id = result_a.section_id.unwrap();
 
@@ -918,7 +838,7 @@ fn test_execute_delete_section_command() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(7.0)],
+        shots: vec![shot(7.0)],
     });
     let section_b_id = result_b.section_id.unwrap();
 
@@ -956,12 +876,7 @@ fn test_execute_delete_section_command() {
 fn test_execute_update_section_metadata_command() {
     // Verify UpdateSectionMetadata modifies metadata correctly
     use chrono::NaiveDate;
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let initial_date = NaiveDate::from_ymd_opt(2024, 1, 15).unwrap();
     let create_result = state.execute(Command::CreateSection {
@@ -970,7 +885,7 @@ fn test_execute_update_section_metadata_command() {
         date: Some(initial_date),
         color: "#ff0000".to_string(),
         direction: Some(SurveyDirection::In),
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
 
     let section_id = create_result.section_id.unwrap();
@@ -1029,7 +944,7 @@ fn test_execute_command_no_project_open() {
         },
         Command::CreateShot {
             section_id: 0,
-            shot: test_shot_data(5.0),
+            shot: shot(5.0),
             after_shot_id: None,
             before_shot_id: None,
         },
@@ -1067,12 +982,7 @@ fn test_execute_command_no_project_open() {
 
 #[test]
 fn test_execute_commands_with_invalid_ids() {
-    let state = AppState::new().unwrap();
-
-    state.execute(Command::CreateProject {
-        name: "Test".to_string(),
-        location: None,
-    });
+    let state = state_with_project("Test");
 
     let create_result = state.execute(Command::CreateSection {
         name: None,
@@ -1080,7 +990,7 @@ fn test_execute_commands_with_invalid_ids() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0)],
+        shots: vec![shot(5.0)],
     });
     let section_id = create_result.section_id.unwrap();
 

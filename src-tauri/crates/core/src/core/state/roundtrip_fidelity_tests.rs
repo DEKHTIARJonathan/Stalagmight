@@ -8,10 +8,10 @@ use std::collections::HashSet;
 
 use tempfile::TempDir;
 
-use super::tests::test_shot_data;
 use super::AppState;
 use crate::core::Command;
 use crate::models::{GpsCoordinates, ShotData, StationRef};
+use crate::test_fixtures::shot;
 
 /// Export project to TML, re-import it, verify shot data matches exactly.
 #[test]
@@ -123,7 +123,7 @@ fn test_tml_roundtrip_preserves_multiple_sections() {
         date: None,
         color: "#ff0000".to_string(),
         direction: None,
-        shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+        shots: vec![shot(5.0), shot(3.0)],
     });
     state.execute(Command::CreateSection {
         name: Some("Gallery B".to_string()),
@@ -131,7 +131,7 @@ fn test_tml_roundtrip_preserves_multiple_sections() {
         date: None,
         color: "#00ff00".to_string(),
         direction: None,
-        shots: vec![test_shot_data(7.0)],
+        shots: vec![shot(7.0)],
     });
 
     let project = state.get_project_state().unwrap();
@@ -169,7 +169,7 @@ fn test_stalx_roundtrip_preserves_merges_closures_offsets() {
             date: None,
             color: "#ff0000".to_string(),
             direction: None,
-            shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
+            shots: vec![shot(5.0), shot(3.0)],
         })
         .section_id
         .unwrap();
@@ -181,7 +181,7 @@ fn test_stalx_roundtrip_preserves_merges_closures_offsets() {
             date: None,
             color: "#00ff00".to_string(),
             direction: None,
-            shots: vec![test_shot_data(4.0), test_shot_data(6.0)],
+            shots: vec![shot(4.0), shot(6.0)],
         })
         .section_id
         .unwrap();
