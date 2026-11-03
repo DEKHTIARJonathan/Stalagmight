@@ -377,7 +377,9 @@ impl AppState {
         // In the second case the tables only that file holds are UNREADABLE, not
         // absent, and the new file goes without them: say so (#576 RV2-R-7).
         let Some(db) = db_guard.as_ref() else {
-            if !request.deferred {
+            // [#576 RV6a-15] Only when there IS an original file: a project never
+            // saved (no `file_path`) has nothing that could have failed to read.
+            if !request.deferred && project.file_path.is_some() {
                 carried.warnings.push(ValidationWarning {
                     code: SIDE_TABLES_NOT_CARRIED_CODE.to_owned(),
                     message: "The project was saved, but the original file could not be read, \
