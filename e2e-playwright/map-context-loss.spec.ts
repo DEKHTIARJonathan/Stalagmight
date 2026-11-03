@@ -157,7 +157,7 @@ async function showGlobalSurveys(page: Page): Promise<void> {
       .getState()
       .loadGeometryBatch(['/projects/cave-alpha.stalx', '/projects/cave-beta.stalx', '/projects/cave-gamma.stalx']);
   });
-  await expect.poll(() => globalShotMidpoints(page).then((m) => m.length)).toBeGreaterThan(0);
+  await expect.poll(() => globalShots(page).then((m) => m.length)).toBeGreaterThan(0);
   await page.evaluate(() => {
     const w = window as unknown as {
       __E2E_TEST__: { globalViewStore: { getState: () => { geometryData: Map<string, { shots: Array<{ from: number[]; to: number[] }> }> } } };
@@ -175,28 +175,34 @@ async function showGlobalSurveys(page: Page): Promise<void> {
   });
 }
 
-/** Every loaded Global View shot's midpoint, as `[lng, lat]`. */
-async function globalShotMidpoints(page: Page): Promise<Array<[number, number]>> {
+/** Every loaded Global View shot, as `[lng, lat]` endpoints. */
+async function globalShots(page: Page): Promise<Array<{ from: [number, number]; to: [number, number] }>> {
   return page.evaluate(() => {
     const w = window as unknown as {
       __E2E_TEST__: { globalViewStore: { getState: () => { geometryData: Map<string, { shots: Array<{ from: number[]; to: number[] }> }> } } };
     };
     return [...w.__E2E_TEST__.globalViewStore.getState().geometryData.values()].flatMap((g) =>
-      g.shots.map((s) => [(s.from[0]! + s.to[0]!) / 2, (s.from[1]! + s.to[1]!) / 2] as [number, number]),
+      g.shots.map((s) => ({ from: [s.from[0]!, s.from[1]!] as [number, number], to: [s.to[0]!, s.to[1]!] as [number, number] })),
     );
   });
 }
 
 /**
- * Ink the Global View map paints at its on-screen shot midpoints, against the
- * canvas-corner background - the Global View's counterpart of {@link inkAt}: a
- * global survey layer that is back in the stack but draws nothing reads 0
- * (#576 RV4-FE-MF-7).
+ * How many on-screen Global View shots are drawn: a shot counts when a pixel at
+ * its midpoint differs from the pixels 12 px to either side of the line while
+ * those two agree with each other (both are the background there). The Global
+ * View's base imagery is not one color (the mock's tiles are squares of
+ * different greens), so a fixed background sample would count the imagery as
+ * ink, and a one-sided one an imagery edge; the line's own two-sided
+ * neighbourhood does not. The Global View's counterpart of
+ * {@link inkAt}: a global survey layer that is back in the stack but draws
+ * nothing reads 0 (#576 RV4-FE-MF-7). `shiftPx` moves every probe point off the
+ * survey, for the oracle's own check.
  */
-async function globalInk(page: Page): Promise<number> {
-  const mids = await globalShotMidpoints(page);
+async function globalInk(page: Page, shiftPx = 0): Promise<number> {
+  const shots = await globalShots(page);
   return page.evaluate(
-    (mids) =>
+    ({ shots, shiftPx }) =>
       new Promise<number>((resolve) => {
         const map = (window as unknown as {
           __stalagmight_global_map__?: {
@@ -211,6 +217,8 @@ async function globalInk(page: Page): Promise<number> {
         const gl = canvas.getContext('webgl2') as WebGL2RenderingContext | null;
         if (!gl) return resolve(0);
         const dpr = canvas.width / canvas.clientWidth;
+        const inside = (p: { x: number; y: number }) =>
+          p.x > 16 && p.y > 16 && p.x < canvas.clientWidth - 16 && p.y < canvas.clientHeight - 16;
         map.once('render', () => {
           const read = (x: number, y: number, size: number) => {
             const n = Math.max(1, Math.round(size * dpr));
@@ -218,22 +226,36 @@ async function globalInk(page: Page): Promise<number> {
             gl.readPixels(Math.round(x * dpr - n / 2), Math.round(canvas.height - y * dpr - n / 2), n, n, gl.RGBA, gl.UNSIGNED_BYTE, out);
             return out;
           };
-          const bg = read(6, 6, 1);
-          let ink = 0;
-          for (const ll of mids) {
-            const p = map.project(ll);
-            // Off-canvas reads return zeros, which would count as ink.
-            if (p.x < 6 || p.y < 6 || p.x > canvas.clientWidth - 6 || p.y > canvas.clientHeight - 6) continue;
-            const buf = read(p.x, p.y, 9);
-            for (let i = 0; i < buf.length; i += 4) {
-              if (Math.abs(buf[i]! - bg[0]!) > 12 || Math.abs(buf[i + 1]! - bg[1]!) > 12 || Math.abs(buf[i + 2]! - bg[2]!) > 12) ink++;
+          let drawn = 0;
+          for (const s of shots) {
+            const a = map.project(s.from);
+            const b = map.project(s.to);
+            const len = Math.hypot(b.x - a.x, b.y - a.y);
+            if (len < 4) continue;
+            const nx = -(b.y - a.y) / len;
+            const ny = (b.x - a.x) / len;
+            const mid = { x: (a.x + b.x) / 2 + nx * shiftPx, y: (a.y + b.y) / 2 + ny * shiftPx };
+            const left = { x: mid.x + nx * 12, y: mid.y + ny * 12 };
+            const right = { x: mid.x - nx * 12, y: mid.y - ny * 12 };
+            if (!inside(mid) || !inside(left) || !inside(right)) continue;
+            const differs = (p: Uint8Array, i: number, q: Uint8Array) =>
+              Math.abs(p[i]! - q[0]!) > 30 || Math.abs(p[i + 1]! - q[1]!) > 30 || Math.abs(p[i + 2]! - q[2]!) > 30;
+            const refA = read(left.x, left.y, 1);
+            const refB = read(right.x, right.y, 1);
+            if (differs(refA, 0, refB)) continue; // an imagery edge runs between the two sides
+            const block = read(mid.x, mid.y, 3);
+            for (let i = 0; i < block.length; i += 4) {
+              if (differs(block, i, refA)) {
+                drawn++;
+                break;
+              }
             }
           }
-          resolve(ink);
+          resolve(drawn);
         });
         map.triggerRepaint();
       }),
-    mids,
+    { shots, shiftPx },
   );
 }
 
