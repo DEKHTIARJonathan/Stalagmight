@@ -156,18 +156,22 @@ export function useSurveyLayerSync({
     }
   }, [config, mapLoaded]);
 
-  // Apply theme colors to SurveyLayer and map background when resolvedTheme changes
+  // Apply theme colors to SurveyLayer when resolvedTheme changes
   // MapLibre GL JS does NOT read CSS variables - colors must be re-applied explicitly
+  // Not on a context restore (#576 RV4-FE-SL-4): with a live style this is a full
+  // survey rebuild, and the restore already replays the survey with these colors.
   useEffect(() => {
-    const colors = getMapThemeColors();
     if (surveyLayerRef.current) {
-      surveyLayerRef.current.applyThemeColors(colors);
+      surveyLayerRef.current.applyThemeColors(getMapThemeColors());
     }
-    // Re-apply map background color to match the active theme. Not while the
-    // WebGL context is lost (no style; the write would throw): styleEpoch runs
-    // this again once the restored style has loaded (#576 NF-MAP-5).
+  }, [resolvedTheme, mapLoaded]);
+
+  // Re-apply map background color to match the active theme. Not while the
+  // WebGL context is lost (no style; the write would throw): styleEpoch runs
+  // this again once the restored style has loaded (#576 NF-MAP-5).
+  useEffect(() => {
     if (map.current && mapLoaded && hasLiveStyle(map.current)) {
-      map.current.setPaintProperty('background', 'background-color', colors.background);
+      map.current.setPaintProperty('background', 'background-color', getMapThemeColors().background);
     }
   }, [resolvedTheme, mapLoaded, styleEpoch]);
 
