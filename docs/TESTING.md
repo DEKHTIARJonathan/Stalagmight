@@ -130,7 +130,9 @@ untagged test still runs nightly. The per-test timing report on every smoke run
 Each canary asserts the feature's effect through the mock - the IPC call it
 sends, with its arguments (`e2e-playwright/helpers/ipcRecorder.ts`), and the
 state it leaves (a card gone, a receipt, a clean footer) - not merely that the
-UI did not crash (#576 RV3-FE-7).
+UI did not crash (#576 RV3-FE-7). This is enforced in review, not by
+`lint:smoke-features`: the gate reads test titles only, so a weakened canary
+still passes it (#576 RV4-FE-FEB-10).
 
 The agent harness is **on-demand plus per-RC** and is in no gated tier above.
 The retired WDIO suite's residual coverage lives in the journeys
