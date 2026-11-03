@@ -29,6 +29,10 @@ pub mod shot;
 pub mod source_scan;
 pub mod speleo_link;
 pub mod station;
+/// [#576 E1] The shared survey-data builders (`shot`, `straight_shot`, ...): see
+/// the module doc.
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_fixtures;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]
