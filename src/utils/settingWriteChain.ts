@@ -55,8 +55,15 @@ export function chainSettingWrite<T>(key: string, write: () => Promise<T>): Prom
  * MADE (its `created_at` and the file it is open from, #576 NF-W8FE-3), to send for
  * the backend to check (`save_display_setting` refuses another project's - or
  * another copy's - with PROJECT_CHANGED), and a write whose turn comes after the
- * project was replaced (`store/projectSession.ts`) is dropped unsent: it resolves
- * `undefined`.
+ * project was replaced by another one (`store/projectSession.ts`) is dropped
+ * unsent: it resolves `undefined`.
+ *
+ * [#576 RV8b-3] Replaced by ANOTHER one: the rule is "a write lands in the project
+ * it was made in", the backend's own. A reload of the same file (a dialog's
+ * reopen, a SpeleoDB pull that reloads the copy) starts a new session but opens
+ * the project the write was made in, so the write is still sent - as one already
+ * in flight would land. Only a write made with no project open falls back to the
+ * session, because "no project" names nothing to compare.
  */
 export function chainProjectSettingWrite<T>(
   key: string,
@@ -65,8 +72,15 @@ export function chainProjectSettingWrite<T>(
   const session = projectSessionEpoch();
   const madeFor = openProjectIdentity();
   return chainSettingWrite(key, () =>
-    session === projectSessionEpoch() ? write(madeFor) : Promise.resolve(undefined),
+    stillTheProjectItWasMadeIn(madeFor, session) ? write(madeFor) : Promise.resolve(undefined),
   );
+}
+
+/** Whether the project open now is the one a write was made in (see above). */
+function stillTheProjectItWasMadeIn(madeFor: DisplaySettingTarget | null, session: number): boolean {
+  const open = openProjectIdentity();
+  if (madeFor === null || open === null) return madeFor === open && session === projectSessionEpoch();
+  return open.createdAt === madeFor.createdAt && open.filePath === madeFor.filePath;
 }
 
 /** Keys for the writers that share a command but not a setting. */

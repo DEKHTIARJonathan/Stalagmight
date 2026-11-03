@@ -10,7 +10,10 @@
  *    `created_at` and, since NF-W8FE-3, the file it is open from (two copies of
  *    one file share `created_at`) - and the backend refuses it with
  *    PROJECT_CHANGED when another one is open;
- *  - a write still queued when the project is replaced is dropped, never sent;
+ *  - a write still queued when the project is replaced by ANOTHER one (or a copy)
+ *    is dropped, never sent - but one queued across a reload of the SAME project
+ *    (same `created_at`, same file) is still sent: it was made in the project that
+ *    is open (RV8b-3);
  *  - that refusal is the design working, so it is not logged as a failure.
  *
  * Store tier: the real stores and write chain; the IPC is mocked, and the first
@@ -26,6 +29,7 @@ vi.mock('@tauri-apps/api/core', async () => (await import('../../test/factories/
 
 import { useUIStore } from '../uiStore';
 import { useProjectStore } from '../projectStore';
+import { noteProjectSessionChanged } from '../projectSession';
 import type { Project } from '../../types/project';
 
 const CAVE_A = '2026-01-01T10:00:00Z';
@@ -128,6 +132,49 @@ describe('display settings are scoped to their project (#576 RV6b-2)', () => {
     const queuedGrid = sent.filter((args) => args.key === 'gridSpacing');
     expect(queuedGrid).toEqual([{ key: 'gridSpacing', value: '20', madeFor: MADE_FOR_A }]);
     expect(sent.every((args) => JSON.stringify(args.madeFor) === JSON.stringify(MADE_FOR_A))).toBe(true);
+  });
+
+  it('a write queued across a reload of the same project is still sent to it (#576 RV8b-3)', async () => {
+    // A dialog-driven reload of the open file (publish, a SpeleoDB pull, the
+    // recovery reopen) replaces the project session, as any load does. A write
+    // queued behind an in-flight one of the same key was made in THIS project, and
+    // the project open after the reload is the same one: it lands.
+    const { setGridSpacing } = useUIStore.getState();
+    setGridSpacing(20);
+    await until(() => sent.length === 1);
+    setGridSpacing(50);
+    // What a load of the same file does: a new session, the same project.
+    noteProjectSessionChanged();
+    useProjectStore.setState({
+      project: { name: 'CaveA', created_at: CAVE_A, file_path: CAVE_A_PATH, sections: [] } as unknown as Project,
+    });
+    releaseFirst?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    console.log('[RV8b-3] writes across a same-file reload:', JSON.stringify(sent));
+    expect(sent).toEqual([
+      { key: 'gridSpacing', value: '20', madeFor: MADE_FOR_A },
+      { key: 'gridSpacing', value: '50', madeFor: MADE_FOR_A },
+    ]);
+  });
+
+  it('a write queued across a switch to another copy of the file is dropped (#576 RV8b-3)', async () => {
+    const { setGridSpacing } = useUIStore.getState();
+    setGridSpacing(20);
+    await until(() => sent.length === 1);
+    setGridSpacing(50);
+    noteProjectSessionChanged();
+    useProjectStore.setState({
+      project: {
+        name: 'CaveA',
+        created_at: CAVE_A,
+        file_path: '/surveys/CaveA copy.stalx',
+        sections: [],
+      } as unknown as Project,
+    });
+    releaseFirst?.();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    console.log('[RV8b-3] writes across a switch to a copy:', JSON.stringify(sent));
+    expect(sent).toEqual([{ key: 'gridSpacing', value: '20', madeFor: MADE_FOR_A }]);
   });
 
   it("the backend's PROJECT_CHANGED refusal is not reported as a failure", async () => {
