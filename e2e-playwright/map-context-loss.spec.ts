@@ -143,6 +143,100 @@ async function openGlobalViewMap(page: Page): Promise<void> {
   await expect.poll(() => globalLayerOrder(page)).toContain('global-survey-custom');
 }
 
+/**
+ * Load every Global View system's survey and frame it, so the global survey layer
+ * has geometry on screen for {@link globalInk} to find (#576 RV4-FE-MF-7).
+ */
+async function showGlobalSurveys(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const w = window as unknown as {
+      __E2E_TEST__: { globalViewStore: { getState: () => { loadGeometryBatch: (paths: string[]) => Promise<void> } } };
+      __stalagmight_global_map__: { fitBounds: (b: [[number, number], [number, number]], o: object) => void };
+    };
+    await w.__E2E_TEST__.globalViewStore
+      .getState()
+      .loadGeometryBatch(['/projects/cave-alpha.stalx', '/projects/cave-beta.stalx', '/projects/cave-gamma.stalx']);
+  });
+  await expect.poll(() => globalShotMidpoints(page).then((m) => m.length)).toBeGreaterThan(0);
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      __E2E_TEST__: { globalViewStore: { getState: () => { geometryData: Map<string, { shots: Array<{ from: number[]; to: number[] }> }> } } };
+      __stalagmight_global_map__: { fitBounds: (b: [[number, number], [number, number]], o: object) => void };
+    };
+    const pts = [...w.__E2E_TEST__.globalViewStore.getState().geometryData.values()].flatMap((g) =>
+      g.shots.flatMap((s) => [s.from, s.to]),
+    );
+    const lngs = pts.map((p) => p[0]!);
+    const lats = pts.map((p) => p[1]!);
+    w.__stalagmight_global_map__.fitBounds(
+      [[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]],
+      { animate: false, padding: 60 },
+    );
+  });
+}
+
+/** Every loaded Global View shot's midpoint, as `[lng, lat]`. */
+async function globalShotMidpoints(page: Page): Promise<Array<[number, number]>> {
+  return page.evaluate(() => {
+    const w = window as unknown as {
+      __E2E_TEST__: { globalViewStore: { getState: () => { geometryData: Map<string, { shots: Array<{ from: number[]; to: number[] }> }> } } };
+    };
+    return [...w.__E2E_TEST__.globalViewStore.getState().geometryData.values()].flatMap((g) =>
+      g.shots.map((s) => [(s.from[0]! + s.to[0]!) / 2, (s.from[1]! + s.to[1]!) / 2] as [number, number]),
+    );
+  });
+}
+
+/**
+ * Ink the Global View map paints at its on-screen shot midpoints, against the
+ * canvas-corner background - the Global View's counterpart of {@link inkAt}: a
+ * global survey layer that is back in the stack but draws nothing reads 0
+ * (#576 RV4-FE-MF-7).
+ */
+async function globalInk(page: Page): Promise<number> {
+  const mids = await globalShotMidpoints(page);
+  return page.evaluate(
+    (mids) =>
+      new Promise<number>((resolve) => {
+        const map = (window as unknown as {
+          __stalagmight_global_map__?: {
+            getCanvas: () => HTMLCanvasElement;
+            project: (p: [number, number]) => { x: number; y: number };
+            once: (e: string, cb: () => void) => void;
+            triggerRepaint: () => void;
+          };
+        }).__stalagmight_global_map__;
+        if (!map) return resolve(0);
+        const canvas = map.getCanvas();
+        const gl = canvas.getContext('webgl2') as WebGL2RenderingContext | null;
+        if (!gl) return resolve(0);
+        const dpr = canvas.width / canvas.clientWidth;
+        map.once('render', () => {
+          const read = (x: number, y: number, size: number) => {
+            const n = Math.max(1, Math.round(size * dpr));
+            const out = new Uint8Array(n * n * 4);
+            gl.readPixels(Math.round(x * dpr - n / 2), Math.round(canvas.height - y * dpr - n / 2), n, n, gl.RGBA, gl.UNSIGNED_BYTE, out);
+            return out;
+          };
+          const bg = read(6, 6, 1);
+          let ink = 0;
+          for (const ll of mids) {
+            const p = map.project(ll);
+            // Off-canvas reads return zeros, which would count as ink.
+            if (p.x < 6 || p.y < 6 || p.x > canvas.clientWidth - 6 || p.y > canvas.clientHeight - 6) continue;
+            const buf = read(p.x, p.y, 9);
+            for (let i = 0; i < buf.length; i += 4) {
+              if (Math.abs(buf[i]! - bg[0]!) > 12 || Math.abs(buf[i + 1]! - bg[1]!) > 12 || Math.abs(buf[i + 2]! - bg[2]!) > 12) ink++;
+            }
+          }
+          resolve(ink);
+        });
+        map.triggerRepaint();
+      }),
+    mids,
+  );
+}
+
 async function globalLayerOrder(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const map = (window as unknown as { __stalagmight_global_map__?: { getLayersOrder: () => string[] } }).__stalagmight_global_map__;
@@ -265,12 +359,16 @@ test.describe('Global View survives a WebGL context loss (#576 D38)', () => {
   test('the global survey layer comes back, in its old stacking order', async ({ page }) => {
     const errors = collectErrors(page);
     await openGlobalViewMap(page);
+    await showGlobalSurveys(page);
+    await expect.poll(() => globalInk(page)).toBeGreaterThan(0);
     const orderBefore = await globalLayerOrder(page);
 
     await loseContext(page, '__stalagmight_global_map__');
     await restoreContext(page, '__stalagmight_global_map__');
 
     await expect.poll(() => globalLayerOrder(page)).toEqual(orderBefore);
+    // Back in the stack is not enough: it draws again (#576 RV4-FE-MF-7).
+    await expect.poll(() => globalInk(page), { timeout: 10000 }).toBeGreaterThan(0);
     expect(errors).toEqual([]);
   });
 });
@@ -349,6 +447,8 @@ test.describe('A WebGL context that does not come back (#576 D38-LOST)', () => {
   test('Global View: the same toast rebuilds the Global View map', async ({ page }) => {
     const errors = collectErrors(page);
     await openGlobalViewMap(page);
+    await showGlobalSurveys(page);
+    await expect.poll(() => globalInk(page)).toBeGreaterThan(0);
     await tagMap(page, '__stalagmight_global_map__');
 
     await loseContext(page, '__stalagmight_global_map__');
@@ -358,6 +458,8 @@ test.describe('A WebGL context that does not come back (#576 D38-LOST)', () => {
     await expect.poll(() => mapIsRebuilt(page, '__stalagmight_global_map__'), { timeout: 10000 }).toBe(true);
     await expect(page.locator(LOST_TOAST)).toHaveCount(0);
     await expect.poll(() => globalLayerOrder(page)).toContain('global-survey-custom');
+    // The rebuilt map draws the surveys, not just lists their layer (#576 RV4-FE-MF-7).
+    await expect.poll(() => globalInk(page), { timeout: 10000 }).toBeGreaterThan(0);
     expect(errors).toEqual([]);
   });
 });
