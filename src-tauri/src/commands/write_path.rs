@@ -230,15 +230,78 @@ fn lexical(path: &Path) -> PathBuf {
     out
 }
 
-/// Whether `path` is `dir` or inside it - case-insensitively on Windows, whose
-/// file system is.
+/// How a platform's file system compares paths (#576 RV6b-R4).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PathRules {
+    /// Windows path syntax: `\` and `/` both separate, and a verbatim prefix
+    /// (`\\?\C:\..`, `\\?\UNC\server\share\..`) names the same place as the plain
+    /// form (`C:\..`, `\\server\share\..`).
+    pub(crate) windows: bool,
+    /// Names match whatever their letter case: Windows (NTFS) and macOS, whose
+    /// default file systems (APFS, HFS+) are case-insensitive. On a macOS volume
+    /// formatted case-sensitive this refuses a differently-cased folder too - the
+    /// conservative side for a check that only ever refuses.
+    pub(crate) fold_case: bool,
+}
+
+impl PathRules {
+    /// The rules of the platform this build runs on.
+    pub(crate) const HOST: Self = Self {
+        windows: cfg!(windows),
+        fold_case: cfg!(any(windows, target_os = "macos")),
+    };
+}
+
+/// Whether `path` is `dir` or inside it, under this platform's rules.
 fn starts_with_dir(path: &Path, dir: &Path) -> bool {
-    if cfg!(windows) {
-        let lower = |p: &Path| PathBuf::from(p.to_string_lossy().to_lowercase());
-        lower(path).starts_with(lower(dir))
+    path_is_within(
+        &path.to_string_lossy(),
+        &dir.to_string_lossy(),
+        PathRules::HOST,
+    )
+}
+
+/// Whether `path` is `dir` or inside it, compared component by component as text
+/// under `rules` - pure, so every platform's rules can be tested on any host.
+/// Trailing and repeated separators are ignored; `.`/`..` are expected folded
+/// already (`lexical`, or a canonical form).
+pub(crate) fn path_is_within(path: &str, dir: &str, rules: PathRules) -> bool {
+    let (path, dir) = (path_components(path, rules), path_components(dir, rules));
+    !dir.is_empty() && path.len() >= dir.len() && path[..dir.len()] == dir[..]
+}
+
+/// `path` as the components [`path_is_within`] compares: a leading separator (the
+/// root, or a UNC path's `\\`) is a component of its own.
+fn path_components(path: &str, rules: PathRules) -> Vec<String> {
+    let mut text = if rules.windows {
+        let text = path.replace('/', "\\");
+        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
+            format!(r"\\{rest}")
+        } else if let Some(rest) = text
+            .strip_prefix(r"\\?\")
+            .or_else(|| text.strip_prefix(r"\\.\"))
+        {
+            rest.to_owned()
+        } else {
+            text
+        }
     } else {
-        path.starts_with(dir)
+        path.to_owned()
+    };
+    if rules.fold_case {
+        text = text.to_lowercase();
     }
+    let separator = if rules.windows { '\\' } else { '/' };
+    let mut parts = Vec::new();
+    if text.starts_with(separator) {
+        parts.push(separator.to_string());
+    }
+    parts.extend(
+        text.split(separator)
+            .filter(|part| !part.is_empty() && *part != ".")
+            .map(str::to_owned),
+    );
+    parts
 }
 
 /// The system directories no command may write into.
