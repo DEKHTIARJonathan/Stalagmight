@@ -267,8 +267,10 @@ export function GasPlanPanel() {
         bar,
         distance: reachField.stage_drop_distances_m[i] ?? null,
         // Dragged deeper than the safe drop (#246): breathing into reserve, flagged red. The
-        // engine is the single source of truth for this, same as the pressure.
-        overReserve: reachField.stage_drop_over_reserve[i] === true,
+        // engine is the single source of truth for this, same as the pressure. Only for a drop the
+        // dive reaches - the same rule the map marker applies (`useGasPlanDropMarkers`).
+        overReserve:
+          stageDropReached(reachField, i) && reachField.stage_drop_over_reserve[i] === true,
         // A pinned drop the dive turns short of (#576 RV8c-2-D3): no pressure to leave the stage
         // at - it is carried the whole dive.
         reached: stageDropReached(reachField, i),

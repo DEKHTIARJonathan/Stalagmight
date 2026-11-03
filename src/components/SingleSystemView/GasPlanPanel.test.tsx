@@ -277,6 +277,20 @@ describe('GasPlanPanel stage drop the dive does not reach (#576 RV8c-2-D3)', () 
     expect(screen.getByTestId('gas-readout-stage1-reset')).toBeInTheDocument();
   });
 
+  it('never reads a drop the dive does not reach as over-reserve, as the map marker does not (#576 RV9b-9)', () => {
+    // The engine never sends both (gas.rs clears the flag past the route); the readout applies
+    // the marker's rule anyway, so the two surfaces share one.
+    useGasPlanStore.setState({
+      reachField: { ...dropField(3), stage_drop_over_reserve: [true] },
+      stageDropOverrides: [pin],
+    });
+    render(<GasPlanPanel />);
+    const row = screen.getByTestId('gas-readout-stage1-drop');
+    expect(row.getAttribute('data-reached')).toBe('false');
+    expect(row.getAttribute('data-over-reserve')).toBe('false');
+    expect(screen.queryByTestId('gas-readout-over-reserve-warning')).toBeNull();
+  });
+
   it('keeps the drop pressure for a drop on the route, the turnaround included', () => {
     useGasPlanStore.setState({ reachField: dropField(1), stageDropOverrides: [pin] });
     render(<GasPlanPanel />);
