@@ -272,11 +272,7 @@ pub fn suggest_all_placements(
     }
 
     // Sort by score descending
-    all.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    all.sort_by(|a, b| score_cmp(b.score, a.score));
 
     all
 }
@@ -435,6 +431,25 @@ impl MatchShot {
             depth_out: self.depth_in,
         }
     }
+}
+
+/// [#576 NF-W9PERF-1] The order of the score sorts: `partial_cmp`, made total.
+///
+/// A NaN reading (an azimuth or length the import carries as NaN) gives a NaN
+/// score, and every sort here used `partial_cmp(..).unwrap_or(Equal)`: NaN
+/// "equal" to two scores that are not equal to each other is no order at all,
+/// and the standard sort panics when it notices ("does not correctly implement
+/// a total order"). Two numbers compare exactly as `partial_cmp` compares them
+/// (so `-0.0 == 0.0` still, and no finite order moves); a NaN is below every
+/// number and equal to another NaN, so the descending sorts put it last.
+///
+/// Not `f64::total_cmp`, which orders `-0.0` before `0.0` and so could reorder
+/// two finite candidates the old sort kept as tied. The rest of the pipeline
+/// tolerates a non-finite reading the same way - it proves nothing with it
+/// (`crossing::trace_is_finite`) rather than refusing the import.
+fn score_cmp(a: f64, b: f64) -> std::cmp::Ordering {
+    a.partial_cmp(&b)
+        .unwrap_or_else(|| b.is_nan().cmp(&a.is_nan()))
 }
 
 /// Compute the angular difference between two azimuths in [0, 180].
@@ -991,7 +1006,7 @@ fn station_context_multiplier(
         return 0.65;
     }
 
-    scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    scored.sort_by(|a, b| score_cmp(b.0, a.0));
     let best = scored[0];
     let has_second_side = scored
         .iter()
@@ -1155,9 +1170,7 @@ fn try_match_sequence(
     }
 
     candidates.sort_by(|a, b| {
-        cell_final_score(*b, config)
-            .partial_cmp(&cell_final_score(*a, config))
-            .unwrap_or(std::cmp::Ordering::Equal)
+        score_cmp(cell_final_score(*b, config), cell_final_score(*a, config))
             .then_with(|| b.import_count.cmp(&a.import_count))
     });
 
@@ -1239,11 +1252,7 @@ fn best_merge_offset(
             ))
         })
         .collect();
-    ranked.sort_by(|a, b| {
-        b.0.partial_cmp(&a.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| b.1.cmp(&a.1))
-    });
+    ranked.sort_by(|a, b| score_cmp(b.0, a.0).then_with(|| b.1.cmp(&a.1)));
     ranked
         .into_iter()
         .find(|&(_, _, merge_import_station, merge_existing_station)| {
@@ -1467,11 +1476,7 @@ fn suggest_placements_among<'a>(
     suppress_duplicate_endpoint_pairs(&mut suggestions);
 
     // Sort by score descending
-    suggestions.sort_by(|a, b| {
-        b.score
-            .partial_cmp(&a.score)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    suggestions.sort_by(|a, b| score_cmp(b.score, a.score));
 
     // Keep top N
     suggestions.truncate(config.max_suggestions);
@@ -1488,6 +1493,7 @@ mod perf_tests;
 mod differential_tests;
 
 #[cfg(test)]
+#[expect(clippy::print_stdout)]
 mod tests {
     use super::*;
 
@@ -1660,6 +1666,141 @@ mod tests {
             !via_fallback.is_empty(),
             "a section that declares nothing must still be read through the fallback"
         );
+    }
+
+    /// [#576 NF-W9PERF-1] A NaN reading made a candidate's score NaN, and the
+    /// score sorts took NaN as "equal" to every score: equal to 1.3 and to 0.6,
+    /// which are not equal to each other. That is no order, and the standard
+    /// sort panics when it sees it ("does not correctly implement a total
+    /// order"), so one bad azimuth panicked the whole suggestion pass.
+    ///
+    /// Synthetic scene, shaped like the differential gate's seed 0x736: short
+    /// straight sections of 5 m and 3 m legs with one NaN azimuth each, so the
+    /// pass yields multi-shot, single-shot and NaN-scored candidates together.
+    #[test]
+    fn a_nan_reading_neither_panics_the_score_sorts_nor_moves_the_finite_candidates() {
+        // Level legs, and 3 m legs that climb (`up`) or drop (`down`) 3 m.
+        let depth = 29.3;
+        let leg = |az: f64, length: f64| make_shot_data(az, az, length, depth, depth);
+        let up = |az: f64| make_shot_data(az, az, 3.0, depth + 3.0, depth);
+        let down = |az: f64| make_shot_data(az, az, 3.0, depth, depth + 3.0);
+        let existing_shots = [
+            leg(0.0, 5.0),
+            up(90.0),
+            leg(0.0, 5.0),
+            leg(f64::NAN, 5.0),
+            leg(45.0, 0.0),
+            leg(180.0, 5.0),
+            down(0.0),
+            leg(0.0, 5.0),
+            leg(180.0, 5.0),
+            up(180.0),
+        ];
+        let existing = vec![make_section(
+            1,
+            "CaveA",
+            existing_shots
+                .iter()
+                .enumerate()
+                .map(|(i, s)| Shot::new(i as u32, s.clone()))
+                .collect(),
+        )];
+        let imports: Vec<ImportSectionForSuggestion> = [
+            vec![
+                leg(180.0, 5.0),
+                leg(0.0, 5.0),
+                down(90.0),
+                leg(45.0, 5.0),
+                leg(f64::NAN, 5.0),
+                leg(180.0, 5.0),
+                leg(180.0, 5.0),
+                leg(180.0, 5.0),
+            ],
+            vec![
+                leg(0.0, 0.0),
+                leg(0.0, 5.0),
+                up(0.0),
+                leg(90.0, 5.0),
+                leg(0.0, 5.0),
+                leg(0.0, 5.0),
+            ],
+            vec![
+                leg(0.0, 5.0),
+                down(45.0),
+                leg(f64::NAN, 5.0),
+                down(45.0),
+                leg(45.0, 5.0),
+                leg(90.0, 5.0),
+                down(0.0),
+                leg(90.0, 5.0),
+                down(90.0),
+                leg(180.0, 5.0),
+            ],
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, shots)| ImportSectionForSuggestion {
+            index: index as u32,
+            name: format!("Import{index}"),
+            shots,
+            azimuth_reference: None,
+        })
+        .collect();
+
+        let found = suggest_all_placements(
+            &imports,
+            AzimuthReference::default(),
+            &existing,
+            &PlacementSuggestionConfig::default(),
+        );
+
+        let scores: Vec<f64> = found.iter().map(|s| s.score).collect();
+        println!("suggestion scores, in order: {scores:?}");
+        let finite = scores.iter().take_while(|s| !s.is_nan()).count();
+        let distinct_finite = {
+            let mut bits: Vec<u64> = scores[..finite].iter().map(|s| s.to_bits()).collect();
+            bits.dedup();
+            bits.len()
+        };
+        assert!(
+            finite < scores.len() && distinct_finite >= 2,
+            "the scene must mix NaN with distinct finite scores to test the order: {scores:?}"
+        );
+        assert!(
+            scores[finite..].iter().all(|s| s.is_nan()),
+            "every NaN-scored candidate sorts after every finite one: {scores:?}"
+        );
+        assert!(
+            scores[..finite].windows(2).all(|w| w[0] >= w[1]),
+            "the finite candidates stay best first: {scores:?}"
+        );
+    }
+
+    /// [#576 NF-W9PERF-1] The total order agrees with `partial_cmp` on every
+    /// pair of numbers - signed zeros and infinities included - so no finite
+    /// result can move; only a NaN gets a place (below every number).
+    #[test]
+    fn the_score_order_is_partial_cmp_on_numbers_and_puts_nan_lowest() {
+        use std::cmp::Ordering;
+        let numbers = [
+            f64::NEG_INFINITY,
+            -1.5,
+            -0.0,
+            0.0,
+            f64::MIN_POSITIVE,
+            0.6,
+            1.3,
+            f64::INFINITY,
+        ];
+        for a in numbers {
+            for b in numbers {
+                assert_eq!(Some(score_cmp(a, b)), a.partial_cmp(&b), "{a} vs {b}");
+            }
+            assert_eq!(score_cmp(f64::NAN, a), Ordering::Less, "NaN vs {a}");
+            assert_eq!(score_cmp(a, f64::NAN), Ordering::Greater, "{a} vs NaN");
+        }
+        assert_eq!(score_cmp(f64::NAN, f64::NAN), Ordering::Equal);
+        assert_eq!(score_cmp(-0.0, 0.0), Ordering::Equal, "unlike total_cmp");
     }
 
     // ========================================================================

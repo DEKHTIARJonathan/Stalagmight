@@ -15,10 +15,10 @@
 //! crossing check alone must agree with the reference's on extra placements of
 //! every section pair, in and out of range, with and without ignored pairs.
 //!
-//! Both pipelines share the score sorts (`partial_cmp`, NaN as equal), which
-//! the standard sort may abort on when a NaN reading makes a score NaN; a
-//! scene both pipelines panic on after the same crossing checks counts as
-//! agreeing, and only one of them panicking is a difference.
+//! Neither pipeline may panic. A NaN reading makes a score NaN, and the score
+//! sorts used to treat NaN as equal to everything, which the standard sort
+//! aborts on; they order by `score_cmp` now (#576 NF-W9PERF-1), so a scene
+//! with non-finite readings is compared like any other.
 //!
 //! A failure names its seed. Replay it, or run more seeds, with
 //! `PLACEMENT_DIFF_SEED=<seed>` or `PLACEMENT_DIFF_SEEDS=<count>` (plus
@@ -723,8 +723,6 @@ struct Tally {
     sparse_lanes: usize,
     /// Replayed checks in which at least one chunk missed its lane's grid.
     chunk_skips: usize,
-    /// Scenes both pipelines panicked on, identically.
-    panicked: usize,
 }
 
 /// The production crossing check for one section pair, as one closure over
@@ -899,9 +897,7 @@ fn run_logged(
 }
 
 /// Runs one seed's scene through both pipelines and the replay; panics, naming
-/// the seed, on the first difference. A scene both pipelines panic on (a NaN
-/// reading can make the shared score sort panic - see the module docs) counts
-/// as agreeing when they panic after the same crossing checks.
+/// the seed, on the first difference or when either pipeline panicked.
 fn compare_seed(seed: u64, max_len: usize, tally: &mut Tally) {
     let (kind, scene) = scene(seed, max_len);
 
@@ -934,17 +930,13 @@ fn compare_seed(seed: u64, max_len: usize, tally: &mut Tally) {
         old_log.get(at),
     );
     assert!(
-        new.is_some() == old.is_some(),
-        "seed {seed:#018x} ({kind}): only the {} pipeline panicked. Replay with \
-         PLACEMENT_DIFF_SEED={seed:#x}",
-        if new.is_none() {
-            "optimised"
-        } else {
-            "reference"
-        }
+        new.is_some() && old.is_some(),
+        "seed {seed:#018x} ({kind}): a pipeline panicked (optimised: {}, reference: {}). \
+         Replay with PLACEMENT_DIFF_SEED={seed:#x}",
+        new.is_none(),
+        old.is_none()
     );
     let (Some(new), Some(old)) = (new, old) else {
-        tally.panicked += 1;
         return;
     };
     let (new_print, old_print) = (fingerprint(&new), fingerprint(&old));
@@ -1031,13 +1023,12 @@ fn optimised_pipeline_matches_the_reference_on_seeded_scenes() {
         tally.segments_cleared += t.segments_cleared;
         tally.sparse_lanes += t.sparse_lanes;
         tally.chunk_skips += t.chunk_skips;
-        tally.panicked += t.panicked;
     }
     println!(
         "placement differential: {} scenes (seeds {:#x}..), {} suggestions, {} pipeline crossing \
          checks ({} rejected), {} replayed checks ({} rejected); {} section pairs, {} with \
          segments proven parallel to all ({} segments), {} sparse lanes, {} replays skipping a \
-         chunk; {} scenes both pipelines panicked on identically; 0 mismatches",
+         chunk; 0 panics, 0 mismatches",
         tally.scenes,
         seeds.first().copied().unwrap_or(0),
         tally.suggestions,
@@ -1050,7 +1041,6 @@ fn optimised_pipeline_matches_the_reference_on_seeded_scenes() {
         tally.segments_cleared,
         tally.sparse_lanes,
         tally.chunk_skips,
-        tally.panicked,
     );
     // The comparison must exercise both verdicts and every shortcut, not just
     // agree on easy passes (skipped for a single replayed seed).
@@ -1248,7 +1238,9 @@ fn optimised_pipeline_matches_the_reference_at_worst_case_sizes() {
 }
 
 /// The base (b83b12de5) crossing pipeline, verbatim but for the work counter,
-/// the crossing log and the `pub(super)` the harness needs.
+/// the crossing log, the `pub(super)` the harness needs and the score order
+/// (`score_cmp`, #576 NF-W9PERF-1: the old `partial_cmp`, made total, as in
+/// production - it orders two numbers exactly as before).
 mod reference {
     use super::super::crossing::{
         crossing_prefilter_margin, max_segment_extent, pair_crosses_too_close, segment_box,
@@ -1256,11 +1248,11 @@ mod reference {
     };
     use super::super::{
         ignored_crossing_pairs_for_suggestion, log_crossing_check, merge_offset_pairs,
-        merge_station_pair_for_offsets, section_trace_points, station_context_multiplier,
-        suppress_duplicate_endpoint_pairs, suppress_equivalent_single_front_reverses,
-        try_match_sequence, CrossSectionSuggestion, ExistingSection, ImportSectionForSuggestion,
-        MatchDirection, MatchShot, PlacementSuggestion, SuggestionConfidence, SuggestionConfig,
-        TargetType, TracePoint,
+        merge_station_pair_for_offsets, score_cmp, section_trace_points,
+        station_context_multiplier, suppress_duplicate_endpoint_pairs,
+        suppress_equivalent_single_front_reverses, try_match_sequence, CrossSectionSuggestion,
+        ExistingSection, ImportSectionForSuggestion, MatchDirection, MatchShot,
+        PlacementSuggestion, SuggestionConfidence, SuggestionConfig, TargetType, TracePoint,
     };
     use crate::config::PlacementSuggestionConfig;
     use crate::{AzimuthReference, SectionId, Shot, ShotData};
@@ -1377,11 +1369,7 @@ mod reference {
         }
 
         // Sort by score descending
-        all.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        all.sort_by(|a, b| score_cmp(b.score, a.score));
 
         all
     }
@@ -1677,11 +1665,7 @@ mod reference {
                 ))
             })
             .collect();
-        ranked.sort_by(|a, b| {
-            b.0.partial_cmp(&a.0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| b.1.cmp(&a.1))
-        });
+        ranked.sort_by(|a, b| score_cmp(b.0, a.0).then_with(|| b.1.cmp(&a.1)));
         ranked
             .into_iter()
             .find(|&(_, _, merge_import_station, merge_existing_station)| {
@@ -1869,11 +1853,7 @@ mod reference {
         suppress_duplicate_endpoint_pairs(&mut suggestions);
 
         // Sort by score descending
-        suggestions.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        suggestions.sort_by(|a, b| score_cmp(b.score, a.score));
 
         // Keep top N
         suggestions.truncate(config.max_suggestions);

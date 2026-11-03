@@ -255,9 +255,13 @@ section pair also gets extra direct crossing checks. A failure prints its seed
 debug; this change passed 50,000 seeds (sections up to 160 shots) plus 3,000
 (up to 600) and 11 worst-case-size scenes in release, with 0 mismatches, and the
 gate caught two deliberately wrong variants (a 100x looser parallel tolerance,
-seed 0x13; a chunk box one point short, seed 0x4c). A NaN reading can make the
-shared score sort panic (35 of those 53,000 scenes); both pipelines panic
-identically there, which the gate counts as agreement.
+seed 0x13; a chunk box one point short, seed 0x4c). A NaN reading used to make
+the score sorts panic (35 of those 53,000 scenes): they took NaN as equal to
+every score. They order by `score_cmp` now (#576 NF-W9PERF-1) - `partial_cmp` on
+any two numbers, NaN below all of them - so no finite result moved (20,000
+seeded scenes compared against the old sorts: every all-finite scene
+bit-identical) and the gate fails on any panic (20,000 seeds in release: 0
+panics, 0 mismatches).
 
 Release probe (`placement_suggest_timing_probe`, 2026-11-03, before = b83b12de5).
 The machine was shared (load average 13-17 on 22 cores for this table, 8-17
