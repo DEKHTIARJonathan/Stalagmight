@@ -10,7 +10,6 @@ import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { Project, Station, ShotData } from '../../types/project';
 import type { ImportPlacement } from '../../types/commands';
 import type { ZeroDatumConfigResult } from './ZeroDatumConfigDialog';
-import type { DmpSection } from '../../types/commands';
 import type { OverlapMode } from '../../types/config';
 import { WizardMapPanel } from './WizardMapPanel';
 // The preview-square cap comes straight from layoutConstants rather than
@@ -18,28 +17,17 @@ import { WizardMapPanel } from './WizardMapPanel';
 // a mocked module cannot supply a plain number the render arithmetic needs.
 import { WIZARD_MAP_PANEL_MAX_WIDTH as MAP_PANEL_MAX_WIDTH } from '../SingleSystemView/layoutConstants';
 import { WizardScrollBody } from './WizardScrollBody';
-import SectionPreview, { type MergePreviewConfig, type DmpMergePreviewConfig, type ContextSectionGeometry, computeStationsFromDmpShots, computeStationsFromShots } from './SectionPreview';
-import { Select } from '../common/Select';
+import SectionPreview, { type ContextSectionGeometry } from './SectionPreview';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
-import { SuggestionSectionSettings } from './SuggestionSectionSettings';
 import { SegmentPlacementModes, type SegmentPlacementMode } from './SegmentPlacementModes';
 import { buildZeroDatumSectionConfig, DMP_AZIMUTH_REFERENCE } from '../../utils/importSectionConfig';
 import { ShotTableEditor } from '../common/ShotTableEditor';
 import { useProjectStore } from '../../store/projectStore';
-import { convertToEditableShots, editableShotToShotData, editableShotsToDmpSection } from '../../utils/shotConversion';
+import { convertToEditableShots, editableShotToShotData } from '../../utils/shotConversion';
 import { computeMergeOptions, defaultMergeOffset } from '../../utils/overlapHelpers';
-import {
-  type VirtualConnection,
-  type ExistingSectionGeoEntry,
-  computeDmpBfsContext,
-  stationPositionFromShotLines,
-  discoverBridgedDmpSections,
-  computeUnreachableSegments,
-  computeSegmentLayout,
-} from '../../utils/segmentContext';
-import { azimuthReferenceFor } from '../../utils/stationWalk';
+import { type VirtualConnection, computeUnreachableSegments, computeSegmentLayout } from '../../utils/segmentContext';
 import { buildFromExistingContext } from './dmpWizard/fromExistingContext';
 import { sectionColorPalette } from '../../utils/colors';
 import { debugLog } from '../../utils/debugLog';
@@ -62,6 +50,8 @@ import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useDmpImportRun } from './dmpWizard/useDmpImportRun';
 import { buildBatchImport } from './dmpWizard/buildBatchImport';
+import { SuggestingStep } from './dmpWizard/SuggestingStep';
+import { targetDoublyAnchored } from './dmpWizard/doublyAnchored';
 import { useSectionEditor, type RowCountChange } from './dmpWizard/useSectionEditor';
 import { initialWizardState, segmentQueue, useWizardState, type SegmentChoices } from './dmpWizard/wizardState';
 import { adjustConnectionsForEdits, buildEffectiveDmpSection } from './dmpWizard/effectiveSections';
@@ -122,9 +112,7 @@ export default function DmpNewImportDialog({
   // (WizardMapPanel persists it on divider release).
   const mapPanelWidth = useUIStore((s) => s.wizardMapPanelWidth);
   const setMapPanelWidth = useUIStore((s) => s.setWizardMapPanelWidth);
-  const suggestionBodyRef = useRef<HTMLDivElement | null>(null);
   const manualBodyRef = useRef<HTMLDivElement | null>(null);
-  const [suggestionPreviewRef, suggestionPreviewSize] = usePreviewSize(MAP_PANEL_MAX_WIDTH);
   const [manualPreviewRef, manualPreviewSize] = usePreviewSize(MAP_PANEL_MAX_WIDTH);
 
   // Store selectors
@@ -176,7 +164,6 @@ export default function DmpNewImportDialog({
   const [skippedIndices, setSkippedIndices] = useState<Set<number>>(
     saved ? new Set(saved.skippedIndices) : new Set()
   );
-  const [showAlternatives, setShowAlternatives] = useState(true);
   const error = failure?.message ?? null;
   // F8: registers this dialog's footer height with the toast stack for as long
   // as the footer is mounted, so a lingering toast (e.g. the manual-placement
@@ -211,12 +198,6 @@ export default function DmpNewImportDialog({
   const confirmedOverlapsRef = useRef<Map<number, ConfirmedOverlapInfo>>(
     saved ? new Map(saved.confirmedOverlaps ?? []) : new Map()
   );
-
-  // Unified segment context (import-side DMP BFS + existing anchors, target-side geometry)
-  const [segmentContext, setSegmentContext] = useState<{
-    importSide: ContextSectionGeometry[];
-    targetSide: ContextSectionGeometry[];
-  } | null>(null);
 
   // Cache all cross-section suggestions from startup calculation
   const suggestionPoolRef = useRef<CrossSectionSuggestion[]>([]);
@@ -397,279 +378,14 @@ export default function DmpNewImportDialog({
   // run after them and overwrite the backend's preferred offset with the deepest
   // one (#576 D12).
 
-  // Check if the current suggestion targets an existing section that is doubly-anchored
-  // (modified overlap shots sit between two positional constraints). When true, only
-  // 'existing_data' and 'keep_both' are valid - interpolation / import_data would break
-  // a closure or zero-datum constraint.
-  //
-  // A merge/closure is only an anchor if the partner can independently reach a zero datum
-  // without going through this section.  A merge to a free-floating section is NOT a
-  // positional constraint - the partner can follow via cascading offset adjustments.
-  const isTargetDoublyAnchored = useMemo(() => {
-    if (!currentSuggestion) return false;
-    if (currentSuggestion.targetType !== 'existing' || currentSuggestion.existingSectionId == null) return false;
-    if (currentSuggestion.matchedShots === 0) return false;
+  // Doubly anchored target: only 'existing_data' and 'keep_both' are valid
+  // (dmpWizard/doublyAnchored.ts). Read from the project when the suggestion
+  // changes, as it always was.
+  const isTargetDoublyAnchored = useMemo(
+    () => targetDoublyAnchored(currentSuggestion, useProjectStore.getState().project),
+    [currentSuggestion],
+  );
 
-    const project = useProjectStore.getState().project;
-    if (!project) return false;
-
-    const sid = currentSuggestion.existingSectionId;
-
-    // BFS: can `start` reach a zero datum via merges + aligned closures
-    // without traversing through `excluded`?
-    const hasDatumPathExcluding = (start: number, excluded: number): boolean => {
-      const visited = new Set<number>();
-      const queue = [start];
-      while (queue.length > 0) {
-        const current = queue.pop()!;
-        if (current === excluded) continue;
-        if (visited.has(current)) continue;
-        visited.add(current);
-        if (project.zero_datums.some((zd) => zd.station_ref.section_id === current)) {
-          return true;
-        }
-        for (const m of project.station_merges) {
-          if (m.station_a.section_id === current && !visited.has(m.station_b.section_id)) {
-            queue.push(m.station_b.section_id);
-          }
-          if (m.station_b.section_id === current && !visited.has(m.station_a.section_id)) {
-            queue.push(m.station_a.section_id);
-          }
-        }
-        for (const c of project.loop_closures) {
-          if (!c.is_aligned) continue;
-          if (c.station_a.section_id === current && !visited.has(c.station_b.section_id)) {
-            queue.push(c.station_b.section_id);
-          }
-          if (c.station_b.section_id === current && !visited.has(c.station_a.section_id)) {
-            queue.push(c.station_a.section_id);
-          }
-        }
-      }
-      return false;
-    };
-
-    // Compute the range of target shot indices that would be modified
-    let minShot: number;
-    let maxShot: number;
-    if (currentSuggestion.direction === 'forward') {
-      minShot = currentSuggestion.existingStationIndex;
-      maxShot = currentSuggestion.existingStationIndex + currentSuggestion.matchedShots - 1;
-    } else {
-      minShot = currentSuggestion.existingStationIndex - currentSuggestion.matchedShots;
-      maxShot = currentSuggestion.existingStationIndex - 1;
-    }
-
-    // Collect anchor station indices on the target section.
-    // Zero datums are always anchors.  Merges/closures are only anchors
-    // if the partner is independently datum-backed.
-    const anchors: number[] = [];
-
-    for (const zd of project.zero_datums) {
-      if (zd.station_ref.section_id === sid) anchors.push(zd.station_ref.station_index);
-    }
-    for (const m of project.station_merges) {
-      if (m.station_a.section_id === sid && hasDatumPathExcluding(m.station_b.section_id, sid)) {
-        anchors.push(m.station_a.station_index);
-      }
-      if (m.station_b.section_id === sid && hasDatumPathExcluding(m.station_a.section_id, sid)) {
-        anchors.push(m.station_b.station_index);
-      }
-    }
-    for (const c of project.loop_closures) {
-      if (!c.is_aligned) continue;
-      if (c.station_a.section_id === sid && hasDatumPathExcluding(c.station_b.section_id, sid)) {
-        anchors.push(c.station_a.station_index);
-      }
-      if (c.station_b.section_id === sid && hasDatumPathExcluding(c.station_a.section_id, sid)) {
-        anchors.push(c.station_b.station_index);
-      }
-    }
-
-    const hasFront = anchors.some((idx) => idx <= minShot);
-    const hasBack = anchors.some((idx) => idx > maxShot);
-    return hasFront && hasBack;
-  }, [currentSuggestion]);
-
-  // Unified segment context - BFS through DMP connections + fetch existing segment geometry
-  useEffect(() => {
-    if (!currentSuggestion) {
-      setSegmentContext(null);
-      return;
-    }
-
-    let cancelled = false;
-
-    const compute = async () => {
-      const importIdx = currentSuggestion.importSectionIndex;
-      const importSide: ContextSectionGeometry[] = [];
-      const targetSide: ContextSectionGeometry[] = [];
-      const coveredExistingSectionIds = new Set<number>();
-
-      // Store raw segment geometry so we can position DMP sections relative to existing ones.
-      // Maps existing section ID → { shotLines, frameOffsetX/Y, side }
-      const existingSectionGeo = new Map<number, ExistingSectionGeoEntry>();
-
-      // Import-side BFS through importing-type connections
-      const importExclude = new Set<number>();
-      if (currentSuggestion.targetType === 'importing' && currentSuggestion.targetImportIndex != null) {
-        importExclude.add(currentSuggestion.targetImportIndex);
-      }
-      const importBfs = computeDmpBfsContext(importIdx, importExclude, connections, dmpFile.sections);
-      importSide.push(...importBfs.dmpContext);
-
-      // Target-side handling
-      let targetBfsVisited: Set<number> | undefined;
-      if (currentSuggestion.targetType === 'existing' && currentSuggestion.existingSectionId != null) {
-        // Fetch segment geometry for the existing target section
-        try {
-          const result = await invokeIpc('get_segment_geometry', { sectionId: currentSuggestion.existingSectionId }, { purpose: 'fetch segment geometry for target section' });
-          if (cancelled) return;
-
-          for (const s of result.sections) {
-            coveredExistingSectionIds.add(s.section_id);
-            existingSectionGeo.set(s.section_id, {
-              shotLines: s.shot_lines,
-              frameOffsetX: 0,
-              frameOffsetY: 0,
-              side: 'target',
-            });
-          }
-
-          const ctx: ContextSectionGeometry[] = result.sections
-            .filter((s) => s.section_id !== currentSuggestion.existingSectionId)
-            .map((s) => ({
-              color: s.color,
-              shots: s.shot_lines
-                .filter((line) => line.length >= 2 && line[0]!.length >= 2 && line[1]!.length >= 2)
-                .map((line) => ({
-                  from: [line[0]![0]!, line[0]![1]!] as [number, number],
-                  to: [line[1]![0]!, line[1]![1]!] as [number, number],
-                })),
-            }))
-            .filter((s) => s.shots.length > 0);
-
-          targetSide.push(...ctx);
-        } catch {
-          // Non-fatal
-        }
-      } else if (currentSuggestion.targetType === 'importing' && currentSuggestion.targetImportIndex != null) {
-        // Target-side DMP BFS
-        const targetExclude = new Set<number>([importIdx]);
-        const targetBfs = computeDmpBfsContext(currentSuggestion.targetImportIndex, targetExclude, connections, dmpFile.sections);
-        targetSide.push(...targetBfs.dmpContext);
-        targetBfsVisited = targetBfs.visitedIndices;
-
-        // Process target-side existing anchors
-        for (const anchor of targetBfs.existingAnchors) {
-          if (coveredExistingSectionIds.has(anchor.existingSectionId)) continue;
-          coveredExistingSectionIds.add(anchor.existingSectionId);
-
-          try {
-            const result = await invokeIpc('get_segment_geometry', { sectionId: anchor.existingSectionId }, { purpose: 'fetch segment geometry for anchor section' });
-            if (cancelled) return;
-
-            const anchorGeo = result.sections.find((s) => s.section_id === anchor.existingSectionId);
-            if (!anchorGeo) continue;
-
-            const mergePos = stationPositionFromShotLines(anchorGeo.shot_lines, anchor.existingStationIdx);
-            if (!mergePos) continue;
-
-            const dx = anchor.x - mergePos.x;
-            const dy = anchor.y - mergePos.y;
-
-            for (const s of result.sections) {
-              if (coveredExistingSectionIds.has(s.section_id)) continue;
-              coveredExistingSectionIds.add(s.section_id);
-              existingSectionGeo.set(s.section_id, {
-                shotLines: s.shot_lines,
-                frameOffsetX: dx,
-                frameOffsetY: dy,
-                side: 'target',
-              });
-
-              const shots = s.shot_lines
-                .filter((line) => line.length >= 2 && line[0]!.length >= 2 && line[1]!.length >= 2)
-                .map((line) => ({
-                  from: [line[0]![0]! + dx, line[0]![1]! + dy] as [number, number],
-                  to: [line[1]![0]! + dx, line[1]![1]! + dy] as [number, number],
-                }));
-
-              if (shots.length > 0) targetSide.push({ color: s.color, shots });
-            }
-          } catch {
-            // Non-fatal
-          }
-        }
-      }
-
-      // Process import-side existing anchors
-      for (const anchor of importBfs.existingAnchors) {
-        if (coveredExistingSectionIds.has(anchor.existingSectionId)) continue;
-        coveredExistingSectionIds.add(anchor.existingSectionId);
-
-        try {
-          const result = await invokeIpc('get_segment_geometry', { sectionId: anchor.existingSectionId }, { purpose: 'fetch segment geometry for import-side anchor' });
-          if (cancelled) return;
-
-          const anchorGeo = result.sections.find((s) => s.section_id === anchor.existingSectionId);
-          if (!anchorGeo) continue;
-
-          const mergePos = stationPositionFromShotLines(anchorGeo.shot_lines, anchor.existingStationIdx);
-          if (!mergePos) continue;
-
-          const dx = anchor.x - mergePos.x;
-          const dy = anchor.y - mergePos.y;
-
-          for (const s of result.sections) {
-            if (coveredExistingSectionIds.has(s.section_id)) continue;
-            coveredExistingSectionIds.add(s.section_id);
-            existingSectionGeo.set(s.section_id, {
-              shotLines: s.shot_lines,
-              frameOffsetX: dx,
-              frameOffsetY: dy,
-              side: 'import',
-            });
-
-            const shots = s.shot_lines
-              .filter((line) => line.length >= 2 && line[0]!.length >= 2 && line[1]!.length >= 2)
-              .map((line) => ({
-                from: [line[0]![0]! + dx, line[0]![1]! + dy] as [number, number],
-                to: [line[1]![0]! + dx, line[1]![1]! + dy] as [number, number],
-              }));
-
-            if (shots.length > 0) importSide.push({ color: s.color, shots });
-          }
-        } catch {
-          // Non-fatal
-        }
-      }
-
-      // Bridge discovery: find DMP sections with confirmed existing connections
-      // to sections we have geometry for, but not yet shown by BFS.
-      // This handles the case where DMP sections A and B both connect to existing X
-      // but have no importing-type edge between them.
-      const shownDmpIndices = new Set(importBfs.visitedIndices);
-      if (targetBfsVisited) {
-        for (const idx of targetBfsVisited) shownDmpIndices.add(idx);
-      }
-
-      // Bridge discovery: find DMP sections connected through shared existing sections
-      const bridged = discoverBridgedDmpSections(connections, shownDmpIndices, existingSectionGeo, dmpFile.sections);
-      importSide.push(...bridged.importSide);
-      targetSide.push(...bridged.targetSide);
-
-      if (cancelled) return;
-      setSegmentContext(
-        importSide.length > 0 || targetSide.length > 0
-          ? { importSide, targetSide }
-          : null
-      );
-    };
-
-    compute();
-    return () => { cancelled = true; };
-  }, [currentSuggestion, connections, dmpFile.sections]);
 
 
   // Persist the overlap mode on change: this one setting, sent as chosen (#576
@@ -1043,119 +759,6 @@ export default function DmpNewImportDialog({
     await computeSuggestions();
   }, [computeSuggestions, finishRun, importAnchor, selectedIndices, zeroDatumConfig]);
 
-  // Build preview section for import side from original shots (no mode modifications).
-  // Both import and target sections display their original geometry so the user can
-  // visually compare the overlap regardless of the selected overlap mode.
-  const importPreviewSection = useMemo<DmpSection | null>(() => {
-    if (!currentSuggestion) return null;
-    const section = dmpFile.sections[currentSuggestion.importSectionIndex];
-    if (!section) return null;
-    if (!editState) return section;
-
-    return {
-      ...editableShotsToDmpSection(section, editState.shots),
-      name: editState.name,
-      direction: editState.direction,
-    };
-  }, [currentSuggestion, dmpFile.sections, editState]);
-
-  // Build merge preview config for SectionPreview (existing target)
-  const mergePreviewConfig = useMemo((): MergePreviewConfig | null => {
-    if (!currentSuggestion || currentSuggestion.targetType !== 'existing') return null;
-    if (currentSuggestion.existingSectionId == null) return null;
-
-    const currentProject = useProjectStore.getState().project;
-    if (!currentProject) return null;
-
-    const targetSection = currentProject.sections.find(
-      (s) => s.id === currentSuggestion.existingSectionId
-    );
-    if (!targetSection) return null;
-
-    return {
-      targetSection,
-      importStationIndex: selectedMergePair?.importStation ?? currentSuggestion.importStationIndex,
-      targetStationIndex: selectedMergePair?.existingStation ?? currentSuggestion.existingStationIndex,
-      // The reference the backend walks the target with (#576 D15); the context
-      // offset below walks it with the same one.
-      targetAzimuthReference: azimuthReferenceFor(targetSection.azimuth_reference, currentProject.default_azimuth_reference),
-    };
-  }, [currentSuggestion, selectedMergePair]);
-
-  // Build DMP merge preview config for import-to-import targets
-  const dmpMergePreviewConfig = useMemo((): DmpMergePreviewConfig | null => {
-    if (!currentSuggestion || currentSuggestion.targetType !== 'importing') return null;
-    if (currentSuggestion.targetImportIndex == null) return null;
-
-    const targetSection = dmpFile.sections[currentSuggestion.targetImportIndex];
-    if (!targetSection) return null;
-
-    const targetColorIdx = (currentSuggestion.targetImportIndex ?? 0) % sectionPalette.length;
-
-    return {
-      targetDmpSection: targetSection,
-      targetColor: sectionPalette[targetColorIdx] ?? '#95a5a6',
-      importStationIndex: selectedMergePair?.importStation ?? currentSuggestion.importStationIndex,
-      targetStationIndex: selectedMergePair?.existingStation ?? currentSuggestion.existingStationIndex,
-    };
-  }, [currentSuggestion, selectedMergePair, dmpFile.sections, sectionPalette]);
-
-  // Merge target-side + import-side context for SectionPreview.
-  // Import-side context is relative to the import section's station 0 and needs the same
-  // merge offset that SectionPreview applies to align the import section with the target.
-  const mergedContextSections = useMemo((): ContextSectionGeometry[] | null => {
-    const parts: ContextSectionGeometry[] = [];
-    if (segmentContext?.targetSide) parts.push(...segmentContext.targetSide);
-    if (segmentContext?.importSide && segmentContext.importSide.length > 0) {
-      const activePreview = mergePreviewConfig ?? dmpMergePreviewConfig;
-      let dx = 0;
-      let dy = 0;
-      if (activePreview && importPreviewSection) {
-        // Compute the same importOffset that SectionPreview uses internally
-        const importStations = computeStationsFromDmpShots(
-          importPreviewSection.shots.filter((s) => s.shot_type === 'Standard')
-        );
-        let targetStations: Array<{ x: number; y: number }> = [];
-        if (mergePreviewConfig) {
-          targetStations = computeStationsFromShots(
-            mergePreviewConfig.targetSection.shots, mergePreviewConfig.targetAzimuthReference
-          );
-        } else if (dmpMergePreviewConfig) {
-          targetStations = computeStationsFromDmpShots(
-            dmpMergePreviewConfig.targetDmpSection.shots.filter((s) => s.shot_type === 'Standard')
-          );
-        }
-        const importStn = importStations[activePreview.importStationIndex];
-        const targetStn = targetStations[activePreview.targetStationIndex];
-        if (importStn && targetStn) {
-          dx = targetStn.x - importStn.x;
-          dy = targetStn.y - importStn.y;
-        }
-      }
-      parts.push(...segmentContext.importSide.map((ctx) => ({
-        color: ctx.color,
-        shots: ctx.shots.map((shot) => ({
-          from: [shot.from[0] + dx, shot.from[1] + dy] as [number, number],
-          to: [shot.to[0] + dx, shot.to[1] + dy] as [number, number],
-        })),
-      })));
-    }
-    return parts.length > 0 ? parts : null;
-  }, [segmentContext, mergePreviewConfig, dmpMergePreviewConfig, importPreviewSection]);
-
-  // Import color for the current section (from editState, which tracks user changes)
-  const importColor = useMemo(() => {
-    if (editState?.color) return editState.color;
-    const sectionIdx = currentSuggestion?.importSectionIndex ?? -1;
-    const pos = selectedIndices.indexOf(sectionIdx);
-    return sectionPalette[(pos >= 0 ? pos : 0) % sectionPalette.length] ?? '#4ecdc4';
-  }, [editState?.color, currentSuggestion?.importSectionIndex, selectedIndices, sectionPalette]);
-
-  // Target section name for display
-  const targetSectionName = useMemo(() => {
-    if (!currentSuggestion) return '';
-    return currentSuggestion.existingSectionName;
-  }, [currentSuggestion]);
 
   // Confirm handler - records a virtual connection + overlap info (instant, no backend call).
   // Overlap treatment is deferred to applyAllOverlapTreatments which runs before batch import.
@@ -1291,6 +894,11 @@ export default function DmpNewImportDialog({
       if (advanceLatchRef.current === 'picking') advanceLatchRef.current = 'idle';
     }
   }, [currentSuggestion, selectedMergePair, zeroDatumConfig, selectedIndices, pickFromPool, transitionToPlacingOrManual, connectionsRef, skippedIndicesRef]);
+
+  const handleMergeOffsetChange = useCallback(
+    (mergeOffset: number) => dispatch({ type: 'setMergeOffset', mergeOffset }),
+    [dispatch],
+  );
 
   // Alternative click handler
   const handleAlternativeClick = useCallback((alt: CrossSectionSuggestion) => {
@@ -1901,15 +1509,6 @@ export default function DmpNewImportDialog({
     onBack();
   }, [withdrawImportedSections, onBack, dispatch]);
 
-  // Confidence helpers
-  const confidenceColors: Record<string, string> = {
-    high: 'bg-success-10 text-success border-success-30',
-    medium: 'bg-warning-10 text-warning border-warning-30',
-    low: 'bg-background-50 text-text-secondary border-border',
-  };
-
-  const directionLabel = (direction: string) =>
-    direction === 'forward' ? '\u2192' : '\u2190';
 
   // Progress - during manual_placing, compute from queue (which has ALL unplaced sections).
   // Otherwise, count connected sections + zero datum.
@@ -1919,8 +1518,6 @@ export default function DmpNewImportDialog({
     : connectedIndices.size + (zeroDatumConfig ? 1 : 0);
   const skippedCount = skippedIndices.size;
 
-  // Target type label for import-to-import connections
-  const isImportTarget = currentSuggestion?.targetType === 'importing';
 
   // Section names in current segment (for display)
   const segmentSectionNames = useMemo(() => {
@@ -1937,6 +1534,20 @@ export default function DmpNewImportDialog({
     if (segmentPlacementMode === 'discard') return true;
     return false;
   }, [segmentAnchor, segmentPlacementMode, segmentSkippedSuggestion, fromExistingSectionId]);
+
+  // The section on screen's rows, the same table under either step's body.
+  const shotTable = editState ? (
+    <ShotTableEditor
+      shots={effectiveShots}
+      onShotChange={handleShotChange}
+      onAddShot={handleAddShot}
+      onAddShots={handleAddShots}
+      onInsertShots={handleInsertShots}
+      onDeleteShot={handleDeleteShot}
+      onDeleteShots={handleDeleteShots}
+      frozenShotIndices={frozenShotIndices}
+    />
+  ) : null;
 
   return (
     <DialogWrapper
@@ -1963,228 +1574,30 @@ export default function DmpNewImportDialog({
 
         {/* Body: side-by-side when showing suggestion, centered otherwise */}
         {suggesting ? (
-          <WizardScrollBody
-            bodyRef={suggestionBodyRef}
-            table={
-              editState ? (
-                <ShotTableEditor
-                  shots={effectiveShots}
-                  onShotChange={handleShotChange}
-                  onAddShot={handleAddShot}
-                  onAddShots={handleAddShots}
-                  onInsertShots={handleInsertShots}
-                  onDeleteShot={handleDeleteShot}
-                  onDeleteShots={handleDeleteShots}
-                  frozenShotIndices={frozenShotIndices}
-                />
-              ) : null
-            }
-          >
-            {(bandHeight) => (
-            <div className="flex" style={{ minHeight: bandHeight }}>
-            <WizardMapPanel
-              width={mapPanelWidth}
-              onWidthChange={setMapPanelWidth}
-              bodyRef={suggestionBodyRef} panelRef={suggestionPreviewRef} height={bandHeight}
-            >
-              <SectionPreview
-                section={importPreviewSection}
-                color={importColor}
-                size={suggestionPreviewSize.width}
-                height={suggestionPreviewSize.height}
-                mergePreview={mergePreviewConfig}
-                dmpMergePreview={dmpMergePreviewConfig}
-                focusStationIndex={selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex}
-                contextSections={mergedContextSections}
-              />
-            </WizardMapPanel>
-
-            {/* Right column: connection details */}
-            <div className="flex-1 min-w-0 p-5 space-y-4" data-testid="wizard-suggestion">
-              {/* Suggested connection - prominent card */}
-              <div className="rounded-lg border border-accent/30 bg-accent/5 p-4 space-y-3">
-                <div>
-                  <h3 className="text-sm font-semibold text-text-primary">
-                    {t('dialogs.dmpNewImport.connectionHeading')}
-                  </h3>
-                  <p className="text-xs text-text-secondary mt-0.5">
-                    {t('dialogs.dmpNewImport.connectionDescription')}
-                  </p>
-                </div>
-
-                {/* Connection description */}
-                <div className="rounded border border-border bg-background p-3" data-testid="wizard-connection-description">
-                  <div className="text-sm">
-                    <span className="font-medium">&ldquo;{currentSuggestion!.importSectionName}&rdquo;</span>
-                    {' '}{t('dialogs.dmpNewImport.station', { index: selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex })}
-                  </div>
-                  <div className="text-text-secondary text-sm my-1">
-                    {t('dialogs.dmpNewImport.connectsTo')}
-                  </div>
-                  <div className="text-sm">
-                    <span className="font-medium">&ldquo;{targetSectionName}&rdquo;</span>
-                    {' '}{t('dialogs.dmpNewImport.station', { index: selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex })}
-                    {isImportTarget && (
-                      <span className="ml-1 text-xs text-text-secondary">{t('dialogs.dmpNewImport.importingTag')}</span>
-                    )}
-                  </div>
-                </div>
-
-                {/* Confidence badge */}
-                <div className="flex items-center gap-2" data-testid="wizard-confidence">
-                  <span className={`px-2 py-1 rounded border text-xs font-medium ${confidenceColors[currentSuggestion!.confidence] ?? ''}`}>
-                    {t(`dialogs.dmpNewImport.confidence.${currentSuggestion!.confidence}`)}
-                  </span>
-                  <span className="text-xs text-text-secondary">
-                    · {t('dialogs.dmpNewImport.matchedShots', { count: currentSuggestion!.matchedShots })} {directionLabel(currentSuggestion!.direction)}
-                    {currentSuggestion!.isPartial && <span className="ml-0.5 opacity-60">~</span>}
-                  </span>
-                </div>
-
-                {/* Merge station control */}
-                <div className="flex items-center gap-2" data-testid="wizard-merge-station-control">
-                  <label className="text-xs text-text-secondary whitespace-nowrap">
-                    {t('dialogs.dmpNewImport.mergeStation')}
-                  </label>
-                  {mergeOptions.length > 1 ? (
-                    <Select
-                      value={String(selectedMergeOffset)}
-                      onChange={(v) => dispatch({ type: 'setMergeOffset', mergeOffset: Number(v) })}
-                      options={mergeOptions.map((opt) => ({
-                        value: String(opt.offset),
-                        label: t('dialogs.dmpNewImport.mergeOption', { importStation: opt.importStation, target: targetSectionName, existingStation: opt.existingStation }),
-                      }))}
-                      size="sm"
-                      data-testid="merge-station-select"
-                    />
-                  ) : (
-                    <span className="text-xs text-text-secondary">
-                      {t('dialogs.dmpNewImport.mergeOption', {
-                        importStation: selectedMergePair?.importStation ?? currentSuggestion!.importStationIndex, target: targetSectionName,
-                        existingStation: selectedMergePair?.existingStation ?? currentSuggestion!.existingStationIndex,
-                      })}
-                    </span>
-                  )}
-                </div>
-
-                {/* Overlap control */}
-                <div className="flex items-center gap-2" data-testid="wizard-overlap-control">
-                  <label className="text-xs text-text-secondary whitespace-nowrap">
-                    {t('dialogs.dmpNewImport.overlapMode')}
-                  </label>
-                  {currentSuggestion && currentSuggestion.matchedShots > 0 ? (
-                    <Select
-                      value={overlapMode}
-                      onChange={(v) => handleOverlapModeChange(v as OverlapMode)}
-                      options={[
-                        { value: 'interpolate', label: t('dialogs.dmpNewImport.overlapMode_interpolate'), disabled: isTargetDoublyAnchored },
-                        { value: 'import_data', label: t('dialogs.dmpNewImport.overlapMode_importData'), disabled: isTargetDoublyAnchored },
-                        { value: 'existing_data', label: t('dialogs.dmpNewImport.overlapMode_existingData') },
-                        { value: 'keep_both', label: t('dialogs.dmpNewImport.overlapMode_keepBoth') },
-                      ]}
-                      size="sm"
-                      data-testid="overlap-mode-select"
-                    />
-                  ) : (
-                    <span className="text-xs text-text-secondary">
-                      {t('dialogs.dmpNewImport.noOverlapShots')}
-                    </span>
-                  )}
-                </div>
-
-                {/* Prompt */}
-                <div className="text-sm font-medium">
-                  {t('dialogs.dmpNewImport.doesThisLookRight')}
-                </div>
-              </div>
-
-              {/* Error */}
-              {error && (
-                <div className="text-sm text-error" data-testid="wizard-error">
-                  {error}
-                </div>
-              )}
-
-              {/* Alternatives */}
-              {alternatives.length > 0 && (
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => setShowAlternatives(!showAlternatives)}
-                    className="text-xs text-accent hover:text-accent-hover flex items-center gap-1"
-                    data-testid="toggle-alternatives"
-                  >
-                    <span className={`transition-transform ${showAlternatives ? 'rotate-90' : ''}`}>&#9654;</span>
-                    {showAlternatives
-                      ? t('dialogs.dmpNewImport.hideAlternatives')
-                      : t('dialogs.dmpNewImport.showAlternatives', { count: alternatives.length })}
-                  </button>
-
-                  {showAlternatives && (
-                    <div className="mt-2 space-y-1" data-testid="alternatives-list">
-                      {alternatives.map((alt, idx) => (
-                        <button
-                          key={`${alt.importSectionIndex}-${alt.existingSectionId ?? alt.targetImportIndex}-${alt.existingStationIndex}-${alt.importStationIndex}-${alt.direction}`}
-                          type="button"
-                          className={`w-full p-2 rounded border text-left text-xs flex items-center gap-2 hover:bg-accent-5 transition-colors ${confidenceColors[alt.confidence] ?? ''}`}
-                          onClick={() => handleAlternativeClick(alt)}
-                          data-testid={`alternative-${idx}`}
-                        >
-                          <span className={`px-1 py-0.5 rounded text-[10px] font-medium ${confidenceColors[alt.confidence] ?? ''}`}>
-                            {t(`dialogs.dmpNewImport.confidence.${alt.confidence}`).split(' ')[0]}
-                          </span>
-                          <span className="flex-1 truncate">
-                            <span className="text-text-secondary">{t('dialogs.dmpNewImport.stn', { index: alt.importStationIndex })}</span>
-                            <span className="text-text-secondary"> → </span>
-                            <span className="font-medium">{alt.existingSectionName}</span>
-                            <span className="text-text-secondary"> {t('dialogs.dmpNewImport.stn', { index: alt.existingStationIndex })}</span>
-                            {alt.targetType === 'importing' && (
-                              <span className="text-text-secondary text-[10px] ml-0.5">{t('dialogs.dmpNewImport.importingShort')}</span>
-                            )}
-                          </span>
-                          <span className="text-text-secondary">
-                            {alt.matchedShots} {directionLabel(alt.direction)}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Section Settings */}
-              {/* #61 embedding slot: section-name + SectionMetadataForm + ShotTableEditor.
-                  Consumed as-is here; the reusable focus-mode section-edit surface
-                  (fields-right / table-bottom) drops in here later. Do not refactor.
-                  #567 item 2: wrapped in a collapsed-by-default disclosure so it
-                  stops competing with the connection card/confidence badge above -
-                  the wrapped content itself is unchanged. */}
-              {editState && (
-                <div className="border-t border-border pt-3">
-                  <SuggestionSectionSettings editState={editState} onMetadataChange={handleMetadataChange} />
-                </div>
-              )}
-            </div>
-            </div>
-            )}
-          </WizardScrollBody>
+          <SuggestingStep
+            currentSuggestion={suggesting.suggestion}
+            alternatives={alternatives}
+            onAlternativeClick={handleAlternativeClick}
+            mergeOptions={mergeOptions}
+            selectedMergeOffset={selectedMergeOffset}
+            selectedMergePair={selectedMergePair}
+            onMergeOffsetChange={handleMergeOffsetChange}
+            overlapMode={overlapMode}
+            onOverlapModeChange={handleOverlapModeChange}
+            isTargetDoublyAnchored={isTargetDoublyAnchored}
+            error={error}
+            editState={editState}
+            onMetadataChange={handleMetadataChange}
+            table={shotTable}
+            connections={connections}
+            dmpFile={dmpFile}
+            selectedIndices={selectedIndices}
+            sectionPalette={sectionPalette}
+          />
         ) : manual ? (
           <WizardScrollBody
             bodyRef={manualBodyRef}
-            table={
-              editState ? (
-                <ShotTableEditor
-                  shots={effectiveShots}
-                  onShotChange={handleShotChange}
-                  onAddShot={handleAddShot}
-                  onAddShots={handleAddShots}
-                  onInsertShots={handleInsertShots}
-                  onDeleteShot={handleDeleteShot}
-                  onDeleteShots={handleDeleteShots}
-                  frozenShotIndices={frozenShotIndices}
-                />
-              ) : null
-            }
+            table={shotTable}
           >
             {(bandHeight) => (
             <div className="flex" style={{ minHeight: bandHeight }}>
