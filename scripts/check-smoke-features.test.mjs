@@ -98,6 +98,36 @@ test('a skip outside the canary scope (a sibling test, another group, a skipped 
   assert.deepEqual(testTitles(spec), ['confirming deletes @smoke']);
 });
 
+// #576 RV4-FE-FEB-1: each of these used to pass the gate with a canary that never runs,
+// or one that passes only while the feature is broken.
+const DISQUALIFIED = {
+  'a TestInfo skip disqualifies the canary: testInfo.skip() in the body': "test('confirming deletes @smoke', async ({ page }, testInfo) => {\n  testInfo.skip();\n});",
+  'a TestInfo fixme disqualifies the canary: info.fixme() with a renamed parameter': "test('confirming deletes @smoke', async ({ page }, info) => {\n  info.fixme(true, 'broken');\n});",
+  'a TestInfo skip disqualifies the canary: test.info().skip(cond, why)': "test('confirming deletes @smoke', async ({ browserName }) => {\n  test.info().skip(browserName === 'webkit', 'why');\n});",
+  'a TestInfo skip disqualifies the canary: testInfo.skip() in the describe beforeEach': "test.describe('G', () => {\n  test.beforeEach(async ({}, testInfo) => { testInfo.skip(); });\n  test('confirming deletes @smoke', async () => {});\n});",
+  "a test.fail canary does not count: declared test.fail('confirming deletes @smoke', ...)": "test.fail('confirming deletes @smoke', async () => {});",
+  'a test.fail canary does not count: test.fail() in its body': "test('confirming deletes @smoke', async () => {\n  test.fail();\n});",
+};
+for (const [name, spec] of Object.entries(DISQUALIFIED)) {
+  test(name, () => {
+    assert.equal(run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': spec }).problems.length, 1);
+  });
+}
+
+test('a TestInfo skip in a sibling, a closed describe.skip group and a titled test.step.skip in the canary do not disqualify it', () => {
+  const spec = [
+    "test('other', async ({}, testInfo) => { testInfo.skip(); });",
+    "test.describe.skip('B', () => { test('b @smoke', async () => {}); });",
+    "test('confirming deletes @smoke', async () => {",
+    "  await test.step.skip('step title', async () => {});",
+    '});',
+  ].join('\n');
+  assert.deepEqual(run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': spec }).problems, []);
+  assert.deepEqual(testTitles(spec), ['confirming deletes @smoke']);
+  const only = run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': "test.only('confirming deletes @smoke', async () => {});" });
+  assert.deepEqual(only.problems, [], 'test.only is still a canary');
+});
+
 test('an @smoke mention in a comment is not a tag (the custom-renderer-health trap)', () => {
   const spec = ['/**', ' * Kept @smoke so a regression trips the merge gate - confirming deletes.', ' */', "test('confirming deletes', async () => {});"].join('\n');
   assert.equal(run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': spec }).problems.length, 1);

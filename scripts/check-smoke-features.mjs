@@ -18,7 +18,11 @@
 //
 // A row passes when that spec has a NON-skipped test whose title contains both
 // `@smoke` and the canary fragment (skipped = declared skip/fixme, inside a
-// describe.skip/fixme group, or under a skip/fixme annotation; see testTitles). Comments are stripped first, so a spec
+// describe.skip/fixme group, or under a skip/fixme annotation; see testTitles).
+// The TestInfo forms (`testInfo.skip()`, `test.info().fixme(cond)`) count as
+// annotations, and a `test.fail` test - declared or annotated - is no canary,
+// since it passes only while the feature is broken (#576 RV4-FE-FEB-1).
+// Comments are stripped first, so a spec
 // that merely mentions @smoke in prose (custom-renderer-health.spec.ts does)
 // does not count. Only the test title is read - the repo's convention is the
 // title suffix, not Playwright's `tag` option (docs/TESTING.md).
@@ -79,13 +83,22 @@ export function parseFeatureList(md) {
 //   - its body, an enclosing describe, or the file's top level calls the
 //     annotation form `test.skip()` / `test.skip(condition, reason)` (or the
 //     same for fixme). A condition is not evaluated: a canary must run on
-//     every project, so any skip annotation in its scope disqualifies it.
+//     every project, so any skip annotation in its scope disqualifies it;
+//   - (#576 RV4-FE-FEB-1) the annotation is made through the TestInfo API -
+//     `testInfo.skip()`, `info.fixme(cond)` (the parameter can have any
+//     name), `test.info().skip(cond, reason)` - or it is a `fail` one: a
+//     `test.fail('title', ...)` test, or `test.fail()` / `testInfo.fail()`
+//     in scope, passes CI only while the feature is BROKEN, so it is no canary
+//     (TEST_CALL_RE does not read `test.fail('title')` as a test at all).
 // Scopes are the paren extents of the calls (scripts/lib/js-comments.mjs
-// matchParen), so nesting depth and line breaks do not matter.
-const TEST_CALL_RE = /\btest(?:\.(only|fail|slow))?\s*\(\s*(['"`])((?:\\.|(?!\2)[^\\])*)\2/g;
+// matchParen), so nesting depth and line breaks do not matter. The
+// annotation's receiver is `test`, `test.info()` or any bare identifier; the
+// lookbehind keeps `test.describe.skip(` / `test.step.skip(` (a member of a
+// member) from reading as one.
+const TEST_CALL_RE = /\btest(?:\.(only|slow))?\s*\(\s*(['"`])((?:\\.|(?!\2)[^\\])*)\2/g;
 const SKIPPED_GROUP_RE = /\b(?:test\.)?describe\.(?:skip|fixme)\s*\(/g;
 const GROUP_RE = /\b(?:test\.)?describe(?:\.(?:only|parallel|serial))?\s*\(/g;
-const ANNOTATION_RE = /\btest\.(?:skip|fixme)\s*\(\s*(?!['"`])/g;
+const ANNOTATION_RE = /(?<![\w$.])(?:test\.info\(\)|[A-Za-z_$][\w$]*)\.(?:skip|fixme|fail)\s*\(\s*(?!['"`])/g;
 
 // [{start, end}] extents of every call `re` matches (its `(` is the match's
 // last character).
