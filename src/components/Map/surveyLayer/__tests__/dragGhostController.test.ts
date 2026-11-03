@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Map as MaplibreMap } from 'maplibre-gl';
 import { DRAG_PREVIEW_SOURCE } from '../dragPreviewLayers';
 import type { DragPreviewSet } from '../dragPreviewSource';
 import { dropStyle } from '../customRender/__tests__/styleGone';
+import { makeFakeMap } from '../../../../test/factories/fakeMap';
 
 /**
  * Drag-ghost controller (#mem drag latency). Locks the behaviour that replaces
@@ -53,48 +53,6 @@ import { DragGhostController, type DragGhostOptions } from '../dragGhostControll
 import type { GhostRenderData } from '../customRender/surveyGhostLayer';
 
 const GHOST_ID = 'survey-drag-ghost';
-
-interface FakeMap {
-  map: MaplibreMap;
-  sources: Set<string>;
-  layers: Set<string>;
-  setDataCount: number;
-  translateCount: number;
-  repaintCount: number;
-  sourcedataListeners: Array<(e: unknown) => void>;
-}
-
-function makeFakeMap(): FakeMap {
-  const sources = new Set<string>();
-  const layers = new Set<string>();
-  const sourcedataListeners: Array<(e: unknown) => void> = [];
-  const state = { setDataCount: 0, translateCount: 0, repaintCount: 0 };
-  const map = {
-    // A live style, as MapLibre has outside a lost WebGL context (hasLiveStyle).
-    style: {},
-    addSource: (id: string) => sources.add(id),
-    getSource: (id: string) =>
-      sources.has(id) ? { setData: () => { state.setDataCount++; } } : undefined,
-    removeSource: (id: string) => sources.delete(id),
-    addLayer: (layer: { id: string }) => layers.add(layer.id),
-    getLayer: (id: string) => (layers.has(id) ? { id } : undefined),
-    removeLayer: (id: string) => layers.delete(id),
-    setPaintProperty: () => { state.translateCount++; },
-    isSourceLoaded: () => true,
-    triggerRepaint: () => { state.repaintCount++; },
-    on: (_type: string, fn: (e: unknown) => void) => sourcedataListeners.push(fn),
-    off: (_type: string, fn: (e: unknown) => void) => {
-      const i = sourcedataListeners.indexOf(fn);
-      if (i >= 0) sourcedataListeners.splice(i, 1);
-    },
-  } as unknown as MaplibreMap;
-  return {
-    map, sources, layers, sourcedataListeners,
-    get setDataCount() { return state.setDataCount; },
-    get translateCount() { return state.translateCount; },
-    get repaintCount() { return state.repaintCount; },
-  };
-}
 
 const SET: DragPreviewSet = {
   features: [
@@ -175,9 +133,9 @@ describe('per-drag fallback: custom layer fails to initialize', () => {
 
     // A move past the rebake threshold, once the @0 bake lands, re-bakes (setData).
     ctrl.move(200, 0);
-    fake.sourcedataListeners.forEach((fn) => fn({ sourceId: DRAG_PREVIEW_SOURCE }));
+    fake.listeners('sourcedata').forEach((fn) => fn({ sourceId: DRAG_PREVIEW_SOURCE }));
     expect(fake.setDataCount).toBeGreaterThan(1);
-    expect(fake.translateCount).toBeGreaterThan(0);
+    expect(fake.paintCalls.length).toBeGreaterThan(0);
     ctrl.end();
     expect(fake.sources.has(DRAG_PREVIEW_SOURCE)).toBe(false);
   });
@@ -260,16 +218,16 @@ describe('dispose (map-free teardown for the lightweight unmount)', () => {
       const ctrl = new DragGhostController(fake.map, makeOptions());
       expect(ctrl.begin(SET)).toBe('stock');
       expect(vi.getTimerCount()).toBe(1); // the bake-landed fallback
-      expect(fake.sourcedataListeners).toHaveLength(1);
+      expect(fake.listeners('sourcedata')).toHaveLength(1);
       const layersBefore = new Set(fake.layers);
-      const translates = fake.translateCount;
+      const translates = fake.paintCalls.length;
 
       ctrl.dispose();
 
       expect(vi.getTimerCount()).toBe(0);
-      expect(fake.sourcedataListeners).toHaveLength(0);
+      expect(fake.listeners('sourcedata')).toHaveLength(0);
       expect(fake.layers).toEqual(layersBefore);
-      expect(fake.translateCount).toBe(translates);
+      expect(fake.paintCalls.length).toBe(translates);
       expect(ctrl.isCustom()).toBe(false);
     } finally {
       vi.useRealTimers();
@@ -323,7 +281,7 @@ describe('a STOCK-ghost carry while the WebGL context is lost (#576 RV4-FE-SL2)'
       // A small move (translate only), the @0 bake landing, then a move past the
       // rebake threshold (a bake), then the cancel.
       ctrl.move(2, 1);
-      fake.sourcedataListeners.forEach((fn) => fn({ sourceId: DRAG_PREVIEW_SOURCE }));
+      fake.listeners('sourcedata').forEach((fn) => fn({ sourceId: DRAG_PREVIEW_SOURCE }));
       ctrl.move(200, 0);
       ctrl.end();
     } catch (e) {

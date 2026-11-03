@@ -7,8 +7,8 @@
  * buffer build + hit index run for real.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Map as MaplibreMap } from 'maplibre-gl';
 import { dropStyle } from '../../../Map/surveyLayer/customRender/__tests__/styleGone';
+import { makeFakeMap } from '../../../../test/factories/fakeMap';
 import type { ProjectMetadata } from '../../../../types/project';
 import type { GeometryShot, SurveyGeometry } from '../../../../types/survey';
 import type { SystemGeometry } from '../../systemColor';
@@ -68,34 +68,6 @@ const h = vi.hoisted(() => {
 vi.mock('../globalCustomLayer', () => ({ GlobalCustomLayer: h.FakeLayer }));
 
 const CUSTOM_ID = 'global-survey-custom';
-
-/**
- * Fake map with NO stock global-survey layers (the stock-deletion stage removed
- * them). The custom layer is added at the top; `added` / `removed` record the
- * layer lifecycle so the tests can assert it without a real style.
- */
-function makeFakeMap(): { map: MaplibreMap; added: string[]; removed: string[] } {
-  const existing = new Set<string>();
-  const added: string[] = [];
-  const removed: string[] = [];
-  const map = {
-    style: {},
-    getStyle: () => ({}),
-    getLayer: (id: string) => (existing.has(id) ? { id } : undefined),
-    addLayer: (layer: { id: string; onAdd?: (m: unknown, gl: unknown) => void }) => {
-      existing.add(layer.id);
-      added.push(layer.id);
-      layer.onAdd?.(map, {});
-    },
-    removeLayer: (id: string) => {
-      existing.delete(id);
-      removed.push(id);
-    },
-    project: ([lng, lat]: [number, number]) => ({ x: lng, y: lat }),
-    triggerRepaint: () => {},
-  } as unknown as MaplibreMap;
-  return { map, added, removed };
-}
 
 function shot(from: [number, number], to: [number, number], isReference = false): GeometryShot {
   return { from, to, kind: isReference ? ('Reference' as const) : ('Normal' as const), section_id: 0 };
