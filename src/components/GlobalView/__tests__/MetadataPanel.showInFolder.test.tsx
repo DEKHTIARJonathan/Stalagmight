@@ -8,14 +8,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../../../utils/ipc')>()),
-  invokeIpc: invokeIpcMock,
-}));
+vi.mock('../../../utils/ipc');
 
 import MetadataPanel from '../MetadataPanel';
 import type { ProjectMetadata } from '../../../types/project';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 const projectAt = (file_path: string): ProjectMetadata =>
   ({

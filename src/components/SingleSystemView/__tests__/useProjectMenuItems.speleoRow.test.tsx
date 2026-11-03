@@ -6,13 +6,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: vi.fn(),
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 import { useProjectMenuItems } from '../useProjectMenuItems';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
+import { stubGetErrorMessage, fallbackOr } from '../../../test/factories/ipc';
 
 const LINK: SpeleoLinkState = {
   permission: 'READ_AND_WRITE',

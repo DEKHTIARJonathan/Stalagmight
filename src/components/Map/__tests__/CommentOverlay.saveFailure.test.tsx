@@ -12,12 +12,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: vi.fn(() => Promise.resolve(undefined)) }));
+vi.mock('../../../utils/ipc');
+invokeIpcMock.mockImplementation(() => Promise.resolve(undefined));
 
 import CommentOverlay from '../CommentOverlay';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore, type CommentTarget } from '../../../store/uiStore';
 import type { CommandResult } from '../../../types/commands';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 const result = (success: boolean): CommandResult => ({
   success,

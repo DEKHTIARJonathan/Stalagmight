@@ -20,14 +20,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../../utils/ipc');
 
 import DataTable from '../DataTable';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
 import { defaultConfig } from '../../../types/config';
 import type { Config } from '../../../types/config';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 /** jsdom has no ResizeObserver; DataTable's chrome-offset measurement effect
  *  needs the constructor to exist, but this suite never depends on it firing. */

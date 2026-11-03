@@ -147,14 +147,14 @@ vi.mock('../GlobalSurveyLayer', () => ({
   },
   generateSystemColor: () => '#336699',
 }));
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../../utils/ipc');
 
 import GlobalViewMap from '../GlobalViewMap';
 import { useGlobalViewStore } from '../../../store/globalViewStore';
 import type { ProjectMetadata } from '../../../types/project';
 import { testIdPart } from '../../../utils/testId';
 import { useShallow } from 'zustand/react/shallow';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 const GOOD = '/caves/CaveA.stalx';
 const BROKEN = '/caves/CaveB.stalx';

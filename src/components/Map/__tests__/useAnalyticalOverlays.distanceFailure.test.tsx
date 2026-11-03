@@ -13,10 +13,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import type { MutableRefObject } from 'react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: (...args: unknown[]) => invokeIpcMock(...args),
-}));
+vi.mock('../../../utils/ipc');
 // The markers this hook adds import maplibre-gl, which jsdom cannot load; with
 // the map not loaded no marker is ever built.
 vi.mock('maplibre-gl', () => ({ default: {} }));
@@ -24,6 +21,7 @@ vi.mock('maplibre-gl', () => ({ default: {} }));
 import { useAnalyticalOverlays } from '../useAnalyticalOverlays';
 import { useUIStore } from '../../../store/uiStore';
 import type { DistanceField } from '../../../types/project';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 const FIELD = { stations: [], shots: [], max_distance: 0 } as unknown as DistanceField;
 

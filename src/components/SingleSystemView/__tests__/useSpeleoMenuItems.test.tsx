@@ -10,15 +10,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 
-vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: vi.fn(),
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
-}));
+vi.mock('../../../utils/ipc');
+stubGetErrorMessage(fallbackOr('error'));
 
 import { useSpeleoMenuItems } from '../useSpeleoMenuItems';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
 import type { AppMenuItem } from '../../common/AppMenu';
+import { stubGetErrorMessage, fallbackOr } from '../../../test/factories/ipc';
 
 const LINK: SpeleoLinkState = {
   permission: 'READ_AND_WRITE',

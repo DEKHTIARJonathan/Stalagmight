@@ -146,13 +146,13 @@ vi.mock('../GlobalSurveyLayer', () => ({
   },
   generateSystemColor: () => '#336699',
 }));
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../../utils/ipc');
 
 import GlobalViewMap from '../GlobalViewMap';
 import { useGlobalViewStore } from '../../../store/globalViewStore';
 import type { ProjectMetadata } from '../../../types/project';
 import type { SurveyGeometry } from '../../../types/survey';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 const CAVE_A = '/caves/CaveA.stalx';
 const CAVE_B = '/caves/CaveB.stalx';

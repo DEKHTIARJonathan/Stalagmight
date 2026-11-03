@@ -145,7 +145,8 @@ vi.mock('../GlobalSurveyLayer', () => ({
   },
   generateSystemColor: () => '#336699',
 }));
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: vi.fn(async () => undefined) }));
+vi.mock('../../../utils/ipc');
+invokeIpcMock.mockImplementation(async () => undefined);
 
 import GlobalViewMap, { type GlobalViewMapHandle } from '../GlobalViewMap';
 import type { ProjectMetadata } from '../../../types/project';
@@ -153,6 +154,7 @@ import type { SurveyGeometry } from '../../../types/survey';
 import { useProjectStore } from '../../../store/projectStore';
 import { defaultConfig, type Config } from '../../../types/config';
 import { testIdPart } from '../../../utils/testId';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 function setLengthPrecision(length: number): void {
   const config = defaultConfig as Config;

@@ -25,8 +25,7 @@ vi.mock('@tanstack/react-virtual', () => ({
   }),
 }));
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../../utils/ipc');
 
 import DataTable from '../DataTable';
 import { useProjectStore } from '../../../store/projectStore';
@@ -36,6 +35,7 @@ import { defaultConfig } from '../../../types/config';
 import type { Config } from '../../../types/config';
 import type { CommandResult } from '../../../types/commands';
 import type { Section, Shot } from '../../../types/project';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 class NoopResizeObserver {
   observe() {}

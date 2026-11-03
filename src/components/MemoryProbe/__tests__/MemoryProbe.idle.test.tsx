@@ -17,13 +17,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../../utils/ipc');
 
 import { MemoryProbe } from '../MemoryProbe';
 import * as probe from '../../../utils/memoryProbe';
 import { useUIStore } from '../../../store/uiStore';
 import { useProjectStore } from '../../../store/projectStore';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 const STATS = {
   backend: { pid: 1, name: 'stalagmight', role: 'backend', rss_kb: 1024, vm_size_kb: 0, vm_peak_kb: 0, vm_rss_anon_kb: 0 },

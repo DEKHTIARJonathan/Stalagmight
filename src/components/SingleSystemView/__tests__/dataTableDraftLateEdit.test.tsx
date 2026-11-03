@@ -26,8 +26,7 @@ vi.mock('@tanstack/react-virtual', () => ({
   }),
 }));
 
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../../utils/ipc');
 
 import DataTable from '../DataTable';
 import { AZIMUTH_AVG_KEY } from '../dataTableEdits';
@@ -39,6 +38,7 @@ import type { Config } from '../../../types/config';
 import { accepted, type CommandOutcome } from '../../../store/commandResult';
 import type { ShotCreated } from '../../../types/ipc/ShotCreated';
 import type { Section, Shot } from '../../../types/project';
+import { invokeIpcMock } from '../../../test/factories/ipc';
 
 class NoopResizeObserver {
   observe() {}
