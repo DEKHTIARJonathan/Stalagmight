@@ -27,13 +27,21 @@ export const historyCommands: MockCommandFamily = (ctx) => {
       case 'undo':
       case 'redo':
       case 'undo_to':
-      case 'redo_to':
+      case 'redo_to': {
         undoRedoCalls.push(cmd);
+        // [#576 RV7a-3] An undo or redo never forgets the Unwind state: the backend reads
+        // the link row, which the step does not touch. The mock's only record of it is the
+        // link status it answers (`speleodb_link_status`, spec-seeded through
+        // __speleoLinkStatusOverrides), so the step reports that value, not a fixed false.
+        const link = ctx.remoteLink();
+        const status = (window as unknown as { __speleoLinkStatusOverrides?: { unwound?: unknown } })
+          .__speleoLinkStatusOverrides;
         return {
           reversed_steps: [],
           warnings: [],
-          remote_link: ctx.remoteLink(),
+          remote_link: link ? { ...link, unwound: status?.unwound === true } : null,
         } satisfies MockReply<'undo'> & MockReply<'redo'> & MockReply<'undo_to'> & MockReply<'redo_to'>;
+      }
 
       case 'can_undo':
       case 'can_redo':
