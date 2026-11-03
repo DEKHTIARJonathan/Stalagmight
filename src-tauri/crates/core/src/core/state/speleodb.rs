@@ -9275,6 +9275,147 @@ mod tests {
         );
     }
 
+    /// Every first-party Rust file of the workspace (`src-tauri/src` and every
+    /// `src-tauri/crates/*/src`), as (path relative to `src-tauri`, contents).
+    fn workspace_rust_files() -> Vec<(String, String)> {
+        fn walk(dir: &Path, root: &Path, out: &mut Vec<(String, String)>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, root, out);
+                } else if path.extension().is_some_and(|e| e == "rs") {
+                    let rel = path
+                        .strip_prefix(root)
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    out.push((rel, std::fs::read_to_string(&path).expect("read source")));
+                }
+            }
+        }
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut out = Vec::new();
+        walk(&root.join("src"), &root, &mut out);
+        let crates = std::fs::read_dir(root.join("crates")).expect("read crates/");
+        for krate in crates.flatten() {
+            walk(&krate.path().join("src"), &root, &mut out);
+        }
+        out.sort();
+        out
+    }
+
+    /// [#576 RV9a-4] Who may implement a licence. A licence trait is a promise that
+    /// only a proof (or a marker named for why its flow has no precondition) holds
+    /// one, and `DumpLicence` / `UploadLicence` / `PatchLicence` are public traits of
+    /// the speleodb crate: any crate that depends on it - the app crate does - could
+    /// declare a two-line marker and call the guarded wire. A sealed trait cannot help
+    /// here: it admits only its own crate, and the implementors are core's proof
+    /// types. So every implementation in the workspace is inventoried, and a new one
+    /// fails this until it is added - with its reason - to the list.
+    #[test]
+    fn licence_implementations_are_exactly_the_sanctioned_set() {
+        const TRAITS: [&str; 5] = [
+            "DumpLicence",
+            "UploadLicence",
+            "PatchLicence",
+            "ReplaceLicence",
+            "ReclaimRelease",
+        ];
+        let mut found: Vec<String> = Vec::new();
+        for (path, src) in workspace_rust_files() {
+            let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
+            for line in src.lines().map(str::trim) {
+                if line.starts_with("//") || !line.starts_with("impl") {
+                    continue;
+                }
+                let Some((head, ty)) = line.split_once(" for ") else {
+                    continue;
+                };
+                let Some(licence) = TRAITS.iter().find(|t| {
+                    head.ends_with(&format!("::{t}")) || head.ends_with(&format!(" {t}"))
+                }) else {
+                    continue;
+                };
+                let ty = ty.trim_end_matches(" {}").trim_end_matches('{').trim();
+                found.push(format!("{name}: {licence} for {ty}"));
+            }
+        }
+        found.sort();
+        let mut sanctioned = vec![
+            // The test licence (compiled into test builds only).
+            "client.rs: DumpLicence for TestWire",
+            "client.rs: UploadLicence for TestWire",
+            "client.rs: PatchLicence for TestWire",
+            "speleodb_cache.rs: ReplaceLicence for TestReplace",
+            // Proofs: each made only by the step whose order it carries.
+            "speleodb.rs: PatchLicence for Landed",
+            "speleodb_adopt.rs: DumpLicence for AdoptLockGuard<'_>",
+            "speleodb_adopt.rs: PatchLicence for AdoptLanded",
+            "speleodb_pull.rs: DumpLicence for LocalEditsCleared",
+            "speleodb_pull.rs: ReplaceLicence for LocalEditsCleared",
+            "speleodb_pull.rs: ReplaceLicence for PinnedDump",
+            "speleodb_push.rs: UploadLicence for PushSnapshot",
+            "speleodb_revisions.rs: DumpLicence for UnwindCleared",
+            "speleodb_revisions.rs: ReplaceLicence for ChildPolicyChecked",
+            "speleodb_session.rs: ReclaimRelease for StoodDown",
+            // Markers, each named for why its flow has no precondition.
+            "speleodb_project.rs: PatchLicence for UserMetadataEdit",
+            "speleodb_pull.rs: DumpLicence for FastForwardFetch",
+            "speleodb_pull.rs: DumpLicence for LockFreeProbe",
+            "speleodb_revisions.rs: DumpLicence for AffordanceProbe",
+            "speleodb_session.rs: ReclaimRelease for CapturedRelease",
+            "speleodb_session.rs: ReclaimRelease for SessionMovedUnwind",
+            "speleodb_session.rs: ReclaimRelease for StrandedClaim",
+        ];
+        sanctioned.sort_unstable();
+        assert_eq!(
+            found, sanctioned,
+            "RULE (a licence is held only by a proof or a named no-precondition marker, \
+             #576 RV9a-4): the licence implementations in the workspace changed; add a new \
+             one to this list only with the reason it may skip the step the licence guards"
+        );
+    }
+
+    /// [#576 RV9a-6] The test licences (`client::TestWire`, `TestReplace`) exist for the
+    /// tests of the guarded calls. Under `cargo test` and `clippy --all-targets` feature
+    /// unification compiles `TestWire` into core's library too, so a production call
+    /// naming it compiled there (only a plain `cargo check` refused it). No production
+    /// region in the workspace may name either, outside the line that defines it.
+    #[test]
+    fn no_production_code_names_a_test_licence() {
+        let mut named: Vec<String> = Vec::new();
+        for (path, src) in workspace_rust_files() {
+            let name = path.rsplit('/').next().unwrap_or(&path);
+            let test_only_file = path.contains("/tests/")
+                || name == "tests.rs"
+                || name.ends_with("_tests.rs")
+                || name == "test_fixtures.rs"
+                || name == "test_helpers.rs"
+                || name == "tests_support.rs";
+            if test_only_file {
+                continue;
+            }
+            let end = crate::models::source_scan::test_module_start(&src).unwrap_or(src.len());
+            let region = src.get(..end).unwrap_or(&src);
+            for (n, line) in region.lines().enumerate() {
+                let code = line.split("//").next().unwrap_or_default();
+                let defines = code.contains("struct TestWire")
+                    || code.contains("for TestWire")
+                    || code.contains("struct TestReplace");
+                if !defines && (code.contains("TestWire") || code.contains("TestReplace")) {
+                    named.push(format!("{path}:{}: {}", n + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            named.is_empty(),
+            "RULE (a test licence never reaches production, #576 RV9a-6): {named:#?}"
+        );
+    }
+
     /// The poll's catch-all clear must not act on the `edit_enabled` snapshot taken at
     /// the top of `speleodb_link_status`: a fast-forward finishing underneath an
     /// in-flight poll reopens the gate and restores the record for a lock we still

@@ -815,6 +815,12 @@ pub fn fetch_user_email(
 /// flow whose download has no precondition (named for why), and by
 /// [`TestWire`]. Implementing it anywhere else is the bypass this trait exists
 /// to stop.
+///
+/// [#576 RV9a-4] Not sealed, because it cannot be: a sealed trait admits only the
+/// crate that defines it, and its implementors are core's proof types (core
+/// depends on this crate). Every implementation of this trait, [`UploadLicence`]
+/// and [`PatchLicence`] in the workspace is inventoried instead, by core's
+/// `licence_implementations_are_exactly_the_sanctioned_set`.
 pub trait DumpLicence {}
 
 /// [#576 A8 NF-A8-BYPASS] The [`DumpLicence`] of [`upload_auto`]: the push's
