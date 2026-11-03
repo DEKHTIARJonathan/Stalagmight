@@ -183,7 +183,12 @@ fn start_editing_stamps_its_verify_whatever_an_autosave_is_doing() {
         }
         let generation = state.speleodb_session_generation();
         let committed = under_autosave(&state, round, || {
-            state.speleodb_commit_editing(Some(generation), PROJECT_ID, false)
+            state.speleodb_commit_editing(
+                &state.speleodb_lock_ops_guard(),
+                Some(generation),
+                PROJECT_ID,
+                false,
+            )
         });
         let verified = state
             .speleodb_open_link()
@@ -246,7 +251,12 @@ fn link_writers_wait_for_a_command_in_flight() {
     let generation = state.speleodb_session_generation();
     let commit = waits_for_command_lock(&state, || {
         assert!(state
-            .speleodb_commit_editing(Some(generation), PROJECT_ID, false)
+            .speleodb_commit_editing(
+                &state.speleodb_lock_ops_guard(),
+                Some(generation),
+                PROJECT_ID,
+                false
+            )
             .is_ok());
     });
 

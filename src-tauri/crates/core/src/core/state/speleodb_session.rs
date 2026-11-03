@@ -303,8 +303,12 @@ impl AppState {
     /// (a teardown between the two reads pairs the old world's generation with
     /// the new world's link, and the eventual refusal then unwinds the lock of
     /// the project the user actually has open).
+    ///
+    /// [#576 A8] Inside the lock-ops span, by its proof: every fact Start Editing
+    /// decides on is read after the span opens.
     pub(super) fn speleodb_session_snapshot(
         &self,
+        _lock_ops: &LockOpsHeld<'_>,
     ) -> Result<(u64, crate::models::SpeleoLink), SpeleoErrorDto> {
         let _proj_guard = self.project.lock();
         let generation = self.speleodb_session_generation();
@@ -349,8 +353,13 @@ impl AppState {
     /// world set it, and no record is minted. The caller decides what to do
     /// with the server lock it acquired - see
     /// [`AppState::speleodb_unwind_release`].
+    ///
+    /// [#576 A8] Takes the span's proof: "Start Editing holds `speleodb_lock_ops` from
+    /// before its first read through this commit" - and the update fast-forward's
+    /// restore with it - is the type's, so a commit outside the span does not compile.
     pub(super) fn speleodb_commit_editing(
         &self,
+        _lock_ops: &LockOpsHeld<'_>,
         entry_generation: Option<u64>,
         project_id: &str,
         acquired_here: bool,
@@ -551,7 +560,7 @@ impl AppState {
         // between, so this went on to confirm the PREVIOUS account's lock with
         // the previous account's token and opened the edit gate for the new one -
         // free to mutate a project whose mutex their credentials do not hold.
-        let _lock_ops = self.speleodb_lock_ops_guard();
+        let lock_ops = self.speleodb_lock_ops_guard();
         // [#576 RV4-R-S1] A Done finished editing here and left the lock with the
         // account: that session is over, whatever the server says about the
         // account's lock. Only a new open or an explicit Start editing resumes it.
@@ -584,7 +593,7 @@ impl AppState {
         if !super::speleodb::lock_held_by_me(holder.as_deref(), Some(me.as_str())) {
             return false;
         }
-        self.speleodb_commit_editing(None, &link.project_id, false)
+        self.speleodb_commit_editing(&lock_ops, None, &link.project_id, false)
             .is_ok()
     }
 
@@ -1139,14 +1148,16 @@ mod tests {
         open_linked(&state, temp.path(), "a.stalx", ID);
 
         let (entry_gen, link) = state
-            .speleodb_session_snapshot()
+            .speleodb_session_snapshot(&state.speleodb_lock_ops_guard())
             .expect("a linked open project has a snapshot");
         assert_eq!(entry_gen, state.speleodb_session_generation());
         assert_eq!(link.project_id, ID);
 
         state.close_project();
         assert!(
-            state.speleodb_session_snapshot().is_err(),
+            state
+                .speleodb_session_snapshot(&state.speleodb_lock_ops_guard())
+                .is_err(),
             "no open project, no snapshot"
         );
     }
@@ -1157,10 +1168,17 @@ mod tests {
         let state = AppState::new().expect("state");
         sign_in_unreachable(&state);
         open_linked(&state, temp.path(), "a.stalx", ID);
-        let (entry_gen, link) = state.speleodb_session_snapshot().expect("snapshot");
+        let (entry_gen, link) = state
+            .speleodb_session_snapshot(&state.speleodb_lock_ops_guard())
+            .expect("snapshot");
 
         state
-            .speleodb_commit_editing(Some(entry_gen), &link.project_id, true)
+            .speleodb_commit_editing(
+                &state.speleodb_lock_ops_guard(),
+                Some(entry_gen),
+                &link.project_id,
+                true,
+            )
             .expect("nothing moved, so the commit lands");
 
         assert!(state.edit_enabled(), "the gate is open");
@@ -1181,10 +1199,17 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("temp");
         let state = AppState::new().expect("state");
         open_linked(&state, temp.path(), "a.stalx", ID);
-        let (entry_gen, link) = state.speleodb_session_snapshot().expect("snapshot");
+        let (entry_gen, link) = state
+            .speleodb_session_snapshot(&state.speleodb_lock_ops_guard())
+            .expect("snapshot");
 
         state
-            .speleodb_commit_editing(Some(entry_gen), &link.project_id, false)
+            .speleodb_commit_editing(
+                &state.speleodb_lock_ops_guard(),
+                Some(entry_gen),
+                &link.project_id,
+                false,
+            )
             .expect("commit lands");
 
         assert!(state.edit_enabled());
@@ -1199,12 +1224,19 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("temp");
         let state = AppState::new().expect("state");
         open_linked(&state, temp.path(), "a.stalx", ID);
-        let (entry_gen, link) = state.speleodb_session_snapshot().expect("snapshot");
+        let (entry_gen, link) = state
+            .speleodb_session_snapshot(&state.speleodb_lock_ops_guard())
+            .expect("snapshot");
 
         state.close_project();
 
         let refused = state
-            .speleodb_commit_editing(Some(entry_gen), &link.project_id, true)
+            .speleodb_commit_editing(
+                &state.speleodb_lock_ops_guard(),
+                Some(entry_gen),
+                &link.project_id,
+                true,
+            )
             .expect_err("the world this flow started from is gone");
         assert!(matches!(refused, SpeleoDbError::SessionMoved));
         assert!(
@@ -1221,13 +1253,20 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("temp");
         let state = AppState::new().expect("state");
         open_linked(&state, temp.path(), "a.stalx", ID);
-        let (entry_gen, link) = state.speleodb_session_snapshot().expect("snapshot");
+        let (entry_gen, link) = state
+            .speleodb_session_snapshot(&state.speleodb_lock_ops_guard())
+            .expect("snapshot");
 
         state.close_project();
         open_linked(&state, temp.path(), "b.stalx", ID);
 
         let refused = state
-            .speleodb_commit_editing(Some(entry_gen), &link.project_id, true)
+            .speleodb_commit_editing(
+                &state.speleodb_lock_ops_guard(),
+                Some(entry_gen),
+                &link.project_id,
+                true,
+            )
             .expect_err("a successor session on the same project is not our session");
         assert!(matches!(refused, SpeleoDbError::SessionMoved));
         assert!(!state.edit_enabled(), "the successor's shut gate stands");
@@ -1249,7 +1288,7 @@ mod tests {
         open_linked(&state, temp.path(), "b.stalx", ID);
 
         state
-            .speleodb_commit_editing(None, ID, true)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, ID, true)
             .expect("the open project is still linked to this id");
         assert!(state.edit_enabled());
         assert!(state.speleodb_lock_acquired_here(ID));
@@ -1257,13 +1296,13 @@ mod tests {
         state.close_project();
         open_linked(&state, temp.path(), "c.stalx", OTHER_ID);
         let refused = state
-            .speleodb_commit_editing(None, ID, true)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, ID, true)
             .expect_err("a different project is open");
         assert!(matches!(refused, SpeleoDbError::SessionMoved));
 
         state.close_project();
         let refused = state
-            .speleodb_commit_editing(None, ID, true)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, ID, true)
             .expect_err("no project is open at all");
         assert!(matches!(refused, SpeleoDbError::SessionMoved));
     }
@@ -1482,14 +1521,14 @@ mod tests {
 
         // An earlier flow that DID acquire.
         state
-            .speleodb_commit_editing(None, ID, true)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, ID, true)
             .expect("the first flow's commit");
 
         // A later flow that inherits: it opens its span, commits without an
         // acquisition, and must leave the unwind empty.
-        state.speleodb_begin_acquisition_flow();
+        state.speleodb_begin_acquisition_flow(&state.speleodb_lock_ops_guard());
         state
-            .speleodb_commit_editing(None, ID, false)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, ID, false)
             .expect("the inheriting flow's commit");
 
         assert_eq!(
@@ -1550,7 +1589,7 @@ mod tests {
         // deployment.
         open_linked(&state, temp.path(), "a.stalx", ID);
         state
-            .speleodb_commit_editing(None, ID, false)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, ID, false)
             .expect("the successor's commit");
 
         // The captured release is for the same id on ANOTHER deployment.
@@ -1785,7 +1824,7 @@ mod tests {
         let state = AppState::new().expect("state");
         open_linked(&state, temp.path(), "a.stalx", ID);
         state
-            .speleodb_commit_editing(None, ID, false)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, ID, false)
             .expect("the inherited successor's commit");
         assert!(
             !state.speleodb_lock_acquired_here(ID),
@@ -1829,7 +1868,7 @@ mod tests {
         state.close_project();
         open_linked(&state, temp.path(), "b.stalx", OTHER_ID);
         state
-            .speleodb_commit_editing(None, OTHER_ID, false)
+            .speleodb_commit_editing(&state.speleodb_lock_ops_guard(), None, OTHER_ID, false)
             .expect("the other project's session");
         assert!(state.speleodb_release_unless_reclaimed(&params).is_err());
     }
@@ -1916,63 +1955,6 @@ mod tests {
                  (see `speleodb_session`'s module doc)"
             );
         }
-    }
-
-    #[test]
-    fn start_editing_holds_the_guards_in_the_right_order() {
-        let src = state_source("speleodb.rs");
-        let start = src
-            .find("fn speleodb_start_editing")
-            .expect("start editing is present");
-        let body = &src[start..];
-        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
-
-        let lock_ops = body
-            .find("self.speleodb_lock_ops_guard()")
-            .expect("the acquire span must be serialized against captured releases");
-        let snapshot = body
-            .find("self.speleodb_session_snapshot()")
-            .expect("entry must snapshot generation + link as one world (D6)");
-        let token = body
-            .find("self.speleodb_active_token()")
-            .expect("the flow resolves a token");
-        let probe = body
-            .find("self.speleodb_lock_holder_checked(")
-            .expect("the pre-acquire holder probe is present");
-        let acquire = body
-            .find("client::acquire_lock(")
-            .expect("the acquire is present");
-        assert!(
-            lock_ops < snapshot && snapshot < token && token < probe && probe < acquire,
-            "order must be: lock-ops guard FIRST, then the session snapshot, the \
-             token, the holder probe, and the acquire. Every fact after the guard \
-             is one another lock operation could invalidate: a probe outside the \
-             span reads provenance a captured release can undo before the acquire \
-             (round 5), and a token read outside it lets a logout leave this flow \
-             committing on behalf of a signed-out session (round 6)"
-        );
-        let flow_begins = body
-            .find("self.speleodb_begin_acquisition_flow()")
-            .expect("the operation must clear the previous one's unwind slot");
-        assert!(
-            lock_ops < flow_begins && flow_begins < acquire,
-            "the unwind slot is reset inside the span and before the acquire, so \
-             an inheriting or aborting flow leaves nothing behind for the \
-             stale-context unwind to release (round 10)"
-        );
-        assert_eq!(
-            body.matches("self.speleodb_commit_editing(").count(),
-            2,
-            "both success arms must commit through the session guard"
-        );
-        assert!(
-            body.contains("self.speleodb_unwind_release("),
-            "the unwind must route through the session-aware release"
-        );
-        assert!(
-            !body.contains("self.set_edit_enabled(true)"),
-            "no arm may open the gate outside the guarded commit"
-        );
     }
 
     #[test]
