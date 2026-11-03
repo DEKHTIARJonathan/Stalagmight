@@ -31,15 +31,14 @@ const inputClass = 'w-full px-2 py-1 bg-background border border-border rounded 
  * [#576 NF-W4M-2] Publish answers its outcome together with the warnings of the two
  * saves it ran (the relocation into the SpeleoDB cache and the initial push's
  * pre-push save): what they could not keep. One-shot, like Done's and Push's, so
- * they are shown here like a normal save's. A bare outcome (as test doubles return
- * it) reads as that outcome with nothing lost.
+ * they are shown here like a normal save's. [#576 RV6a-6] Only that wire shape is
+ * read: a bare outcome is a broken contract and fails the publish loudly.
  */
-function readPublishReport(raw: SpeleoPublishReport | SpeleoPublishResult): {
+function readPublishReport(raw: SpeleoPublishReport): {
   result: SpeleoPublishResult;
   saveLosses: ValidationWarning[];
 } {
-  if ('result' in raw) return { result: raw.result, saveLosses: raw.save_warnings ?? [] };
-  return { result: raw, saveLosses: [] };
+  return { result: raw.result, saveLosses: raw.save_warnings ?? [] };
 }
 
 /** A collaborator queued in the dialog, granted only after the project is created. */

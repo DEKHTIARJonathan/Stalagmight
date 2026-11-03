@@ -29,6 +29,13 @@ import { useUIStore } from '../../store/uiStore';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { invokeIpcMock, stubGetErrorMessage, fallbackOr } from '../../test/factories/ipc';
 
+/** `speleodb_publish`'s answer as the wire carries it (`SpeleoPublishReport`, #576
+ *  RV6a-6): the outcome and what its saves could not keep (nothing here). */
+const published = () => ({
+  result: { project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' },
+  save_warnings: [],
+});
+
 let loadProjectMock: ReturnType<typeof vi.fn>;
 let closeDialogMock: ReturnType<typeof vi.fn>;
 let showToastMock: ReturnType<typeof vi.fn>;
@@ -51,11 +58,7 @@ beforeEach(() => {
 
 describe('PublishToSpeleoDbDialog', () => {
   it('gates Publish on a chosen country and publishes with the right params', async () => {
-    invokeIpcMock.mockResolvedValue({
-      project_id: 'p1',
-      endpoint: 'https://x',
-      local_path: '/cache/p1/project.stalx',
-    });
+    invokeIpcMock.mockResolvedValue(published());
     render(<PublishToSpeleoDbDialog />);
 
     // Name prefilled from the project; country still unchosen -> Publish disabled.
@@ -110,12 +113,26 @@ describe('PublishToSpeleoDbDialog', () => {
     await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
   });
 
+  it('refuses an answer that is not the wire shape instead of loading from it (#576 RV6a-6)', async () => {
+    // The bare outcome, without its envelope: what the stale doubles used to return,
+    // and what a regression in the command would send. It must fail loudly, not
+    // be read as a publish that lost nothing.
+    invokeIpcMock.mockResolvedValue({ project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' });
+    render(<PublishToSpeleoDbDialog />);
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
+
+    await waitFor(() => expect(showToastMock).toHaveBeenCalled());
+    const kinds = showToastMock.mock.calls.map((c) => [c[1], c[2]]);
+    console.log(`[RV6a-6] bare answer: loadProject calls=${loadProjectMock.mock.calls.length} toasts=${JSON.stringify(kinds)}`);
+    expect(loadProjectMock).not.toHaveBeenCalled();
+    expect(kinds).toEqual([[TOAST_KEYS.SPELEODB_PUBLISH, 'error']]);
+    expect(closeDialogMock).not.toHaveBeenCalled();
+  });
+
   it('does NOT close or claim success when the reopen fails', async () => {
-    invokeIpcMock.mockResolvedValue({
-      project_id: 'p1',
-      endpoint: 'https://x',
-      local_path: '/cache/p1/project.stalx',
-    });
+    invokeIpcMock.mockResolvedValue(published());
     loadProjectMock.mockResolvedValue({ success: false });
     render(<PublishToSpeleoDbDialog />);
 
@@ -176,7 +193,7 @@ describe('PublishToSpeleoDbDialog', () => {
         return Promise.resolve([{ email: 'alice@x.com', label: 'Alice Diver <alice@x.com>' }]);
       }
       if (cmd === 'speleodb_publish') {
-        return Promise.resolve({ project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' });
+        return Promise.resolve(published());
       }
       // speleodb_add_collaborator -> the (unused-here) refreshed roster.
       return Promise.resolve({ users: [], teams: [] });
@@ -207,7 +224,7 @@ describe('PublishToSpeleoDbDialog', () => {
   it('still closes but warns when a queued collaborator cannot be granted', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_publish') {
-        return Promise.resolve({ project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' });
+        return Promise.resolve(published());
       }
       if (cmd === 'speleodb_add_collaborator') return Promise.reject(new Error('403'));
       return Promise.resolve({ users: [], teams: [] });
@@ -229,7 +246,7 @@ describe('PublishToSpeleoDbDialog', () => {
   it('grants the FINAL queued level after changing a collaborator row in place', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_publish') {
-        return Promise.resolve({ project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' });
+        return Promise.resolve(published());
       }
       // speleodb_search_users (unused - added by typing) + add_collaborator roster.
       return Promise.resolve({ users: [], teams: [] });
@@ -257,7 +274,7 @@ describe('PublishToSpeleoDbDialog', () => {
   it('removes a queued collaborator so it is never granted', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_publish') {
-        return Promise.resolve({ project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' });
+        return Promise.resolve(published());
       }
       return Promise.resolve({ users: [], teams: [] });
     });
