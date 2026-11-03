@@ -463,21 +463,34 @@ pub async fn execute_compass_import<R: Runtime>(
             apply_corrections,
             comments_on_stations,
         };
-        run_file_import(
-            state,
-            sink,
-            &COMPASS_IMPORT,
-            &path,
-            file_hash,
-            // Auto: no dialog on this path carries a per-file override, so the
-            // chain rule decides (decision C10-D1).
-            VirtualShotMode::Auto,
-            crate::parsers::compass::parse_compass,
-            |parsed| convert_compass(parsed, &opts),
-        )
-        .into_outcome::<ImportOutcome>()
+        execute_compass_import_impl(state, sink, &path, file_hash, &opts)
+            .into_outcome::<ImportOutcome>()
     })
     .await
+}
+
+/// The body of [`execute_compass_import`], on the pool: parse, convert and apply
+/// the file at `path` into the open project. Its own function so the destructive
+/// path is tested on a real file without a Tauri app (#576 E10).
+pub(crate) fn execute_compass_import_impl(
+    state: &AppState,
+    sink: std::sync::Arc<dyn crate::core::events::EventSink>,
+    path: &std::path::Path,
+    file_hash: Option<String>,
+    opts: &CompassImportOptions,
+) -> CommandResult {
+    run_file_import(
+        state,
+        sink,
+        &COMPASS_IMPORT,
+        path,
+        file_hash,
+        // Auto: no dialog on this path carries a per-file override, so the
+        // chain rule decides (decision C10-D1).
+        VirtualShotMode::Auto,
+        crate::parsers::compass::parse_compass,
+        |parsed| convert_compass(parsed, opts),
+    )
 }
 
 /// The Compass importer as the runner names it.

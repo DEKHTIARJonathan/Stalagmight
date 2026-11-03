@@ -39,6 +39,14 @@ mod app_contract_tests;
 mod command_tests;
 #[cfg(test)]
 #[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              receipt is the evidence a run captures"
+)]
+mod compass_import_tests;
+#[cfg(test)]
+#[expect(
     clippy::print_stdout,
     reason = "test module: the printed values are the evidence a run captures"
 )]
