@@ -11,6 +11,7 @@ use crate::models::{
 use crate::persistence::Database;
 use crate::test_helpers::TestDb;
 use chrono::NaiveDate;
+use stalagmight_core::test_fixtures::bare_shot;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::{env, fs};
@@ -142,25 +143,7 @@ fn assert_failure_contains(result: &impl Answer, needle: &str) {
 }
 
 pub(super) fn shot_data(length: f64) -> ShotData {
-    ShotData {
-        azimuth_in: 0.0,
-        azimuth_out: 5.0,
-        length,
-        depth_in: 0.0,
-        depth_out: 0.0,
-        ..Default::default()
-    }
-}
-
-fn shot_data_with_depth(length: f64, depth_in: f64, depth_out: f64) -> ShotData {
-    ShotData {
-        azimuth_in: 10.0,
-        azimuth_out: 15.0,
-        length,
-        depth_in,
-        depth_out,
-        ..Default::default()
-    }
+    bare_shot(length).with_azimuths(0.0, 5.0)
 }
 
 fn create_project(app: &tauri::App<MockRuntime>) {
@@ -1417,8 +1400,12 @@ fn test_get_project_state_depth_stats_match_station_z() {
     create_section_with_shots(
         &app,
         vec![
-            shot_data_with_depth(10.0, 5.0, 6.0),
-            shot_data_with_depth(10.0, 6.0, 8.0),
+            bare_shot(10.0)
+                .with_azimuths(10.0, 15.0)
+                .with_depths(5.0, 6.0),
+            bare_shot(10.0)
+                .with_azimuths(10.0, 15.0)
+                .with_depths(6.0, 8.0),
         ],
     );
 
@@ -4461,7 +4448,12 @@ fn test_get_project_warnings_multiple_sections_sorted_by_section_id() {
 fn test_get_project_warnings_detects_large_depth_change() {
     let app = app_with_state();
     create_project(&app);
-    create_section_with_shots(&app, vec![shot_data_with_depth(5.0, 0.0, 20.0)]);
+    create_section_with_shots(
+        &app,
+        vec![bare_shot(5.0)
+            .with_azimuths(10.0, 15.0)
+            .with_depths(0.0, 20.0)],
+    );
     let warnings = read(validation::get_project_warnings(h(&app)));
     assert!(warnings.iter().any(|w| w.code == "LARGE_DEPTH_CHANGE"));
 }

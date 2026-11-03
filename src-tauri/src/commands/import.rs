@@ -868,6 +868,7 @@ mod receipt_tests {
     use super::*;
     use crate::core::command::ImportReceipt;
     use crate::core::{ValidationWarning, WarningSeverity};
+    use stalagmight_core::test_fixtures::state_with_project;
     use std::fs;
     use std::path::Path;
 
@@ -1203,17 +1204,6 @@ mod receipt_tests {
         sink.0.lock().map(|e| e.clone()).unwrap_or_default()
     }
 
-    /// A fresh app state with an open, empty project.
-    fn project_state() -> AppState {
-        let state = AppState::new().expect("app state");
-        let created = state.execute(crate::core::Command::CreateProject {
-            name: "Synthetic Cave".to_string(),
-            location: None,
-        });
-        assert!(created.success, "{:?}", created.error);
-        state
-    }
-
     /// The parts of a result the receipt-equality checks compare.
     fn comparable(result: &CommandResult) -> serde_json::Value {
         serde_json::to_value(result).expect("a command result serializes")
@@ -1231,7 +1221,7 @@ mod receipt_tests {
     /// what happened, and nothing is imported.
     #[test]
     fn a_panicking_parse_or_convert_fails_the_import_instead_of_unwinding() {
-        let state = project_state();
+        let state = state_with_project("Synthetic Cave");
         let sink = std::sync::Arc::new(RecordingSink::default());
         let parse_panics = run_file_import(
             &state,
@@ -1278,7 +1268,7 @@ mod receipt_tests {
     /// Every runner import reports the four import phases, in order.
     #[test]
     fn the_runner_reports_every_import_phase() {
-        let state = project_state();
+        let state = state_with_project("Synthetic Cave");
         let sink = std::sync::Arc::new(RecordingSink::default());
         let result = run_file_import(
             &state,
@@ -1350,7 +1340,7 @@ mod receipt_tests {
             comments_on_stations: false,
         };
 
-        let legacy_state = project_state();
+        let legacy_state = state_with_project("Synthetic Cave");
         let parsed = crate::parsers::compass::parse_compass(&path).expect("parse");
         let (sections, closures, warnings) =
             crate::parsers::compass::convert_compass_to_import_configs(&parsed, &opts)
@@ -1374,7 +1364,7 @@ mod receipt_tests {
         );
         let legacy = finalize_deferred_import(&legacy_state, legacy);
 
-        let state = project_state();
+        let state = state_with_project("Synthetic Cave");
         let runner = run_file_import(
             &state,
             std::sync::Arc::new(RecordingSink::default()),
@@ -1415,7 +1405,7 @@ mod receipt_tests {
             selected_surveys: None,
         };
 
-        let legacy_state = project_state();
+        let legacy_state = state_with_project("Synthetic Cave");
         let parsed = crate::parsers::walls::parse_walls(&path).expect("parse");
         let (sections, closures, warnings) =
             crate::parsers::walls::convert_walls_to_import_configs(&parsed, &opts)
@@ -1439,7 +1429,7 @@ mod receipt_tests {
         );
         let legacy = finalize_deferred_import(&legacy_state, legacy);
 
-        let state = project_state();
+        let state = state_with_project("Synthetic Cave");
         let runner = run_file_import(
             &state,
             std::sync::Arc::new(RecordingSink::default()),
@@ -1486,7 +1476,7 @@ mod receipt_tests {
             root_placement: None,
         };
 
-        let legacy_state = project_state();
+        let legacy_state = state_with_project("Synthetic Cave");
         let tml = crate::parsers::tml::parse_tml(&path).expect("parse");
         let (sections, closures, warnings) =
             crate::parsers::tml::convert_tml_with_options(&tml, &opts()).expect("convert");
@@ -1509,7 +1499,7 @@ mod receipt_tests {
         );
         let legacy = finalize_deferred_import(&legacy_state, legacy);
 
-        let state = project_state();
+        let state = state_with_project("Synthetic Cave");
         let opts = opts();
         let runner = run_file_import(
             &state,
@@ -1565,7 +1555,7 @@ mod receipt_tests {
             depth_inverted: false,
         };
 
-        let legacy_state = project_state();
+        let legacy_state = state_with_project("Synthetic Cave");
         let gpx = crate::parsers::gpx::parse_gpx(&path).expect("parse");
         let (sections, warnings) =
             crate::parsers::gpx::convert_gpx_to_import_configs(&gpx, true, true, true, &[], false)
@@ -1582,7 +1572,7 @@ mod receipt_tests {
         decorate_receipt(&mut legacy, "GPX", &path, sections_found, None, warnings);
         let legacy = finalize_deferred_import(&legacy_state, legacy);
 
-        let state = project_state();
+        let state = state_with_project("Synthetic Cave");
         let sink = std::sync::Arc::new(RecordingSink::default());
         let runner = run_file_import(
             &state,

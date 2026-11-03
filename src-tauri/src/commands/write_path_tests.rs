@@ -13,6 +13,7 @@ use super::command_tests::{h, run};
 use crate::commands::write_path::{check_write_path_with, AppDirs, WriteTarget};
 use crate::core::AppState;
 use crate::export::ImageFormat;
+use stalagmight_core::test_fixtures::state_with_project;
 
 fn no_app_dirs() -> AppDirs {
     AppDirs {
@@ -30,12 +31,7 @@ fn verdict(path: &Path, target: WriteTarget, dirs: &AppDirs) -> String {
 
 /// A project with one section, open, so the exports have something to write.
 fn open_project_state(dir: &Path) -> AppState {
-    let state = AppState::new().expect("state");
-    let created = state.execute(crate::core::Command::CreateProject {
-        name: "CaveW".to_string(),
-        location: None,
-    });
-    assert!(created.success, "{:?}", created.error);
+    let state = state_with_project("CaveW");
     let saved = state.execute(crate::core::Command::SaveProject {
         path: Some(dir.join("CaveW.stalx")),
     });

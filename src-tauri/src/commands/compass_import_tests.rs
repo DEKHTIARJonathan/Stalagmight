@@ -14,19 +14,9 @@ use tempfile::TempDir;
 
 use super::command_tests::with_config_lock;
 use super::import::execute_compass_import_impl;
-use crate::core::{AppState, Command};
+use crate::core::events::NullEventSink;
 use crate::parsers::compass::CompassImportOptions;
-
-/// The progress events go nowhere.
-struct NoListener;
-
-impl crate::core::events::EventSink for NoListener {
-    fn emit(&self, _event: &str, _payload: serde_json::Value) {}
-
-    fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
-        false
-    }
-}
+use stalagmight_core::test_fixtures::state_with_project;
 
 /// One Compass survey record of `CaveA`: `shots` legs of 10 ft heading east.
 fn survey(name: &str, shots: usize) -> String {
@@ -58,19 +48,11 @@ fn a_compass_file_imports_its_surveys_into_the_open_project() {
         let path = dir.path().join("CaveA.dat");
         std::fs::write(&path, format!("{}{}", survey("A", 2), survey("B", 1)))
             .expect("write the synthetic file");
-        let state = AppState::new().expect("app state");
-        assert!(
-            state
-                .execute(Command::CreateProject {
-                    name: "CaveA".to_owned(),
-                    location: None,
-                })
-                .success
-        );
+        let state = state_with_project("CaveA");
 
         let result = execute_compass_import_impl(
             &state,
-            Arc::new(NoListener),
+            Arc::new(NullEventSink),
             &path,
             Some("synthetic-hash".to_owned()),
             &CompassImportOptions {

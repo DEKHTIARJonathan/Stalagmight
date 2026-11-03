@@ -33,7 +33,7 @@ use super::import_command_tests::{
 };
 use super::import_runner::parse_gate;
 use crate::core::state::AppState;
-use crate::core::Command;
+use stalagmight_core::test_fixtures::state_with_project;
 
 /// A `tauri::test` app wired with the real import commands and `cancel_loading`,
 /// managing an app state with an open, empty project, plus its window.
@@ -48,12 +48,7 @@ fn app_with_import_commands() -> (App<MockRuntime>, WebviewWindow<MockRuntime>) 
         ])
         .build(mock_context(noop_assets()))
         .expect("mock app");
-    let state = AppState::new().expect("app state");
-    let created = state.execute(Command::CreateProject {
-        name: "CaveB".to_string(),
-        location: None,
-    });
-    assert!(created.success, "{:?}", created.error);
+    let state = state_with_project("CaveB");
     app.manage(state);
     let window = WebviewWindowBuilder::new(&app, "main", Default::default())
         .build()

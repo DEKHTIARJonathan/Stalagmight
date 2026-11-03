@@ -11,6 +11,7 @@
 use chrono::Utc;
 use stalagmight_lib::config::{CacheConfig, Config, ValidationConfig};
 use stalagmight_lib::core::{Command, PersistStack, UndoData, UndoEntry, UndoStack, Validator};
+use stalagmight_lib::models::test_fixtures::straight_shot;
 use stalagmight_lib::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure, Project, Section, SectionData,
     SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates, StationMerge, StationRef,
@@ -30,14 +31,7 @@ fn create_test_project() -> Project {
 
 fn create_shot_data(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
     // Use same azimuth for in/out (the function averages them)
-    ShotData {
-        azimuth_in: azimuth,
-        azimuth_out: azimuth,
-        length,
-        depth_in,
-        depth_out,
-        ..Default::default()
-    }
+    straight_shot(azimuth, length).with_depths(depth_in, depth_out)
 }
 
 fn create_section_with_shots(name: &str, shots: Vec<ShotData>) -> SectionData {

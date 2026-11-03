@@ -18,16 +18,12 @@ use super::import::{
     check_duplicate_import, execute_compass_import, execute_tml_import, execute_walls_import,
 };
 use crate::core::state::AppState;
-use crate::core::{Command, CommandError, ImportOutcome};
+use crate::core::{CommandError, ImportOutcome};
+use stalagmight_core::test_fixtures::state_with_project;
 
 /// A `tauri::test` app managing a fresh app state with an open, empty project.
 fn project_app() -> App<MockRuntime> {
-    let state = AppState::new().expect("app state");
-    let created = state.execute(Command::CreateProject {
-        name: "CaveA".to_string(),
-        location: None,
-    });
-    assert!(created.success, "{:?}", created.error);
+    let state = state_with_project("CaveA");
     let app = tauri::test::mock_app();
     app.manage(state);
     app

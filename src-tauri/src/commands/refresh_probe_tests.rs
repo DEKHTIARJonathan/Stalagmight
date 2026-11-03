@@ -14,32 +14,24 @@ use super::{project, validation};
 use crate::core::state::{AppState, VirtualShotMode};
 use crate::core::Command;
 use crate::models::{ImportPlacement, ImportSectionConfig, ShotData, ShotUpdates};
+use stalagmight_core::test_fixtures::{state_with_project, straight_shot};
 
 /// A synthetic passage of `len` shots.
 fn passage(seed: u32, len: usize) -> Vec<ShotData> {
     (0..len)
-        .map(|i| ShotData {
-            azimuth_in: f64::from((seed * 37 + i as u32 * 11) % 360),
-            azimuth_out: f64::from((seed * 37 + i as u32 * 11) % 360),
-            length: 3.0 + f64::from((seed + i as u32) % 5),
-            depth_in: 10.0,
-            depth_out: 10.0,
-            ..Default::default()
+        .map(|i| {
+            straight_shot(
+                f64::from((seed * 37 + i as u32 * 11) % 360),
+                3.0 + f64::from((seed + i as u32) % 5),
+            )
+            .with_depths(10.0, 10.0)
         })
         .collect()
 }
 
 /// An open project of `sections` sections of `shots` shots each.
 fn synthetic(sections: u32, shots: usize) -> AppState {
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "Probe".to_string(),
-                location: None,
-            })
-            .success
-    );
+    let state = state_with_project("Probe");
     let configs = (0..sections)
         .map(|i| ImportSectionConfig {
             section_index: i,

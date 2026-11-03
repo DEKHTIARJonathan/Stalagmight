@@ -15,23 +15,13 @@ use crate::commands::import_runner::{
 };
 use crate::core::state::{AppState, VirtualShotMode};
 use crate::models::{ImportPlacement, ImportSectionConfig, ShotData};
+use stalagmight_core::test_fixtures::state_with_project;
 
 const TEST_IMPORT: ImportKind = ImportKind {
     receipt_label: "Synthetic",
     error_label: "Synthetic",
     purpose: "import Synthetic",
 };
-
-/// A fresh app state with an open, empty project.
-fn project_state() -> AppState {
-    let state = AppState::new().expect("app state");
-    let created = state.execute(crate::core::Command::CreateProject {
-        name: "CaveC".to_string(),
-        location: None,
-    });
-    assert!(created.success, "{:?}", created.error);
-    state
-}
 
 /// One synthetic section of two shots, placed at the origin.
 fn one_section() -> ConvertedImport {
@@ -91,7 +81,7 @@ fn import_cancelling_during(state: &AppState, during_convert: bool) -> crate::co
 #[test]
 fn cancel_during_an_import_phase_commits_nothing() {
     for (phase, during_convert) in [("reading", false), ("converting", true)] {
-        let state = project_state();
+        let state = state_with_project("CaveC");
         let result = import_cancelling_during(&state, during_convert);
         let sections = state.get_project_state().expect("project").sections.len();
         println!(
@@ -121,7 +111,7 @@ fn cancel_during_an_import_phase_commits_nothing() {
 #[test]
 fn a_cancelled_imports_message_carries_no_marker() {
     for (phase, during_convert) in [("reading", false), ("converting", true)] {
-        let state = project_state();
+        let state = state_with_project("CaveC");
         let result = import_cancelling_during(&state, during_convert);
         let error = result.error.clone().unwrap_or_default();
         println!(
@@ -148,7 +138,7 @@ fn a_cancelled_imports_message_carries_no_marker() {
 
 #[test]
 fn an_import_nobody_cancels_still_lands_and_frees_its_token() {
-    let state = project_state();
+    let state = state_with_project("CaveC");
     let result = run_file_import(
         &state,
         Arc::new(SilentSink),
