@@ -1480,7 +1480,37 @@ impl AppState {
             );
             return;
         };
-        if !self.persist_locked_undo_stacks_into(db, &stack) {
+        // [#576 RV6a-1] The save's crash rule (`persist_or_clear_undo_stacks_into`):
+        // the upload releases `command_lock` while it is on the network, and an edit
+        // that crashed in that window can have left the history out of step with the
+        // survey. Writing the remaining entries would hand them to the restarted
+        // session, which replays them; the file's history is cleared instead, as the
+        // save after a crash does (`UNDO_HISTORY_DROPPED`).
+        let persisted = if self.refuse_after_crash("Saving the Undo history").is_err() {
+            match db.clear_history_stacks() {
+                Ok(()) => {
+                    tracing::warn!(
+                        dropped,
+                        code = super::save_sidecars::UNDO_HISTORY_DROPPED_CODE,
+                        purpose = "never persist a crashed session's history (#576 RV6a-1)",
+                        "Cleared the Undo and Redo history from the file after a confirmed push: \
+                         an internal error happened in this session"
+                    );
+                    true
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "never persist a crashed session's history (#576 RV6a-1)",
+                        "Could not clear the history after a crash"
+                    );
+                    false
+                }
+            }
+        } else {
+            self.persist_locked_undo_stacks_into(db, &stack)
+        };
+        if !persisted {
             tracing::warn!(
                 dropped,
                 purpose = "persist confirmed-push undo cleanup (#303)",
