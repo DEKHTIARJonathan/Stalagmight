@@ -90,7 +90,8 @@ pub(super) fn preserved_undo_mode(
 /// the file for the next open to pick up again.
 ///
 /// Fatal while the file is still staged. A downloaded database is never installed until
-/// all inherited history metadata has been removed successfully.
+/// all inherited history metadata has been removed successfully - bar a file a newer
+/// build saved, which is never written ([`saved_by_a_newer_build`]).
 fn drop_inherited_undo(dest: &Path) -> Result<(), SpeleoDbError> {
     crate::persistence::Database::clear_undo_history_at(dest).map_err(|e| {
         SpeleoDbError::Io(format!(
@@ -98,6 +99,20 @@ fn drop_inherited_undo(dest: &Path) -> Result<(), SpeleoDbError> {
             dest.display()
         ))
     })
+}
+
+/// [#576 NF-W10BE-3] Whether the file at `path` was saved by a NEWER build, read off
+/// its SQLite header bytes alone - opening a connection to ask is not a read-only
+/// act. `false` when the header cannot be read: the clear that follows then reports
+/// what the file is.
+fn saved_by_a_newer_build(path: &Path) -> bool {
+    use std::io::Read as _;
+    let mut head = [0u8; crate::persistence::Database::HEADER_LEN];
+    std::fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut head))
+        .is_ok_and(|()| {
+            crate::persistence::Database::newer_schema_version_in_header(&head).is_some()
+        })
 }
 
 fn sanitized_download_path(dest: &Path) -> std::path::PathBuf {
@@ -400,7 +415,15 @@ impl AppState {
                 // one place is what makes "a pulled stack is never silently adopted"
                 // true of the pull, the fast-forward AND the revision swap at once,
                 // without each of them having to remember.
-                if matches!(undo, InheritedUndo::Drop) {
+                //
+                // [#576 NF-W10BE-3] Except in a file a NEWER build saved: this build never
+                // writes into one (#576 B6-D1), and the clear is a write. The first-time
+                // Open is the only replace that installs such a file (every path over a
+                // linked copy refuses it before the swap, `refuse_a_newer_download`), and
+                // it opens read-only. Its history stays in the file as the newer build
+                // wrote it, and none of it reaches the session: the load reads no history
+                // from a newer file (`do_load_project_full`).
+                if matches!(undo, InheritedUndo::Drop) && !saved_by_a_newer_build(&staged) {
                     if let Err(e) = drop_inherited_undo(&staged) {
                         let _ = std::fs::remove_file(&staged);
                         if closed {

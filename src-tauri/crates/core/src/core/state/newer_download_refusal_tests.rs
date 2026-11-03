@@ -83,9 +83,10 @@ fn project_file(path: &Path, name: &str, section: &str) {
         .expect("write");
 }
 
-/// The server's tree as a newer build saved it: one `.stalx` entry, stamped one
-/// schema version above this build's, zipped as SpeleoDB zips it.
-fn newer_dump() -> Vec<u8> {
+/// The server's project file as a newer build saved it: stamped one schema version
+/// above this build's, and carrying the pusher's undo history (a Full-mode push
+/// ships it), which this build must not clear out of a file it may not write.
+fn newer_server_file() -> Vec<u8> {
     let temp = TempDir::new().expect("temp");
     let server = temp.path().join("server.stalx");
     project_file(&server, "Server Copy", "ServerSection");
@@ -94,19 +95,25 @@ fn newer_dump() -> Vec<u8> {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .expect("read the stamp");
     conn.execute_batch(&format!(
-        "UPDATE project SET schema_version = {newer}; PRAGMA user_version = {newer};",
+        "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) \
+         VALUES (0, x'00', x'00', '2026-01-01T00:00:00Z'); \
+         UPDATE project SET schema_version = {newer}; PRAGMA user_version = {newer};",
         newer = current + 1
     ))
     .expect("stamp it newer");
     drop(conn);
-    let bytes = std::fs::read(&server).expect("read the server project");
+    std::fs::read(&server).expect("read the server project")
+}
+
+/// `bytes` as the one `.stalx` entry of a dump, zipped as SpeleoDB zips it.
+fn dump_of(bytes: &[u8]) -> Vec<u8> {
     let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
     let opts = zip::write::SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated);
     writer
         .start_file("misc/project.stalx", opts)
         .expect("start entry");
-    writer.write_all(&bytes).expect("write entry");
+    writer.write_all(bytes).expect("write entry");
     writer.finish().expect("finish zip").into_inner()
 }
 
@@ -253,7 +260,8 @@ fn newer_download_body_in_a_process_of_its_own() {
     let dest = super::speleodb_local_state::cache_path_in(&cache, REMOTE_ID);
     std::fs::create_dir_all(dest.parent().expect("cache dir")).expect("create cache dir");
 
-    let (base, _listener, seen) = routing_stub(newer_dump());
+    let server_file = newer_server_file();
+    let (base, _listener, seen) = routing_stub(dump_of(&server_file));
     let downloads = || {
         seen.lock()
             .expect("request log")
@@ -265,7 +273,7 @@ fn newer_download_body_in_a_process_of_its_own() {
     *state.speleodb.lock() = authed_session_at(&base);
 
     if scenario == "first_open" {
-        first_open_of_a_newer_file(&state, &dest, downloads);
+        first_open_of_a_newer_file(&state, &dest, &server_file, downloads);
         return;
     }
 
@@ -366,10 +374,28 @@ fn newer_download_body_in_a_process_of_its_own() {
     }
 }
 
+/// The pusher's undo rows in the file at `path`, read through a read-only
+/// connection (so the read itself writes nothing).
+fn undo_rows_in(path: &Path) -> i64 {
+    rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .expect("open the cache copy read-only")
+        .query_row("SELECT COUNT(*) FROM undo_stack", [], |r| r.get(0))
+        .expect("count the undo rows")
+}
+
 /// [#576 RV4-R-S7-D2] No cache copy yet: the Open downloads the newer file and
 /// hands it over unlinked, and opening it gives the read-only newer-version file.
 /// `downloads` counts the dumps fetched once the Open has returned.
-fn first_open_of_a_newer_file(state: &AppState, dest: &Path, downloads: impl Fn() -> usize) {
+///
+/// [#576 NF-W10BE-3] And neither the Open nor opening the file writes into it: the
+/// installed bytes are the server's, byte for byte, the pusher's undo history
+/// included (the replace used to clear it, a write into a newer build's file).
+fn first_open_of_a_newer_file(
+    state: &AppState,
+    dest: &Path,
+    server_file: &[u8],
+    downloads: impl Fn() -> usize,
+) {
     assert!(!dest.exists(), "fixture: no cache copy yet");
     let answer = state.speleodb_open_project(
         REMOTE_ID.to_owned(),
@@ -378,8 +404,11 @@ fn first_open_of_a_newer_file(state: &AppState, dest: &Path, downloads: impl Fn(
         None,
     );
     let downloaded = downloads();
-    let on_disk = dest.exists().then(|| copy_on_disk(dest));
+    let installed_as_served = std::fs::read(dest).ok().as_deref() == Some(server_file);
     let opened = state.open_project(dest.to_path_buf()).success;
+    let opened_as_served = std::fs::read(dest).ok().as_deref() == Some(server_file);
+    let undo_rows = dest.exists().then(|| undo_rows_in(dest));
+    let on_disk = dest.exists().then(|| copy_on_disk(dest));
     let flags = state.open_file_flags();
     let open_name = state.get_project_state().map(|p| p.name);
     let linked = state.speleodb_open_link().is_ok();
@@ -393,6 +422,13 @@ fn first_open_of_a_newer_file(state: &AppState, dest: &Path, downloads: impl Fn(
             .map(|r| r.local_path.clone())
             .map_err(|e| (e.code, e.message.clone())),
         flags.newer_schema_version
+    );
+    let undo_offered = state.can_undo();
+    println!(
+        "[NF-W10BE-3] the installed file is the server's bytes: after the Open \
+         {installed_as_served}, after opening it {opened_as_served}; the pusher's undo rows \
+         in it {undo_rows:?} (served with 1); undo offered {undo_offered} (expected true, \
+         true, Some(1), false)"
     );
 
     let opened_at = answer.expect("a first-time open of a newer file is not refused");
@@ -418,4 +454,21 @@ fn first_open_of_a_newer_file(state: &AppState, dest: &Path, downloads: impl Fn(
         "as a newer-format file: read-only, with the newer-version notice"
     );
     assert!(!linked, "and not as a remote copy");
+    assert!(
+        installed_as_served,
+        "the Open installs the newer build's file byte for byte: nothing is written into it"
+    );
+    assert!(
+        opened_as_served,
+        "and opening it read-only writes nothing into it either"
+    );
+    assert_eq!(
+        undo_rows,
+        Some(1),
+        "its undo history is the newer build's, left in place"
+    );
+    assert!(
+        !undo_offered,
+        "and none of it reaches the session: a newer file's history is not loaded"
+    );
 }
