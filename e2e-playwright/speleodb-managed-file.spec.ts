@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupMockedPage, createProject, openAppMenu } from './helpers/app';
-import { recordIpcCalls, waitForIpcCall } from './helpers/ipcRecorder';
+import { getIpcCalls, recordIpcCalls, waitForIpcCall } from './helpers/ipcRecorder';
 
 /**
  * Canonical SpeleoDB storage, frontend half:
@@ -82,6 +82,12 @@ test.describe('SpeleoDB managed-file prompt', () => {
     // ...and only then was the same path loaded, now as the open project.
     const loads = await waitForIpcCall(page, 'load_project_full_binary');
     expect(loads.map((c) => c.args.path)).toEqual([MANAGED.path]);
+    // [#576 RV4-FE-FEB-8] "Only then": the recorder keeps call order, so a load
+    // issued before the strip finished being sent fails here.
+    expect((await getIpcCalls(page)).map((c) => c.cmd)).toEqual([
+      'speleodb_remove_link_at',
+      'load_project_full_binary',
+    ]);
     const opened = await page.evaluate(
       () =>
         (window as unknown as {

@@ -1,6 +1,6 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
-import { recordIpcCalls, waitForIpcCall } from './helpers/ipcRecorder';
+import { getIpcCalls, recordIpcCalls, waitForIpcCall } from './helpers/ipcRecorder';
 
 /**
  * Mocked-tier coverage for the Compass (.mak/.dat) import journey (#576
@@ -103,8 +103,8 @@ test.describe('Compass import journey', () => {
     await page.getByTestId('compass-import-cancel').click();
     await expect(page.getByTestId('compass-import-dialog')).toBeHidden();
     expect(await importedSections(page)).toEqual([]);
-    await expect.poll(async () => (await page.evaluate(
-      () => ((window as unknown as { __E2E_IPC_CALLS__?: Array<{ cmd: string }> }).__E2E_IPC_CALLS__ ?? []).length,
-    ))).toBe(0);
+    // [#576 RV4-FE-FEB-9] One honest read once the dialog is gone: a poll for 0
+    // passed on its first read, so it waited for nothing. Cancel issues no import.
+    expect(await getIpcCalls(page, 'execute_compass_import')).toEqual([]);
   });
 });
