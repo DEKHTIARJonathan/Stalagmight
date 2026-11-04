@@ -738,3 +738,19 @@ fn a_datum_the_stored_offsets_no_longer_honour_has_a_large_residual() {
         .unwrap();
     assert!(far.residual_m.unwrap() > 10_000.0, "{:?}", far.residual_m);
 }
+
+#[test]
+fn the_deadline_covers_the_whole_read_not_only_long_statements() {
+    // No single statement here is long enough for SQLite to interrupt; the
+    // read-wide clock still stops it.
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &full_project());
+
+    let err = read_file_with(
+        &path,
+        &ReadOptions::default().deadline(std::time::Duration::ZERO),
+    )
+    .unwrap_err();
+
+    assert_eq!(invalid_kind(&err), Some(InvalidKind::Deadline), "{err}");
+}

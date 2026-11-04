@@ -18,11 +18,15 @@
 //! past it; the load connection also skips memory-mapping and keeps temporary
 //! data on disk.
 //!
-//! **The deadline covers SQLite only.** The steps after the load (the app's
-//! post-load normalisation, the conversion, and optional station positions) are
-//! plain Rust and have no time or memory bound here; some are super-linear in
-//! counts the file controls (#597, #596). A server should run each read in a
-//! worker it can kill on its own wall-clock and memory limits.
+//! **One deadline covers the whole read, at two granularities.** Inside SQLite a
+//! statement is interrupted mid-run. The steps after the load (the app's
+//! post-load normalisation, the conversion, optional station positions) are
+//! plain Rust: the deadline is checked between them, so a step that has started
+//! runs to completion. With the app's #596 / #597 fixes those steps are
+//! near-linear, except station positions, which until this crate switches to the
+//! app's positions-only path still build per-station merge lists quadratic in
+//! merge-group size (#596). There is no memory bound beyond the input and
+//! count caps; a server should still run reads in a worker it can kill.
 //!
 //! Files written by a newer schema than this crate knows are refused with
 //! [`ReadError::NewerSchema`]; upgrade the crate to read them.
@@ -39,7 +43,7 @@ mod survey;
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use stalagmight_models::ClassifyScope;
 use stalagmight_persistence::persistence::{Database, SCHEMA_VERSION};
@@ -52,7 +56,7 @@ pub use survey::{
 /// Default cap on the input size, in bytes.
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 
-/// Default deadline, measured from opening the copy.
+/// Default deadline for the whole read.
 pub const DEFAULT_DEADLINE: Duration = Duration::from_secs(30);
 
 /// The newest `.stalx` schema version this crate reads.
@@ -65,10 +69,10 @@ pub struct ReadOptions {
     /// Inputs larger than this are refused before anything is copied. Also caps
     /// any single string or blob SQLite produces while loading.
     pub max_file_bytes: u64,
-    /// A statement still running this long after the copy is opened is
-    /// interrupted and the read fails. SQLite checks it every 1,000 VM steps per
-    /// statement, so it bounds long statements, not the sum of many short ones,
-    /// and nothing after the load (see the crate docs).
+    /// Time allowed for the whole read, from the start of the load. A SQLite
+    /// statement still running at the deadline is interrupted (checked every
+    /// 1,000 VM steps); after the load, it is checked between steps (see the
+    /// crate docs). Either way the read fails with [`InvalidKind::Deadline`].
     pub deadline: Duration,
     /// Also compute measured (unadjusted) station positions into [`Survey::stations`].
     pub with_stations: bool,
@@ -308,8 +312,11 @@ fn private_dir(options: &ReadOptions) -> std::io::Result<tempfile::TempDir> {
 /// Read the private copy. The caller keeps the temp dir alive across this call;
 /// every connection to the copy is dropped before it returns.
 fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
+    // ONE clock for the whole read: each SQLite connection gets only what is left,
+    // and every post-load phase checks it before starting.
+    let expires = Instant::now() + options.deadline;
     let max_value_bytes = i32::try_from(options.max_file_bytes).unwrap_or(i32::MAX);
-    let schema_version = inspect(copy, max_value_bytes, options.deadline)?;
+    let schema_version = inspect(copy, max_value_bytes, remaining(expires)?)?;
     if schema_version > SCHEMA_VERSION {
         return Err(ReadError::NewerSchema {
             found: schema_version,
@@ -317,7 +324,7 @@ fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
         });
     }
 
-    let db = Database::open_existing_untrusted(copy, max_value_bytes, options.deadline)
+    let db = Database::open_existing_untrusted(copy, max_value_bytes, remaining(expires)?)
         .map_err(invalid)?;
     let mut project = db.load_project().map_err(invalid)?;
     check_counts(&project, options.count_limits)?;
@@ -331,17 +338,31 @@ fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
     // offsets (which also re-anchors refs and turns orphan closures into
     // merges), and the one-shot Jump/Reference classification an old file's
     // migration left pending. All in-memory; the copy is discarded.
+    remaining(expires)?;
     project.assign_closure_ids();
+    remaining(expires)?;
     project.redrive_offsets_after_load();
+    remaining(expires)?;
     if db.is_kind_classification_pending() {
         project.classify_virtual_shots(&ClassifyScope::WholeProject);
     }
+    remaining(expires)?;
     Ok(Survey::from_project(
         &project,
         schema_version,
         options.with_stations,
         &derived_uuids,
     ))
+}
+
+/// Time left before `expires`, or [`InvalidKind::Deadline`] once it has passed.
+/// Checked between phases, so a phase that has started runs to completion: the
+/// read is bounded to the deadline plus one phase.
+fn remaining(expires: Instant) -> Result<Duration, ReadError> {
+    expires
+        .checked_duration_since(Instant::now())
+        .filter(|left| !left.is_zero())
+        .ok_or_else(|| ReadError::invalid(InvalidKind::Deadline, "deadline passed"))
 }
 
 /// Refuse zero datums no survey can have, before any geometry uses them.
@@ -410,8 +431,8 @@ fn inspect(path: &Path, max_value_bytes: i32, deadline: Duration) -> Result<i32,
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)
         .map_err(sql_err)?;
     conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, max_value_bytes);
-    let expires = std::time::Instant::now() + deadline;
-    conn.progress_handler(1_000, Some(move || std::time::Instant::now() > expires));
+    let expires = Instant::now() + deadline;
+    conn.progress_handler(1_000, Some(move || Instant::now() > expires));
 
     // Decided by what SQLite PARSED, not by the stored `sql` text: SQLite accepts
     // `CREATE/**/VIRTUAL TABLE` and other spellings a text match would miss.
