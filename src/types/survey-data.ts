@@ -2,11 +2,11 @@
  * Struct-of-Arrays representation of a survey's bulk numeric data.
  *
  * Background: the legacy in-memory shape is `Project.sections[].shots[]`
- * (75k+ JS `Shot` objects across 14k+ `Section` arrays) plus a parallel
- * `Station[]` (89k+ `Station` objects). Each object has 5-16 named
+ * (one JS `Shot` object per shot, one array per `Section`) plus a parallel
+ * `Station[]` (one `Station` object per station). Each object has 5-16 named
  * fields and JSC's IsoHeap commits a per-class slab that doesn't
- * decommit on close. After loading 92.stalx once the WebProcess ends
- * up with ~2 GB of committed but-mostly-empty slabs that won't return
+ * decommit on close. After loading a large project once the WebProcess ends
+ * up with gigabytes of committed but-mostly-empty slabs that won't return
  * to the OS without external pressure.
  *
  * This module defines a flat typed-array layout (`SurveyData`) and
@@ -35,8 +35,8 @@ import type { GpsCoordinates } from './ipc/GpsCoordinates';
 import type { AzimuthReference } from './ipc/AzimuthReference';
 import type { SurveyDirection } from './ipc/SurveyDirection';
 
-/** Section metadata kept as small structured objects. ~14k items for
- *  92.stalx; total memory is tiny compared to the shot payload. The
+/** Section metadata kept as small structured objects, one per section;
+ *  total memory is tiny compared to the shot payload. The
  *  `shots[]` array is *gone* - shots live in `SurveyData` keyed by
  *  global index and looked up via `shotOffset` + `shotCount`.
  *

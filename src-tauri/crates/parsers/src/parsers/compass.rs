@@ -1678,9 +1678,7 @@ pub fn convert_compass_to_import_configs(
     // by a spanning-tree walk over chain connectivity, so it doesn't depend on
     // survey/file order (the previous one-pass first-occurrence registration
     // mis-placed every chain whose shared station was first defined in a
-    // later-processed survey, dumping ~280 shots at origin in the
-    // private real-cave corpus the spanning-tree placement was first
-    // validated against).
+    // later-processed survey, leaving those chains' shots at the origin).
     struct PendingChain {
         section_index: u32,
         names: Vec<String>,

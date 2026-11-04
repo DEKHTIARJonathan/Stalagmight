@@ -1649,7 +1649,7 @@ describe('multi-connection overlap: target shot updates', () => {
   });
 
   it('adjacent non-overlapping connections update different target shots', () => {
-    // Simulates the kb.dmp scenario:
+    // Two adjacent connections into one section:
     // Connection 1: B→A at A station 25, 2 matched, forward (updates A[25],A[26])
     // Connection 2: C→A at A station 27, 2 matched, forward (updates A[27],A[28])
     // These should be independent - no conflict.
@@ -1719,13 +1719,12 @@ describe('multi-connection overlap: target shot updates', () => {
 // These tests simulate the exact code path in DmpNewImportDialog.handleConfirm
 // that propagates overlap mode to the target section's shots for import-to-import
 // connections. This is the fix for "interpolation not applied" bug.
-// Test file: /tmp/kb.dmp (sections 018 and 003)
 
-describe('handleConfirm target-shot-update: real kb.dmp 018→003 scenario', () => {
+describe('handleConfirm target-shot-update: a front overlap into an existing section', () => {
   /**
-   * Actual suggestion parameters from /tmp/kb.dmp (sections 018 and 003):
-   *   Import section 018: 29 shots, importStationIndex=0, matchedShots=2
-   *   Target section 003: 107 shots, existingStationIndex=27, direction=forward
+   * Synthetic suggestion parameters:
+   *   Import section: 20 shots, importStationIndex=0, matchedShots=2
+   *   Target section: 40 shots, existingStationIndex=12, direction=forward
    *   Default merge station = importStationIndex = 0
    *
    * This is a FRONT overlap (importStationIndex=0).
@@ -1734,32 +1733,31 @@ describe('handleConfirm target-shot-update: real kb.dmp 018→003 scenario', () 
    * for Front overlap the loop is `for (i = 0; i < 0; i++)` → never executes.
    * Fix: use computeOverlapIds instead of computeActionableIds.
    *
-   * Real shot data at the overlap:
-   *   Import shot 0: az=229.9, len=5.21, depth=9.55/9.44
-   *   Import shot 1: az=204.2, len=8.84, depth=9.13/9.37
-   *   Target shot 27: az=232.1, len=5.35, depth=9.37/9.27
-   *   Target shot 28: az=194.7, len=9.22, depth=9.27/9.17
+   * Shot data at the overlap:
+   *   Import shot 0: az=230.0, len=5.2, depth=9.5/9.4
+   *   Import shot 1: az=205.0, len=8.8, depth=9.1/9.3
+   *   Target shot 12: az=232.0, len=5.4, depth=9.4/9.3
+   *   Target shot 13: az=195.0, len=9.2, depth=9.3/9.2
    */
 
   const importStationIndex = 0;
   const matchedShots = 2;
-  const existingStationIndex = 27;
+  const existingStationIndex = 12;
   const direction = 'forward' as const;
   const mergeImportStation = importStationIndex; // default
 
-  // Real shot values from the DMP file
   const importShots: EditableShotLike[] = [
-    makeEditableShot(0, { azimuth_in: 229.9, azimuth_out: 229.9, length: 5.21, depth_in: 9.55, depth_out: 9.44 }),
-    makeEditableShot(1, { azimuth_in: 204.2, azimuth_out: 204.2, length: 8.84, depth_in: 9.13, depth_out: 9.37 }),
-    ...Array.from({ length: 27 }, (_, i) =>
+    makeEditableShot(0, { azimuth_in: 230.0, azimuth_out: 230.0, length: 5.2, depth_in: 9.5, depth_out: 9.4 }),
+    makeEditableShot(1, { azimuth_in: 205.0, azimuth_out: 205.0, length: 8.8, depth_in: 9.1, depth_out: 9.3 }),
+    ...Array.from({ length: 18 }, (_, i) =>
       makeEditableShot(i + 2, { azimuth_in: 125 + i, azimuth_out: 125 + i, length: 5 + i * 0.1 }),
     ),
   ];
 
-  // 107 shots; we only care about shots 27 and 28 having real values
-  const targetShots: EditableShotLike[] = Array.from({ length: 107 }, (_, i) => {
-    if (i === 27) return makeEditableShot(i, { azimuth_in: 232.1, azimuth_out: 232.1, length: 5.35, depth_in: 9.37, depth_out: 9.27 });
-    if (i === 28) return makeEditableShot(i, { azimuth_in: 194.7, azimuth_out: 194.7, length: 9.22, depth_in: 9.27, depth_out: 9.17 });
+  // 40 shots; only shots 12 and 13, the overlap, carry chosen values
+  const targetShots: EditableShotLike[] = Array.from({ length: 40 }, (_, i) => {
+    if (i === 12) return makeEditableShot(i, { azimuth_in: 232.0, azimuth_out: 232.0, length: 5.4, depth_in: 9.4, depth_out: 9.3 });
+    if (i === 13) return makeEditableShot(i, { azimuth_in: 195.0, azimuth_out: 195.0, length: 9.2, depth_in: 9.3, depth_out: 9.2 });
     return makeEditableShot(i, { azimuth_in: 190 + i * 0.3, azimuth_out: 191 + i * 0.3, length: 9 + i * 0.05 });
   });
 
@@ -1777,13 +1775,13 @@ describe('handleConfirm target-shot-update: real kb.dmp 018→003 scenario', () 
     expect(needsDirectionReversal(importStationIndex, direction)).toBe(false);
   });
 
-  it('target shot indices map correctly: import 0→target 27, import 1→target 28', () => {
+  it('target shot indices map correctly: import 0→target 12, import 1→target 13', () => {
     const overlapParams: OverlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
-    expect(computeTargetShotIndex(0, overlapParams)).toBe(27);
-    expect(computeTargetShotIndex(1, overlapParams)).toBe(28);
+    expect(computeTargetShotIndex(0, overlapParams)).toBe(12);
+    expect(computeTargetShotIndex(1, overlapParams)).toBe(13);
   });
 
-  it('import_data mode: target shots 27,28 get import values', () => {
+  it('import_data mode: target shots 12,13 get import values', () => {
     const allOverlap = computeOverlapIds(importStationIndex, matchedShots);
     const shouldReverse = needsDirectionReversal(importStationIndex, direction);
     const overlapParams: OverlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
@@ -1810,21 +1808,21 @@ describe('handleConfirm target-shot-update: real kb.dmp 018→003 scenario', () 
     expect(modified).toBe(true);
     expect(shouldReverse).toBe(false);
 
-    // Target shot 27 should now have import shot 0's values
-    expect(modifiedTarget[27]!.azimuth_in).toBe(229.9);
-    expect(modifiedTarget[27]!.length).toBe(5.21);
-    expect(modifiedTarget[27]!.depth_in).toBe(9.55);
+    // Target shot 12 should now have import shot 0's values
+    expect(modifiedTarget[12]!.azimuth_in).toBe(230.0);
+    expect(modifiedTarget[12]!.length).toBe(5.2);
+    expect(modifiedTarget[12]!.depth_in).toBe(9.5);
 
-    // Target shot 28 should now have import shot 1's values
-    expect(modifiedTarget[28]!.azimuth_in).toBe(204.2);
-    expect(modifiedTarget[28]!.length).toBe(8.84);
+    // Target shot 13 should now have import shot 1's values
+    expect(modifiedTarget[13]!.azimuth_in).toBe(205.0);
+    expect(modifiedTarget[13]!.length).toBe(8.8);
 
     // Non-overlap target shots should be unchanged
-    expect(modifiedTarget[26]!.azimuth_in).toBe(targetShots[26]!.azimuth_in);
-    expect(modifiedTarget[29]!.azimuth_in).toBe(targetShots[29]!.azimuth_in);
+    expect(modifiedTarget[11]!.azimuth_in).toBe(targetShots[11]!.azimuth_in);
+    expect(modifiedTarget[14]!.azimuth_in).toBe(targetShots[14]!.azimuth_in);
   });
 
-  it('interpolate mode: target shots 27,28 get averaged values', () => {
+  it('interpolate mode: target shots 12,13 get averaged values', () => {
     const allOverlap = computeOverlapIds(importStationIndex, matchedShots);
     const shouldReverse = needsDirectionReversal(importStationIndex, direction);
     const overlapParams: OverlapParams = { importStationIndex, matchedShots, existingStationIndex, direction };
@@ -1850,14 +1848,14 @@ describe('handleConfirm target-shot-update: real kb.dmp 018→003 scenario', () 
 
     expect(modified).toBe(true);
 
-    // Target shot 27: average of (232.1, 5.35) and (229.9, 5.21)
-    expect(modifiedTarget[27]!.length).toBeCloseTo((5.35 + 5.21) / 2, 5);
+    // Target shot 12: average of (232.0, 5.4) and (230.0, 5.2)
+    expect(modifiedTarget[12]!.length).toBeCloseTo((5.4 + 5.2) / 2, 5);
 
-    // Target shot 28: average of (194.7, 9.22) and (204.2, 8.84)
-    expect(modifiedTarget[28]!.length).toBeCloseTo((9.22 + 8.84) / 2, 5);
+    // Target shot 13: average of (195.0, 9.2) and (205.0, 8.8)
+    expect(modifiedTarget[13]!.length).toBeCloseTo((9.2 + 8.8) / 2, 5);
 
     // Non-overlap target shots should be unchanged
-    expect(modifiedTarget[26]!.length).toBe(targetShots[26]!.length);
+    expect(modifiedTarget[11]!.length).toBe(targetShots[11]!.length);
   });
 
   it('import overlap shots 0,1 properly marked deleted', () => {
@@ -1874,7 +1872,7 @@ describe('handleConfirm target-shot-update: real kb.dmp 018→003 scenario', () 
     expect(deletedImport[2]!.isDeleted).toBeFalsy();
 
     const filtered = deletedImport.filter(s => !s.isDeleted);
-    expect(filtered).toHaveLength(27);
+    expect(filtered).toHaveLength(18);
   });
 });
 

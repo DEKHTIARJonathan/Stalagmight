@@ -10283,14 +10283,14 @@ fn lsq_long_chain_per_shot_changes_are_small() {
 
 #[test]
 fn lsq_realistic_topology_preserves_geometry() {
-    // Mimics the user's topology from kbd.stalx:
-    // - Section A: 364 shots with varying azimuths (real-world cave)
-    // - Section B: 1 shot (anchor section)
-    // - Section C: 105 shots (branch)
-    // - Two zero datums at A:364 and B:0
-    // - Merge: C:105 ↔ A:180
-    // - Closure: A:73 ↔ B:1
-    // - Large section offsets (700-900m range)
+    // A large synthetic topology:
+    // - Section A: a long zigzag section with varying azimuths
+    // - Section B: a one-shot anchor section
+    // - Section C: a branch
+    // - Two zero datums, at A's far end and at B's start
+    // - Merge: C's far end onto the middle of A
+    // - Closure: a station of A onto B's end
+    // - Large section offsets (hundreds of metres)
     let mut project = Project::new("RealisticLSQ".to_string(), None);
 
     // Section A: 364 shots with varying azimuths (zigzag pattern)
