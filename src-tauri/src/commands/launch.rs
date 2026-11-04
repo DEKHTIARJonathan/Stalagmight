@@ -24,7 +24,7 @@
 //! that would displace open work.
 
 use std::collections::HashSet;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Runtime, Url};
 
@@ -347,6 +347,27 @@ pub fn focus_main_window<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
+/// Whether this process registers `tauri-plugin-single-instance`.
+///
+/// Always, except in a DEBUG build launched by the agent harness
+/// (`STALAGMIGHT_TEST_HOOKS=1`, which `e2e/agent/session.ts` sets for every
+/// session it starts and a normal launch never does). The plugin claims one
+/// name on the D-Bus session bus per app identifier, so with it registered two
+/// harness sessions on one machine kill each other: the second app is
+/// terminated and its argv forwarded to the first, and a parallel
+/// `agent:fuzz-matrix` lost 9 of 12 cells that way (#576 HFI-7). The same
+/// mechanism forwarded a harness launch into the user's own open app.
+///
+/// Two layers, the same rule `commands/debug.rs` applies to its hooks: the
+/// environment variable alone is not enough, because `debug_build` is
+/// `cfg!(debug_assertions)` at the call site, so a release binary ignores the
+/// variable and keeps the plugin whatever its environment says. (The release
+/// HARNESS build drops the plugin at compile time instead, through `--features
+/// e2e`.) Pure so both answers are testable from a debug test build.
+pub fn single_instance_enabled(debug_build: bool, test_hooks: Option<&OsStr>) -> bool {
+    !(debug_build && test_hooks == Some(OsStr::new("1")))
+}
+
 /// Drain the files the OS asked us to open since the last call.
 #[tauri::command]
 pub async fn take_pending_launch_files<R: Runtime>(
@@ -597,5 +618,34 @@ mod tests {
             declared, accepted,
             "tauri.conf.json fileAssociations and LAUNCHABLE_EXTENSIONS disagree"
         );
+    }
+
+    #[test]
+    fn single_instance_stays_on_in_release_even_with_test_hooks() {
+        // A release binary ignores the variable: the harness switch must never
+        // reach a production build, whatever its environment says.
+        assert!(single_instance_enabled(false, Some(OsStr::new("1"))));
+        assert!(single_instance_enabled(false, None));
+    }
+
+    #[test]
+    fn harness_debug_build_drops_single_instance() {
+        // #576 HFI-7: a debug build started by the agent harness
+        // (STALAGMIGHT_TEST_HOOKS=1) must not claim the session-bus name, or
+        // parallel harness sessions kill each other.
+        assert!(!single_instance_enabled(true, Some(OsStr::new("1"))));
+    }
+
+    #[test]
+    fn plain_debug_build_keeps_single_instance() {
+        // `./scripts/dev.sh` and every other debug launch without the harness
+        // switch behave exactly as before.
+        assert!(single_instance_enabled(true, None));
+        for other in ["0", "true", "", "1 "] {
+            assert!(
+                single_instance_enabled(true, Some(OsStr::new(other))),
+                "STALAGMIGHT_TEST_HOOKS={other:?} is not the harness switch"
+            );
+        }
     }
 }

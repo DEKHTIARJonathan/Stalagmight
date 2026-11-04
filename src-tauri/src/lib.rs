@@ -124,7 +124,10 @@ pub fn run() {
     // plugin at all (see Cargo.toml): LaunchServices routes the second open to
     // the running instance as an Apple event, handled in the `RunEvent::Opened`
     // arm below. Off under `e2e` so the WebDriver harness can still spawn its
-    // own instance while a dev build is running.
+    // own instance while a dev build is running, and off in a DEBUG build the
+    // agent harness started (`STALAGMIGHT_TEST_HOOKS=1`): parallel harness
+    // sessions on one session bus otherwise kill each other (#576 HFI-7). A
+    // release binary ignores that variable - see `single_instance_enabled`.
     //
     // `desktop` (not a hand-rolled `not(android)`/`not(ios)` pair) so this cfg
     // cannot drift from Cargo.toml's `[target.'cfg(...)'.dependencies]` gate on
@@ -132,25 +135,32 @@ pub fn run() {
     // (true on Android/iOS too), so a mobile build would try to reference a
     // dependency Cargo never pulled in and fail to resolve it (#445 review).
     #[cfg(all(not(feature = "e2e"), desktop, not(target_os = "macos")))]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
-        // `cwd` is the SENDER's working directory - a relative argument there
-        // means nothing against ours, so it is what relative paths resolve
-        // against (and without it they are dropped, not guessed at).
-        let cwd = std::path::PathBuf::from(cwd);
-        let base = cwd.is_absolute().then_some(cwd.as_path());
-        let paths = commands::launch::launch_paths_from_args(
-            argv.into_iter().map(std::ffi::OsString::from),
-            base,
-        );
-        if paths.is_empty() {
-            return;
-        }
-        // Raise the window BEFORE queueing: whatever the frontend does with
-        // this - a confirm, an open - has to happen somewhere the user can see,
-        // or "Open with" on a backgrounded app reads as nothing happening.
-        commands::launch::focus_main_window(app);
-        commands::launch::queue_and_notify(app, paths);
-    }));
+    let builder = if commands::launch::single_instance_enabled(
+        cfg!(debug_assertions),
+        std::env::var_os("STALAGMIGHT_TEST_HOOKS").as_deref(),
+    ) {
+        builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| {
+            // `cwd` is the SENDER's working directory - a relative argument there
+            // means nothing against ours, so it is what relative paths resolve
+            // against (and without it they are dropped, not guessed at).
+            let cwd = std::path::PathBuf::from(cwd);
+            let base = cwd.is_absolute().then_some(cwd.as_path());
+            let paths = commands::launch::launch_paths_from_args(
+                argv.into_iter().map(std::ffi::OsString::from),
+                base,
+            );
+            if paths.is_empty() {
+                return;
+            }
+            // Raise the window BEFORE queueing: whatever the frontend does with
+            // this - a confirm, an open - has to happen somewhere the user can see,
+            // or "Open with" on a backgrounded app reads as nothing happening.
+            commands::launch::focus_main_window(app);
+            commands::launch::queue_and_notify(app, paths);
+        }))
+    } else {
+        builder
+    };
 
     let builder = builder
         .manage(commands::launch::PendingLaunchFiles::default())
