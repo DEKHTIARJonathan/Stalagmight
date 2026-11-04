@@ -22,6 +22,7 @@
 
 use super::model::{CylRole, Cylinder, Diver, GasReachField, PlanSegment, TankMaterial};
 use super::physics::deliverable_gas;
+use super::pin_monotone_tests::{range_per_metre_of, route_line_m};
 use super::route_sweep_tests::{scooter, two_branch_cave};
 use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset};
 use crate::{ClosureStrategy, Project, SectionData, ShotData, StationRef};
@@ -1117,9 +1118,9 @@ fn dark_on_route(f: &GasReachField) -> Vec<String> {
 fn rv9a_1_a_scootered_dive_pinned_round_a_loop_is_painted_to_its_turn() {
     // #576 RV9a-1, D4 with a scooter. The stage pinned at 1:1 sends the dive round the deep loop:
     // more gas than the line, far less range. Before D4 the pinned plan kept the masks of the plan
-    // without pins, whose range rides the gas-cheapest path - along the line, 1158 m of range to
-    // 0:4 and out of range at 0:5 - so the dive turned at 0:5 (796 m of range on its own route) on
-    // a station the map left dark, and passed 1:0 dark too. The overlay is now priced on the
+    // without pins, whose range then rode the gas-cheapest path - along the line, 1158 m of range
+    // to 0:4 and out of range at 0:5 - so the dive turned at 0:5 (796 m of range on its own route)
+    // on a station the map left dark, and passed 1:0 dark too. The overlay is now priced on the
     // pinned walk for the range as well as the gas: the route to the turn and the turn are
     // painted, and with less range the dive turns sooner and nothing past its range is painted.
     let (project, line, deep) = rv9a_loop_cave();
@@ -1148,14 +1149,13 @@ fn rv9a_1_a_scootered_dive_pinned_round_a_loop_is_painted_to_its_turn() {
         "the pinned dive passes or turns on stations the map leaves dark: {:?}",
         dark_on_route(&pinned)
     );
-    // The plan without pins prices 0:5 along the line: on gas it could (1810 L against 2524 L),
-    // on range it cannot, so it turns at 0:4 and leaves 0:5 dark. The pinned plan paints 0:5 on
-    // its own walk's range; on gas it never pays less than the plan without pins.
-    assert!(pin_free.turn_on_scooter_range);
-    assert_eq!(pin_free.final_turn_ref, Some(line_at(4)));
-    assert!(!is_reachable(&pin_free, line_at(5)));
-    assert!(gas_of(&pin_free, line_at(5)) <= pin_free.budget_litres);
-    assert!(pinned.budget_litres <= pin_free.budget_litres);
+    // The plan without pins used to price 0:5 along the line - on gas it could (1810 L against
+    // 2524 L), on range it could not - so it turned at 0:4 and left 0:5 dark while the pinned plan
+    // painted it. It now takes the way round the loop itself (#576 NF-W11GAS-1-D1, see
+    // `nf_w11gas_1_...`), so the pinned overlay stays inside it, and on gas the pin never pays less.
+    assert_eq!(pin_free.final_turn_ref, Some(line_at(6)));
+    assert!(is_reachable(&pin_free, line_at(5)));
+    assert_within_pin_free(&pinned, &pin_free);
     for (i, (with, without)) in pinned
         .gas_to_reach
         .iter()
@@ -1190,4 +1190,142 @@ fn rv9a_1_a_scootered_dive_pinned_round_a_loop_is_painted_to_its_turn() {
         );
         assert!(!is_reachable(&short, s), "{} painted out of range", name(s));
     }
+}
+
+/// Metres of range one metre of line costs on the seed's rig at 16.787 m/min, from the rig's
+/// numbers.
+fn rv9a_range_per_metre(f: &GasReachField) -> f64 {
+    assert!(f.scooter_range_limit_m.is_some());
+    let rig = DpvRig {
+        primary: DpvUnit {
+            speed_m_per_min: 26.712,
+            burn_minutes: 75.836,
+        },
+        backup: DpvUnit {
+            speed_m_per_min: 48.313,
+            burn_minutes: 47.324,
+        },
+        range_reserve_fraction: 0.0,
+    };
+    let per_metre = range_per_metre_of(&rig, 16.787);
+    assert!((per_metre - 2.55).abs() < 0.01, "the seed's 2.55 m a metre");
+    per_metre
+}
+
+/// Route gas at the turnaround: the last outbound point of the profile.
+fn turn_gas_of(f: &GasReachField) -> f64 {
+    f.route_profile
+        .iter()
+        .rev()
+        .find(|p| p.outbound)
+        .map(|p| p.gas_l)
+        .unwrap()
+}
+
+#[test]
+fn nf_w11gas_1_a_scootered_dive_without_pins_takes_the_way_round_the_loop_its_range_covers() {
+    // #576 NF-W11GAS-1, decided D1 "price along the route": the plan without pins takes a route
+    // its scooter can fly, and prices the range (and the gas) along it, as the pinned plan does
+    // along its walk. The seed's endpoint 0:6 is two ways from the entrance: along the shallow
+    // line, the cheaper gas but 684 m of line to 0:5 (1744 m of range, out of range), or round the
+    // deep loop, 312 m to 0:5 and 427 m to 0:6 - more gas, within both the gas and the range.
+    // Before, the plan priced the range along the cheaper gas only and turned at 0:4 on range.
+    let (project, line, deep) = rv9a_loop_cave();
+    let line_at = |i: u32| StationRef::new(line, i);
+    let deep_at = |i: u32| StationRef::new(deep, i);
+    let pin_free = rv9a_plan(&project, line, 0.267, &[]);
+    let limit = pin_free.scooter_range_limit_m.unwrap();
+    let per_metre = rv9a_range_per_metre(&pin_free);
+    let line_m = route_line_m(&project, &pin_free);
+    let along_route = line_m * per_metre;
+    println!("NF-W11GAS-1 {}", describe("pin-free", &pin_free));
+    println!(
+        "NF-W11GAS-1   turn gas {:.1} of {:.2} L; range at the turn {:.2} of {limit:.2} m \
+         (route line {line_m:.3} m x {per_metre:.4} = {along_route:.2} m); range-bound {}",
+        pin_free
+            .route_profile
+            .iter()
+            .rev()
+            .find(|p| p.outbound)
+            .map_or(f64::NAN, |p| p.gas_l),
+        pin_free.budget_litres,
+        pin_free.scooter_distance_m,
+        pin_free.turn_on_scooter_range,
+    );
+    assert_eq!(
+        route_of(&pin_free),
+        vec![
+            line_at(0),
+            deep_at(2),
+            deep_at(1),
+            deep_at(0),
+            line_at(5),
+            line_at(6)
+        ],
+        "round the loop to the endpoint"
+    );
+    assert_eq!(pin_free.final_turn_ref, Some(line_at(6)));
+    assert!(pin_free.turn_toward_endpoint);
+    assert!(!pin_free.turn_on_scooter_range, "the endpoint is reached");
+    // The range used along the route, as the engine reports it and as worked out from the route's
+    // own shots, is within the rig's usable range (its reserve taken off).
+    assert!((pin_free.scooter_distance_m - along_route).abs() < 1e-6 * along_route);
+    assert!(pin_free.scooter_distance_m <= limit);
+    assert!(turn_gas_of(&pin_free) <= pin_free.budget_litres);
+    assert!(dark_on_route(&pin_free).is_empty());
+    // Every station round the loop is painted and priced at what the loop costs to it; the same
+    // plan with no rig (no range cap) prices 0:5 and 0:6 along the line, on less gas.
+    let mut no_rig_cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        conservative_tank_gas: true,
+        ..GasConfig::default()
+    };
+    no_rig_cfg.reserve_profile.stage_reserve_bar = 1.753;
+    no_rig_cfg.normalize();
+    let gas_only = project.compute_gas_reach_field_with_overrides(
+        Some(&line_at(0)),
+        Some(&line_at(6)),
+        &[],
+        &[PlanSegment {
+            speed_m_per_min: Some(16.787),
+            on_scooter: true,
+        }],
+        &Diver::new(28.044, None).unwrap(),
+        &[
+            cyl(16.373, 176.0, 91.946, CylRole::BackGas),
+            cyl(16.565, 300.0, 272.541, CylRole::BackGas),
+            cyl(21.398, 207.0, 121.556, CylRole::Stage),
+            cyl(7.383, 176.0, 166.773, CylRole::Stage),
+        ],
+        &no_rig_cfg,
+        &[],
+    );
+    assert!((gas_only.budget_litres - pin_free.budget_litres).abs() < 1e-9);
+    for s in [deep_at(1), deep_at(0), line_at(5), line_at(6)] {
+        assert!(is_reachable(&pin_free, s), "{} dark", name(s));
+        assert!(gas_of(&pin_free, s) <= pin_free.budget_litres);
+    }
+    for s in [line_at(5), line_at(6)] {
+        assert!(
+            gas_of(&pin_free, s) > gas_of(&gas_only, s) + 1.0,
+            "{} priced along the loop, not the line",
+            name(s)
+        );
+    }
+    assert!((gas_of(&pin_free, line_at(6)) - turn_gas_of(&pin_free)).abs() < 1e-9);
+
+    // With less range (a 70% reserve, 608 m) no way to 0:6 is in range. The plan heads for it
+    // along the line, as before, and turns where the range runs out there, at 0:2 (306 m); the
+    // loop's 1:1 (358 m) is painted, 1:0 (796 m) is not.
+    let short = rv9a_plan(&project, line, 0.7, &[]);
+    println!(
+        "NF-W11GAS-1 {}",
+        describe("pin-free, 70% range reserve", &short)
+    );
+    assert_eq!(short.final_turn_ref, Some(line_at(2)));
+    assert!(short.turn_on_scooter_range);
+    assert!(short.scooter_distance_m <= short.scooter_range_limit_m.unwrap());
+    assert!(is_reachable(&short, deep_at(1)));
+    assert!(!is_reachable(&short, deep_at(0)));
+    assert!(dark_on_route(&short).is_empty());
 }

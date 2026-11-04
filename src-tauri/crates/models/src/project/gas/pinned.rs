@@ -160,7 +160,7 @@ pub(super) fn pinned_view(
     // price for every station is at least the plain field's - the walk through the pins is one the
     // plain field could fly too, and the pinned budget is never larger - so a pin cannot paint a
     // station on gas that the plan without pins leaves dark.
-    let masks = budget_view(walk, endpoint, budget_litres, scooter_limit);
+    let masks = budget_view(walk, None, endpoint, budget_litres, scooter_limit);
     let affordable =
         |i: usize| walk.chain_gas[i] <= budget_litres && walk.chain_scoot[i] <= scooter_limit;
     let last_pin = walk.chain.len() - 1;

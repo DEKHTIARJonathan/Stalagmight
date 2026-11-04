@@ -269,18 +269,19 @@ station that plan cannot afford on gas.
 
 The scooter range is priced on the same walk (RV9a-1): every station the pinned
 dive passes on the way to its turn, and the turn, is painted, and nothing the
-range does not reach along that walk is. Round a loop this can light a station
-the plan without pins leaves dark on range alone, because that plan prices the
-range along its own gas-cheapest way. In the review's seed 0x9a0058be a stage
+range does not reach along that walk is. In the review's seed 0x9a0058be a stage
 pinned on a deep loop takes the dive 312 m round it to 0:5, 796 m of a 1484 m
-range, where the shallow line - the cheaper gas - is 684 m long and has spent
-1158 m of range by 0:4: the pinned plan turns at 0:5 and paints it, the plan
-without pins turns at 0:4 and leaves 0:5 dark. Before, the pinned plan kept the
-other plan's masks, so its dive turned on a station its own map left dark
+range, where the shallow line - the cheaper gas - is 684 m long: the pinned plan
+turns at 0:5 and paints it. Before, the pinned plan kept the other plan's masks,
+so its dive turned on a station its own map left dark
 (`rv9a_1_a_scootered_dive_pinned_round_a_loop_is_painted_to_its_turn`; the loop
 sweep `round_a_loop_less_gas_or_range_never_lets_a_pinned_plan_gain_more_than_without_its_pins`
-checks every route to the turn is painted). In a cave without loops there is one
-way to each station, and the pinned overlay stays inside the other one.
+checks every route to the turn is painted). The plan without pins then still
+priced the range along its gas-cheapest way, the line, so it turned at 0:4 on
+range and left 0:5 dark - the pin lit a station the plan without it did not. It
+now takes the way its range covers (NF-W11GAS-1, see "Which way a scooter dive
+takes" under Segments and the DPV), and the pinned walk is one of the ways it
+considers, so no pin paints a station the plan without pins leaves dark.
 
 The cost of D4, accepted with the decision: a pin is a way point for the overlay
 even when it sits on its own default station, so pinning a drop where the default
@@ -353,7 +354,9 @@ no longer resolves falls back to them rather than blanking the field.
 station in Plan, by clicking a turn-frontier dot, or from the station context
 menu. In budget, it is the turnaround. Out of budget, the plan stays on the
 passage the diver chose and turns earlier - the target becomes the last in-budget
-station on the path toward it. Only with no endpoint at all, or one that is
+station on the path toward it (on a scooter, the way toward it the range covers,
+if there is one: "Which way a scooter dive takes" below). Only with no endpoint
+at all, or one that is
 unusable (deleted under a loaded plan, or in another graph component), does it
 fall back to the deepest in-budget station *anywhere*, and `turn_toward_endpoint`
 reports which happened. The UI needs that flag because the two read identically
@@ -446,6 +449,43 @@ whose route spends more than the usable range drops out of the reach masks, and
 turnaround (set from the route target itself, not a cave-global scan). Riding
 buys speed, and through it cheaper gas per metre; it does not change the
 breathing rate.
+
+**Which way a scooter dive takes** (#576 NF-W11GAS-1, decided "price along the
+route"). Gas and range are read off one route, and with a scooter the plan
+without pins chooses that route for both: to each station, the cheapest gas
+among the ways its range covers (`gas/range_route.rs`). Where the cheapest gas is
+in range that is the gas-cheapest way itself, so a plan the range does not bind
+is unchanged. Round a loop the cheaper gas can run out of range while the way
+round - shorter and deeper, more gas - is in range on gas the diver has, and the
+plan takes it. In the review's seed 0x9a0058be the endpoint 0:6 is 684 m along a
+shallow line to 0:5 (1744 m of a 1484 m range there) or 312 m round a deep loop:
+the plan used to turn at 0:4 on range, 1158 m spent; it now goes round the loop
+to 0:6 on 2410 of its 2524 L and 1089 m of range, and paints the loop and 0:5
+(`nf_w11gas_1_a_scootered_dive_without_pins_takes_the_way_round_the_loop_its_range_covers`).
+Each station is priced on that way - its gas-to-reach is the way round's, more
+than the line's - so the colour and the max-penetration readout describe the
+dive the plan flies, and `scooter_distance_m` is the range the route to the turn
+spends. An endpoint out of budget on its in-range way is approached along that
+way, turning where the gas runs out; one no way reaches in range is approached
+as before, along the cheapest gas, turning where the range or the gas runs out.
+
+The search covers the open part of the route, after the last way point; the legs
+between way points keep the cheapest gas between the points the diver named. It
+keeps at most 16 ways per station - a cave survey is mostly a tree, so this binds
+only in a maze - and a way it does not keep can only turn the dive earlier, never
+later: every price is that of a real route. A pinned plan flies its own walk
+(D4), and that walk is one of the ways the plan without pins considers, so no pin
+paints a station the plan without pins leaves dark. With less range the way the
+range covers can cost more gas, so a range lowering can turn the dive on more
+route gas, to the same station or one painted before, within the budget and the
+lowered range. The two pin sweeps in `gas/pin_monotone_tests.rs` assert this for
+every plan, lowered or not, and check every scootered turn's range against the
+route itself (its shots' line times the range a metre costs): round a loop, 0
+stations lit by a pin that the plan without pins leaves dark (375 before), 1080
+stations painted on the way round, 12848 turns checked against their route; in
+tree caves nothing changes. On 1236 small loop caves every station's paint and
+price is checked against every simple route from the origin, enumerated
+(`without_pins_a_scooter_plan_paints_each_station_at_the_cheapest_gas_its_range_covers`).
 
 A span with the flag off is swum - towing the units or having parked them,
 numerically identical - so the park point is *derived*, never placed: the
@@ -583,6 +623,11 @@ each pins a rule that reads like an implementation detail and is not.
   (noted on `DpvRig`).
   `stressed_rmv_multiplier` and the two `reserve_profile.recalc_hold_*` pressures
   are still carried in the config for later phases; nothing computes with them.
+- A scooter dive takes a way its range covers only on the open part of the route
+  (NF-W11GAS-1): the legs between way points, and a pinned plan's walk through
+  its pins, keep the cheapest gas between their points, so a way-point leg that
+  runs out of range stops the plan there even when another way between the same
+  points is in range.
 - `Team` and `PlanMode` (open-circuit vs CCR bailout) exist in `gas/model.rs` so
   the multi-diver and CCR phases need no migration, but the entry point takes one
   diver and its cylinders. Everything shipped is single-diver open-circuit.
