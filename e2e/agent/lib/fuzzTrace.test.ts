@@ -19,6 +19,7 @@ import {
   type TraceStep,
   traceHasWellFormedFlows,
   TraceRecorder,
+  corpusEntryRel,
   describeSteps,
   failureSignature,
   planReplay,
@@ -636,7 +637,9 @@ describe('a written trace never names a corpus file', () => {
       rel: 'fuzz-files/corpus-1',
       label: `corpus #${corpusFileId(PRIVATE_CORPUS_REL)}`,
     });
-    recorder.record({ kind: 'route', rel: 'fuzz-files/corpus-1/a.dmp', label: 'route corpus dmp' });
+    // The opened entry is named by its directory's token, never by the copy's
+    // basename (#576 HFI-13) - `writeTrace` refuses the basename.
+    recorder.record({ kind: 'route', rel: corpusEntryRel('fuzz-files/corpus-1'), label: 'route corpus dmp' });
     return recorder.build({
       scenario: 'import-dialog-fuzz',
       seed: 3,

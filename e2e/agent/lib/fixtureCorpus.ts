@@ -675,3 +675,56 @@ export function describeCorpus(inventory: CorpusInventory): string {
       : '')
   );
 }
+
+/**
+ * What printed output must never contain once an entry has been copied, and
+ * what to say instead - ONE list per PROCESS.
+ *
+ * The copy keeps its real names on disk (see `materializeCorpusEntry`), and the
+ * app echoes them back: an import that fails quotes the path it was handed, and
+ * that text reaches a scenario's failure message, the error log the oracle sweep
+ * reports, and whatever a runner prints. The scenario that materializes the copy
+ * is the only code that knows the names, and the runners that print are not in
+ * its closure - so the list lives here, beside the rule, and every printer runs
+ * its text through `redactCorpusText` (#576 HFI-13). Empty, and therefore a
+ * no-op, in any process that never copied a corpus entry.
+ */
+const REDACTED_DIRS: { find: string; say: string }[] = [];
+const REDACTED_NAMES: { find: string; say: string }[] = [];
+/**
+ * A path segment this short identifies nothing, and replacing it everywhere
+ * would garble every line it occurs in (a Walls `.PATH` folder named `1`).
+ */
+export const MIN_REDACTED_NAME = 3;
+
+/**
+ * Register one materialized entry: its copy directory, and every file and
+ * directory name the copy created at any depth (`MaterializedCorpusEntry.names`).
+ */
+export function registerCorpusRedactions(id: string, destination: string, names: readonly string[]): void {
+  const tag = `<corpus #${id}>`;
+  if (destination !== '' && !REDACTED_DIRS.some((entry) => entry.find === destination)) {
+    REDACTED_DIRS.push({ find: destination, say: tag });
+  }
+  for (const name of names) {
+    if (name.length < MIN_REDACTED_NAME || REDACTED_NAMES.some((entry) => entry.find === name)) continue;
+    REDACTED_NAMES.push({ find: name, say: `${tag}/file` });
+  }
+  // Longest first, so a name that is a prefix of another cannot leave the
+  // other's tail behind (`cave` before `cave-north.srv` would print `-north.srv`,
+  // and `corpus-3` before `corpus-30` would tag the wrong entry).
+  REDACTED_DIRS.sort((a, b) => b.find.length - a.find.length);
+  REDACTED_NAMES.sort((a, b) => b.find.length - a.find.length);
+}
+
+/**
+ * `text` with every registered copy directory and corpus name replaced by the
+ * entry's publishable tag. Directories go first, so a full path is folded whole
+ * rather than leaving `<corpus #id>/<basename>` behind.
+ */
+export function redactCorpusText(text: string): string {
+  let out = text;
+  for (const entry of REDACTED_DIRS) out = out.split(entry.find).join(entry.say);
+  for (const entry of REDACTED_NAMES) out = out.split(entry.find).join(entry.say);
+  return out;
+}

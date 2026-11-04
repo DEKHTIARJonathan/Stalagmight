@@ -893,7 +893,7 @@ real survey files. Generated files reach the parsers' edges; real files reach th
 shapes nobody would think to generate. A run with no corpus counts
 `corpus:absent` and is exactly as valid, just narrower.
 
-**Nothing a corpus run writes ever names a corpus file.** An entry is identified
+**Nothing a corpus run publishes names a corpus file.** An entry is identified
 everywhere by `corpusFileId`, a 5-hex fold of its relative path
 (`e2e/agent/lib/fixtureCorpus.ts`), because a survey filename can name a cave, a
 landowner or an unreleased project - and a metric key, a log line, a failure
@@ -907,6 +907,26 @@ so a caller that hands over a path gets it folded before the step is stored; and
 assembled it. The corpus ROOT is not recorded either -
 `STALAGMIGHT_FUZZ_CORPUS_DIR` is an absolute path on the recorder's disk, so it
 is excluded from the trace's `env` header and never restored on replay.
+
+**The step that OPENS a corpus copy names it by a token, not by its file
+(#576 HFI-13).** The copy under `fuzz-files/corpus-N/` keeps its real names -
+a `.mak` names its `.dat` files and a `.wpj` its `.srv` tree, so renaming would
+break the very files the corpus exists to exercise - and the `route` /
+`fileDialog` step after a `corpusFile` step used to record
+`fuzz-files/corpus-N/<real basename>`: every corpus trace named its files, a
+shrunk one still did, and `fuzz-shrink` printed the name in its minimal action
+list. That step now records `fuzz-files/corpus-N/@corpus-entry`
+(`fuzzTrace.corpusEntryRel`), which a replay resolves against the copy its own
+`corpusFile` step just made (an unbound token is a missing file, skipped and
+counted), and `writeTrace` / `readTrace` refuse a step that names a file inside
+a corpus copy any other way - without quoting it. What the APP echoes back - an
+import error quoting the path it was handed - is folded by one per-process list
+(`fixtureCorpus.redactCorpusText`, filled as entries are copied) that the
+scenario's failure message, `agent:scenario`'s FAIL/findings lines,
+`fuzz-shrink`'s output and the MCP `run_scenario` result all pass through.
+Not covered, because they are not published: the session's working files - the
+copies themselves, the sweep's `findings/` JSON and the app's own logs. Attach
+the trace and the printed failure, not the session directory.
 
 **`corpusId` labels; `corpusHash` resolves.** The 5-hex crc20 is 20 bits, which
 is ample for telling two files apart in one run's output and far too little to

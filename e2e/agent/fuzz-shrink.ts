@@ -53,7 +53,7 @@ import { ddmin, type ShrinkVerdict } from './lib/fuzzShrink';
 // Safe to import statically, unlike the scenarios below: this module freezes
 // nothing at import and reads `STALAGMIGHT_FUZZ_CORPUS_DIR` at call time, which
 // its own tests pin.
-import { CORPUS_DIR_ENV, corpusAvailable, corpusLookup } from './lib/fixtureCorpus';
+import { CORPUS_DIR_ENV, corpusAvailable, corpusLookup, redactCorpusText } from './lib/fixtureCorpus';
 
 interface Args {
   trace: string;
@@ -183,10 +183,11 @@ async function main(): Promise<number> {
       await runScenario(trace.scenario, session, { seed: trace.seed, iterations: trace.iterations });
       return null;
     } catch (err) {
-      return {
-        message: err instanceof Error ? err.message : String(err),
-        signature: failureSignature(err instanceof Error ? err.message : String(err)),
-      };
+      // Redacted before it is printed, compared or written into the minimal
+      // trace: a replay that copied a corpus entry can fail on a message that
+      // quotes it (#576 HFI-13).
+      const message = redactCorpusText(err instanceof Error ? err.message : String(err));
+      return { message, signature: failureSignature(message) };
     } finally {
       replayTimesMs.push(Date.now() - started);
     }
@@ -280,7 +281,7 @@ async function main(): Promise<number> {
     );
   } catch (err) {
     failed = true;
-    process.stdout.write(`shrink failed: ${err instanceof Error ? err.stack : String(err)}\n`);
+    process.stdout.write(`shrink failed: ${redactCorpusText(err instanceof Error ? (err.stack ?? err.message) : String(err))}\n`);
   } finally {
     await session.stop('fuzz-shrink');
     fs.rmSync(scratch, { recursive: true, force: true });

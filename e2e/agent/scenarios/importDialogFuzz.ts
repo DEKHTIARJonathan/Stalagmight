@@ -28,13 +28,19 @@
  * real files reach the shapes nobody would think to generate. A run with no
  * corpus counts `corpus:absent` and is exactly as valid, just narrower.
  *
- * NOTHING THIS RUN WRITES EVER NAMES A CORPUS FILE. A corpus entry is
+ * NOTHING THIS RUN PUBLISHES NAMES A CORPUS FILE. A corpus entry is
  * identified everywhere by `corpusFileId` - a 5-hex fold of its relative path -
  * because a survey filename can name a cave, a landowner or an unreleased
  * project, and a metric key, a log line, a failure payload and a recorded trace
  * are all things that end up attached to an issue. The real path stays inside
  * `lib/fixtureCorpus.ts`, which states the full rule; the `corpusFile` trace
- * step carries the id, and `fuzzTrace.ts` refuses to write anything else.
+ * step carries the id, the step that OPENS the copy carries
+ * `fuzzTrace.corpusEntryRel` rather than its basename (#576 HFI-13), and
+ * `fuzzTrace.ts` refuses to write or read anything else. What the app echoes
+ * back is folded by `fixtureCorpus.redactCorpusText` wherever it is printed.
+ * The session's own working files are NOT publishable and are not covered: the
+ * copy under `fuzz-files/` keeps its real names, and the sweep's `findings/`
+ * and the app's logs quote them.
  *
  * ## The shape of a run
  *
@@ -372,7 +378,7 @@ import { mulberry32, type Scenario, type ScenarioContext } from './framework';
 import { DEFAULT_FIXTURE, disableAutoSave, loadFixtureWithoutUndoHistory } from './common';
 import { ORACLE_GLOBAL, oracleInjectionSource } from '../lib/fuzzOracleCore';
 import { mapClick } from '../lib/controls';
-import { planReplay, traceHasWellFormedFlows, TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
+import { isCorpusEntryRel, planReplay, traceHasWellFormedFlows, TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
 import { fuzzFixture } from '../lib/fuzzKnobs';
 import { failureText, MoveLog, openReplay, RERUN_WITH, throwFailure, writeRunTrace } from '../lib/fuzzHarness';
 import {
@@ -389,6 +395,8 @@ import {
   describeCorpus,
   discoverCorpus,
   materializeCorpusEntry,
+  redactCorpusText,
+  registerCorpusRedactions as registerProcessRedactions,
   type CorpusEntry,
 } from '../lib/fixtureCorpus';
 import type { ImportScreenDigest } from '../lib/importScreenDigest';
@@ -432,13 +440,13 @@ import {
   runUiStep,
   type Move,
 } from './importDialogBridge';
+import { CorpusEntryPaths, moveTraceStep, sourceTraceStep } from './importDialogTrace';
 import {
   AUX_INTERJECT_STREAM_SALT,
   auxInterjectProbability,
   buildAuxInterjection,
   buildInterjection,
   corpusDrawProbability,
-  describeSource,
   drawAuxInterjection,
   drawInterjection,
   enabledFamilies,
@@ -750,18 +758,20 @@ export const importDialogFuzz: Scenario = {
      */
     const moveLog = new MoveLog();
     /**
-     * Substrings a failure payload must never contain, and what to say instead.
+     * Substrings printed output must never contain, and what to say instead.
      *
      * `describeSource` keeps a corpus file's NAME out of every label this run
-     * writes, but the app puts it back: an import that fails quotes the path it
-     * was given, and the copy under `fuzz-files/corpus-N/` keeps the original
+     * writes, and the trace names an opened entry by `corpusEntryRel`, but the
+     * app puts the name back: an import that fails quotes the path it was
+     * given, and the copy under `fuzz-files/corpus-N/` keeps the original
      * basename because a `.mak` names its sibling `.dat` files and a `.wpj`
      * names its `.srv` tree - renaming them would break the very files the
      * corpus exists to exercise. So the file names are real, and a failure
      * message that echoes one would carry it into the issue the failure gets
-     * attached to. Filled in as entries are materialized; applied by `fail`.
+     * attached to. Filled in as entries are materialized; applied by `fail`,
+     * and - because the list is the PROCESS's (`fixtureCorpus.redactCorpusText`)
+     * - by the runners that print the oracle sweep's findings too (#576 HFI-13).
      */
-    const redactions: { find: string; say: string }[] = [];
 
     /**
      * Register the redactions for one materialized corpus entry.
@@ -772,25 +782,17 @@ export const importDialogFuzz: Scenario = {
      * messages - straight into `fail()` output, the trace and the printed
      * detail. One helper is what stops the next call site from forgetting.
      *
-     * The directory goes FIRST so a full path is redacted whole rather than
-     * leaving `<corpus #id>/<basename>` behind. `names` is every segment the copy
-     * created AT ANY DEPTH - a Walls project's `.PATH` subfolder can name a cave
-     * system exactly as well as a file can, and a single-level readdir here used
-     * to miss all of them.
+     * `names` is every segment the copy created AT ANY DEPTH - a Walls
+     * project's `.PATH` subfolder can name a cave system exactly as well as a
+     * file can, and a single-level readdir here used to miss all of them.
      */
     const registerCorpusRedactions = (id: string, destination: string, names: readonly string[]): void => {
-      const tag = `<corpus #${id}>`;
-      redactions.unshift({ find: destination, say: tag });
-      for (const name of names) {
-        redactions.push({ find: name, say: `${tag}/file` });
-      }
+      registerProcessRedactions(id, destination, names);
     };
 
-    const redact = (text: string): string => {
-      let out = text;
-      for (const entry of redactions) out = out.split(entry.find).join(entry.say);
-      return out;
-    };
+    const redact = redactCorpusText;
+    /** Where this run's corpus entry tokens point, on a replay - see `CorpusEntryPaths`. */
+    const corpusEntries = new CorpusEntryPaths();
     let fileSeq = 0;
     let lastUndoDepth = -1;
     /**
@@ -925,6 +927,11 @@ export const importDialogFuzz: Scenario = {
         registerCorpusRedactions(source.id, destination, copied.names);
         return copied.path;
       }
+      // A replayed corpus entry is a TOKEN, bound when its `corpusFile` step
+      // materialized the copy; unbound (the step was shrunk away, or this
+      // machine lacks the entry) it is a missing file like any other.
+      const entry = corpusEntries.resolve(source.rel);
+      if (entry !== undefined) return entry;
       const target = resolveRel(source.rel);
       return fs.existsSync(target) ? target : null;
     };
@@ -939,30 +946,8 @@ export const importDialogFuzz: Scenario = {
      */
     const recordFileSource = (source: FileSource, record: boolean): void => {
       if (!record) return;
-      if (source.origin === 'gen') {
-        recorder.record({
-          kind: 'genFile',
-          spec: source.spec,
-          rel: source.rel,
-          label: describeSource(source),
-        });
-        return;
-      }
-      if (source.origin === 'corpus') {
-        recorder.record({
-          kind: 'corpusFile',
-          corpusId: source.id,
-          // The resolution key. `corpusId` is 20 bits and labels the file in
-          // everything a human reads; this is what a replay looks it up by, so
-          // a corpus holding a second file that folds to the same id cannot be
-          // materialized in its place.
-          corpusHash: source.hash,
-          // The DIRECTORY the copy lands in; the `route`/`fileDialog` step that
-          // follows names the file inside it.
-          rel: source.dirRel,
-          label: describeSource(source),
-        });
-      }
+      const step = sourceTraceStep(source);
+      if (step !== null) recorder.record(step);
     };
 
     /**
@@ -1082,6 +1067,16 @@ export const importDialogFuzz: Scenario = {
       handoff: FileHandoff | null;
     }
 
+    /** Record what a performed move did - the one shape `moveTraceStep` builds. */
+    const recordMove = (move: FuzzMove): void => {
+      const step = moveTraceStep(move);
+      if (step !== null) recorder.record(step);
+    };
+
+    /** A corpus draw, or a replayed corpus entry token. */
+    const fromCorpus = (source: FileSource): boolean =>
+      source.origin === 'corpus' || (source.origin === 'disk' && isCorpusEntryRel(source.rel));
+
     /** Run one move, record it if it happened, and report the screen after. */
     const execute = async (move: FuzzMove, record: boolean): Promise<Executed> => {
       moveLog.startingMove(move.label);
@@ -1104,13 +1099,7 @@ export const importDialogFuzz: Scenario = {
         fullscreenAtDispatch = outcome.fullscreenAtDispatch;
         digest = outcome.digest;
         noteBridgeTiming(outcome.timing);
-        if (record && performed) {
-          recorder.record(
-            move.double === true
-              ? { kind: 'ui', testid: move.testid, double: true, label: move.label }
-              : { kind: 'ui', testid: move.testid, label: move.label },
-          );
-        }
+        if (record && performed) recordMove(move);
       } else if (move.kind === 'input') {
         // The dispatched value may carry a substituted path; the RECORDED one
         // never does - see `dispatchable`.
@@ -1121,26 +1110,17 @@ export const importDialogFuzz: Scenario = {
         dialogAtDispatch = outcome.dialogAtDispatch;
         digest = outcome.digest;
         noteBridgeTiming(outcome.timing);
-        if (record && performed) {
-          recorder.record({
-            kind: 'input',
-            testid: move.testid,
-            value: move.value,
-            mode: move.mode,
-            label: move.label,
-          });
-        }
+        if (record && performed) recordMove(move);
       } else if (move.kind === 'openFile') {
         const live = move;
         const absolute = sourceOnDisk(live.source);
         if (absolute === null) {
           // A REPLAY whose `genFile` step ddmin cut away, or a corpus entry
           // this machine does not have.
-          skip = live.source.origin === 'corpus' ? 'corpus-missing' : 'file-missing';
+          skip = fromCorpus(live.source) ? 'corpus-missing' : 'file-missing';
           digest = await observeScreen(ctx, false);
         } else {
           recordFileSource(live.source, record);
-          const rel = live.source.rel;
           if (live.via === 'route') {
             const routed = await routeFile(ctx, absolute);
             if (!routed.routed) fail('the E2E routeOpenedFile hook is missing; rebuild with VITE_E2E=1');
@@ -1156,7 +1136,7 @@ export const importDialogFuzz: Scenario = {
             // return before anything is parsed.
             handoff =
               routed.dialogAtDispatch !== null || routed.placementAtDispatch ? 'gate-refused' : 'accepted';
-            if (record) recorder.record({ kind: 'route', rel, label: move.label });
+            if (record) recordMove(move);
             digest = await observeScreen(ctx);
           } else {
             const answered = await answerFileDialogInPage(ctx, live.trigger, 'open', absolute);
@@ -1165,16 +1145,14 @@ export const importDialogFuzz: Scenario = {
             digest = answered.digest;
             handoff = answered.consumed ? 'accepted' : 'unconsumed';
             if (performed && !answered.consumed) ctx.metric('dialogAnswerUnconsumed');
-            if (record && performed) {
-              recorder.record({ kind: 'fileDialog', trigger: live.trigger, dialog: 'open', rel, label: move.label });
-            }
+            if (record && performed) recordMove(move);
           }
         }
       } else if (move.kind === 'keyFile') {
         const live = move;
         const absolute = sourceOnDisk(live.source);
         if (absolute === null) {
-          skip = live.source.origin === 'corpus' ? 'corpus-missing' : 'file-missing';
+          skip = fromCorpus(live.source) ? 'corpus-missing' : 'file-missing';
           digest = await observeScreen(ctx, false);
         } else {
           recordFileSource(live.source, record);
@@ -1187,21 +1165,13 @@ export const importDialogFuzz: Scenario = {
           // documented gate, so it is counted rather than asserted.
           handoff = answered.consumed ? 'accepted' : 'unconsumed';
           ctx.metric(answered.consumed ? 'keyPickerConsumed' : 'keyPickerSwallowed');
-          if (record && performed) {
-            recorder.record({
-              kind: 'fileDialog',
-              trigger: `key:${live.chord}`,
-              dialog: 'open',
-              rel: live.source.rel,
-              label: move.label,
-            });
-          }
+          if (record && performed) recordMove(move);
         }
       } else if (move.kind === 'closeProject') {
         const res = await ctx.callAction('project', 'closeProject', []);
         performed = res.ok;
         if (!res.ok) skip = 'close-refused';
-        if (record && performed) recorder.record({ kind: 'mutate', action: 'closeProject', args: [], label: move.label });
+        if (record && performed) recordMove(move);
         digest = await observeScreen(ctx);
       } else if (move.kind === 'cancelDialog') {
         const live = move;
@@ -1209,9 +1179,7 @@ export const importDialogFuzz: Scenario = {
         performed = answered.performed;
         skip = answered.reason;
         digest = answered.digest;
-        if (record && performed) {
-          recorder.record({ kind: 'fileDialog', trigger: live.trigger, dialog: 'open', rel: null, label: move.label });
-        }
+        if (record && performed) recordMove(move);
       } else if (move.kind === 'mapClick') {
         const live = move;
         // A relative draw is resolved HERE and recorded ABSOLUTE: replay must
@@ -1240,7 +1208,7 @@ export const importDialogFuzz: Scenario = {
         const res = await ctx.callAction('project', which, []);
         performed = res.ok;
         if (!res.ok) skip = `${which}-refused`;
-        if (record && performed) recorder.record(which === 'undo' ? { kind: 'undo' } : { kind: 'redo' });
+        if (record && performed) recordMove(move);
         digest = await observeScreen(ctx);
       } else {
         fs.mkdirSync(projectsDir, { recursive: true });
@@ -1248,7 +1216,7 @@ export const importDialogFuzz: Scenario = {
         const res = await ctx.callAction('project', 'saveProject', [target]);
         performed = res.ok;
         if (!res.ok) skip = 'save-refused';
-        if (record && performed) recorder.record({ kind: 'save' });
+        if (record && performed) recordMove(move);
         digest = await observeScreen(ctx);
       }
 
@@ -2476,7 +2444,10 @@ export const importDialogFuzz: Scenario = {
               // A REPLAY needs the redactions as much as a recording does - the
               // app echoes the basenames it opened, and a replayed failure is
               // exactly the message somebody attaches to an issue.
-              if (!copied.skipped) registerCorpusRedactions(lookup.entry.id, destination, copied.names);
+              if (!copied.skipped) {
+                registerCorpusRedactions(lookup.entry.id, destination, copied.names);
+                corpusEntries.bind(step.rel, copied.path);
+              }
               continue;
             }
             const move = moveFromStep(step);

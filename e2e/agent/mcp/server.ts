@@ -17,6 +17,7 @@ import { LogCursor, type LogLevel } from '../lib/logs';
 import { invokeInApp, evalInApp, capJson } from '../lib/page';
 import { newOracleState, runSweep, type OracleState } from '../lib/oracles';
 import { listScenarios, runScenario } from '../scenarios';
+import { redactCorpusText } from '../lib/fixtureCorpus';
 import { DEFAULT_FIXTURE, materializeFixture } from '../lib/fixtures';
 import {
   waitForAppReady,
@@ -50,6 +51,18 @@ function textResult(value: unknown): ToolResult {
 }
 function errorResult(message: string): ToolResult {
   return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }], isError: true };
+}
+/**
+ * `value` with every corpus name the process has copied replaced by its tag
+ * (`fixtureCorpus.redactCorpusText`). A name that ends in a backslash could
+ * split a JSON escape; that value is withheld rather than sent half-redacted.
+ */
+function redactedJson(value: unknown): unknown {
+  try {
+    return JSON.parse(redactCorpusText(JSON.stringify(value ?? null))) as unknown;
+  } catch {
+    return '(withheld: redacting a corpus name broke the encoding)';
+  }
 }
 function asMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -1144,15 +1157,17 @@ define(
         full: true,
         recorder: session.hasRecorder ? session.recorder : undefined,
       });
+      // The findings quote the app's error log, which quotes the path of a
+      // corpus copy it failed to import (#576 HFI-13); a no-op without one.
       return textResult({
         scenario: args.name,
         metrics,
         ok: sweep.worst === null || sweep.worst === 'warning',
         worst: sweep.worst,
-        findings: sweep.findings,
+        findings: redactedJson(sweep.findings),
       });
     } catch (err) {
-      return errorResult(asMessage(err));
+      return errorResult(redactCorpusText(asMessage(err)));
     }
   },
 );

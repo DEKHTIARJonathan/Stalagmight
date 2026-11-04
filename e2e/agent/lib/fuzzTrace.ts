@@ -643,6 +643,70 @@ function redactStep(step: TraceStep): TraceStep {
 }
 
 /**
+ * The last segment of a `rel` that opens a CORPUS entry: the entry is named by
+ * the directory its `corpusFile` step materialized into plus this token, never
+ * by its file name.
+ *
+ * A corpus copy keeps its real basename on disk, because a `.mak` names its
+ * sibling `.dat` files and a `.wpj` its `.srv` tree and renaming would break the
+ * very files the corpus exists to exercise. The `corpusFile` step already
+ * carried only the id; the `route` / `fileDialog` step that OPENED the copy
+ * carried `<dir>/<real basename>`, so every corpus trace named its files anyway
+ * - 14 and 17 distinct private names in two traces of one campaign, one of them
+ * still in a 9-step shrink and printed in fuzz-shrink's action list (#576
+ * HFI-13). A replayer resolves the token against the copy its own `corpusFile`
+ * step just made; a token with no such step resolves to nothing and the move is
+ * skipped and counted, exactly like an entry this machine does not have.
+ */
+export const CORPUS_ENTRY_SEGMENT = '@corpus-entry';
+
+/** The `rel` that opens the entry materialized into `dirRel`. */
+export function corpusEntryRel(dirRel: string): string {
+  return `${dirRel}/${CORPUS_ENTRY_SEGMENT}`;
+}
+
+/** Is `rel` a corpus entry reference rather than a path on disk? */
+export function isCorpusEntryRel(rel: string): boolean {
+  return rel.split(/[/\\]/).pop() === CORPUS_ENTRY_SEGMENT;
+}
+
+/** Every session-relative path a step hands to the app or writes to. */
+function stepRels(step: TraceStep): string[] {
+  switch (step.kind) {
+    case 'fileDialog':
+      return step.rel === null ? [] : Array.isArray(step.rel) ? step.rel : [step.rel];
+    case 'route':
+    case 'genFile':
+    case 'export':
+      return [step.rel];
+    case 'mutate':
+      return FILE_ARG_ACTIONS.has(step.action) && typeof step.args[0] === 'string' ? [step.args[0]] : [];
+    default:
+      return [];
+  }
+}
+
+/**
+ * The index of the first step that names a file INSIDE a corpus copy by
+ * anything other than `CORPUS_ENTRY_SEGMENT`, or -1 when none does.
+ *
+ * A trace-level rule rather than a per-step one, because a `rel` is only a
+ * corpus name by virtue of sitting under a directory some `corpusFile` step
+ * materialized into.
+ */
+export function corpusNameLeakAt(steps: readonly TraceStep[]): number {
+  const slash = (rel: string): string => rel.split('\\').join('/').replace(/\/+$/, '');
+  const dirs = steps.flatMap((step) => (step.kind === 'corpusFile' ? [`${slash(step.rel)}/`] : []));
+  if (dirs.length === 0) return -1;
+  return steps.findIndex((step) =>
+    stepRels(step).some((rel) => {
+      const target = slash(rel);
+      return dirs.some((dir) => target.startsWith(dir) && target !== `${dir}${CORPUS_ENTRY_SEGMENT}`);
+    }),
+  );
+}
+
+/**
  * Collects the resolved move list for one run (or, for a per-cycle scenario, one
  * cycle). Observe-only: it never draws, never reads app state and never decides
  * anything.
@@ -733,6 +797,13 @@ export function writeTrace(filePath: string, trace: FuzzTrace): string {
       );
     }
   });
+  const leak = corpusNameLeakAt(trace.steps);
+  if (leak >= 0) {
+    throw new Error(
+      `refusing to write ${filePath}: step ${leak + 1} opens a file inside a corpus copy by its name ` +
+        `rather than as <dir>/${CORPUS_ENTRY_SEGMENT}, and a trace is an artifact people attach to bug reports`,
+    );
+  }
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, `${JSON.stringify(trace, null, 2)}\n`, 'utf8');
   return filePath;
@@ -988,6 +1059,14 @@ export function readTrace(filePath: string): FuzzTrace {
   }
   if (!Array.isArray(parsed.steps)) throw new Error(`trace ${filePath} has no steps array`);
   parsed.steps.forEach((step, index) => validateStep(step, index, filePath));
+  // Same non-quoting rule as `requireCorpusId`: the value is a survey's name.
+  const leak = corpusNameLeakAt(parsed.steps);
+  if (leak >= 0) {
+    throw new Error(
+      `trace ${filePath} step ${leak + 1} opens a file inside a corpus copy by its name. A trace names ` +
+        `a corpus entry as <dir>/${CORPUS_ENTRY_SEGMENT}, never by its file name; re-record it on this build.`,
+    );
+  }
   return parsed;
 }
 

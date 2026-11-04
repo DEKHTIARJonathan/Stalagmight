@@ -33,6 +33,7 @@
  * so it works as a one-off gate too.
  */
 import * as path from 'path';
+import { redactCorpusText } from './lib/fixtureCorpus';
 import { readTrace, restoreTraceEnv, type FuzzTrace } from './lib/fuzzTrace';
 import { parseScenarioArgs, scenarioRunOptions } from './lib/scenarioRunArgs';
 
@@ -131,11 +132,16 @@ async function main(): Promise<void> {
       `${fatal.length ? 'FAIL' : 'PASS'}: ${args.name} seed=${metrics.seed} iterations=${metrics.iterations} ` +
         `mode=${started.buildMode} ` +
         `(${metrics.durationMs}ms) ${JSON.stringify(metrics.metrics)}` +
-        `${sweep.findings.length ? ` findings=${JSON.stringify(sweep.findings)}` : ''}\n`,
+        // Through the corpus redaction: a finding quotes the app's error log,
+        // and the app quotes the path of a corpus copy it failed to import
+        // (#576 HFI-13). A no-op in a run that copied no corpus entry.
+        `${sweep.findings.length ? ` findings=${redactCorpusText(JSON.stringify(sweep.findings))}` : ''}\n`,
     );
   } catch (err) {
     failed = true;
-    process.stdout.write(`FAIL: ${args.name} threw:\n${err instanceof Error ? err.message : String(err)}\n`);
+    process.stdout.write(
+      `FAIL: ${args.name} threw:\n${redactCorpusText(err instanceof Error ? err.message : String(err))}\n`,
+    );
   } finally {
     await session.stop('scenario-run');
   }
