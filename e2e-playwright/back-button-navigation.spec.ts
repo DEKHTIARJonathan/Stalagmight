@@ -193,19 +193,41 @@ test.describe('Back Button Navigation', () => {
     // Wait for project to be fully loaded
     await expect(page.locator('canvas').first()).toBeVisible();
 
-    // Open the menu and rapidly click "Close Project" (now a menu item).
+    // Open the menu and click "Close Project" (now a menu item) three times in a
+    // row. A Playwright click per activation cannot do that: the first one closes
+    // the menu, and the item is gone before the next can land (#576 NF-W10FE-1).
+    // So the three clicks are dispatched in one task in the page, before React
+    // re-renders the closed menu: each reaches the item's handler, and three
+    // handleCloseProject calls overlap - the store's isClosing guard is what keeps
+    // that to ONE close_project (#576 RV10b-5).
     await openMenu(page);
-    const backButton = page.locator('[data-testid="back-button"]');
+    const clicks = await page.evaluate(() => {
+      const w = window as unknown as {
+        __closeProjectCalls__: number;
+        __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
+      };
+      w.__closeProjectCalls__ = 0;
+      const invoke = w.__TAURI_INTERNALS__.invoke;
+      w.__TAURI_INTERNALS__.invoke = (cmd, args) => {
+        if (cmd === 'close_project') w.__closeProjectCalls__ += 1;
+        return invoke(cmd, args);
+      };
+      const item = document.querySelector<HTMLButtonElement>('[data-testid="back-button"]');
+      let landed = 0;
+      item?.addEventListener('click', () => { landed += 1; });
+      item?.click();
+      item?.click();
+      item?.click();
+      return { landed, stillInMenu: item?.isConnected === true };
+    });
+    expect(clicks).toEqual({ landed: 3, stillInMenu: true });
 
-    // The first click navigates and closes the menu, so the item is gone and a
-    // repeat click has nothing to land on. (Two force-clicks used to follow it:
-    // each timed out after 1 s on the vanished item, failure swallowed, without
-    // clicking anything - #576 NF-W10FE-1.)
-    await backButton.click();
-    await expect(backButton).toHaveCount(0);
-
-    // Should still end up at Global View with no errors
+    // Should still end up at Global View, closed once, with no errors
     await expect(page.locator('[data-testid="global-view"]')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('[data-testid="back-button"]')).toHaveCount(0);
+    expect(
+      await page.evaluate(() => (window as unknown as { __closeProjectCalls__: number }).__closeProjectCalls__),
+    ).toBe(1);
   });
 
   test('should handle Back button immediately after opening project', async ({ page }) => {
