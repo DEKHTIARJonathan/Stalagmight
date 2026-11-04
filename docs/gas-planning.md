@@ -185,7 +185,16 @@ that a pin never adds what a lowered input takes away - the pinned budget rises
 by no more than the plan without pins does - and the tree sweep, whose fills stay
 out of these windows, that it never rises at all
 (`a_lower_fill_can_be_credited_more_under_a_free_allowance_or_an_overfill_under_the_cap`
-pins the numbers above).
+pins the numbers above). One exception, also only in these windows (#576
+RV10a-1): the lower fill raises a stage's safe gas, which can carry its default
+drop onto a deeper pin. The pin then reproduces the default - a pin on its
+default station is the default - and the next stage starts at the default drop
+instead of at the pin, so it is credited the route between the two. There the
+pinned budget can rise by more than the plan without pins' does - on the review's
+reseeded loop sweep (seed 0x5EED0004) 2222.0 -> 2630.6 L, against 2564.7 -> 2630.6
+L without the pins - but never above that plan's budget, which the sweeps assert
+for every plan, lowered or not; such a lowering is counted, not set aside. The
+engine is unchanged: the lower fill's plan is the one its own rules give.
 
 A staged strategy the rig cannot support falls back to All-thirds.
 `effective_preset` counts enabled `stage` cylinders; short of `required_stages`
@@ -512,7 +521,8 @@ after it. Each plan is still checked on its own: within the budget and the range
 nothing lit that the plan without pins leaves dark. The pin sweeps in
 `gas/pin_monotone_tests.rs` assert this for every plan, lowered or not, and check
 every scootered turn's range against the route itself (its shots' line times the
-range a metre costs), with 0 violations. On the loop sweep's seed: 0 stations lit by
+range a metre costs); each runs on its own seed and on three more
+(`RESEEDS`), with 0 violations on all. On the loop sweep's seed: 0 stations lit by
 a pin that the plan without pins leaves dark (375 before NF-W11GAS-1), 1133
 stations painted on the way round, 12859 turns checked against their route (859
 past a way point, 2513 on a route the pins decide), 36 range lowerings sending a

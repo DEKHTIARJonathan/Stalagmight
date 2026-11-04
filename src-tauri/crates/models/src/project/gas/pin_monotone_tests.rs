@@ -30,11 +30,15 @@
 //! with or without pins, docs/gas-planning.md "A lower fill can hold more gas"). For every
 //! lowering, with nothing set aside:
 //! - the pin rules: the pinned budget rises by no more than the plan without pins' budget does,
-//!   and not at all where that one does not rise; and a lowering that does not raise the pinned
-//!   budget paints no new station, adds no turnaround, turns on a station painted before it, and
-//!   on a gas lowering does not move the turn later (the route through the pins does not depend
-//!   on the gas, D1-D4; a gas lowering never changes the route it commits through the way points
-//!   and pins, asserted). A range lowering can change the route of a plan
+//!   and not at all where that one does not rise - except where the lowering moves a pinned stage
+//!   onto its default landing (#576 RV10a-1: in those windows a lower fill raises the stage's safe
+//!   gas and can carry its default drop onto a deeper pin, which then reproduces the default, and
+//!   the next stage starts at the default drop rather than the pin), where the pinned budget can
+//!   rise by more but stays at or below the plan without pins' - counted; and a lowering that does
+//!   not raise the pinned budget paints no new station, adds no turnaround, turns on a station
+//!   painted before it, and on a gas lowering does not move the turn later (the route through the
+//!   pins does not depend on the gas, D1-D4; a gas lowering never changes the route it commits
+//!   through the way points and pins, asserted). A range lowering can change the route of a plan
 //!   whose pins decide nothing (NF-W11GAS-1-D1: less range puts the cheaper way out of range and
 //!   the plan takes a way round on more gas), so there the turn's route gas may rise - counted,
 //!   within the budget and the lowered range. It can also send a leg to a way point or a pin
@@ -53,7 +57,9 @@
 //! the turn spends no more scooter range than the rig has (RV9a-1: the pinned dive turned round a
 //! loop on a station the overlay left dark) - where every span is scootered at one speed, worked
 //! out from the route's own shots too, and equal to what the field reports. Each sweep is a fixed
-//! set of plans from a fixed seed, so it runs the same cases in the same few seconds every time.
+//! set of plans from a fixed seed, so it runs the same cases in the same few seconds every time;
+//! and it runs again on three more seeds ([`RESEEDS`], #576 RV10a-1), each its own fixed set of
+//! plans, so a rule that holds only on the seed a sweep was first run on fails here.
 //!
 //! Round a loop on a scooter a station is reached two ways: along the line on less gas, round the
 //! loop on less range. Until NF-W11GAS-1 the plan without pins priced the range along its
@@ -771,7 +777,40 @@ struct Tally {
     range_moved_rose: usize,
     range_moved_painted: usize,
     range_moved_turned: usize,
+    /// Lowerings that raised the pinned budget by more than the plan without pins' by moving a
+    /// pinned stage onto its default landing (RV10a-1, [`pin_moved_onto_default`]).
+    default_landing_rises: usize,
     violations: Vec<String>,
+}
+
+impl Tally {
+    /// Add another sweep's counts to these (a reseeded run of the same sweep).
+    fn add(&mut self, o: Tally) {
+        self.plans += o.plans;
+        self.runs += o.runs;
+        self.lowered_budget += o.lowered_budget;
+        self.lowered_range += o.lowered_range;
+        self.pin_free_rose += o.pin_free_rose;
+        self.pinned_rose += o.pinned_rose;
+        self.drained_corner += o.drained_corner;
+        self.scootered += o.scootered;
+        self.range_bound_turns += o.range_bound_turns;
+        self.route_stations += o.route_stations;
+        self.range_only += o.range_only;
+        self.rerouted += o.rerouted;
+        self.rerouted_turns += o.rerouted_turns;
+        self.range_oracle_turns += o.range_oracle_turns;
+        self.pin_free_scootered += o.pin_free_scootered;
+        self.range_rerouted_turns += o.range_rerouted_turns;
+        self.waypoint_oracle_turns += o.waypoint_oracle_turns;
+        self.pinned_oracle_turns += o.pinned_oracle_turns;
+        self.range_moved_way += o.range_moved_way;
+        self.range_moved_rose += o.range_moved_rose;
+        self.range_moved_painted += o.range_moved_painted;
+        self.range_moved_turned += o.range_moved_turned;
+        self.default_landing_rises += o.default_landing_rises;
+        self.violations.extend(o.violations);
+    }
 }
 
 /// The pinned plan never exceeds the plan without its pins: never more budget, never a station
@@ -898,6 +937,33 @@ fn reference_fields(
     (gas_only, cheapest)
 }
 
+/// [#576 RV10a-1] Whether a lowering moved a pinned stage onto its default landing: priced as a pin
+/// before (its drop gauge is not the strategy default the plan without pins reads) and as the
+/// default after. In the windows RV9a-5-D1 keeps - a Free allowance below the fill, an overfill
+/// under the cap - a lower fill raises the stage's safe IN gas and can carry the default threshold
+/// onto a deeper pin; the pin then reproduces the default (a pin on its default station is the
+/// default, `price_stage_drops`), and the next stage starts at the threshold instead of the pin,
+/// so it is credited the route between them. The pinned budget can then rise by more than the
+/// plan without pins' does - never above that plan's, which every lowered plan is checked against.
+fn pin_moved_onto_default(
+    pins: &[Option<StationRef>],
+    before: [&GasReachField; 2],
+    after: [&GasReachField; 2],
+) -> bool {
+    let default = |pinned: &GasReachField, pin_free: &GasReachField, k: usize| {
+        matches!(
+            (pinned.stage_drop_bars.get(k), pin_free.stage_drop_bars.get(k)),
+            (Some(a), Some(b)) if (a - b).abs() <= 1e-9 * b.abs().max(1.0)
+        )
+    };
+    pins.iter().enumerate().any(|(k, p)| {
+        p.is_some()
+            && k < before[0].stage_drop_bars.len()
+            && !default(before[0], before[1], k)
+            && default(after[0], after[1], k)
+    })
+}
+
 fn sweep(seed: u64, plans: usize, draw: fn(&mut Rng) -> Plan, every_input: bool) -> Tally {
     let mut r = Rng(seed);
     let mut t = Tally {
@@ -965,10 +1031,15 @@ fn sweep(seed: u64, plans: usize, draw: fn(&mut Rng) -> Plan, every_input: bool)
             }
             // The pin rules, scoped against the plan without pins: the pins never add budget a
             // lowering takes away - the pinned budget rises by no more than that plan's, and not
-            // at all where that plan's does not.
+            // at all where that plan's does not. RV10a-1: in the windows RV9a-5-D1 keeps, a lower
+            // fill can carry a stage's default drop onto a deeper pin, and then the pinned budget
+            // can rise by more - up to, never past, the plan without pins' (checked below).
             if rise > free_rise.max(0.0) + 1e-9 {
                 if moved {
                     t.range_moved_rose += 1;
+                } else if pin_moved_onto_default(pins, [&pinned, &pin_free], [&after, &free_after])
+                {
+                    t.default_landing_rises += 1;
                 } else {
                     found.push(format!(
                         "{what}: budget {:.3} -> {:.3} L, the plan without pins {:.3} -> {:.3} L",
@@ -1047,7 +1118,9 @@ fn report(name: &str, t: &Tally) {
          turns whose range was worked out from the route ({} past a way point, {} on a route the \
          pins decide); {} range lowerings turning on more route gas, on a way round the lowered \
          range covers; {} range lowerings sending a leg to a way point or a pin another way ({} \
-         raising the pinned budget, {} painting a station dark before, {} turning on one)",
+         raising the pinned budget, {} painting a station dark before, {} turning on one); {} \
+         lowerings raising the pinned budget by moving a pin onto its default landing, within the \
+         plan without pins",
         t.runs,
         t.lowered_range,
         t.plans,
@@ -1070,17 +1143,46 @@ fn report(name: &str, t: &Tally) {
         t.range_moved_way,
         t.range_moved_rose,
         t.range_moved_painted,
-        t.range_moved_turned
+        t.range_moved_turned,
+        t.default_landing_rises
     );
     for v in t.violations.iter().take(8) {
         println!("  {v}");
     }
 }
 
+/// [#576 RV10a-1] The seeds every sweep is also run on, each over a fixed set of plans of its own,
+/// so a rule that holds only on the seed a sweep was first run on fails here rather than on the
+/// next reseed. On 0x5EED_0004 the review's reseed found the loop sweep's default-landing rise.
+const RESEEDS: [u64; 3] = [0x5EED_0004, 0x5EED_0007, 0x5EED_0008];
+
+/// The sweep on `seed` over `plans` plans, and on each of [`RESEEDS`] over `reseed_plans`: the
+/// first run's tally (what each sweep's must-bite counts read) and the reseeded runs' together.
+fn sweeps(
+    seed: u64,
+    (plans, reseed_plans): (usize, usize),
+    draw: fn(&mut Rng) -> Plan,
+    every_input: bool,
+) -> (Tally, Tally) {
+    let main = sweep(seed, plans, draw, every_input);
+    let mut reseeded = Tally::default();
+    for s in RESEEDS {
+        reseeded.add(sweep(s, reseed_plans, draw, every_input));
+    }
+    (main, reseeded)
+}
+
 #[test]
 fn in_a_tree_cave_less_gas_never_lets_a_pinned_plan_gain_more_than_without_its_pins() {
-    let t = sweep(0x2545_F491_4F6C_DD1D, 2500, tree_plan, false);
+    let (t, reseeded) = sweeps(0x2545_F491_4F6C_DD1D, (2500, 1000), tree_plan, false);
     report("tree caves", &t);
+    report("tree caves, reseeded", &reseeded);
+    assert!(
+        reseeded.violations.is_empty() && reseeded.pin_free_rose == 0,
+        "reseeded: {} violations, {} lowerings raising the plan without pins",
+        reseeded.violations.len(),
+        reseeded.pin_free_rose
+    );
     assert!(
         t.runs >= 7500 && t.lowered_budget > t.runs / 4,
         "the sweep must bite"
@@ -1120,8 +1222,14 @@ fn round_a_loop_less_gas_or_range_never_lets_a_pinned_plan_gain_more_than_withou
     // pins take different ways to a station, most plans scootered, the range lowered too, and
     // (RV9a-5-D1) every fill, a Free allowance below the fill and an overfill under the cap
     // included - where a lower fill can raise the budget, pins or none.
-    let t = sweep(0x9A1C_0FFE_E5EE_D001, 2500, loop_plan, true);
+    let (t, reseeded) = sweeps(0x9A1C_0FFE_E5EE_D001, (2500, 1000), loop_plan, true);
     report("caves with a loop", &t);
+    report("caves with a loop, reseeded", &reseeded);
+    assert!(
+        reseeded.violations.is_empty(),
+        "reseeded: {} violations",
+        reseeded.violations.len()
+    );
     assert!(
         t.runs >= 7500 && t.lowered_budget > t.runs / 5,
         "the sweep must bite"
@@ -1174,14 +1282,30 @@ fn in_a_tree_cave_a_scooter_plan_through_way_points_turns_within_its_range() {
     // scootered, so every turn past a way point - and every turn on a route its pins decide - has
     // its range worked out from the route's own shots and checked against what the field reports
     // and the rig's range. One way to each station, so no leg can take another way.
-    let t = sweep(0x7EE5_3A1D_0C0F_FEE5, 1500, tree_waypoint_plan, false);
-    report("tree caves, scooter plans with way points", &t);
-    assert!(t.violations.is_empty(), "{} violations", t.violations.len());
-    assert_eq!(
-        (t.rerouted, t.range_moved_way, t.pin_free_rose),
-        (0, 0, 0),
-        "a tree cave has one way to each station, and this domain keeps the credit monotone"
+    let (t, reseeded) = sweeps(
+        0x7EE5_3A1D_0C0F_FEE5,
+        (1500, 500),
+        tree_waypoint_plan,
+        false,
     );
+    report("tree caves, scooter plans with way points", &t);
+    report(
+        "tree caves, scooter plans with way points, reseeded",
+        &reseeded,
+    );
+    for (which, t) in [("seeded", &t), ("reseeded", &reseeded)] {
+        assert!(
+            t.violations.is_empty(),
+            "{which}: {} violations",
+            t.violations.len()
+        );
+        assert_eq!(
+            (t.rerouted, t.range_moved_way, t.pin_free_rose),
+            (0, 0, 0),
+            "{which}: a tree cave has one way to each station, and this domain keeps the credit \
+             monotone"
+        );
+    }
     assert!(
         t.waypoint_oracle_turns > 1000 && t.pinned_oracle_turns > 100,
         "the sweep must check the range at turns past way points ({}) and on routes the pins \
@@ -1201,9 +1325,19 @@ fn round_a_loop_the_legs_to_way_points_and_pins_take_a_way_their_range_covers() 
     // station the plan without pins leaves dark, every route and turn is painted and within the
     // range worked out from its own shots. A range lowering that sends a leg another way is a
     // different dive, and counted.
-    let t = sweep(0x5CA1_AB1E_0BAD_F00D, 1500, loop_waypoint_plan, true);
+    let (t, reseeded) = sweeps(0x5CA1_AB1E_0BAD_F00D, (1500, 500), loop_waypoint_plan, true);
     report("caves with a loop, scooter plans with way points", &t);
-    assert!(t.violations.is_empty(), "{} violations", t.violations.len());
+    report(
+        "caves with a loop, scooter plans with way points, reseeded",
+        &reseeded,
+    );
+    for (which, t) in [("seeded", &t), ("reseeded", &reseeded)] {
+        assert!(
+            t.violations.is_empty(),
+            "{which}: {} violations",
+            t.violations.len()
+        );
+    }
     assert!(
         t.waypoint_oracle_turns > 2500 && t.pinned_oracle_turns > 300,
         "the sweep must check the range at turns past way points ({}) and on routes the pins \
