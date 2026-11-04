@@ -75,12 +75,27 @@ const FS_RECEIVER = '\\b(?:fs|fsp|fsPromises|promises)';
 // (#576 NF-W9FE-4) - so FS_DESTRUCTURE_RE finds only its closing brace and the
 // `=`, and the pattern is walked back to its opening brace.
 const FS_IMPORT_RE = /\bimport\s+(?:type\s+)?(?:[\w$]+\s*,\s*)?\{([^}]*)\}\s*from\s*(['"`])(?:node:)?fs(?:\/promises)?\2/g;
-const FS_DESTRUCTURE_RE =
-  /\}\s*=(?![=>])\s*(?:(?:await\s+)?(?:require|import)\s*\(\s*(['"`])(?:node:)?fs(?:\/promises)?\1\s*\)|(?:fs\.promises|fsPromises|fsp|fs|promises)(?![\w$.]))/g;
+// The fs module (or fs.promises) as a value: what a destructure or alias reads.
+// `quote` is the number of the capture group that holds the module name's quote.
+const fsSource = (quote) =>
+  '(?:(?:await\\s+)?(?:require|import)\\s*\\(\\s*([\'"`])(?:node:)?fs(?:\\/promises)?\\' + quote +
+  '\\s*\\)|(?:fs\\.promises|fsPromises|fsp|fs|promises)(?![\\w$.]))';
+// The pattern may carry a type annotation (`}: typeof fs.promises =`, #576 RV10b-G6).
+const FS_DESTRUCTURE_RE = new RegExp(String.raw`\}\s*(?::[^=;{}]+)?=(?![=>])\s*` + fsSource(1), 'g');
 // A binding key in a destructure pattern: the name right after `{` or `,` at any
-// depth (`writeFile` in `{ writeFile: w }`; not `w`, which follows a `:`).
-const PATTERN_KEY_RE = /[{,]\s*([A-Za-z_$][\w$]*)/g;
+// depth (`writeFile` in `{ writeFile: w }`; not `w`, which follows a `:`), also
+// quoted or computed (`{ 'open': o }`, `{ ['open']: o }`, #576 RV10b-G6).
+const PATTERN_KEY_RE = /[{,]\s*(?:\[\s*(['"`])([A-Za-z_$][\w$]*)\1\s*\]|(['"`])([A-Za-z_$][\w$]*)\3|([A-Za-z_$][\w$]*))/g;
+const keyName = (m) => m[2] ?? m[4] ?? m[5];
 const FS_IMPORTED = new Set([...DISK_WRITE_NAMES, ...FS_SHORT_NAMES]);
+// [#576 RV10b-G6] A new name for the fs module or fs.promises - `import * as X` /
+// `import X from` '(node:)fs(/promises)', `const X = <fs source>`, or the
+// `promises` key of an fs destructure renamed (`const { promises: p } = fs`) -
+// is an fs receiver like `fs` itself, so its open / link / chmod count.
+const FS_NAMESPACE_IMPORT_RE = /\bimport\s+(?:\*\s*as\s+)?([A-Za-z_$][\w$]*)\s+from\s*(['"`])(?:node:)?fs(?:\/promises)?\2/g;
+const FS_ALIAS_RE = new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;{}]+)?=(?![=>])\s*` + fsSource(2), 'g');
+const PROMISES_ALIAS_RE = /[{,]\s*promises\s*:\s*([A-Za-z_$][\w$]*)/g;
+const RECEIVER_ONLY_NAMES = ['open', 'link', 'chmod'];
 
 // The index of the `{` matching the `}` at `close`, scanning back; -1 if none.
 function openingBrace(text, close) {
@@ -108,14 +123,28 @@ function fsImportLines(code) {
       at += entry.length + 1;
     }
   }
+  const aliases = new Set();
   FS_DESTRUCTURE_RE.lastIndex = 0;
   while ((m = FS_DESTRUCTURE_RE.exec(text)) !== null) {
     const open = openingBrace(text, m.index);
     if (open < 0) continue;
     const pattern = text.slice(open, m.index + 1);
     for (const key of pattern.matchAll(PATTERN_KEY_RE)) {
-      if (FS_IMPORTED.has(key[1])) lines.add(lineOf(open + key.index + key[0].length));
+      if (FS_IMPORTED.has(keyName(key))) lines.add(lineOf(open + key.index + key[0].length));
     }
+    for (const alias of pattern.matchAll(PROMISES_ALIAS_RE)) aliases.add(alias[1]);
+  }
+  for (const re of [FS_NAMESPACE_IMPORT_RE, FS_ALIAS_RE]) {
+    re.lastIndex = 0;
+    while ((m = re.exec(text)) !== null) aliases.add(m[1]);
+  }
+  for (const alias of aliases) {
+    const id = alias.replace(/\$/g, '\\$');
+    const member = new RegExp(
+      `(?<![\\w$.])${id}\\s*(?:\\.\\s*(?:${RECEIVER_ONLY_NAMES.join('|')})\\s*\\(|\\[\\s*(['"\`])(?:${FS_SHORT_NAMES.join('|')})\\1\\s*\\])`,
+      'g',
+    );
+    while ((m = member.exec(text)) !== null) lines.add(lineOf(m.index));
   }
   return lines;
 }
@@ -184,8 +213,12 @@ export const RULES = [
     // alias or not (`import { writeFileSync as w } from 'node:fs'`,
     // `const { open } = fs.promises`), count too (#576 RV4-FE-FEB-3), as does
     // one destructured through `promises` (`const { promises: { open } } = fs`,
-    // #576 NF-W9FE-4); the import check reads the whole file, so a multi-line
-    // brace counts.
+    // #576 NF-W9FE-4), under a quoted or computed key or a typed pattern
+    // (`const { ['open']: o } = fs.promises`, `}: typeof fs =`), and a call on
+    // a new name for the module (`const { promises: p } = fs; p.open(...)`,
+    // `import * as nodeFs from 'fs'`, `const P = fs.promises`; #576 RV10b-G6);
+    // the import check reads the whole file, so a multi-line brace counts. Not
+    // seen: a `}` inside a string default within the pattern.
     re: new RegExp(
       `\\b(?:${LONG})\\s*\\(|\\.(?:rm|cp|rename|truncate)\\s*\\(|${FS_RECEIVER}\\.(?:open|link|chmod)\\s*\\(`
         + `|\\[\\s*(['"\`])(?:${LONG})\\1\\s*\\]|${FS_RECEIVER}\\s*\\[\\s*(['"\`])(?:${FS_SHORT_NAMES.join('|')})\\2\\s*\\]`,

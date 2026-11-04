@@ -100,6 +100,34 @@ for (const [name, [text, expected]] of Object.entries(HIDDEN_WRITES)) {
   });
 }
 
+// #576 RV10b-G6: fs destructure evasions - a computed or quoted key, a typed
+// pattern, and an fs module bound to a new name whose open / link / chmod is
+// then called as a member.
+const DESTRUCTURE_EVASIONS = {
+  "disk-write fires on a computed key: const { ['open']: o } = fs.promises": ["const { ['open']: o } = fs.promises;\nawait o(p, 'w');", [['disk-write', 1]]],
+  "disk-write fires on a quoted key: const { 'writeFile': w } = fsp": ["const { 'writeFile': w } = fsp;\nawait w(p, x);", [['disk-write', 1]]],
+  'disk-write fires on a typed destructure: const { open }: typeof fs.promises = fs.promises': ['const { open }: typeof fs.promises = fs.promises;', [['disk-write', 1]]],
+  "disk-write fires on an alias then a member call: const { promises: p } = fs; p.open(f, 'w')": [
+    "const { promises: p } = fs;\nconst h = await p.open(f, 'w');\nawait p['chmod'](f, 0o600);",
+    [['disk-write', 2], ['disk-write', 3]],
+  ],
+  'disk-write fires on fs bound to a new name, then a member open / link': [
+    "import * as nodeFs from 'node:fs/promises';\nconst P = fs.promises;\nawait nodeFs.open(f, 'w');\nawait P.link(a, b);",
+    [['disk-write', 3], ['disk-write', 4]],
+  ],
+};
+for (const [name, [text, expected]] of Object.entries(DESTRUCTURE_EVASIONS)) {
+  test(name, () => {
+    const got = at(text);
+    assert.deepEqual(got, expected, `got ${JSON.stringify(got)}, want ${JSON.stringify(expected)}`);
+  });
+}
+
+test('an fs alias does NOT make a read or another object\'s open fire', () => {
+  assert.deepEqual(ids("const { promises: p } = fs;\nawait p.readFile(f);\nawait p.stat(f);\nwindow.open(url);\nawait menu.open();"), []);
+  assert.deepEqual(ids("const { ['readFile']: r } = fs.promises;\nconst { ['open']: o } = menu;"), []);
+});
+
 test('a nested destructure does NOT fire on a read name, a non-fs source, or an object literal', () => {
   assert.deepEqual(ids('const { promises: { readFile, stat } } = fs;'), []);
   assert.deepEqual(ids('const { menu: { open } } = page;\nawait open();'), []);
