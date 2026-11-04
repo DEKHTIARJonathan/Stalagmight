@@ -15589,3 +15589,24 @@ fn the_orphan_sweep_still_promotes_in_order_and_keeps_a_redundant_twin() {
         [12]
     );
 }
+
+#[test]
+fn the_orphan_sweep_sees_merges_through_a_deleted_section() {
+    // Two anchored sections bridged only by merges through a section id that no
+    // longer exists. The merges do not connect them (they do not resolve), so the
+    // closure is an orphan; but `merge_would_double_anchor` walks stored ids, sees
+    // one merge component, and allows the promotion. The sweep must agree.
+    let mut project = two_anchored_components_with_orphan_closures(1, 1);
+    let (a, b) = (project.sections[0].id, project.sections[1].id);
+    let gone: SectionId = project.sections.iter().map(|s| s.id).max().unwrap_or(0) + 100;
+    for (x, y) in [(a, gone), (gone, b)] {
+        project.station_merges.push(StationMerge {
+            station_a: StationKey::new(x, StationAnchor::SectionStart),
+            station_b: StationKey::new(y, StationAnchor::SectionStart),
+            merged_at: Utc::now(),
+        });
+    }
+
+    assert_eq!(project.convert_orphan_closures_to_merges(), 1);
+    assert!(project.loop_closures.is_empty());
+}

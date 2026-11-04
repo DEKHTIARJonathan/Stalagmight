@@ -22,9 +22,11 @@ use super::Project;
 /// - `merge_component`: sections joined by merges by their STORED section ids,
 ///   resolvable or not - the same graph `MergeTopology::adjacency` gives
 ///   `merge_would_double_anchor`, with each component flagged when a resolvable
-///   zero datum sits in it.
+///   zero datum sits in it. A stored id naming no live section still gets a
+///   slot (`merge_slot`), since the adjacency walk passes through it.
 pub(crate) struct StationComponents {
     section_slot: HashMap<SectionId, usize>,
+    merge_slot: HashMap<SectionId, usize>,
     connected: UnionFind,
     merge_component: UnionFind,
     anchored: Vec<bool>,
@@ -38,12 +40,19 @@ impl StationComponents {
             .enumerate()
             .map(|(i, s)| (s.id, i))
             .collect();
-        let n = section_slot.len();
+        let mut merge_slot = section_slot.clone();
+        for merge in &project.station_merges {
+            for id in [merge.station_a.section_id, merge.station_b.section_id] {
+                let next = merge_slot.len();
+                merge_slot.entry(id).or_insert(next);
+            }
+        }
         let mut components = Self {
-            connected: UnionFind::new(n),
-            merge_component: UnionFind::new(n),
-            anchored: vec![false; n],
+            connected: UnionFind::new(section_slot.len()),
+            merge_component: UnionFind::new(merge_slot.len()),
+            anchored: vec![false; merge_slot.len()],
             section_slot,
+            merge_slot,
         };
         for merge in &project.station_merges {
             if project.resolve_key(&merge.station_a).is_some()
@@ -55,7 +64,7 @@ impl StationComponents {
         }
         for datum in &project.zero_datums {
             if let Some(station) = project.resolve_key(&datum.station_ref) {
-                if let Some(&i) = components.section_slot.get(&station.section_id) {
+                if let Some(&i) = components.merge_slot.get(&station.section_id) {
                     let root = components.merge_component.find(i);
                     components.anchored[root] = true;
                 }
@@ -78,7 +87,7 @@ impl StationComponents {
 
     /// `merge_would_double_anchor`, answered from the components.
     fn would_double_anchor(&mut self, a: SectionId, b: SectionId) -> bool {
-        let (Some(&a), Some(&b)) = (self.section_slot.get(&a), self.section_slot.get(&b)) else {
+        let (Some(&a), Some(&b)) = (self.merge_slot.get(&a), self.merge_slot.get(&b)) else {
             return false;
         };
         let (ra, rb) = (self.merge_component.find(a), self.merge_component.find(b));
@@ -98,7 +107,7 @@ impl StationComponents {
     }
 
     fn union_merge(&mut self, a: SectionId, b: SectionId) {
-        if let (Some(&a), Some(&b)) = (self.section_slot.get(&a), self.section_slot.get(&b)) {
+        if let (Some(&a), Some(&b)) = (self.merge_slot.get(&a), self.merge_slot.get(&b)) {
             let (ra, rb) = (self.merge_component.find(a), self.merge_component.find(b));
             if ra != rb {
                 let anchored = self.anchored[ra] || self.anchored[rb];
