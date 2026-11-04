@@ -682,7 +682,11 @@ it. So it is allowed for one kind of rule only (#576 A8):
   dropping the span between them is then E0505. Put the proof type and its
   producer in a small private module so nothing else can construct it (a private
   field), and prove the conversion by writing the forbidden reorder in a
-  throwaway copy and capturing the compile error.
+  throwaway copy and capturing the compile error. To keep the proof in the
+  suite, give the module its own file and a `compile_fail` doctest that
+  `include!`s it over a stand-in for what it reads, plus a compiling twin in the
+  allowed order so the first cannot pass on an unrelated error (`InSpan`:
+  `speleodb_session/lock_ops_span.rs`, #576 RV10a-3).
 - **Bypass:** a proof stops a reorder only if the raw step it guards cannot be
   called without it. The guarded primitive takes the proof as a licence
   argument - `client::download_dump*` (`DumpLicence`), `client::upload_auto`

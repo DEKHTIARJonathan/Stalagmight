@@ -76,7 +76,16 @@ fn speleodb_prod_sources() -> [(&'static str, &'static str); 14] {
             "speleodb_revisions.rs",
             include_str!("speleodb_revisions.rs"),
         ),
-        ("speleodb_session.rs", include_str!("speleodb_session.rs")),
+        // [#576 RV10a-3] The lock-ops span module lives in its own file (a doctest
+        // `include!`s it) but is `speleodb_session.rs`'s child: scanned as part of it,
+        // ahead of it, so the session file's test module still ends the region.
+        (
+            "speleodb_session.rs",
+            concat!(
+                include_str!("speleodb_session/lock_ops_span.rs"),
+                include_str!("speleodb_session.rs")
+            ),
+        ),
     ]
     .map(|(name, src)| {
         // [#576 A8 / E9(b)] Only the top-level test MODULE ends production: a gated
