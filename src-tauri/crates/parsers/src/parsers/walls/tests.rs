@@ -2054,35 +2054,77 @@ fn per_survey_fixed_station_count_dedups_and_validates() {
 
 // ----- ignored real-data validation (no project files committed) -------
 
+/// Any Walls project tree (`WALLS_WPJ`, a maintainer-held private copy): what
+/// holds for every one - it parses, the preview accounts for the parse, and the
+/// import lands what the preview promised. [#576 HFI-11] It asserted ONE
+/// project's book and survey counts and UTM zone, so it failed on every other
+/// `.wpj`; no dataset's numbers belong here.
 #[test]
 #[ignore = "needs a private Walls project tree; set WALLS_WPJ to its .WPJ"]
-fn real_qr_project_tree() {
-    // Maintainer-held private survey tree; point WALLS_WPJ at a local copy.
+fn real_project_tree() {
     let wpj = require_env_file("WALLS_WPJ");
     let parsed = parse_walls(&wpj).unwrap();
-    let resolved = parsed.surveys.iter().filter(|s| s.resolved).count();
-    println!(
-        "QR .wpj: books={} surveys={} resolved={} missing={} skipped_attachments={} warnings={}",
-        parsed.book_count,
-        parsed.surveys.len(),
-        resolved,
-        parsed.missing_files.len(),
-        parsed.skipped_attachments,
-        parsed.warnings.len(),
-    );
     let preview = build_preview(&parsed);
     println!(
-        "preview: zone={:?} datum={:?} georef={}",
-        preview.utm_zone, preview.datum, preview.has_georeference
+        ".wpj: books={} surveys={} resolved={} missing={} skipped_attachments={} shots={} \
+         splays={} fixed={} warnings={}",
+        parsed.book_count,
+        parsed.surveys.len(),
+        preview.resolved_survey_count,
+        parsed.missing_files.len(),
+        parsed.skipped_attachments,
+        preview.shot_count,
+        preview.splay_count,
+        preview.fixed_station_count,
+        parsed.warnings.len(),
     );
-    assert!(parsed.book_count >= 250);
-    assert!(parsed.surveys.len() >= 1500);
-    assert_eq!(preview.utm_zone, Some(16));
+    assert!(!parsed.surveys.is_empty(), "a project tree names surveys");
+
+    // The preview is the parse, counted.
+    assert_eq!(preview.survey_count as usize, parsed.surveys.len());
+    assert_eq!(
+        preview.resolved_survey_count as usize,
+        parsed.surveys.iter().filter(|s| s.resolved).count()
+    );
+    assert_eq!(
+        preview.missing_file_count as usize,
+        parsed.missing_files.len()
+    );
+    let per_survey =
+        |count: fn(&WallsSurveySummary) -> u32| -> u32 { preview.surveys.iter().map(count).sum() };
+    assert_eq!(per_survey(|s| s.shot_count), preview.shot_count);
+    assert_eq!(per_survey(|s| s.splay_count), preview.splay_count);
+    assert_eq!(preview.utm_zone.is_some(), preview.has_georeference);
+
+    // The import lands exactly the shots the preview counts, with and without
+    // the splays, in non-empty sections, and anchors on at most the fixes it found.
+    for include_splays in [false, true] {
+        let opts = WallsImportOptions {
+            include_splays,
+            ..WallsImportOptions::default()
+        };
+        let (configs, _closures, _warnings) =
+            convert_walls_to_import_configs(&parsed, &opts).unwrap();
+        let shots: usize = configs.iter().map(|c| c.shots.len()).sum();
+        let expected = preview.shot_count
+            + if include_splays {
+                preview.splay_count
+            } else {
+                0
+            };
+        assert_eq!(shots, expected as usize, "include_splays={include_splays}");
+        assert!(configs.iter().all(|c| !c.shots.is_empty()));
+        let zero_datums = configs
+            .iter()
+            .filter(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
+            .count();
+        assert!(zero_datums <= preview.fixed_station_count as usize);
+    }
 }
 
 #[test]
 #[ignore = "needs a folder of private .SRV files; set WALLS_SRV_DIR"]
-fn real_qr_srv_dir() {
+fn real_srv_dir() {
     let dir = require_env_file("WALLS_SRV_DIR");
     let mut total_shots = 0usize;
     let mut files = 0usize;

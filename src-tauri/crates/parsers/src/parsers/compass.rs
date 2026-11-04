@@ -1845,12 +1845,17 @@ mod tests {
 
     // The private_cave_* tests below exercise the importer end-to-end against
     // a real-cave Compass corpus.  That corpus is private survey data and is
-    // not committed; place `PrivateCave.MAK` (and the .DAT files it
-    // references) under `src-tauri/tests/fixtures/compass/` locally and
-    // re-run with `cargo test -- --ignored` to enable them. Run without it,
-    // each fails naming the missing file (#576 E13).
+    // not committed; point `COMPASS_PRIVATE_MAK` at a `.MAK` (its .DAT files
+    // beside it), or place it as `PrivateCave.MAK` under
+    // `src-tauri/tests/fixtures/compass/`, and re-run with
+    // `cargo test -- --ignored` to enable them. Run without it, each fails
+    // naming the missing file (#576 E13). [#576 HFI-11] They hold for ANY
+    // Compass project - no dataset's numbers or names belong in them.
     fn private_cave_mak() -> PathBuf {
-        crate::models::test_support::require_file(fixture("PrivateCave.MAK"))
+        match std::env::var_os("COMPASS_PRIVATE_MAK") {
+            Some(_) => crate::models::test_support::require_env_file("COMPASS_PRIVATE_MAK"),
+            None => crate::models::test_support::require_file(fixture("PrivateCave.MAK")),
+        }
     }
 
     #[test]
@@ -1866,6 +1871,18 @@ mod tests {
         );
     }
 
+    /// The geometry is inclination-based, +down (#576 B28: the inclination
+    /// column is an ordinary angle, negative = down, whatever the survey FORMAT
+    /// says about how the notebook was kept - a `W` format once read it as a
+    /// depth difference with the sign reversed). [#576 HFI-11] Was one dataset's
+    /// first shot, to the centimetre; now what holds for any project:
+    /// - depth is a function of the station: consecutive shots of a section
+    ///   agree on the station they share, and the anchor station is the datum;
+    /// - each station's depth comes from the shot that first reached it from
+    ///   the anchor, as `length x sin(mean pitch)`, so every shot except those
+    ///   closing a loop carries exactly that change. A survey network with as
+    ///   many loop-closing shots as the rest would be a grid, not a cave: MORE
+    ///   than half of the shots must match.
     #[test]
     #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
     fn private_cave_first_shot_geometry_is_depth_based() {
@@ -1874,39 +1891,47 @@ mod tests {
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
         assert!(!configs.is_empty());
 
-        // The private corpus uses a survey FORMAT whose 4th character is `W`
-        // (depth gauge). The stored inclination column is still an ordinary
-        // angle in decimal degrees, negative = down (#576 B28): the FORMAT
-        // only records how the notebook was kept.
-        let anchor_config = configs
-            .iter()
-            .find(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
-            .expect("a section anchored by zero datum");
-        if let ImportPlacement::ZeroDatum { station_index, .. } = anchor_config.placement {
-            assert_eq!(station_index, 0);
+        for c in &configs {
+            for pair in c.shots.windows(2) {
+                assert!(
+                    (pair[0].depth_out - pair[1].depth_in).abs() < 1e-9,
+                    "section {:?}: consecutive shots disagree on their station's depth",
+                    c.name
+                );
+            }
         }
-        let shot = &anchor_config.shots[0];
-        // The first shot stores -5.86 over 49 ft: 5.86 deg DOWN, a 1.525 m
-        // descent - the expectation this test held before 19b3cb53 read the
-        // column as a depth difference with the sign reversed (a 1.79 m climb).
-        assert!(shot.depth_in.abs() < 0.01, "depth_in {}", shot.depth_in);
-        assert!(
-            (shot.depth_out - 1.5252).abs() < 0.01,
-            "depth_out {}",
-            shot.depth_out
-        );
-        assert!(
-            shot.pitch_in.is_some_and(|p| (p - 5.86).abs() < 0.01),
-            "expected the stored 5.86 deg descent, got {:?}",
-            shot.pitch_in
-        );
+        for c in &configs {
+            if let ImportPlacement::ZeroDatum { station_index, .. } = c.placement {
+                let k = station_index as usize;
+                let depth = match c.shots.get(k) {
+                    Some(shot) => shot.depth_in,
+                    None => c.shots[k - 1].depth_out,
+                };
+                assert!(depth.abs() < 1e-9, "the anchor station sits at {depth}");
+            }
+        }
 
-        // Exactly one zero datum for the whole project.
-        let zero_datums = configs
+        let shots: Vec<&ShotData> = configs.iter().flat_map(|c| &c.shots).collect();
+        let own_pitch = shots
             .iter()
-            .filter(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
+            .filter(|s| {
+                let pitch_in = s.pitch_in.unwrap_or(0.0);
+                let mean = s
+                    .pitch_out
+                    .map_or(pitch_in, |out| f64::midpoint(pitch_in, out));
+                let change = s.length * mean.to_radians().sin();
+                (s.depth_out - s.depth_in - change).abs() < 1e-6
+            })
             .count();
-        assert_eq!(zero_datums, 1);
+        println!(
+            "{own_pitch} of {} shots carry the depth change of their own pitch",
+            shots.len()
+        );
+        assert!(
+            own_pitch * 2 > shots.len(),
+            "{own_pitch} of {} shots carry the depth change of their own +down pitch",
+            shots.len()
+        );
     }
 
     #[test]
@@ -1937,35 +1962,57 @@ mod tests {
         );
     }
 
+    /// `X`-flagged (excluded) shots land only when asked for, and then as
+    /// reference shots - by the preview's own accounting (#437), exact for
+    /// both toggles. [#576 HFI-11] Was "the fixture has an all-excluded
+    /// survey", one dataset's shape; this holds for any project, including one
+    /// with no excluded shot at all.
     #[test]
     #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
     fn private_cave_excluded_shots_are_filtered_by_default() {
         let parsed = parse_compass(&private_cave_mak()).unwrap();
-        let (default_configs, _, _) = convert_compass_to_import_configs(
-            &parsed,
-            &CompassImportOptions {
-                include_excluded: false,
-                apply_corrections: true,
-                comments_on_stations: true,
-            },
-        )
-        .unwrap();
-        let (included_configs, _, _) = convert_compass_to_import_configs(
-            &parsed,
-            &CompassImportOptions {
-                include_excluded: true,
-                apply_corrections: true,
-                comments_on_stations: true,
-            },
-        )
-        .unwrap();
-        // The fixture contains at least one survey that is entirely
-        // `#|X#`-flagged; including excluded shots must add shots, which
-        // are imported as reference shots.
-        assert!(total_shots(&included_configs) > total_shots(&default_configs));
-        assert!(included_configs
-            .iter()
-            .any(|c| c.shots.iter().any(|s| s.kind.is_virtual())));
+        let convert = |include_excluded| {
+            convert_compass_to_import_configs(
+                &parsed,
+                &CompassImportOptions {
+                    include_excluded,
+                    apply_corrections: true,
+                    comments_on_stations: true,
+                },
+            )
+            .unwrap()
+            .0
+        };
+        let (default_configs, included_configs) = (convert(false), convert(true));
+        let preview = build_preview(&parsed);
+        let invalid = &preview.invalid_shot_counts;
+        println!(
+            "shots={} excluded={} default import={} with excluded={}",
+            preview.shot_count,
+            preview.excluded_shot_count,
+            total_shots(&default_configs),
+            total_shots(&included_configs)
+        );
+        assert_eq!(
+            total_shots(&default_configs) as u32,
+            preview.shot_count - preview.excluded_shot_count - invalid.non_excluded_corrected
+        );
+        assert_eq!(
+            total_shots(&included_configs) as u32,
+            preview.shot_count - invalid.non_excluded_corrected - invalid.excluded_corrected
+        );
+        let virtual_shots = |configs: &[ImportSectionConfig]| {
+            configs
+                .iter()
+                .flat_map(|c| &c.shots)
+                .filter(|s| s.kind.is_virtual())
+                .count() as u32
+        };
+        assert_eq!(virtual_shots(&default_configs), 0);
+        assert_eq!(
+            virtual_shots(&included_configs),
+            preview.excluded_shot_count - invalid.excluded_corrected
+        );
     }
 
     /// #393 item 1: `execute_compass_import` now reads `(survey_count,
@@ -2408,61 +2455,49 @@ mod tests {
         assert!(lat > 55.0 && lat < 65.0, "expected lat ≈ +60°, got {lat}");
     }
 
+    /// Compass convention: a shot comment describes the FROM station (where the
+    /// surveyor stood). With comments_on_stations on (the default) every
+    /// non-empty shot comment becomes a station comment at station_index = shot
+    /// index and leaves the shot; off, nothing moves. [#576 HFI-11] Was "the
+    /// anchor section's first shot carries a comment", one dataset's shape; this
+    /// compares the two imports section by section, for any project.
     #[test]
     #[ignore = "uses private cave survey data; fixtures kept outside the repo"]
     fn private_cave_comments_promoted_to_from_station_by_default() {
-        // Compass convention: a shot comment describes the FROM station (the
-        // point the surveyor was standing at).  With comments_on_stations on
-        // (the default), each non-empty shot comment should become a
-        // station_comment at station_index = shot index, and the shot's own
-        // comment should be cleared.  The private fixture's first shot
-        // carries an entrance note on its FROM station; this test asserts
-        // that note migrates to station 0 of the anchor section.
         let parsed = parse_compass(&private_cave_mak()).unwrap();
         let (promoted, _, _) =
             convert_compass_to_import_configs(&parsed, &CompassImportOptions::default()).unwrap();
-        let anchor = promoted
-            .iter()
-            .find(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
-            .expect("zero datum section");
-        assert!(
-            anchor.shots[0].comment.is_none(),
-            "first shot's comment should be promoted off the shot, got {:?}",
-            anchor.shots[0].comment
-        );
-        let station_zero_comment = anchor
-            .station_comments
-            .iter()
-            .find_map(|(idx, text)| (*idx == 0).then_some(text.as_str()));
-        assert!(
-            station_zero_comment.is_some_and(|s| !s.is_empty()),
-            "station 0 should carry a non-empty promoted comment, got {:?}",
-            station_zero_comment
-        );
-
-        // With the option off, comments stay on the shot and station_comments
-        // is empty for the section.
         let (kept_on_shots, _, _) = convert_compass_to_import_configs(
             &parsed,
             &CompassImportOptions {
-                include_excluded: false,
-                apply_corrections: true,
                 comments_on_stations: false,
+                ..CompassImportOptions::default()
             },
         )
         .unwrap();
-        let anchor_raw = kept_on_shots
-            .iter()
-            .find(|c| matches!(c.placement, ImportPlacement::ZeroDatum { .. }))
-            .expect("zero datum section");
-        assert!(anchor_raw.station_comments.is_empty());
-        assert!(
-            anchor_raw.shots[0]
-                .comment
-                .as_deref()
-                .is_some_and(|s| !s.is_empty()),
-            "first shot should retain its non-empty comment when promotion is off"
-        );
+        assert_eq!(promoted.len(), kept_on_shots.len());
+        let mut moved = 0;
+        for kept in &kept_on_shots {
+            let on = promoted
+                .iter()
+                .find(|c| c.section_index == kept.section_index)
+                .expect("the same sections either way");
+            assert!(kept.station_comments.is_empty(), "off: nothing moves");
+            assert!(
+                on.shots.iter().all(|s| s.comment.is_none()),
+                "on: every comment leaves its shot"
+            );
+            let expected: Vec<(u32, String)> = kept
+                .shots
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| s.comment.clone().map(|c| (i as u32, c)))
+                .collect();
+            assert!(expected.iter().all(|(_, c)| !c.is_empty()));
+            assert_eq!(on.station_comments, expected, "section {:?}", kept.name);
+            moved += expected.len();
+        }
+        println!("{moved} shot comments promoted to their FROM station");
     }
 
     #[test]
@@ -2472,7 +2507,7 @@ mod tests {
         // section in the private corpus must attach to the network through a
         // station-name path back to the zero datum (1 ZeroDatum + the rest
         // FromImporting), with no chains stranded at origin.  A one-pass
-        // first-occurrence placement previously left ~20 sections detached
+        // first-occurrence placement previously left sections detached
         // because their connection station was first defined in a
         // later-processed survey.
         let parsed = parse_compass(&private_cave_mak()).unwrap();
