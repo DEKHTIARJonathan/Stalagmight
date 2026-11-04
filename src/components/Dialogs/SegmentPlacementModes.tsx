@@ -41,6 +41,12 @@ export interface SegmentPlacementModesProps {
   onFromExistingStationChange: (idx: number) => void;
   fromExistingStationCount: number;
   onPlaceOnMap: () => void;
+  /**
+   * [#576 RV10b-2] The id of the line saying why this segment cannot go on the
+   * map, or null when it can. While set, "Place on map" is disabled and that line
+   * is its accessible description: the click could only log a warning.
+   */
+  placeOnMapBlockedBy?: string | null;
 }
 
 export function SegmentPlacementModes({
@@ -61,6 +67,7 @@ export function SegmentPlacementModes({
   onFromExistingStationChange,
   fromExistingStationCount,
   onPlaceOnMap,
+  placeOnMapBlockedBy = null,
 }: SegmentPlacementModesProps) {
   const { t } = useTranslation();
 
@@ -304,6 +311,8 @@ export function SegmentPlacementModes({
             variant="primary"
             size="sm"
             onClick={onPlaceOnMap}
+            disabled={placeOnMapBlockedBy !== null}
+            aria-describedby={placeOnMapBlockedBy ?? undefined}
             data-testid="segment-place-on-map-button"
           >
             {t('dialogs.dmpNewImport.manualPlacing.placeOnMap')}

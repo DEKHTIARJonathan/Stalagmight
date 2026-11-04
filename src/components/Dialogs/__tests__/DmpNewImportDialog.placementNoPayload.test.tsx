@@ -152,3 +152,70 @@ describe('DMP wizard: the manual-placing screen says why a segment cannot be pla
     );
   });
 });
+
+/**
+ * #576 RV10b-2: while the cannot-place line shows, the screen offered "Place on
+ * map" anyway - a primary button whose click only logged a console warning. It is
+ * now disabled, with that line as its accessible description, and enabled again
+ * once the anchor names a section the file has.
+ */
+describe('DMP wizard: Place on map while the segment cannot go on the map (#576 RV10b-2)', () => {
+  const REASON = 'wizard-cannot-place-on-map';
+  const LONG = 'dialogs.dmpNewImport.manualPlacing.cannotPlaceOnMap';
+  const PLACE_ON_MAP = 'segment-place-on-map-button';
+
+  beforeEach(() => {
+    useUIStore.setState({ activeDialog: 'dmp-import-new', dialogData: { filePath: '/tmp/dive.dmp' }, placementMode: null });
+  });
+
+  const chooseManualPlacement = async () => {
+    await waitFor(() => expect(screen.getByTestId('wizard-manual-placing')).toBeVisible());
+    await userEvent.click(screen.getByTestId('segment-mode-manual-input'));
+    return screen.getByTestId(PLACE_ON_MAP);
+  };
+
+  it('disables Place on map and names the line as its reason', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    renderWizard(savedState({ segmentQueue: [[1]], segmentAnchor: { sectionIndex: 9, stationIndex: 0 } }), {
+      selected: [0, 1],
+    });
+    const button = await chooseManualPlacement();
+    const reason = screen.getByTestId(REASON);
+
+    expect.soft(button).toBeDisabled();
+    expect.soft(reason.id).not.toBe('');
+    expect.soft(button).toHaveAttribute('aria-describedby', reason.id);
+    expect.soft(button).toHaveAccessibleDescription(LONG);
+
+    // A click on the disabled button reaches nothing: no placement, the wizard stays.
+    await userEvent.click(button);
+    expect.soft(useUIStore.getState().placementMode).toBeNull();
+    expect.soft(useUIStore.getState().activeDialog).toBe('dmp-import-new');
+    expect.soft(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('enables Place on map again once the anchor moves to a section the file has', async () => {
+    renderWizard(savedState({ segmentQueue: [[1, 2]], segmentAnchor: { sectionIndex: 9, stationIndex: 0 } }), {
+      selected: [0, 1, 2],
+    });
+    const button = await chooseManualPlacement();
+    expect(button).toBeDisabled();
+
+    await userEvent.click(screen.getByTestId('manual-import-section-select'));
+    await userEvent.click(screen.getByTestId('manual-import-section-select-option-2'));
+
+    await waitFor(() => expect(screen.queryByTestId(REASON)).toBeNull());
+    expect.soft(screen.getByTestId(PLACE_ON_MAP)).toBeEnabled();
+    expect.soft(screen.getByTestId(PLACE_ON_MAP)).not.toHaveAttribute('aria-describedby');
+  });
+
+  it('keeps Place on map enabled, with no description, when the anchor section is in the file', async () => {
+    renderWizard(savedState({ segmentQueue: [[1]], segmentAnchor: { sectionIndex: 1, stationIndex: 0 } }), {
+      selected: [0, 1],
+    });
+    const button = await chooseManualPlacement();
+    expect.soft(button).toBeEnabled();
+    expect.soft(button).not.toHaveAttribute('aria-describedby');
+  });
+});

@@ -9,7 +9,7 @@
  * and every change goes back through the callbacks. The step derives what only
  * it draws: the segment preview, the From Existing context, the section names.
  */
-import { useCallback, useMemo, useRef, type MutableRefObject, type ReactNode } from 'react';
+import { useCallback, useId, useMemo, useRef, type MutableRefObject, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DmpFile } from '../../../types/commands';
 import type { SectionEditState } from '../../../utils/batchImportHelpers';
@@ -173,6 +173,9 @@ export function ManualPlacingStep({
   // [#576 NF-W9FE-3-D1] The payload builder's own condition: with no such section
   // in the file the segment cannot go on the map, and the screen says so.
   const cannotPlaceOnMap = anchorSectionIn(dmpFile.sections, segmentAnchor) === undefined;
+  // [#576 RV10b-2] The line is also the disabled "Place on map" button's
+  // accessible reason (aria-describedby), so it needs an id.
+  const cannotPlaceOnMapId = useId();
 
   // Section names in current segment (for display)
   const segmentSectionNames = useMemo(() => {
@@ -228,7 +231,12 @@ export function ManualPlacingStep({
         )}
 
         {cannotPlaceOnMap && (
-          <div className="text-sm text-warning" role="status" data-testid="wizard-cannot-place-on-map">
+          <div
+            id={cannotPlaceOnMapId}
+            className="text-sm text-warning"
+            role="status"
+            data-testid="wizard-cannot-place-on-map"
+          >
             {t('dialogs.dmpNewImport.manualPlacing.cannotPlaceOnMap')}
           </div>
         )}
@@ -252,6 +260,7 @@ export function ManualPlacingStep({
           onFromExistingStationChange={onFromExistingStationChange}
           fromExistingStationCount={fromExistingStationCount}
           onPlaceOnMap={onPlaceOnMap}
+          placeOnMapBlockedBy={cannotPlaceOnMap ? cannotPlaceOnMapId : null}
         />
 
         {/* Section settings (same editing surface as section connection / zero datum flows) */}
