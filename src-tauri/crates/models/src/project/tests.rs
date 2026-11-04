@@ -15642,3 +15642,40 @@ fn the_orphan_sweep_examines_the_closure_right_after_a_converted_one() {
     assert_eq!(project.convert_orphan_closures_to_merges(), 2);
     assert!(project.loop_closures.is_empty());
 }
+
+#[test]
+fn remeasuring_alignment_is_fast_with_thousands_of_aligned_closures_in_one_component() {
+    // One 4000-section merge chain, with a snap-to-merge closure doubling every
+    // merge: each closure's gap is zero, so each reaches the double-anchor
+    // question, which a per-closure merge walk made quadratic.
+    let mut project = two_anchored_components_with_orphan_closures(4_000, 0);
+    let doubled: Vec<(StationKey, StationKey)> = project
+        .station_merges
+        .iter()
+        .map(|m| (m.station_a.clone(), m.station_b.clone()))
+        .collect();
+    for (i, (a, b)) in doubled.into_iter().enumerate() {
+        project.loop_closures.push(LoopClosure {
+            id: i as u64 + 1,
+            station_a: a,
+            station_b: b,
+            path_length: 0.0,
+            misclosure_distance: 0.0,
+            error_percentage: 0.0,
+            horizontal_misclosure: 0.0,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::Move,
+            is_aligned: false,
+        });
+    }
+
+    let started = std::time::Instant::now();
+    project.redrive_offsets_after_load();
+    let elapsed = started.elapsed();
+
+    assert!(project.loop_closures.iter().all(|c| c.is_aligned));
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "took {elapsed:?}"
+    );
+}

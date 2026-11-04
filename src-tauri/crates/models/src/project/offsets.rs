@@ -488,6 +488,7 @@ impl Project {
         station_b: &StationKey,
         local: &HashMap<SectionId, Vec<(f64, f64)>>,
         station_offsets: &HashMap<StationRef, (f64, f64, f64)>,
+        components: Option<&mut StationComponents>,
     ) -> bool {
         if strategy != ClosureStrategy::Move {
             return false;
@@ -501,7 +502,12 @@ impl Project {
         if gap >= Self::MERGE_ALIGNMENT_INVARIANT_M {
             return false;
         }
-        !self.merge_would_double_anchor(a.section_id, b.section_id)
+        // A batch caller answers from components built once: a walk per closure
+        // is closures x merge-component size on every load (#597).
+        !match components {
+            Some(components) => components.would_double_anchor(a.section_id, b.section_id),
+            None => self.merge_would_double_anchor(a.section_id, b.section_id),
+        }
     }
 
     /// [`Self::closure_alignment_stamp`] for a caller that has ONE closure and no
@@ -520,7 +526,14 @@ impl Project {
         }
         let local = self.section_local_coords();
         let station_offsets = self.resolved_station_offsets();
-        self.closure_alignment_stamp(strategy, station_a, station_b, &local, &station_offsets)
+        self.closure_alignment_stamp(
+            strategy,
+            station_a,
+            station_b,
+            &local,
+            &station_offsets,
+            None,
+        )
     }
 
     /// Re-derive every snap-to-merge closure's `is_aligned` from the geometry as
@@ -591,6 +604,7 @@ impl Project {
         }
         let local = self.section_local_coords();
         let station_offsets = self.resolved_station_offsets();
+        let mut components = StationComponents::new(self);
         // Decided in an immutable pass, applied after: the stamp reads merges and
         // datums off `self`. Every decision is independent of every other, so the
         // batch is the same however the list is ordered.
@@ -606,6 +620,7 @@ impl Project {
                     &closure.station_b,
                     &local,
                     &station_offsets,
+                    Some(&mut components),
                 );
                 (stamp != closure.is_aligned).then_some((index, stamp))
             })
