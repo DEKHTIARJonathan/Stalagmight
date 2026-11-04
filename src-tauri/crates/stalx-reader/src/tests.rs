@@ -18,6 +18,18 @@ use super::{
     ReadOptions, ShotKind, StationId, SUPPORTED_SCHEMA_VERSION,
 };
 
+thread_local! {
+    /// Runs right after the load inside every read on this thread: stands in for
+    /// a slow or panicking post-load step.
+    pub(super) static AFTER_LOAD: std::cell::RefCell<Box<dyn Fn()>> =
+        std::cell::RefCell::new(Box::new(|| {}));
+}
+
+/// Install an [`AFTER_LOAD`] hook for the rest of this test's thread.
+fn after_load(hook: impl Fn() + 'static) {
+    AFTER_LOAD.with(|slot| *slot.borrow_mut() = Box::new(hook));
+}
+
 fn invalid_kind(err: &ReadError) -> Option<InvalidKind> {
     match err {
         ReadError::Invalid { kind, .. } => Some(*kind),
@@ -351,20 +363,20 @@ fn read_bytes_enforces_its_own_size_cap() {
 #[test]
 fn an_expired_deadline_interrupts_a_long_statement() {
     // A plain filler table is allowed, but the integrity check walks it in one
-    // long statement, which the deadline must interrupt.
+    // long statement, which the load connection's deadline must interrupt.
     let path = with_schema_sql(
         "CREATE TABLE filler (x);
          WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 50000)
            INSERT INTO filler SELECT x FROM n;",
     );
 
-    let err = read_file_with(
-        &path,
-        &ReadOptions::default().deadline(std::time::Duration::ZERO),
-    )
-    .unwrap_err();
+    let err =
+        Database::open_existing_untrusted(&path, i32::MAX, std::time::Duration::from_nanos(1))
+            .map(|_| ())
+            .map_err(super::invalid)
+            .unwrap_err();
 
-    assert!(invalid_kind(&err) == Some(InvalidKind::Deadline), "{err}");
+    assert_eq!(invalid_kind(&err), Some(InvalidKind::Deadline), "{err}");
 }
 
 #[test]
@@ -591,12 +603,20 @@ fn the_frame_datum_anchors_its_component_even_when_it_is_not_the_lowest() {
 #[test]
 #[expect(clippy::panic, reason = "the panic is the input under test")]
 fn a_panic_during_the_read_becomes_an_internal_error() {
-    let err = super::contain_panics(|| panic!("boom")).unwrap_err();
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &full_project());
+    after_load(|| panic!("boom"));
 
-    assert!(
-        matches!(&err, ReadError::Internal(m) if m == "boom"),
-        "{err}"
-    );
+    let from_file = read_file(&path).unwrap_err();
+    let from_bytes =
+        read_bytes(&std::fs::read(&path).unwrap(), &ReadOptions::default()).unwrap_err();
+
+    for err in [from_file, from_bytes] {
+        assert!(
+            matches!(&err, ReadError::Internal(m) if m == "boom"),
+            "{err}"
+        );
+    }
 }
 
 #[test]
@@ -741,16 +761,107 @@ fn a_datum_the_stored_offsets_no_longer_honour_has_a_large_residual() {
 
 #[test]
 fn the_deadline_covers_the_whole_read_not_only_long_statements() {
-    // No single statement here is long enough for SQLite to interrupt; the
-    // read-wide clock still stops it.
+    // No statement here is long enough for SQLite to interrupt; a slow step
+    // after the load uses up the deadline, and the read-wide clock stops it.
     let dir = TempDir::new().unwrap();
     let path = save(&dir, &full_project());
+    after_load(|| std::thread::sleep(std::time::Duration::from_millis(1_500)));
 
     let err = read_file_with(
         &path,
-        &ReadOptions::default().deadline(std::time::Duration::ZERO),
+        &ReadOptions::default().deadline(std::time::Duration::from_secs(1)),
     )
     .unwrap_err();
 
     assert_eq!(invalid_kind(&err), Some(InvalidKind::Deadline), "{err}");
+}
+
+#[test]
+fn row_counts_are_refused_before_the_load() {
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &full_project());
+    after_load(|| unreachable!("the load ran"));
+    let options = ReadOptions::default().count_limits(CountLimits::default().shots(1));
+
+    let err = read_file_with(&path, &options).unwrap_err();
+
+    assert!(
+        matches!(
+            err,
+            ReadError::TooComplex {
+                what: "shots",
+                max: 1,
+                ..
+            }
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn schema_expressions_a_migration_would_evaluate_are_refused() {
+    for sql in [
+        "CREATE INDEX e ON shots (length(hex(zeroblob(3000000))) + length);",
+        "CREATE INDEX p ON shots (length) WHERE length > 0;",
+        "CREATE TABLE d (x TEXT DEFAULT (hex(zeroblob(1000))));",
+        "CREATE TABLE c (x CHECK (length(hex(zeroblob(4000000))) > 0));",
+        "CREATE TABLE c (x, CHECK(x = 1) /* CHECK (id = 1) */);",
+        "CREATE TABLE c (x CHECK/**/(x > 0));",
+    ] {
+        let err = read_file(&with_schema_sql(sql)).unwrap_err();
+        assert_eq!(
+            invalid_kind(&err),
+            Some(InvalidKind::RefusedSchemaObject),
+            "{sql}: {err}"
+        );
+    }
+}
+
+#[test]
+fn the_apps_own_check_and_literal_defaults_are_allowed() {
+    // The app's schema has `CHECK (id = 1)` singletons; plain literal defaults and
+    // identifiers containing "check" are not expressions.
+    let path = with_schema_sql(
+        "CREATE TABLE extra (id INTEGER PRIMARY KEY CHECK ( id=1 ), checked_at TEXT DEFAULT 'x',
+                             n REAL DEFAULT -1.5, t TEXT DEFAULT CURRENT_TIMESTAMP);",
+    );
+
+    read_file(&path).unwrap();
+}
+
+#[test]
+fn a_derived_uuid_steps_past_one_the_file_already_holds() {
+    // The namespace is public: give Main's first shot the id the reader would
+    // derive for its (UUID-less) second shot.
+    let path = with_schema_sql("SELECT 1;");
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let section: u32 = conn
+        .query_row(
+            "SELECT section_id FROM shots ORDER BY section_id, sequence_order LIMIT 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let squat = uuid::Uuid::new_v5(
+        &super::DERIVED_UUID_NAMESPACE,
+        format!("{section}/1/").as_bytes(),
+    )
+    .to_string();
+    conn.execute_batch(&format!(
+        "UPDATE shots SET uuid = '{squat}'
+           WHERE rowid = (SELECT rowid FROM shots ORDER BY section_id, sequence_order LIMIT 1);
+         UPDATE shots SET uuid = NULL
+           WHERE rowid = (SELECT rowid FROM shots ORDER BY section_id, sequence_order
+                          LIMIT 1 OFFSET 1);"
+    ))
+    .unwrap();
+    drop(conn);
+
+    let first = read_file(&path).unwrap();
+    let second = read_file(&path).unwrap();
+
+    assert_eq!(first, second, "derived ids must not change between reads");
+    let shots = &first.sections[0].shots;
+    assert_eq!(shots[0].uuid, squat);
+    assert!(shots[1].uuid_derived && shots[1].uuid != squat);
 }

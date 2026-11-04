@@ -10,23 +10,30 @@
 //! migrations change stored meaning (v12 flips the pitch sign convention), so a
 //! raw read of an old file would be silently wrong.
 //!
-//! The input is treated as hostile. Before the app's load path runs, a file
-//! that defines views, triggers, virtual tables or generated columns is
-//! refused, because those would run SQL the file chose. Every connection to the
-//! copy runs in defensive mode with `trusted_schema` off, a cap on any value
-//! SQLite produces, and a deadline that interrupts any statement still running
-//! past it; the load connection also skips memory-mapping and keeps temporary
-//! data on disk.
+//! The input is treated as hostile. Before the app's load path runs, a file is
+//! refused if it defines a view, trigger, virtual table, generated column,
+//! expression or partial index, a non-literal column default, or any CHECK
+//! constraint other than the app's own `CHECK (id = 1)`: each would evaluate an
+//! expression the file chose, and the forward migrations write to the copy. It
+//! is also refused when a table holds more rows than [`CountLimits`] allows,
+//! counted before anything is loaded. Every connection to the copy runs in
+//! defensive mode with `trusted_schema` off, a cap on any value SQLite produces,
+//! no memory-mapping, cell-size checks, and a deadline that interrupts any
+//! statement still running past it.
 //!
-//! **One deadline covers the whole read, at two granularities.** Inside SQLite a
-//! statement is interrupted mid-run. The steps after the load (the app's
-//! post-load normalisation, the conversion, optional station positions) are
-//! plain Rust: the deadline is checked between them, so a step that has started
-//! runs to completion. With the app's #596 / #597 fixes those steps are
-//! near-linear, except station positions, which until this crate switches to the
-//! app's positions-only path still build per-station merge lists quadratic in
-//! merge-group size (#596). There is no memory bound beyond the input and
-//! count caps; a server should still run reads in a worker it can kill.
+//! **Bounds.** One deadline covers the read from the first SQLite statement to
+//! the result, at two granularities: inside SQLite a statement is interrupted
+//! mid-run; the steps after the load (the app's post-load normalisation, the
+//! conversion, optional station positions) are plain Rust, and the deadline is
+//! checked between them, so a step that has started runs to completion. How
+//! long such a step can run is set by the app code it calls: the orphan-closure
+//! sweep in the normalisation is super-linear until #597 lands, and station
+//! positions build per-station merge lists quadratic in merge-group size until
+//! this crate moves to the app's positions-only path (#596). Memory is bounded
+//! only by the input size and [`CountLimits`]. SQLite's own temporary files go
+//! to the process temp dir (`SQLITE_TMPDIR`), not [`ReadOptions::temp_dir`].
+//! A server should run reads in a worker it can kill: stack overflow and
+//! allocation failure abort the process, which no error type can contain.
 //!
 //! Files written by a newer schema than this crate knows are refused with
 //! [`ReadError::NewerSchema`]; upgrade the crate to read them.
@@ -97,11 +104,10 @@ impl Default for ReadOptions {
 
 /// Caps on what a file may contain, refused with [`ReadError::TooComplex`].
 ///
-/// The steps after the load are plain Rust and some are super-linear in these
-/// counts (#597: loop closures x stations x merges; #596: merge-group size), so
-/// the deadline cannot bound them. The defaults are generous enough for the
-/// largest real surveys and do NOT make the worst case fast; a server should set
-/// tighter caps until those issues are fixed.
+/// Rows are counted in the file before it is loaded, so the caps also bound the
+/// memory the load uses. They do not make every step fast: see the crate docs'
+/// **Bounds**. The defaults fit the largest real surveys; a server should set
+/// caps that fit its own deadline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CountLimits {
@@ -184,12 +190,12 @@ impl ReadOptions {
 
 /// Why a read failed.
 ///
-/// Every variant is deterministic for a given file and crate version, so none is
-/// worth retrying as-is, except [`ReadError::Io`] (disk or temp-dir trouble on
-/// the reading side) and [`ReadError::NewerSchema`] (retry after upgrading the
-/// crate). In particular [`InvalidKind::Deadline`] means the file needs more
-/// than the configured time, not that a worker was slow: retrying it with the
-/// same deadline fails the same way.
+/// Every variant except one is deterministic for a given file and crate version,
+/// so retrying as-is cannot help, apart from [`ReadError::Io`] (disk or temp-dir
+/// trouble on the reading side) and [`ReadError::NewerSchema`] (retry after
+/// upgrading the crate). The exception is [`InvalidKind::Deadline`], which
+/// measures wall-clock time: a file near the limit can pass on a less-loaded
+/// worker. Retry it at most once, or treat it as "too complex".
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ReadError {
@@ -226,14 +232,15 @@ pub enum InvalidKind {
     /// SQLite, but corrupt (failed the integrity check, a malformed schema, or
     /// an impossible schema version).
     Corrupt,
-    /// The file defines a view, trigger, virtual table or generated column.
+    /// The file defines a schema object that evaluates file-chosen SQL (see the
+    /// crate docs).
     RefusedSchemaObject,
     /// A statement was still running at the deadline.
     Deadline,
     /// SQLite, but not a Stalagmight project (no project data).
     NoProjectData,
-    /// A stored value no survey can have: a non-finite measurement, or a zero
-    /// datum outside latitude [-90, 90] / longitude [-180, 180].
+    /// A stored value no survey can have: a zero datum with a non-finite
+    /// latitude/longitude or one outside [-90, 90] / [-180, 180].
     InvalidValue,
     /// Anything else the load path rejected.
     Other,
@@ -316,7 +323,12 @@ fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
     // and every post-load phase checks it before starting.
     let expires = Instant::now() + options.deadline;
     let max_value_bytes = i32::try_from(options.max_file_bytes).unwrap_or(i32::MAX);
-    let schema_version = inspect(copy, max_value_bytes, remaining(expires)?)?;
+    let schema_version = inspect(
+        copy,
+        max_value_bytes,
+        options.count_limits,
+        remaining(expires)?,
+    )?;
     if schema_version > SCHEMA_VERSION {
         return Err(ReadError::NewerSchema {
             found: schema_version,
@@ -327,6 +339,11 @@ fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
     let db = Database::open_existing_untrusted(copy, max_value_bytes, remaining(expires)?)
         .map_err(invalid)?;
     let mut project = db.load_project().map_err(invalid)?;
+    // A probe interrupted by the deadline can swallow the error and report a
+    // table absent, so check the clock before trusting what was loaded.
+    remaining(expires)?;
+    #[cfg(test)]
+    tests::AFTER_LOAD.with(|hook| hook.borrow()());
     check_counts(&project, options.count_limits)?;
     validate_values(&project)?;
     // Before the app's steps below: the app repairs a missing or in-section
@@ -365,6 +382,94 @@ fn remaining(expires: Instant) -> Result<Duration, ReadError> {
         .ok_or_else(|| ReadError::invalid(InvalidKind::Deadline, "deadline passed"))
 }
 
+/// Whether a column default, as `pragma_table_xinfo` reports it (an expression
+/// default loses its parentheses there), is a plain literal: a number, a string
+/// or blob literal, NULL, TRUE/FALSE or CURRENT_TIME/DATE/TIMESTAMP.
+fn is_literal_default(default: &str) -> bool {
+    let d = default.trim();
+    let quoted = |body: &str| {
+        body.len() >= 2
+            && body.starts_with('\'')
+            && body.ends_with('\'')
+            && !body[1..body.len() - 1].replace("''", "").contains('\'')
+    };
+    let upper = d.to_ascii_uppercase();
+    let unsigned = d.trim_start_matches(['+', '-']);
+    matches!(
+        upper.as_str(),
+        "NULL" | "TRUE" | "FALSE" | "CURRENT_TIME" | "CURRENT_DATE" | "CURRENT_TIMESTAMP"
+    ) || quoted(d)
+        || (upper.starts_with("X'") && quoted(&d[1..]))
+        || (!unsigned.is_empty()
+            && unsigned
+                .chars()
+                .all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
+            && unsigned.parse::<f64>().is_ok())
+}
+
+/// Whether every CHECK constraint in a table's `CREATE TABLE` text is the app's
+/// own singleton guard, `CHECK (id = 1)`. Scans for the keyword anywhere, so a
+/// spelling this misreads is refused, never allowed.
+fn checks_are_the_apps(sql: &str) -> bool {
+    let upper = sql.to_ascii_uppercase();
+    let bytes = upper.as_bytes();
+    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+    let mut from = 0;
+    while let Some(at) = upper[from..].find("CHECK").map(|i| from + i) {
+        from = at + "CHECK".len();
+        let before = at.checked_sub(1).map(|i| bytes[i]);
+        let after = bytes.get(from).copied();
+        if before.is_some_and(word) || after.is_some_and(word) {
+            continue; // part of a longer identifier, e.g. `checked_at`
+        }
+        let rest = upper[from..].trim_start();
+        let Some(body) = rest.strip_prefix('(') else {
+            return false;
+        };
+        let Some(end) = body.find(')') else {
+            return false;
+        };
+        let expr: String = body[..end].chars().filter(|c| !c.is_whitespace()).collect();
+        if expr != "ID=1" {
+            return false;
+        }
+    }
+    true
+}
+
+/// Refuse a file whose tables hold more rows than `limits` allow, before the
+/// load builds them in memory. A table the file lacks counts as empty.
+fn check_row_counts(conn: &rusqlite::Connection, limits: CountLimits) -> Result<(), ReadError> {
+    for (table, what, max) in [
+        ("sections", "sections", limits.sections),
+        ("shots", "shots", limits.shots),
+        ("station_merges", "station merges", limits.station_merges),
+        ("loop_closures", "loop closures", limits.loop_closures),
+    ] {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_list WHERE schema = 'main' AND name = ?1",
+                [table],
+                |row| row.get(0),
+            )
+            .map_err(sql_invalid)?;
+        if exists == 0 {
+            continue;
+        }
+        // `table` is one of the fixed names above, never file content.
+        let count: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM \"{table}\""), [], |row| {
+                row.get(0)
+            })
+            .map_err(sql_invalid)?;
+        let count = usize::try_from(count).unwrap_or(usize::MAX);
+        if count > max {
+            return Err(ReadError::TooComplex { what, count, max });
+        }
+    }
+    Ok(())
+}
+
 /// Refuse zero datums no survey can have, before any geometry uses them.
 fn validate_values(project: &stalagmight_models::Project) -> Result<(), ReadError> {
     // Shot measurements need no check here: the loader already replaces a
@@ -385,15 +490,17 @@ fn validate_values(project: &stalagmight_models::Project) -> Result<(), ReadErro
     Ok(())
 }
 
+/// An arbitrary fixed UUID; changing it changes every derived shot id.
+const DERIVED_UUID_NAMESPACE: uuid::Uuid =
+    uuid::Uuid::from_u128(0x6f1d_2c3e_8b4a_4e57_9c1d_5a7e_0b3f_2d91);
+
 /// Fill a missing shot UUID, and replace the later of two equal UUIDs in one
 /// section, with a UUID derived from the shot's place and content, so the same
 /// file always reads to the same ids. Returns the shots it filled, as
-/// `(section id, shot index)`.
+/// `(section id, derived uuid)`.
 fn derive_missing_shot_uuids(
     project: &mut stalagmight_models::Project,
-) -> std::collections::HashSet<(u32, usize)> {
-    // An arbitrary fixed UUID; changing it changes every derived id.
-    const NAMESPACE: uuid::Uuid = uuid::Uuid::from_u128(0x6f1d_2c3e_8b4a_4e57_9c1d_5a7e_0b3f_2d91);
+) -> std::collections::HashSet<(u32, String)> {
     let mut derived = std::collections::HashSet::new();
     for section in &mut project.sections {
         let mut seen = std::collections::HashSet::new();
@@ -403,10 +510,21 @@ fn derive_missing_shot_uuids(
                 continue;
             }
             let name = format!("{}/{i}/{}", section.id, shot.uuid.as_deref().unwrap_or(""));
-            let id = uuid::Uuid::new_v5(&NAMESPACE, name.as_bytes()).to_string();
-            seen.insert(id.clone());
-            shot.uuid = Some(id);
-            derived.insert((section.id, i));
+            // The namespace is public, so a file can hold a UUID equal to the one
+            // derived here; step past it rather than reuse it.
+            let id = (0u32..)
+                .map(|n| match n {
+                    0 => uuid::Uuid::new_v5(&DERIVED_UUID_NAMESPACE, name.as_bytes()),
+                    n => uuid::Uuid::new_v5(
+                        &DERIVED_UUID_NAMESPACE,
+                        format!("{name}#{n}").as_bytes(),
+                    ),
+                })
+                .map(|id| id.to_string())
+                .find(|id| seen.insert(id.clone()))
+                .unwrap_or_default();
+            shot.uuid = Some(id.clone());
+            derived.insert((section.id, id));
         }
     }
     derived
@@ -417,7 +535,12 @@ fn derive_missing_shot_uuids(
 ///
 /// The version follows the app's own rule: `PRAGMA user_version`, or when that
 /// is 0 (files from before the pragma), the `project.schema_version` column.
-fn inspect(path: &Path, max_value_bytes: i32, deadline: Duration) -> Result<i32, ReadError> {
+fn inspect(
+    path: &Path,
+    max_value_bytes: i32,
+    limits: CountLimits,
+    deadline: Duration,
+) -> Result<i32, ReadError> {
     use rusqlite::config::DbConfig;
     use rusqlite::limits::Limit;
 
@@ -433,6 +556,8 @@ fn inspect(path: &Path, max_value_bytes: i32, deadline: Duration) -> Result<i32,
     conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, max_value_bytes);
     let expires = Instant::now() + deadline;
     conn.progress_handler(1_000, Some(move || Instant::now() > expires));
+    conn.execute_batch("PRAGMA mmap_size = 0; PRAGMA cell_size_check = ON;")
+        .map_err(sql_err)?;
 
     // Decided by what SQLite PARSED, not by the stored `sql` text: SQLite accepts
     // `CREATE/**/VIRTUAL TABLE` and other spellings a text match would miss.
@@ -468,6 +593,57 @@ fn inspect(path: &Path, max_value_bytes: i32, deadline: Duration) -> Result<i32,
             format!("the file defines {generated} generated column(s)"),
         ));
     }
+    // Expression and partial indexes, and `DEFAULT (expr)`, evaluate file-chosen
+    // expressions whenever a migration writes the table.
+    let indexes: i64 = conn
+        .query_row(
+            "SELECT (SELECT COUNT(*) FROM sqlite_master AS m, pragma_index_list(m.name) AS i \
+                     WHERE m.type = 'table' AND i.partial = 1) \
+                  + (SELECT COUNT(*) FROM sqlite_master AS m, pragma_index_xinfo(m.name) AS x \
+                     WHERE m.type = 'index' AND x.cid = -2)",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(sql_err)?;
+    let mut defaults = conn
+        .prepare(
+            "SELECT c.dflt_value FROM sqlite_master AS m, pragma_table_xinfo(m.name) AS c \
+             WHERE m.type = 'table' AND c.dflt_value IS NOT NULL",
+        )
+        .map_err(sql_err)?;
+    let mut expressions = indexes;
+    for default in defaults
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(sql_err)?
+    {
+        if !is_literal_default(&default.map_err(sql_err)?) {
+            expressions += 1;
+        }
+    }
+    drop(defaults);
+    if expressions > 0 {
+        return Err(ReadError::invalid(
+            InvalidKind::RefusedSchemaObject,
+            format!("the file defines {expressions} expression index(es) or default(s)"),
+        ));
+    }
+    let mut tables = conn
+        .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL")
+        .map_err(sql_err)?;
+    let mut rows = tables.query([]).map_err(sql_err)?;
+    while let Some(row) = rows.next().map_err(sql_err)? {
+        let sql: String = row.get(1).map_err(sql_err)?;
+        if !checks_are_the_apps(&sql) {
+            let name: String = row.get(0).map_err(sql_err)?;
+            return Err(ReadError::invalid(
+                InvalidKind::RefusedSchemaObject,
+                format!("table {name} defines a CHECK constraint the app never writes"),
+            ));
+        }
+    }
+    drop(rows);
+    drop(tables);
+    check_row_counts(&conn, limits)?;
 
     let stamped: i32 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))

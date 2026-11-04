@@ -264,7 +264,7 @@ impl Survey {
         project: &Project,
         schema_version: i32,
         with_stations: bool,
-        derived_uuids: &std::collections::HashSet<(u32, usize)>,
+        derived_uuids: &std::collections::HashSet<(u32, String)>,
     ) -> Self {
         let mut unresolved = 0;
         let mut resolve = |key: &StationKey| {
@@ -390,9 +390,11 @@ impl Survey {
                         shots: section
                             .shots
                             .iter()
-                            .enumerate()
-                            .map(|(i, shot)| {
-                                Shot::from_model(shot, derived_uuids.contains(&(section.id, i)))
+                            .map(|shot| {
+                                let derived = shot.uuid.as_ref().is_some_and(|uuid| {
+                                    derived_uuids.contains(&(section.id, uuid.clone()))
+                                });
+                                Shot::from_model(shot, derived)
                             })
                             .collect(),
                     }
