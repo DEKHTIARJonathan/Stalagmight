@@ -2831,6 +2831,28 @@
       }
     },
     {
+      "name": "save_target_exists",
+      "module": "save_target",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "bool",
+        "ts": "boolean"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
       "name": "set_project_name_for_path",
       "module": "project",
       "async": true,

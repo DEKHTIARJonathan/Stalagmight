@@ -1,9 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const existsMock = vi.hoisted(() => vi.fn());
-vi.mock('@tauri-apps/plugin-fs', () => ({ exists: existsMock }));
+vi.mock('../ipc');
 
 import { confirmOverwrite, resolveSavePath, useOverwritePromptStore } from '../overwriteGuard';
+import { invokeIpcMock } from '../../test/factories/ipc';
+
+/**
+ * [#576 HFI-2] The existence probe is the backend's `save_target_exists`: the
+ * webview's fs plugin has no scope for user paths, so its `exists()` threw for
+ * every path in the real app and every rewritten name asked "could not check".
+ * `answer` scripts the backend's reply to that one command.
+ */
+function backendSays(answer: boolean | Error): void {
+  invokeIpcMock.mockImplementation(async (cmd: string) => {
+    if (cmd !== 'save_target_exists') throw new Error(`unexpected command ${cmd}`);
+    if (answer instanceof Error) throw answer;
+    return answer;
+  });
+}
+
+/** The paths the probe was asked about. */
+function probedPaths(): unknown[] {
+  return invokeIpcMock.mock.calls
+    .filter(([cmd]) => cmd === 'save_target_exists')
+    .map(([, args]) => (args as { path: string }).path);
+}
 
 /** Let the probe settle, then answer the prompt that is (or is not) showing. */
 async function answerPrompt(replace: boolean): Promise<void> {
@@ -19,24 +40,26 @@ async function answerPrompt(replace: boolean): Promise<void> {
 describe('resolveSavePath', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    invokeIpcMock.mockReset();
     useOverwritePromptStore.setState({ request: null });
   });
 
   it('does not probe or ask when the name is written as the dialog returned it', async () => {
+    backendSays(true);
     expect(await resolveSavePath('/mock/map.png', 'png')).toBe('/mock/map.png');
-    expect(existsMock).not.toHaveBeenCalled();
+    expect(invokeIpcMock).not.toHaveBeenCalled();
     expect(useOverwritePromptStore.getState().request).toBeNull();
   });
 
   it('writes a rewritten name that does not exist without asking', async () => {
-    existsMock.mockResolvedValue(false);
+    backendSays(false);
     expect(await resolveSavePath('/mock/CaveA 1.5', 'csv')).toBe('/mock/CaveA 1.5.csv');
-    expect(existsMock).toHaveBeenCalledWith('/mock/CaveA 1.5.csv');
+    expect(probedPaths()).toEqual(['/mock/CaveA 1.5.csv']);
     expect(useOverwritePromptStore.getState().request).toBeNull();
   });
 
   it('asks before replacing an existing file under the rewritten name; Cancel writes nothing', async () => {
-    existsMock.mockResolvedValue(true);
+    backendSays(true);
     const pending = resolveSavePath('/mock/map.svg', 'png');
 
     await vi.waitFor(() => expect(useOverwritePromptStore.getState().request).not.toBeNull());
@@ -54,14 +77,14 @@ describe('resolveSavePath', () => {
   });
 
   it('returns the rewritten name once the user agrees to replace it', async () => {
-    existsMock.mockResolvedValue(true);
+    backendSays(true);
     const pending = resolveSavePath('/mock/map.svg', 'png');
     await answerPrompt(true);
     expect(await pending).toBe('/mock/map.png');
   });
 
-  it('asks (fail closed) when the probe fails', async () => {
-    existsMock.mockRejectedValue(new Error('permission denied'));
+  it('asks (fail closed) when the backend check fails', async () => {
+    backendSays(new Error('permission denied'));
     const pending = resolveSavePath('/mock/OtherCave', 'stalx');
 
     await vi.waitFor(() => expect(useOverwritePromptStore.getState().request).not.toBeNull());

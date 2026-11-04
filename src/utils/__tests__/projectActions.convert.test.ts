@@ -2,10 +2,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const saveDialogMock = vi.hoisted(() => vi.fn());
 const surfaceSaveFailureMock = vi.hoisted(() => vi.fn());
-const existsMock = vi.hoisted(() => vi.fn());
-
-vi.mock('@tauri-apps/plugin-fs', () => ({ exists: existsMock }));
-
 vi.mock('../ipc');
 stubGetErrorMessage(fallbackOr('error'));
 vi.mock('../fileDialogs', () => ({
@@ -153,10 +149,10 @@ describe('convertToUnmanagedStalx onto a rewritten existing name', () => {
     vi.clearAllMocks();
     useOverwritePromptStore.setState({ request: null });
     saveDialogMock.mockResolvedValue('/home/diver/OtherCave');
-    existsMock.mockResolvedValue(true);
-    // clearAllMocks keeps implementations; drop the failing-unlink one above.
+    // clearAllMocks keeps implementations; drop the failing-unlink one above. The
+    // backend's existence probe (`save_target_exists`, #576 HFI-2) finds a file.
     invokeIpcMock.mockReset();
-    invokeIpcMock.mockResolvedValue(undefined);
+    invokeIpcMock.mockImplementation(async (cmd: string) => (cmd === 'save_target_exists' ? true : undefined));
     saveProjectMock = vi.fn(async () => ({ success: true, unlinked_copy_path: '/home/diver/OtherCave.stalx' }));
     useProjectStore.setState({ saveProject: saveProjectMock, loadProject: vi.fn() } as never);
     useSpeleoStore.setState({ refreshLinkStatus: vi.fn(async () => {}) } as never);
@@ -173,7 +169,8 @@ describe('convertToUnmanagedStalx onto a rewritten existing name', () => {
 
     expect(await pending).toBe(false);
     expect(saveProjectMock).not.toHaveBeenCalled();
-    expect(invokeIpcMock).not.toHaveBeenCalled();
+    // Only the existence probe ran: no unlink, nothing else.
+    expect(invokeIpcMock.mock.calls.map(([cmd]) => cmd)).toEqual(['save_target_exists']);
   });
 
   it('writes the copy there once the user agrees', async () => {

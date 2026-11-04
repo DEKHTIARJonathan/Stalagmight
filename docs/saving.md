@@ -274,6 +274,22 @@ pre-push flush is the same save: its warnings ride the Done / Push answer
 
 The frontend calls `refreshProjectState()` after a save ONLY when the project entered the save with integrity issues (the backend's save-time heals mutate the live project). A clean save skips it: it changes no computed data (stations, stats, warnings), so recomputing everything would be wasted work. The only state that changes is `file_path` (on first save or save-as), which the backend returns via `SaveOutcome.saved_path`. When the save produced a detached copy instead (see Save a Copy below), the path comes back in `unlinked_copy_path` and `saved_path` is `null`.
 
+### Asking before a file is replaced
+
+Save As (`saveProjectAs`, `src/utils/projectActions.ts`) and every save or export
+whose name the app rewrote after the OS dialog answered (`resolveSavePath`,
+`src/utils/overwriteGuard.ts`: `map.svg` typed for a PNG export is written as
+`map.png`) ask before replacing a file. Whether one is there is the backend's
+answer, `save_target_exists` (`commands/save_target.rs`, #576 HFI-2): it runs the
+write-path policy of the write it precedes (docs/architecture.md, "IPC trust
+boundary") and reports anything at the name - a file, a folder, a dangling link -
+as there. A probe that is refused or fails (a folder the OS will not let it look
+into) is an error, and the prompt then asks with its "could not check whether ...
+already exists" wording rather than saving over a file nobody looked for (#576
+E10-D1). The webview's fs plugin is not asked: its scope holds no user path, so its
+`exists()` failed for every path in the real app and every Save As said "could not
+check".
+
 ## Atomic Save (Temp File + Rename)
 
 All saves use a temp file with atomic rename to prevent data loss on crash or power failure:

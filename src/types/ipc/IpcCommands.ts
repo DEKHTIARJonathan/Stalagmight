@@ -224,6 +224,7 @@ export interface IpcCommands {
   save_display_setting: { args: { key: string; value: string; madeFor?: DisplaySettingTarget | null }; result: null; error: CommandError };
   save_dive_plan: { args: { id?: number | null; name: string; snapshot: DivePlanSnapshot }; result: DivePlanMeta; error: CommandError };
   save_project: { args: { path?: string | null; isAutosave?: boolean | null }; result: SaveOutcome; error: CommandError };
+  save_target_exists: { args: { path: string }; result: boolean; error: CommandError };
   set_project_name_for_path: { args: { path: string; name: string }; result: EditOutcome; error: CommandError };
   set_shot_kind: { args: { sectionId: number; shotId: number; kind: ShotKind }; result: EditOutcome; error: CommandError };
   set_station_comment: { args: { stationRef: StationRef; comment?: string | null }; result: EditOutcome; error: CommandError };
@@ -410,6 +411,7 @@ export const IPC_COMMAND_NAMES = [
   "save_display_setting",
   "save_dive_plan",
   "save_project",
+  "save_target_exists",
   "set_project_name_for_path",
   "set_shot_kind",
   "set_station_comment",

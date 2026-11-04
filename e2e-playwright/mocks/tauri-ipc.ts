@@ -14,6 +14,7 @@ import { dmpImportCommands } from './ipc/dmpImport';
 import { gasPlanCommands } from './ipc/gasPlan';
 import { historyCommands } from './ipc/history';
 import { recoveryCommands } from './ipc/recovery';
+import { saveTargetCommands } from './ipc/saveTarget';
 import { speleodbCommands } from './ipc/speleodb';
 import { tileCacheCommands } from './ipc/tileCache';
 import { buildMockShot } from './ipc/shots';
@@ -126,6 +127,7 @@ const MOCK_COMMAND_FAMILIES: MockCommandFamily[] = [
   compassImportCommands,
   historyCommands,
   recoveryCommands,
+  saveTargetCommands,
 ];
 
 /**
@@ -2588,9 +2590,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'plugin:fs|write':
           case 'plugin:fs|writeFile':
             return null;
-
-          case 'plugin:fs|exists':
-            return false;
 
           // The native UI zoom (`getCurrentWebview().setZoom`, src/utils/uiScale.ts): there is
           // no native webview to zoom in a browser; acknowledged so the scale is applied as set.

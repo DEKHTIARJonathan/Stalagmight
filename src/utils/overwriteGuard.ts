@@ -16,8 +16,8 @@
  * dialog that is waiting for the answer.
  */
 import { create } from 'zustand';
-import { exists } from '@tauri-apps/plugin-fs';
 import { ensureExtension } from './fileDialogs';
+import { invokeIpc } from './ipc';
 import { extractFilename } from './path';
 
 export interface OverwritePromptRequest {
@@ -66,6 +66,18 @@ export function confirmOverwrite(
 }
 
 /**
+ * Whether a file is already at `path`, which a save or export is about to write
+ * (#576 HFI-2). The backend answers (`save_target_exists`), under the write-path
+ * policy of the write that follows: the webview's fs plugin has no scope for
+ * user paths, so its `exists()` threw for every path in the real app and every
+ * prompt said "could not check". Rejects when the check failed or the path is
+ * refused; the callers then ask as if the file were there (E10-D1).
+ */
+export function saveTargetExists(path: string): Promise<boolean> {
+  return invokeIpc('save_target_exists', { path }, { purpose: 'check whether a save would replace a file' });
+}
+
+/**
  * The path a save-dialog answer is actually written to, or `null` when the user
  * declined to replace an existing file there.
  *
@@ -80,7 +92,7 @@ export async function resolveSavePath(selected: string, extension: string): Prom
   let present: boolean;
   let existenceUnknown = false;
   try {
-    present = await exists(finalPath);
+    present = await saveTargetExists(finalPath);
   } catch {
     present = true;
     existenceUnknown = true;

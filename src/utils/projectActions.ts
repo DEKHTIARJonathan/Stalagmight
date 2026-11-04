@@ -13,7 +13,6 @@
  * handlers (outside React). Callers tag the telemetry entry-point source before
  * calling.
  */
-import { exists } from '@tauri-apps/plugin-fs';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
@@ -28,7 +27,7 @@ import {
   PROJECT_EXTENSION,
 } from './fileDialogs';
 import { extractFilename } from './path';
-import { resolveSavePath } from './overwriteGuard';
+import { resolveSavePath, saveTargetExists } from './overwriteGuard';
 import type { CommandOutcome } from '../store/commandResult';
 import type { SaveOutcome } from '../types/ipc/SaveOutcome';
 
@@ -84,14 +83,15 @@ export async function saveProjectAs(opts?: {
     if (!selected) return null;
 
     const finalPath = ensureExtension(selected, PROJECT_EXTENSION);
-    // [#576 E10-D1] A probe that FAILS (permissions, a sandbox scope, a network
-    // drive) says nothing about whether the file is there, so it asks exactly
-    // like a probe that found it. It used to fall through to the save, replacing
-    // an existing survey with no prompt at all.
+    // [#576 E10-D1] A probe that FAILS (permissions, a refused location, a
+    // network drive) says nothing about whether the file is there, so it asks
+    // exactly like a probe that found it. It used to fall through to the save,
+    // replacing an existing survey with no prompt at all. [#576 HFI-2] The
+    // backend answers: the webview's fs plugin threw for every user path.
     let existenceUnknown = false;
     let present: boolean;
     try {
-      present = await exists(finalPath);
+      present = await saveTargetExists(finalPath);
     } catch {
       present = true;
       existenceUnknown = true;

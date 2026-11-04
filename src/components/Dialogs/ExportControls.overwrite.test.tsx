@@ -1,7 +1,7 @@
 /**
  * [#576 D35] Export writes the NORMALISED name (`map.svg` typed for a PNG export is
  * written as `map.png`), a file the OS overwrite prompt never asked about. With
- * the real naming rule and only the picker and the existence probe stubbed, an
+ * the real naming rule and only the picker and the backend's existence probe stubbed, an
  * export onto an existing rewritten name must ask first, and Cancel must write
  * nothing.
  */
@@ -10,8 +10,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import '../../i18n';
 
-const existsMock = vi.hoisted(() => vi.fn());
-vi.mock('@tauri-apps/plugin-fs', () => ({ exists: existsMock }));
+vi.mock('../../utils/ipc');
 vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }));
 vi.mock('../../utils/fileDialogs', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../utils/fileDialogs')>()),
@@ -24,6 +23,19 @@ import { useProjectStore } from '../../store/projectStore';
 import { saveDialog } from '../../utils/fileDialogs';
 import { useOverwritePromptStore } from '../../utils/overwriteGuard';
 import { DEFAULT_IMAGE_OPTIONS } from '../../store/exportStore';
+import { invokeIpcMock } from '../../test/factories/ipc';
+
+/** [#576 HFI-2] The backend's answer to the existence probe (`save_target_exists`). */
+function fileThere(present: boolean): void {
+  invokeIpcMock.mockImplementation(async (cmd: string) => (cmd === 'save_target_exists' ? present : undefined));
+}
+
+/** The paths the existence probe was asked about. */
+function probedPaths(): unknown[] {
+  return invokeIpcMock.mock.calls
+    .filter(([cmd]) => cmd === 'save_target_exists')
+    .map(([, args]) => (args as { path: string }).path);
+}
 
 let exportImage: ReturnType<typeof vi.fn>;
 let exportCsv: ReturnType<typeof vi.fn>;
@@ -49,6 +61,7 @@ function renderExport(exportType: 'image' | 'data') {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  invokeIpcMock.mockReset();
   useOverwritePromptStore.setState({ request: null });
   exportImage = vi.fn(async () => undefined);
   exportCsv = vi.fn(async () => undefined);
@@ -62,7 +75,7 @@ beforeEach(() => {
 describe('export onto a rewritten file name', () => {
   it('asks before replacing map.png when map.svg was typed; Cancel writes nothing', async () => {
     vi.mocked(saveDialog).mockResolvedValue('/mock/map.svg');
-    existsMock.mockResolvedValue(true);
+    fileThere(true);
     renderExport('image');
 
     await userEvent.click(screen.getByTestId('export-button'));
@@ -70,7 +83,7 @@ describe('export onto a rewritten file name', () => {
     const prompt = await screen.findByTestId('overwrite-rewritten-prompt');
     expect(prompt).toHaveTextContent('map.png');
     expect(prompt).toHaveTextContent('already exists');
-    expect(existsMock).toHaveBeenCalledWith('/mock/map.png');
+    expect(probedPaths()).toEqual(['/mock/map.png']);
     expect(exportImage).not.toHaveBeenCalled();
 
     await userEvent.click(screen.getByTestId('overwrite-rewritten-cancel'));
@@ -83,7 +96,7 @@ describe('export onto a rewritten file name', () => {
 
   it('writes the rewritten name once the user chooses Replace', async () => {
     vi.mocked(saveDialog).mockResolvedValue('/mock/map.svg');
-    existsMock.mockResolvedValue(true);
+    fileThere(true);
     renderExport('image');
 
     await userEvent.click(screen.getByTestId('export-button'));
@@ -95,7 +108,7 @@ describe('export onto a rewritten file name', () => {
 
   it('keeps the tail of a dotted name and writes it without asking when nothing is there', async () => {
     vi.mocked(saveDialog).mockResolvedValue('/mock/CaveA 1.5');
-    existsMock.mockResolvedValue(false);
+    fileThere(false);
     renderExport('data');
 
     await userEvent.click(screen.getByTestId('export-button'));
@@ -106,13 +119,13 @@ describe('export onto a rewritten file name', () => {
 
   it('does not ask again for the name the OS dialog already confirmed', async () => {
     vi.mocked(saveDialog).mockResolvedValue('/mock/map.png');
-    existsMock.mockResolvedValue(true);
+    fileThere(true);
     renderExport('image');
 
     await userEvent.click(screen.getByTestId('export-button'));
 
     await waitFor(() => expect(exportImage).toHaveBeenCalledTimes(1));
-    expect(existsMock).not.toHaveBeenCalled();
+    expect(probedPaths()).toEqual([]);
     expect(screen.queryByTestId('overwrite-rewritten-prompt')).toBeNull();
   });
 });

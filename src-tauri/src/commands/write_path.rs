@@ -37,6 +37,33 @@ pub(crate) enum WriteTarget {
 }
 
 impl WriteTarget {
+    /// Every target, for [`Self::of_path`].
+    const ALL: [Self; 9] = [
+        Self::Project,
+        Self::Csv,
+        Self::Json,
+        Self::Ariane,
+        Self::Image(ImageFormat::Png),
+        Self::Image(ImageFormat::Svg),
+        Self::Image(ImageFormat::Pdf),
+        Self::DiveProfile(ProfileFormat::SubsurfaceXml),
+        Self::DiveProfile(ProfileFormat::PlainText),
+    ];
+
+    /// [#576 HFI-2] What a file named `path` would be written as - the target
+    /// whose extension it has - or `None` when the app writes no file of that
+    /// type. For a check that serves every save and export alike (the
+    /// existence probe, `commands::save_target`).
+    pub(crate) fn of_path(path: &Path) -> Option<Self> {
+        let extension = path.extension()?.to_str()?;
+        Self::ALL.into_iter().find(|target| {
+            target
+                .extensions()
+                .iter()
+                .any(|x| extension.eq_ignore_ascii_case(x))
+        })
+    }
+
     fn extensions(self) -> &'static [&'static str] {
         match self {
             Self::Project => &["stalx"],
