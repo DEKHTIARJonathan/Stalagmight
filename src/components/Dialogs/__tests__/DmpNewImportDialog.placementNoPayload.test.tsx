@@ -158,10 +158,15 @@ describe('DMP wizard: the manual-placing screen says why a segment cannot be pla
  * map" anyway - a primary button whose click only logged a console warning. It is
  * now disabled, with that line as its accessible description, and enabled again
  * once the anchor names a section the file has.
+ *
+ * #576 RV10b-6: the line tells the user to click a station in the preview, but
+ * when none of the segment's sections is in the file the preview draws nothing.
+ * That sub-case drops the preview clause and keeps the Do not place way out.
  */
-describe('DMP wizard: Place on map while the segment cannot go on the map (#576 RV10b-2)', () => {
+describe('DMP wizard: Place on map while the segment cannot go on the map (#576 RV10b-2, RV10b-6)', () => {
   const REASON = 'wizard-cannot-place-on-map';
   const LONG = 'dialogs.dmpNewImport.manualPlacing.cannotPlaceOnMap';
+  const SHORT = 'dialogs.dmpNewImport.manualPlacing.cannotPlaceOnMapNoPreview';
   const PLACE_ON_MAP = 'segment-place-on-map-button';
 
   beforeEach(() => {
@@ -217,5 +222,31 @@ describe('DMP wizard: Place on map while the segment cannot go on the map (#576 
     const button = await chooseManualPlacement();
     expect.soft(button).toBeEnabled();
     expect.soft(button).not.toHaveAttribute('aria-describedby');
+  });
+
+  it('points at the preview while it draws one of the segment sections', async () => {
+    renderWizard(savedState({ segmentQueue: [[1, 9]], segmentAnchor: { sectionIndex: 9, stationIndex: 0 } }), {
+      selected: [0, 1],
+    });
+    await waitFor(() => expect(screen.getByTestId('wizard-manual-placing')).toBeVisible());
+    expect(screen.getByTestId(REASON)).toHaveTextContent(LONG);
+  });
+
+  it('leaves the preview out when none of the segment sections is in the file', async () => {
+    renderWizard(savedState({ segmentQueue: [[9]], segmentAnchor: { sectionIndex: 9, stationIndex: 0 } }), {
+      selected: [0, 1],
+    });
+    const button = await chooseManualPlacement();
+    expect.soft(screen.getByTestId(REASON)).toHaveTextContent(SHORT);
+    expect.soft(button).toBeDisabled();
+    expect.soft(button).toHaveAccessibleDescription(SHORT);
+  });
+
+  it('the short line keeps the Do not place way out and does not mention the preview (en.json)', () => {
+    const line: string = en.dialogs.dmpNewImport.manualPlacing.cannotPlaceOnMapNoPreview;
+    expect.soft(line).toBe(
+      'This segment cannot be placed on the map: its anchor section is not in the DMP file. Choose Do not place.',
+    );
+    expect.soft(line).not.toMatch(/preview/i);
   });
 });

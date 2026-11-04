@@ -176,6 +176,10 @@ export function ManualPlacingStep({
   // [#576 RV10b-2] The line is also the disabled "Place on map" button's
   // accessible reason (aria-describedby), so it needs an id.
   const cannotPlaceOnMapId = useId();
+  // [#576 RV10b-6] The line points at the preview for another anchor - but when
+  // none of the segment's sections is in the file the preview draws nothing to
+  // click, so that sub-case leaves the preview out and offers Do not place alone.
+  const previewHasStations = (segmentPreviewSections?.length ?? 0) > 0;
 
   // Section names in current segment (for display)
   const segmentSectionNames = useMemo(() => {
@@ -237,7 +241,9 @@ export function ManualPlacingStep({
             role="status"
             data-testid="wizard-cannot-place-on-map"
           >
-            {t('dialogs.dmpNewImport.manualPlacing.cannotPlaceOnMap')}
+            {previewHasStations
+              ? t('dialogs.dmpNewImport.manualPlacing.cannotPlaceOnMap')
+              : t('dialogs.dmpNewImport.manualPlacing.cannotPlaceOnMapNoPreview')}
           </div>
         )}
 
