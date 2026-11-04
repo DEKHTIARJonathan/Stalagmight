@@ -47,7 +47,13 @@ impl std::fmt::Display for StationRef {
 /// at the geometry/IPC boundary.
 // Internal identity types - NOT crossing IPC (the wire ref stays positional
 // `StationRef`), so no `TS` derive; serde is for in-memory project (de)serialization.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+//
+// [#576 NF-W12BE-3] The derived order is load-bearing: the variants sort in
+// declaration order, so the canonical anchors (`SectionStart`, `AfterShot` by
+// shot UUID) come before the transitional `Index`. When two stored keys name one
+// station, the one that sorts first is the one read (see
+// `Project::compute_station_coordinates_with_progress`).
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum StationAnchor {
     SectionStart,
     AfterShot(String),
@@ -67,7 +73,10 @@ pub enum StationAnchor {
 /// an unrelated shot never has to rewrite them and a reference can never silently
 /// point at the wrong in-range station. The solver/IPC use the transient
 /// positional [`StationRef`], obtained via `Project::resolve_key`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+///
+/// Ordered by section, then anchor ([`StationAnchor`]'s order): the order that
+/// picks one key when two name one station.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct StationKey {
     pub section_id: SectionId,
     pub anchor: StationAnchor,

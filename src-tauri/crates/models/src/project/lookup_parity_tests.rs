@@ -26,7 +26,7 @@
     reason = "test module: a failed unwrap is the failure report"
 )]
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{BTreeSet, HashSet, VecDeque};
 use std::fmt::Write as _;
 
 use chrono::Utc;
@@ -327,7 +327,12 @@ fn datums_and_comments_land_where_the_station_scan_put_them() {
             }
         }
     }
-    for (key, comment) in &project.station_comments {
+    // The scan applied the comments in the map's order, the last one winning; the
+    // rule since #576 NF-W12BE-3 is that the key sorting first wins, so the scan
+    // here applies them last-sorting first.
+    let mut comments: Vec<(&StationKey, &String)> = project.station_comments.iter().collect();
+    comments.sort_by(|a, b| b.0.cmp(a.0));
+    for (key, comment) in comments {
         let Some(sr) = project.resolve_key(key) else {
             continue;
         };
@@ -357,6 +362,13 @@ fn datums_and_comments_land_where_the_station_scan_put_them() {
         .gps_coordinates
         .is_some_and(|g| (g.latitude - 3.0).abs() < 1e-12)));
     assert_eq!(stations.iter().filter(|s| s.comment.is_some()).count(), 3);
+    // Of the two, the canonical key's comment shows, never the positional one's.
+    assert!(stations
+        .iter()
+        .any(|s| s.comment.as_deref() == Some("after shot 0")));
+    assert!(!stations
+        .iter()
+        .any(|s| s.comment.as_deref() == Some("by index")));
 }
 
 /// A small deterministic generator (xorshift64*), so a corpus is a list of seeds.
@@ -843,4 +855,50 @@ fn closure_refs_over_the_layout_match_the_station_scan() {
     );
     // The corpus reaches every branch the layout has to get right.
     assert!(refs > 0 && via_merge > 0 && chained > 0 && doubled_refs > 0);
+}
+
+/// [#576 NF-W12BE-3] Two stored keys naming one station - the canonical key and a
+/// legacy positional `Index` beside it - each with its own comment. Which one the
+/// station showed came out of the comment map's iteration order, so a project
+/// rebuilt with the same content could show the other one. The rule: the key
+/// that sorts first wins, and a canonical anchor sorts before a positional one.
+#[test]
+#[expect(clippy::print_stdout, reason = "the test prints the winners it saw")]
+fn colliding_comment_keys_pick_one_documented_winner() {
+    let mut winners: BTreeSet<(u32, String)> = BTreeSet::new();
+    for _ in 0..64 {
+        let mut project = Project::new("collide".to_string(), None);
+        let id = project
+            .add_section(SectionData {
+                shots: vec![straight_shot(0.0, 5.0), straight_shot(90.0, 5.0)],
+                ..Default::default()
+            })
+            .id;
+        project.ensure_shot_uuids();
+        for index in [0u32, 1] {
+            let canonical = project.key_for_ref(StationRef::new(id, index)).unwrap();
+            let positional = StationKey::new(id, StationAnchor::Index(index));
+            // A fresh map per project: its own hash seed, so its own order.
+            project
+                .station_comments
+                .insert(positional, format!("index key {index}"));
+            project
+                .station_comments
+                .insert(canonical, format!("canonical key {index}"));
+        }
+        for station in project.compute_station_coordinates() {
+            if let Some(comment) = station.comment {
+                winners.insert((station.station_ref.station_index, comment));
+            }
+        }
+    }
+    println!("[NF-W12BE-3] winners over 64 rebuilt projects: {winners:?}");
+    assert_eq!(
+        winners.into_iter().collect::<Vec<_>>(),
+        vec![
+            (0, "canonical key 0".to_string()),
+            (1, "canonical key 1".to_string())
+        ],
+        "each station shows its canonical key's comment, every time"
+    );
 }

@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::warn;
 
 use crate::config::ClosureAdjustmentConfig;
-use crate::{ClosureRef, ClosureStrategy, Coordinates, Section, SectionId, Station, StationRef};
+use crate::{
+    ClosureRef, ClosureStrategy, Coordinates, Section, SectionId, Station, StationKey, StationRef,
+};
 
 use super::Project;
 
@@ -754,11 +756,28 @@ impl Project {
         );
         let t_phase = std::time::Instant::now();
 
-        // Assign station comments
+        // Assign station comments.
+        //
+        // [#576 NF-W12BE-3] Two stored keys can name one station - a legacy
+        // positional `Index` beside the canonical key, or `Index(0)` beside
+        // `SectionStart` - and a station shows one comment. The comments used to be
+        // applied in the map's iteration order, the last one applied winning, and
+        // that order changes from one map to the next, so the same project could
+        // show either comment. The rule: of the keys naming one station, the one
+        // that sorts first wins ([`StationKey`]'s order - a canonical anchor before
+        // a positional one, then by shot UUID or index). A comment set in the app is
+        // stored under the canonical key, so it wins over one left on a legacy key.
+        let mut comment_for: HashMap<StationRef, (&StationKey, &String)> = HashMap::new();
         for (key, comment) in &self.station_comments {
             let Some(sr) = self.resolve_key(key) else {
                 continue;
             };
+            let best = comment_for.entry(sr).or_insert((key, comment));
+            if key < best.0 {
+                *best = (key, comment);
+            }
+        }
+        for (sr, (_, comment)) in comment_for {
             for i in layout.positions(&stations, sr) {
                 stations[i].comment = Some(comment.clone());
             }

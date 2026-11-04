@@ -1737,12 +1737,14 @@ impl Project {
 
     /// Station comment for a positional ref, found by resolving each stored key
     /// (sound for any anchor kind). For callers/tests that hold a positional ref
-    /// rather than a stored key.
+    /// rather than a stored key. Of two keys naming the station, the one that
+    /// sorts first wins, as the station's own comment does (#576 NF-W12BE-3).
     #[cfg(any(test, feature = "test-support"))]
     pub fn station_comment_for_ref(&self, sr: StationRef) -> Option<&String> {
         self.station_comments
             .iter()
-            .find(|(k, _)| self.resolve_key(k) == Some(sr))
+            .filter(|(k, _)| self.resolve_key(k) == Some(sr))
+            .min_by(|(a, _), (b, _)| a.cmp(b))
             .map(|(_, v)| v)
     }
 }
