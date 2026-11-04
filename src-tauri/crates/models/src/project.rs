@@ -1709,14 +1709,24 @@ impl Project {
     /// transient positional [`StationRef`] keys against the CURRENT structure -
     /// the sound positional view for hot solver paths. Usually empty; entries
     /// whose anchor no longer resolves are dropped (surfaced by integrity).
+    ///
+    /// [#576 NF-W12BE-4] Of two keys naming one station, the one that sorts first
+    /// wins - the station-comment rule (NF-W12BE-3), and the one
+    /// [`Self::station_offset_for_ref`] follows. The winner used to be the last
+    /// key in the map's iteration order here and the first one there, so the two
+    /// could disagree, and either could change from one map to the next.
     fn resolved_station_offsets(&self) -> HashMap<StationRef, (f64, f64, f64)> {
-        let mut out = HashMap::with_capacity(self.station_offsets.len());
+        let mut best: HashMap<StationRef, (&StationKey, (f64, f64, f64))> =
+            HashMap::with_capacity(self.station_offsets.len());
         for (key, &v) in &self.station_offsets {
             if let Some(sr) = self.resolve_key(key) {
-                out.insert(sr, v);
+                let entry = best.entry(sr).or_insert((key, v));
+                if key < entry.0 {
+                    *entry = (key, v);
+                }
             }
         }
-        out
+        best.into_iter().map(|(sr, (_, v))| (sr, v)).collect()
     }
 
     /// Per-station manual offset for a single positional ref. Found by resolving
@@ -1724,14 +1734,18 @@ impl Project {
     /// (canonical `AfterShot`/`SectionStart` after reanchor, or transitional
     /// `Index` straight off a raw load), unlike building a canonical key (which
     /// would never match an `Index` entry). `None` when there is no nudge (the
-    /// common case - short-circuits before touching the map).
+    /// common case - short-circuits before touching the map). Of two keys naming
+    /// the station, the one that sorts first wins (#576 NF-W12BE-4). A pass over
+    /// every station reads [`Self::resolved_station_offsets`] instead: this
+    /// resolves every stored key per call.
     pub fn station_offset_for_ref(&self, sr: StationRef) -> Option<(f64, f64, f64)> {
         if self.station_offsets.is_empty() {
             return None;
         }
         self.station_offsets
             .iter()
-            .find(|(k, _)| self.resolve_key(k) == Some(sr))
+            .filter(|(k, _)| self.resolve_key(k) == Some(sr))
+            .min_by(|(a, _), (b, _)| a.cmp(b))
             .map(|(_, v)| *v)
     }
 

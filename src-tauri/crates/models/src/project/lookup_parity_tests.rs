@@ -31,6 +31,7 @@ use std::fmt::Write as _;
 
 use chrono::Utc;
 
+use super::shots::LinkPartners;
 use crate::test_fixtures::straight_shot;
 use crate::{
     ClosureRef, ClosureStrategy, GpsCoordinates, LoopClosure, Project, SectionData, SectionId,
@@ -900,5 +901,284 @@ fn colliding_comment_keys_pick_one_documented_winner() {
             (1, "canonical key 1".to_string())
         ],
         "each station shows its canonical key's comment, every time"
+    );
+}
+
+/// `range_neighbors` before #576 NF-W12BE-4: every merge and closure re-resolved
+/// for the one station asked about.
+fn scanned_range_neighbors(
+    project: &Project,
+    station_ref: StationRef,
+    section_id: SectionId,
+    start_pos: usize,
+    end_pos: usize,
+    include_closures: bool,
+) -> Vec<StationRef> {
+    let mut neighbors = Vec::new();
+    let Some(section) = project.get_section(station_ref.section_id) else {
+        return neighbors;
+    };
+    let idx = station_ref.station_index as usize;
+    if idx > section.shots.len() {
+        return neighbors;
+    }
+    let in_range = |shot_idx: usize| {
+        station_ref.section_id == section_id && (start_pos..=end_pos).contains(&shot_idx)
+    };
+    if idx > 0 && !in_range(idx - 1) {
+        neighbors.push(StationRef::new(station_ref.section_id, (idx - 1) as u32));
+    }
+    if idx < section.shots.len() && !in_range(idx) {
+        neighbors.push(StationRef::new(station_ref.section_id, (idx + 1) as u32));
+    }
+    for merge in &project.station_merges {
+        if project.key_is_ref(&merge.station_a, station_ref) {
+            neighbors.extend(project.resolve_key(&merge.station_b));
+        } else if project.key_is_ref(&merge.station_b, station_ref) {
+            neighbors.extend(project.resolve_key(&merge.station_a));
+        }
+    }
+    if include_closures {
+        for closure in &project.loop_closures {
+            if project.key_is_ref(&closure.station_a, station_ref) {
+                neighbors.extend(project.resolve_key(&closure.station_b));
+            } else if project.key_is_ref(&closure.station_b, station_ref) {
+                neighbors.extend(project.resolve_key(&closure.station_a));
+            }
+        }
+    }
+    neighbors
+}
+
+/// [#576 NF-W12BE-4] The range-delete search's neighbors over the link index are
+/// the per-node scan's, in its order, for every station (and one past the end,
+/// and one in a missing section), around every kind of range, with and without
+/// closures.
+#[test]
+#[expect(clippy::print_stdout, reason = "the test prints the corpus coverage")]
+fn range_neighbors_over_the_link_index_match_the_per_node_scan() {
+    let (mut asked, mut linked) = (0, 0);
+    for (n, project) in parity_projects().iter().enumerate() {
+        let mut refs: Vec<StationRef> = project
+            .sections
+            .iter()
+            .flat_map(|s| (0..=s.shots.len() as u32 + 1).map(move |i| StationRef::new(s.id, i)))
+            .collect();
+        refs.push(StationRef::new(SectionId::MAX, 0));
+        let mut ids: Vec<SectionId> = project.sections.iter().map(|s| s.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        for include_closures in [false, true] {
+            let links = LinkPartners::of(project, include_closures);
+            for &section_id in &ids {
+                let last = project.get_section(section_id).unwrap().shots.len() - 1;
+                let ranges = [
+                    (0, 0),
+                    (0, last),
+                    (last, last),
+                    (1.min(last), last.max(1) - 1),
+                ];
+                for (start_pos, end_pos) in ranges {
+                    for &sr in &refs {
+                        let want = scanned_range_neighbors(
+                            project,
+                            sr,
+                            section_id,
+                            start_pos,
+                            end_pos,
+                            include_closures,
+                        );
+                        let got =
+                            project.range_neighbors(&links, sr, section_id, start_pos, end_pos);
+                        assert_eq!(
+                            got, want,
+                            "project {n}, {sr:?}, range {section_id}:{start_pos}..={end_pos}, \
+                             closures {include_closures}"
+                        );
+                        asked += 1;
+                        linked += usize::from(want.len() > 2);
+                    }
+                }
+            }
+        }
+    }
+    println!("[NF-W12BE-4] {asked} neighbor lists compared, {linked} with a merge or closure partner past the shots");
+    assert!(linked > 0);
+}
+
+/// The range-delete searches before #576 NF-W12BE-4, over
+/// [`scanned_range_neighbors`]: `(connected to b, reaches a datum)`.
+fn scanned_range_searches(
+    project: &Project,
+    a: StationRef,
+    b: StationRef,
+    range: (SectionId, usize, usize),
+    removed: &HashSet<StationRef>,
+    include_closures: bool,
+) -> (bool, bool) {
+    let (section_id, start_pos, end_pos) = range;
+    let search = |closures: bool, hit: &dyn Fn(StationRef) -> bool| {
+        let mut visited = HashSet::from([a]);
+        let mut queue = VecDeque::from([a]);
+        while let Some(cur) = queue.pop_front() {
+            for nb in
+                scanned_range_neighbors(project, cur, section_id, start_pos, end_pos, closures)
+            {
+                if removed.contains(&nb) {
+                    continue;
+                }
+                if hit(nb) {
+                    return true;
+                }
+                if visited.insert(nb) {
+                    queue.push_back(nb);
+                }
+            }
+        }
+        false
+    };
+    let connected = a == b || search(include_closures, &|nb| nb == b);
+    let datums: HashSet<StationRef> = project
+        .zero_datums
+        .iter()
+        .filter_map(|zd| project.resolve_key(&zd.station_ref))
+        .filter(|sr| !removed.contains(sr))
+        .collect();
+    let anchored = datums.contains(&a) || search(true, &|nb| datums.contains(&nb));
+    (connected, anchored)
+}
+
+/// [#576 NF-W12BE-4] The range-delete searches the preview runs - the loop check
+/// and the datum check - answer what they did over the per-node scan, from every
+/// station to the range's tail, for each section's interior range with the
+/// stations a gap-close removes taken out.
+#[test]
+#[expect(clippy::print_stdout, reason = "the test prints the corpus coverage")]
+fn range_searches_over_the_link_index_match_the_per_node_scan() {
+    let (mut connected, mut apart, mut anchored) = (0, 0, 0);
+    for (n, project) in parity_projects().iter().enumerate() {
+        let refs: Vec<StationRef> = project
+            .sections
+            .iter()
+            .flat_map(|s| (0..=s.shots.len() as u32).map(move |i| StationRef::new(s.id, i)))
+            .collect();
+        let mut ids: Vec<SectionId> = project.sections.iter().map(|s| s.id).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        for &section_id in &ids {
+            let shots = project.get_section(section_id).unwrap().shots.len();
+            if shots < 3 {
+                continue;
+            }
+            let (start_pos, end_pos) = (1, shots - 2);
+            let removed: HashSet<StationRef> = ((start_pos as u32 + 1)..=(end_pos as u32 + 1))
+                .map(|i| StationRef::new(section_id, i))
+                .collect();
+            let tail = StationRef::new(section_id, end_pos as u32 + 2);
+            for include_closures in [false, true] {
+                for &a in &refs {
+                    let want = scanned_range_searches(
+                        project,
+                        a,
+                        tail,
+                        (section_id, start_pos, end_pos),
+                        &removed,
+                        include_closures,
+                    );
+                    let got = (
+                        project.stations_connected_excluding_range(
+                            a,
+                            tail,
+                            section_id,
+                            start_pos,
+                            end_pos,
+                            &removed,
+                            include_closures,
+                        ),
+                        project.station_reaches_datum_excluding_range(
+                            a, section_id, start_pos, end_pos, &removed,
+                        ),
+                    );
+                    assert_eq!(
+                        got, want,
+                        "project {n}, {a:?} -> {tail:?}, range {section_id}:{start_pos}..={end_pos}, \
+                         closures {include_closures}"
+                    );
+                    if want.0 {
+                        connected += 1;
+                    } else {
+                        apart += 1;
+                    }
+                    anchored += usize::from(want.1);
+                }
+            }
+        }
+    }
+    println!("[NF-W12BE-4] range searches: {connected} connected, {apart} apart, {anchored} reach a datum");
+    assert!(connected > 0 && apart > 0 && anchored > 0);
+}
+
+/// [#576 NF-W12BE-4] The offset map a pass over every station reads gives each
+/// station the offset the single-station lookup gives it - also when two keys
+/// name the station (the corpus with colliding keys), where the map used to
+/// keep the last key in its iteration order and the lookup the first.
+#[test]
+#[expect(clippy::print_stdout, reason = "the test prints the corpus coverage")]
+fn resolved_offsets_match_the_single_station_lookup() {
+    let (mut offsets, mut collisions) = (0, 0);
+    for (n, project) in parity_projects().iter().enumerate() {
+        let resolved = project.resolved_station_offsets();
+        for section in &project.sections {
+            for i in 0..=section.shots.len() as u32 {
+                let sr = StationRef::new(section.id, i);
+                assert_eq!(
+                    resolved.get(&sr).copied(),
+                    project.station_offset_for_ref(sr),
+                    "project {n} of the corpus, {sr:?}"
+                );
+            }
+        }
+        offsets += resolved.len();
+        collisions += project.station_offsets.len() - resolved.len();
+    }
+    println!("[NF-W12BE-4] {offsets} station offsets, {collisions} keys sharing a station");
+    assert!(offsets > 0 && collisions > 0);
+}
+
+/// [#576 NF-W12BE-4] Two keys naming one station, each with its own offset: the
+/// station lands by the key that sorts first (the canonical one), on every
+/// rebuild - the comment rule of NF-W12BE-3.
+#[test]
+#[expect(clippy::print_stdout, reason = "the test prints the positions it saw")]
+fn colliding_offset_keys_pick_one_documented_winner() {
+    let mut eastings: BTreeSet<String> = BTreeSet::new();
+    for _ in 0..64 {
+        let mut project = Project::new("collide".to_string(), None);
+        let id = project
+            .add_section(SectionData {
+                shots: vec![straight_shot(0.0, 5.0)],
+                ..Default::default()
+            })
+            .id;
+        project.ensure_shot_uuids();
+        let sr = StationRef::new(id, 1);
+        let canonical = project.key_for_ref(sr).unwrap();
+        project.station_offsets.insert(
+            StationKey::new(id, StationAnchor::Index(1)),
+            (7.0, 0.0, 0.0),
+        );
+        project.station_offsets.insert(canonical, (3.0, 0.0, 0.0));
+        let station = project
+            .compute_station_coordinates()
+            .into_iter()
+            .find(|s| s.station_ref == sr)
+            .unwrap();
+        eastings.insert(format!("{:.1}", station.coordinates.x));
+    }
+    println!("[NF-W12BE-4] station 1 easting over 64 rebuilt projects: {eastings:?}");
+    assert_eq!(
+        eastings.into_iter().collect::<Vec<_>>(),
+        vec!["3.0".to_string()],
+        "the canonical key's offset, every time"
     );
 }

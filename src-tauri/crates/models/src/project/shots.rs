@@ -31,12 +31,12 @@ pub const MIN_SPLIT_CHILD_LENGTH_M: f64 = 0.01;
 /// in project order, then closures in project order, one partner per link - and a
 /// link contributes exactly what that scan's `if a is the station { b } else if b
 /// is the station { a }` did, including nothing when an end does not resolve.
-struct LinkPartners {
+pub(super) struct LinkPartners {
     by_station: HashMap<StationRef, Vec<StationRef>>,
 }
 
 impl LinkPartners {
-    fn of(project: &Project, include_closures: bool) -> Self {
+    pub(super) fn of(project: &Project, include_closures: bool) -> Self {
         let mut by_station: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
         let mut link = |a: Option<StationRef>, b: Option<StationRef>| {
             if let (Some(a), Some(b)) = (a, b) {
@@ -1081,13 +1081,17 @@ impl Project {
     /// Neighbors of `station_ref` for range-delete connectivity checks: like
     /// [`Self::station_neighbors_excluding_shot`] but skips ALL shot edges at
     /// positions `start_pos..=end_pos` in `section_id` (the gap-closed range).
-    fn range_neighbors(
+    /// Merges, then closures when `links` was built with them.
+    ///
+    /// [#576 NF-W12BE-4] The links come from a [`LinkPartners`] the search builds
+    /// once; this used to re-resolve every merge and closure at every node.
+    pub(super) fn range_neighbors(
         &self,
+        links: &LinkPartners,
         station_ref: StationRef,
         section_id: SectionId,
         start_pos: usize,
         end_pos: usize,
-        include_closures: bool,
     ) -> Vec<StationRef> {
         let mut neighbors = Vec::new();
         let Some(section) = self.get_section(station_ref.section_id) else {
@@ -1106,22 +1110,7 @@ impl Project {
         if idx < section.shots.len() && !in_range(idx) {
             neighbors.push(StationRef::new(station_ref.section_id, (idx + 1) as u32));
         }
-        for merge in &self.station_merges {
-            if self.key_is_ref(&merge.station_a, station_ref) {
-                neighbors.extend(self.resolve_key(&merge.station_b));
-            } else if self.key_is_ref(&merge.station_b, station_ref) {
-                neighbors.extend(self.resolve_key(&merge.station_a));
-            }
-        }
-        if include_closures {
-            for closure in &self.loop_closures {
-                if self.key_is_ref(&closure.station_a, station_ref) {
-                    neighbors.extend(self.resolve_key(&closure.station_b));
-                } else if self.key_is_ref(&closure.station_b, station_ref) {
-                    neighbors.extend(self.resolve_key(&closure.station_a));
-                }
-            }
-        }
+        neighbors.extend_from_slice(links.of_station(station_ref));
         neighbors
     }
 
@@ -1129,7 +1118,7 @@ impl Project {
     /// `start_pos..=end_pos` and without passing through a `removed` station?
     /// Used to detect a loop around a to-be-gap-closed interior range so the
     /// check sees the post-delete topology rather than each original single shot.
-    fn stations_connected_excluding_range(
+    pub(super) fn stations_connected_excluding_range(
         &self,
         a: StationRef,
         b: StationRef,
@@ -1142,12 +1131,13 @@ impl Project {
         if a == b {
             return true;
         }
+        let links = LinkPartners::of(self, include_closures);
         let mut visited = HashSet::new();
         visited.insert(a);
         let mut queue = VecDeque::new();
         queue.push_back(a);
         while let Some(cur) = queue.pop_front() {
-            for nb in self.range_neighbors(cur, section_id, start_pos, end_pos, include_closures) {
+            for nb in self.range_neighbors(&links, cur, section_id, start_pos, end_pos) {
                 if removed.contains(&nb) {
                     continue;
                 }
@@ -1165,7 +1155,7 @@ impl Project {
     /// Does `station` reach a zero datum WITHOUT using a shot in the range or
     /// passing through a `removed` station (datums on removed stations don't
     /// count - they are themselves being deleted)?
-    fn station_reaches_datum_excluding_range(
+    pub(super) fn station_reaches_datum_excluding_range(
         &self,
         station: StationRef,
         section_id: SectionId,
@@ -1182,12 +1172,13 @@ impl Project {
         if datum_set.contains(&station) {
             return true;
         }
+        let links = LinkPartners::of(self, true);
         let mut visited = HashSet::new();
         visited.insert(station);
         let mut queue = VecDeque::new();
         queue.push_back(station);
         while let Some(cur) = queue.pop_front() {
-            for nb in self.range_neighbors(cur, section_id, start_pos, end_pos, true) {
+            for nb in self.range_neighbors(&links, cur, section_id, start_pos, end_pos) {
                 if removed.contains(&nb) {
                     continue;
                 }

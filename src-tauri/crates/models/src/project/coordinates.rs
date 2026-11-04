@@ -275,7 +275,9 @@ impl Project {
             }
         }
 
-        // Per-section XY walk + individual station offsets.
+        // Per-section XY walk + individual station offsets, every offset key
+        // resolved once (#576 NF-W12BE-4) rather than all of them per station.
+        let station_offsets = self.resolved_station_offsets();
         let mut out: HashMap<StationRef, Coordinates> = HashMap::with_capacity(station_list.len());
         for section in self.sections.iter().filter(|s| component.contains(&s.id)) {
             let (offset_x, offset_y) = self
@@ -296,7 +298,7 @@ impl Project {
                 let sr = StationRef::new(section.id, idx as u32);
                 let z = depth.get(&sr).copied().unwrap_or(0.0);
                 let mut coords = Coordinates::new(cur.0, cur.1, z);
-                if let Some((ox, oy, oz)) = self.station_offset_for_ref(sr) {
+                if let Some(&(ox, oy, oz)) = station_offsets.get(&sr) {
                     coords.x += ox;
                     coords.y += oy;
                     coords.z += oz;
@@ -609,6 +611,9 @@ impl Project {
         );
         let t_phase = std::time::Instant::now();
 
+        // Every station offset key resolved once (#576 NF-W12BE-4): the walk used
+        // to resolve all of them at every station.
+        let station_offsets = self.resolved_station_offsets();
         let mut stations: Vec<Station> = Vec::new();
         let mut station_count = 0u32;
 
@@ -629,7 +634,7 @@ impl Project {
                 .unwrap_or(0.0);
             let mut station_coords = Coordinates::new(current_xy.0, current_xy.1, z);
             // Apply station offset if exists
-            if let Some((ox, oy, oz)) = self.station_offset_for_ref(first_station_ref) {
+            if let Some(&(ox, oy, oz)) = station_offsets.get(&first_station_ref) {
                 station_coords = Coordinates::new(
                     station_coords.x + ox,
                     station_coords.y + oy,
@@ -660,7 +665,7 @@ impl Project {
                 let z = station_depths.get(&station_ref).copied().unwrap_or(0.0);
                 let mut station_coords = Coordinates::new(current_xy.0, current_xy.1, z);
                 // Apply station offset if exists
-                if let Some((ox, oy, oz)) = self.station_offset_for_ref(station_ref) {
+                if let Some(&(ox, oy, oz)) = station_offsets.get(&station_ref) {
                     station_coords = Coordinates::new(
                         station_coords.x + ox,
                         station_coords.y + oy,
