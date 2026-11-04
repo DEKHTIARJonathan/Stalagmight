@@ -223,6 +223,11 @@ on `base_budget + sum(min(breathed, safe) - safe)` and can never reach further
 than the same plan without the moved drops. The pins are re-checked on every
 recompute, so this holds whatever moved under a saved pin since it was set.
 
+A pinned drop is reported at the station the diver pinned (#576 NF-W12GAS2-1,
+decided D1): on a merged station the route can pass the pin's zero-cost twin just
+before the pin, at the same gas, and the drop is still named, drawn and exported
+(panel, map marker, profile, slate) at the pin's own pass, not at the twin.
+
 **A pinned drop decides the route** (#576 RV8c-2, decided D1-D6; `gas/pinned.rs`).
 A drop the diver pinned is a place the dive goes, so the route passes it the way it
 passes a way point:

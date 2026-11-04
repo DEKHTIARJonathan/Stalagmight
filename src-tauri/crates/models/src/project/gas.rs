@@ -1449,6 +1449,14 @@ fn budget_view(
 /// its pin, `beyond_gas` carries the route on from the turnaround to the last pin, and the drop is
 /// placed there - past the turnaround, the index the field reports as "not reached" - instead of
 /// being clamped onto a station the diver never chose.
+///
+/// A pinned drop is reported at the station the user pinned (#576 NF-W12GAS2-1-D1). `pinned[k]`
+/// is the pin's index on the pinned walk's chain, which is also its index here: the route starts
+/// with that chain, and `beyond_gas` carries it on from the turnaround. A merge or an aligned
+/// closure holds one physical station as several nodes joined at no cost, so the route can pass
+/// the pin's twin just before the pin, at the same gas, and the first station reaching the
+/// threshold is then the twin. When the station the threshold lands on costs what the pin costs
+/// (it is the pin, or a zero-cost twin passed on the way to it), the drop is the pin's own pass.
 fn place_stage_drops(
     route_gas: &[f64],
     beyond_gas: &[f64],
@@ -1458,19 +1466,31 @@ fn place_stage_drops(
     let Some(last) = route_gas.len().checked_sub(1) else {
         return Vec::new();
     };
+    let gas_at = |i: usize| {
+        route_gas
+            .get(i)
+            .or_else(|| beyond_gas.get(i.checked_sub(route_gas.len())?))
+            .copied()
+    };
     thresholds
         .iter()
         .enumerate()
         .map(|(k, &t)| {
+            let pin = pinned.get(k).copied().flatten();
             let on_route = route_gas.iter().position(|&g| g >= t);
-            match (on_route, pinned.get(k).copied().flatten()) {
+            let j = match (on_route, pin) {
                 (Some(j), _) => j,
                 (None, Some(_)) if !beyond_gas.is_empty() => {
                     let past = beyond_gas.iter().position(|&g| g >= t);
                     route_gas.len() + past.unwrap_or(beyond_gas.len() - 1)
                 }
                 (None, _) => last,
-            }
+            };
+            // Gas never falls along the route, so a station at or before the pin that costs at
+            // least the pin's gas costs exactly that: the same point, reached for free.
+            let same_point =
+                |p: usize| p >= j && gas_at(j).zip(gas_at(p)).is_some_and(|(gj, gp)| gj >= gp);
+            pin.filter(|&p| same_point(p)).unwrap_or(j)
         })
         .collect()
 }

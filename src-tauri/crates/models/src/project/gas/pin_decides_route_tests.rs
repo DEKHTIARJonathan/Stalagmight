@@ -1493,3 +1493,70 @@ fn nf_w12gas_1_a_pin_leg_round_a_loop_takes_the_way_its_range_covers() {
     assert!(short.scooter_distance_m <= short.scooter_range_limit_m.unwrap());
     assert!(dark_on_route(&short).is_empty());
 }
+
+#[test]
+fn nf_w12gas2_1_a_drop_pinned_on_a_merged_station_is_reported_at_the_pin() {
+    // #576 NF-W12GAS2-1, decided D1 "the station the user pinned": 0:5 is merged with 1:0, and
+    // the route round the loop passes 1:0 and then 0:5 at the same gas (the merge costs nothing).
+    // The drop was placed at the first route station whose gas reaches the pin's threshold - the
+    // twin 1:0 - so the panel, the map marker and the profile/slate named a station the diver did
+    // not pick. It is now reported at 0:5, the pinned station, on the pass the route makes there.
+    let (project, line, deep) = rv9a_loop_cave();
+    let line_at = |i: u32| StationRef::new(line, i);
+    let deep_at = |i: u32| StationRef::new(deep, i);
+    let pinned = rv9a_plan(&project, line, 0.267, &[Some(line_at(5))]);
+    let route = route_of(&pinned);
+    let profile_names: Vec<String> = pinned
+        .stage_drop_route_indices
+        .iter()
+        .filter_map(|&j| {
+            pinned
+                .route_profile
+                .iter()
+                .find(|p| p.outbound && p.route_index == j)
+        })
+        .map(|p| name(p.station_ref))
+        .collect();
+    println!("NF-W12GAS2-1 {}", describe("pinned 0:5", &pinned));
+    println!(
+        "NF-W12GAS2-1   drop route indices {:?}, profile station at the drop {:?}",
+        pinned.stage_drop_route_indices, profile_names
+    );
+    let twin = route.iter().position(|&s| s == deep_at(0)).unwrap();
+    let pin = route.iter().position(|&s| s == line_at(5)).unwrap();
+    assert_eq!(
+        twin + 1,
+        pin,
+        "precondition: the route passes the twin, then the pin"
+    );
+    let gas_at = |i: usize| {
+        pinned
+            .route_profile
+            .iter()
+            .find(|p| p.outbound && p.route_index as usize == i)
+            .map(|p| p.gas_l)
+            .unwrap()
+    };
+    assert!(
+        (gas_at(twin) - gas_at(pin)).abs() < 1e-12,
+        "precondition: the twin and the pin cost the same gas"
+    );
+    assert_eq!(
+        pinned.stage_drop_refs,
+        vec![line_at(5)],
+        "the drop names the pinned station"
+    );
+    assert_eq!(
+        pinned.stage_drop_route_indices,
+        vec![u32::try_from(pin).unwrap()],
+        "the drop sits on the pinned station's pass"
+    );
+    assert_eq!(
+        profile_names,
+        vec![name(line_at(5))],
+        "the profile marker names the pin"
+    );
+    // Same physical point as the twin: still reached, still over reserve.
+    assert!(reached(&pinned, 0));
+    assert_eq!(pinned.stage_drop_over_reserve, vec![true]);
+}
