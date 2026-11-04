@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   prodLoc, classify, markCfgTestItems, maskNonCode, discoverSrcRoots, discoverExtraRoots, WARN_LOC, FAIL_LOC,
   TEST_WARN_LOC, TEST_FAIL_LOC, TEST_LIMITS, TEST_FILE_RE, declaredUnderTestCfg, isTestModule, testLoc,
@@ -285,6 +286,72 @@ test('tightenRows output is sorted and every row is <= the recorded one', () => 
 test('unrecordedFiles names the measured files with no row, sorted', () => {
   assert.deepEqual(unrecordedFiles({ 'b.rs': 1, 'gone.rs': 2 }, { 'c.rs': 1, 'b.rs': 1, 'a.rs': 1 }), ['a.rs', 'c.rs']);
   assert.deepEqual(unrecordedFiles({ 'a.rs': 1 }, { 'a.rs': 9 }), []);
+});
+
+// [#576 RV10a-2] Recording a NEW file at/above its warn line would grandfather the
+// file check mode refuses ("new file at/above warn", "exceeds the hard budget").
+test('REGRESSION: tightenRows never records a NEW file at/above its warn line', () => {
+  const measured = { 'big_new.rs': WARN_LOC, 'huge_new.rs': FAIL_LOC + 100, 'tiny_new.rs': 50, 'frozen.rs': 1650 };
+  const recorded = { 'frozen.rs': 1600 };
+  // frozen.rs has a row, so it keeps it (never raised); only tiny_new.rs is added.
+  assert.deepEqual(tightenRows(recorded, measured), { 'frozen.rs': 1600, 'tiny_new.rs': 50 });
+  const tests = { 'big_tests.rs': TEST_WARN_LOC, 'small_tests.rs': TEST_WARN_LOC - 1 };
+  assert.deepEqual(tightenRows({}, tests, TEST_LIMITS), { 'small_tests.rs': TEST_WARN_LOC - 1 });
+});
+
+// A copy of the script in a throwaway tree resolves REPO_ROOT to that tree, so the
+// CLI runs end to end against a fixture baseline.
+function sizeGateFixture() {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), 'rust-size-tighten-'));
+  fs.mkdirSync(path.join(base, 'scripts'));
+  fs.mkdirSync(path.join(base, 'src-tauri', 'src'), { recursive: true });
+  fs.copyFileSync(new URL('./check-rust-file-size.mjs', import.meta.url), path.join(base, 'scripts', 'check-rust-file-size.mjs'));
+  const rs = (name, n) =>
+    fs.writeFileSync(path.join(base, 'src-tauri', 'src', name), Array.from({ length: n }, (_, i) => `pub fn f${i}() {}\n`).join(''));
+  rs('lib.rs', 10);
+  rs('small.rs', 200);
+  rs('big_new.rs', 1700);
+  rs('huge_new.rs', 2100);
+  rs('tiny_new.rs', 50);
+  const baseline = path.join(base, 'src-tauri', 'file-size-baseline.json');
+  fs.writeFileSync(
+    baseline,
+    JSON.stringify({
+      warn_loc: WARN_LOC, fail_loc: FAIL_LOC, test_warn_loc: TEST_WARN_LOC, test_fail_loc: TEST_FAIL_LOC,
+      files: { 'src-tauri/src/lib.rs': 10, 'src-tauri/src/small.rs': 300 },
+      test_files: {},
+    }, null, 2),
+  );
+  const run = (...args) =>
+    spawnSync(process.execPath, [path.join(base, 'scripts', 'check-rust-file-size.mjs'), ...args], { encoding: 'utf8' });
+  return { base, baseline, run };
+}
+
+test('REGRESSION: --tighten refuses a NEW file at/above warn with the split instruction and writes nothing', () => {
+  const { base, baseline, run } = sizeGateFixture();
+  try {
+    const before = fs.readFileSync(baseline, 'utf8');
+    const r = run('--tighten');
+    assert.equal(r.status, 1, `--tighten must fail, got ${r.status}\n${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /big_new\.rs: new production file at 1700 LOC \(>= warn 1500\).*Split it/);
+    assert.match(r.stderr, /huge_new\.rs: 2100 LOC exceeds the hard 2000-LOC budget.*Split it/);
+    assert.doesNotMatch(r.stderr, /tiny_new\.rs/);
+    assert.equal(fs.readFileSync(baseline, 'utf8'), before, 'a refused --tighten must not write the baseline');
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('REGRESSION: check mode tells only the files --tighten will record to run it', () => {
+  const { base, run } = sizeGateFixture();
+  try {
+    const r = run();
+    assert.equal(r.status, 1, 'the two new files at/above warn are check-mode errors');
+    const note = r.stderr.split('\n').find((l) => l.includes('have no row')) ?? '';
+    assert.match(note, /1 measured file\(s\) have no row \(src-tauri\/src\/tiny_new\.rs\); run --tighten/);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 });
 
 // --- report ------------------------------------------------------------------

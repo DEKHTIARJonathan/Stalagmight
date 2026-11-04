@@ -45,6 +45,10 @@
 // wants in an unrelated diff, so rows were hand-edited instead. `--tighten` is the safe refresh: it lowers a
 // row to its file's size, adds a row for an unrecorded file and prunes a row
 // whose file is gone, and never raises a row. Check mode notes unrecorded files.
+// [#576 RV10a-2] It never adds a row for a NEW file at/above its warn line: that
+// row would grandfather exactly the file check mode refuses, so --tighten fails
+// naming it, with the split instruction, and writes nothing (`--update` stays the
+// deliberate way to baseline one).
 //
 // Runs in the `check` job (ci.yml) - which runs on `src-tauri/**` changes and is
 // NOT path-ignored (unlike `smoke`), so it actually sees Rust edits. The strip
@@ -345,13 +349,25 @@ export function testLoc(text) {
 // not larger than the measured one, else the measured size - so a row only ever
 // goes down. A file with no row is recorded at its size; a row whose file is gone
 // is dropped (it is not in `measured`). Pure, so the fixture test can pin it.
-export function tightenRows(recorded, measured) {
+//
+// [#576 RV10a-2] Except a file with no row at/above the section's warn line
+// (`limits`): check mode refuses it as a new file born too large, and a row would
+// turn that refusal into a pass. It gets no row; `--tighten` fails naming it.
+export function tightenRows(recorded, measured, limits = PROD_LIMITS) {
   const rows = {};
   for (const rel of Object.keys(measured).sort()) {
     const was = recorded[rel];
-    rows[rel] = was === undefined ? measured[rel] : Math.min(Number(was), measured[rel]);
+    if (was !== undefined) rows[rel] = Math.min(Number(was), measured[rel]);
+    else if (!bornTooLarge(rel, measured[rel], limits)) rows[rel] = measured[rel];
   }
   return rows;
+}
+
+// [#576 RV10a-2] A file with no row that check mode refuses for its size alone
+// (`classify`'s new-file-at/above-warn and hard-cap errors). Allow-listed files are
+// exempt from the warn line, so recording one is still a tightening.
+function bornTooLarge(rel, loc, limits) {
+  return !isAllowed(rel) && loc >= limits.warn;
 }
 
 // [#576 NF-W9E1-2] Measured files that have no baseline row, sorted.
@@ -531,8 +547,26 @@ function main() {
   if (process.argv.includes('--tighten')) {
     const recordedProd = baseline.files ?? {};
     const recordedTests = baseline.test_files ?? {};
-    const prod = tightenRows(recordedProd, measured.prod);
-    const tests = tightenRows(recordedTests, measured.tests);
+    const prod = tightenRows(recordedProd, measured.prod, PROD_LIMITS);
+    const tests = tightenRows(recordedTests, measured.tests, TEST_LIMITS);
+    // [#576 RV10a-2] A measured file without a row (it is not in `rows`) was refused.
+    const refused = [
+      [recordedProd, measured.prod, prod, PROD_LIMITS],
+      [recordedTests, measured.tests, tests, TEST_LIMITS],
+    ].flatMap(([recorded, section, rows, limits]) =>
+      unrecordedFiles(recorded, section)
+        .filter((rel) => rows[rel] === undefined)
+        .map((rel) => classify(rel, section[rel], undefined, limits).message),
+    );
+    if (refused.length > 0) {
+      console.error(
+        `\n✗ --tighten refused - ${refused.length} new file(s) at/above a warn line; ` +
+          `it never records one (that would grandfather the file the check refuses):\n`,
+      );
+      for (const m of refused) console.error(`  ${m}`);
+      console.error(`\nNothing was written to ${relPosix(BASELINE_PATH)}.\n`);
+      return 1;
+    }
     const count = (recorded, rows) => ({
       lowered: Object.keys(rows).filter((r) => recorded[r] !== undefined && rows[r] < Number(recorded[r])).length,
       added: unrecordedFiles(recorded, rows).length,
@@ -565,8 +599,11 @@ function main() {
     // runs --tighten to prune them.
     stale.push(...Object.keys(recorded).filter((r) => section[r] === undefined));
     // [#576 NF-W9E1-2] Files with no row pass below their warn line, so nothing
-    // made anyone record them; say so, the same way.
-    unrecorded.push(...unrecordedFiles(recorded, section));
+    // made anyone record them; say so, the same way. [#576 RV10a-2] Only those:
+    // one at/above the line is an error above, and --tighten refuses to record it.
+    unrecorded.push(
+      ...unrecordedFiles(recorded, section).filter((rel) => !bornTooLarge(rel, section[rel], limits)),
+    );
   }
   if (stale.length > 0) {
     const shown = stale.slice(0, 5).join(', ');
