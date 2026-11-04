@@ -15669,8 +15669,15 @@ fn remeasuring_alignment_is_fast_with_thousands_of_aligned_closures_in_one_compo
         });
     }
 
-    let started = std::time::Instant::now();
+    // Place the sections (untimed: the offset cascade's own cost is tracked
+    // separately), then re-measure from scratch.
     project.redrive_offsets_after_load();
+    for closure in &mut project.loop_closures {
+        closure.is_aligned = false;
+    }
+
+    let started = std::time::Instant::now();
+    project.remeasure_closure_alignment();
     let elapsed = started.elapsed();
 
     assert!(project.loop_closures.iter().all(|c| c.is_aligned));
