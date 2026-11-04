@@ -198,8 +198,9 @@ a current or newer file opens untouched. Commands that only read keep taking any
 path, with one exception: the overwrite prompts' existence probe
 (`save_target_exists`) answers only for a path the write after it may write (the
 same three rules), so it tells a page script nothing about the app's own or a
-system folder; a refused or failed probe is an error, and the prompt then asks as
-if the file were there (#576 E10-D1).
+system folder; a failed probe is an error, and the prompt then asks as if the file
+were there (#576 E10-D1), while a refused one (`WRITE_PATH_REFUSED`) goes straight
+to the write, which refuses it with the reason (#576 HFI-2-D2).
 
 ## Data Model
 

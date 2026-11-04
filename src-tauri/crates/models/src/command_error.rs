@@ -86,6 +86,12 @@ pub enum CommandErrorCode {
     /// [#576 B6-D1] A save (or upload) refused: a NEWER Stalagmight saved this
     /// project. See [`Self::NewerFileEditDisabled`] for the edit refusal.
     NewerFileReadOnly,
+    /// [#576 HFI-2-D2] The write-path policy refused the path (an app or system
+    /// folder, a file type the app does not write) before anything was looked
+    /// at or written. The existence probe a save or export runs first carries it,
+    /// so the frontend goes straight to the write, which refuses with the reason,
+    /// instead of first asking "could not check whether it exists".
+    WritePathRefused,
 
     // --- Import ----------------------------------------------------------------
     /// [#576 NF-FIX3A-2] The user cancelled a file import before anything landed.
@@ -148,7 +154,7 @@ pub enum CommandErrorCode {
 impl CommandErrorCode {
     /// Every code, in declaration order, for the wire-name tests. A new variant
     /// gets a wire name from the exhaustive [`Self::as_str`]; list it here too.
-    pub const ALL: [Self; 40] = [
+    pub const ALL: [Self; 41] = [
         Self::Failed,
         Self::InternalError,
         Self::RefusedAfterInternalError,
@@ -168,6 +174,7 @@ impl CommandErrorCode {
         Self::UndoMarkersUnreadable,
         Self::ProjectSettingsUnreadable,
         Self::NewerFileReadOnly,
+        Self::WritePathRefused,
         Self::ImportCancelled,
         Self::AlreadyOpen,
         Self::Cancelled,
@@ -213,6 +220,7 @@ impl CommandErrorCode {
             Self::UndoMarkersUnreadable => "UNDO_MARKERS_UNREADABLE",
             Self::ProjectSettingsUnreadable => "PROJECT_SETTINGS_UNREADABLE",
             Self::NewerFileReadOnly => "NEWER_FILE_READ_ONLY",
+            Self::WritePathRefused => "WRITE_PATH_REFUSED",
             Self::ImportCancelled => "IMPORT_CANCELLED",
             Self::AlreadyOpen => "ALREADY_OPEN",
             Self::Cancelled => "CANCELLED",

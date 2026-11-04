@@ -15,6 +15,7 @@ vi.mock('../saveFeedback', () => ({
 }));
 
 import { saveProjectAs } from '../projectActions';
+import { IpcCommandError } from '../commandError';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { invokeIpcMock } from '../../test/factories/ipc';
@@ -96,6 +97,45 @@ describe('saveProjectAs overwrite guard', () => {
       closeAfterSave: false,
       existenceUnknown: true,
     });
+  });
+
+  // [#576 HFI-2-D2] A refused path (an app or system folder): the save refuses it
+  // too, with the reason, so Save As goes straight to it - one dialog, the
+  // refusal - instead of first asking "could not check whether it exists".
+  it('goes straight to the save when the backend refuses the path, and shows only its refusal', async () => {
+    saveDialogMock.mockResolvedValue('/etc/CaveA.stalx');
+    const refused = { success: false, error: 'Refused to change CaveA.stalx: it is inside a system folder' };
+    saveProject.mockResolvedValue(refused);
+    backendSays(
+      new IpcCommandError({
+        code: 'WRITE_PATH_REFUSED',
+        message: 'Refused to change CaveA.stalx: it is inside a system folder',
+      }),
+    );
+
+    expect(await saveProjectAs()).toBe(refused);
+
+    expect(openDialog).not.toHaveBeenCalledWith('confirm-overwrite', expect.anything());
+    expect(saveProject).toHaveBeenCalledWith('/etc/CaveA.stalx');
+    expect(surfaceSaveFailureMock).toHaveBeenCalledTimes(1);
+    expect(surfaceSaveFailureMock).toHaveBeenCalledWith(refused, openDialog, expect.anything());
+  });
+
+  it('still asks (fail closed) for any other coded failure of the check', async () => {
+    backendSays(
+      new IpcCommandError({
+        code: 'FS_PERMISSION_DENIED',
+        message: 'Could not check whether CaveA.stalx already exists: permission denied',
+      }),
+    );
+
+    expect(await saveProjectAs()).toBeNull();
+
+    expect(saveProject).not.toHaveBeenCalled();
+    expect(openDialog).toHaveBeenCalledWith(
+      'confirm-overwrite',
+      expect.objectContaining({ path: '/home/diver/CaveA.stalx', existenceUnknown: true }),
+    );
   });
 
   it('carries Save and Close through the fail-closed prompt', async () => {

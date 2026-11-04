@@ -5,7 +5,9 @@
 //! "could not check". The backend probe must answer true and false correctly,
 //! and must refuse - not answer - where the write-path policy refuses the write
 //! it precedes: the app's own folders, a system folder, a file type the app does
-//! not write. A check that fails is an error (the frontend then asks, E10-D1).
+//! not write. A check that fails is an error (the frontend then asks, E10-D1);
+//! a refusal carries `WRITE_PATH_REFUSED` (the frontend goes straight to the
+//! write, which refuses with the reason, HFI-2-D2).
 //!
 //! All files are synthetic, in temp dirs.
 
@@ -109,7 +111,7 @@ fn the_app_folders_are_refused_without_an_answer() {
     std::fs::write(&stored, b"{}").unwrap();
 
     let err = probe(&stored, &dirs).unwrap_err();
-    assert_eq!(err.code, CommandErrorCode::Failed);
+    assert_eq!(err.code, CommandErrorCode::WritePathRefused);
     assert!(
         err.message.contains("app's own settings"),
         "{}",
@@ -160,6 +162,39 @@ fn the_command_refuses_a_system_folder() {
             "{path}: {}",
             err.message
         );
+    }
+}
+
+/// [#576 HFI-2-D2] Every refusal by the write-path policy carries its own code,
+/// `WRITE_PATH_REFUSED`: the write after the probe refuses the same path with the
+/// reason, so the frontend goes straight to it instead of first asking "could
+/// not check whether it exists". The probe used to refuse with the generic
+/// `FAILED`, which the frontend cannot tell from a check that failed.
+#[test]
+fn hfi2_d2_a_policy_refusal_carries_the_refusal_code() {
+    let app = TempDir::new().unwrap();
+    let user = TempDir::new().unwrap();
+    let dirs = AppDirs {
+        internal: vec![app.path().to_path_buf()],
+        managed_projects: None,
+    };
+    let mut refused = vec![
+        app.path().join("CaveA.stalx"),
+        user.path().join("config.toml"),
+    ];
+    if cfg!(unix) {
+        refused.push("/etc/stalagmight-hfi2.stalx".into());
+    }
+    for path in refused {
+        let err = probe(&path, &dirs).unwrap_err();
+        assert_eq!(
+            err.code.as_str(),
+            "WRITE_PATH_REFUSED",
+            "{}: {}",
+            path.display(),
+            err.message
+        );
+        assert!(err.message.starts_with("Refused to"), "{}", err.message);
     }
 }
 

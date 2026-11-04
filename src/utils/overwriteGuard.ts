@@ -16,6 +16,7 @@
  * dialog that is waiting for the answer.
  */
 import { create } from 'zustand';
+import { errorCode } from './commandError';
 import { ensureExtension } from './fileDialogs';
 import { invokeIpc } from './ipc';
 import { extractFilename } from './path';
@@ -78,25 +79,37 @@ export function saveTargetExists(path: string): Promise<boolean> {
 }
 
 /**
+ * What the overwrite prompts need to know about `path` before a save or export
+ * writes it: `present` asks first, `existenceUnknown` words the question "could
+ * not check". A failed check asks (fail closed, #576 E10-D1). A path the
+ * write-path policy refuses (`WRITE_PATH_REFUSED`: an app or system folder) is
+ * refused by the write too, with the reason, so it goes straight there - one
+ * dialog, the refusal, not a "could not check" prompt in front of it
+ * (#576 HFI-2-D2).
+ */
+export async function saveTargetPresence(path: string): Promise<{ present: boolean; existenceUnknown: boolean }> {
+  try {
+    return { present: await saveTargetExists(path), existenceUnknown: false };
+  } catch (e) {
+    if (errorCode(e) === 'WRITE_PATH_REFUSED') return { present: false, existenceUnknown: false };
+    return { present: true, existenceUnknown: true };
+  }
+}
+
+/**
  * The path a save-dialog answer is actually written to, or `null` when the user
  * declined to replace an existing file there.
  *
  * Only a REWRITTEN name is checked: when `ensureExtension` leaves the answer
  * as-is, the OS dialog already asked about exactly that file. A probe that
- * fails asks too (fail closed), like Save As (#576 E10-D1).
+ * fails asks too (fail closed), like Save As (#576 E10-D1); a refused path goes
+ * to the write, which refuses it (#576 HFI-2-D2).
  */
 export async function resolveSavePath(selected: string, extension: string): Promise<string | null> {
   const finalPath = ensureExtension(selected, extension);
   if (finalPath === selected) return finalPath;
 
-  let present: boolean;
-  let existenceUnknown = false;
-  try {
-    present = await saveTargetExists(finalPath);
-  } catch {
-    present = true;
-    existenceUnknown = true;
-  }
+  const { present, existenceUnknown } = await saveTargetPresence(finalPath);
   if (!present) return finalPath;
   return (await confirmOverwrite(finalPath, extension, existenceUnknown)) ? finalPath : null;
 }

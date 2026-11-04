@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../ipc');
 
 import { confirmOverwrite, resolveSavePath, useOverwritePromptStore } from '../overwriteGuard';
+import { IpcCommandError } from '../commandError';
 import { invokeIpcMock } from '../../test/factories/ipc';
 
 /**
@@ -92,6 +93,47 @@ describe('resolveSavePath', () => {
       path: '/mock/OtherCave.stalx',
       existenceUnknown: true,
     });
+    useOverwritePromptStore.getState().request!.resolve(false);
+    expect(await pending).toBeNull();
+  });
+
+  // [#576 HFI-2-D2] A path the write-path policy refuses (an app or system folder)
+  // is refused by the write too, so asking "could not check" first only put a
+  // second dialog in front of the refusal: the name goes straight to the write.
+  it('does not ask when the backend refuses the path; the write refuses it', async () => {
+    backendSays(
+      new IpcCommandError({
+        code: 'WRITE_PATH_REFUSED',
+        message: 'Refused to change map.png: it is inside a system folder',
+      }),
+    );
+    let written: string | null | undefined;
+    const pending = resolveSavePath('/usr/share/map.svg', 'png').then((path) => {
+      written = path;
+    });
+    // Settled, or stuck behind a prompt: either way, look.
+    await vi.waitFor(() =>
+      expect(written !== undefined || useOverwritePromptStore.getState().request !== null).toBe(true),
+    );
+    const asked = useOverwritePromptStore.getState().request;
+    asked?.resolve(false);
+    await pending;
+
+    expect(asked?.existenceUnknown ?? 'no prompt').toBe('no prompt');
+    expect(written).toBe('/usr/share/map.png');
+    expect(probedPaths()).toEqual(['/usr/share/map.png']);
+  });
+
+  it('still asks (fail closed) for any other coded failure of the check', async () => {
+    backendSays(
+      new IpcCommandError({
+        code: 'FS_PERMISSION_DENIED',
+        message: 'Could not check whether map.png already exists: permission denied',
+      }),
+    );
+    const pending = resolveSavePath('/mock/map.svg', 'png');
+    await vi.waitFor(() => expect(useOverwritePromptStore.getState().request).not.toBeNull());
+    expect(useOverwritePromptStore.getState().request).toMatchObject({ existenceUnknown: true });
     useOverwritePromptStore.getState().request!.resolve(false);
     expect(await pending).toBeNull();
   });
