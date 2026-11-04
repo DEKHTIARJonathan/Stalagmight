@@ -197,6 +197,89 @@ test('typeof setTimeout and a setTimeout object key are not sleeps; a value use 
   assert.deepEqual(bad('const timers = { setTimeout };\nconst more = { nap: setTimeout };'), [1, 2], 'a shorthand or a value is the timer');
 });
 
+// #576 RV10b-G2: a handler that rethrows everything EXCEPT the timeout swallows
+// the wait's failure (Playwright's optional-wait idiom), as does one that only
+// asserts something trivially true.
+const CONDITIONAL_RETHROW = {
+  'a try/catch that rethrows all but TimeoutError counts': [
+    'try {\n  await loc.waitFor({ timeout: 1000 });\n} catch (e) {\n  if (!(e instanceof errors.TimeoutError)) throw e;\n}',
+    [2],
+  ],
+  "a .catch that rethrows all but a 'Timeout' message counts": [
+    "await loc.waitFor({ timeout: 1000 }).catch((e) => {\n  if (!String(e).includes('Timeout')) throw e;\n});",
+    [1],
+  ],
+  'a catch that returns on the timeout before its throw counts': [
+    'try {\n  await loc.waitFor({ timeout: 1000 });\n} catch (e) {\n  if (e instanceof errors.TimeoutError) return;\n  throw e;\n}',
+    [2],
+  ],
+  'a throw in an if block or a ternary branch counts': [
+    "await loc.waitFor({ timeout: 1000 }).catch((e) => {\n  if (e.name !== 'TimeoutError') {\n    throw e;\n  }\n});\nawait loc.waitFor({ timeout: 1 }).catch((e) => (isTimeout(e) ? null : fail(e)));",
+    [1, 6],
+  ],
+  'a handler that asserts only a literal counts': ['await loc.waitFor({ timeout: 1000 }).catch(() => expect(true).toBe(true));', [1]],
+};
+for (const [name, [text, lines]] of Object.entries(CONDITIONAL_RETHROW)) {
+  test(name, () => assert.deepEqual(bad(text), lines));
+}
+
+test('a settle annotation directly above the wait clears the optional-wait idiom', () => {
+  assert.deepEqual(
+    bad('try {\n  // settle: the hint toast may or may not appear; either is fine here\n  await loc.waitFor({ timeout: 1000 });\n} catch (e) {\n  if (!(e instanceof errors.TimeoutError)) throw e;\n}'),
+    [],
+  );
+});
+
+test('NOT a sleep: an unconditional rethrow after logging, on its own line, or after an if block', () => {
+  assert.deepEqual(bad('try {\n  await loc.waitFor({ timeout: 500 });\n} catch (e) {\n  console.log(e)\n  throw e\n}'), []);
+  assert.deepEqual(bad("await loc.waitFor().catch((e) => {\n  if (verbose) { log(e); }\n  throw new Error('menu never opened', { cause: e });\n});"), []);
+  assert.deepEqual(bad('await loc.waitFor().catch((e) => expect(e).toBeUndefined());'), []);
+});
+
+// #576 RV10b-G3: swallowed-wait shapes the chain reader did not see.
+const UNSEEN_SWALLOWS = {
+  'a two-argument .then swallows the wait': ['await loc.waitFor({ timeout: 500 }).then(() => {}, () => {});', [1]],
+  'Promise.allSettled of waits, its outcome thrown away': [
+    "await Promise.allSettled([loc.waitFor({ timeout: 500 }), page.waitForURL('**/x')]);",
+    [1],
+  ],
+  'Promise.race of waits with a swallowing .catch': [
+    "await Promise.race([a.waitFor({ timeout: 500 }), b.waitFor({ timeout: 500 })]).catch(() => {});",
+    [1],
+  ],
+  'an IIFE that waits, with a swallowing .catch': [
+    'await (async () => {\n  await a.waitFor({ timeout: 500 });\n})().catch(() => {});',
+    [1],
+  ],
+  'an optional-call .catch?.()': ['await loc.waitFor({ timeout: 500 })?.catch?.(() => {});', [1]],
+};
+for (const [name, [text, lines]] of Object.entries(UNSEEN_SWALLOWS)) {
+  test(name, () => assert.deepEqual(bad(text), lines));
+}
+
+test('NOT a sleep: a two-argument .then that rethrows, a kept boolean or allSettled probe, race / all / IIFE without a swallowing catch', () => {
+  assert.deepEqual(bad('await loc.waitFor().then(() => {}, (e) => { throw e; });'), []);
+  assert.deepEqual(bad('const shown = await loc.waitFor({ timeout: 500 }).then(() => true, () => false);'), []);
+  assert.deepEqual(bad("const [r] = await Promise.allSettled([loc.waitFor({ timeout: 500 })]);\nexpect(r.status).toBe('rejected');"), []);
+  assert.deepEqual(bad("await Promise.race([a.waitFor(), b.waitFor()]);\nawait Promise.all([page.waitForEvent('download'), btn.click()]);"), []);
+  assert.deepEqual(bad("await Promise.allSettled([fetchA(), fetchB()]);\nawait (async () => { await btn.click(); })().catch(() => {});"), []);
+  assert.deepEqual(bad("await Promise.race([a.waitFor(), b.waitFor()]).catch((e) => { throw new Error('neither', { cause: e }); });"), []);
+});
+
+// #576 RV10b-G4: a destructure binds the timer whatever follows the pattern -
+// a parameter list, a for-of, a type annotation - not only `= value`.
+test('a timer bound through a parameter, for-of or typed destructure counts', () => {
+  assert.deepEqual(bad('(({ setTimeout: nap }) => nap(done, 100))(globalThis);'), [1]);
+  assert.deepEqual(bad('for (const { setTimeout: nap } of [globalThis]) nap(done, 100);'), [1]);
+  assert.deepEqual(bad('const { setTimeout: nap }: typeof globalThis = globalThis;'), [1]);
+  assert.deepEqual(bad('const { timers: { setTimeout: nap } } = runtime;'), [1]);
+  assert.deepEqual(bad('async function f({ setTimeout: nap }: typeof globalThis) {\n  await new Promise((r) => nap(r, 5));\n}'), [1]);
+});
+
+test('NOT a sleep: an object key in a call argument, an arrow-returned object, or a type', () => {
+  assert.deepEqual(bad('mock({ setTimeout: 0 });\nconst make = () => ({ setInterval: 1 });\ntype T = { a: { setTimeout: number } };'), []);
+});
+
 test('a regex literal holding /* does not hide a later sleep (shared stripper)', () => {
   assert.deepEqual(bad('const LEAD = /^\\/*/;\nawait page.waitForTimeout(5);\n/* end */'), [2]);
 });

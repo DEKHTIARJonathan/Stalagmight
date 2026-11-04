@@ -86,7 +86,8 @@ work:
   that spells it, `page['wait' + 'ForTimeout']`), a runner-side `setTimeout`
   (one outside `page.evaluate` and friends), a `timers/promises` import, or a
   wait whose failure is swallowed (`locator.waitFor({ timeout }).catch(() => {})`,
-  or one awaited in a `try` whose `catch` neither throws nor asserts).
+  or one awaited in a `try` whose `catch` does not always throw or assert - a
+  catch that rethrows everything but the timeout swallows it too).
 - Retries are configured in `playwright.config.ts` (2 in CI, 1 locally), so one
   blip does not abort a push. `PW_RETRIES=0` to fail fast while hunting a flake.
 

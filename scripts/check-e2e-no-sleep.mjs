@@ -24,13 +24,25 @@
 //   - a wait whose failure is swallowed (#576 NF-W9FE-4): a Playwright wait
 //     (`waitFor`, `waitForSelector`, `waitForFunction`, ...) or a web-first
 //     assertion (`expect(...)`, `expect.poll`, `toPass`) chained into a
-//     `.catch(...)` that neither throws nor asserts, or awaited in a `try`
-//     whose `catch` neither throws nor asserts. When the condition never comes
-//     it waits out the timeout and the test goes on as if it had - a sleep.
-//     Not counted: a boolean probe
-//     (`.then(() => true).catch(() => false)`) whose outcome the test keeps - to
-//     branch or assert on (one whose value is thrown away is a sleep) - and a
-//     swallowed action (`click({ timeout })`), which is not a wait.
+//     `.catch(...)` (or `?.catch?.(...)`, or a two-argument `.then(ok, fail)`)
+//     whose handler does not always throw or assert, or awaited in a `try`
+//     whose `catch` does not. When the condition never comes it waits out the
+//     timeout and the test goes on as if it had - a sleep. "Always" (#576
+//     RV10b-G2): an unconditional statement at the top of the handler - a
+//     `throw`, or an `expect(...)` about something other than a literal - with
+//     no `return` / `break` / `continue` before it. So a catch that rethrows
+//     everything EXCEPT the timeout (`if (!(e instanceof errors.TimeoutError))
+//     throw e;`, Playwright's optional-wait idiom) swallows the wait: settle-
+//     annotate it if waiting it out is the point. A chain holding a wait in its
+//     arguments or callee counts too (#576 RV10b-G3): `Promise.race([...])` /
+//     `Promise.all([...])` or an async IIFE that waits, then `.catch(() => {})`;
+//     and `Promise.allSettled([...waits])`, which never rejects, when its outcome
+//     is thrown away. Not counted: a boolean probe
+//     (`.then(() => true).catch(() => false)`, `.then(() => true, () => false)`)
+//     or an `allSettled` whose outcome the test keeps - to branch or assert on
+//     (one whose value is thrown away is a sleep) - and a swallowed action
+//     (`click({ timeout })`), which is not a wait. A kept try/catch probe is not
+//     exempt (write it as the .then form).
 //
 // THE ESCAPE HATCH - some waits are legitimate: proving that something does NOT
 // happen ("press the key, give a buggy handler time to react, assert the tool is
@@ -154,10 +166,10 @@ function matchBack(code, close) {
   return -1;
 }
 
-// The index after the closer matching the opener at `open` ({ or ( ), scanning forward.
+// The index after the closer matching the opener at `open` ({, ( or [), scanning forward.
 function matchForward(code, open) {
   const openCh = code[open];
-  const closeCh = openCh === '{' ? '}' : ')';
+  const closeCh = openCh === '{' ? '}' : openCh === '[' ? ']' : ')';
   let depth = 0;
   for (let i = open; i < code.length; i++) {
     if (code[i] === openCh) depth++;
@@ -202,34 +214,129 @@ function isStatement(code, start) {
   return before === '' || /[;{}]$/.test(before);
 }
 
-// [#576 RV9b-5] A reference that names no timer: a type position (`typeof
-// setTimeout`) or an object literal's key (`{ setTimeout: false }`). A
-// destructuring key (`const { setTimeout: nap } = globalThis`) binds the timer, so
-// it still counts, as do a shorthand property and a value position.
-function namesNoTimer(code, at, len) {
-  if (/\btypeof\s+$/.test(code.slice(Math.max(0, at - 32), at))) return true;
-  if (!/[{,]$/.test(code.slice(0, at).trimEnd()) || !/^:(?!:)/.test(code.slice(at + len).trimStart())) return false;
+// The index of the bracket that encloses `at`, scanning back, or -1.
+function enclosingOpen(code, at) {
   let depth = 0;
   for (let i = at - 1; i >= 0; i--) {
     const c = code[i];
     if (c === '}' || c === ')' || c === ']') depth++;
-    else if (c === '{' || c === '(' || c === '[') {
-      if (depth-- > 0) continue;
-      return c === '{' && !/^\s*=(?![=>])/.test(code.slice(matchForward(code, i)));
+    else if ((c === '{' || c === '(' || c === '[') && depth-- === 0) return i;
+  }
+  return -1;
+}
+
+// [#576 RV10b-G4] Whether the `{` / `[` at `open` is a destructuring pattern,
+// which binds names: one declared (`const {...}` - whatever follows it: `=`, a
+// type annotation, `of`), assigned (`({...} = value)`), a parameter (its `(`
+// closes before `=>`, or follows `function name`), or nested in such a pattern.
+function isPattern(code, open) {
+  if (/\b(?:const|let|var)\s*$/.test(code.slice(0, open))) return true;
+  if (/^\s*=(?![=>])/.test(code.slice(matchForward(code, open)))) return true;
+  const outer = enclosingOpen(code, open);
+  if (outer < 0) return false;
+  if (code[outer] !== '(') return isPattern(code, outer);
+  return (
+    /^\s*(?::[^;{}()]*)?=>/.test(code.slice(matchForward(code, outer))) ||
+    /\bfunction\s*[\w$]*\s*$/.test(code.slice(0, outer))
+  );
+}
+
+// [#576 RV9b-5] A reference that names no timer: a type position (`typeof
+// setTimeout`) or an object literal's key (`{ setTimeout: false }`). A
+// destructuring key (`const { setTimeout: nap } = globalThis`) binds the timer, so
+// it still counts - in a declaration, an assignment, a parameter list or a for-of,
+// typed or not (#576 RV10b-G4) - as do a shorthand property and a value position.
+function namesNoTimer(code, at, len) {
+  if (/\btypeof\s+$/.test(code.slice(Math.max(0, at - 32), at))) return true;
+  if (!/[{,]$/.test(code.slice(0, at).trimEnd()) || !/^:(?!:)/.test(code.slice(at + len).trimStart())) return false;
+  const open = enclosingOpen(code, at);
+  return open >= 0 && code[open] === '{' && !isPattern(code, open);
+}
+
+const TRY_WAIT_RE = new RegExp(`\\.\\s*(?:${[...WAIT_METHODS].join('|')})\\s*\\(|\\bawait\\s+(expect)\\b`, 'g');
+const HAS_WAIT_RE = new RegExp(TRY_WAIT_RE.source);
+// A chain is a wait when one of its links is (`loc.waitFor(...)`, `expect(...)`),
+// or when it holds one in its arguments or its callee (#576 RV10b-G3):
+// `Promise.race([a.waitFor()])`, `Promise.all([...])`, an async IIFE that waits.
+const isWaitChain = (code, start, end, names) =>
+  names.some((n) => WAIT_METHODS.has(n)) || names[names.length - 1] === 'expect' || HAS_WAIT_RE.test(code.slice(start, end));
+// `() => true` / `(e) => false` / `() => { return false; }`: a boolean outcome.
+const BOOLEAN_HANDLER_RE = /^\s*(?:async\s+)?(?:\([^)]*\)|[\w$]+)\s*=>\s*(?:(?:true|false)|\{\s*return\s+(?:true|false)\s*;?\s*\})\s*$/;
+// `expect(true)` / `expect(1)` / `expect('x')`: asserts nothing about the page.
+const TRIVIAL_EXPECT_RE = /^(?:await\s+)?expect\s*\(\s*(?:true|false|null|undefined|-?\d[\d.]*|(['"`])\s*\1)\s*\)/;
+const ASSERT_RE = /^(?:await\s+)?expect\s*[.(]/;
+const CONTROL_RE = /^(?:if|else|for|while|do|switch|case|default|with)\b/;
+const CATCH_CALL_RE = /\??\.\s*catch\s*(?:\?\.\s*)?\(/g;
+const THEN_CALL_RE = /\??\.\s*then\s*(?:\?\.\s*)?\(/g;
+const ALL_SETTLED_RE = /\bPromise\s*\.\s*allSettled\s*\(/g;
+const TRY_RE = /\btry\s*\{/g;
+const CATCH_BLOCK_RE = /^\s*catch\s*(?:\([^)]*\)\s*)?\{/;
+
+// The top-level arguments of the call whose `(` is at `open`, as source slices.
+function callArgs(code, open) {
+  const close = matchForward(code, open) - 1;
+  const args = [];
+  let depth = 0;
+  let from = open + 1;
+  for (let i = open + 1; i < close; i++) {
+    const c = code[i];
+    if (c === '(' || c === '[' || c === '{') depth++;
+    else if (c === ')' || c === ']' || c === '}') depth--;
+    else if (c === ',' && depth === 0) {
+      args.push(code.slice(from, i));
+      from = i + 1;
     }
+  }
+  if (code.slice(from, close).trim() !== '') args.push(code.slice(from, close));
+  return args;
+}
+
+// [#576 RV10b-G2] Whether a rejection handler (its source: an arrow, a function,
+// a reference) or a catch block (`{...}`) rethrows or asserts on EVERY path. Only
+// an unconditional statement at the top level of its body counts - a `throw`, or
+// an `expect(...)` that is not about a literal - with no `return` / `break` /
+// `continue` before it; an expression body counts when it is such an expect. A
+// throw under a condition (`if (!(e instanceof errors.TimeoutError)) throw e;`,
+// Playwright's optional-wait idiom) lets the timeout through: a swallowed wait.
+function rethrowsAlways(src) {
+  let body = src.trim();
+  if (body[0] !== '{') {
+    const fn = /^(?:async\s+)?(?:function\b[^(]*)?/.exec(body)[0];
+    let rest = body.slice(fn.length).trimStart();
+    if (rest[0] === '(') rest = rest.slice(matchForward(rest, 0)).trimStart();
+    else if (!fn.includes('function')) rest = rest.replace(/^[\w$]+\s*/, '');
+    rest = rest.replace(/^(?::[^=;{]*)?=>\s*/, '').trimStart();
+    if (rest[0] !== '{') return ASSERT_RE.test(rest) && !TRIVIAL_EXPECT_RE.test(rest);
+    body = rest.slice(0, matchForward(rest, 0));
+  }
+  const block = body.slice(1, -1);
+  let depth = 0;
+  let stmt = 0;
+  for (let i = 0; i < block.length; i++) {
+    const c = block[i];
+    const wordStart = !/[\w$.]/.test(block[i - 1] ?? ' ');
+    if (wordStart && /^(?:return|break|continue)\b/.test(block.slice(i))) return false;
+    if (c === '(' || c === '[' || c === '{') {
+      depth++;
+      continue;
+    }
+    if (c === ')' || c === ']' || c === '}') {
+      if (--depth === 0 && c === '}') stmt = i + 1;
+      continue;
+    }
+    if (depth === 0 && c === ';') stmt = i + 1;
+    if (depth !== 0 || !wordStart) continue;
+    const tail = block.slice(i);
+    const isThrow = /^throw\b/.test(tail);
+    if (!isThrow && !(ASSERT_RE.test(tail) && !TRIVIAL_EXPECT_RE.test(tail))) continue;
+    const lead = block.slice(stmt, i);
+    // A statement start: nothing before it in the statement, or (no semicolon)
+    // a line break after an expression statement that is not a control header.
+    const startsStatement = lead.trim() === '' || (/\n\s*$/.test(lead) && !CONTROL_RE.test(lead.trim()) && !/[?:&|,=(]\s*$/.test(lead));
+    if (startsStatement) return true;
   }
   return false;
 }
-
-const isWaitChain = (names) => names.some((n) => WAIT_METHODS.has(n)) || names[names.length - 1] === 'expect';
-// `() => true` / `(e) => false` / `() => { return false; }`: a boolean outcome.
-const BOOLEAN_HANDLER_RE = /^\s*(?:async\s+)?(?:\([^)]*\)|[\w$]+)\s*=>\s*(?:(?:true|false)|\{\s*return\s+(?:true|false)\s*;?\s*\})\s*$/;
-// A handler that throws or asserts does not swallow the failure.
-const RETHROWS_RE = /\bthrow\b|\bexpect\s*[.(]/;
-const CATCH_CALL_RE = /\.\s*catch\s*\(/g;
-const TRY_RE = /\btry\s*\{/g;
-const CATCH_BLOCK_RE = /^\s*catch\s*(?:\([^)]*\)\s*)?\{/;
-const TRY_WAIT_RE = new RegExp(`\\.\\s*(?:${[...WAIT_METHODS].join('|')})\\s*\\(|\\bawait\\s+(expect)\\b`, 'g');
 
 function swallowedWaitLines(code) {
   const lineOf = (at) => code.slice(0, at).split('\n').length - 1;
@@ -238,12 +345,31 @@ function swallowedWaitLines(code) {
   CATCH_CALL_RE.lastIndex = 0;
   while ((m = CATCH_CALL_RE.exec(code)) !== null) {
     const { start, names } = chainBefore(code, m.index);
-    if (!isWaitChain(names)) continue;
+    if (!isWaitChain(code, start, m.index, names)) continue;
     const open = m.index + m[0].length - 1;
     const handler = code.slice(open + 1, matchForward(code, open) - 1);
-    if (RETHROWS_RE.test(handler)) continue;
+    if (rethrowsAlways(handler)) continue;
     if (names.includes('then') && BOOLEAN_HANDLER_RE.test(handler) && !isStatement(code, start)) continue;
     starts.add(start);
+  }
+  // [#576 RV10b-G3] `.then(onFulfilled, onRejected)`: the second argument is a
+  // rejection handler, read like a `.catch`'s.
+  THEN_CALL_RE.lastIndex = 0;
+  while ((m = THEN_CALL_RE.exec(code)) !== null) {
+    const { start, names } = chainBefore(code, m.index);
+    if (!isWaitChain(code, start, m.index, names)) continue;
+    const args = callArgs(code, m.index + m[0].length - 1);
+    if (args.length < 2 || rethrowsAlways(args[1])) continue;
+    if (args.every((a) => BOOLEAN_HANDLER_RE.test(a)) && !isStatement(code, start)) continue;
+    starts.add(start);
+  }
+  // [#576 RV10b-G3] `Promise.allSettled([...waits])` never rejects: a sleep when
+  // its outcome is thrown away (kept, its statuses are a probe).
+  ALL_SETTLED_RE.lastIndex = 0;
+  while ((m = ALL_SETTLED_RE.exec(code)) !== null) {
+    const open = m.index + m[0].length - 1;
+    if (!HAS_WAIT_RE.test(code.slice(open, matchForward(code, open)))) continue;
+    if (isStatement(code, m.index)) starts.add(m.index);
   }
   TRY_RE.lastIndex = 0;
   while ((m = TRY_RE.exec(code)) !== null) {
@@ -252,7 +378,7 @@ function swallowedWaitLines(code) {
     const catchHead = CATCH_BLOCK_RE.exec(code.slice(tryEnd));
     if (!catchHead) continue;
     const catchOpen = tryEnd + catchHead[0].length - 1;
-    if (RETHROWS_RE.test(code.slice(catchOpen, matchForward(code, catchOpen)))) continue;
+    if (rethrowsAlways(code.slice(catchOpen, matchForward(code, catchOpen)))) continue;
     const body = code.slice(tryOpen, tryEnd);
     let w;
     TRY_WAIT_RE.lastIndex = 0;
