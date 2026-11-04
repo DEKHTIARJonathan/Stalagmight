@@ -36,6 +36,7 @@
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
+import { projectSessionEpoch } from '../store/projectSession';
 import { isEditingBlockedNow } from '../hooks/useEditingBlocked';
 import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
@@ -73,11 +74,22 @@ function unsupportedFileDisplayName(path: string): string {
  * return` abandon path every caller already has for a parser that resolves to
  * null (no dialog, quiet abort) - the two null cases end up in the same
  * no-op branch, only one of them opened a dialog first.
+ *
+ * [#576 HFI-4-D1] `stillWanted` is read when the parse settles: a result nobody
+ * is waiting for any more - another project opened meanwhile, or the
+ * import-as-new confirm was cancelled - is dropped, success or failure alike,
+ * so neither a late dialog nor a late error lands over what the user did since.
  */
-async function parseForImport<T>(promise: Promise<T>, errorTitle: string): Promise<T | null> {
+async function parseForImport<T>(
+  promise: Promise<T>,
+  errorTitle: string,
+  stillWanted: () => boolean,
+): Promise<T | null> {
   try {
-    return await promise;
+    const parsed = await promise;
+    return stillWanted() ? parsed : null;
   } catch (err) {
+    if (!stillWanted()) return null;
     useUIStore.getState().openDialog('error', {
       title: errorTitle,
       message: getErrorMessage(err, 'Failed to open file'),
@@ -106,9 +118,9 @@ function projectNameFromCaveOrFile(fileName: string | null | undefined, fallback
  * Open the "import as new project?" confirm dialog (#391) for a new-project-only
  * format (GPX / Ariane / Compass / Walls) picked while a project is already
  * open. Replaces the old close-first dead end (`IMPORT_SURVEY_CLOSE_FIRST`):
- * confirming closes the current project (honoring its own unsaved-changes
- * guard) and then re-routes the same path, which - with no project open - falls
- * through to the normal new-project import chain.
+ * confirming re-routes the same path with `importAsNew`, which parses the file
+ * while the project stays open and closes it (honoring its own unsaved-changes
+ * guard) only once the parse succeeded (#576 HFI-4-D1).
  */
 function openImportAsNewProject(ui: ReturnType<typeof useUIStore.getState>, path: string): void {
   ui.openDialog('import-as-new-project', { path, fileName: extractFilename(path) });
@@ -181,6 +193,14 @@ function importFlowOwnsScreen(ui: ReturnType<typeof useUIStore.getState>): boole
  *   when it re-routes the same path after the user confirmed swapping out a
  *   clean, already-open project: skips that same confirm on this second pass,
  *   so confirming doesn't ask again.
+ * @param opts.importAsNew  Set by ImportAsNewProjectDialog's confirm, which
+ *   stays on screen (showing the parse in progress) while this runs: "parse
+ *   first, then switch" (#576 HFI-4-D1). The project stays open while the file
+ *   parses; only a successful parse closes it, through `closeCurrent` (the same
+ *   guarded close as File > Close), and hands over to `new-project-for-import`.
+ *   A failed parse leaves the project untouched. A close that must ask first
+ *   (unsaved changes, SpeleoDB hand-back) still asks before any parse, as it
+ *   always did, and the import ends at that prompt.
  * @param opts.allow  Restricts which extensions this call may route. `'project-
  *   only'` refuses everything but `.stalx` with the same unsupported-file
  *   dialog used for an unrecognized extension. Recents entries are read from
@@ -197,12 +217,52 @@ export async function routeOpenedFile(
     residualReadOnlyToast?: boolean;
     swapConfirmed?: boolean;
     allow?: 'project-only';
+    importAsNew?: { closeCurrent: () => Promise<{ success: boolean }> };
   },
 ): Promise<void> {
   const lowerPath = path.toLowerCase();
   const store = useProjectStore.getState();
   const ui = useUIStore.getState();
   const hasProject = !!store.project;
+  const importAsNew = opts?.importAsNew;
+
+  // [#576 HFI-4-D1] The version guard every parse below settles against, in the
+  // shape of the `projectIdentityKey` guards (useMapTools, useUnwindTarget): the
+  // project session the file was picked in, and - for an import-as-new run - the
+  // confirm dialog instance it was confirmed in (`openDialog` always installs a
+  // fresh `dialogData`, so its identity names the instance). A parse that settles
+  // after either moved is a late result and is dropped.
+  const session = projectSessionEpoch();
+  const confirmDialogData = importAsNew ? ui.dialogData : null;
+  const confirmStillShowing = (): boolean => {
+    const now = useUIStore.getState();
+    return now.activeDialog === 'import-as-new-project' && now.dialogData === confirmDialogData;
+  };
+  const stillWanted = (): boolean =>
+    projectSessionEpoch() === session && (!importAsNew || confirmStillShowing());
+  // A dropped result whose confirm dialog is still up (the project changed under
+  // it, not by a cancel) takes the dialog down too: it names the old project.
+  const dropLateResult = (): void => {
+    if (importAsNew && !stillWanted() && confirmStillShowing()) useUIStore.getState().closeDialog();
+  };
+  // Import as new over a project whose close must ask first (unsaved changes,
+  // SpeleoDB hand-back): ask now, before the parse, exactly as before - the
+  // prompt takes the screen and this import ends there. True when it asked.
+  const askedBeforeParse = async (): Promise<boolean> => {
+    if (!importAsNew || !store.project) return false;
+    if (!needsSpeleoHandBackPrompt(useSpeleoStore.getState().link) && !useProjectStore.getState().isDirty) {
+      return false;
+    }
+    await importAsNew.closeCurrent();
+    return true;
+  };
+  // After a successful parse, switch: close the project the import was confirmed
+  // over, through the same guarded close. False when the close did not happen (a
+  // prompt took over, or the close was refused); the import ends there.
+  const switchedForImport = async (): Promise<boolean> => {
+    if (!importAsNew || !useProjectStore.getState().project) return true;
+    return (await importAsNew.closeCurrent()).success;
+  };
 
   // A dialog (or the terminal command it triggers) now owns the pending entry-
   // point source's lifetime - leave it set so that flow can apply it on
@@ -249,8 +309,13 @@ export async function routeOpenedFile(
     // the active dialog (its own handleConfirm routes BEFORE closing, to keep
     // the dialog slot - and `screenBusy()` - occupied for the whole flow; see
     // there). Every other dialog that re-enters this router closes itself
-    // first, so `activeDialog` is already null by the time it calls back in.
-    if (ui.activeDialog && !opts?.swapConfirmed) {
+    // first, so `activeDialog` is already null by the time it calls back in -
+    // except `import-as-new-project`, which (#576 HFI-4-D1) stays up showing the
+    // parse in progress until the new-project dialog replaces it.
+    const reentryOwnsScreen =
+      opts?.swapConfirmed === true ||
+      (importAsNew !== undefined && ui.activeDialog === 'import-as-new-project');
+    if (ui.activeDialog && !reentryOwnsScreen) {
       ui.showToast(i18n.t('importGate.inProgress'), TOAST_KEYS.IMPORT_IN_PROGRESS, 'warning');
       return;
     }
@@ -364,13 +429,18 @@ export async function routeOpenedFile(
       // supported (DMP is the additive in-project import). Mirror the TML/Compass
       // guard so a GPX opened/dropped while a project is open is rejected, not
       // silently added to the current project.
-      if (store.project) {
+      if (store.project && !importAsNew) {
         openImportAsNewProject(ui, path);
         handedOff = true;
         return;
       }
-      const gpxFile = await parseForImport(store.parseGpx(path), errorTitle);
-      if (!gpxFile) return;
+      if (await askedBeforeParse()) return;
+      const gpxFile = await parseForImport(store.parseGpx(path), errorTitle, stillWanted);
+      if (!gpxFile) {
+        dropLateResult();
+        return;
+      }
+      if (!(await switchedForImport())) return;
       ui.setImportContext('new-project');
       ui.openDialog('new-project-for-import', {
         gpxFile,
@@ -384,13 +454,18 @@ export async function routeOpenedFile(
       handedOff = true;
     } else if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
       // TML/TMLU import always creates a new project.
-      if (store.project) {
+      if (store.project && !importAsNew) {
         openImportAsNewProject(ui, path);
         handedOff = true;
         return;
       }
-      const tmlFile = await parseForImport(store.parseTml(path), errorTitle);
-      if (!tmlFile) return;
+      if (await askedBeforeParse()) return;
+      const tmlFile = await parseForImport(store.parseTml(path), errorTitle, stillWanted);
+      if (!tmlFile) {
+        dropLateResult();
+        return;
+      }
+      if (!(await switchedForImport())) return;
       // Mirror the DMP branch: the project about to be created exists only for
       // this import, and the import dialog has to know that to offer to discard
       // it again if the import is cancelled or fails (#411 C2).
@@ -407,13 +482,18 @@ export async function routeOpenedFile(
       handedOff = true;
     } else if (lowerPath.endsWith('.mak') || lowerPath.endsWith('.dat')) {
       // Compass import always creates a new project.
-      if (store.project) {
+      if (store.project && !importAsNew) {
         openImportAsNewProject(ui, path);
         handedOff = true;
         return;
       }
-      const compassFile = await parseForImport(store.parseCompass(path), errorTitle);
-      if (!compassFile) return;
+      if (await askedBeforeParse()) return;
+      const compassFile = await parseForImport(store.parseCompass(path), errorTitle, stillWanted);
+      if (!compassFile) {
+        dropLateResult();
+        return;
+      }
+      if (!(await switchedForImport())) return;
       ui.setImportContext('new-project');
       ui.openDialog('new-project-for-import', {
         compassFile,
@@ -427,13 +507,18 @@ export async function routeOpenedFile(
       handedOff = true;
     } else if (lowerPath.endsWith('.wpj') || lowerPath.endsWith('.srv')) {
       // Walls import always creates a new project.
-      if (store.project) {
+      if (store.project && !importAsNew) {
         openImportAsNewProject(ui, path);
         handedOff = true;
         return;
       }
-      const wallsFile = await parseForImport(store.parseWalls(path), errorTitle);
-      if (!wallsFile) return;
+      if (await askedBeforeParse()) return;
+      const wallsFile = await parseForImport(store.parseWalls(path), errorTitle, stillWanted);
+      if (!wallsFile) {
+        dropLateResult();
+        return;
+      }
+      if (!(await switchedForImport())) return;
       ui.setImportContext('new-project');
       ui.openDialog('new-project-for-import', {
         wallsFile,
@@ -447,11 +532,13 @@ export async function routeOpenedFile(
       handedOff = true;
     } else if (isDmp) {
       // mNemo DMP: import into the current project, or seed a new one.
-      const dmpFile = await parseForImport(store.importDmp(path), errorTitle);
+      const dmpFile = await parseForImport(store.importDmp(path), errorTitle, stillWanted);
       if (!dmpFile) return;
       // Re-read project state fresh after the parse - the existing/new-project
       // decision must reflect the project as it is NOW, not the snapshot taken
-      // before the await (a switch could have landed during the parse).
+      // before the await. A switch during the parse no longer gets this far
+      // (#576 HFI-4-D1: `stillWanted` dropped the result - the file was picked
+      // for the project that was open then), so this reads that same project.
       if (useProjectStore.getState().project) {
         ui.setImportContext('existing-project');
         ui.openDialog('dmp-selection', { dmpFile, filePath: path });

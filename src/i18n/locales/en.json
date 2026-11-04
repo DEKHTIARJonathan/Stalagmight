@@ -1777,7 +1777,8 @@
       "title": "Import as new project?",
       "body": "{{fileName}} will be converted into a new Stalagmight project. Your original file is never modified.",
       "closeNotice": "{{projectName}} will be closed.",
-      "confirm": "Close and import"
+      "confirm": "Close and import",
+      "parsing": "Reading {{fileName}}..."
     },
     "newProjectForImport": {
       "saveDialogTitle": "Save Project",
