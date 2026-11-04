@@ -162,10 +162,14 @@ cancels (`commands/import_offthread_tests.rs`, `core/state/command_ordering_test
 
 The custom Tauri commands take paths and payloads straight from the webview, and
 `src-tauri/capabilities/default.json` does not bound them: a capability grants the
-**plugin** commands the page may call (the frontend uses only the fs plugin's
-`exists` and `writeTextFile`, plus the dialog and opener plugins), never the app's
-own `#[tauri::command]`s. Nor does `withGlobalTauri` decide reachability:
-`window.__TAURI_INTERNALS__.invoke` is injected regardless (see docs/app-modes.md).
+**plugin** commands the page may call (the dialog and opener plugins; no fs plugin
+command), never the app's own `#[tauri::command]`s. The two file operations the
+page used to ask the fs plugin for - whether a save would replace a file, and the
+corruption-recovery salvage write - are app commands (`save_target_exists`,
+`write_salvaged_data`): the fs plugin's scope held no user path, so both failed for
+every path in the real app (#576 HFI-2, HFI-3). Nor does `withGlobalTauri` decide
+reachability: `window.__TAURI_INTERNALS__.invoke` is injected regardless (see
+docs/app-modes.md).
 
 The real boundary is that **only the app's bundled frontend runs in the webview**:
 a strict CSP (`script-src 'self'`, no inline script, no remote origin; see
@@ -173,8 +177,9 @@ a strict CSP (`script-src 'self'`, no inline script, no remote origin; see
 Defence in depth for the day that fails (#576 C11-D1): every command that writes,
 replaces or deletes a file at a path it is handed - the exports (CSV, JSON, Ariane,
 image, dive profile), Save As, create, merge (and the sources it archives), delete,
-rename-by-path, restore from backup, repair and the SpeleoDB unlink - first runs
-`commands/write_path.rs` `check_write_path`: the file must have the extension of
+rename-by-path, restore from backup, repair, the salvage write and the SpeleoDB
+unlink - first runs `commands/write_path.rs` `check_write_path`: the file must have
+the extension of
 what is written, must not be inside the app's own configuration, data or cache
 folders (the SpeleoDB managed-project cache excepted, for projects), and must not
 be inside a system folder (`/etc`, `/usr`, `/bin`, ..., `C:\Windows`,
@@ -190,7 +195,11 @@ the open dialog offers "All Files"), and in those folders an older file is refus
 before anything is written (`Database::open_existing_refusing_upgrade`, load error
 `UPGRADE_REFUSED`) with a message saying to copy the project somewhere writable;
 a current or newer file opens untouched. Commands that only read keep taking any
-path.
+path, with one exception: the overwrite prompts' existence probe
+(`save_target_exists`) answers only for a path the write after it may write (the
+same three rules), so it tells a page script nothing about the app's own or a
+system folder; a refused or failed probe is an error, and the prompt then asks as
+if the file were there (#576 E10-D1).
 
 ## Data Model
 

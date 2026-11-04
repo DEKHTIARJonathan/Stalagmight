@@ -113,3 +113,149 @@ fn an_unusable_candidate_is_refused_and_the_project_is_untouched() {
         "the project file must be exactly as it was"
     );
 }
+
+// --- [#576 HFI-3] Export Salvageable Data: the backend writes the file ---------
+
+/// Run the salvage write through the command itself.
+fn write_salvage(project: &Path, dest: &Path) -> Result<(), crate::core::CommandError> {
+    tauri::async_runtime::block_on(recovery::write_salvaged_data(
+        project.to_path_buf(),
+        dest.to_path_buf(),
+    ))
+}
+
+/// The file the dialog chose holds the salvage of the project - the JSON the
+/// dialog used to write from the webview (which the fs scope refused in the real
+/// app) - into a new folder, and over a file the OS dialog already agreed to
+/// replace.
+#[test]
+fn the_salvage_export_writes_the_chosen_file() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("CaveA.stalx");
+    project_file(&project, "SalvageMe");
+    let folder = temp.path().join("new-empty-folder");
+    std::fs::create_dir(&folder).unwrap();
+    let dest = folder.join("salvaged.json");
+
+    let written = write_salvage(&project, &dest);
+    println!(
+        "write_salvaged_data: {written:?}; file written: {}",
+        dest.exists()
+    );
+    written.unwrap();
+    let json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&dest).unwrap()).unwrap();
+    println!("salvaged project name in the file: {}", json["name"]);
+    assert_eq!(json["name"], "SalvageMe");
+
+    // The same bytes the read command hands the dialog for its summary.
+    let read =
+        tauri::async_runtime::block_on(recovery::export_salvageable_data(project.clone())).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(&dest).unwrap(),
+        read.full_project_json.unwrap()
+    );
+
+    // Over an existing file (the OS save dialog asked about this exact name).
+    std::fs::write(&dest, b"an older salvage").unwrap();
+    write_salvage(&project, &dest).unwrap();
+    assert!(std::fs::read_to_string(&dest)
+        .unwrap()
+        .contains("SalvageMe"));
+}
+
+/// Refused like every other write: the app's own folders, a non-JSON name, and
+/// the damaged project itself - and nothing is written or touched.
+#[test]
+fn the_salvage_export_refuses_where_no_command_writes() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("CaveA.stalx");
+    project_file(&project, "SalvageMe");
+
+    let app = TempDir::new().unwrap();
+    let dirs = crate::commands::write_path::AppDirs {
+        internal: vec![app.path().to_path_buf()],
+        managed_projects: None,
+    };
+    let inside_app = app.path().join("salvaged.json");
+    let refused = recovery::write_salvaged_data_with(&project, &inside_app, &dirs);
+    println!("into the app's folder: {refused:?}");
+    assert!(refused.unwrap_err().message.contains("app's own settings"));
+    assert!(!inside_app.exists(), "nothing written there");
+
+    let not_json = temp.path().join("notes.txt");
+    let refused = write_salvage(&project, &not_json);
+    println!("to notes.txt: {refused:?}");
+    assert!(refused.unwrap_err().message.contains("must end in .json"));
+    assert!(!not_json.exists());
+
+    // A damaged project opened under a .json name (the open dialog offers "All
+    // Files"): its own salvage must not replace it.
+    let odd = temp.path().join("odd.json");
+    project_file(&odd, "OddName");
+    let before = std::fs::read(&odd).unwrap();
+    let refused = write_salvage(&odd, &odd);
+    println!("over the damaged project itself: {refused:?}");
+    assert!(refused
+        .unwrap_err()
+        .message
+        .contains("damaged project itself"));
+    assert!(
+        std::fs::read(&odd).unwrap() == before,
+        "the project is untouched"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn the_salvage_export_refuses_a_system_folder() {
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("CaveA.stalx");
+    project_file(&project, "SalvageMe");
+    let refused = write_salvage(&project, Path::new("/etc/stalagmight-hfi3.json"));
+    println!("into /etc: {refused:?}");
+    assert!(refused
+        .unwrap_err()
+        .message
+        .contains("inside a system folder"));
+}
+
+/// A folder the user may not write to: an error with the reason, nothing written -
+/// not a success the dialog would report as saved.
+#[cfg(unix)]
+#[test]
+fn the_salvage_export_into_an_unwritable_folder_fails_and_says_why() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = TempDir::new().unwrap();
+    let project = temp.path().join("CaveA.stalx");
+    project_file(&project, "SalvageMe");
+    let locked = temp.path().join("read-only");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+    // Root (CAP_DAC_OVERRIDE) ignores the mode bits; fail rather than pass untested.
+    crate::models::test_support::assert_dir_refuses_new_files(&locked);
+
+    let dest = locked.join("salvaged.json");
+    let written = write_salvage(&project, &dest);
+
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    println!(
+        "into a read-only folder: {written:?}; file written: {}",
+        dest.exists()
+    );
+    let err = written.unwrap_err();
+    assert_eq!(
+        err.code,
+        crate::core::CommandErrorCode::Failed,
+        "{}",
+        err.message
+    );
+    assert!(
+        err.message.contains("Could not write salvaged.json")
+            && err.message.contains("Permission denied"),
+        "{}",
+        err.message
+    );
+    assert!(!dest.exists());
+}

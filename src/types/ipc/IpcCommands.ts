@@ -300,6 +300,7 @@ export interface IpcCommands {
   update_project_settings: { args: { name: string; validation: ValidationConfig; defaultAzimuthReference?: AzimuthReference | null }; result: EditOutcome; error: CommandError };
   update_section: { args: { sectionId: number; updates: SectionUpdates }; result: EditOutcome; error: CommandError };
   update_shot: { args: { sectionId: number; shotId: number; updates: ShotUpdates }; result: EditOutcome; error: CommandError };
+  write_salvaged_data: { args: { path: string; destPath: string }; result: null; error: CommandError };
 }
 
 /** Every registered command name. */
@@ -487,4 +488,5 @@ export const IPC_COMMAND_NAMES = [
   "update_project_settings",
   "update_section",
   "update_shot",
+  "write_salvaged_data",
 ] as const;

@@ -3,7 +3,7 @@ import type { MockCommandFamily, MockReply } from './types';
 /**
  * The corruption-recovery commands of the Playwright IPC mock (#576 E3): canned
  * "nothing to recover" answers. No backup exists, a repair reports that it changed
- * nothing, and nothing is salvaged. What the backend does on disk - the safety copy, the
+ * nothing, nothing is salvaged, and writing the salvage file succeeds. What the backend does on disk - the safety copy, the
  * `fs::copy` of a backup over the live project, REINDEX/VACUUM - is pinned by the Rust
  * command tests (`src-tauri/src/commands/recovery_tests.rs`), never here. A spec that
  * walks the recovery dialog seeds the answers it needs with `__MOCK_IPC_OVERRIDES__`
@@ -39,6 +39,10 @@ export const recoveryCommands: MockCommandFamily = (ctx) => {
           fullProjectJson: null,
           errors: [],
         } satisfies MockReply<'export_salvageable_data'>;
+
+      // [#576 HFI-3] The salvage file is written by the backend; the mock writes nothing.
+      case 'write_salvaged_data':
+        return null satisfies MockReply<'write_salvaged_data'>;
 
       default:
         return ctx.unhandled;

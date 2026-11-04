@@ -578,6 +578,7 @@ pub fn run() {
             commands::recovery::list_backups,
             commands::recovery::restore_from_backup,
             commands::recovery::export_salvageable_data,
+            commands::recovery::write_salvaged_data,
             // [#576 HFI-2] The overwrite prompts' existence probe
             commands::save_target::save_target_exists,
             // Logging

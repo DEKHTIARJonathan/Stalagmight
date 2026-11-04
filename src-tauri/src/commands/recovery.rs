@@ -1,7 +1,8 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::commands::pool;
-use crate::commands::write_path::{check_write_path, WriteTarget};
+use crate::commands::save_target::file_name;
+use crate::commands::write_path::{check_write_path, check_write_path_with, AppDirs, WriteTarget};
 use crate::core::CommandError;
 use crate::persistence::{BackupInfo, Database, RepairResult, SalvagedData};
 
@@ -75,7 +76,7 @@ pub async fn restore_from_backup(
             tracing::error!(error = %e, "Restore failed");
             format!("{e:#}")
         })?;
-        let name = |path: &std::path::Path| {
+        let name = |path: &Path| {
             path.file_name().map_or_else(
                 || path.display().to_string(),
                 |n| n.to_string_lossy().into_owned(),
@@ -107,4 +108,57 @@ pub async fn export_salvageable_data(path: PathBuf) -> Result<SalvagedData, Comm
             .map_err(|e| CommandError::failed(format!("Salvage failed: {e}")))
     })
     .await
+}
+
+/// [#576 HFI-3] Write what can be salvaged from the corrupt project at `path`
+/// to `dest_path`: the JSON file the recovery dialog's "Export Salvageable Data"
+/// saves (the readable project as a whole, else its sections, else `{}`).
+///
+/// The dialog used to write that file itself, with the fs plugin's
+/// `writeTextFile`, whose capability scope holds no user path: in the real app
+/// every salvage export failed ("forbidden path") and nothing was written. The
+/// backend writes it now, behind the write-path policy (a `.json` file, not
+/// inside the app's own folders or a system folder), and salvages `path` again
+/// itself rather than writing text the webview hands it - so the page gains no
+/// general file write, only this one, exactly as an export is. The destination
+/// is replaced atomically, as every export's is (`export::write_atomic_bytes`);
+/// the damaged project is only read, and naming it as the destination is
+/// refused.
+#[tauri::command]
+pub async fn write_salvaged_data(path: PathBuf, dest_path: PathBuf) -> Result<(), CommandError> {
+    pool::run_stateless(move || write_salvaged_data_with(&path, &dest_path, &AppDirs::current()))
+        .await
+}
+
+/// [`write_salvaged_data`] against given app directories (the testable core).
+pub(crate) fn write_salvaged_data_with(
+    path: &Path,
+    dest_path: &Path,
+    dirs: &AppDirs,
+) -> Result<(), CommandError> {
+    tracing::info!(path = ?path, dest = ?dest_path, "IPC: write_salvaged_data");
+    check_write_path_with(dest_path, WriteTarget::Json, dirs)?;
+    let name = file_name(dest_path);
+    let same_file = matches!(
+        (std::fs::canonicalize(path), std::fs::canonicalize(dest_path)),
+        (Ok(source), Ok(dest)) if source == dest
+    );
+    if same_file {
+        return Err(CommandError::failed(format!(
+            "Refused to write the salvaged data to {name}: that is the damaged project itself"
+        )));
+    }
+
+    let salvaged = Database::export_salvageable(path)
+        .map_err(|e| CommandError::failed(format!("Salvage failed: {e}")))?;
+    let content = salvaged
+        .full_project_json
+        .or(salvaged.sections_json)
+        .unwrap_or_else(|| "{}".to_owned());
+    // `FAILED` with the reason, as every export's write failure: the atomic
+    // writer reports the OS error as text, so there is no kind to classify.
+    crate::export::write_atomic_bytes(dest_path, content.as_bytes()).map_err(|e| {
+        tracing::error!(dest = ?dest_path, error = %e, "Writing the salvaged data failed");
+        CommandError::failed(format!("Could not write {name}: {e:#}"))
+    })
 }

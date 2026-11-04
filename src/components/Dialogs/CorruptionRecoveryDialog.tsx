@@ -168,10 +168,12 @@ export default function CorruptionRecoveryDialog() {
         return;
       }
 
-      // Write the full project JSON or sections JSON to disk
-      const content = data.fullProjectJson ?? data.sectionsJson ?? '{}';
-      const { writeTextFile } = await import('@tauri-apps/plugin-fs');
-      await writeTextFile(destPath, content);
+      // [#576 HFI-3] The backend writes the file (the full project JSON, else
+      // the sections JSON), behind the write-path policy: the webview's fs
+      // plugin has no scope for user paths, so writing it here always failed.
+      await invokeIpc('write_salvaged_data', { path: filePath, destPath }, {
+        purpose: 'write salvaged data from corrupt database',
+      });
 
       const parts: string[] = [];
       if (data.sectionCount > 0) parts.push(t('dialogs.corruptionRecovery.salvage.sections', { count: data.sectionCount }));

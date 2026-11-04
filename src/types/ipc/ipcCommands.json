@@ -4809,6 +4809,35 @@
         "rust": "CommandError",
         "ts": "CommandError"
       }
+    },
+    {
+      "name": "write_salvaged_data",
+      "module": "recovery",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "dest_path",
+          "key": "destPath",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
     }
   ]
 }
