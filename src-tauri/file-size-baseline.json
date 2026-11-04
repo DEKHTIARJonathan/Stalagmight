@@ -125,6 +125,7 @@
     "src-tauri/crates/models/src/project/gas/model.rs": 172,
     "src-tauri/crates/models/src/project/gas/physics.rs": 46,
     "src-tauri/crates/models/src/project/gas/pinned.rs": 213,
+    "src-tauri/crates/models/src/project/gas/range_route.rs": 171,
     "src-tauri/crates/models/src/project/gas/scooter.rs": 46,
     "src-tauri/crates/models/src/project/integrity.rs": 382,
     "src-tauri/crates/models/src/project/lsq.rs": 668,
