@@ -103,9 +103,11 @@ pub fn gps_to_local(gps: &GpsCoordinates, origin: &GpsCoordinates) -> (f64, f64)
     (east, north)
 }
 
-/// The exact inverse of [`gps_to_local`]: the point on the WGS84 ellipsoid whose
-/// local `(east, north)` relative to `origin` is the one given, as `(latitude,
-/// longitude)` in degrees.
+/// The exact inverse of [`gps_to_local`] on the origin's side of the earth: the
+/// point on the WGS84 ellipsoid whose local `(east, north)` relative to `origin`
+/// is the one given, as `(latitude, longitude)` in degrees. A far-side point
+/// shares its `(east, north)` with a near-side one and comes back as that one;
+/// no survey spans that distance.
 ///
 /// [`gps_to_local`] drops the "up" component, so the inverse puts the point back
 /// on the ellipsoid: it solves for the up offset that lands
@@ -404,7 +406,7 @@ mod tests {
     }
 
     /// `local_to_gps` must invert `gps_to_local` exactly in both directions, at any
-    /// latitude and at cave scale up to regional distances.
+    /// latitude, from cave scale up to regional distances (near side only).
     #[test]
     fn local_to_gps_inverts_gps_to_local() {
         let origins = [(0.0, 0.0), (20.5, -87.4), (-60.0, 150.0), (80.0, 10.0)];
