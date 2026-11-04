@@ -1219,6 +1219,109 @@ export function multisetDelta(
   return deltas.sort((p, q) => (p.key < q.key ? -1 : 1));
 }
 
+// ---------------------------------------------------------------------------
+// The one azimuth change a TML round trip is ENTITLED to make
+// ---------------------------------------------------------------------------
+
+/**
+ * A section's RESOLVED azimuth reference, as `Project::azimuth_reference_for`
+ * (`models/project.rs:1169`) returns it: the section's own, else the project
+ * default, else the "nothing recorded" default (magnetic, 0, unknown).
+ */
+export interface SectionAzimuthReference {
+  north: 'magnetic' | 'true' | 'grid';
+  /** Degrees, east positive, as stored. */
+  correction: number;
+  /** False exactly when the source is `CorrectionSource::Unknown`: no correction on record. */
+  onRecord: boolean;
+}
+
+/** The four answers `AzimuthExport::decide` gives, in the same order. */
+export type TmlAzimuthPlan = 'magnetic' | 'true-as-stored' | 'mixed-to-true' | 'magnetic-unresolved';
+
+/** `AzimuthReference::applied_correction`: the stored value, or 0 when it is not finite. */
+function appliedCorrection(reference: SectionAzimuthReference): number {
+  return Number.isFinite(reference.correction) ? reference.correction : 0;
+}
+
+/**
+ * MIRROR of `AzimuthExport::decide` (`export/tml_azimuth.rs:56-108`): which
+ * north the Ariane document declares, and whether its bearings are rewritten.
+ *
+ * `references` holds the resolved reference of every NON-EMPTY section - or,
+ * equivalently, of every SHOT's section: the decision reads only which
+ * references occur (any unknown? do the declared ones agree?), and a section with
+ * no shots has none, which is exactly the Rust's `!section.shots.is_empty()`
+ * filter. Only a section with a correction on record votes; an unknown one
+ * constrains the document to magnetic and forbids the rewrite. "Agree" is the
+ * same north and an applied correction within 1e-12 - the Rust's identity test,
+ * not a tolerance.
+ */
+export function tmlAzimuthPlan(references: readonly SectionAzimuthReference[]): TmlAzimuthPlan {
+  const anyUnknown = references.some((reference) => !reference.onRecord);
+  const declared = references.filter((reference) => reference.onRecord);
+  const first = declared[0];
+  if (first === undefined) return 'magnetic';
+  const uniform = declared.every(
+    (reference) =>
+      reference.north === first.north && Math.abs(appliedCorrection(reference) - appliedCorrection(first)) < 1e-12,
+  );
+  const canRewrite = !anyUnknown;
+  if (!uniform) return canRewrite ? 'mixed-to-true' : 'magnetic-unresolved';
+  switch (first.north) {
+    case 'magnetic':
+      return 'magnetic';
+    case 'true':
+      return anyUnknown ? 'magnetic-unresolved' : 'true-as-stored';
+    case 'grid':
+      return canRewrite ? 'mixed-to-true' : 'magnetic-unresolved';
+  }
+}
+
+/**
+ * The shots AS THE TML EXPORT WRITES THEM - what X6 compares the re-import to.
+ *
+ * On every plan but `mixed-to-true` that is the shots unchanged. On
+ * `mixed-to-true` the exporter pushes each shot's measured mean bearing through
+ * its section's reference (`AzimuthReference::to_true`,
+ * `models/azimuth_reference.rs:232-240`, via `AzimuthExport::emit_reference`):
+ * `normalize(bearing + correction)`, and a zero correction is the identity that
+ * returns its input untouched. The re-import then reads those rotated bearings as
+ * measured true-north ones, so without this fold X6 reported every shot of a
+ * project whose sections carry different declinations (multi-year IGRF) as lost
+ * and gained (#576 HFI-8).
+ *
+ * THIS IS THE FORMAT'S DOCUMENTED LOSS, NOT A TOLERANCE - the same distinction
+ * `lrudSentinel` and `clampedDescent` draw. `docs/ariane-export.md` ("Round-trip
+ * cost of that third case") states that the per-section corrections are gone
+ * after such a round trip and the azimuth multiset legitimately differs, and
+ * decision HFI-8-D1 keeps the rotation (the declination review is #600). The
+ * fold applies exactly that rotation, per section, and nothing else: a bearing
+ * rotated by the wrong section's correction, a length, a descent or an LRUD that
+ * changed - all still fail X6.
+ *
+ * `references[i]` is the resolved reference of `shots[i]`'s section.
+ */
+export function asExportedToTml(
+  shots: readonly ShotIdentity[],
+  references: readonly SectionAzimuthReference[],
+): { shots: ShotIdentity[]; plan: TmlAzimuthPlan; rotated: number } {
+  if (references.length !== shots.length) {
+    // A harness bug, not an oracle verdict: the two lists come from one digest.
+    throw new Error(`asExportedToTml: ${shots.length} shot(s) but ${references.length} reference(s)`);
+  }
+  const plan = tmlAzimuthPlan(references);
+  if (plan !== 'mixed-to-true') return { shots: [...shots], plan, rotated: 0 };
+  let rotated = 0;
+  const out = shots.map((shot, index) => {
+    const correction = appliedCorrection(references[index] as SectionAzimuthReference);
+    if (correction === 0) return shot;
+    rotated += 1;
+    return { ...shot, azimuthIn: normalizeHeading(shot.azimuthIn + correction) };
+  });
+  return { shots: out, plan, rotated };
+}
+
 /**
  * Which COMMENT TEXTS the project gained or lost, wherever they live.
  *
@@ -1291,6 +1394,12 @@ export function checkShotMultiset(
     identityDetail?: string | null;
     /** `commentMultisetDelta`'s answer for the text, pooled over shots + stations. */
     commentDeltas?: readonly MultisetDelta[];
+    /**
+     * The export's azimuth plan, when the caller folded it (`asExportedToTml`).
+     * Only rendered: on `mixed-to-true` the BEFORE side was already rotated, so
+     * a reader knows a remaining azimuth difference is not that documented loss.
+     */
+    azimuthPlan?: TmlAzimuthPlan;
   },
   reproduce: string,
 ): void {
@@ -1309,6 +1418,12 @@ export function checkShotMultiset(
         `0.0 absent-sentinel folded onto null - see docs/ariane-export.md, and \`clampedDescent\` ` +
         `for why the absolute depths are a metric rather than a key):`,
     );
+    if (args.azimuthPlan === 'mixed-to-true') {
+      lines.push(
+        `      (the BEFORE side is already rotated into true north per section correction - the ` +
+          `exporter's documented mixed-declination case, docs/ariane-export.md - so this is not that)`,
+      );
+    }
     for (const delta of args.deltas.slice(0, 8)) {
       lines.push(`      ${delta.key}  x${delta.before} -> x${delta.after}`);
     }

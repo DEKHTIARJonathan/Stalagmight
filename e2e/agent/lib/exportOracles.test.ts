@@ -38,11 +38,15 @@ import {
   PATH_SHAPES,
   shotKey,
   strictShotKey,
+  asExportedToTml,
+  tmlAzimuthPlan,
   type ExportAttempt,
   type ModeSnapshot,
   type OptionSnapshot,
   type PathShape,
+  type SectionAzimuthReference,
   type ShotIdentity,
+  type TmlAzimuthPlan,
 } from './exportOracles';
 
 const REPRO = 'reproduce: pnpm agent:scenario export-roundtrip-fuzz --seed 1 --iterations 1';
@@ -883,6 +887,130 @@ describe('X6 shot multiset', () => {
     // one file twice lands the copies in NEW sections, so this is the ordinary
     // outcome, not a defect.
     expect(() => checkNoDuplicateUuids([['u1', 'u2'], ['u1', 'u2']], REPRO)).not.toThrow();
+  });
+});
+
+describe('X6 folds the TML mixed-declination rotation (#576 HFI-8, decision HFI-8-D1)', () => {
+  const shot = (azimuthIn: number, over: Partial<ShotIdentity> = {}): ShotIdentity => ({
+    length: 5,
+    azimuthIn,
+    depthIn: 1,
+    depthOut: 2,
+    lrud: [1, 1, 1, 1],
+    ...over,
+  });
+  const magnetic = (correction: number): SectionAzimuthReference => ({ north: 'magnetic', correction, onRecord: true });
+  const unknown: SectionAzimuthReference = { north: 'magnetic', correction: 0, onRecord: false };
+  const trueNorth: SectionAzimuthReference = { north: 'true', correction: 0, onRecord: true };
+  const grid = (correction: number): SectionAzimuthReference => ({ north: 'grid', correction, onRecord: true });
+
+  // A SYNTHETIC two-declination project: section A magnetic with an IGRF
+  // correction of 3.71 (survey year 2018), section B magnetic with 4.11 (2020).
+  // That is the multi-year-IGRF shape that made X6 red on every shot.
+  const sectionA = [shot(90), shot(180.5, { length: 7 }), shot(358)];
+  const sectionB = [shot(10), shot(270, { length: 3 }), shot(357, { length: 4 })];
+  const before = [...sectionA, ...sectionB];
+  const references = [...sectionA.map(() => magnetic(3.71)), ...sectionB.map(() => magnetic(4.11))];
+  // What the re-import of the exported .tmlu reads, TRANSCRIBED BY HAND from
+  // `AzimuthReference::to_true` (normalize(bearing + correction), per SECTION)
+  // rather than computed by the function under test - so this pins the mirror
+  // against the Rust rule instead of against itself. 358 + 3.71 and 357 + 4.11
+  // wrap through north.
+  const reimported = [
+    shot(93.71),
+    shot(184.21, { length: 7 }),
+    shot(1.71),
+    shot(14.11),
+    shot(274.11, { length: 3 }),
+    shot(1.11, { length: 4 }),
+  ];
+  const uuids = ['a1', 'a2', 'a3', 'b1', 'b2', 'b3'];
+  const x6 = (deltas: ReturnType<typeof multisetDelta>, azimuthPlan?: TmlAzimuthPlan): void =>
+    checkShotMultiset(
+      {
+        deltas,
+        uuidsBefore: uuids,
+        uuidsAfter: uuids,
+        countBefore: before.length,
+        countAfter: reimported.length,
+        ...(azimuthPlan === undefined ? {} : { azimuthPlan }),
+      },
+      REPRO,
+    );
+
+  it('decides mixed-to-true for two sections that disagree on their correction', () => {
+    expect(tmlAzimuthPlan(references)).toBe('mixed-to-true');
+  });
+
+  it('passes X6 once the BEFORE side is rotated the way the exporter rotates it', () => {
+    const exported = asExportedToTml(before, references);
+    // The X6 verdict first, so a regression reports the oracle's own message.
+    expect(() => x6(multisetDelta(exported.shots, reimported), exported.plan)).not.toThrow();
+    expect(multisetDelta(exported.shots, reimported)).toEqual([]);
+    expect(exported.plan).toBe('mixed-to-true');
+    expect(exported.rotated).toBe(6);
+  });
+
+  it('is the HFI-8 false positive without the fold: every shot reads as lost and gained', () => {
+    const unfolded = multisetDelta(before, reimported);
+    expect(unfolded).toHaveLength(12);
+    expect(() => x6(unfolded)).toThrow(/X6 the shot set changed/);
+  });
+
+  it('still fails a bearing rotated by the WRONG section correction', () => {
+    // b1 rotated by section A's 3.71 instead of its own 4.11.
+    const wrong = reimported.map((s, index) => (index === 3 ? shot(13.71) : s));
+    const exported = asExportedToTml(before, references);
+    expect(() => x6(multisetDelta(exported.shots, wrong), exported.plan)).toThrow(/already rotated into true north/);
+  });
+
+  it('still fails any other change - a length that moved', () => {
+    const changed = reimported.map((s, index) => (index === 0 ? { ...s, length: 5.5 } : s));
+    const exported = asExportedToTml(before, references);
+    expect(() => x6(multisetDelta(exported.shots, changed), exported.plan)).toThrow(/X6 the shot set changed/);
+  });
+
+  it('leaves the shots untouched on every plan that writes the readings as stored', () => {
+    const cases: Array<[string, SectionAzimuthReference[], TmlAzimuthPlan]> = [
+      ['one shared magnetic correction', [magnetic(3.71), magnetic(3.71)], 'magnetic'],
+      ['nothing declared', [unknown, unknown], 'magnetic'],
+      ['every section true north', [trueNorth, trueNorth], 'true-as-stored'],
+      // An unknown section abstains: one declared magnetic correction beside it
+      // is still a uniform magnetic document (the ordinary .tml + .dmp case).
+      ['one magnetic correction plus a section with none on record', [magnetic(3.71), unknown], 'magnetic'],
+      [
+        'disagreeing corrections plus a section with none on record',
+        [magnetic(3.71), magnetic(4.11), unknown],
+        'magnetic-unresolved',
+      ],
+      ['true north plus a section with none on record', [trueNorth, unknown], 'magnetic-unresolved'],
+      ['grid plus a section with none on record', [grid(1.5), unknown], 'magnetic-unresolved'],
+    ];
+    for (const [what, refs, plan] of cases) {
+      const shots = refs.map((_ref, index) => shot(90 + index * 110));
+      const exported = asExportedToTml(shots, refs);
+      expect(exported.plan, what).toBe(plan);
+      expect(exported.rotated, what).toBe(0);
+      expect(exported.shots, what).toEqual(shots);
+    }
+  });
+
+  it('rotates a uniform GRID project, and leaves a zero correction as the identity', () => {
+    const gridded = asExportedToTml([shot(90), shot(359)], [grid(1.5), grid(1.5)]);
+    expect(gridded.plan).toBe('mixed-to-true');
+    expect(gridded.shots.map((s) => s.azimuthIn)).toEqual([91.5, 0.5]);
+
+    // True north (correction 0) beside a magnetic 3.71: the document is
+    // rotated, the true-north section's bearings go out exactly as stored.
+    const mixed = asExportedToTml([shot(90), shot(90)], [trueNorth, magnetic(3.71)]);
+    expect(mixed.plan).toBe('mixed-to-true');
+    expect(mixed.rotated).toBe(1);
+    expect(mixed.shots[0]).toEqual(shot(90));
+    expect(mixed.shots[1]?.azimuthIn).toBeCloseTo(93.71, 9);
+  });
+
+  it('refuses a reference list that is not parallel to the shots', () => {
+    expect(() => asExportedToTml([shot(90)], [])).toThrow(/1 shot\(s\) but 0 reference\(s\)/);
   });
 });
 

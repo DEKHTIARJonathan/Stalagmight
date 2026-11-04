@@ -440,6 +440,7 @@ import { TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
 import { fuzzFixture } from '../lib/fuzzKnobs';
 import { MoveLog, openReplay, RERUN_WITH, writeRunTrace } from '../lib/fuzzHarness';
 import {
+  asExportedToTml,
   checkByteIdentity,
   checkConvergence,
   checkExportModeInvariants,
@@ -466,6 +467,7 @@ import {
   type ExportRoute,
   type OptionSnapshot,
   type PathShape,
+  type SectionAzimuthReference,
   type ShotIdentity,
 } from '../lib/exportOracles';
 import {
@@ -615,6 +617,12 @@ interface ProjectDigest {
   open: boolean;
   sections: number;
   shots: ShotIdentity[];
+  /**
+   * Each shot's section reference, PARALLEL to `shots`, resolved the way
+   * `Project::azimuth_reference_for` does. X6 needs it to know what the TML
+   * export does to a bearing - see `asExportedToTml`.
+   */
+  shotReferences: SectionAzimuthReference[];
   uuids: string[];
   /**
    * The same uuids, grouped BY SECTION.
@@ -654,9 +662,27 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
     const state = await core.invoke('get_project_state');
     const project = state && state.project ? state.project : state;
     if (!project || !Array.isArray(project.sections)) {
-      return { open: false, sections: 0, shots: [], uuids: [], uuidsBySection: [], commentParts: [], missingUuids: 0, duplicateUuids: 0, filePath: null };
+      return { open: false, sections: 0, shots: [], shotReferences: [], uuids: [], uuidsBySection: [], commentParts: [], missingUuids: 0, duplicateUuids: 0, filePath: null };
     }
+    // A section's azimuth reference, resolved as Project::azimuth_reference_for
+    // does: the section's own, else the project default, else nothing recorded
+    // (magnetic, 0, source unknown). Wire shape per src-tauri/bindings: north is
+    // a lowercase string, a non-finite correction serializes as null (read as 0,
+    // which is what applied_correction makes of it), and source is the string
+    // "unknown" / "file_declared" / "manual" or an object such as
+    // {"igrf_auto":{"epoch_year":2018}}. Only "unknown" (or no source) means no
+    // correction is on record.
+    const resolveReference = (raw) => {
+      if (!raw || typeof raw !== 'object') return { north: 'magnetic', correction: 0, onRecord: false };
+      const north = raw.north === 'true' || raw.north === 'grid' ? raw.north : 'magnetic';
+      const correction = typeof raw.correction === 'number' ? raw.correction : 0;
+      const source = raw.source;
+      const onRecord =
+        (typeof source === 'string' && source !== 'unknown') || (typeof source === 'object' && source !== null);
+      return { north: north, correction: correction, onRecord: onRecord };
+    };
     const shots = [];
+    const shotReferences = [];
     const uuids = [];
     const uuidsBySection = [];
     const commentParts = [];
@@ -678,7 +704,11 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
       if (!section || !Array.isArray(section.shots)) continue;
       const sectionUuids = [];
       uuidsBySection.push(sectionUuids);
+      const reference = resolveReference(
+        section.azimuth_reference != null ? section.azimuth_reference : project.default_azimuth_reference,
+      );
       for (const shot of section.shots) {
+        shotReferences.push(reference);
         const uuid = typeof shot.uuid === 'string' ? shot.uuid : '';
         if (uuid === '') missing += 1;
         else {
@@ -729,6 +759,7 @@ async function readProjectDigest(ctx: ScenarioContext): Promise<ProjectDigest> {
       open: true,
       sections: project.sections.length,
       shots: shots,
+      shotReferences: shotReferences,
       uuids: uuids,
       uuidsBySection: uuidsBySection,
       commentParts: commentParts,
@@ -1355,10 +1386,20 @@ export const exportRoundtripFuzz: Scenario = {
       // can come back as several - #412, by design). Collapsing both sides onto
       // one synthetic section asks the question that survives the trip.
       const identity = shotSetDelta(flatUuidSnapshot(original.uuids), flatUuidSnapshot(afterFirst.uuids));
+      // The BEFORE side as the TML export writes it. On a project whose
+      // sections carry different declinations the exporter rotates every
+      // bearing into true north (docs/ariane-export.md, the third case) and the
+      // re-import reads them as measured true-north ones - a documented loss
+      // that decision HFI-8-D1 keeps, so X6 compares against the rotated
+      // bearings instead of reporting every shot as lost and gained (#576
+      // HFI-8). `asExportedToTml` states what it folds and what still fails.
+      const exported = asExportedToTml(original.shots, original.shotReferences);
+      if (exported.plan === 'mixed-to-true') ctx.metric('x6:rotatedToTrue', exported.rotated);
       guarded(() =>
         checkShotMultiset(
           {
-            deltas: multisetDelta(original.shots, afterFirst.shots),
+            deltas: multisetDelta(exported.shots, afterFirst.shots),
+            azimuthPlan: exported.plan,
             // LOSSES ONLY, and the asymmetry is forced by what this tier can
             // see rather than chosen to quiet a red.
             //
@@ -1395,7 +1436,7 @@ export const exportRoundtripFuzz: Scenario = {
       // change in how often the exporter moves a branch's datum shows up in the
       // metrics rather than silently not mattering. `clampedDescent` states why
       // this is a metric and not an assertion.
-      const datumShifts = multisetDelta(original.shots, afterFirst.shots, strictShotKey);
+      const datumShifts = multisetDelta(exported.shots, afterFirst.shots, strictShotKey);
       if (datumShifts.length > 0) ctx.metric('x6:absoluteDepthShifts', datumShifts.length);
 
       // X6b: importing the SAME file again must not leave two shots on one
