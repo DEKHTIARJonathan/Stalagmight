@@ -477,10 +477,8 @@ fn validate_values(project: &stalagmight_models::Project) -> Result<(), ReadErro
     let bad = |what: String| Err(ReadError::invalid(InvalidKind::InvalidValue, what));
     for datum in &project.zero_datums {
         let (lat, lon) = (datum.gps.latitude, datum.gps.longitude);
-        if !(lat.is_finite() && lon.is_finite())
-            || !(-90.0..=90.0).contains(&lat)
-            || !(-180.0..=180.0).contains(&lon)
-        {
+        // A range never contains NaN or an infinity, so this also refuses those.
+        if !((-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon)) {
             return bad(format!(
                 "zero datum on section {}: latitude/longitude out of range",
                 datum.station_ref.section_id
@@ -512,7 +510,7 @@ fn derive_missing_shot_uuids(
             let name = format!("{}/{i}/{}", section.id, shot.uuid.as_deref().unwrap_or(""));
             // The namespace is public, so a file can hold a UUID equal to the one
             // derived here; step past it rather than reuse it.
-            let id = (0u32..)
+            let id = (0..u32::MAX)
                 .map(|n| match n {
                     0 => uuid::Uuid::new_v5(&DERIVED_UUID_NAMESPACE, name.as_bytes()),
                     n => uuid::Uuid::new_v5(
