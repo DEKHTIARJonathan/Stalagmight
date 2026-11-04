@@ -67,8 +67,8 @@ use stalagmight_lib::parsers::gpx::{
     GpxTrackSegment, GpxWaypoint,
 };
 use stalagmight_lib::parsers::tml::{
-    TmlClosure, TmlFile, TmlGeoCoding, TmlParseAnomalies, TmlRootPlacement, TmlSection, TmlShot,
-    TmlShotType, TmlUnit,
+    TmlClosure, TmlFile, TmlGeoCoding, TmlParseAnomalies, TmlRootPlacement, TmlScaledDepthInMarker,
+    TmlSection, TmlShot, TmlShotType, TmlUnit,
 };
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{
@@ -317,6 +317,7 @@ fn main() {
     export::<TmlGeoCoding>(&out_dir);
     export::<TmlClosure>(&out_dir);
     export::<TmlParseAnomalies>(&out_dir);
+    export::<TmlScaledDepthInMarker>(&out_dir);
     export::<TmlRootPlacement>(&out_dir);
 
     // Compass import
@@ -602,6 +603,7 @@ fn main() {
         "TmlGeoCoding",
         "TmlClosure",
         "TmlParseAnomalies",
+        "TmlScaledDepthInMarker",
         "TmlRootPlacement",
         "CompassFile",
         "CompassSurveySummary",

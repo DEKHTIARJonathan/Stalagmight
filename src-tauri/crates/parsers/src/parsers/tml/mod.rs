@@ -86,6 +86,12 @@ pub struct TmlFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub encoding_warning: Option<String>,
+    /// Set when the file's "same as previous" `DepthIn` marker was written scaled
+    /// from feet and read as the marker (`restore_scaled_depth_in_marker`), so the
+    /// import receipt can say so (#576 HFI-1-D2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub scaled_depth_in_marker: Option<TmlScaledDepthInMarker>,
     pub geo_coding: Option<TmlGeoCoding>,
     pub sections: Vec<TmlSection>,
     pub closures: Vec<TmlClosure>,
@@ -113,6 +119,18 @@ impl TmlParseAnomalies {
     fn any(self) -> bool {
         self != Self::default()
     }
+}
+
+/// [#576 HFI-1-D2] A "same as previous" `DepthIn` marker the parser read from
+/// its feet-to-metre scaled spelling ([`schema::DEPTH_IN_SAME_AS_PREVIOUS_SCALED`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../bindings/")]
+pub struct TmlScaledDepthInMarker {
+    /// Each spelling the file used (`-0.3`, ...), once, in file order. From the
+    /// fixed spelling list, never file text.
+    pub written_as: Vec<String>,
+    /// Shots whose `DepthIn` was read as the marker.
+    pub shots: u32,
 }
 
 /// Measurement unit in the TML file.
@@ -1125,9 +1143,14 @@ fn apply_unit_conversion(
 /// shared by half a survey's shots is not a survey - and if a flat stretch did
 /// sit there, "same as previous" would read the same depth back. A feet file is
 /// left alone: its marker is `-1.0`, and its -0.3 is -0.3 ft.
-fn restore_scaled_depth_in_marker(sections: &mut [TmlSection], unit: TmlUnit) {
+///
+/// Returns what it read, for the import receipt (#576 HFI-1-D2).
+fn restore_scaled_depth_in_marker(
+    sections: &mut [TmlSection],
+    unit: TmlUnit,
+) -> Option<TmlScaledDepthInMarker> {
     if unit != TmlUnit::Metric {
-        return;
+        return None;
     }
     let total: usize = sections.iter().map(|s| s.shots.len()).sum();
     let scaled = sections
@@ -1136,10 +1159,15 @@ fn restore_scaled_depth_in_marker(sections: &mut [TmlSection], unit: TmlUnit) {
         .filter(|shot| schema::is_scaled_depth_in_sentinel(shot.depth_in))
         .count();
     if scaled * 2 <= total {
-        return;
+        return None;
     }
+    let mut written_as: Vec<String> = Vec::new();
     for shot in sections.iter_mut().flat_map(|s| &mut s.shots) {
-        if schema::is_scaled_depth_in_sentinel(shot.depth_in) {
+        if let Some(spelling) = schema::scaled_depth_in_spelling(shot.depth_in) {
+            let spelling = spelling.to_string();
+            if !written_as.contains(&spelling) {
+                written_as.push(spelling);
+            }
             shot.depth_in = schema::DEPTH_IN_SAME_AS_PREVIOUS;
         }
     }
@@ -1148,6 +1176,10 @@ fn restore_scaled_depth_in_marker(sections: &mut [TmlSection], unit: TmlUnit) {
         total,
         "TML: DepthIn marker written as -1 ft in metres; read as same-as-previous"
     );
+    Some(TmlScaledDepthInMarker {
+        written_as,
+        shots: u32::try_from(scaled).unwrap_or(u32::MAX),
+    })
 }
 
 // ============================================================================
@@ -1177,7 +1209,7 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
     anomalies.duplicate_shot_ids = count_duplicate_shot_ids(&raw_shots);
 
     let (mut sections, closures) = build_sections(raw_shots);
-    restore_scaled_depth_in_marker(&mut sections, unit);
+    let scaled_depth_in_marker = restore_scaled_depth_in_marker(&mut sections, unit);
 
     // Apply unit conversion before returning
     let mut first_start_absolute_elevation = metadata.first_start_absolute_elevation;
@@ -1210,6 +1242,7 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
         unrecognized_unit,
         parse_anomalies: anomalies.any().then_some(anomalies),
         encoding_warning,
+        scaled_depth_in_marker,
         geo_coding,
         sections,
         closures,
@@ -1383,6 +1416,15 @@ pub fn convert_tml_with_options(
 
     if let Some(anomalies) = tml.parse_anomalies {
         push_parse_anomaly_warnings(anomalies, &mut warnings);
+    }
+
+    if let Some(marker) = &tml.scaled_depth_in_marker {
+        warnings.push(format!(
+            "Read the depth marker written as {} (a scaled -1) as same as previous on {} shot{}.",
+            marker.written_as.join(" or "),
+            marker.shots,
+            plural_s(marker.shots)
+        ));
     }
 
     // What the per-trip section cut could not express (#427).
@@ -2379,6 +2421,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding,
             sections,
             closures,
@@ -2995,6 +3038,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections: vec![TmlSection {
                 name: "Main".to_string(),
@@ -3859,6 +3903,51 @@ mod tests {
         assert_eq!(imported_depth_ins(&half), [-0.3, 1.0], "half the shots");
     }
 
+    /// [#576 HFI-1-D2] Reading the scaled marker as "same as previous" is a
+    /// reinterpretation of the file, so the import receipt says so in one line,
+    /// naming the spelling and how many shots it was read on. A file whose marker
+    /// is the plain -1.0 (or that has no scaled spelling at all) gets no line.
+    #[test]
+    fn the_receipt_says_a_scaled_depth_marker_was_read_as_same_as_previous() {
+        let receipt = |rows: &[String]| {
+            let tml = parse_synthetic_tmlu(&wrap_xml(&rows.join("\n")));
+            let (_, _, warnings) = convert_tml_to_import_configs(&tml, false, false).unwrap();
+            warnings
+                .into_iter()
+                .filter(|w| w.contains("depth marker"))
+                .collect::<Vec<_>>()
+        };
+        // The START row opens the section; the three REAL rows are its shots.
+        let scaled = |marker: f64| {
+            vec![
+                tml_shot_xml_depth(0, -1, "START", "Start", 0.0, marker),
+                tml_shot_xml_depth(1, 0, "REAL", "A", 7.0, marker),
+                tml_shot_xml_depth(2, 1, "REAL", "A", 9.0, marker),
+                tml_shot_xml_depth(3, 2, "REAL", "A", 12.0, marker),
+            ]
+        };
+        let lines = receipt(&scaled(-0.3));
+        println!("HFI-1-D2 marker -0.3 on every shot: {lines:?}");
+        assert_eq!(
+            lines,
+            ["Read the depth marker written as -0.3 (a scaled -1) as same as previous on 3 shots."]
+        );
+        assert_eq!(
+            receipt(&scaled(-0.3048)),
+            ["Read the depth marker written as -0.3048 (a scaled -1) as same as previous on 3 shots."]
+        );
+        // Two spellings in one file: both named, in file order, in the one line.
+        let mut mixed = scaled(-0.305);
+        mixed[3] = tml_shot_xml_depth(3, 2, "REAL", "A", 12.0, -0.3);
+        assert_eq!(
+            receipt(&mixed),
+            ["Read the depth marker written as -0.305 or -0.3 (a scaled -1) as same as previous on 3 shots."]
+        );
+        let plain = receipt(&scaled(-1.0));
+        println!("HFI-1-D2 marker -1.0 on every shot: {plain:?}");
+        assert!(plain.is_empty(), "the plain marker is no news: {plain:?}");
+    }
+
     // -------------------------------------------------------------------
     // Multi-section topology
     // -------------------------------------------------------------------
@@ -3945,6 +4034,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections,
             closures,
@@ -4428,6 +4518,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -4504,6 +4595,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -4599,6 +4691,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections: vec![
                 TmlSection {
@@ -4684,6 +4777,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections: vec![
                 // Section A (index 0): shots 1,2
@@ -4854,6 +4948,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections,
             closures,
@@ -5057,6 +5152,7 @@ mod tests {
             unrecognized_unit: None,
             parse_anomalies: None,
             encoding_warning: None,
+            scaled_depth_in_marker: None,
             geo_coding: None,
             sections: vec![TmlSection {
                 name: "S".to_string(),

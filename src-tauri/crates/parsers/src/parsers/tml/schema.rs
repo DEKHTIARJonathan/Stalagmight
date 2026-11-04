@@ -203,9 +203,15 @@ pub const DEPTH_IN_SAME_AS_PREVIOUS_SCALED: [f64; 4] = [-0.3, -0.304, -0.305, -0
 
 /// Whether `depth_in` is one of [`DEPTH_IN_SAME_AS_PREVIOUS_SCALED`].
 pub fn is_scaled_depth_in_sentinel(depth_in: f64) -> bool {
+    scaled_depth_in_spelling(depth_in).is_some()
+}
+
+/// The spelling of [`DEPTH_IN_SAME_AS_PREVIOUS_SCALED`] that `depth_in` is, if any.
+pub fn scaled_depth_in_spelling(depth_in: f64) -> Option<f64> {
     DEPTH_IN_SAME_AS_PREVIOUS_SCALED
         .iter()
-        .any(|spelling| (depth_in - spelling).abs() < 1e-6)
+        .copied()
+        .find(|spelling| (depth_in - spelling).abs() < 1e-6)
 }
 
 /// Whether `c` is in XML 1.0's `Char` production -
