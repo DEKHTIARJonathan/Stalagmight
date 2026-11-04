@@ -5,6 +5,8 @@
 //! change for a consumer. Each struct is `#[non_exhaustive]` so fields can be
 //! added in a minor release.
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 use stalagmight_models::station::{StationKey, StationRef};
 use stalagmight_models::{NorthReference, Project, ShotKind as ModelShotKind, SurveyDirection};
@@ -16,6 +18,26 @@ use stalagmight_models::{NorthReference, Project, ShotKind as ModelShotKind, Sur
 /// - Depth and pitch are positive DOWN.
 /// - Azimuths are as stored; add the section's [`Section::azimuth_correction_deg`]
 ///   to get a true-north bearing.
+///
+/// # Identity
+///
+/// - [`Section::id`] is stable across edits for the life of the project.
+/// - [`StationId::index`] is NOT stable: inserting or deleting a shot shifts the
+///   indexes after it, and reversing a section renumbers station `i` to `N - i`.
+///   Key anything persistent on `(section id, shot uuid)`, never on an index.
+/// - [`Shot::uuid`] is stable across edits, unique within its section only (the
+///   same UUID can appear in two sections), and `None` only for shots in files
+///   written before shot UUIDs existed and never re-saved since. A file that
+///   carries the same UUID twice in one section gets a fresh random UUID for the
+///   later shot on every read, as the app does on open.
+///
+/// # Ordering
+///
+/// Every list is sorted, so the same file content always reads to the same
+/// value (except the duplicate-UUID repair above): sections by id, shots in
+/// survey order, merges by `(a, b)`, zero datums and comments and station
+/// positions by station, loop closures by id. [`Survey::modified_at`] changes
+/// on every save; leave it out of any content hash.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct Survey {
@@ -33,9 +55,13 @@ pub struct Survey {
     pub station_merges: Vec<StationMerge>,
     pub zero_datums: Vec<ZeroDatum>,
     pub loop_closures: Vec<LoopClosure>,
-    /// Sorted by station.
     pub station_comments: Vec<StationComment>,
-    /// Measured (unadjusted) station positions; `None` unless requested in
+    /// The zero datum whose station is the georeference origin of the local frame
+    /// (the project's first resolvable datum, as the app defines it). `None` when
+    /// the project has no usable datum. See [`StationPosition`].
+    pub frame_datum: Option<StationId>,
+    /// Measured (unadjusted) station positions computed by the app's own geometry,
+    /// the supported input for drawing a map; `None` unless requested in
     /// [`crate::ReadOptions`].
     pub stations: Option<Vec<StationPosition>>,
     /// Cross-references (merges, datums, closures, comments) whose station no
@@ -155,10 +181,24 @@ pub struct StationComment {
     pub text: String,
 }
 
-/// Position in metres in the project's own local frame, the one the app's measured
-/// view draws: x east, y north, z depth (positive down). Section and station
-/// offsets are applied. The frame is not georeferenced and has no fixed origin
-/// across projects; use [`Survey::zero_datums`] to place it on the earth.
+/// A station's measured (not loop-closure-adjusted) position, computed by the
+/// app's own geometry, so a map drawn from these agrees with the app's measured
+/// view.
+///
+/// # Frame
+///
+/// - Metres. `x` east, `y` north (true north where the section records an
+///   azimuth correction, otherwise as surveyed), `z` depth below the surface,
+///   positive down.
+/// - Section and station offsets (manual moves) are applied.
+/// - Horizontal georeference: the [`Survey::frame_datum`] station is the origin.
+///   Another station's latitude/longitude is the frame datum's, moved by
+///   `(x - frame.x)` metres east and `(y - frame.y)` metres north on the WGS84
+///   ellipsoid's local east/north plane at the frame datum, which is how the app
+///   placed every other datum relative to it.
+/// - Only a station whose [`StationPosition::anchor`] is `Some` sits in a
+///   component tied to a datum. A floating component (`anchor: None`) is placed
+///   wherever the user's offsets put it, so its georeference is not meaningful.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct StationPosition {
@@ -166,6 +206,11 @@ pub struct StationPosition {
     pub x: f64,
     pub y: f64,
     pub z: f64,
+    /// The zero-datum station anchoring this station's connected component
+    /// (connected through shots and station merges): the frame datum when it is
+    /// in the component, otherwise the component's lowest datum station. `None`
+    /// when the component has no datum.
+    pub anchor: Option<StationId>,
 }
 
 impl From<StationRef> for StationId {
@@ -192,7 +237,7 @@ impl Survey {
             id
         };
 
-        let station_merges = project
+        let mut station_merges: Vec<StationMerge> = project
             .station_merges
             .iter()
             .filter_map(|m| {
@@ -202,7 +247,8 @@ impl Survey {
                 })
             })
             .collect();
-        let zero_datums = project
+        station_merges.sort_by_key(|m| (m.a, m.b));
+        let mut zero_datums: Vec<ZeroDatum> = project
             .zero_datums
             .iter()
             .filter_map(|z| {
@@ -214,7 +260,8 @@ impl Survey {
                 })
             })
             .collect();
-        let loop_closures = project
+        zero_datums.sort_by_key(|z| z.station);
+        let mut loop_closures: Vec<LoopClosure> = project
             .loop_closures
             .iter()
             .filter_map(|c| {
@@ -225,6 +272,7 @@ impl Survey {
                 })
             })
             .collect();
+        loop_closures.sort_by_key(|c| c.id);
         let mut station_comments: Vec<StationComment> = project
             .station_comments
             .iter()
@@ -236,29 +284,41 @@ impl Survey {
             })
             .collect();
         station_comments.sort_by_key(|c| c.station);
+        let frame_datum = project
+            .frame_datum_key()
+            .and_then(|key| project.resolve_key(&key))
+            .map(StationId::from);
 
         let stations = with_stations.then(|| {
-            project
+            let anchors = Anchors::new(project, &station_merges, &zero_datums, frame_datum);
+            let mut positions: Vec<StationPosition> = project
                 .compute_station_coordinates()
                 .into_iter()
-                .map(|s| StationPosition {
-                    station: s.station_ref.into(),
-                    x: s.coordinates.x,
-                    y: s.coordinates.y,
-                    z: s.coordinates.z,
+                .map(|s| {
+                    let station = StationId::from(s.station_ref);
+                    StationPosition {
+                        station,
+                        x: s.coordinates.x,
+                        y: s.coordinates.y,
+                        z: s.coordinates.z,
+                        anchor: anchors.of(station),
+                    }
                 })
-                .collect()
+                .collect();
+            positions.sort_by_key(|p| p.station);
+            positions
         });
 
+        let mut sections: Vec<&stalagmight_models::Section> = project.sections.iter().collect();
+        sections.sort_by_key(|s| s.id);
         Self {
             schema_version,
             name: project.name.clone(),
             location: project.location.clone(),
             created_at: project.created_at.to_rfc3339(),
             modified_at: project.modified_at.to_rfc3339(),
-            sections: project
-                .sections
-                .iter()
+            sections: sections
+                .into_iter()
                 .map(|section| {
                     let reference = project.azimuth_reference_for(section);
                     Section {
@@ -286,9 +346,118 @@ impl Survey {
             zero_datums,
             loop_closures,
             station_comments,
+            frame_datum,
             stations,
             unresolved_references: unresolved,
         }
+    }
+}
+
+/// Which zero datum anchors each station's component (connected through shots
+/// and station merges). Union-find with path halving and union by size.
+struct Anchors {
+    index: HashMap<StationId, usize>,
+    root: Vec<usize>,
+    anchor_of_root: HashMap<usize, StationId>,
+}
+
+impl Anchors {
+    fn new(
+        project: &Project,
+        merges: &[StationMerge],
+        datums: &[ZeroDatum],
+        frame_datum: Option<StationId>,
+    ) -> Self {
+        let mut index = HashMap::new();
+        for section in &project.sections {
+            for i in 0..=section.shots.len() as u32 {
+                let next = index.len();
+                index.insert(
+                    StationId {
+                        section_id: section.id,
+                        index: i,
+                    },
+                    next,
+                );
+            }
+        }
+        let mut uf = UnionFind::new(index.len());
+        for section in &project.sections {
+            for i in 0..section.shots.len() as u32 {
+                let at = |index_: u32| {
+                    index.get(&StationId {
+                        section_id: section.id,
+                        index: index_,
+                    })
+                };
+                if let (Some(&a), Some(&b)) = (at(i), at(i + 1)) {
+                    uf.union(a, b);
+                }
+            }
+        }
+        for m in merges {
+            if let (Some(&a), Some(&b)) = (index.get(&m.a), index.get(&m.b)) {
+                uf.union(a, b);
+            }
+        }
+        // `datums` is sorted by station, so the first datum seen in a component is
+        // its lowest; the frame datum then overrides it in its own component.
+        let mut anchor_of_root = HashMap::new();
+        for d in datums {
+            if let Some(&i) = index.get(&d.station) {
+                anchor_of_root.entry(uf.find(i)).or_insert(d.station);
+            }
+        }
+        if let Some(frame) = frame_datum {
+            if let Some(&i) = index.get(&frame) {
+                anchor_of_root.insert(uf.find(i), frame);
+            }
+        }
+        let root = (0..index.len()).map(|i| uf.find(i)).collect();
+        Self {
+            index,
+            root,
+            anchor_of_root,
+        }
+    }
+
+    fn of(&self, station: StationId) -> Option<StationId> {
+        let i = *self.index.get(&station)?;
+        self.anchor_of_root.get(&self.root[i]).copied()
+    }
+}
+
+struct UnionFind {
+    parent: Vec<usize>,
+    size: Vec<usize>,
+}
+
+impl UnionFind {
+    fn new(n: usize) -> Self {
+        Self {
+            parent: (0..n).collect(),
+            size: vec![1; n],
+        }
+    }
+
+    fn find(&mut self, mut i: usize) -> usize {
+        while self.parent[i] != i {
+            self.parent[i] = self.parent[self.parent[i]];
+            i = self.parent[i];
+        }
+        i
+    }
+
+    fn union(&mut self, a: usize, b: usize) {
+        let (mut a, mut b) = (self.find(a), self.find(b));
+        if a == b {
+            return;
+        }
+        if self.size[a] < self.size[b] {
+            std::mem::swap(&mut a, &mut b);
+        }
+        self.parent[b] = a;
+        self.size[a] += self.size[b];
     }
 }
 

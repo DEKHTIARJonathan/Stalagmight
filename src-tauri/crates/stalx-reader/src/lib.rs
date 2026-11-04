@@ -72,6 +72,9 @@ pub struct ReadOptions {
     pub deadline: Duration,
     /// Also compute measured (unadjusted) station positions into [`Survey::stations`].
     pub with_stations: bool,
+    /// Caps on the counts the post-load steps scale with, checked right after the
+    /// load and before any of them run.
+    pub count_limits: CountLimits,
 }
 
 impl Default for ReadOptions {
@@ -80,7 +83,61 @@ impl Default for ReadOptions {
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             deadline: DEFAULT_DEADLINE,
             with_stations: false,
+            count_limits: CountLimits::default(),
         }
+    }
+}
+
+/// Caps on what a file may contain, refused with [`ReadError::TooComplex`].
+///
+/// The steps after the load are plain Rust and some are super-linear in these
+/// counts (#597: loop closures x stations x merges; #596: merge-group size), so
+/// the deadline cannot bound them. The defaults are generous enough for the
+/// largest real surveys and do NOT make the worst case fast; a server should set
+/// tighter caps until those issues are fixed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct CountLimits {
+    pub sections: usize,
+    pub shots: usize,
+    pub station_merges: usize,
+    pub loop_closures: usize,
+}
+
+impl Default for CountLimits {
+    fn default() -> Self {
+        Self {
+            sections: 100_000,
+            shots: 2_000_000,
+            station_merges: 200_000,
+            loop_closures: 50_000,
+        }
+    }
+}
+
+impl CountLimits {
+    #[must_use]
+    pub fn sections(mut self, max: usize) -> Self {
+        self.sections = max;
+        self
+    }
+
+    #[must_use]
+    pub fn shots(mut self, max: usize) -> Self {
+        self.shots = max;
+        self
+    }
+
+    #[must_use]
+    pub fn station_merges(mut self, max: usize) -> Self {
+        self.station_merges = max;
+        self
+    }
+
+    #[must_use]
+    pub fn loop_closures(mut self, max: usize) -> Self {
+        self.loop_closures = max;
+        self
     }
 }
 
@@ -102,6 +159,12 @@ impl ReadOptions {
         self.with_stations = on;
         self
     }
+
+    #[must_use]
+    pub fn count_limits(mut self, limits: CountLimits) -> Self {
+        self.count_limits = limits;
+        self
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -109,17 +172,50 @@ impl ReadOptions {
 pub enum ReadError {
     #[error("input is over the {max}-byte limit")]
     TooLarge { max: u64 },
+    /// One of the [`CountLimits`] was exceeded; `what` names it.
+    #[error("file has {count} {what}, over the limit of {max}")]
+    TooComplex {
+        what: &'static str,
+        count: usize,
+        max: usize,
+    },
     #[error("file uses .stalx schema v{found}; this reader supports up to v{supported}")]
     NewerSchema { found: i32, supported: i32 },
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-    /// Not a readable `.stalx`: not SQLite, corrupt, missing project data, a
-    /// refused schema object, or interrupted by the deadline.
-    ///
-    /// The text can quote content from the file (SQLite error context). Treat it
-    /// as untrusted: log it, don't echo it to other users.
-    #[error("not a readable .stalx file: {0}")]
-    Invalid(String),
+    /// Not a readable `.stalx`. Branch on `kind`; `detail` can quote content
+    /// from the file (SQLite error context), so treat it as untrusted: log it,
+    /// don't echo it to other users.
+    #[error("not a readable .stalx file ({kind:?}): {detail}")]
+    Invalid { kind: InvalidKind, detail: String },
+}
+
+/// Why a file is not a readable `.stalx`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum InvalidKind {
+    /// Not an SQLite database at all.
+    NotSqlite,
+    /// SQLite, but corrupt (failed the integrity check, a malformed schema, or
+    /// an impossible schema version).
+    Corrupt,
+    /// The file defines a view, trigger, virtual table or generated column.
+    RefusedSchemaObject,
+    /// A statement was still running at the deadline.
+    Deadline,
+    /// SQLite, but not a Stalagmight project (no project data).
+    NoProjectData,
+    /// Anything else the load path rejected.
+    Other,
+}
+
+impl ReadError {
+    fn invalid(kind: InvalidKind, detail: impl Into<String>) -> Self {
+        Self::Invalid {
+            kind,
+            detail: detail.into(),
+        }
+    }
 }
 
 /// Read a `.stalx` file with default options.
@@ -172,6 +268,7 @@ fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
     let db = Database::open_existing_untrusted(copy, max_value_bytes, options.deadline)
         .map_err(invalid)?;
     let mut project = db.load_project().map_err(invalid)?;
+    check_counts(&project, options.count_limits)?;
     // The post-load steps of the app's own open (`project_load.rs`) that change
     // what this crate reports: ids for legacy closures, re-derived section
     // offsets (which also re-anchors refs and turns orphan closures into
@@ -198,7 +295,7 @@ fn inspect(path: &Path, max_value_bytes: i32, deadline: Duration) -> Result<i32,
     use rusqlite::config::DbConfig;
     use rusqlite::limits::Limit;
 
-    let sql_err = |e: rusqlite::Error| ReadError::Invalid(e.to_string());
+    let sql_err = sql_invalid;
     let conn =
         rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(sql_err)?;
@@ -224,9 +321,10 @@ fn inspect(path: &Path, max_value_bytes: i32, deadline: Duration) -> Result<i32,
         )
         .map_err(sql_err)?;
     if refused > 0 {
-        return Err(ReadError::Invalid(format!(
-            "the file defines {refused} view(s), trigger(s) or virtual table(s)"
-        )));
+        return Err(ReadError::invalid(
+            InvalidKind::RefusedSchemaObject,
+            format!("the file defines {refused} view(s), trigger(s) or virtual table(s)"),
+        ));
     }
     // A generated column evaluates file-chosen expressions on every read, and
     // built-ins such as zeroblob stay allowed with trusted_schema off.
@@ -239,18 +337,20 @@ fn inspect(path: &Path, max_value_bytes: i32, deadline: Duration) -> Result<i32,
         )
         .map_err(sql_err)?;
     if generated > 0 {
-        return Err(ReadError::Invalid(format!(
-            "the file defines {generated} generated column(s)"
-        )));
+        return Err(ReadError::invalid(
+            InvalidKind::RefusedSchemaObject,
+            format!("the file defines {generated} generated column(s)"),
+        ));
     }
 
     let stamped: i32 = conn
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .map_err(sql_err)?;
     if stamped < 0 {
-        return Err(ReadError::Invalid(format!(
-            "negative schema version {stamped}"
-        )));
+        return Err(ReadError::invalid(
+            InvalidKind::Corrupt,
+            format!("negative schema version {stamped}"),
+        ));
     }
     if stamped > 0 {
         return Ok(stamped);
@@ -277,8 +377,66 @@ fn inspect(path: &Path, max_value_bytes: i32, deadline: Duration) -> Result<i32,
     Ok(claimed.unwrap_or(0).max(0))
 }
 
+fn check_counts(
+    project: &stalagmight_models::Project,
+    limits: CountLimits,
+) -> Result<(), ReadError> {
+    let shots = project.sections.iter().map(|s| s.shots.len()).sum();
+    for (what, count, max) in [
+        ("sections", project.sections.len(), limits.sections),
+        ("shots", shots, limits.shots),
+        (
+            "station merges",
+            project.station_merges.len(),
+            limits.station_merges,
+        ),
+        (
+            "loop closures",
+            project.loop_closures.len(),
+            limits.loop_closures,
+        ),
+    ] {
+        if count > max {
+            return Err(ReadError::TooComplex { what, count, max });
+        }
+    }
+    Ok(())
+}
+
+/// Classify a load-path failure. SQLite result codes are read from the error
+/// chain; the two app-level refusals are recognised by the exact messages the
+/// persistence crate attaches (pinned by tests here).
 fn invalid(e: anyhow::Error) -> ReadError {
-    ReadError::Invalid(format!("{e:#}"))
+    let detail = format!("{e:#}");
+    let kind = e
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<rusqlite::Error>())
+        .and_then(sqlite_kind)
+        .unwrap_or_else(|| {
+            if detail.contains("Database file may be corrupted") {
+                InvalidKind::Corrupt
+            } else if detail.contains("does not contain a valid Stalagmight project") {
+                InvalidKind::NoProjectData
+            } else {
+                InvalidKind::Other
+            }
+        });
+    ReadError::invalid(kind, detail)
+}
+
+fn sqlite_kind(e: &rusqlite::Error) -> Option<InvalidKind> {
+    use rusqlite::ErrorCode;
+    match e.sqlite_error_code()? {
+        ErrorCode::NotADatabase => Some(InvalidKind::NotSqlite),
+        ErrorCode::DatabaseCorrupt => Some(InvalidKind::Corrupt),
+        ErrorCode::OperationInterrupted => Some(InvalidKind::Deadline),
+        _ => None,
+    }
+}
+
+fn sql_invalid(e: rusqlite::Error) -> ReadError {
+    let kind = sqlite_kind(&e).unwrap_or(InvalidKind::Other);
+    ReadError::invalid(kind, e.to_string())
 }
 
 #[cfg(test)]

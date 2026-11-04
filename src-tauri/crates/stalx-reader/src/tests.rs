@@ -14,9 +14,16 @@ use stalagmight_persistence::persistence::Database;
 use tempfile::TempDir;
 
 use super::{
-    read_bytes, read_file, read_file_with, Direction, ReadError, ReadOptions, ShotKind, StationId,
-    SUPPORTED_SCHEMA_VERSION,
+    read_bytes, read_file, read_file_with, CountLimits, Direction, InvalidKind, ReadError,
+    ReadOptions, ShotKind, StationId, SUPPORTED_SCHEMA_VERSION,
 };
+
+fn invalid_kind(err: &ReadError) -> Option<InvalidKind> {
+    match err {
+        ReadError::Invalid { kind, .. } => Some(*kind),
+        _ => None,
+    }
+}
 
 /// 30-degree descents (length 10, dz 5), pitch stored with `sign`.
 fn descending(name: &str, sign: f64, count: usize) -> SectionData {
@@ -201,9 +208,14 @@ fn an_oversized_input_is_refused_before_it_is_read() {
 
 #[test]
 fn bytes_that_are_not_a_stalx_are_invalid() {
-    for bytes in [b"".as_slice(), b"not a database".as_slice(), &[0u8; 4096]] {
+    // An empty file is a valid empty SQLite database, so it fails as "no project".
+    for (bytes, want) in [
+        (b"".as_slice(), InvalidKind::NoProjectData),
+        (b"not a database".as_slice(), InvalidKind::NotSqlite),
+        (&[0u8; 4096], InvalidKind::NotSqlite),
+    ] {
         let err = read_bytes(bytes, &ReadOptions::default()).unwrap_err();
-        assert!(matches!(err, ReadError::Invalid(_)), "{err}");
+        assert_eq!(invalid_kind(&err), Some(want), "{err}");
     }
 }
 
@@ -218,7 +230,11 @@ fn a_sqlite_file_without_project_data_is_invalid() {
 
     let err = read_file(&path).unwrap_err();
 
-    assert!(matches!(err, ReadError::Invalid(_)), "{err}");
+    assert_eq!(
+        invalid_kind(&err),
+        Some(InvalidKind::NoProjectData),
+        "{err}"
+    );
 }
 
 #[test]
@@ -296,7 +312,7 @@ fn views_triggers_and_virtual_tables_are_refused() {
     ] {
         let err = read_file(&with_schema_sql(sql)).unwrap_err();
         assert!(
-            matches!(&err, ReadError::Invalid(m) if m.contains("view(s), trigger(s)")),
+            invalid_kind(&err) == Some(InvalidKind::RefusedSchemaObject),
             "{sql}: {err}"
         );
     }
@@ -322,7 +338,7 @@ fn a_negative_schema_version_is_invalid() {
 
     let err = read_file(&path).unwrap_err();
 
-    assert!(matches!(err, ReadError::Invalid(_)), "{err}");
+    assert_eq!(invalid_kind(&err), Some(InvalidKind::Corrupt), "{err}");
 }
 
 #[test]
@@ -348,10 +364,7 @@ fn an_expired_deadline_interrupts_a_long_statement() {
     )
     .unwrap_err();
 
-    assert!(
-        matches!(&err, ReadError::Invalid(m) if m.contains("interrupt")),
-        "{err}"
-    );
+    assert!(invalid_kind(&err) == Some(InvalidKind::Deadline), "{err}");
 }
 
 #[test]
@@ -375,7 +388,7 @@ fn generated_columns_are_refused() {
     let err = read_file(&path).unwrap_err();
 
     assert!(
-        matches!(&err, ReadError::Invalid(m) if m.contains("generated column")),
+        invalid_kind(&err) == Some(InvalidKind::RefusedSchemaObject),
         "{err}"
     );
 }
@@ -448,4 +461,129 @@ fn an_oversized_file_is_refused_without_buffering_it() {
     let err = read_file_with(&path, &ReadOptions::default().max_file_bytes(1024)).unwrap_err();
 
     assert!(matches!(err, ReadError::TooLarge { max: 1024 }), "{err}");
+}
+
+#[test]
+fn positions_report_their_datum_anchor_and_the_frame_datum() {
+    // Main carries the datum at its start; Side is merged into Main, so it shares
+    // the anchor; Loose is connected to nothing, so it floats.
+    let mut project = full_project();
+    project.add_section(descending("Loose", 1.0, 2));
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &project);
+
+    let survey = read_file_with(&path, &ReadOptions::default().with_stations(true)).unwrap();
+
+    let main = survey.sections[0].id;
+    let datum = StationId {
+        section_id: main,
+        index: 0,
+    };
+    assert_eq!(survey.frame_datum, Some(datum));
+    let loose = survey.sections[2].id;
+    for p in survey.stations.unwrap() {
+        if p.station.section_id == loose {
+            assert_eq!(p.anchor, None, "{:?} floats", p.station);
+        } else {
+            assert_eq!(
+                p.anchor,
+                Some(datum),
+                "{:?} is tied to the datum",
+                p.station
+            );
+        }
+    }
+}
+
+#[test]
+fn every_list_is_sorted_and_reads_are_deterministic() {
+    // Store merges and closures in the reverse of their sorted order, so only the
+    // reader's own sort can put them right.
+    let mut project = full_project();
+    project.add_section(descending("Third", 1.0, 3));
+    let (main, third) = (project.sections[0].id, project.sections[2].id);
+    project
+        .merge_stations(StationRef::new(main, 1), StationRef::new(third, 0))
+        .unwrap();
+    let late = project.key_for_ref(StationRef::new(third, 3)).unwrap();
+    let early = project.key_for_ref(StationRef::new(main, 3)).unwrap();
+    let mut closure = project.loop_closures[0].clone();
+    closure.id = 3;
+    closure.station_a = early;
+    closure.station_b = late;
+    project.loop_closures.insert(0, closure);
+    project.loop_closures[1].id = 9;
+    project.loop_closures.swap(0, 1);
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &project);
+    let options = ReadOptions::default().with_stations(true);
+
+    let first = read_file_with(&path, &options).unwrap();
+    let second = read_file_with(&path, &options).unwrap();
+
+    assert_eq!(first, second);
+    assert!(first.sections.windows(2).all(|w| w[0].id < w[1].id));
+    assert!(first
+        .station_merges
+        .windows(2)
+        .all(|w| (w[0].a, w[0].b) <= (w[1].a, w[1].b)));
+    assert!(first
+        .zero_datums
+        .windows(2)
+        .all(|w| w[0].station <= w[1].station));
+    assert!(first.loop_closures.windows(2).all(|w| w[0].id <= w[1].id));
+    assert!(first
+        .stations
+        .unwrap()
+        .windows(2)
+        .all(|w| w[0].station < w[1].station));
+}
+
+#[test]
+fn count_limits_refuse_a_file_before_the_post_load_steps() {
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &full_project());
+    let options = ReadOptions::default().count_limits(CountLimits::default().loop_closures(0));
+
+    let err = read_file_with(&path, &options).unwrap_err();
+
+    assert!(
+        matches!(
+            err,
+            ReadError::TooComplex {
+                what: "loop closures",
+                count: 1,
+                max: 0
+            }
+        ),
+        "{err}"
+    );
+}
+
+#[test]
+fn the_frame_datum_anchors_its_component_even_when_it_is_not_the_lowest() {
+    // The app refuses a second datum in one component, but a crafted or older
+    // file can carry one. Put a datum on Side (merged into Main) FIRST, so it is
+    // the frame datum although Main's datum has the lower station id.
+    let mut project = full_project();
+    let side = project.sections[1].id;
+    let key = project.key_for_ref(StationRef::new(side, 1)).unwrap();
+    let mut extra = project.zero_datums[0].clone();
+    extra.station_ref = key;
+    project.zero_datums.insert(0, extra);
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &project);
+
+    let survey = read_file_with(&path, &ReadOptions::default().with_stations(true)).unwrap();
+
+    let frame = StationId {
+        section_id: side,
+        index: 1,
+    };
+    assert_eq!(survey.frame_datum, Some(frame));
+    assert!(survey
+        .stations
+        .unwrap()
+        .iter()
+        .all(|p| p.anchor == Some(frame)));
 }
