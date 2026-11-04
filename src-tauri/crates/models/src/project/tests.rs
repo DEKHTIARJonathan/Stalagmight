@@ -15610,3 +15610,35 @@ fn the_orphan_sweep_sees_merges_through_a_deleted_section() {
     assert_eq!(project.convert_orphan_closures_to_merges(), 1);
     assert!(project.loop_closures.is_empty());
 }
+
+#[test]
+fn the_orphan_sweep_examines_the_closure_right_after_a_converted_one() {
+    // Two different orphans side by side: converting the first must not skip
+    // the second.
+    let mut project = two_anchored_components_with_orphan_closures(3, 0);
+    project.zero_datums.pop();
+    let loose = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let (a0, b0) = (project.sections[0].id, project.sections[3].id);
+    for (id, other) in [(11, b0), (12, loose)] {
+        project.loop_closures.push(LoopClosure {
+            id,
+            station_a: StationKey::new(a0, StationAnchor::SectionStart),
+            station_b: StationKey::new(other, StationAnchor::SectionStart),
+            path_length: 0.0,
+            misclosure_distance: 0.0,
+            error_percentage: 0.0,
+            horizontal_misclosure: 0.0,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::default(),
+            is_aligned: false,
+        });
+    }
+
+    assert_eq!(project.convert_orphan_closures_to_merges(), 2);
+    assert!(project.loop_closures.is_empty());
+}
