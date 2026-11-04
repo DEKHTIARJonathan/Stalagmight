@@ -149,6 +149,9 @@ export default function CorruptionRecoveryDialog() {
   const handleSalvage = useCallback(async () => {
     setStep('salvaging');
     setBusy(true);
+    // A cancelled save dialog goes back to the choices, not to the result step
+    // with no result, which renders an empty body (#576 NF-W12FS-1).
+    let cancelled = false;
     try {
       const data = await invokeIpc('export_salvageable_data', { path: filePath }, {
         purpose: 'salvage data from corrupt database',
@@ -162,9 +165,7 @@ export default function CorruptionRecoveryDialog() {
       }, 'recovery-export-salvage');
 
       if (!destPath) {
-        // User cancelled save dialog
-        setStep('choose');
-        setBusy(false);
+        cancelled = true;
         return;
       }
 
@@ -201,7 +202,7 @@ export default function CorruptionRecoveryDialog() {
       });
     } finally {
       setBusy(false);
-      setStep('result');
+      setStep(cancelled ? 'choose' : 'result');
     }
   }, [filePath, t]);
 

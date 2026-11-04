@@ -107,4 +107,20 @@ describe('CorruptionRecoveryDialog salvage export (#576 HFI-3)', () => {
     expect(invokeIpc).toHaveBeenCalledWith('export_salvageable_data', { path: '/survey/CaveA.stalx' }, expect.anything());
     expect(invokeIpc).not.toHaveBeenCalledWith('write_salvaged_data', expect.anything(), expect.anything());
   });
+
+  // [#576 NF-W12FS-1] The cancel went to the result step with no result, which
+  // renders nothing: the dialog was left with its title and an empty body.
+  it('goes back to the recovery choices when the save dialog is cancelled', async () => {
+    saveDialogMock.mockResolvedValue(null);
+    backend(async () => null);
+
+    await exportSalvage();
+
+    await waitFor(() => expect(saveDialogMock).toHaveBeenCalledTimes(1));
+    expect(await screen.findByTestId('recovery-export-salvage')).toBeInTheDocument();
+    expect(screen.getByTestId('recovery-attempt-repair')).toBeInTheDocument();
+    expect(screen.getByText('Database integrity check failed.')).toBeInTheDocument();
+    expect(screen.queryByText('Data Exported')).toBeNull();
+    expect(screen.queryByText('Salvage Failed')).toBeNull();
+  });
 });
