@@ -1,7 +1,7 @@
 # Third-party licenses
 
 Stalagmight's shipped binaries include the open-source packages listed below:
-627 Rust crates and 63 npm packages. Each distinct license
+627 Rust crates and 62 npm packages. Each distinct license
 text is reproduced verbatim, as those licenses require. Stalagmight itself is
 licensed AGPL-3.0-or-later; see [LICENSE](LICENSE).
 
@@ -10,11 +10,11 @@ from the dependency lockfiles - do not edit by hand. CI fails if this file is
 stale or hand-edited; regenerate after any dependency change.
 
 <!-- lockfile-hashes
-Cargo.lock=e68b3453a932c03e4d03745e4944660f1981f1c9d2940f53172fae51122640bc
-pnpm-lock.yaml=8f9c3f002ab36ef5fd8f917670799f5cb7ca93e0133546022f47f3373696d9bb
+Cargo.lock=52320d204f3a30a211067b3a6c22d984ba1092809ffe78cbf9f768c2902c49cd
+pnpm-lock.yaml=cc12edc721b48bd24276d48a9ab62e5d8383d4d8ef8c98fe0548ccd661f0200b
 gen-third-party-licenses.mjs=0960ccfe71c05a14c5a27618a2f6408ecc2c38be1bc5cb85bb706739ca4bb96d
 about.toml=d2768e49653dc612b768e450ef73aab5e97964c9365bcf0fc2b68cd50cde9f0d
-bundle-body=5b0534ec3109ee53d598919232676c0d0275172f9317e098f45469d9db050f12
+bundle-body=65e49fc8bef42d1b64287a49f524c390a5f32e8f5e93ee9c7003264cc6891f3f
 -->
 
 ## npm packages
@@ -1853,7 +1853,7 @@ SOFTWARE.
 
 ### MIT OR Apache-2.0
 
-Applies to: `@tauri-apps/plugin-dialog 2.5.0`, `@tauri-apps/plugin-fs 2.4.5`, `@tauri-apps/plugin-opener 2.5.3`
+Applies to: `@tauri-apps/plugin-dialog 2.5.0`, `@tauri-apps/plugin-opener 2.5.3`
 
 ````text
 SPDXVersion: SPDX-2.1

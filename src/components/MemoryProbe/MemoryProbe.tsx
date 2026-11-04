@@ -10,8 +10,8 @@
  * Visibility is driven by the hamburger menu's Debug ▸ "Memory Stats" toggle
  * (`showMemoryStats`), or forced on via `config.debug.memory_probe`.
  *
- * The "Dump" button writes a JSON snapshot to the system temp dir via the
- * Tauri fs plugin, with a console.log fallback if the user denied fs.
+ * The "Dump" button logs a JSON snapshot to the console and copies it to the
+ * clipboard.
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invokeIpc } from '../../utils/ipc';

@@ -2583,14 +2583,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return (dir !== undefined && baseDirs[dir]) || '/mock/home';
           }
 
-          case 'plugin:fs|read':
-          case 'plugin:fs|readFile':
-            return new Uint8Array([]);
-
-          case 'plugin:fs|write':
-          case 'plugin:fs|writeFile':
-            return null;
-
           // The native UI zoom (`getCurrentWebview().setZoom`, src/utils/uiScale.ts): there is
           // no native webview to zoom in a browser; acknowledged so the scale is applied as set.
           case 'plugin:webview|set_webview_zoom':

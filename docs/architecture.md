@@ -162,12 +162,12 @@ cancels (`commands/import_offthread_tests.rs`, `core/state/command_ordering_test
 
 The custom Tauri commands take paths and payloads straight from the webview, and
 `src-tauri/capabilities/default.json` does not bound them: a capability grants the
-**plugin** commands the page may call (the dialog and opener plugins; no fs plugin
-command), never the app's own `#[tauri::command]`s. The two file operations the
-page used to ask the fs plugin for - whether a save would replace a file, and the
-corruption-recovery salvage write - are app commands (`save_target_exists`,
-`write_salvaged_data`): the fs plugin's scope held no user path, so both failed for
-every path in the real app (#576 HFI-2, HFI-3). Nor does `withGlobalTauri` decide
+**plugin** commands the page may call (the dialog and opener plugins), never the
+app's own `#[tauri::command]`s. The fs plugin is not registered at all (#576
+NF-W12FS-2): the two file operations the page used to ask it for - whether a save
+would replace a file, and the corruption-recovery salvage write - are app commands
+(`save_target_exists`, `write_salvaged_data`), because its scope held no user path,
+so both failed for every path in the real app (#576 HFI-2, HFI-3). Nor does `withGlobalTauri` decide
 reachability: `window.__TAURI_INTERNALS__.invoke` is injected regardless (see
 docs/app-modes.md).
 

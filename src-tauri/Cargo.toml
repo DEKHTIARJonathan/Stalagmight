@@ -116,7 +116,6 @@ stalagmight-speleodb = { path = "crates/speleodb" }
 stalagmight-telemetry = { path = "crates/telemetry" }
 stalagmight-tiles = { path = "crates/tiles" }
 tauri = { version = "2", features = ["devtools"] }
-tauri-plugin-fs = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 serde = { workspace = true, features = ["derive"] }

@@ -164,7 +164,6 @@ pub fn run() {
 
     let builder = builder
         .manage(commands::launch::PendingLaunchFiles::default())
-        .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .register_asynchronous_uri_scheme_protocol(

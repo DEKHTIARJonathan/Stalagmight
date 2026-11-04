@@ -78,7 +78,6 @@
     "@tanstack/react-virtual": "^3.13.18",
     "@tauri-apps/api": "^2.1.1",
     "@tauri-apps/plugin-dialog": "^2.0.3",
-    "@tauri-apps/plugin-fs": "^2.0.3",
     "@tauri-apps/plugin-opener": "^2.5.3",
     "i18next": "^23.16.0",
     "i18next-browser-languagedetector": "^7.2.1",
