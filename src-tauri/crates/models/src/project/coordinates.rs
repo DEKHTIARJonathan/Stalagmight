@@ -709,10 +709,11 @@ impl Project {
 
     /// Merge groups (transitive closure of `station_merges`): each station in a
     /// group maps to its group index. Union by size, so a pathological merge order
-    /// stays near-linear (#596).
+    /// stays near-linear (#596). Member order is unchanged from the pre-#596 code
+    /// (`a`'s group, then `b`'s): `merged_with` is read in that order by the frontend.
     fn merge_groups(&self) -> (HashMap<StationRef, usize>, Vec<Vec<StationRef>>) {
         let mut station_to_group: HashMap<StationRef, usize> = HashMap::new();
-        let mut groups: Vec<Vec<StationRef>> = Vec::new();
+        let mut groups: Vec<VecDeque<StationRef>> = Vec::new();
 
         for merge in &self.station_merges {
             let (Some(sa), Some(sb)) = (
@@ -728,18 +729,18 @@ impl Project {
                 (None, None) => {
                     // Neither station is in a group, create a new group
                     let group_id = groups.len();
-                    groups.push(vec![sa, sb]);
+                    groups.push(VecDeque::from([sa, sb]));
                     station_to_group.insert(sa, group_id);
                     station_to_group.insert(sb, group_id);
                 }
                 (Some(gid), None) => {
                     // station_a is in a group, add station_b to it
-                    groups[gid].push(sb);
+                    groups[gid].push_back(sb);
                     station_to_group.insert(sb, gid);
                 }
                 (None, Some(gid)) => {
                     // station_b is in a group, add station_a to it
-                    groups[gid].push(sa);
+                    groups[gid].push_back(sa);
                     station_to_group.insert(sa, gid);
                 }
                 (Some(gid_a), Some(gid_b)) => {
@@ -756,13 +757,23 @@ impl Project {
                         for member in &absorbed {
                             station_to_group.insert(*member, keep);
                         }
-                        groups[keep].extend(absorbed);
+                        if keep == gid_a {
+                            groups[keep].extend(absorbed);
+                        } else {
+                            // `a` is absorbed into `b`: prepend so `a`'s members stay first.
+                            for member in absorbed.into_iter().rev() {
+                                groups[keep].push_front(member);
+                            }
+                        }
                     }
                     // If same group, nothing to do
                 }
             }
         }
-        (station_to_group, groups)
+        (
+            station_to_group,
+            groups.into_iter().map(Vec::from).collect(),
+        )
     }
 
     /// Attach each station's merge (`merged_with`) and loop-closure (`closures_with`)
@@ -1367,6 +1378,33 @@ mod tests {
             elapsed < std::time::Duration::from_secs(2),
             "union by size keeps this near-linear; took {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn merge_groups_keep_the_first_groups_members_first() {
+        use crate::station::{StationAnchor, StationKey};
+        let mut project = Project::new("Order".to_string(), None);
+        let ids: Vec<SectionId> = (0..5)
+            .map(|_| add_section(&mut project, vec![shot(90.0, 1.0)]))
+            .collect();
+        let key = |i: usize| StationKey::new(ids[i], StationAnchor::SectionStart);
+        let merge = |a: usize, b: usize| StationMerge {
+            station_a: key(a),
+            station_b: key(b),
+            merged_at: Utc::now(),
+        };
+        // {0,1} then {2,3,4}; the last merge joins the SMALLER group (a) to the
+        // larger one (b), which union by size absorbs the other way round.
+        for m in [merge(0, 1), merge(2, 3), merge(2, 4), merge(0, 2)] {
+            project.station_merges.push(m);
+        }
+
+        let (station_to_group, groups) = project.merge_groups();
+        let expected: Vec<StationRef> = (0..5)
+            .filter_map(|i| project.resolve_key(&key(i)))
+            .collect();
+        assert_eq!(expected.len(), 5);
+        assert_eq!(groups[station_to_group[&expected[0]]], expected);
     }
 
     #[test]
