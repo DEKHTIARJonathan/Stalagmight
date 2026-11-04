@@ -9307,6 +9307,96 @@ mod tests {
         out
     }
 
+    /// The `(trait, type)` of every `impl <one of traits> for <type>` in `src`.
+    ///
+    /// [#576 RV10a-4] Read from the CODE (`source_scan::code_only`: comments and
+    /// literals blanked), at every `impl` keyword wherever it stands on its line -
+    /// after an attribute, say, where a line-start match never looked - up to the
+    /// item's `{` or `;`, with the whitespace folded so a header broken over lines
+    /// reads as one.
+    fn licence_impls(src: &str, traits: &[&str]) -> Vec<(String, String)> {
+        let code = crate::models::source_scan::code_only(src);
+        let is_ident = |c: char| c.is_alphanumeric() || c == '_';
+        let mut out = Vec::new();
+        for (at, keyword) in code.match_indices("impl") {
+            let before = code[..at].chars().next_back();
+            let after = code[at + keyword.len()..].chars().next();
+            if before.is_some_and(is_ident) || !after.is_some_and(|c| c.is_whitespace() || c == '<')
+            {
+                continue;
+            }
+            let rest = &code[at..];
+            let header = rest[..rest.find(['{', ';']).unwrap_or(rest.len())]
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            let Some((head, ty)) = header.split_once(" for ") else {
+                continue;
+            };
+            // The trait is the head's last path segment: `impl<T> a::b::Trait`.
+            let Some(licence) = traits.iter().find(|t| {
+                head.strip_suffix(**t)
+                    .is_some_and(|lead| lead.ends_with(|c: char| !is_ident(c)))
+            }) else {
+                continue;
+            };
+            let ty = ty.split_once(" where ").map_or(ty, |(ty, _)| ty).trim();
+            out.push(((*licence).to_owned(), ty.to_owned()));
+        }
+        out
+    }
+
+    /// [#576 RV10a-4] The inventory's parser on the shapes an implementation can
+    /// take in source - an attribute on the impl's own line (which hid
+    /// `#[rustfmt::skip] impl client::PatchLicence for X {}` from a line-start
+    /// match), a header broken over lines, no space before the trait, a `where`
+    /// clause - and on text that is NOT one: a comment, a string, `impl Trait` in
+    /// argument position, a bound, a longer trait name.
+    ///
+    /// (Indented: a column-0 `}` here would end `mod tests` for `source_scan`.)
+    #[test]
+    fn the_licence_inventory_parses_every_impl_shape() {
+        let fixture = r#"
+            impl client::PatchLicence for Plain {}
+            #[rustfmt::skip] impl client::PatchLicence for SkipAttr {}
+            #[cfg(any())] #[doc(hidden)] impl DumpLicence for TwoAttrs {}
+            impl<'a> client::DumpLicence
+                for Wrapped<'a>
+            {
+            }
+            impl<T>UploadLicence for Tight<T> {}
+            impl ReclaimRelease for Bounded where Bounded: Sized {}
+            // impl client::PatchLicence for InAComment {}
+            /* impl client::PatchLicence for InABlockComment {} */
+            const S: &str = "impl client::PatchLicence for InAString {}";
+            fn takes(_: impl client::DumpLicence) -> u8 { 0 }
+            impl<T: client::DumpLicence> Unrelated for Generic<T> {}
+            impl client::PatchLicenceExtra for NotALicence {}
+        "#;
+        let traits = [
+            "DumpLicence",
+            "UploadLicence",
+            "PatchLicence",
+            "ReclaimRelease",
+        ];
+        let rows: Vec<String> = licence_impls(fixture, &traits)
+            .iter()
+            .map(|(licence, ty)| format!("{licence} for {ty}"))
+            .collect();
+        println!("[RV10a-4] parsed: {rows:?}");
+        assert_eq!(
+            rows,
+            [
+                "PatchLicence for Plain",
+                "PatchLicence for SkipAttr",
+                "DumpLicence for TwoAttrs",
+                "DumpLicence for Wrapped<'a>",
+                "UploadLicence for Tight<T>",
+                "ReclaimRelease for Bounded",
+            ]
+        );
+    }
+
     /// [#576 RV9a-4] Who may implement a licence. A licence trait is a promise that
     /// only a proof (or a marker named for why its flow has no precondition) holds
     /// one, and `DumpLicence` / `UploadLicence` / `PatchLicence` are public traits of
@@ -9315,6 +9405,10 @@ mod tests {
     /// here: it admits only its own crate, and the implementors are core's proof
     /// types. So every implementation in the workspace is inventoried, and a new one
     /// fails this until it is added - with its reason - to the list.
+    ///
+    /// [#576 RV10a-4] A tripwire, not a seal: it reads the source text
+    /// ([`licence_impls`], pinned by `the_licence_inventory_parses_every_impl_shape`),
+    /// so an impl a macro emits with the trait as a metavariable is not there to see.
     #[test]
     fn licence_implementations_are_exactly_the_sanctioned_set() {
         const TRAITS: [&str; 5] = [
@@ -9327,21 +9421,11 @@ mod tests {
         let mut found: Vec<String> = Vec::new();
         for (path, src) in workspace_rust_files() {
             let name = path.rsplit('/').next().unwrap_or(&path).to_owned();
-            for line in src.lines().map(str::trim) {
-                if line.starts_with("//") || !line.starts_with("impl") {
-                    continue;
-                }
-                let Some((head, ty)) = line.split_once(" for ") else {
-                    continue;
-                };
-                let Some(licence) = TRAITS.iter().find(|t| {
-                    head.ends_with(&format!("::{t}")) || head.ends_with(&format!(" {t}"))
-                }) else {
-                    continue;
-                };
-                let ty = ty.trim_end_matches(" {}").trim_end_matches('{').trim();
-                found.push(format!("{name}: {licence} for {ty}"));
-            }
+            found.extend(
+                licence_impls(&src, &TRAITS)
+                    .into_iter()
+                    .map(|(licence, ty)| format!("{name}: {licence} for {ty}")),
+            );
         }
         found.sort();
         let mut sanctioned = vec![
@@ -9395,7 +9479,9 @@ mod tests {
              or under \"Markers\" when it is a marker named for why its flow has no \
              precondition. Anything else holding a licence - a convenience marker, a test \
              licence in production - is the bypass the trait exists to stop. Remove a row whose \
-             implementation is gone. (A new licence TRAIT goes in TRAITS above.)"
+             implementation is gone. (A new licence TRAIT goes in TRAITS above.) The \
+             inventory reads source text - a tripwire, not a seal: an impl generated by a \
+             macro is not in it, so do not write one to get past this."
         );
     }
 
