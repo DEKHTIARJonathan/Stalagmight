@@ -246,11 +246,19 @@ test.describe('Data table fullscreen mode', () => {
     await expect(page.getByTestId('export-dialog')).toHaveCount(0);
     await expect(page.getByTestId('data-table')).toHaveAttribute('data-fullscreen', 'true');
 
-    // The fullscreen Sections view stays editable - dirty the project.
+    // Ctrl+S is alive: the save clears the dirty flag the seeding left. This clean
+    // baseline is also what makes the edit below observable: from a dirty start the
+    // dirty poll passed at once, before the edit had landed, so Ctrl+S could save
+    // first and the late edit re-dirty the project (#576 NF-W12DMP-4).
+    await page.keyboard.press('Control+s');
+    await expect.poll(() => getIsDirty(page)).toBe(false);
+
+    // The fullscreen Sections view stays editable: the flag turns true only once
+    // the edit has landed (it is set after the edit's state refresh).
     await fillCell(page, 0, 'length', '42');
     await expect.poll(() => getIsDirty(page)).toBe(true);
 
-    // Ctrl+S is alive: the save clears the dirty flag.
+    // Ctrl+S again, now saving the edit.
     await page.keyboard.press('Control+s');
     await expect.poll(() => getIsDirty(page)).toBe(false);
 
