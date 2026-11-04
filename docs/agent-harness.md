@@ -1006,6 +1006,21 @@ picker). They are separate PRNG streams so that adding the second left the
 first's draws bit-identical, which bounds how far the existing repro lines
 moved - the convention `mulberry32`'s header states.
 
+**A stall is a failure like any other (#576 HFI-9).** Every in-page call goes
+through WebDriver's `execute/async`, which `lib/sessionShared.ts` gives 30 s,
+and a fused UI step that outran it used to end the run on a bare
+`WebDriverError: The operation was aborted due to timeout` - no move, no
+`reproduce:` line, no trace - because only oracle failures went through `fail`.
+The run now catches every error it did not raise itself. A WebDriver timeout
+becomes `STALL: execute/async did not return within the WebDriver budget - the
+page stopped answering`, with the stalled move named, the move history ending
+on it as IN FLIGHT, the reproduce line, and a trace whose LAST step is the move
+that never returned, so a replay stalls where the recording did. Any other
+error keeps its own first line as the headline and gets the same treatment. A
+stall skips the in-page cleanup (every call would wait out the budget again),
+and a stall inside a map click is no longer swallowed as `map-unavailable`. The
+`bridgeStepMsMax` metric is still what says how close a PASSING run came.
+
 The open findings it has produced are written up in the scenario file's header,
 each with the `reproduce:` line that still runs.
 

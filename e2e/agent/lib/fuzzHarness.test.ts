@@ -7,12 +7,15 @@ import {
   MoveLog,
   RERUN_WITH,
   RERUN_WITH_IDS,
+  describeRunError,
   failureText,
+  isWebDriverStall,
   openReplay,
   throwFailure,
   writeRunTrace,
 } from './fuzzHarness';
-import { TraceRecorder, readTrace, writeTrace } from './fuzzTrace';
+import { TraceRecorder, failureSignature, readTrace, writeTrace } from './fuzzTrace';
+import { moveTraceStep } from '../scenarios/importDialogTrace';
 
 // Shared per-run plumbing of the four fuzz scenarios. The failure texts below
 // are pinned VERBATIM, because the shrinker compares failure signatures taken
@@ -228,5 +231,96 @@ describe('throwFailure', () => {
 
   it('throws the bare message when no trace was written', () => {
     expect(() => throwFailure('the message', () => null)).toThrow(new Error('the message'));
+  });
+});
+
+describe('a run that dies outside its own fail (#576 HFI-9)', () => {
+  /**
+   * What webdriver 9 throws when a fused in-page step outruns the 30 s request
+   * budget: `WebDriverError.computeErrorMessage` wraps the DOMException text
+   * with the command and the in-page script.
+   */
+  const timeout = (): Error =>
+    new Error(
+      'WebDriverError: The operation was aborted due to timeout when running "execute/async" with method ' +
+        '"POST" and args "async function fusedStep(args) { const done = arguments[arguments.length - 1]; ..."',
+    );
+
+  it('recognises every spelling of a stalled page, and nothing else', () => {
+    expect(isWebDriverStall(timeout())).toBe(true);
+    expect(isWebDriverStall(new Error('Request timed out! Consider increasing the "connectionRetryTimeout" option.'))).toBe(
+      true,
+    );
+    expect(isWebDriverStall(new Error('script timeout: the script did not finish within 30000 ms'))).toBe(true);
+    expect(isWebDriverStall(new Error('could not turn auto-save off; a timer firing mid-run would change state'))).toBe(
+      false,
+    );
+    expect(isWebDriverStall(new Error('S4 UNEXPECTED ERROR DIALOG: a move with no business failing raised one'))).toBe(
+      false,
+    );
+  });
+
+  it('turns the bare timeout into a STALL that names the move that never returned', () => {
+    const report = describeRunError(timeout(), 'click shot-editor-ctx-cut - cut the selection');
+    expect(report.stall).toBe(true);
+    expect(report.headline).toBe(
+      'STALL: execute/async did not return within the WebDriver budget - the page stopped answering',
+    );
+    expect(report.detail).toContain('  stalled move: click shot-editor-ctx-cut - cut the selection');
+    expect(report.detail).toContain('  error: WebDriverError: The operation was aborted due to timeout');
+  });
+
+  it('gives every stall of one command one signature, whatever the seed or the move', () => {
+    const a = describeRunError(timeout(), 'FORCED advance on wiz-manual');
+    const b = describeRunError(timeout(), 'select row 41');
+    const sign = (report: { headline: string; detail: string }, seed: number) =>
+      failureSignature(
+        failureText(report.headline, [`  reproduce: pnpm agent:scenario x --seed ${seed}`], report.detail, 'move(s)', []),
+      );
+    expect(sign(a, 1).headline).toBe(sign(b, 32).headline);
+  });
+
+  it('keeps any other error under its own first line', () => {
+    const report = describeRunError(new Error('E2 INTEGRITY: x.stalx opened SAVE-BLOCKED\n["a"]'), null);
+    expect(report.stall).toBe(false);
+    expect(report.headline).toBe('E2 INTEGRITY: x.stalx opened SAVE-BLOCKED');
+    expect(report.detail).toBe('  in flight: (none)\n["a"]');
+  });
+
+  it('writes the trace up to and including the stalled move, with the reproduce line', () => {
+    // The scenario's catch, from the same helpers it calls: the steps recorded
+    // so far, then the in-flight step the dispatch left behind, then `fail`.
+    const recorder = new TraceRecorder();
+    recorder.record({ kind: 'ui', testid: 'import-wizard-next', label: 'next' });
+    const stalled = moveTraceStep({ kind: 'ui', testid: 'shot-editor-ctx-cut', label: 'cut the selection' });
+    expect(stalled).not.toBeNull();
+    const log = new MoveLog();
+    log.note('next [wiz-manual]');
+    log.startingMove('cut the selection');
+    expect(log.inFlight()).toBe('cut the selection');
+
+    const report = describeRunError(timeout(), log.inFlight());
+    if (stalled !== null) recorder.record(stalled);
+    const message = failureText(
+      report.headline,
+      ['  reproduce: pnpm agent:scenario importDialogFuzz --seed 19 --iterations 8'],
+      report.detail,
+      'move(s)',
+      log.tail(25),
+    );
+    const meta = { scenario: 'importDialogFuzz', iterations: 8, fixture: 'f.stalx', stream: 'import-v3' };
+    let thrown = '';
+    try {
+      throwFailure(message, (failure) => writeRunTrace({ artifactsDir: dir, seed: 19 }, recorder, meta, failure, ''));
+    } catch (err) {
+      thrown = err instanceof Error ? err.message : String(err);
+    }
+    expect(thrown.split('\n')[0]).toMatch(/^STALL: /);
+    expect(thrown).toContain('  reproduce: pnpm agent:scenario importDialogFuzz --seed 19');
+    expect(thrown).toContain('    cut the selection -> IN FLIGHT (had not returned)');
+    const tracePath = /\n {2}trace: (.+)$/.exec(thrown)?.[1] ?? '';
+    const trace = readTrace(tracePath);
+    expect(trace.steps.at(-1)).toEqual(stalled);
+    expect(trace.failure?.message.split('\n')[0]).toMatch(/^STALL: /);
   });
 });

@@ -380,7 +380,16 @@ import { ORACLE_GLOBAL, oracleInjectionSource } from '../lib/fuzzOracleCore';
 import { mapClick } from '../lib/controls';
 import { isCorpusEntryRel, planReplay, traceHasWellFormedFlows, TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
 import { fuzzFixture } from '../lib/fuzzKnobs';
-import { failureText, MoveLog, openReplay, RERUN_WITH, throwFailure, writeRunTrace } from '../lib/fuzzHarness';
+import {
+  describeRunError,
+  failureText,
+  isWebDriverStall,
+  MoveLog,
+  openReplay,
+  RERUN_WITH,
+  throwFailure,
+  writeRunTrace,
+} from '../lib/fuzzHarness';
 import {
   materializeSurveyFile,
   randomSurveyFileSpec,
@@ -825,6 +834,24 @@ export const importDialogFuzz: Scenario = {
       );
 
     /**
+     * Every error `fail` has thrown. A throw that is NOT one of these died
+     * outside the oracles - a stall, a harness error - and the run's catch
+     * routes it through `fail` so it gets the reproduce line, the move history
+     * and the trace a failure is owed (#576 HFI-9).
+     */
+    const raisedByFail = new WeakSet<object>();
+    /**
+     * The step a dispatch that has NOT RETURNED would have recorded, or null.
+     * Set immediately before each dispatching await and cleared the moment it
+     * returns, so a stall leaves exactly the move it stalled on - which goes
+     * into the trace as its last step, because a trace that stopped one move
+     * short would replay green.
+     */
+    let inFlightStep: TraceStep | null = null;
+    /** Set when the run died on a stall: the page is not answering, so skip in-page cleanup. */
+    let pageStalled = false;
+
+    /**
      * Annotated on the CONST so TypeScript treats a `fail(...)` call as
      * never-returning (a caller ending in one needs no dead `return` after it).
      */
@@ -849,7 +876,12 @@ export const importDialogFuzz: Scenario = {
           tail,
         ),
       );
-      throwFailure(message, dumpTrace);
+      try {
+        throwFailure(message, dumpTrace);
+      } catch (thrown) {
+        if (typeof thrown === 'object' && thrown !== null) raisedByFail.add(thrown);
+        throw thrown;
+      }
     };
 
     // ---- paths -----------------------------------------------------------
@@ -1073,6 +1105,17 @@ export const importDialogFuzz: Scenario = {
       if (step !== null) recorder.record(step);
     };
 
+    /**
+     * One dispatching await, with `step` as the in-flight step while it runs.
+     * A throw leaves `inFlightStep` set - see its comment - and propagates.
+     */
+    const dispatch = async <T>(step: TraceStep | null, call: () => Promise<T>): Promise<T> => {
+      inFlightStep = step;
+      const out = await call();
+      inFlightStep = null;
+      return out;
+    };
+
     /** A corpus draw, or a replayed corpus entry token. */
     const fromCorpus = (source: FileSource): boolean =>
       source.origin === 'corpus' || (source.origin === 'disk' && isCorpusEntryRel(source.rel));
@@ -1090,7 +1133,7 @@ export const importDialogFuzz: Scenario = {
       let digest: ImportScreenDigest;
 
       if (move.kind === 'ui') {
-        const outcome = await runUiStep(ctx, move as Move);
+        const outcome = await dispatch(record ? moveTraceStep(move) : null, () => runUiStep(ctx, move as Move));
         performed = outcome.performed;
         skip = outcome.reason;
         offAtDispatch = outcome.offAtDispatch;
@@ -1103,7 +1146,9 @@ export const importDialogFuzz: Scenario = {
       } else if (move.kind === 'input') {
         // The dispatched value may carry a substituted path; the RECORDED one
         // never does - see `dispatchable`.
-        const outcome = await runUiStep(ctx, dispatchable(move) as Move);
+        const outcome = await dispatch(record ? moveTraceStep(move) : null, () =>
+          runUiStep(ctx, dispatchable(move) as Move),
+        );
         performed = outcome.performed;
         skip = outcome.reason;
         offAtDispatch = outcome.offAtDispatch;
@@ -1122,7 +1167,7 @@ export const importDialogFuzz: Scenario = {
         } else {
           recordFileSource(live.source, record);
           if (live.via === 'route') {
-            const routed = await routeFile(ctx, absolute);
+            const routed = await dispatch(record ? moveTraceStep(move) : null, () => routeFile(ctx, absolute));
             if (!routed.routed) fail('the E2E routeOpenedFile hook is missing; rebuild with VITE_E2E=1');
             performed = true;
             dialogAtDispatch = routed.dialogAtDispatch;
@@ -1139,7 +1184,9 @@ export const importDialogFuzz: Scenario = {
             if (record) recordMove(move);
             digest = await observeScreen(ctx);
           } else {
-            const answered = await answerFileDialogInPage(ctx, live.trigger, 'open', absolute);
+            const answered = await dispatch(record ? moveTraceStep(move) : null, () =>
+              answerFileDialogInPage(ctx, live.trigger, 'open', absolute),
+            );
             performed = answered.performed;
             skip = answered.reason;
             digest = answered.digest;
@@ -1156,7 +1203,9 @@ export const importDialogFuzz: Scenario = {
           digest = await observeScreen(ctx, false);
         } else {
           recordFileSource(live.source, record);
-          const answered = await answerKeyboardFileDialog(ctx, live.chord, absolute);
+          const answered = await dispatch(record ? moveTraceStep(move) : null, () =>
+            answerKeyboardFileDialog(ctx, live.chord, absolute),
+          );
           performed = answered.performed;
           skip = answered.reason;
           digest = answered.digest;
@@ -1168,14 +1217,18 @@ export const importDialogFuzz: Scenario = {
           if (record && performed) recordMove(move);
         }
       } else if (move.kind === 'closeProject') {
-        const res = await ctx.callAction('project', 'closeProject', []);
+        const res = await dispatch(record ? moveTraceStep(move) : null, () =>
+          ctx.callAction('project', 'closeProject', []),
+        );
         performed = res.ok;
         if (!res.ok) skip = 'close-refused';
         if (record && performed) recordMove(move);
         digest = await observeScreen(ctx);
       } else if (move.kind === 'cancelDialog') {
         const live = move;
-        const answered = await answerFileDialogInPage(ctx, live.trigger, 'open', null);
+        const answered = await dispatch(record ? moveTraceStep(move) : null, () =>
+          answerFileDialogInPage(ctx, live.trigger, 'open', null),
+        );
         performed = answered.performed;
         skip = answered.reason;
         digest = answered.digest;
@@ -1191,10 +1244,16 @@ export const importDialogFuzz: Scenario = {
             ? live.lngLat
             : [live.lngLat[0] + (centre[0] as number), live.lngLat[1] + (centre[1] as number)];
         try {
-          await ctx.exclusive(() => mapClick(ctx.browser, at));
+          await dispatch(record ? { kind: 'mapClick', lngLat: at, label: move.label } : null, () =>
+            ctx.exclusive(() => mapClick(ctx.browser, at)),
+          );
           performed = true;
           if (record) recorder.record({ kind: 'mapClick', lngLat: at, label: move.label });
         } catch (err) {
+          // A STALL is not an impossible click: the page stopped answering, and
+          // swallowing it here would let the walk carry on into the next
+          // timeout with the attribution lost.
+          if (isWebDriverStall(err)) throw err;
           // Outside the viewport, or no map on this screen. Both are ordinary
           // impossible moves - skipped and counted, exactly like an absent
           // testid - because a shrunk trace reaches states with a different
@@ -1205,7 +1264,7 @@ export const importDialogFuzz: Scenario = {
         digest = await observeScreen(ctx);
       } else if (move.kind === 'undo' || move.kind === 'redo') {
         const which = move.kind;
-        const res = await ctx.callAction('project', which, []);
+        const res = await dispatch(record ? moveTraceStep(move) : null, () => ctx.callAction('project', which, []));
         performed = res.ok;
         if (!res.ok) skip = `${which}-refused`;
         if (record && performed) recordMove(move);
@@ -1213,7 +1272,9 @@ export const importDialogFuzz: Scenario = {
       } else {
         fs.mkdirSync(projectsDir, { recursive: true });
         const target = path.join(projectsDir, `flow-save-${ctx.seed}.stalx`);
-        const res = await ctx.callAction('project', 'saveProject', [target]);
+        const res = await dispatch(record ? moveTraceStep(move) : null, () =>
+          ctx.callAction('project', 'saveProject', [target]),
+        );
         performed = res.ok;
         if (!res.ok) skip = 'save-refused';
         if (record && performed) recordMove(move);
@@ -1726,10 +1787,14 @@ export const importDialogFuzz: Scenario = {
      * cleanly when replayed on its own.
      */
     const forceClean = async (): Promise<void> => {
-      await ctx.callAction('ui', 'cancelPlacementMode', []).catch(() => undefined);
-      await ctx.callAction('ui', 'closeDialog', []).catch(() => undefined);
-      await ctx.callAction('ui', 'setImportContext', [null]).catch(() => undefined);
-      await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
+      // After a STALL every in-page call would wait out the same budget again,
+      // only to fail; the session is torn down after a failure anyway.
+      if (!pageStalled) {
+        await ctx.callAction('ui', 'cancelPlacementMode', []).catch(() => undefined);
+        await ctx.callAction('ui', 'closeDialog', []).catch(() => undefined);
+        await ctx.callAction('ui', 'setImportContext', [null]).catch(() => undefined);
+        await ctx.callAction('project', 'closeProject', []).catch(() => undefined);
+      }
       for (const dir of [filesDir, projectsDir]) {
         try {
           fs.rmSync(dir, { recursive: true, force: true });
@@ -2682,6 +2747,16 @@ export const importDialogFuzz: Scenario = {
 
     try {
       await runEpisodes();
+    } catch (err) {
+      if (typeof err === 'object' && err !== null && raisedByFail.has(err)) throw err;
+      // Died OUTSIDE the oracles - a WebDriver call that outran its budget, or
+      // a harness error. Same treatment as any failure: the move that had not
+      // returned goes into the trace and the history, and `fail` prints the
+      // reproduce line and writes the trace (#576 HFI-9).
+      const report = describeRunError(err, moveLog.inFlight());
+      if (inFlightStep !== null) recorder.record(inFlightStep);
+      pageStalled = report.stall;
+      fail(report.headline, report.detail);
     } finally {
       await forceClean();
     }

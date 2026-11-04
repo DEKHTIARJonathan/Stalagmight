@@ -99,6 +99,11 @@ export class MoveLog {
     this.current = null;
   };
 
+  /** The label of the move that is running right now, or null between moves. */
+  inFlight(): string | null {
+    return this.current;
+  }
+
   /**
    * The last `limit` lines (every line when `full`), indented for a failure
    * message, plus the armed move if one had not returned.
@@ -183,4 +188,65 @@ export function failureText(
 export function throwFailure(message: string, dumpTrace: (failure: { message: string }) => string | null): never {
   const written = dumpTrace({ message });
   throw new Error(written ? `${message}\n  trace: ${written}` : message);
+}
+
+/**
+ * Did a WebDriver call outrun its budget - the PAGE stopped answering, rather
+ * than the app saying something?
+ *
+ * Three spellings of one event: webdriver's own request timeout (`The operation
+ * was aborted due to timeout when running "execute/async" ...`, the 30 s
+ * `connectionRetryTimeout` in `sessionShared.ts`), undici's connect timeout as
+ * webdriver rewords it (`Request timed out!`), and the W3C `script timeout`
+ * error a driver returns when the in-page script itself overran.
+ */
+export function isWebDriverStall(err: unknown): boolean {
+  const text = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
+  return /aborted due to timeout|Request timed out!|script timeout|\bTimeoutError\b/i.test(text);
+}
+
+/** A run that died outside its own `fail`, reduced to what `fail` needs. */
+export interface RunErrorReport {
+  /** True when the page stopped answering (`isWebDriverStall`). */
+  stall: boolean;
+  /** The failure's first line - what `failureSignature` and a shrink key on. */
+  headline: string;
+  detail: string;
+}
+
+/**
+ * Turn an error a scenario did NOT raise through its own `fail` into a failure
+ * it can raise: a headline that says what happened and a detail that names the
+ * move that had not returned.
+ *
+ * A fused UI step that outruns the WebDriver budget used to surface as a bare
+ * `WebDriverError: The operation was aborted due to timeout` - no move, no
+ * `reproduce:` line, no trace - because only oracle failures went through
+ * `fail` (#576 HFI-9, 24+ import-dialog runs on one campaign). A STALL headline
+ * names the WebDriver command and nothing that varies run to run, so every
+ * stall of one kind shrinks against one signature; the `error:` line keeps the
+ * driver's own words. Anything else keeps its own first line as the headline,
+ * because that line already says what it is.
+ */
+export function describeRunError(err: unknown, inFlight: string | null): RunErrorReport {
+  const message = err instanceof Error ? err.message : String(err);
+  const lines = message.split('\n');
+  const first = (lines[0] ?? '').trim();
+  if (isWebDriverStall(err)) {
+    const command = /when running "([^"]+)"/.exec(message)?.[1] ?? 'a WebDriver call';
+    return {
+      stall: true,
+      headline: `STALL: ${command} did not return within the WebDriver budget - the page stopped answering`,
+      detail: [
+        `  stalled move: ${inFlight ?? '(none in flight - the stall came between moves)'}`,
+        // Bounded: webdriver appends the in-page script to the message.
+        `  error: ${first.length > 240 ? `${first.slice(0, 240)}...` : first}`,
+      ].join('\n'),
+    };
+  }
+  return {
+    stall: false,
+    headline: first === '' ? 'the run threw an error with no message' : first,
+    detail: [`  in flight: ${inFlight ?? '(none)'}`, ...lines.slice(1)].join('\n').trimEnd(),
+  };
 }
