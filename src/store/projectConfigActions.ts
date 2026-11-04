@@ -62,6 +62,41 @@ export interface ProjectConfigActions {
   setConfig: (config: Config) => void;
 }
 
+/**
+ * [#576 HFI-12] The backend's recent project paths, re-read in the config chain
+ * like every other config re-read (see `reloadConfigInOrder`); null when the config
+ * cannot be read. `loadRecentProjects` re-reads them with the list, through
+ * {@link withRecentPaths}.
+ */
+export function readRecentPathsInOrder(): Promise<string[] | null> {
+  return chainSettingWrite(SETTING_KEYS.config, () =>
+    invokeIpc('get_config', undefined, { purpose: 're-read the recent project paths' }),
+  ).then(
+    (config) => {
+      const paths: unknown = (config as { general?: { recent_projects?: unknown } } | undefined)?.general
+        ?.recent_projects;
+      return Array.isArray(paths) ? (paths as string[]) : null;
+    },
+    (e: unknown) => {
+      console.error('Failed to re-read the recent project paths:', e);
+      return null;
+    },
+  );
+}
+
+/**
+ * The store update that puts `paths` into the config's recents, or none when there
+ * is no config yet, nothing was read, or the recents already match. Only this one
+ * field is taken from the re-read: the backend writes it (open, create, remove,
+ * delete) and the frontend never does, so it cannot put back a setting changed since.
+ */
+export function withRecentPaths(config: Config | null, paths: string[] | null): { config?: Config } {
+  if (!config || !paths) return {};
+  const current = config.general.recent_projects;
+  if (current.length === paths.length && current.every((p, i) => p === paths[i])) return {};
+  return { config: { ...config, general: { ...config.general, recent_projects: paths } } };
+}
+
 export function createProjectConfigActions(
   set: StoreApi<ProjectStore>['setState'],
   get: StoreApi<ProjectStore>['getState']

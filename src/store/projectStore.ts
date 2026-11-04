@@ -60,7 +60,7 @@ export interface ImportReceiptProvenance {
 }
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
-import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
+import { createProjectConfigActions, readRecentPathsInOrder, withRecentPaths, type ProjectConfigActions } from './projectConfigActions';
 import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
 import { createProjectLoadRepairsActions, LOAD_REPAIRS_CLEARED, loadRepairsStateFor, type ProjectLoadRepairsActions, type ProjectLoadRepairsState } from './projectLoadRepairsBanner';
 import { createProjectIntegrityActions, type ProjectIntegrityActions } from './projectIntegrityActions';
@@ -1616,6 +1616,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   loadRecentProjects: async () => {
     try {
+      // [#576 HFI-12] With the list, the recent PATHS. A recent that no longer loads
+      // (moved, deleted) leaves the list, and the Global View shows it as missing
+      // only if the config's recents name it - but the store's copy was read before
+      // every project opened or created since, so such a project just vanished until
+      // a config reload. Both land in one `set`: no render sees one without the other.
+      const recentPaths = readRecentPathsInOrder();
       // [perf] Hot path on every navigation to GlobalView. Surfaced in the
       // memory probe panel to confirm the SQL-aggregate fast path stays fast.
       const t0 = performance.now();
@@ -1625,7 +1631,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       const ms = performance.now() - t0;
       const { recordPerfTiming } = await import('../utils/memoryProbe');
       recordPerfTiming('list_recent_projects IPC', ms);
-      set({ recentProjects: recent });
+      const paths = await recentPaths;
+      set((s) => ({ recentProjects: recent, ...withRecentPaths(s.config, paths) }));
     } catch (e) {
       console.error('Failed to load recent projects:', e);
     }
