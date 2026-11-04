@@ -24,19 +24,6 @@ export function lastSeparatorIndex(path: string): number {
 }
 
 /**
- * The folder holding `path`, without the separator before the file name:
- * `/home/u/caves` for `/home/u/caves/CaveA.stalx`, `C:\caves` for
- * `C:\caves\CaveA.stalx`. A Windows drive root keeps its separator (`C:\`), since
- * a bare `C:` means the current directory on drive C. A POSIX path is split on
- * `/` alone, so a file directly under `/`, or a bare file name, gives ''.
- */
-export function parentDir(path: string): string {
-  const at = lastSeparatorIndex(path);
-  const dir = path.substring(0, at);
-  return /^[a-zA-Z]:$/.test(dir) ? path.substring(0, at + 1) : dir;
-}
-
-/**
  * The file `name` in the folder holding `path`, joined with the separator that
  * precedes `path`'s own file name: `C:\caves\CaveB.stalx` next to
  * `C:\caves\CaveA.stalx`. A POSIX path is split on `/` alone and always joined

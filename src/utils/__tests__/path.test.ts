@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isWindowsPath, parentDir, siblingPath } from '../path';
+import { isWindowsPath, siblingPath } from '../path';
 
 // '\' is an ordinary file-name character on Linux and macOS, so only a
 // Windows-shaped path may split on it (#576).
@@ -24,24 +24,6 @@ describe('isWindowsPath', () => {
 
   it.each([...POSIX_PATHS, 'C:CaveA.stalx', '\\CaveA.stalx'])('does not recognise %s', (path) => {
     expect(isWindowsPath(path)).toBe(false);
-  });
-});
-
-describe('parentDir', () => {
-  // The '/'-only split both call sites used before Windows support.
-  it.each(POSIX_PATHS)('splits the POSIX path %s on / alone', (path) => {
-    expect(parentDir(path)).toBe(path.substring(0, path.lastIndexOf('/')));
-  });
-
-  it.each([
-    ['C:\\caves\\CaveA.stalx', 'C:\\caves'],
-    ['C:/caves\\CaveA.stalx', 'C:/caves'],
-    ['\\\\srv\\share\\CaveA.stalx', '\\\\srv\\share'],
-    // A bare 'C:' is the current directory on drive C, not its root.
-    ['C:\\CaveA.stalx', 'C:\\'],
-    ['C:/CaveA.stalx', 'C:/'],
-  ])('gives the folder of the Windows path %s', (path, expected) => {
-    expect(parentDir(path)).toBe(expected);
   });
 });
 
