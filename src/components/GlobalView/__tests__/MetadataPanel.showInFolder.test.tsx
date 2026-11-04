@@ -1,18 +1,20 @@
 /**
- * Component test (#576): "Show in folder" falls back to opening the project's
- * folder when revealing the file itself fails. The folder is everything before
- * the file name, on either separator - splitting on '/' alone handed the
- * opener an empty path for a Windows `C:\...` project.
+ * Component test (#576 HFI-5): the project panel's "Show in folder" reveals the
+ * project file through the opener plugin's own call - the one the recents
+ * right-click menu makes (`revealItemInDir`). The panel used to hand-build the IPC
+ * with `{ path }`, which the plugin's `reveal_item_in_dir` (it takes `paths`)
+ * rejects, and then fell back to `open_path`, which the app's capabilities do not
+ * grant: the button did nothing. The assertions sit on the Tauri IPC bridge
+ * itself (`mockIPC`), under both `utils/ipc` and the plugin's JS API, so they see
+ * the exact arguments that reach the plugin whichever route the panel takes.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-
-vi.mock('../../../utils/ipc');
-
+import { clearMocks, mockIPC } from '@tauri-apps/api/mocks';
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import MetadataPanel from '../MetadataPanel';
 import type { ProjectMetadata } from '../../../types/project';
-import { invokeIpcMock } from '../../../test/factories/ipc';
 
 const projectAt = (file_path: string): ProjectMetadata =>
   ({
@@ -26,54 +28,57 @@ const projectAt = (file_path: string): ProjectMetadata =>
     gps_bounds: null,
   } as ProjectMetadata);
 
-/** Click Show in folder with the reveal failing; return the folder the fallback opened. */
-const fallbackFolderFor = async (filePath: string): Promise<unknown> => {
+const REVEAL = 'plugin:opener|reveal_item_in_dir';
+
+/** Every command that reached the bridge, with its arguments. */
+const invoke = vi.fn<(cmd: string, args: unknown) => unknown>();
+
+/** Click Show in folder for a project at `filePath`; resolve once a reveal went out. */
+const clickShowInFolder = async (filePath: string): Promise<void> => {
   render(<MetadataPanel project={projectAt(filePath)} onOpenProject={vi.fn()} onRemoveFromRecent={vi.fn()} />);
   await userEvent.click(screen.getByTestId('metadata-show-folder-button'));
-  await waitFor(() => expect(invokeIpcMock).toHaveBeenCalledWith('plugin:opener|open_path', expect.anything(), expect.anything()));
-  const call = invokeIpcMock.mock.calls.find(([cmd]) => cmd === 'plugin:opener|open_path');
-  return (call?.[1] as { path?: unknown } | undefined)?.path;
+  await waitFor(() => expect(invoke).toHaveBeenCalled());
 };
 
 beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  invokeIpcMock.mockReset();
-  invokeIpcMock.mockImplementation(async (cmd: string) => {
-    if (cmd === 'plugin:opener|reveal_item_in_dir') throw new Error('reveal unavailable');
-    return undefined;
-  });
+  invoke.mockReset();
+  invoke.mockResolvedValue(undefined);
+  mockIPC((cmd, args) => invoke(cmd, args));
 });
 
-describe('MetadataPanel Show in folder fallback', () => {
-  it('opens the containing folder of a Windows backslash path', async () => {
-    expect(await fallbackFolderFor('C:\\caves\\CaveA.stalx')).toBe('C:\\caves');
+afterEach(() => {
+  clearMocks();
+});
+
+describe('MetadataPanel Show in folder (#576 HFI-5)', () => {
+  it.each(['/home/user/caves/CaveA.stalx', 'C:\\caves\\CaveA.stalx'])(
+    'reveals %s with the plugin\'s `paths` argument',
+    async (filePath) => {
+      await clickShowInFolder(filePath);
+
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith(REVEAL, { paths: [filePath] });
+    },
+  );
+
+  it('sends exactly what the recents right-click menu sends', async () => {
+    const filePath = '/home/user/caves/CaveA.stalx';
+    await revealItemInDir(filePath); // the right-click path (GlobalView handleShowInFolder)
+    const rightClick = invoke.mock.calls[0];
+    invoke.mockClear();
+
+    await clickShowInFolder(filePath);
+
+    expect(invoke.mock.calls).toEqual([rightClick]);
   });
 
-  it('opens the containing folder of a POSIX path', async () => {
-    expect(await fallbackFolderFor('/home/user/caves/CaveA.stalx')).toBe('/home/user/caves');
-  });
+  it('never reaches for open_path, which the capabilities do not grant, when the reveal fails', async () => {
+    invoke.mockRejectedValue(new Error('reveal unavailable'));
 
-  // On Linux and macOS '\' is an ordinary file-name character, so a path that is
-  // not Windows-shaped must open exactly the folder the '/'-only split gave.
-  it.each([
-    '/home/u/caves/CaveA.stalx',
-    '/home/u/we\\ird.stalx',
-    '/CaveA.stalx',
-    'CaveA.stalx',
-    '/home/u/caves//CaveA.stalx',
-  ])('opens the same folder as before for the POSIX path %s', async (filePath) => {
-    expect(await fallbackFolderFor(filePath)).toBe(filePath.substring(0, filePath.lastIndexOf('/')));
-  });
+    await clickShowInFolder('/home/user/caves/CaveA.stalx');
 
-  // A bare 'C:' is the current directory on drive C, not its root.
-  it('keeps the root of a project at a Windows drive root', async () => {
-    expect(await fallbackFolderFor('C:\\CaveA.stalx')).toBe('C:\\');
-  });
-
-  it.each([
-    ['\\\\srv\\share\\CaveA.stalx', '\\\\srv\\share'],
-    ['C:/caves\\CaveA.stalx', 'C:/caves'],
-  ])('opens the containing folder of the Windows path %s', async (filePath, expected) => {
-    expect(await fallbackFolderFor(filePath)).toBe(expected);
+    await waitFor(() => expect(console.error).toHaveBeenCalled());
+    expect(invoke.mock.calls.map(([cmd]) => cmd)).toEqual([REVEAL]);
   });
 });
