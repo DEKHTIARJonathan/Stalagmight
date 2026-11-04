@@ -1065,6 +1065,17 @@ fn rv9a_plan(
     range_reserve: f64,
     pins: &[Option<StationRef>],
 ) -> GasReachField {
+    rv9a_plan_via(project, line, range_reserve, &[], pins)
+}
+
+/// [`rv9a_plan`] through `waypoints`, every span scootered at the seed's speed.
+fn rv9a_plan_via(
+    project: &Project,
+    line: u32,
+    range_reserve: f64,
+    waypoints: &[StationRef],
+    pins: &[Option<StationRef>],
+) -> GasReachField {
     let mut cfg = GasConfig {
         default_reserve: ReservePreset::OneStage,
         conservative_tank_gas: true,
@@ -1089,14 +1100,18 @@ fn rv9a_plan(
         cyl(21.398, 207.0, 121.556, CylRole::Stage),
         cyl(7.383, 176.0, 166.773, CylRole::Stage),
     ];
+    let segments = vec![
+        PlanSegment {
+            speed_m_per_min: Some(16.787),
+            on_scooter: true,
+        };
+        waypoints.len() + 1
+    ];
     project.compute_gas_reach_field_with_overrides(
         Some(&StationRef::new(line, 0)),
         Some(&StationRef::new(line, 6)),
-        &[],
-        &[PlanSegment {
-            speed_m_per_min: Some(16.787),
-            on_scooter: true,
-        }],
+        waypoints,
+        &segments,
         &Diver::new(28.044, None).unwrap(),
         &rig,
         &cfg,
@@ -1327,5 +1342,154 @@ fn nf_w11gas_1_a_scootered_dive_without_pins_takes_the_way_round_the_loop_its_ra
     assert!(short.scooter_distance_m <= short.scooter_range_limit_m.unwrap());
     assert!(is_reachable(&short, deep_at(1)));
     assert!(!is_reachable(&short, deep_at(0)));
+    assert!(dark_on_route(&short).is_empty());
+}
+
+/// What `f` prints for the NF-W12GAS-1 evidence: its route and turn, the range at the turn as the
+/// field reports it and as worked out from the route's shots, and the gas at the turn.
+fn describe_range(label: &str, project: &Project, f: &GasReachField) -> String {
+    let line_m = route_line_m(project, f);
+    let per_metre = rv9a_range_per_metre(f);
+    format!(
+        "{}; turn gas {:.1} of {:.2} L, range at the turn {:.2} of {:.2} m (route line {line_m:.3} \
+         m x {per_metre:.4} = {:.2} m), range-bound {}, way point gas {:?}",
+        describe(label, f),
+        f.route_profile
+            .iter()
+            .rev()
+            .find(|p| p.outbound)
+            .map_or(f64::NAN, |p| p.gas_l),
+        f.budget_litres,
+        f.scooter_distance_m,
+        f.scooter_range_limit_m.unwrap(),
+        line_m * per_metre,
+        f.turn_on_scooter_range,
+        f.waypoint_gas_litres
+    )
+}
+
+#[test]
+fn nf_w12gas_1_a_way_point_leg_round_a_loop_takes_the_way_its_range_covers() {
+    // #576 NF-W12GAS-1, decided D2 "extend to all legs": the seed's dive with a way point at 0:5,
+    // both spans scootered. The leg to it is two ways from the entrance: along the shallow line,
+    // the cheaper gas but 684 m of line (1744 m of range, out of range), or round the deep loop,
+    // 312 m. The open tail already took the way round (NF-W11GAS-1); the leg to a way point kept
+    // the cheaper gas, so the dive ran out of range on its way to 0:5 and had no turnaround at all.
+    // The leg now takes the cheapest gas its range covers: round the loop, to the way point and on
+    // to 0:6 - the same dive as without the way point.
+    let (project, line, deep) = rv9a_loop_cave();
+    let line_at = |i: u32| StationRef::new(line, i);
+    let deep_at = |i: u32| StationRef::new(deep, i);
+    let via = rv9a_plan_via(&project, line, 0.267, &[line_at(5)], &[]);
+    let direct = rv9a_plan(&project, line, 0.267, &[]);
+    println!(
+        "NF-W12GAS-1 {}",
+        describe_range("way point 0:5", &project, &via)
+    );
+    println!(
+        "NF-W12GAS-1 {}",
+        describe_range("no way point", &project, &direct)
+    );
+    assert_eq!(
+        route_of(&via),
+        vec![
+            line_at(0),
+            deep_at(2),
+            deep_at(1),
+            deep_at(0),
+            line_at(5),
+            line_at(6)
+        ],
+        "round the loop to the way point, then on to the endpoint"
+    );
+    assert_eq!(via.final_turn_ref, Some(line_at(6)));
+    assert!(via.turn_toward_endpoint && !via.turn_on_scooter_range);
+    // Priced along the way round: the way point costs what the loop costs to it, and the dive is
+    // the plan's without the way point, gas and range.
+    assert!((via.waypoint_gas_litres[0].unwrap() - gas_of(&direct, line_at(5))).abs() < 1e-9);
+    assert!((turn_gas_of(&via) - turn_gas_of(&direct)).abs() < 1e-9);
+    assert!((via.scooter_distance_m - direct.scooter_distance_m).abs() < 1e-9);
+    let along_route = route_line_m(&project, &via) * rv9a_range_per_metre(&via);
+    assert!((via.scooter_distance_m - along_route).abs() < 1e-6 * along_route);
+    assert!(via.scooter_distance_m <= via.scooter_range_limit_m.unwrap());
+    assert!(turn_gas_of(&via) <= via.budget_litres);
+    assert!(dark_on_route(&via).is_empty());
+
+    // With less range (a 70% reserve, 608 m) no way to 0:5 is in range - the loop is 796 m of
+    // range to it - so the leg keeps the cheaper gas and the dive cannot fly the way point: no
+    // turnaround, as before, and nothing past the range painted.
+    let short = rv9a_plan_via(&project, line, 0.7, &[line_at(5)], &[]);
+    println!(
+        "NF-W12GAS-1 {}",
+        describe("way point 0:5, 70% range reserve", &short)
+    );
+    assert_eq!(short.final_turn_ref, None);
+    for s in [deep_at(0), line_at(5), line_at(6)] {
+        assert!(!is_reachable(&short, s), "{} painted out of range", name(s));
+    }
+}
+
+#[test]
+fn nf_w12gas_1_a_pin_leg_round_a_loop_takes_the_way_its_range_covers() {
+    // #576 NF-W12GAS-1, decided D2: the seed's dive with its stage pinned at 0:5. The pinned walk
+    // flies a leg to the pin like a way point's, and kept the cheaper gas too - along the line -
+    // so the dive turned at 0:4 where the range ran out (D3) and never reached its pin, while the
+    // plan without pins went round the loop to 0:6. The pin leg now takes the cheapest gas its
+    // range covers, round the loop: the dive reaches the pin and goes on to the endpoint.
+    let (project, line, deep) = rv9a_loop_cave();
+    let line_at = |i: u32| StationRef::new(line, i);
+    let deep_at = |i: u32| StationRef::new(deep, i);
+    let pins = [Some(line_at(5))];
+    let pinned = rv9a_plan(&project, line, 0.267, &pins);
+    let pin_free = rv9a_plan(&project, line, 0.267, &[]);
+    println!(
+        "NF-W12GAS-1 {}",
+        describe_range("pinned 0:5", &project, &pinned)
+    );
+    println!(
+        "NF-W12GAS-1 {}",
+        describe_range("pin-free", &project, &pin_free)
+    );
+    println!(
+        "NF-W12GAS-1   drop bars {:?}, route indices {:?}, over {:?}",
+        pinned.stage_drop_bars, pinned.stage_drop_route_indices, pinned.stage_drop_over_reserve
+    );
+    assert_eq!(
+        route_of(&pinned),
+        vec![
+            line_at(0),
+            deep_at(2),
+            deep_at(1),
+            deep_at(0),
+            line_at(5),
+            line_at(6)
+        ],
+        "round the loop through the pin, then on to the endpoint"
+    );
+    assert_eq!(pinned.final_turn_ref, Some(line_at(6)));
+    assert!(reached(&pinned, 0), "the dive reaches its pin");
+    // The pin is deeper than the stage's default drop: shown over reserve, no reach bought - the
+    // budget, and here the whole dive, are the plan's without the pin.
+    assert_eq!(pinned.stage_drop_over_reserve, vec![true]);
+    assert!((pinned.budget_litres - pin_free.budget_litres).abs() < 1e-9);
+    assert!((turn_gas_of(&pinned) - turn_gas_of(&pin_free)).abs() < 1e-9);
+    let along_route = route_line_m(&project, &pinned) * rv9a_range_per_metre(&pinned);
+    assert!((pinned.scooter_distance_m - along_route).abs() < 1e-6 * along_route);
+    assert!(pinned.scooter_distance_m <= pinned.scooter_range_limit_m.unwrap());
+    assert!(dark_on_route(&pinned).is_empty());
+    assert_within_pin_free(&pinned, &pin_free);
+
+    // With less range (a 70% reserve, 608 m) no way to the pin is in range: the leg keeps the
+    // cheaper gas, along the line, and the dive turns where the range runs out on it, short of the
+    // pin, which it reports not reached (D3) - as before.
+    let short = rv9a_plan(&project, line, 0.7, &pins);
+    println!(
+        "NF-W12GAS-1 {}",
+        describe("pinned 0:5, 70% range reserve", &short)
+    );
+    assert!(!reached(&short, 0), "no way to the pin is in range");
+    assert!(short.turn_on_scooter_range);
+    assert!(route_of(&short).iter().all(|s| s.section_id == line));
+    assert!(short.scooter_distance_m <= short.scooter_range_limit_m.unwrap());
     assert!(dark_on_route(&short).is_empty());
 }

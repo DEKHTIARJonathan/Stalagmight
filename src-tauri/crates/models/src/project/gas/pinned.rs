@@ -22,7 +22,8 @@
 //! that drops its stage at B:1). The cost, accepted with the decision: a pin on its own default
 //! station is a way point too, so it can change the overlay of an otherwise identical plan.
 
-use super::{budget_view, path_to, waypoint_walk, BudgetView, ResolvedSegment, WaypointWalk};
+use super::range_route::{self, RangedTail};
+use super::{budget_view, waypoint_walk, BudgetView, ResolvedSegment, WaypointWalk};
 
 /// The walk a pinned plan flies, and where each pin sits on it.
 pub(super) struct PinnedWalk {
@@ -42,6 +43,34 @@ impl PinnedWalk {
     pub(super) fn walk<'a>(&'a self, base: &'a WaypointWalk) -> &'a WaypointWalk {
         self.walk.as_ref().unwrap_or(base)
     }
+
+    /// The pinned plan's open tail, from its last pin on, priced on the routes its scooter can fly
+    /// (#576 NF-W12GAS-1-D2): the rule the plan without pins prices its own tail by. `None` when
+    /// every pin is on the way-point chain (the plain view is the pinned plan's) or there is no
+    /// range to search ([`range_route::ranged_tail`]).
+    pub(super) fn ranged_tail(
+        &self,
+        adj: &[Vec<(usize, f64)>],
+        lens: &[Vec<(usize, f64)>],
+        roots: &[usize],
+        base: &WaypointWalk,
+        segments: &[ResolvedSegment],
+        in_rmv: f64,
+        scooter_limit: f64,
+    ) -> Option<RangedTail> {
+        if !self.ends_at_pin {
+            return None;
+        }
+        range_route::ranged_tail(
+            adj,
+            lens,
+            roots,
+            self.walk(base),
+            segments,
+            in_rmv,
+            scooter_limit,
+        )
+    }
 }
 
 /// The pinned plan's walk, or `None` when no stage has a usable pin.
@@ -53,6 +82,11 @@ impl PinnedWalk {
 /// own constraint), or on the way to an earlier pin (a drop moved shallower than the one before
 /// it). Such a pin stays at that first pass, where the stage is dropped full (#246), rather than
 /// sending the dive back to it.
+///
+/// Each pin leg takes the way a way-point leg does (#576 NF-W12GAS-1-D2): the gas-cheapest way,
+/// or - when that one is out of `scooter_limit` at the pin and another way is in range - the
+/// cheapest gas among the ways in range. The way points' own legs are the plan's, so the pinned
+/// walk and the plan without pins share the chain to the last way point.
 pub(super) fn pinned_walk(
     adj: &[Vec<(usize, f64)>],
     lens: &[Vec<(usize, f64)>],
@@ -62,6 +96,7 @@ pub(super) fn pinned_walk(
     pins: &[Option<usize>],
     segments: &[ResolvedSegment],
     in_rmv: f64,
+    scooter_limit: f64,
 ) -> Option<PinnedWalk> {
     let stage_pins: Vec<Option<usize>> = pins
         .iter()
@@ -87,7 +122,16 @@ pub(super) fn pinned_walk(
         let walk = (!appended.is_empty()).then(|| {
             let mut chain_points = waypoints.to_vec();
             chain_points.extend(appended.iter().map(|&si| Some(si)));
-            waypoint_walk(adj, lens, roots, &chain_points, segments, in_rmv, false)
+            waypoint_walk(
+                adj,
+                lens,
+                roots,
+                &chain_points,
+                segments,
+                in_rmv,
+                scooter_limit,
+                false,
+            )
         });
         let w = walk.as_ref().unwrap_or(base);
         let leg_end = |leg: usize| {
@@ -138,10 +182,12 @@ pub(super) fn pinned_walk(
 /// a drop it never reaches can still be named at its pin.
 ///
 /// `plain` is the view on the plan's own walk, returned as it is when every pin is on the
-/// way-point chain (that walk already passes the pins).
+/// way-point chain (that walk already passes the pins). `ranged` is the pinned walk's tail priced
+/// on the routes its scooter can fly ([`PinnedWalk::ranged_tail`]).
 pub(super) fn pinned_view(
     pinned: &PinnedWalk,
     base: &WaypointWalk,
+    ranged: Option<&RangedTail>,
     plain: BudgetView,
     endpoint: Option<usize>,
     budget_litres: f64,
@@ -154,13 +200,26 @@ pub(super) fn pinned_view(
     }
     let walk = pinned.walk(base);
     // D4: the masks a way-point plan through the pins would show - pass-through gas on the route
-    // to the last pin, the after-pins price everywhere else - at the same final budget. Only the
-    // masks are read from this view; the turnaround below is the pinned walk's own rule. The pinned
+    // to the last pin, the after-pins price everywhere else - at the same final budget. The pinned
     // walk does not depend on the budget, so less gas can only take stations off the map. Its gas
     // price for every station is at least the plain field's - the walk through the pins is one the
     // plain field could fly too, and the pinned budget is never larger - so a pin cannot paint a
     // station on gas that the plan without pins leaves dark.
-    let masks = budget_view(walk, None, endpoint, budget_litres, scooter_limit);
+    //
+    // The same view also picks the turn for a dive that reaches every pin: on from the last pin,
+    // exactly as the plain field goes on from its last way point - its tail on the routes its
+    // scooter can fly, as that one's is (NF-W12GAS-1-D2) - but with no endpoint the target is the
+    // deepest station BEYOND that pin (D1), the passage the dive continues into, never a station
+    // only a backtrack reaches. A dive that runs out first (D3) keeps only its masks.
+    let beyond_pin = beyond_last_pin(walk);
+    let masks = budget_view(
+        walk,
+        ranged,
+        endpoint,
+        budget_litres,
+        scooter_limit,
+        Some(&beyond_pin),
+    );
     let affordable =
         |i: usize| walk.chain_gas[i] <= budget_litres && walk.chain_scoot[i] <= scooter_limit;
     let last_pin = walk.chain.len() - 1;
@@ -195,72 +254,9 @@ pub(super) fn pinned_view(
         return (view, Some(beyond));
     }
 
-    // Every pin reached: on from the last pin, exactly as the plain field goes on from its last
-    // way point - but with no endpoint the target is the deepest station BEYOND that pin (D1), the
-    // passage the dive continues into, never a station only a backtrack reaches.
-    let can_end = |i: usize| {
-        walk.gas_in[i].is_finite()
-            && walk.gas_in[i] <= budget_litres
-            && walk.scoot_in[i] <= scooter_limit
-    };
-    let range_bound = |i: usize| {
-        walk.gas_in[i].is_finite()
-            && walk.gas_in[i] <= budget_litres
-            && walk.scoot_in[i] > scooter_limit
-    };
-    let beyond_pin = beyond_last_pin(walk);
-    let mut deepest: Option<usize> = None;
-    let mut deepest_gas = f64::NEG_INFINITY;
-    for (i, &g) in walk.gas_in.iter().enumerate() {
-        if beyond_pin[i] && can_end(i) && g > deepest_gas {
-            deepest_gas = g;
-            deepest = Some(i);
-        }
-    }
-    let deepest_range_bound = || {
-        (0..walk.gas_in.len())
-            .any(|i| beyond_pin[i] && range_bound(i) && walk.gas_in[i] > deepest_gas)
-    };
-    let (target, toward, scooter_bound) = match endpoint {
-        Some(e) if can_end(e) => (Some(e), true, false),
-        Some(e) => {
-            // Walk toward the endpoint from the last pin and keep the last station in budget; gas
-            // along the walk's shortest path is monotone, so that is where it runs out. The path
-            // starts at the last pin, which is affordable, so this always finds a station.
-            let path = path_to(&walk.pred, e);
-            let stopped = path.iter().position(|&n| !can_end(n));
-            match stopped.map_or(path.last().copied(), |p| p.checked_sub(1).map(|i| path[i])) {
-                Some(n) => (Some(n), true, stopped.is_some_and(|p| range_bound(path[p]))),
-                None => (deepest, false, deepest_range_bound()),
-            }
-        }
-        None => (deepest, false, deepest_range_bound()),
-    };
-    let mut route = walk.chain.clone();
-    let mut route_gas = walk.chain_gas.clone();
-    let mut route_time = walk.chain_time.clone();
-    if let Some(t) = target {
-        for &node in path_to(&walk.pred, t).iter().skip(1) {
-            route.push(node);
-            route_gas.push(walk.gas_in[node]);
-            route_time.push(walk.time_in[node]);
-        }
-    }
-    let view = BudgetView {
-        target,
-        target_toward_endpoint: toward,
-        route,
-        route_gas,
-        route_time,
-        scooter_bound,
-        turn_scoot: target
-            .map(|t| walk.scoot_in[t])
-            .filter(|s| s.is_finite())
-            .unwrap_or(0.0),
-        turn_time: target.map(|t| walk.time_in[t]).filter(|t| t.is_finite()),
-        ..masks
-    };
-    (view, None)
+    // Every pin reached: the view above already turned on from the last pin (D1/D2 - the endpoint
+    // on the way the range covers, else the deepest station beyond the pin).
+    (masks, None)
 }
 
 /// No turnaround: the way-point chain itself is unaffordable. The committed chain is kept for the

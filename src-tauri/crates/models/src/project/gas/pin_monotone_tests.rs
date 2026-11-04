@@ -20,7 +20,10 @@
 //! with the range set near the line's length, half the drops pinned on the loop and most endpoints
 //! on the line beyond it. It lowers every fill, those windows included (overfills under the cap
 //! too), a Free allowance, a cylinder's size, and the scooter's range (a unit's burn time, or a
-//! larger reserve).
+//! larger reserve). Each has a twin drawing scooter plans with one or two way points, every span
+//! scootered - in the loop caves half the way points on the line past the loop - so the legs to
+//! way points and pins are checked as the open part of the route is (#576 NF-W12GAS-1-D2: every
+//! leg takes the cheapest gas its range covers).
 //!
 //! So what is asserted is scoped to what the PINS may do, not that less gas never shows more reach
 //! (#576 RV9a-5-D1, "keep physics, document": in those windows a lower fill shows a larger budget
@@ -30,22 +33,27 @@
 //!   and not at all where that one does not rise; and a lowering that does not raise the pinned
 //!   budget paints no new station, adds no turnaround, turns on a station painted before it, and
 //!   on a gas lowering does not move the turn later (the route through the pins does not depend
-//!   on the gas, D1-D4). A range lowering can change the route of a plan whose pins decide
-//!   nothing (NF-W11GAS-1-D1: less range puts the cheaper way out of range and the plan takes a way
-//!   round on more gas), so there the turn's route gas may rise - counted, within the budget and
-//!   the lowered range;
+//!   on the gas, D1-D4; a gas lowering never changes the route it commits through the way points
+//!   and pins, asserted). A range lowering can change the route of a plan
+//!   whose pins decide nothing (NF-W11GAS-1-D1: less range puts the cheaper way out of range and
+//!   the plan takes a way round on more gas), so there the turn's route gas may rise - counted,
+//!   within the budget and the lowered range. It can also send a leg to a way point or a pin
+//!   another way (NF-W12GAS-1-D2), seen as the committed route changing: that plan is another
+//!   dive - it passes other stations, its pins strand another share of the stages, and with less
+//!   range spent on the way it can reach further after them - so it is held to what every plan
+//!   is held to below, and counted;
 //! - the tree sweep's inputs keep the plan without pins from gaining, so there the pinned budget
 //!   never rises at all; the loop sweep counts the lowerings that raise the plan without pins.
 //!
 //! For every plan, lowered or not, pinned against pin-free: the pinned plan never has more budget,
-//! never prices a station below the plan without pins' cheapest gas (that plan with no rig), never
-//! prices a station it paints below the plan without pins, and paints only stations that plan
-//! paints. Every station of a plan's route up to its turnaround, and the turnaround, is painted,
-//! and the turn spends no more scooter range than the rig has (RV9a-1: the pinned dive turned
-//! round a loop on a station the overlay left dark) - where every span is scootered at one speed,
-//! worked out from the route's own shots too, and equal to what the field reports. Each sweep is a
-//! fixed set of plans from a fixed seed, so it runs the same cases in the same few seconds every
-//! time.
+//! never prices a station below the cheapest gas from the origin (the plan without pins, its rig
+//! and its way points), never prices a station it paints below the plan without pins, and paints
+//! only stations that plan paints; nor does the plan without pins price one below that cheapest
+//! gas. Every station of a plan's route up to its turnaround, and the turnaround, is painted, and
+//! the turn spends no more scooter range than the rig has (RV9a-1: the pinned dive turned round a
+//! loop on a station the overlay left dark) - where every span is scootered at one speed, worked
+//! out from the route's own shots too, and equal to what the field reports. Each sweep is a fixed
+//! set of plans from a fixed seed, so it runs the same cases in the same few seconds every time.
 //!
 //! Round a loop on a scooter a station is reached two ways: along the line on less gas, round the
 //! loop on less range. Until NF-W11GAS-1 the plan without pins priced the range along its
@@ -301,7 +309,18 @@ impl Plan {
         cfg: &GasConfig,
         pins: &[Option<StationRef>],
     ) -> GasReachField {
-        self.project.compute_gas_reach_field_with_overrides(
+        self.field_and_chain(rig, cfg, pins).0
+    }
+
+    /// The field, and the route the plan commits through its way points and pins
+    /// ([`Project::gas_reach_field_and_chain`]).
+    fn field_and_chain(
+        &self,
+        rig: &[Cylinder],
+        cfg: &GasConfig,
+        pins: &[Option<StationRef>],
+    ) -> (GasReachField, Vec<StationRef>) {
+        self.project.gas_reach_field_and_chain(
             Some(&self.origin),
             self.endpoint.as_ref(),
             &self.waypoints,
@@ -346,9 +365,21 @@ fn random_rig(
 
 /// The tree sweep's plan, drawn exactly as the sweep always has.
 fn tree_plan(r: &mut Rng) -> Plan {
+    draw_tree_plan(r, false)
+}
+
+/// [#576 NF-W12GAS-1] The tree sweep's plan on a scooter with one or two way points, every span
+/// scootered, so each turn past a way point has its range worked out from the route.
+fn tree_waypoint_plan(r: &mut Rng) -> Plan {
+    draw_tree_plan(r, true)
+}
+
+/// `legs`: a scooter on every span and one or two way points (else the tree sweep's own draw,
+/// unchanged).
+fn draw_tree_plan(r: &mut Rng, legs: bool) -> Plan {
     let (project, origin, stations) = random_cave(r);
     let (preset, conservative, backs, rig, mut cfg) = random_rig(r, false);
-    let scootered = r.unit() < 0.25;
+    let scootered = legs || r.unit() < 0.25;
     if scootered {
         cfg.dpv = Some(DpvRig {
             primary: DpvUnit {
@@ -364,7 +395,11 @@ fn tree_plan(r: &mut Rng) -> Plan {
     }
     cfg.normalize();
     let endpoint = (r.unit() < 0.5).then(|| stations[r.pick(stations.len())]);
-    let waypoints: Vec<StationRef> = if r.unit() < 0.25 {
+    let waypoints: Vec<StationRef> = if legs {
+        (0..=r.pick(2))
+            .map(|_| stations[r.pick(stations.len())])
+            .collect()
+    } else if r.unit() < 0.25 {
         vec![stations[r.pick(stations.len())]]
     } else {
         Vec::new()
@@ -372,7 +407,7 @@ fn tree_plan(r: &mut Rng) -> Plan {
     let segments: Vec<PlanSegment> = (0..=waypoints.len())
         .map(|_| PlanSegment {
             speed_m_per_min: None,
-            on_scooter: scootered && r.unit() < 0.7,
+            on_scooter: scootered && (legs || r.unit() < 0.7),
         })
         .collect();
     let pins: Vec<Option<StationRef>> = (0..=r.pick(2))
@@ -398,9 +433,23 @@ fn tree_plan(r: &mut Rng) -> Plan {
 /// more than a metre of range, with the usable range set to between 0.3 and 1.5 times the line's
 /// length to the loop's end; most endpoints on the line past the loop, half the pins on the loop.
 fn loop_plan(r: &mut Rng) -> Plan {
+    draw_loop_plan(r, false)
+}
+
+/// [#576 NF-W12GAS-1] The loop sweep's plan on a scooter with one or two way points, every span
+/// scootered, half the way points on the line past the loop - so the leg to one is two ways from
+/// the station before it, along the line on less gas or round the loop on less range - a quarter
+/// on the loop, the rest anywhere; the pins as the loop sweep draws them.
+fn loop_waypoint_plan(r: &mut Rng) -> Plan {
+    draw_loop_plan(r, true)
+}
+
+/// `legs`: a scooter on every span and one or two way points (else the loop sweep's own draw,
+/// unchanged).
+fn draw_loop_plan(r: &mut Rng, legs: bool) -> Plan {
     let cave = random_loop_cave(r);
     let (preset, conservative, backs, rig, mut cfg) = random_rig(r, true);
-    let scootered = r.unit() < 0.8;
+    let scootered = legs || r.unit() < 0.8;
     let speed = r.range(10.0, 22.0);
     if scootered {
         // A unit ridden at `speed`, below its cruise, covers `speed x burn` of line; the rig's
@@ -435,7 +484,17 @@ fn loop_plan(r: &mut Rng) -> Plan {
             stations[r.pick(stations.len())]
         }
     });
-    let waypoints: Vec<StationRef> = if r.unit() < 0.15 {
+    let waypoints: Vec<StationRef> = if legs {
+        (0..=r.pick(2))
+            .map(|_| match r.pick(4) {
+                0 | 1 if !cave.beyond_loop.is_empty() => {
+                    cave.beyond_loop[r.pick(cave.beyond_loop.len())]
+                }
+                2 => cave.on_loop[r.pick(cave.on_loop.len())],
+                _ => stations[r.pick(stations.len())],
+            })
+            .collect()
+    } else if r.unit() < 0.15 {
         vec![stations[r.pick(stations.len())]]
     } else {
         Vec::new()
@@ -443,7 +502,7 @@ fn loop_plan(r: &mut Rng) -> Plan {
     let segments: Vec<PlanSegment> = (0..=waypoints.len())
         .map(|_| PlanSegment {
             speed_m_per_min: Some(speed),
-            on_scooter: scootered && r.unit() < 0.9,
+            on_scooter: scootered && (legs || r.unit() < 0.9),
         })
         .collect();
     let pins: Vec<Option<StationRef>> = (0..=r.pick(2))
@@ -547,17 +606,18 @@ fn turn_gas(f: &GasReachField) -> Option<f64> {
 /// plan's one speed (NF-W11GAS-1) the range is also worked out from the route itself - its shots'
 /// line times what a metre costs on `cfg`'s rig ([`route_line_m`], [`range_per_metre_of`]) - and
 /// must match what the field reports and fit the range; `t.range_oracle_turns` counts those turns.
-/// Returns how many route stations it checked, or what it found wrong. A plan with no turnaround
-/// has no route to check.
+/// Returns how many route stations it checked and whether it worked the range out from the route,
+/// or what it found wrong. A plan with no turnaround has no route to check.
 fn route_is_painted(
     plan: &Plan,
     cfg: &GasConfig,
     f: &GasReachField,
     t: &mut Tally,
-) -> Result<usize, String> {
+) -> Result<(usize, bool), String> {
     let Some(turn) = f.final_turn_ref else {
-        return Ok(0);
+        return Ok((0, false));
     };
+    let mut range_from_route = false;
     if let Some(limit) = f.scooter_range_limit_m {
         if f.scooter_distance_m > limit + 1e-6 {
             return Err(format!(
@@ -581,6 +641,7 @@ fn route_is_painted(
                 ));
             }
             t.range_oracle_turns += 1;
+            range_from_route = true;
         }
     }
     let route: Vec<StationRef> = f
@@ -597,7 +658,7 @@ fn route_is_painted(
             return Err(format!("route station {s:?} is dark (turn {turn:?})"));
         }
     }
-    Ok(route.len())
+    Ok((route.len(), range_from_route))
 }
 
 /// Lower one input of `plan`: a cylinder's fill or size, or - with `every_input` - a Free
@@ -698,24 +759,41 @@ struct Tally {
     /// Range lowerings after which the plan turns on more route gas: the way its lowered range
     /// covers costs more gas than the way it took before (NF-W11GAS-1-D1).
     range_rerouted_turns: usize,
+    /// Of the turns whose range was worked out from the route: those past a way point, and those
+    /// on a route the pins decide (it differs from the plan without pins') (NF-W12GAS-1-D2).
+    waypoint_oracle_turns: usize,
+    pinned_oracle_turns: usize,
+    /// Range lowerings that sent a leg to a way point or a pin another way (NF-W12GAS-1-D2: the
+    /// route [`Plan::field_and_chain`] commits changed); of them, those that raised the pinned
+    /// budget (the pins then strand another share of the stages), painted a station dark before,
+    /// or turned on one.
+    range_moved_way: usize,
+    range_moved_rose: usize,
+    range_moved_painted: usize,
+    range_moved_turned: usize,
     violations: Vec<String>,
 }
 
 /// The pinned plan never exceeds the plan without its pins: never more budget, never a station
-/// priced below that plan's cheapest gas, never one painted that the plan without pins leaves
-/// dark - and where it paints one, never priced below that plan. `gas_only` is the plan without
-/// pins with no scooter rig: the gas-cheapest price of every station, which is what the plan
-/// without pins reported before it priced the range along the route it takes (NF-W11GAS-1-D1). A
-/// station the pinned walk reaches out of range can be priced below the in-range way the plan
-/// without pins takes to it - it is dark, so that price claims no reach - so the comparison with
-/// the scootered plan is over the stations the pinned plan paints, and with `gas_only` over all.
+/// priced below the cheapest gas from the origin, never one painted that the plan without pins
+/// leaves dark - and where it paints one, never priced below that plan. `cheapest` is the plan
+/// without pins, without its scooter rig and without its way points: the least gas of any route
+/// from the origin to each station (every span of a sweep's plan flies at one speed, so one span
+/// prices every leg alike), a floor no plan's price can go under, the plan without pins' own
+/// included. A station the pinned walk reaches out of range can be priced below the in-range way
+/// the plan without pins takes to it - it is dark, so that price claims no reach - so the
+/// comparison with the scootered plan is over the stations the pinned plan paints, and with the
+/// floor over all. `gas_only` is the plan without pins with no rig but its own way points, which
+/// is what the plan without pins reported before it priced the range along the ways it takes
+/// (NF-W11GAS-1-D1, NF-W12GAS-1-D2): a station it paints on more gas than that is counted as
+/// rerouted.
 fn check_against_pin_free(
     plan: &Plan,
     cfg: &GasConfig,
-    fields: [&GasReachField; 3],
+    fields: [&GasReachField; 4],
     t: &mut Tally,
 ) -> Vec<String> {
-    let [pinned, pin_free, gas_only] = fields;
+    let [pinned, pin_free, gas_only, cheapest] = fields;
     let mut found = Vec::new();
     if pinned.budget_litres > pin_free.budget_litres + 1e-9 {
         found.push(format!(
@@ -725,15 +803,16 @@ fn check_against_pin_free(
     }
     let below = |with: f64, without: f64| with < without - 1e-6 * without.max(1.0);
     for (i, s) in pinned.station_refs.iter().enumerate() {
-        let (with, without, cheapest) = (
+        let (with, without, floor, unranged) = (
             pinned.gas_to_reach[i],
             pin_free.gas_to_reach[i],
+            cheapest.gas_to_reach[i],
             gas_only.gas_to_reach[i],
         );
-        match (with, without, cheapest) {
-            (Some(with), _, Some(cheapest)) if below(with, cheapest) => {
+        match (with, without, floor) {
+            (Some(with), _, Some(floor)) if below(with, floor) => {
                 found.push(format!(
-                    "pin priced {s:?} at {with:.3} < the cheapest {cheapest:.3} L"
+                    "pin priced {s:?} at {with:.3} < the cheapest {floor:.3} L"
                 ));
             }
             (Some(with), Some(without), _) if pinned.reachable[i] && below(with, without) => {
@@ -742,8 +821,15 @@ fn check_against_pin_free(
             (Some(_), None, _) => found.push(format!("pin priced unreachable {s:?}")),
             _ => {}
         }
+        if let (Some(without), Some(floor)) = (without, floor) {
+            if below(without, floor) {
+                found.push(format!(
+                    "the plan without pins priced {s:?} at {without:.3} < the cheapest {floor:.3} L"
+                ));
+            }
+        }
         if pin_free.reachable[i]
-            && matches!((without, cheapest), (Some(w), Some(c)) if w > c + 1e-6 * c.max(1.0))
+            && matches!((without, unranged), (Some(w), Some(c)) if w > c + 1e-6 * c.max(1.0))
         {
             t.rerouted += 1;
             t.rerouted_turns += usize::from(pin_free.final_turn_ref == Some(*s));
@@ -756,9 +842,20 @@ fn check_against_pin_free(
         }
         found.push(format!("pin made {s:?} reachable"));
     }
-    for (f, which) in [(pinned, "pinned"), (pin_free, "pin-free")] {
+    let pins_route = pinned.route != pin_free.route;
+    for (f, which, pins_route) in [
+        (pinned, "pinned", pins_route),
+        (pin_free, "pin-free", false),
+    ] {
         match route_is_painted(plan, cfg, f, t) {
-            Ok(n) => t.route_stations += n,
+            Ok((n, range_from_route)) => {
+                t.route_stations += n;
+                // NF-W12GAS-1-D2: turns past a way point, or on a route the pins decide, whose
+                // range was worked out from the route itself.
+                t.waypoint_oracle_turns +=
+                    usize::from(range_from_route && !plan.waypoints.is_empty());
+                t.pinned_oracle_turns += usize::from(range_from_route && pins_route);
+            }
             Err(e) => found.push(format!("{which}: {e}")),
         }
     }
@@ -766,22 +863,39 @@ fn check_against_pin_free(
     found
 }
 
-/// The plan without pins and without its scooter rig (`gas_only` in [`check_against_pin_free`]);
-/// the plan without pins itself when it has no rig.
-fn gas_only_field(
+/// The reference fields [`check_against_pin_free`] reads besides the plan without pins: that plan
+/// without its scooter rig (`gas_only`, the plan without pins itself when it has no rig), and that
+/// one without its way points too (`cheapest`, `gas_only` itself when there are none).
+fn reference_fields(
     plan: &Plan,
     rig: &[Cylinder],
     cfg: &GasConfig,
     pin_free: &GasReachField,
-) -> GasReachField {
-    if cfg.dpv.is_none() {
-        return pin_free.clone();
-    }
+) -> (GasReachField, GasReachField) {
     let no_rig = GasConfig {
         dpv: None,
         ..cfg.clone()
     };
-    plan.field(rig, &no_rig, &[])
+    let gas_only = if cfg.dpv.is_none() {
+        pin_free.clone()
+    } else {
+        plan.field(rig, &no_rig, &[])
+    };
+    if plan.waypoints.is_empty() {
+        return (gas_only.clone(), gas_only);
+    }
+    // One span at the plan's own speed: every span of a sweep's plan flies at it.
+    let cheapest = plan.project.compute_gas_reach_field_with_overrides(
+        Some(&plan.origin),
+        None,
+        &[],
+        &plan.segments[..1],
+        &Diver::new(20.0, None).unwrap(),
+        rig,
+        &no_rig,
+        &[],
+    );
+    (gas_only, cheapest)
 }
 
 fn sweep(seed: u64, plans: usize, draw: fn(&mut Rng) -> Plan, every_input: bool) -> Tally {
@@ -793,7 +907,7 @@ fn sweep(seed: u64, plans: usize, draw: fn(&mut Rng) -> Plan, every_input: bool)
     for case in 0..plans {
         let plan = draw(&mut r);
         let pins = &plan.pins;
-        let pinned = plan.field(&plan.rig, &plan.cfg, pins);
+        let (pinned, committed) = plan.field_and_chain(&plan.rig, &plan.cfg, pins);
         let pin_free = plan.field(&plan.rig, &plan.cfg, &[]);
         t.scootered += usize::from(plan.scootered());
         t.range_bound_turns += usize::from(pinned.turn_on_scooter_range);
@@ -807,15 +921,19 @@ fn sweep(seed: u64, plans: usize, draw: fn(&mut Rng) -> Plan, every_input: bool)
                 plan.waypoints
             )
         };
-        let gas_only = gas_only_field(&plan, &plan.rig, &plan.cfg, &pin_free);
-        let found =
-            check_against_pin_free(&plan, &plan.cfg, [&pinned, &pin_free, &gas_only], &mut t);
+        let (gas_only, cheapest) = reference_fields(&plan, &plan.rig, &plan.cfg, &pin_free);
+        let found = check_against_pin_free(
+            &plan,
+            &plan.cfg,
+            [&pinned, &pin_free, &gas_only, &cheapest],
+            &mut t,
+        );
         t.violations.extend(found.iter().map(|f| label(f)));
         for _ in 0..3 {
             let (what, rig, cfg, lowered_cyl) = lower_one(&mut r, &plan, every_input);
             t.runs += 1;
             t.lowered_range += usize::from(lowered_cyl.is_none());
-            let after = plan.field(&rig, &cfg, pins);
+            let (after, committed_after) = plan.field_and_chain(&rig, &cfg, pins);
             let free_after = plan.field(&rig, &cfg, &[]);
             let (rise, free_rise) = (
                 after.budget_litres - pinned.budget_litres,
@@ -826,18 +944,40 @@ fn sweep(seed: u64, plans: usize, draw: fn(&mut Rng) -> Plan, every_input: bool)
             if rise < -1e-9 {
                 t.lowered_budget += 1;
             }
+            // NF-W12GAS-1-D2: a range lowering can send a leg to a way point or a pin another way
+            // - the cheaper way is out of the lowered range, and the leg takes a way round on more
+            // gas - seen as the route the plan commits through them changing. The plan is then
+            // another dive: the pins strand another share of the stages, it passes other stations,
+            // and with less range spent on the way there it can reach further after them, so the
+            // comparisons below with the plan before do not apply to it. What is asserted of it is
+            // what is asserted of every plan, lowered or not (`check_against_pin_free`): no more
+            // budget than the plan without pins, nothing painted that plan leaves dark, and its
+            // route and turn painted and within the range, worked out from its own shots. Counted,
+            // not set aside. Nothing else moves a leg: the way does not depend on the gas (D1-D4),
+            // which is asserted too.
+            let moved = lowered_cyl.is_none() && committed_after != committed;
+            t.range_moved_way += usize::from(moved);
             let mut found: Vec<String> = Vec::new();
+            if lowered_cyl.is_some() && committed_after != committed {
+                found.push(format!(
+                    "{what}: a gas lowering sent a leg to a way point or a pin another way"
+                ));
+            }
             // The pin rules, scoped against the plan without pins: the pins never add budget a
             // lowering takes away - the pinned budget rises by no more than that plan's, and not
             // at all where that plan's does not.
             if rise > free_rise.max(0.0) + 1e-9 {
-                found.push(format!(
-                    "{what}: budget {:.3} -> {:.3} L, the plan without pins {:.3} -> {:.3} L",
-                    pinned.budget_litres,
-                    after.budget_litres,
-                    pin_free.budget_litres,
-                    free_after.budget_litres
-                ));
+                if moved {
+                    t.range_moved_rose += 1;
+                } else {
+                    found.push(format!(
+                        "{what}: budget {:.3} -> {:.3} L, the plan without pins {:.3} -> {:.3} L",
+                        pinned.budget_litres,
+                        after.budget_litres,
+                        pin_free.budget_litres,
+                        free_after.budget_litres
+                    ));
+                }
             }
             // One fixed plan on no more budget (the range never rises either): nothing is newly
             // painted, no turnaround appears, and the turn is a station the plan painted before.
@@ -846,7 +986,13 @@ fn sweep(seed: u64, plans: usize, draw: fn(&mut Rng) -> Plan, every_input: bool)
             // way is out of the lowered range and the plan takes a way round on more gas, to the
             // same station or one it painted before, within the budget and the lowered range
             // (`route_is_painted`); those turns are counted, not set aside.
-            if rise <= 1e-9 {
+            if moved {
+                t.range_moved_painted += usize::from(reach_within(&after, &pinned).is_some());
+                t.range_moved_turned += usize::from(after.final_turn_ref.is_some_and(|turn| {
+                    let i = pinned.station_refs.iter().position(|r| *r == turn).unwrap();
+                    !pinned.reachable[i]
+                }));
+            } else if rise <= 1e-9 {
                 if let Some(s) = reach_within(&after, &pinned) {
                     found.push(format!("{what}: {s:?} became reachable"));
                 }
@@ -869,9 +1015,13 @@ fn sweep(seed: u64, plans: usize, draw: fn(&mut Rng) -> Plan, every_input: bool)
                     _ => {}
                 }
             }
-            let gas_only_after = gas_only_field(&plan, &rig, &cfg, &free_after);
-            let lowered =
-                check_against_pin_free(&plan, &cfg, [&after, &free_after, &gas_only_after], &mut t);
+            let (gas_only_after, cheapest_after) = reference_fields(&plan, &rig, &cfg, &free_after);
+            let lowered = check_against_pin_free(
+                &plan,
+                &cfg,
+                [&after, &free_after, &gas_only_after, &cheapest_after],
+                &mut t,
+            );
             found.extend(lowered.iter().map(|f| format!("{what}: lowered: {f}")));
             let stage_k = lowered_cyl
                 .filter(|&i| plan.rig[i].role == CylRole::Stage)
@@ -894,8 +1044,10 @@ fn report(name: &str, t: &Tally) {
          painted, {} stations painted that the plan without pins leaves dark on range alone, 0 \
          set aside, {} violations; the plan without pins: {} scootered fields checked, {} stations \
          painted on more gas than their cheapest way (the in-range way round), {} turns there; {} \
-         turns whose range was worked out from the route; {} range lowerings turning on more \
-         route gas, on a way round the lowered range covers",
+         turns whose range was worked out from the route ({} past a way point, {} on a route the \
+         pins decide); {} range lowerings turning on more route gas, on a way round the lowered \
+         range covers; {} range lowerings sending a leg to a way point or a pin another way ({} \
+         raising the pinned budget, {} painting a station dark before, {} turning on one)",
         t.runs,
         t.lowered_range,
         t.plans,
@@ -912,7 +1064,13 @@ fn report(name: &str, t: &Tally) {
         t.rerouted,
         t.rerouted_turns,
         t.range_oracle_turns,
-        t.range_rerouted_turns
+        t.waypoint_oracle_turns,
+        t.pinned_oracle_turns,
+        t.range_rerouted_turns,
+        t.range_moved_way,
+        t.range_moved_rose,
+        t.range_moved_painted,
+        t.range_moved_turned
     );
     for v in t.violations.iter().take(8) {
         println!("  {v}");
@@ -1010,6 +1168,58 @@ fn round_a_loop_less_gas_or_range_never_lets_a_pinned_plan_gain_more_than_withou
     );
 }
 
+#[test]
+fn in_a_tree_cave_a_scooter_plan_through_way_points_turns_within_its_range() {
+    // #576 NF-W12GAS-1: the tree sweep with one or two way points on a scooter, every span
+    // scootered, so every turn past a way point - and every turn on a route its pins decide - has
+    // its range worked out from the route's own shots and checked against what the field reports
+    // and the rig's range. One way to each station, so no leg can take another way.
+    let t = sweep(0x7EE5_3A1D_0C0F_FEE5, 1500, tree_waypoint_plan, false);
+    report("tree caves, scooter plans with way points", &t);
+    assert!(t.violations.is_empty(), "{} violations", t.violations.len());
+    assert_eq!(
+        (t.rerouted, t.range_moved_way, t.pin_free_rose),
+        (0, 0, 0),
+        "a tree cave has one way to each station, and this domain keeps the credit monotone"
+    );
+    assert!(
+        t.waypoint_oracle_turns > 1000 && t.pinned_oracle_turns > 100,
+        "the sweep must check the range at turns past way points ({}) and on routes the pins \
+         decide ({})",
+        t.waypoint_oracle_turns,
+        t.pinned_oracle_turns
+    );
+}
+
+#[test]
+fn round_a_loop_the_legs_to_way_points_and_pins_take_a_way_their_range_covers() {
+    // #576 NF-W12GAS-1-D2: the loop sweep with one or two way points on a scooter, every span
+    // scootered, half the way points on the line past the loop: the leg to such a way point - or
+    // to a pin on the loop - is two ways from the station before it, and the cheaper gas is often
+    // out of range. Every leg takes the cheapest gas its range covers, so the plan reaches its way
+    // points and pins round the loop, and every check of the loop sweep holds: no pin paints a
+    // station the plan without pins leaves dark, every route and turn is painted and within the
+    // range worked out from its own shots. A range lowering that sends a leg another way is a
+    // different dive, and counted.
+    let t = sweep(0x5CA1_AB1E_0BAD_F00D, 1500, loop_waypoint_plan, true);
+    report("caves with a loop, scooter plans with way points", &t);
+    assert!(t.violations.is_empty(), "{} violations", t.violations.len());
+    assert!(
+        t.waypoint_oracle_turns > 2500 && t.pinned_oracle_turns > 300,
+        "the sweep must check the range at turns past way points ({}) and on routes the pins \
+         decide ({})",
+        t.waypoint_oracle_turns,
+        t.pinned_oracle_turns
+    );
+    assert!(
+        t.rerouted > 100 && t.range_moved_way > 20,
+        "the sweep must reach legs that take the way round ({} stations painted on it, {} range \
+         lowerings sending a leg another way)",
+        t.rerouted,
+        t.range_moved_way
+    );
+}
+
 /// Every simple route from `from` in a graph whose edges carry (gas, range): for each station, the
 /// least gas over all routes, and the least gas over the routes within `limit` of range.
 fn cheapest_by_enumeration(
@@ -1050,6 +1260,105 @@ fn cheapest_by_enumeration(
     best
 }
 
+/// The project's graph with each edge's (gas, range) as `plan` flies it, every span on the
+/// scooter at its first span's speed, worked out from the rig and the config (not the engine's
+/// riders), and the station index it is keyed by.
+fn priced_edges(
+    plan: &Plan,
+    rig: &DpvRig,
+) -> (
+    Vec<Vec<(usize, f64, f64)>>,
+    std::collections::HashMap<StationRef, usize>,
+) {
+    let speed = plan.segments[0].speed_m_per_min.unwrap();
+    let cfg = &plan.cfg;
+    let coords = plan.project.compute_station_coordinates();
+    let index = Project::station_index_map(&coords);
+    let z: Vec<f64> = coords.iter().map(|s| s.coordinates.z).collect();
+    let basis = plan
+        .project
+        .build_survey_graph_weighted(coords.len(), &index, |shot, fi, ti| {
+            if !shot.kind.is_swum() && !cfg.include_reference_legs {
+                return f64::INFINITY;
+            }
+            let mult = if shot.kind.is_virtual() {
+                cfg.jump_rmv_multiplier
+            } else {
+                1.0
+            };
+            edge_gas_basis(shot.length.max(0.0), z[fi], z[ti]) * mult
+        });
+    let lens = plan
+        .project
+        .build_survey_graph_weighted(coords.len(), &index, |shot, _, _| shot.length.max(0.0));
+    let (gas_per_basis, per_metre) = (
+        20.0 * cfg.survey_rmv_multiplier / speed,
+        range_per_metre_of(rig, speed),
+    );
+    let edges = basis
+        .iter()
+        .zip(&lens)
+        .map(|(b, l)| {
+            b.iter()
+                .zip(l)
+                .map(|(&(v, w), &(_, len))| (v, w * gas_per_basis, len * per_metre))
+                .collect()
+        })
+        .collect();
+    (edges, index)
+}
+
+#[test]
+fn a_way_point_leg_takes_the_cheapest_gas_its_range_covers() {
+    // #576 NF-W12GAS-1-D2, checked against every simple route: on loop caves with one way point
+    // on the scooter (the way-point loop sweep's draw), the way point is reached on the least gas
+    // of the routes from the origin within the range - the way round the loop where the cheaper
+    // gas is out of range - or, where no route is in range, on the least gas of all: the
+    // gas-cheapest way the leg then keeps, on which the plan cannot fly the way point.
+    let mut r = Rng(0x0057_6A11_0E12_5EED);
+    let (mut plans, mut round, mut none_in_range) = (0usize, 0usize, 0usize);
+    let near = |a: f64, b: f64| (a - b).abs() <= 1e-9 * a.abs().max(b.abs()).max(1.0);
+    for _ in 0..4000 {
+        let plan = loop_waypoint_plan(&mut r);
+        let Some(rig) = plan.cfg.dpv.clone() else {
+            continue;
+        };
+        if plan.waypoints.len() != 1 {
+            continue;
+        }
+        let field = plan.field(&plan.rig, &plan.cfg, &[]);
+        let (edges, index) = priced_edges(&plan, &rig);
+        let limit = field.scooter_range_limit_m.unwrap();
+        let (cheapest, in_range) = cheapest_by_enumeration(&edges, index[&plan.origin], limit);
+        let w = index[&plan.waypoints[0]];
+        let expected = if in_range[w].is_finite() {
+            in_range[w]
+        } else {
+            cheapest[w]
+        };
+        let got = field.waypoint_gas_litres[0].unwrap();
+        assert!(
+            near(got, expected),
+            "way point {:?} reached on {got:.6} L; the cheapest gas in range is {:.6} L, the \
+             cheapest of all {:.6} L",
+            plan.waypoints[0],
+            in_range[w],
+            cheapest[w]
+        );
+        plans += 1;
+        round += usize::from(in_range[w].is_finite() && in_range[w] > cheapest[w] + 1e-9);
+        none_in_range += usize::from(!in_range[w].is_finite());
+    }
+    println!(
+        "way-point legs by enumeration: {plans} plans, {round} way points reached on more gas than \
+         their cheapest way (the in-range way round), {none_in_range} with no way in range"
+    );
+    assert!(
+        plans > 1500 && round > 60 && none_in_range > 100,
+        "the check must bite ({plans} plans, {round} round the loop, {none_in_range} out of range)"
+    );
+}
+
 #[test]
 fn without_pins_a_scooter_plan_paints_each_station_at_the_cheapest_gas_its_range_covers() {
     // #576 NF-W11GAS-1-D1, checked against every simple route: on loop caves (the loop sweep's
@@ -1068,46 +1377,12 @@ fn without_pins_a_scooter_plan_paints_each_station_at_the_cheapest_gas_its_range
             continue;
         }
         let field = plan.field(&plan.rig, &plan.cfg, &[]);
-        let speed = plan.segments[0].speed_m_per_min.unwrap();
-        let cfg = &plan.cfg;
-        let coords = plan.project.compute_station_coordinates();
-        let index = Project::station_index_map(&coords);
-        let z: Vec<f64> = coords.iter().map(|s| s.coordinates.z).collect();
-        let basis =
-            plan.project
-                .build_survey_graph_weighted(coords.len(), &index, |shot, fi, ti| {
-                    if !shot.kind.is_swum() && !cfg.include_reference_legs {
-                        return f64::INFINITY;
-                    }
-                    let mult = if shot.kind.is_virtual() {
-                        cfg.jump_rmv_multiplier
-                    } else {
-                        1.0
-                    };
-                    edge_gas_basis(shot.length.max(0.0), z[fi], z[ti]) * mult
-                });
-        let lens = plan
-            .project
-            .build_survey_graph_weighted(coords.len(), &index, |shot, _, _| shot.length.max(0.0));
-        let (gas_per_basis, per_metre) = (
-            20.0 * cfg.survey_rmv_multiplier / speed,
-            range_per_metre_of(&rig, speed),
-        );
-        let edges: Vec<Vec<(usize, f64, f64)>> = basis
-            .iter()
-            .zip(&lens)
-            .map(|(b, l)| {
-                b.iter()
-                    .zip(l)
-                    .map(|(&(v, w), &(_, len))| (v, w * gas_per_basis, len * per_metre))
-                    .collect()
-            })
-            .collect();
+        let (edges, index) = priced_edges(&plan, &rig);
         let origin = index[&plan.origin];
         let limit = field.scooter_range_limit_m.unwrap();
         let (cheapest, in_range) = cheapest_by_enumeration(&edges, origin, limit);
         plans += 1;
-        for i in 0..coords.len() {
+        for i in 0..edges.len() {
             let (budget, s) = (field.budget_litres, field.station_refs[i]);
             if near(in_range[i], budget) {
                 continue; // on the budget's edge, a rounding either way

@@ -250,7 +250,11 @@ the budget exists - the ordering stays acyclic - and LESS gas can only turn a
 pinned plan earlier, never send it somewhere else (the rule this replaced,
 NF-PGAS3-1, priced a pin only when the pin-free route happened to pass it: a change
 that moved the pin-free route handed the stranded gas back, and the same pinned plan
-reached further on less gas).
+reached further on less gas). On a scooter the way to each pin is the cheapest gas
+its range covers (NF-W12GAS-1-D2, "Which way a scooter dive takes" under Segments
+and the DPV), so the route depends on the range, never on the gas: a smaller range
+can send the dive to a pin another way, where the pin strands another share of its
+stage.
 
 **The overlay shows only where the pinned dive goes** (D4). The reach masks, the
 gas-to-reach the map colors by and the turn dots are priced on the route through
@@ -369,7 +373,9 @@ the failure the walk-toward-the-endpoint rule exists to prevent.
 **Way points** - a constraint, not a hint. Each costs one extra Dijkstra seeded at
 the previous way point, with leg costs accumulated, so a station's gas is what it
 costs *after* flying the whole chain and adding a way point costs real gas rather
-than only redrawing a line. A way point that cannot be reached, or that no longer
+than only redrawing a line. On a scooter, a leg whose cheapest way is out of range
+when it gets there takes the way its range covers ("Which way a scooter dive
+takes" under Segments and the DPV). A way point that cannot be reached, or that no longer
 resolves, stalls the plan: every later one reports `None`, the whole field reads
 unreachable, and the route shows only the chain committed before the break.
 Skipping it silently would hand back a route ignoring a point the dive was
@@ -472,23 +478,55 @@ spends. An endpoint out of budget on its in-range way is approached along that
 way, turning where the gas runs out; one no way reaches in range is approached
 as before, along the cheapest gas, turning where the range or the gas runs out.
 
-The search covers the open part of the route, after the last way point; the legs
-between way points keep the cheapest gas between the points the diver named. It
-keeps at most 16 ways per station - a cave survey is mostly a tree, so this binds
-only in a maze - and a way it does not keep can only turn the dive earlier, never
-later: every price is that of a real route. A pinned plan flies its own walk
-(D4), and that walk is one of the ways the plan without pins considers, so no pin
+Every leg takes its way by the same rule (#576 NF-W12GAS-1, decided D2 "extend
+to all legs"). The open part of the route - after the last way point, or after a
+pinned plan's last pin - is priced per station as above. A leg to a way point,
+or to a pin (the pinned walk visits its pins like way points), commits one way to
+its end: the gas-cheapest one where that is in range when the leg gets there,
+else the cheapest gas among the ways in range, priced along it - the chain's gas,
+range and time, `waypoint_gas_litres` and the pin's arrival gas are that way's.
+With the seed's way point at 0:5 the leg used to take the line, run out of range
+on it and leave the plan without a turnaround; it now goes round the loop, and
+the dive is the one without the way point
+(`nf_w12gas_1_a_way_point_leg_round_a_loop_takes_the_way_its_range_covers`). With
+the stage pinned at 0:5 the pinned dive used to turn at 0:4 on range, the drop
+not reached; it now reaches the pin round the loop and turns at 0:6
+(`nf_w12gas_1_a_pin_leg_round_a_loop_takes_the_way_its_range_covers`). A leg no
+way reaches in range keeps the gas-cheapest way, and the plan turns where the
+range runs out on it, as before. A leg is chosen on its own, given what the legs
+before it have spent, not together with the legs after it (Known limits).
+
+The search keeps at most 16 ways per station - a cave survey is mostly a tree, so
+this binds only in a maze - and a way it does not keep can only turn the dive
+earlier, never later: every price is that of a real route. A pinned plan flies
+its own walk (D4); its legs to the last way point are the plan without pins' own,
+and the rest of it is one of the ways that plan's open part considers, so no pin
 paints a station the plan without pins leaves dark. With less range the way the
 range covers can cost more gas, so a range lowering can turn the dive on more
 route gas, to the same station or one painted before, within the budget and the
-lowered range. The two pin sweeps in `gas/pin_monotone_tests.rs` assert this for
-every plan, lowered or not, and check every scootered turn's range against the
-route itself (its shots' line times the range a metre costs): round a loop, 0
-stations lit by a pin that the plan without pins leaves dark (375 before), 1080
-stations painted on the way round, 12848 turns checked against their route; in
-tree caves nothing changes. On 1236 small loop caves every station's paint and
-price is checked against every simple route from the origin, enumerated
-(`without_pins_a_scooter_plan_paints_each_station_at_the_cheapest_gas_its_range_covers`).
+lowered range. It can also send a leg to a way point or a pin another way: the
+plan is then another dive - it passes other stations, a pin reached on more gas
+strands less of its stage, so the pinned budget can rise (never above the plan
+without pins'), and with less range spent on the way there it can reach further
+after it. Each plan is still checked on its own: within the budget and the range,
+nothing lit that the plan without pins leaves dark. The pin sweeps in
+`gas/pin_monotone_tests.rs` assert this for every plan, lowered or not, and check
+every scootered turn's range against the route itself (its shots' line times the
+range a metre costs), with 0 violations. On the loop sweep's seed: 0 stations lit by
+a pin that the plan without pins leaves dark (375 before NF-W11GAS-1), 1133
+stations painted on the way round, 12859 turns checked against their route (859
+past a way point, 2513 on a route the pins decide), 36 range lowerings sending a
+leg another way. Two sweeps draw scooter plans with one or two way points, half of
+them on the line past the loop: round a loop 3479 turns past a way point and 457
+on a route the pins decide checked against their route, 57 range lowerings
+sending a leg another way; in tree caves 1306 and 179, and no leg ever takes
+another way (one way to each station). The way a leg takes is checked against
+every simple route too: on 1236 small loop caves without way points, every
+station's paint and price
+(`without_pins_a_scooter_plan_paints_each_station_at_the_cheapest_gas_its_range_covers`),
+and on 1984 with one way point, the gas the way point is reached on - 71 of them
+round the loop, 662 with no way in range
+(`a_way_point_leg_takes_the_cheapest_gas_its_range_covers`).
 
 A span with the flag off is swum - towing the units or having parked them,
 numerically identical - so the park point is *derived*, never placed: the
@@ -626,11 +664,13 @@ each pins a rule that reads like an implementation detail and is not.
   (noted on `DpvRig`).
   `stressed_rmv_multiplier` and the two `reserve_profile.recalc_hold_*` pressures
   are still carried in the config for later phases; nothing computes with them.
-- A scooter dive takes a way its range covers only on the open part of the route
-  (NF-W11GAS-1): the legs between way points, and a pinned plan's walk through
-  its pins, keep the cheapest gas between their points, so a way-point leg that
-  runs out of range stops the plan there even when another way between the same
-  points is in range.
+- A scooter leg to a way point or a pin takes the cheapest gas its range covers
+  given the legs before it, not together with the legs after it (NF-W12GAS-1-D2):
+  a cheap-gas way that spends most of the range can leave a later leg - or the
+  open part after the last point - short, where a dearer, shorter way would not.
+  The plan then turns where the range runs out, never later; but with more range
+  the same plan can show less than with a little less, which takes the shorter
+  way.
 - `Team` and `PlanMode` (open-circuit vs CCR bailout) exist in `gas/model.rs` so
   the multi-diver and CCR phases need no migration, but the entry point takes one
   diver and its cylinders. Everything shipped is single-diver open-circuit.

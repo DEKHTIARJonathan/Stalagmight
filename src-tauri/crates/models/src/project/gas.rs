@@ -167,6 +167,36 @@ impl Project {
         gas_config: &GasConfig,
         stage_drop_overrides: &[Option<StationRef>],
     ) -> GasReachField {
+        self.gas_reach_field_and_chain(
+            origin,
+            endpoint,
+            waypoints,
+            segments,
+            diver,
+            cylinders,
+            gas_config,
+            stage_drop_overrides,
+        )
+        .0
+    }
+
+    /// [`Self::compute_gas_reach_field_with_overrides`], with the route the plan commits before
+    /// its open tail: the stations of the walk through the way points and, for a pinned plan, the
+    /// pins after them. The field does not report it (a dive that turns before a pin shows only
+    /// part of it), and it is what tells a change that sends a leg another way (#576
+    /// NF-W12GAS-1-D2, a lower scooter range) from one that only moves the turn along it - the
+    /// pin sweeps compare it.
+    pub(crate) fn gas_reach_field_and_chain(
+        &self,
+        origin: Option<&StationRef>,
+        endpoint: Option<&StationRef>,
+        waypoints: &[StationRef],
+        segments: &[PlanSegment],
+        diver: &Diver,
+        cylinders: &[Cylinder],
+        gas_config: &GasConfig,
+        stage_drop_overrides: &[Option<StationRef>],
+    ) -> (GasReachField, Vec<StationRef>) {
         // Disabled tanks (#245) are excluded from EVERY gas computation - budget, gauges, stage
         // drops. Filter once here so no downstream helper has to know about `enabled`; rig (vec)
         // order is preserved, so "stage 1/2" still means the first/second enabled Stage cylinder.
@@ -314,6 +344,7 @@ impl Project {
             &resolved_waypoints,
             &plan_segments,
             in_rmv,
+            scooter_limit,
             degenerate,
         );
 
@@ -378,6 +409,7 @@ impl Project {
             &resolved_overrides,
             &plan_segments,
             in_rmv,
+            scooter_limit,
         );
         let no_pins = vec![None; plans.len()];
         let (pin_chain_idx, pinned_chain_gas): (&[Option<usize>], &[f64]) = match &pinned {
@@ -440,16 +472,31 @@ impl Project {
             endpoint_idx,
             budget_litres,
             scooter_limit,
+            None,
         );
         let (view, full_route) = match &pinned {
-            Some(p) => pinned::pinned_view(
-                p,
-                &walk,
-                plain_view,
-                endpoint_idx,
-                budget_litres,
-                scooter_limit,
-            ),
+            Some(p) => {
+                // The pinned dive's tail, from its last pin on, takes the ways its range covers
+                // as the plan without pins' does (#576 NF-W12GAS-1-D2).
+                let pinned_tail = p.ranged_tail(
+                    &adj,
+                    &lens,
+                    &roots,
+                    &walk,
+                    &plan_segments,
+                    in_rmv,
+                    scooter_limit,
+                );
+                pinned::pinned_view(
+                    p,
+                    &walk,
+                    pinned_tail.as_ref(),
+                    plain_view,
+                    endpoint_idx,
+                    budget_litres,
+                    scooter_limit,
+                )
+            }
             None => (plain_view, None),
         };
         let BudgetView {
@@ -490,6 +537,7 @@ impl Project {
         // it borders the out-of-budget ground and lands on the frontier. The result is a turn dot
         // drawn on top of a committed route station, which is the bug this exclusion exists to stop.
         let flown = pinned.as_ref().map_or(&walk, |p| p.walk(&walk));
+        let committed: Vec<StationRef> = flown.chain.iter().map(|&i| station_refs[i]).collect();
         let mut on_chain = vec![false; n];
         let mut chain_queue: VecDeque<usize> = VecDeque::new();
         for &node in &flown.chain {
@@ -708,7 +756,7 @@ impl Project {
         // is `fill - turn/drop`, the bar the budget credits that tank.
         let cylinder_usable_bars = in_usable_bars(cylinders, effective, profile, conservative);
 
-        GasReachField {
+        let field = GasReachField {
             station_refs,
             gas_to_reach,
             reachable,
@@ -736,7 +784,8 @@ impl Project {
             scooter_drop_ref,
             route_runtime_min,
             turn_on_scooter_range,
-        }
+        };
+        (field, committed)
     }
 
     /// The connecting shot's kind for each ordered route leg; `None` for a cross-section tie (a
@@ -896,6 +945,14 @@ fn leg_scales(segments: &[ResolvedSegment], k: usize, in_rmv: f64) -> (f64, [f64
 /// station. A `None` entry, or one the graph cannot reach, **stalls** the walk - every later way
 /// point reports `None` and the whole field goes unreachable, because a plan that silently skipped a
 /// mandated point would over-state reach (the unsafe direction, §6).
+///
+/// Each leg commits the gas-cheapest way to its way point - unless that way spends more than
+/// `scooter_limit` of range by the time it gets there and another way is in range: the leg then
+/// takes the cheapest gas among the ways in range (#576 NF-W12GAS-1-D2, [`range_route::ranged_leg`]),
+/// priced edge by edge along it, so the chain's gas, range and time are that way's. A leg no way
+/// reaches in range keeps the gas-cheapest way, and the plan turns where the range runs out on it.
+/// The legs' Dijkstras themselves (`pred`, `gas_in`, `last_leg_in`) are the gas-cheapest ones,
+/// seeded at the way point, whichever way the chain took to it.
 fn waypoint_walk(
     adj: &[Vec<(usize, f64)>],
     lens: &[Vec<(usize, f64)>],
@@ -903,6 +960,7 @@ fn waypoint_walk(
     waypoints: &[Option<usize>],
     segments: &[ResolvedSegment],
     in_rmv: f64,
+    scooter_limit: f64,
     degenerate: bool,
 ) -> WaypointWalk {
     let n = adj.len();
@@ -950,15 +1008,42 @@ fn waypoint_walk(
         // Commit this leg's path. Its first node is the previous leg's way point, which already
         // closes the chain, so skip it rather than emitting a zero-length duplicate.
         let skip = usize::from(!chain.is_empty());
-        for &node in path_to(&leg.2, w).iter().skip(skip) {
-            chain.push(node);
-            chain_gas.push(cum + leg.0.get(node).copied().unwrap_or(0.0));
-            chain_scoot.push(cum_scoot + leg.1[0].get(node).copied().unwrap_or(0.0));
-            chain_time.push(cum_time + leg.1[1].get(node).copied().unwrap_or(0.0));
+        // The gas-cheapest way, unless it is out of range at the way point and another way is in
+        // range (NF-W12GAS-1-D2): that way's steps carry what the route has spent, from the chain
+        // so far, so they are committed as they are.
+        let out_of_range =
+            cum_scoot + leg.1[0].get(w).copied().unwrap_or(f64::INFINITY) > scooter_limit;
+        let in_range_way = out_of_range
+            .then(|| {
+                let starts: Vec<(usize, f64, f64, f64)> = match chain.last() {
+                    Some(&from) => vec![(from, cum, cum_scoot, cum_time)],
+                    None => roots.iter().map(|&r| (r, 0.0, 0.0, 0.0)).collect(),
+                };
+                let scales = range_route::LegScales::of(segments, k, in_rmv);
+                range_route::ranged_leg(adj, lens, &starts, w, scales, scooter_limit)
+            })
+            .flatten();
+        if let Some(steps) = in_range_way {
+            for step in steps.iter().skip(skip) {
+                chain.push(step.node);
+                chain_gas.push(step.gas);
+                chain_scoot.push(step.scoot);
+                chain_time.push(step.time);
+            }
+            if let Some(end) = steps.last() {
+                (cum, cum_scoot, cum_time) = (end.gas, end.scoot, end.time);
+            }
+        } else {
+            for &node in path_to(&leg.2, w).iter().skip(skip) {
+                chain.push(node);
+                chain_gas.push(cum + leg.0.get(node).copied().unwrap_or(0.0));
+                chain_scoot.push(cum_scoot + leg.1[0].get(node).copied().unwrap_or(0.0));
+                chain_time.push(cum_time + leg.1[1].get(node).copied().unwrap_or(0.0));
+            }
+            cum += leg.0.get(w).copied().unwrap_or(0.0);
+            cum_scoot += leg.1[0].get(w).copied().unwrap_or(0.0);
+            cum_time += leg.1[1].get(w).copied().unwrap_or(0.0);
         }
-        cum += leg.0.get(w).copied().unwrap_or(0.0);
-        cum_scoot += leg.1[0].get(w).copied().unwrap_or(0.0);
-        cum_time += leg.1[1].get(w).copied().unwrap_or(0.0);
         waypoint_gas.push(Some(cum));
         // The loop above just pushed this way point's own node last, so the chain now ends on it.
         waypoint_chain_idx.push(chain.len().checked_sub(1));
@@ -1110,9 +1195,13 @@ struct BudgetView {
 /// range ends there on it" - built in [`budget_view`] off `can_end_at`, so the two can never
 /// disagree about which cap excluded a station.
 ///
-/// A plan without pins on a scooter takes each station's route from `ranged` - the cheapest gas
-/// among the routes its range covers (#576 NF-W11GAS-1-D1) - and the walk's own route where that
-/// has none. Without `ranged` every route is the walk's, which is the rule for every other plan.
+/// A scooter plan takes each station's route from `ranged` - the cheapest gas among the routes its
+/// range covers (#576 NF-W11GAS-1-D1, NF-W12GAS-1-D2) - and the walk's own route where that has
+/// none. Without `ranged` every route is the walk's.
+///
+/// `candidates`, when given, are the only stations the deepest fallback may pick (a pinned plan's
+/// stations beyond its last pin, D1); `deepest` is already the arg-max over them, and the range
+/// question below asks about them alone.
 fn route_target(
     endpoint: Option<usize>,
     walk: &WaypointWalk,
@@ -1121,6 +1210,7 @@ fn route_target(
     range_bound: &[bool],
     deepest: (Option<usize>, f64),
     caps: (f64, f64),
+    candidates: Option<&[bool]>,
 ) -> (Option<usize>, Vec<Step>, bool, bool) {
     let (deepest, deepest_gas) = deepest;
     let (budget_litres, scooter_limit) = caps;
@@ -1138,7 +1228,8 @@ fn route_target(
         walk.gas_in
             .iter()
             .zip(range_bound)
-            .any(|(&g, &bound)| bound && g > deepest_gas)
+            .enumerate()
+            .any(|(i, (&g, &bound))| bound && g > deepest_gas && is_candidate(candidates, i))
     };
     let fallback = || {
         (
@@ -1187,17 +1278,23 @@ fn route_target(
     path.truncate(turn_len);
     (Some(turn), path, true, range_turned)
 }
-/// `ranged` is the plan's tail priced on the routes its scooter can fly ([`range_route`], #576
-/// NF-W11GAS-1-D1): when it is given, every station's destination and overlay price, and the
-/// route to the target, are those of the cheapest-gas route in range, the walk's own where there
-/// is none. The plain field without pins passes it; a pinned plan's masks do not (its walk is the
-/// route through the pins).
+/// Whether station `i` may be the deepest fallback target: any station without `candidates`.
+fn is_candidate(candidates: Option<&[bool]>, i: usize) -> bool {
+    candidates.is_none_or(|c| c.get(i).copied().unwrap_or(false))
+}
+
+/// `ranged` is the walk's tail priced on the routes its scooter can fly ([`range_route`], #576
+/// NF-W11GAS-1-D1, NF-W12GAS-1-D2): when it is given, every station's destination and overlay
+/// price, and the route to the target, are those of the cheapest-gas route in range, the walk's
+/// own where there is none. The plain field passes its own; a pinned plan passes the one from its
+/// last pin, with `candidates` its stations beyond that pin ([`route_target`]).
 fn budget_view(
     walk: &WaypointWalk,
     ranged: Option<&RangedTail>,
     endpoint: Option<usize>,
     budget_litres: f64,
     scooter_limit: f64,
+    candidates: Option<&[bool]>,
 ) -> BudgetView {
     // Reach is the INTERSECTION of two independent constraints: the gas budget and the scooter
     // rig's usable range (#317). Both masks are built here, and here only, because everything
@@ -1280,7 +1377,7 @@ fn budget_view(
     let mut deepest: Option<usize> = None;
     let mut deepest_gas = f64::NEG_INFINITY;
     for (i, (&g, &ok)) in end_gas.iter().zip(&can_end_at).enumerate() {
-        if ok && g.is_finite() && g > deepest_gas {
+        if ok && g.is_finite() && g > deepest_gas && is_candidate(candidates, i) {
             deepest_gas = g;
             deepest = Some(i);
         }
@@ -1297,6 +1394,7 @@ fn budget_view(
         &range_bound,
         (deepest, deepest_gas),
         (budget_litres, scooter_limit),
+        candidates,
     );
     // The committed way-point chain, then the last leg's route to the target. That route starts at
     // the final way point, which the chain already ends on, so it is skipped from the tail. With no
