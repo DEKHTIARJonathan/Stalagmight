@@ -600,6 +600,22 @@ impl Project {
         // re-scanned ALL `station_merges` at every BFS node - O(group × merges)
         // per call - which made a batch import that checks this once per loop
         // closure (with thousands of merges) quadratic-to-cubic.
+        //
+        // [#576 HFI-10] And a chain of merges from `a` to `b` runs through the
+        // sections those merges join, so `b`'s section is reachable from `a`'s over
+        // the merge-only SECTION adjacency (the memo `MergeTopology` keeps current
+        // per merge) - a superset of the station chain, since it also counts merges
+        // whose ends no longer resolve. When it is not, no chain exists and the
+        // station adjacency (every merge's two keys resolved) is not built. Every
+        // merge an import makes asks this first, and a merge that goes ahead joins
+        // sections that were NOT yet connected, so building it there made the
+        // import quadratic in its merges.
+        if !self
+            .get_merged_section_ids(a.section_id)
+            .contains(&b.section_id)
+        {
+            return false;
+        }
         let adjacency = self.build_station_merge_adjacency();
         let mut visited = HashSet::new();
         let mut queue = VecDeque::new();

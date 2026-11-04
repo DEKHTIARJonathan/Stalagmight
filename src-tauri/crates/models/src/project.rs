@@ -52,6 +52,8 @@ mod anchor_fuzz;
 #[expect(clippy::print_stdout)]
 mod cache_coherence_tests;
 #[cfg(test)]
+mod lookup_parity_tests;
+#[cfg(test)]
 mod mock_narrowing_tests;
 #[cfg(test)]
 mod reverse_swap_tests;

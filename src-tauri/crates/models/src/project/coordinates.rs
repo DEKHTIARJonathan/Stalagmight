@@ -922,16 +922,23 @@ impl Project {
         );
         let t_phase = std::time::Instant::now();
 
+        // [#576 HFI-10] The two passes below find a station by its ref. They used to
+        // compare every station once per zero datum and once per station comment -
+        // (datums + comments) x stations comparisons per call, a third of the import
+        // of a Walls project with hundreds of thousands of shots. `stations` is laid out by
+        // the walk above, section by section and station 0..=shots, so the ref names
+        // its slot directly.
+        let layout = StationLayout::of(&self.sections);
+
         // Mark zero datums
         for zd in &self.zero_datums {
             let Some(sr) = self.resolve_key(&zd.station_ref) else {
                 continue;
             };
-            for station in &mut stations {
-                if station.station_ref == sr {
-                    station.is_zero_datum = true;
-                    station.gps_coordinates = Some(zd.gps);
-                }
+            for i in layout.positions(&stations, sr) {
+                let station = &mut stations[i];
+                station.is_zero_datum = true;
+                station.gps_coordinates = Some(zd.gps);
             }
         }
 
@@ -946,10 +953,8 @@ impl Project {
             let Some(sr) = self.resolve_key(key) else {
                 continue;
             };
-            for station in &mut stations {
-                if station.station_ref == sr {
-                    station.comment = Some(comment.clone());
-                }
+            for i in layout.positions(&stations, sr) {
+                stations[i].comment = Some(comment.clone());
             }
         }
         tracing::debug!(
@@ -958,6 +963,55 @@ impl Project {
         );
 
         stations
+    }
+}
+
+/// [#576 HFI-10] Where each section's stations sit in the vector
+/// [`Project::compute_station_coordinates_with_progress`] builds: every section in
+/// project order, its stations `0..=shots` in a row.
+struct StationLayout {
+    /// Per section id, `(first position, station count)` of each section carrying it.
+    slots: HashMap<SectionId, Vec<(usize, usize)>>,
+    /// Stations the layout accounts for: the vector's length when it holds.
+    total: usize,
+}
+
+impl StationLayout {
+    fn of(sections: &[Section]) -> Self {
+        let mut slots: HashMap<SectionId, Vec<(usize, usize)>> = HashMap::new();
+        let mut total = 0usize;
+        for section in sections {
+            let count = section.shots.len() + 1;
+            slots.entry(section.id).or_default().push((total, count));
+            total += count;
+        }
+        Self { slots, total }
+    }
+
+    /// Every position of `stations` holding `sr`, in vector order - what a scan
+    /// comparing each station's ref would visit. Read off the layout, and checked
+    /// against the vector: should the layout ever not describe it, the scan answers.
+    fn positions(&self, stations: &[Station], sr: StationRef) -> Vec<usize> {
+        let idx = sr.station_index as usize;
+        let slotted: Vec<usize> = self
+            .slots
+            .get(&sr.section_id)
+            .into_iter()
+            .flatten()
+            .filter(|&&(_, count)| idx < count)
+            .map(|&(first, _)| first + idx)
+            .collect();
+        let holds = stations.len() == self.total
+            && slotted
+                .iter()
+                .all(|&i| stations.get(i).is_some_and(|s| s.station_ref == sr));
+        if holds {
+            slotted
+        } else {
+            (0..stations.len())
+                .filter(|&i| stations[i].station_ref == sr)
+                .collect()
+        }
     }
 }
 

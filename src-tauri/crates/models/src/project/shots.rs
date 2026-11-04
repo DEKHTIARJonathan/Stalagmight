@@ -19,16 +19,65 @@ use super::{
 /// on the frontend in `src/utils/shotSplit.ts`.
 pub const MIN_SPLIT_CHILD_LENGTH_M: f64 = 0.01;
 
+/// [#576 HFI-10] The merge partners of every station - and its loop-closure
+/// partners, when built with closures - each stored key resolved ONCE, for a BFS
+/// that asks for one station's neighbors at every node. The BFS used to re-resolve
+/// every merge and closure at every node it visited: O(visited x links)
+/// `resolve_key` calls per search, which on a Walls project with hundreds of
+/// thousands of shots and thousands of merges made the integrity check's
+/// orphan-closure pass take seconds.
+///
+/// A station's partner list is in the order the per-node scan produced it - merges
+/// in project order, then closures in project order, one partner per link - and a
+/// link contributes exactly what that scan's `if a is the station { b } else if b
+/// is the station { a }` did, including nothing when an end does not resolve.
+struct LinkPartners {
+    by_station: HashMap<StationRef, Vec<StationRef>>,
+}
+
+impl LinkPartners {
+    fn of(project: &Project, include_closures: bool) -> Self {
+        let mut by_station: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        let mut link = |a: Option<StationRef>, b: Option<StationRef>| {
+            if let (Some(a), Some(b)) = (a, b) {
+                by_station.entry(a).or_default().push(b);
+                if b != a {
+                    by_station.entry(b).or_default().push(a);
+                }
+            }
+        };
+        for merge in &project.station_merges {
+            link(
+                project.resolve_key(&merge.station_a),
+                project.resolve_key(&merge.station_b),
+            );
+        }
+        if include_closures {
+            for closure in &project.loop_closures {
+                link(
+                    project.resolve_key(&closure.station_a),
+                    project.resolve_key(&closure.station_b),
+                );
+            }
+        }
+        Self { by_station }
+    }
+
+    fn of_station(&self, station_ref: StationRef) -> &[StationRef] {
+        self.by_station.get(&station_ref).map_or(&[], Vec::as_slice)
+    }
+}
+
 impl Project {
     /// Stations adjacent to `station_ref` through shots (skipping `excluded_shot`)
-    /// and merges, plus loop closures when `include_closures` is true. Pass
-    /// `false` to ask "are these connected by the *survey itself*" - used to tell
+    /// and merges, plus loop closures when `links` was built with them. Without
+    /// closures it asks "are these connected by the *survey itself*" - used to tell
     /// a true loop from a detached pair when deciding closure-vs-merge.
     fn station_neighbors_excluding_shot(
         &self,
+        links: &LinkPartners,
         station_ref: StationRef,
         excluded_shot: Option<(SectionId, usize)>,
-        include_closures: bool,
     ) -> Vec<StationRef> {
         let mut neighbors = Vec::new();
         let Some(section) = self.get_section(station_ref.section_id) else {
@@ -53,25 +102,9 @@ impl Project {
             }
         }
 
-        // Merges (resolve stored keys to positional refs)
-        for merge in &self.station_merges {
-            if self.key_is_ref(&merge.station_a, station_ref) {
-                neighbors.extend(self.resolve_key(&merge.station_b));
-            } else if self.key_is_ref(&merge.station_b, station_ref) {
-                neighbors.extend(self.resolve_key(&merge.station_a));
-            }
-        }
-
-        // Closures (all strategies)
-        if include_closures {
-            for closure in &self.loop_closures {
-                if self.key_is_ref(&closure.station_a, station_ref) {
-                    neighbors.extend(self.resolve_key(&closure.station_b));
-                } else if self.key_is_ref(&closure.station_b, station_ref) {
-                    neighbors.extend(self.resolve_key(&closure.station_a));
-                }
-            }
-        }
+        // Merges, then closures (all strategies) when `links` carries them - their
+        // stored keys resolved to positional refs once, by `LinkPartners::of`.
+        neighbors.extend_from_slice(links.of_station(station_ref));
 
         neighbors
     }
@@ -86,15 +119,14 @@ impl Project {
         if station_a == station_b {
             return true;
         }
+        let links = LinkPartners::of(self, include_closures);
         let mut visited = HashSet::new();
         let mut queue = VecDeque::new();
         visited.insert(station_a);
         queue.push_back(station_a);
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in
-                self.station_neighbors_excluding_shot(current, excluded_shot, include_closures)
-            {
+            for neighbor in self.station_neighbors_excluding_shot(&links, current, excluded_shot) {
                 if visited.insert(neighbor) {
                     if neighbor == station_b {
                         return true;
@@ -119,13 +151,14 @@ impl Project {
         if zero_datum_set.contains(&station_ref) {
             return true;
         }
+        let links = LinkPartners::of(self, true);
         let mut visited = HashSet::new();
         let mut queue = VecDeque::new();
         visited.insert(station_ref);
         queue.push_back(station_ref);
 
         while let Some(current) = queue.pop_front() {
-            for neighbor in self.station_neighbors_excluding_shot(current, excluded_shot, true) {
+            for neighbor in self.station_neighbors_excluding_shot(&links, current, excluded_shot) {
                 if visited.insert(neighbor) {
                     if zero_datum_set.contains(&neighbor) {
                         return true;
