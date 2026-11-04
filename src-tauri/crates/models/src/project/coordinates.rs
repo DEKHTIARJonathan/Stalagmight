@@ -857,23 +857,23 @@ impl Project {
         // The closure_id used is the one connecting the shared station to the far endpoint,
         // so the metrics displayed correspond to that specific loop closure.
         {
-            // Collect direct (non-transitive) closure refs for each station
-            let mut direct_closures: HashMap<StationRef, Vec<(u64, StationRef)>> = HashMap::new();
-            for station in &stations {
-                for cr in station.closures() {
-                    if !cr.is_transitive {
-                        direct_closures
-                            .entry(station.station_ref)
-                            .or_default()
-                            .push((cr.closure_id, cr.station_ref));
-                    }
-                }
-            }
-
-            // For each station with 2+ direct closures, create chain-transitive refs
-            // between all pairs of its closure partners
+            // For each station with 2+ direct (non-transitive) closures, create
+            // chain-transitive refs between all pairs of its closure partners.
+            //
+            // [#576 HFI-15] In `stations` order (section order, then station index),
+            // each shared station's partners in the order its direct refs were pushed
+            // (`loop_closures` order). The shared stations used to come out of a fresh
+            // `HashMap`, whose iteration order changes with every map, so one project
+            // state came back with these refs permuted on each recompute.
             let mut chain_transitive_refs: Vec<(StationRef, ClosureRef)> = Vec::new();
-            for (shared_ref, endpoints) in &direct_closures {
+            for station in &stations {
+                let shared_ref = &station.station_ref;
+                let endpoints: Vec<(u64, StationRef)> = station
+                    .closures()
+                    .iter()
+                    .filter(|cr| !cr.is_transitive)
+                    .map(|cr| (cr.closure_id, cr.station_ref))
+                    .collect();
                 if endpoints.len() < 2 {
                     continue;
                 }
@@ -965,6 +965,10 @@ impl Project {
 #[expect(
     clippy::unwrap_used,
     reason = "test module: panics on a failed assumption are the point"
+)]
+#[expect(
+    clippy::print_stdout,
+    reason = "test module: the regression test prints the value it checks"
 )]
 mod tests {
     use super::*;
@@ -1293,6 +1297,75 @@ mod tests {
             after,
             1 - before,
             "the anchor left its physical station: {before} -> {after}"
+        );
+    }
+
+    /// [#576 HFI-15] A station's `closures_with` is a function of the project: the
+    /// chain-transitive entries (a closure partner's other closures, seen through
+    /// the shared station) came out in a fresh `HashMap`'s iteration order, which
+    /// changes with every map, so the same project state was reported in a
+    /// different order on each recompute - and the undo fuzzer read the reorder as
+    /// "undo did not restore". Station X closes to three hubs and each hub closes
+    /// to one spoke, so X sees three chain-transitive closures (to each spoke, via
+    /// its hub).
+    #[test]
+    fn closures_with_comes_back_in_one_order_on_every_recompute() {
+        let mut project = Project::new("closure order".to_string(), None);
+        let sections: Vec<SectionId> = (0..7)
+            .map(|_| add_section(&mut project, vec![straight_shot(0.0, 10.0)]))
+            .collect();
+        project.ensure_shot_uuids();
+        let end_of = |i: usize| StationRef::new(sections[i], 1);
+        // X = 0; hubs 1, 2, 3; spokes 4, 5, 6.
+        for (id, (a, b)) in [(0, 1), (0, 2), (0, 3), (1, 4), (2, 5), (3, 6)]
+            .into_iter()
+            .enumerate()
+        {
+            project.loop_closures.push(LoopClosure {
+                id: id as u64 + 1,
+                station_a: project.key_for_ref(end_of(a)).unwrap(),
+                station_b: project.key_for_ref(end_of(b)).unwrap(),
+                path_length: 20.0,
+                misclosure_distance: 0.0,
+                error_percentage: 0.0,
+                horizontal_misclosure: 0.0,
+                vertical_misclosure: 0.0,
+                strategy: ClosureStrategy::LeastSquaresWeighted,
+                is_aligned: false,
+            });
+        }
+        let x = end_of(0);
+        let closures_of_x = |project: &Project| -> Vec<(u64, StationRef, Option<StationRef>)> {
+            project
+                .compute_station_coordinates()
+                .into_iter()
+                .find(|s| s.station_ref == x)
+                .unwrap()
+                .closures()
+                .iter()
+                .map(|c| (c.closure_id, c.station_ref, c.via_station))
+                .collect()
+        };
+
+        let first = closures_of_x(&project);
+        let chained: Vec<_> = first.iter().filter(|(_, _, via)| via.is_some()).collect();
+        assert_eq!(
+            chained.len(),
+            3,
+            "X sees each spoke through its hub: {first:?}"
+        );
+        // Each recompute builds a fresh map; 32 of them all agreeing by chance on
+        // the base was (1/6)^31 for three entries.
+        let orders: Vec<_> = (0..32).map(|_| closures_of_x(&project)).collect();
+        let differing = orders.iter().filter(|o| **o != first).count();
+        println!(
+            "[HFI-15] {differing} of 32 recomputes ordered X's closures differently from the first"
+        );
+        assert_eq!(
+            differing,
+            0,
+            "first: {first:?}, a later one: {:?}",
+            orders.iter().find(|o| **o != first)
         );
     }
 }
