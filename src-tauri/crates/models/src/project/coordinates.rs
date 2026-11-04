@@ -685,7 +685,100 @@ impl Project {
         let t_phase = std::time::Instant::now();
 
         // Mark merged stations - build merge groups (transitive closure)
-        // First, build a map of station_ref -> group_id using Union-Find logic
+        let (station_to_group, groups) = self.station_merge_groups();
+
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            groups = groups.len(),
+            "compute_station_coordinates: union-find groups"
+        );
+        let t_phase = std::time::Instant::now();
+
+        // Now assign merged_with for each station based on their group
+        for station in &mut stations {
+            if let Some(&group_id) = station_to_group.get(&station.station_ref) {
+                for member in &groups[group_id] {
+                    if *member != station.station_ref {
+                        station.merged_with.push(*member);
+                    }
+                }
+            }
+        }
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: merged_with"
+        );
+        let t_phase = std::time::Instant::now();
+
+        // [#576 HFI-10] The passes below find a station by its ref. They used to
+        // compare every station once per zero datum and once per station comment -
+        // (datums + comments) x stations comparisons per call, a third of the import
+        // of a Walls project with hundreds of thousands of shots - and, for the
+        // closure refs, once per loop closure (#576 NF-W12BE-2). `stations` is laid
+        // out by the walk above, section by section and station 0..=shots, so the
+        // ref names its slot directly.
+        let layout = StationLayout::of(&self.sections);
+
+        self.populate_closures_with(&mut stations, &station_to_group, &groups, &layout);
+
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            closures = self.loop_closures.len(),
+            "compute_station_coordinates: closures_with"
+        );
+        let t_phase = std::time::Instant::now();
+
+        Self::chain_closure_partners(&mut stations, &layout);
+
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: closure-chain transitivity"
+        );
+        let t_phase = std::time::Instant::now();
+
+        // Mark zero datums
+        for zd in &self.zero_datums {
+            let Some(sr) = self.resolve_key(&zd.station_ref) else {
+                continue;
+            };
+            for i in layout.positions(&stations, sr) {
+                let station = &mut stations[i];
+                station.is_zero_datum = true;
+                station.gps_coordinates = Some(zd.gps);
+            }
+        }
+
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: zero datums"
+        );
+        let t_phase = std::time::Instant::now();
+
+        // Assign station comments
+        for (key, comment) in &self.station_comments {
+            let Some(sr) = self.resolve_key(key) else {
+                continue;
+            };
+            for i in layout.positions(&stations, sr) {
+                stations[i].comment = Some(comment.clone());
+            }
+        }
+        tracing::debug!(
+            ms = t_phase.elapsed().as_millis() as u64,
+            "compute_station_coordinates: station comments"
+        );
+
+        stations
+    }
+
+    /// Merge groups - the transitive closure of the station merges: each merged
+    /// station's group, and every group's members in the order the merges joined
+    /// them (a self-merge lists its station twice). A merge with an end that does
+    /// not resolve joins nothing.
+    pub(super) fn station_merge_groups(
+        &self,
+    ) -> (HashMap<StationRef, usize>, Vec<Vec<StationRef>>) {
+        // Union-Find logic: a map of station_ref -> group_id
         let mut station_to_group: HashMap<StationRef, usize> = HashMap::new();
         let mut groups: Vec<Vec<StationRef>> = Vec::new();
 
@@ -731,33 +824,25 @@ impl Project {
                 }
             }
         }
+        (station_to_group, groups)
+    }
 
-        tracing::debug!(
-            ms = t_phase.elapsed().as_millis() as u64,
-            groups = groups.len(),
-            "compute_station_coordinates: union-find groups"
-        );
-        let t_phase = std::time::Instant::now();
-
-        // Now assign merged_with for each station based on their group
-        for station in &mut stations {
-            if let Some(&group_id) = station_to_group.get(&station.station_ref) {
-                for member in &groups[group_id] {
-                    if *member != station.station_ref {
-                        station.merged_with.push(*member);
-                    }
-                }
-            }
-        }
-        tracing::debug!(
-            ms = t_phase.elapsed().as_millis() as u64,
-            "compute_station_coordinates: merged_with"
-        );
-        let t_phase = std::time::Instant::now();
-
-        // Populate closures_with for each station from loop_closures
-        // For each closure, both endpoint stations (and their merged equivalents)
-        // get a ClosureRef entry. Transitive closures go through merged stations.
+    /// Populate closures_with for each station from loop_closures.
+    /// For each closure, both endpoint stations (and their merged equivalents)
+    /// get a ClosureRef entry. Transitive closures go through merged stations.
+    ///
+    /// [#576 NF-W12BE-2] Each closure visits the stations of its two groups, read
+    /// off `layout`; it used to test every station against both groups, closures x
+    /// stations comparisons. The entries and their order are the scan's: a station
+    /// takes them closure by closure in `loop_closures` order, a station in both
+    /// groups takes A's entries only, and a member no station holds gets nothing.
+    fn populate_closures_with(
+        &self,
+        stations: &mut [Station],
+        station_to_group: &HashMap<StationRef, usize>,
+        groups: &[Vec<StationRef>],
+        layout: &StationLayout,
+    ) {
         for closure in &self.loop_closures {
             let (Some(a_ref), Some(b_ref)) = (
                 self.resolve_key(&closure.station_a),
@@ -781,9 +866,16 @@ impl Project {
                 continue;
             }
 
+            // Each member once, even one a self-merge put in its group twice, as the
+            // scan's `contains` visited each station once.
+            let mut visited: HashSet<StationRef> = HashSet::new();
             // For each station in A's group, add direct ref to B and transitive refs to B's merged partners
-            for station in &mut stations {
-                if a_group.contains(&station.station_ref) {
+            for &member in &a_group {
+                if !visited.insert(member) {
+                    continue;
+                }
+                for i in layout.positions(stations, member) {
+                    let station = &mut stations[i];
                     // Direct closure to station_b (skip self-references)
                     if station.station_ref != b_ref {
                         let via = if station.station_ref == a_ref {
@@ -809,7 +901,15 @@ impl Project {
                             });
                         }
                     }
-                } else if b_group.contains(&station.station_ref) {
+                }
+            }
+            // A member of both groups took A's branch only (the scan's `else if`).
+            for &member in &b_group {
+                if !visited.insert(member) {
+                    continue;
+                }
+                for i in layout.positions(stations, member) {
+                    let station = &mut stations[i];
                     // Direct closure to station_a (skip self-references)
                     if station.station_ref != a_ref {
                         let via = if station.station_ref == b_ref {
@@ -838,131 +938,80 @@ impl Project {
                 }
             }
         }
+    }
 
-        tracing::debug!(
-            ms = t_phase.elapsed().as_millis() as u64,
-            closures = self.loop_closures.len(),
-            "compute_station_coordinates: closures_with"
-        );
-        let t_phase = std::time::Instant::now();
-
-        // Closure-chain transitivity: when a station has direct closures to multiple
-        // other stations, those other stations should see transitive closures to each
-        // other via the shared station.
+    /// Closure-chain transitivity: when a station has direct closures to multiple
+    /// other stations, those other stations should see transitive closures to each
+    /// other via the shared station.
+    ///
+    /// Example: Station X has closures to Y and Z.
+    ///   Y should see: transitive closure to Z (via X)
+    ///   Z should see: transitive closure to Y (via X)
+    ///
+    /// The closure_id used is the one connecting the shared station to the far endpoint,
+    /// so the metrics displayed correspond to that specific loop closure.
+    ///
+    /// [#576 NF-W12BE-2] A partner's station is read off `layout`, where it used to
+    /// be found by a scan of every station per entry.
+    fn chain_closure_partners(stations: &mut [Station], layout: &StationLayout) {
+        // For each station with 2+ direct (non-transitive) closures, create
+        // chain-transitive refs between all pairs of its closure partners.
         //
-        // Example: Station X has closures to Y and Z.
-        //   Y should see: transitive closure to Z (via X)
-        //   Z should see: transitive closure to Y (via X)
-        //
-        // The closure_id used is the one connecting the shared station to the far endpoint,
-        // so the metrics displayed correspond to that specific loop closure.
-        {
-            // For each station with 2+ direct (non-transitive) closures, create
-            // chain-transitive refs between all pairs of its closure partners.
-            //
-            // [#576 HFI-15] In `stations` order (section order, then station index),
-            // each shared station's partners in the order its direct refs were pushed
-            // (`loop_closures` order). The shared stations used to come out of a fresh
-            // `HashMap`, whose iteration order changes with every map, so one project
-            // state came back with these refs permuted on each recompute.
-            let mut chain_transitive_refs: Vec<(StationRef, ClosureRef)> = Vec::new();
-            for station in &stations {
-                let shared_ref = &station.station_ref;
-                let endpoints: Vec<(u64, StationRef)> = station
-                    .closures()
-                    .iter()
-                    .filter(|cr| !cr.is_transitive)
-                    .map(|cr| (cr.closure_id, cr.station_ref))
-                    .collect();
-                if endpoints.len() < 2 {
-                    continue;
-                }
-                for i in 0..endpoints.len() {
-                    for j in 0..endpoints.len() {
-                        if i == j {
-                            continue;
-                        }
-                        let (_, target_i) = &endpoints[i];
-                        let (closure_j, target_j) = &endpoints[j];
-
-                        // target_i should see transitive closure to target_j via shared_ref
-                        // using closure_j's id (the closure connecting shared_ref to target_j)
-                        if target_i != target_j {
-                            chain_transitive_refs.push((
-                                *target_i,
-                                ClosureRef {
-                                    closure_id: *closure_j,
-                                    station_ref: *target_j,
-                                    via_station: Some(*shared_ref),
-                                    is_transitive: true,
-                                },
-                            ));
-                        }
-                    }
-                }
+        // [#576 HFI-15] In `stations` order (section order, then station index),
+        // each shared station's partners in the order its direct refs were pushed
+        // (`loop_closures` order). The shared stations used to come out of a fresh
+        // `HashMap`, whose iteration order changes with every map, so one project
+        // state came back with these refs permuted on each recompute.
+        let mut chain_transitive_refs: Vec<(StationRef, ClosureRef)> = Vec::new();
+        for station in stations.iter() {
+            let shared_ref = &station.station_ref;
+            let endpoints: Vec<(u64, StationRef)> = station
+                .closures()
+                .iter()
+                .filter(|cr| !cr.is_transitive)
+                .map(|cr| (cr.closure_id, cr.station_ref))
+                .collect();
+            if endpoints.len() < 2 {
+                continue;
             }
+            for i in 0..endpoints.len() {
+                for j in 0..endpoints.len() {
+                    if i == j {
+                        continue;
+                    }
+                    let (_, target_i) = &endpoints[i];
+                    let (closure_j, target_j) = &endpoints[j];
 
-            // Apply chain-transitive refs, avoiding duplicates
-            for (station_ref, new_ref) in chain_transitive_refs {
-                if let Some(station) = stations.iter_mut().find(|s| s.station_ref == station_ref) {
-                    let already_exists = station.closures().iter().any(|cr| {
-                        cr.station_ref == new_ref.station_ref
-                            && cr.via_station == new_ref.via_station
-                    });
-                    if !already_exists {
-                        station.closures_mut().push(new_ref);
+                    // target_i should see transitive closure to target_j via shared_ref
+                    // using closure_j's id (the closure connecting shared_ref to target_j)
+                    if target_i != target_j {
+                        chain_transitive_refs.push((
+                            *target_i,
+                            ClosureRef {
+                                closure_id: *closure_j,
+                                station_ref: *target_j,
+                                via_station: Some(*shared_ref),
+                                is_transitive: true,
+                            },
+                        ));
                     }
                 }
             }
         }
 
-        tracing::debug!(
-            ms = t_phase.elapsed().as_millis() as u64,
-            "compute_station_coordinates: closure-chain transitivity"
-        );
-        let t_phase = std::time::Instant::now();
-
-        // [#576 HFI-10] The two passes below find a station by its ref. They used to
-        // compare every station once per zero datum and once per station comment -
-        // (datums + comments) x stations comparisons per call, a third of the import
-        // of a Walls project with hundreds of thousands of shots. `stations` is laid out by
-        // the walk above, section by section and station 0..=shots, so the ref names
-        // its slot directly.
-        let layout = StationLayout::of(&self.sections);
-
-        // Mark zero datums
-        for zd in &self.zero_datums {
-            let Some(sr) = self.resolve_key(&zd.station_ref) else {
-                continue;
-            };
-            for i in layout.positions(&stations, sr) {
+        // Apply chain-transitive refs, avoiding duplicates
+        for (station_ref, new_ref) in chain_transitive_refs {
+            // The first station holding the ref, as the scan's `find` took.
+            if let Some(&i) = layout.positions(stations, station_ref).first() {
                 let station = &mut stations[i];
-                station.is_zero_datum = true;
-                station.gps_coordinates = Some(zd.gps);
+                let already_exists = station.closures().iter().any(|cr| {
+                    cr.station_ref == new_ref.station_ref && cr.via_station == new_ref.via_station
+                });
+                if !already_exists {
+                    station.closures_mut().push(new_ref);
+                }
             }
         }
-
-        tracing::debug!(
-            ms = t_phase.elapsed().as_millis() as u64,
-            "compute_station_coordinates: zero datums"
-        );
-        let t_phase = std::time::Instant::now();
-
-        // Assign station comments
-        for (key, comment) in &self.station_comments {
-            let Some(sr) = self.resolve_key(key) else {
-                continue;
-            };
-            for i in layout.positions(&stations, sr) {
-                stations[i].comment = Some(comment.clone());
-            }
-        }
-        tracing::debug!(
-            ms = t_phase.elapsed().as_millis() as u64,
-            "compute_station_coordinates: station comments"
-        );
-
-        stations
     }
 }
 
