@@ -25,16 +25,16 @@ use stalagmight_models::{NorthReference, Project, ShotKind as ModelShotKind, Sur
 /// - [`StationId::index`] is NOT stable: inserting or deleting a shot shifts the
 ///   indexes after it, and reversing a section renumbers station `i` to `N - i`.
 ///   Key anything persistent on `(section id, shot uuid)`, never on an index.
-/// - [`Shot::uuid`] is stable across edits, unique within its section only (the
-///   same UUID can appear in two sections), and `None` only for shots in files
-///   written before shot UUIDs existed and never re-saved since. A file that
-///   carries the same UUID twice in one section gets a fresh random UUID for the
-///   later shot on every read, as the app does on open.
+/// - [`Shot::uuid`] is stable across edits and unique within its section only
+///   (the same UUID can appear in two sections), so key a shot on
+///   `(section id, uuid)`. A shot the file gives no usable UUID (files from before
+///   shot UUIDs, or a second shot repeating one in its section) gets one derived
+///   deterministically and is flagged [`Shot::uuid_derived`].
 ///
 /// # Ordering
 ///
 /// Every list is sorted, so the same file content always reads to the same
-/// value (except the duplicate-UUID repair above): sections by id, shots in
+/// value: sections by id, shots in
 /// survey order, merges by `(a, b)`, zero datums and comments and station
 /// positions by station, loop closures by id. [`Survey::modified_at`] changes
 /// on every save; leave it out of any content hash.
@@ -93,14 +93,40 @@ pub struct Section {
     pub north: North,
     /// Degrees to ADD to a stored azimuth for a true-north bearing (east positive).
     pub azimuth_correction_deg: f64,
+    /// Where [`Section::azimuth_correction_deg`] came from. `NotRecorded` means no
+    /// reference was ever set for this section or the project: the 0 is not a
+    /// verified zero, and the survey is in uncorrected (usually magnetic) north.
+    pub azimuth_correction_source: CorrectionSource,
     pub shots: Vec<Shot>,
+}
+
+/// Provenance of a section's azimuth correction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum CorrectionSource {
+    /// No azimuth reference is recorded at all.
+    NotRecorded,
+    /// A reference is recorded but where its correction came from is not.
+    Unknown,
+    /// Declared by the imported file (e.g. Compass `DECLINATION`, Walls `DECL=`).
+    FileDeclared,
+    /// Computed from a geomagnetic model for `epoch_year`.
+    Model { epoch_year: i32 },
+    /// Entered by hand.
+    Manual,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[non_exhaustive]
 pub struct Shot {
-    /// Stable identity across revisions, when the file has one.
-    pub uuid: Option<String>,
+    /// Stable identity across revisions. See [`Shot::uuid_derived`].
+    pub uuid: String,
+    /// `true` when the file had no usable UUID for this shot (none, or the same
+    /// one as an earlier shot in the section) and `uuid` was derived by this
+    /// crate from the shot's place: deterministic for the same file, but not a
+    /// persisted identity, so it can change once the app re-saves the file.
+    pub uuid_derived: bool,
     pub kind: ShotKind,
     pub length: f64,
     pub azimuth_in: f64,
@@ -164,6 +190,12 @@ pub struct ZeroDatum {
     pub longitude: f64,
     /// Depth of the datum station, metres, positive down.
     pub depth: f64,
+    /// Horizontal disagreement, metres, between where this datum's station sits
+    /// in the local frame and where its GPS says it should be relative to the
+    /// frame datum. `Some(~0)` when consistent; a large value means the stored
+    /// offsets no longer honour this datum (e.g. a datum removed and re-added).
+    /// `None` unless station positions were requested and a frame datum exists.
+    pub residual_m: Option<f64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -211,6 +243,11 @@ pub struct StationPosition {
     /// in the component, otherwise the component's lowest datum station. `None`
     /// when the component has no datum.
     pub anchor: Option<StationId>,
+    /// WGS84 latitude/longitude in degrees, by the exact inverse of the app's own
+    /// datum placement (see "Frame"). `None` for a floating station or when the
+    /// project has no frame datum.
+    pub latitude: Option<f64>,
+    pub longitude: Option<f64>,
 }
 
 impl From<StationRef> for StationId {
@@ -227,6 +264,7 @@ impl Survey {
         project: &Project,
         schema_version: i32,
         with_stations: bool,
+        derived_uuids: &std::collections::HashSet<(u32, usize)>,
     ) -> Self {
         let mut unresolved = 0;
         let mut resolve = |key: &StationKey| {
@@ -257,6 +295,7 @@ impl Survey {
                     latitude: z.gps.latitude,
                     longitude: z.gps.longitude,
                     depth: z.gps.depth_reference,
+                    residual_m: None,
                 })
             })
             .collect();
@@ -289,6 +328,7 @@ impl Survey {
             .and_then(|key| project.resolve_key(&key))
             .map(StationId::from);
 
+        let frame_gps = project.frame_datum().map(|d| d.gps);
         let stations = with_stations.then(|| {
             let anchors = Anchors::new(project, &station_merges, &zero_datums, frame_datum);
             let mut positions: Vec<StationPosition> = project
@@ -302,10 +342,18 @@ impl Survey {
                         y: s.coordinates.y,
                         z: s.coordinates.z,
                         anchor: anchors.of(station),
+                        latitude: None,
+                        longitude: None,
                     }
                 })
                 .collect();
             positions.sort_by_key(|p| p.station);
+            georeference(
+                &mut positions,
+                &mut zero_datums,
+                frame_datum,
+                frame_gps.as_ref(),
+            );
             positions
         });
 
@@ -338,7 +386,15 @@ impl Survey {
                             NorthReference::Grid => North::Grid,
                         },
                         azimuth_correction_deg: reference.correction,
-                        shots: section.shots.iter().map(Shot::from_model).collect(),
+                        azimuth_correction_source: correction_source(project, section),
+                        shots: section
+                            .shots
+                            .iter()
+                            .enumerate()
+                            .map(|(i, shot)| {
+                                Shot::from_model(shot, derived_uuids.contains(&(section.id, i)))
+                            })
+                            .collect(),
                     }
                 })
                 .collect(),
@@ -350,6 +406,62 @@ impl Survey {
             stations,
             unresolved_references: unresolved,
         }
+    }
+}
+
+/// Fill each anchored station's latitude/longitude and each datum's residual,
+/// both relative to the frame datum. Positions must be sorted by station.
+fn georeference(
+    positions: &mut [StationPosition],
+    datums: &mut [ZeroDatum],
+    frame_datum: Option<StationId>,
+    frame_gps: Option<&stalagmight_models::station::GpsCoordinates>,
+) {
+    let (Some(frame), Some(frame_gps)) = (frame_datum, frame_gps) else {
+        return;
+    };
+    let at = |positions: &[StationPosition], station: StationId| {
+        positions
+            .binary_search_by_key(&station, |p| p.station)
+            .ok()
+            .map(|i| (positions[i].x, positions[i].y))
+    };
+    let Some((fx, fy)) = at(positions, frame) else {
+        return;
+    };
+    for p in positions.iter_mut() {
+        if p.anchor.is_none() {
+            continue;
+        }
+        if let Some((lat, lon)) =
+            stalagmight_models::geo::local_to_gps(p.x - fx, p.y - fy, frame_gps)
+        {
+            p.latitude = Some(lat);
+            p.longitude = Some(lon);
+        }
+    }
+    for d in datums.iter_mut() {
+        let (Some((x, y)), Ok(gps)) = (
+            at(positions, d.station),
+            stalagmight_models::station::GpsCoordinates::new(d.latitude, d.longitude, d.depth),
+        ) else {
+            continue;
+        };
+        let (east, north) = stalagmight_models::geo::gps_to_local(&gps, frame_gps);
+        d.residual_m = Some((x - fx - east).hypot(y - fy - north));
+    }
+}
+
+fn correction_source(project: &Project, section: &stalagmight_models::Section) -> CorrectionSource {
+    use stalagmight_models::CorrectionSource as Model;
+    if section.azimuth_reference.is_none() && project.default_azimuth_reference.is_none() {
+        return CorrectionSource::NotRecorded;
+    }
+    match project.azimuth_reference_for(section).source {
+        Model::Unknown => CorrectionSource::Unknown,
+        Model::FileDeclared => CorrectionSource::FileDeclared,
+        Model::IgrfAuto { epoch_year } => CorrectionSource::Model { epoch_year },
+        Model::Manual => CorrectionSource::Manual,
     }
 }
 
@@ -462,9 +574,11 @@ impl UnionFind {
 }
 
 impl Shot {
-    fn from_model(shot: &stalagmight_models::Shot) -> Self {
+    fn from_model(shot: &stalagmight_models::Shot, uuid_derived: bool) -> Self {
         Self {
-            uuid: shot.uuid.clone(),
+            // The reader fills every missing UUID before converting.
+            uuid: shot.uuid.clone().unwrap_or_default(),
+            uuid_derived,
             kind: match shot.kind {
                 ModelShotKind::Normal => ShotKind::Normal,
                 ModelShotKind::Jump => ShotKind::Jump,

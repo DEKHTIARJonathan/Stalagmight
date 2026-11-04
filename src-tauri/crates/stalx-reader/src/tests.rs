@@ -587,3 +587,154 @@ fn the_frame_datum_anchors_its_component_even_when_it_is_not_the_lowest() {
         .iter()
         .all(|p| p.anchor == Some(frame)));
 }
+
+#[test]
+#[expect(clippy::panic, reason = "the panic is the input under test")]
+fn a_panic_during_the_read_becomes_an_internal_error() {
+    let err = super::contain_panics(|| panic!("boom")).unwrap_err();
+
+    assert!(
+        matches!(&err, ReadError::Internal(m) if m == "boom"),
+        "{err}"
+    );
+}
+
+#[test]
+fn the_private_copy_goes_in_the_given_temp_dir_and_is_removed() {
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &full_project());
+    let scratch = TempDir::new().unwrap();
+
+    read_file_with(&path, &ReadOptions::default().temp_dir(scratch.path())).unwrap();
+
+    assert_eq!(std::fs::read_dir(scratch.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn the_correction_source_tells_a_recorded_zero_from_nothing_recorded() {
+    use stalagmight_models::{AzimuthReference, CorrectionSource as Source};
+
+    let dir = TempDir::new().unwrap();
+    let survey = read_file(&save(&dir, &full_project())).unwrap();
+    assert_eq!(
+        survey.sections[0].azimuth_correction_source,
+        super::CorrectionSource::NotRecorded
+    );
+
+    let mut project = full_project();
+    project.default_azimuth_reference = Some(AzimuthReference::magnetic(1.5, Source::Manual));
+    let dir = TempDir::new().unwrap();
+    let survey = read_file(&save(&dir, &project)).unwrap();
+    assert_eq!(
+        survey.sections[0].azimuth_correction_source,
+        super::CorrectionSource::Manual
+    );
+    assert_eq!(survey.sections[0].azimuth_correction_deg, 1.5);
+}
+
+#[test]
+fn impossible_datum_coordinates_are_invalid_values() {
+    for sql in [
+        "UPDATE zero_datums SET latitude = 120.0;",
+        "UPDATE zero_datums SET longitude = -181.0;",
+        "UPDATE zero_datums SET latitude = 9e999;",
+    ] {
+        let err = read_file(&with_schema_sql(sql)).unwrap_err();
+        assert_eq!(
+            invalid_kind(&err),
+            Some(InvalidKind::InvalidValue),
+            "{sql}: {err}"
+        );
+    }
+}
+
+#[test]
+fn missing_and_repeated_uuids_are_derived_the_same_way_every_read() {
+    // Main's first shot loses its UUID, and its third repeats its second, which
+    // makes the third (the later of the two) the repeat.
+    let path = with_schema_sql(
+        "UPDATE shots SET uuid = NULL
+           WHERE rowid = (SELECT rowid FROM shots ORDER BY section_id, sequence_order LIMIT 1);
+         UPDATE shots SET uuid = (SELECT uuid FROM shots ORDER BY section_id, sequence_order
+                                  LIMIT 1 OFFSET 1)
+           WHERE rowid = (SELECT rowid FROM shots ORDER BY section_id, sequence_order
+                          LIMIT 1 OFFSET 2);",
+    );
+
+    let first = read_file(&path).unwrap();
+    let second = read_file(&path).unwrap();
+
+    assert_eq!(first, second, "derived ids must not change between reads");
+    let shots = &first.sections[0].shots;
+    let flags: Vec<bool> = shots.iter().map(|s| s.uuid_derived).collect();
+    assert_eq!(flags, [true, false, true, false]);
+    let unique: std::collections::HashSet<&str> = shots.iter().map(|s| s.uuid.as_str()).collect();
+    assert_eq!(unique.len(), shots.len());
+}
+
+#[test]
+fn anchored_positions_carry_lat_lon_and_datums_carry_their_residual() {
+    let mut project = full_project();
+    // Fore- and back-sight both 90: Main really runs due east.
+    for shot in &mut project.sections[0].shots {
+        shot.azimuth_out = 90.0;
+    }
+    project.add_section(descending("Loose", 1.0, 2));
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &project);
+
+    let survey = read_file_with(&path, &ReadOptions::default().with_stations(true)).unwrap();
+
+    let stations = survey.stations.unwrap();
+    let datum = survey.zero_datums[0];
+    let at_datum = stations
+        .iter()
+        .find(|p| p.station == datum.station)
+        .unwrap();
+    assert!((at_datum.latitude.unwrap() - datum.latitude).abs() < 1e-9);
+    assert!((at_datum.longitude.unwrap() - datum.longitude).abs() < 1e-9);
+    // Longitude moves the same way as the local east coordinate does.
+    let end = stations
+        .iter()
+        .find(|p| p.station.section_id == datum.station.section_id && p.station.index == 4)
+        .unwrap();
+    assert!(
+        (end.x - at_datum.x).abs() > 1.0,
+        "the fixture moves east-west"
+    );
+    assert_eq!(
+        (end.longitude.unwrap() - datum.longitude).signum(),
+        (end.x - at_datum.x).signum()
+    );
+    let loose = survey.sections[2].id;
+    assert!(stations
+        .iter()
+        .filter(|p| p.station.section_id == loose)
+        .all(|p| p.latitude.is_none() && p.longitude.is_none()));
+    assert!(
+        datum.residual_m.unwrap() < 1e-6,
+        "the frame datum is its own origin"
+    );
+}
+
+#[test]
+fn a_datum_the_stored_offsets_no_longer_honour_has_a_large_residual() {
+    // A second datum whose GPS disagrees with where the survey puts its station.
+    let mut project = full_project();
+    let side = project.sections[1].id;
+    let mut extra = project.zero_datums[0].clone();
+    extra.station_ref = project.key_for_ref(StationRef::new(side, 2)).unwrap();
+    extra.gps = GpsCoordinates::new(20.6, -87.4, 0.0).unwrap();
+    project.zero_datums.push(extra);
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &project);
+
+    let survey = read_file_with(&path, &ReadOptions::default().with_stations(true)).unwrap();
+
+    let far = survey
+        .zero_datums
+        .iter()
+        .find(|d| d.station.section_id == side)
+        .unwrap();
+    assert!(far.residual_m.unwrap() > 10_000.0, "{:?}", far.residual_m);
+}

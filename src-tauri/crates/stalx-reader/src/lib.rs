@@ -38,15 +38,15 @@
 mod survey;
 
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use stalagmight_models::ClassifyScope;
 use stalagmight_persistence::persistence::{Database, SCHEMA_VERSION};
 
 pub use survey::{
-    Direction, LoopClosure, North, Section, Shot, ShotKind, StationComment, StationId,
-    StationMerge, StationPosition, Survey, ZeroDatum,
+    CorrectionSource, Direction, LoopClosure, North, Section, Shot, ShotKind, StationComment,
+    StationId, StationMerge, StationPosition, Survey, ZeroDatum,
 };
 
 /// Default cap on the input size, in bytes.
@@ -75,6 +75,8 @@ pub struct ReadOptions {
     /// Caps on the counts the post-load steps scale with, checked right after the
     /// load and before any of them run.
     pub count_limits: CountLimits,
+    /// Directory the private copy goes in; `None` is the system temp directory.
+    pub temp_dir: Option<PathBuf>,
 }
 
 impl Default for ReadOptions {
@@ -84,6 +86,7 @@ impl Default for ReadOptions {
             deadline: DEFAULT_DEADLINE,
             with_stations: false,
             count_limits: CountLimits::default(),
+            temp_dir: None,
         }
     }
 }
@@ -165,8 +168,24 @@ impl ReadOptions {
         self.count_limits = limits;
         self
     }
+
+    /// Where the private copy is made (a fresh directory inside it, removed
+    /// when the read ends). Default: the system temp directory.
+    #[must_use]
+    pub fn temp_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.temp_dir = Some(dir.into());
+        self
+    }
 }
 
+/// Why a read failed.
+///
+/// Every variant is deterministic for a given file and crate version, so none is
+/// worth retrying as-is, except [`ReadError::Io`] (disk or temp-dir trouble on
+/// the reading side) and [`ReadError::NewerSchema`] (retry after upgrading the
+/// crate). In particular [`InvalidKind::Deadline`] means the file needs more
+/// than the configured time, not that a worker was slow: retrying it with the
+/// same deadline fails the same way.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum ReadError {
@@ -188,6 +207,10 @@ pub enum ReadError {
     /// don't echo it to other users.
     #[error("not a readable .stalx file ({kind:?}): {detail}")]
     Invalid { kind: InvalidKind, detail: String },
+    /// A bug in this crate or the app code it runs (a panic was contained). The
+    /// file may be fine; report it, don't blame the uploader.
+    #[error("internal error while reading: {0}")]
+    Internal(String),
 }
 
 /// Why a file is not a readable `.stalx`.
@@ -205,6 +228,9 @@ pub enum InvalidKind {
     Deadline,
     /// SQLite, but not a Stalagmight project (no project data).
     NoProjectData,
+    /// A stored value no survey can have: a non-finite measurement, or a zero
+    /// datum outside latitude [-90, 90] / longitude [-180, 180].
+    InvalidValue,
     /// Anything else the load path rejected.
     Other,
 }
@@ -226,31 +252,57 @@ pub fn read_file(path: &Path) -> Result<Survey, ReadError> {
 /// Read a `.stalx` file. Streams at most `max_file_bytes + 1` bytes from `path`
 /// straight into the private copy, so the input is never held in memory.
 pub fn read_file_with(path: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
-    let dir = tempfile::tempdir()?;
-    let copy = dir.path().join("project.stalx");
-    let written = std::io::copy(
-        &mut std::fs::File::open(path)?.take(options.max_file_bytes.saturating_add(1)),
-        &mut std::fs::File::create(&copy)?,
-    )?;
-    if written > options.max_file_bytes {
-        return Err(ReadError::TooLarge {
-            max: options.max_file_bytes,
-        });
-    }
-    read_copy(&copy, options)
+    contain_panics(|| {
+        let dir = private_dir(options)?;
+        let copy = dir.path().join("project.stalx");
+        let written = std::io::copy(
+            &mut std::fs::File::open(path)?.take(options.max_file_bytes.saturating_add(1)),
+            &mut std::fs::File::create(&copy)?,
+        )?;
+        if written > options.max_file_bytes {
+            return Err(ReadError::TooLarge {
+                max: options.max_file_bytes,
+            });
+        }
+        read_copy(&copy, options)
+    })
 }
 
 /// Read a `.stalx` file held in memory (e.g. an upload).
 pub fn read_bytes(bytes: &[u8], options: &ReadOptions) -> Result<Survey, ReadError> {
-    if bytes.len() as u64 > options.max_file_bytes {
-        return Err(ReadError::TooLarge {
-            max: options.max_file_bytes,
-        });
+    contain_panics(|| {
+        if bytes.len() as u64 > options.max_file_bytes {
+            return Err(ReadError::TooLarge {
+                max: options.max_file_bytes,
+            });
+        }
+        let dir = private_dir(options)?;
+        let copy = dir.path().join("project.stalx");
+        std::fs::File::create(&copy)?.write_all(bytes)?;
+        read_copy(&copy, options)
+    })
+}
+
+/// A panic anywhere in the read becomes [`ReadError::Internal`] instead of
+/// unwinding into the caller (through a Python binding it would surface as a
+/// `BaseException` most task runners do not catch). Needs `panic = "unwind"`,
+/// Rust's default; under `panic = "abort"` the process still dies.
+fn contain_panics(read: impl FnOnce() -> Result<Survey, ReadError>) -> Result<Survey, ReadError> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).unwrap_or_else(|payload| {
+        let message = payload
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_owned())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "panic with a non-string payload".to_owned());
+        Err(ReadError::Internal(message))
+    })
+}
+
+fn private_dir(options: &ReadOptions) -> std::io::Result<tempfile::TempDir> {
+    match &options.temp_dir {
+        Some(dir) => tempfile::Builder::new().prefix("stalx-").tempdir_in(dir),
+        None => tempfile::Builder::new().prefix("stalx-").tempdir(),
     }
-    let dir = tempfile::tempdir()?;
-    let copy = dir.path().join("project.stalx");
-    std::fs::File::create(&copy)?.write_all(bytes)?;
-    read_copy(&copy, options)
 }
 
 /// Read the private copy. The caller keeps the temp dir alive across this call;
@@ -269,6 +321,11 @@ fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
         .map_err(invalid)?;
     let mut project = db.load_project().map_err(invalid)?;
     check_counts(&project, options.count_limits)?;
+    validate_values(&project)?;
+    // Before the app's steps below: the app repairs a missing or in-section
+    // duplicate shot UUID with a RANDOM one, which would make the same file read
+    // differently every time. Derive them instead, so re-reads agree.
+    let derived_uuids = derive_missing_shot_uuids(&mut project);
     // The post-load steps of the app's own open (`project_load.rs`) that change
     // what this crate reports: ids for legacy closures, re-derived section
     // offsets (which also re-anchors refs and turns orphan closures into
@@ -283,7 +340,55 @@ fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
         &project,
         schema_version,
         options.with_stations,
+        &derived_uuids,
     ))
+}
+
+/// Refuse zero datums no survey can have, before any geometry uses them.
+fn validate_values(project: &stalagmight_models::Project) -> Result<(), ReadError> {
+    // Shot measurements need no check here: the loader already replaces a
+    // non-finite one with 0, as the app shows it (`Shot::sanitize_non_finite`).
+    let bad = |what: String| Err(ReadError::invalid(InvalidKind::InvalidValue, what));
+    for datum in &project.zero_datums {
+        let (lat, lon) = (datum.gps.latitude, datum.gps.longitude);
+        if !(lat.is_finite() && lon.is_finite())
+            || !(-90.0..=90.0).contains(&lat)
+            || !(-180.0..=180.0).contains(&lon)
+        {
+            return bad(format!(
+                "zero datum on section {}: latitude/longitude out of range",
+                datum.station_ref.section_id
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Fill a missing shot UUID, and replace the later of two equal UUIDs in one
+/// section, with a UUID derived from the shot's place and content, so the same
+/// file always reads to the same ids. Returns the shots it filled, as
+/// `(section id, shot index)`.
+fn derive_missing_shot_uuids(
+    project: &mut stalagmight_models::Project,
+) -> std::collections::HashSet<(u32, usize)> {
+    // An arbitrary fixed UUID; changing it changes every derived id.
+    const NAMESPACE: uuid::Uuid = uuid::Uuid::from_u128(0x6f1d_2c3e_8b4a_4e57_9c1d_5a7e_0b3f_2d91);
+    let mut derived = std::collections::HashSet::new();
+    for section in &mut project.sections {
+        let mut seen = std::collections::HashSet::new();
+        for (i, shot) in section.shots.iter_mut().enumerate() {
+            let keep = shot.uuid.as_ref().is_some_and(|u| seen.insert(u.clone()));
+            if keep {
+                continue;
+            }
+            let name = format!("{}/{i}/{}", section.id, shot.uuid.as_deref().unwrap_or(""));
+            let id = uuid::Uuid::new_v5(&NAMESPACE, name.as_bytes()).to_string();
+            seen.insert(id.clone());
+            shot.uuid = Some(id);
+            derived.insert((section.id, i));
+        }
+    }
+    derived
 }
 
 /// Refuse schema objects that would run file-chosen SQL, and return the file's

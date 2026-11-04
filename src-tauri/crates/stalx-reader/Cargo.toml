@@ -17,3 +17,4 @@ serde = { workspace = true, features = ["derive"] }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+uuid = { workspace = true, features = ["v5"] }
