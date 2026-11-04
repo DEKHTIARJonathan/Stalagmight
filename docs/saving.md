@@ -89,7 +89,7 @@ opens the project **read-only** and never writes the file (#576 B6-D1):
   ahead of any SpeleoDB lock state. The frontend gets the same verdict on the load
   result (`newerSchemaVersion`) and composes it into the canonical edit gate
   (`useEditingBlocked`, see [app-modes.md](app-modes.md)), and a banner says why:
-  "This project was saved by a newer version of Stalagmight. Update to edit it."
+  "This project was saved by a newer version of Stalagmight. Update Stalagmight to edit it."
 - **Every save is refused** - in place, Save As, the pre-push flush - with the
   `NEWER_FILE_READ_ONLY` code, which `surfaceSaveFailure` turns into a warning
   toast. Auto-save never attempts one. Writing the file at this build's older

@@ -3151,7 +3151,7 @@
       }
     },
     "newerFile": {
-      "lead": "This project was saved by a newer version of Stalagmight. Update to edit it.",
+      "lead": "This project was saved by a newer version of Stalagmight. Update Stalagmight to edit it.",
       "detail": "It is open read-only: you can view and export it, but changes and saves are off so this version cannot drop what the newer one stored.",
       "saveRefused": "Not saved: this project was saved by a newer version of Stalagmight."
     },

@@ -41,6 +41,17 @@ describe('humanizeSpeleoError: a newer-version refusal outside a save (#576 NF-W
     expect(shown).not.toMatch(/Not saved/);
   });
 
+  // [#576 RV10b-3-D1] "Update to edit it" after "Could not update:" read as the
+  // SpeleoDB Update verb that had just failed. The line names what to update.
+  it.each([
+    ['speleodb.editBar.toasts.startFailed', 'Could not start editing'],
+    ['speleodb.editBar.toasts.updateFailed', 'Could not update'],
+  ] as const)('the %s toast says to update Stalagmight, not to Update', (prefixKey, prefixText) => {
+    expect(humanizeSpeleoError(VERB_REFUSED, i18n.t(prefixKey))).toBe(
+      `${prefixText}: This project was saved by a newer version of Stalagmight. Update Stalagmight to edit it`,
+    );
+  });
+
   it('a verb that saves first (Push, Done) keeps the refused-save wording', () => {
     const prefix = i18n.t('speleodb.editBar.toasts.pushFailed');
 

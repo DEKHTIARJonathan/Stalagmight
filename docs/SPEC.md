@@ -2258,7 +2258,7 @@ transaction and first keeps one copy of the file as it was,
 A file stamped with a NEWER schema - saved by a newer Stalagmight - is opened
 read-only instead: nothing is migrated or written, its undo history stays in the file
 untouched, editing is blocked behind a banner ("This project was saved by a newer
-version of Stalagmight. Update to edit it."), and every save and SpeleoDB push of it
+version of Stalagmight. Update Stalagmight to edit it."), and every save and SpeleoDB push of it
 is refused, so an older build can never rewrite it at its own schema and drop what the
 newer one stored. Viewing and export work. See
 [saving.md](saving.md#files-saved-by-a-newer-version-open-read-only). Alongside the survey tables (project, sections, shots, station merges,

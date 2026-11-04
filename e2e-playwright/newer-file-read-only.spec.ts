@@ -57,7 +57,7 @@ test.describe('A project saved by a newer version', () => {
     const banner = page.getByTestId('newer-file-banner');
     await expect(banner).toBeVisible();
     await expect(banner).toContainText('saved by a newer version of Stalagmight');
-    await expect(banner).toContainText('Update to edit it');
+    await expect(banner).toContainText('Update Stalagmight to edit it');
     // An ongoing condition with its remedy outside the app: nothing to click.
     await expect(banner.getByRole('button')).toHaveCount(0);
 
