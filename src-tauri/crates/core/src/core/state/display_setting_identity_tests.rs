@@ -253,3 +253,106 @@ fn a_write_made_just_before_a_save_as_still_lands_in_the_project() {
         .save_display_setting_for(Some(&made_after), "gridSpacing", "30")
         .expect("a write naming the new file");
 }
+
+/// The saved-as file's `gridSpacing`, read from disk.
+fn grid_spacing_in(path: &Path) -> Option<String> {
+    Database::open_readonly(path)
+        .expect("open the file")
+        .get_display_setting("gridSpacing")
+        .expect("read it")
+}
+
+#[test]
+fn a_write_queued_across_a_second_save_as_still_lands_in_the_project() {
+    // [#576 RV10b-4] Every Save As moves the open project to another file without
+    // a new open, not only the first: a write made after the first move names the
+    // intermediate file, and if it is still queued across the second it names
+    // neither the file the project was opened from nor the one it is at now.
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().expect("temp dir");
+    let path_a = temp.path().join("CaveA.stalx");
+    let path_b = temp.path().join("CaveA second.stalx");
+    let path_c = temp.path().join("CaveA third.stalx");
+    let mut project = Project::new("CaveA".to_string(), None);
+    project.created_at = "2026-01-01T10:00:00Z".parse().expect("timestamp");
+    Database::open(&path_a)
+        .expect("create")
+        .save_project(&project)
+        .expect("write");
+
+    let state = AppState::new().expect("state");
+    assert!(state.open_project(path_a).success, "open the project");
+    let made_at_open = wire_identity(&state.get_project_state().expect("open"));
+    let first = state.save_project(Some(path_b.clone()));
+    assert!(first.success, "first save as: {:?}", first.error);
+    let made_between = wire_identity(&state.get_project_state().expect("open"));
+    assert_eq!(made_between.file_path.as_deref(), path_b.to_str());
+    let second = state.save_project(Some(path_c.clone()));
+    assert!(second.success, "second save as: {:?}", second.error);
+
+    let answer = state.save_display_setting_for(Some(&made_between), "gridSpacing", "35");
+    let landed = grid_spacing_in(&path_c);
+    println!(
+        "[RV10b-4] a write naming the file between two Save As: answer={:?}; the open \
+         file's gridSpacing={landed:?} (expected Ok and Some(\"35\"))",
+        answer.as_ref().map_err(|e| e.code)
+    );
+    assert!(answer.is_ok());
+    assert_eq!(landed.as_deref(), Some("35"));
+
+    // The file it was opened from is still its own (as after one Save As).
+    state
+        .save_display_setting_for(Some(&made_at_open), "gridSpacing", "36")
+        .expect("a write naming the file the project was opened from");
+    assert_eq!(grid_spacing_in(&path_c).as_deref(), Some("36"));
+
+    // A file this session's project never was at - same `created_at`, another
+    // copy - is still refused, and nothing is written.
+    let elsewhere = DisplaySettingTarget {
+        created_at: made_between.created_at,
+        file_path: Some(
+            temp.path()
+                .join("CaveA copy.stalx")
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    };
+    let refused = state.save_display_setting_for(Some(&elsewhere), "gridSpacing", "99");
+    assert_eq!(
+        refused.map_err(|e| e.code),
+        Err(CommandErrorCode::ProjectChanged)
+    );
+    assert_eq!(grid_spacing_in(&path_c).as_deref(), Some("36"));
+}
+
+#[test]
+fn a_new_open_forgets_the_files_the_previous_session_was_saved_through() {
+    // [#576 RV10b-4] The files a Save As moved the project off are this SESSION's:
+    // once a file is opened again, the copy left behind by an earlier Save As is
+    // another copy, and a late write made for it is refused.
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().expect("temp dir");
+    let path_a = temp.path().join("CaveA.stalx");
+    let path_b = temp.path().join("CaveA second.stalx");
+    let mut project = Project::new("CaveA".to_string(), None);
+    project.created_at = "2026-01-01T10:00:00Z".parse().expect("timestamp");
+    Database::open(&path_a)
+        .expect("create")
+        .save_project(&project)
+        .expect("write");
+
+    let state = AppState::new().expect("state");
+    assert!(state.open_project(path_a.clone()).success, "open A");
+    let saved_as = state.save_project(Some(path_b));
+    assert!(saved_as.success, "save as: {:?}", saved_as.error);
+    let made_for_b = wire_identity(&state.get_project_state().expect("open"));
+    // The user opens A again while B's write is still in flight.
+    assert!(state.open_project(path_a.clone()).success, "open A again");
+
+    let late = state.save_display_setting_for(Some(&made_for_b), "gridSpacing", "50");
+    assert_eq!(
+        late.map_err(|e| e.code),
+        Err(CommandErrorCode::ProjectChanged)
+    );
+    assert_eq!(grid_spacing_in(&path_a), None);
+}

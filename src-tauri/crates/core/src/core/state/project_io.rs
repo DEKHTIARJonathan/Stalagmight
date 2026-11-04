@@ -806,6 +806,7 @@ impl AppState {
                 // File was saved but can't be reopened - subsequent operations
                 // (undo persistence, display settings) will fail. Clear the stale
                 // database handle so callers don't use it.
+                self.note_open_project_moved(project.file_path.as_deref(), &save_path);
                 project.file_path = Some(save_path.clone());
                 drop(proj_guard);
                 {
@@ -826,7 +827,9 @@ impl AppState {
             }
         };
 
-        // Update file path after successful save
+        // Update file path after successful save (a Save As moves the open
+        // project: #576 RV10b-4).
+        self.note_open_project_moved(project.file_path.as_deref(), &save_path);
         project.file_path = Some(save_path.clone());
 
         // Update database handle

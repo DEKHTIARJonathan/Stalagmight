@@ -2,7 +2,7 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
 use super::AppState;
@@ -71,6 +71,11 @@ impl AppState {
     /// file: the path the open project was committed from, or the one it has now.
     /// Either, because a Save / Save As moves the open project to another file
     /// without a new open, and a write made just before it names the old one.
+    ///
+    /// [#576 RV10b-4] Or any file a Save As has moved it off since that commit
+    /// ([`Self::note_open_project_moved`]): a write made between two of them names
+    /// the file in between. A file the project was never at this session - another
+    /// copy - is still refused.
     pub fn save_display_setting_for(
         &self,
         made_for: Option<&DisplaySettingTarget>,
@@ -90,7 +95,8 @@ impl AppState {
                     .is_ok_and(|at| at.with_timezone(&Utc) == open_created_at);
                 let made_for_path = made_for.file_path.as_ref().map(PathBuf::from);
                 same_created_at
-                    && (made_for_path == open_path || made_for_path == *self.opened_from.lock())
+                    && (made_for_path == open_path
+                        || self.opened_from.lock().contains(&made_for_path))
             }
             _ => false,
         };
@@ -102,6 +108,22 @@ impl AppState {
         }
         self.write_display_setting(key, value)
             .map_err(|e| CommandError::failed(e.to_string()))
+    }
+
+    /// [#576 RV10b-4] A save is moving the open project from `from` (its
+    /// `file_path` before the save) to `to`, without a new open: keep `from` among
+    /// the files this session's project has been at, so a display-setting write
+    /// made for it still lands ([`Self::save_display_setting_for`]). The next
+    /// project-slot commit starts the list again.
+    pub(super) fn note_open_project_moved(&self, from: Option<&Path>, to: &Path) {
+        if from == Some(to) {
+            return;
+        }
+        let from = from.map(Path::to_path_buf);
+        let mut files = self.opened_from.lock();
+        if !files.contains(&from) {
+            files.push(from);
+        }
     }
 
     /// The write itself, for a caller already holding `command_lock`.
