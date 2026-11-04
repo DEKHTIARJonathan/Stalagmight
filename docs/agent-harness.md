@@ -231,6 +231,13 @@ hazards over long runs.
     that owns the key, because silently reordering would ignore what was asked
     for. Parsing lives in `e2e/agent/lib/fuzzMatrixArgs.ts` so a unit test can
     assert the refusal list is the same list the per-cell environment writes.
+    A cell whose child died without printing PASS or FAIL (a spawn failure,
+    the per-cell timeout, an app that never attached) is LOST, not failed:
+    it reads `LOST` in the table, the summary counts lost and failed apart,
+    and the speedup is NOT reported - a lost cell's duration is an attach
+    timeout, so the ratio would measure nothing (#576 HFI-7: a matrix that
+    lost 9 of 12 cells used to print "speedup 3.91x"). The run then ends
+    `MATRIX INCOMPLETE: N of M cell(s) produced no verdict` and exits non-zero.
   - `pnpm agent:mcp` - run the server standalone (for an external MCP client).
   - `pnpm agent:bridge <dir>` - file-based access to the same server for plain
     shells and subagents without an MCP client: append JSON tool calls to
@@ -293,6 +300,20 @@ one profile and not the other has a second candidate explanation, and the
 comparison to reach for is the same seed in the same profile. (The WDIO tier
 builds its DEBUG binary with `--features e2e` for this reason; the agent
 harness deliberately does not, to leave its default build unchanged.)
+
+**Single-instance is off in both harness profiles (#576 HFI-7).** The release
+harness build drops `tauri-plugin-single-instance` at compile time, through
+`e2e`. The debug build keeps the plugin compiled in but does not REGISTER it
+when `STALAGMIGHT_TEST_HOOKS=1`, which every harness session sets for its app
+and a normal launch never does (`commands::launch::single_instance_enabled`);
+a release binary ignores that variable, so production behaviour is unchanged.
+Before, the debug build registered it, and the plugin claims one name on the
+D-Bus session bus per app identifier: on any machine with a session bus,
+parallel sessions killed each other (the second app was terminated and its
+argv forwarded to the first, so its harness never attached), and a harness run
+started while the user's own Stalagmight was open forwarded its launch into the
+user's app. Unsetting `DBUS_SESSION_BUS_ADDRESS` did not help - zbus falls back
+to `$XDG_RUNTIME_DIR/bus`.
 
 **Cost.** One-time cold release build: about 3.5 minutes wall clock on the
 self-hosted runner (`Finished release profile [optimized] in 2m 08s` plus the
@@ -1130,6 +1151,18 @@ and reports `x5:settledAt:N`.
 
 Both fixtures are green.
 
+**Sections with different declinations (#576 HFI-8).** When every section has a
+correction on record but they disagree - multi-year IGRF is enough - the TML
+exporter rotates every bearing into true north and the re-import reads the
+rotated bearings as measured ones (`docs/ariane-export.md`, the third case, a
+documented loss that decision HFI-8-D1 keeps for now; the declination review is
+#600). X6 reported every shot of such a project as lost and gained. It now
+compares the re-import against the shots AS EXPORTED: `asExportedToTml` mirrors
+`AzimuthExport::decide` over each shot's resolved section reference and, on the
+mixed-to-true plan only, rotates each bearing by its own section's correction
+(`x6:rotatedToTrue` counts them). Anything else - a bearing rotated by the
+wrong section's correction, a length, a descent - still fails.
+
 ### Three tiers, and which one gates CI
 
 The harness is the middle tier of three, and it is worth being clear about what
@@ -1409,7 +1442,8 @@ mutating because every later `os_*` step depends on that consent, and
 ## Artifacts layout
 
 ```
-.agent-artifacts/sessions/<yyyymmdd-hhmmss-rand>/
+.agent-artifacts/sessions/<yyyymmdd-hhmmss>-<ms>-p<pid>-<rand>/
+  owner                # the owning harness pid, written when the dir is claimed
   actions.jsonl        # the action log (JSONL contract above)
   screenshots/         # <seq>-<name>.png
   state/               # state snapshots
@@ -1421,7 +1455,29 @@ mutating because every later `os_*` step depends on that consent, and
   report.md            # if a report was generated here
 ```
 
-Gitignored; the 20 newest sessions are kept.
+Gitignored; the 20 newest sessions are kept, plus any older one that is still
+in use.
+
+**One directory per session, claimed atomically (#576 HFI-14).** The id used to
+be the wall-clock second plus `getTime() % 100000` - the clock again - so two
+harness processes starting in the same millisecond shared one directory, one
+`owner` file (two pids concatenated), one `pids` file and one fixture copy, and
+each tore the other down. `recorder.allocateSessionDir` now builds the id from
+the second (so a sorted listing stays chronological), the millisecond, the pid
+and a random tail, creates the directory with an EXCLUSIVE `mkdir` (EEXIST means
+draw again, never share) and writes `owner` in the same breath, before anything
+can prune or reap it.
+
+**Retention never deletes a session that is in use (#576 HFI-6).** Every new
+session prunes all but the newest 20, and it used to do so with no liveness
+check: in a parallel campaign a sibling still running lost its `actions.jsonl`
+mid-run, and a finished cell's failure trace was gone before anyone could shrink
+it. `pruneOldSessions` now skips a directory whose `owner` pid is alive (and is
+not this process - an earlier session of this process stays prunable), or that
+holds a trace in `traces/` written at or after the run start. The run start is
+the process start, or `STALAGMIGHT_AGENT_RUN_START_MS` when that is earlier;
+`agent:fuzz-matrix` sets it for its cells so "the run" is the whole matrix, and a
+hand-rolled runner of many `agent:scenario` processes can export it the same way.
 
 ## Troubleshooting
 
