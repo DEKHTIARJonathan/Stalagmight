@@ -9,6 +9,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
+import { isPidAlive } from './procs';
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const ARTIFACTS_ROOT = path.join(repoRoot, '.agent-artifacts', 'sessions');
 const RETAIN_SESSIONS = 20;
@@ -16,6 +18,20 @@ const RETAIN_SESSIONS = 20;
 export const OWNER_FILE = 'owner';
 /** How many ids `allocateSessionDir` draws before it gives up. */
 const ALLOCATE_ATTEMPTS = 16;
+/**
+ * The session subdirectory a fuzz scenario drops its traces in
+ * (`fuzzTrace.defaultTracePath`). A trace there written during this run keeps
+ * its session from being pruned; `recorder.test.ts` writes through
+ * `defaultTracePath` so the two cannot drift apart unnoticed.
+ */
+const TRACES_DIR = 'traces';
+/**
+ * An epoch-millisecond instant that still counts as THIS run when it is earlier
+ * than the process's own start. `pnpm agent:fuzz-matrix` sets it for its cells,
+ * so "the run" is the whole matrix rather than one cell; a hand-rolled runner
+ * that starts many `agent:scenario` processes can export it the same way.
+ */
+export const RUN_START_ENV = 'STALAGMIGHT_AGENT_RUN_START_MS';
 
 /**
  * A session id: the local wall-clock SECOND it was allocated in, then the
@@ -119,8 +135,82 @@ export interface ActionRecord {
   post?: unknown;
 }
 
-/** Prune all but the newest `keep` session dirs (best-effort). */
-function pruneOldSessions(root: string, keep: number): void {
+/**
+ * When this run started: the process's own start, or the inherited
+ * `RUN_START_ENV` when that is earlier (a matrix campaign started before this
+ * cell did). A malformed value is ignored rather than trusted.
+ */
+export function runStartMs(
+  env: NodeJS.ProcessEnv = process.env,
+  processStartMs: number = Date.now() - process.uptime() * 1000,
+): number {
+  const raw = env[RUN_START_ENV];
+  const inherited = raw === undefined || raw.trim() === '' ? Number.NaN : Number(raw);
+  return Number.isFinite(inherited) && inherited > 0 ? Math.min(inherited, processStartMs) : processStartMs;
+}
+
+/** What retention reads from the world, injectable so a test can pin it. */
+export interface PruneOptions {
+  /** A trace written at or after this instant protects its session. */
+  runStartMs?: number;
+  /** This process: a directory it owns is one of its own EARLIER sessions. */
+  pid?: number;
+  isAlive?: (pid: number) => boolean;
+}
+
+/**
+ * Why a session directory must survive retention, or null when it may go.
+ *
+ * - `live-owner`: the harness process named in its `owner` marker is alive and
+ *   is not this one - a sibling session that is still RUNNING. Deleting it took
+ *   its `actions.jsonl` out from under it (ENOENT mid-run) and its evidence with
+ *   it. `reapPreviousSessions` has always skipped these; retention did not.
+ * - `recent-trace`: it holds a fuzz trace written during this run. A cell that
+ *   FINISHED and left a failure trace is the one artifact a campaign keeps, and
+ *   twenty short cells finishing elsewhere used to be enough to delete it before
+ *   anyone could shrink it.
+ *
+ * A directory this process owns is not protected by its owner: that is an
+ * earlier session of this same process (the MCP server cycles many), whose
+ * process being alive says nothing about the session.
+ */
+export function pruneProtection(
+  dir: string,
+  opts: Required<PruneOptions>,
+): 'live-owner' | 'recent-trace' | null {
+  try {
+    const owner = Number.parseInt(fs.readFileSync(path.join(dir, OWNER_FILE), 'utf8').trim(), 10);
+    if (Number.isSafeInteger(owner) && owner > 0 && owner !== opts.pid && opts.isAlive(owner)) {
+      return 'live-owner';
+    }
+  } catch {
+    // No marker (a pre-marker session dir): nothing says it is alive.
+  }
+  try {
+    const traces = path.join(dir, TRACES_DIR);
+    for (const name of fs.readdirSync(traces)) {
+      if (fs.statSync(path.join(traces, name)).mtimeMs >= opts.runStartMs) return 'recent-trace';
+    }
+  } catch {
+    // No traces directory: nothing to keep it for.
+  }
+  return null;
+}
+
+/**
+ * Prune all but the newest `keep` session dirs (best-effort), never one that
+ * `pruneProtection` says is still in use. Returns the names deleted.
+ *
+ * A protected directory does not count against `keep` and is not replaced by
+ * an older one: it is simply skipped, and goes on a later call once its owner
+ * has exited and its run is over.
+ */
+export function pruneOldSessions(root: string, keep: number, opts: PruneOptions = {}): string[] {
+  const resolved: Required<PruneOptions> = {
+    runStartMs: opts.runStartMs ?? runStartMs(),
+    pid: opts.pid ?? process.pid,
+    isAlive: opts.isAlive ?? isPidAlive,
+  };
   let dirs: string[];
   try {
     dirs = fs
@@ -129,16 +219,19 @@ function pruneOldSessions(root: string, keep: number): void {
       .map((e) => e.name)
       .sort();
   } catch {
-    return;
+    return [];
   }
-  const toDelete = dirs.slice(0, Math.max(0, dirs.length - keep));
-  for (const name of toDelete) {
+  const deleted: string[] = [];
+  for (const name of dirs.slice(0, Math.max(0, dirs.length - keep))) {
+    if (pruneProtection(path.join(root, name), resolved) !== null) continue;
     try {
       fs.rmSync(path.join(root, name), { recursive: true, force: true });
+      deleted.push(name);
     } catch {
       // Best-effort.
     }
   }
+  return deleted;
 }
 
 export class Recorder {

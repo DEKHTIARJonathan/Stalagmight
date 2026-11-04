@@ -51,6 +51,7 @@ import { fileURLToPath } from 'url';
 import { checkBuildFreshness } from './lib/build';
 import { agentBuildMode } from '../lib/env';
 import { failureDetail } from './lib/fuzzMatrixReport';
+import { RUN_START_ENV, runStartMs } from './lib/recorder';
 import {
   BASE_PORT,
   INHERITED_ENV_BLOCKLIST,
@@ -360,6 +361,10 @@ async function main(): Promise<void> {
   });
 
   const startedAt = Date.now();
+  // Session retention reads "this run" as the whole MATRIX, not one cell: every
+  // cell inherits this, so a trace a finished cell left behind outlives the
+  // cells that start after it (#576 HFI-6, `recorder.ts` `pruneProtection`).
+  process.env[RUN_START_ENV] = String(Math.floor(runStartMs()));
   const results: RunResult[] = [];
   // WARM-UP: from a cold tree the first cell runs ALONE, because each child does
   // its own `build: 'auto'` and K concurrent cargo builds would just queue on the

@@ -4,14 +4,23 @@
  * Every case runs in a throwaway root, never `.agent-artifacts/`, so a test can
  * neither prune nor claim a real session's directory.
  */
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { OWNER_FILE, allocateSessionDir, sessionIdFor } from './recorder';
+import { defaultTracePath } from './fuzzTrace';
+import {
+  OWNER_FILE,
+  RUN_START_ENV,
+  Recorder,
+  allocateSessionDir,
+  pruneOldSessions,
+  runStartMs,
+  sessionIdFor,
+} from './recorder';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 let root = '';
@@ -92,4 +101,84 @@ describe('session ids (#576 HFI-14)', () => {
     expect(ownerOf(a.dir)).toBe(String(a.pid));
     expect(ownerOf(b.dir)).toBe(String(b.pid));
   }, 30_000);
+});
+
+describe('retention (#576 HFI-6)', () => {
+  /** A session allocated a day ago, so every session created after it is newer. */
+  const oldSession = (pid: number): string =>
+    allocateSessionDir(root, { now: () => new Date(Date.now() - 24 * 3600 * 1000), pid }).dir;
+
+  /** What every harness start does: claim a directory, then construct the recorder (which prunes). */
+  const startNewerSessions = (count: number): void => {
+    for (let i = 0; i < count; i += 1) new Recorder(allocateSessionDir(root).id, root);
+  };
+
+  /** A pid that WAS a process and is not any more. */
+  const deadPid = (): number => {
+    const done = spawnSync('true');
+    expect(done.pid).toBeGreaterThan(0);
+    return done.pid as number;
+  };
+
+  it('keeps a live sibling session through twenty newer sessions', () => {
+    // A real, live process that is not this one: the shape of a sibling harness
+    // run that is still going while 20 short cells start and finish.
+    const sibling = spawn('sleep', ['60'], { stdio: 'ignore' });
+    try {
+      expect(sibling.pid).toBeGreaterThan(0);
+      const live = oldSession(sibling.pid as number);
+      fs.writeFileSync(path.join(live, 'actions.jsonl'), '{"type":"session-start"}\n');
+      startNewerSessions(20);
+      expect(fs.existsSync(path.join(live, 'actions.jsonl'))).toBe(true);
+      expect(fs.readdirSync(root)).toHaveLength(21);
+    } finally {
+      sibling.kill('SIGKILL');
+    }
+  });
+
+  it('keeps a finished session whose trace was written during this run', () => {
+    const finished = oldSession(deadPid());
+    const trace = defaultTracePath(finished, 'probeScenario', 7);
+    fs.mkdirSync(path.dirname(trace), { recursive: true });
+    fs.writeFileSync(trace, '{}\n');
+    startNewerSessions(20);
+    expect(fs.existsSync(trace)).toBe(true);
+  });
+
+  it('still prunes what nothing needs: a dead owner, an older trace, or an earlier session of this process', () => {
+    const dead = oldSession(deadPid());
+    const staleTrace = defaultTracePath(dead, 'probeScenario', 1);
+    fs.mkdirSync(path.dirname(staleTrace), { recursive: true });
+    fs.writeFileSync(staleTrace, '{}\n');
+    const before = (runStartMs() - 3600 * 1000) / 1000;
+    fs.utimesSync(staleTrace, before, before);
+    const ours = oldSession(process.pid);
+    startNewerSessions(20);
+    expect(fs.existsSync(dead)).toBe(false);
+    expect(fs.existsSync(ours)).toBe(false);
+    expect(fs.readdirSync(root)).toHaveLength(20);
+  });
+
+  it('reports what it deleted and leaves protected directories out of the count', () => {
+    const live = oldSession(31337);
+    const gone = oldSession(31338);
+    for (let i = 0; i < 2; i += 1) allocateSessionDir(root);
+    const deleted = pruneOldSessions(root, 2, {
+      runStartMs: Date.now(),
+      pid: process.pid,
+      isAlive: (pid) => pid === 31337,
+    });
+    expect(deleted).toEqual([path.basename(gone)]);
+    expect(fs.existsSync(live)).toBe(true);
+  });
+
+  it('takes an inherited run start only when it is earlier and well-formed', () => {
+    const own = 1_000_000;
+    expect(runStartMs({}, own)).toBe(own);
+    expect(runStartMs({ [RUN_START_ENV]: '400000' }, own)).toBe(400_000);
+    expect(runStartMs({ [RUN_START_ENV]: '2000000' }, own)).toBe(own);
+    for (const junk of ['', ' ', 'soon', '-5', '0', 'Infinity']) {
+      expect(runStartMs({ [RUN_START_ENV]: junk }, own)).toBe(own);
+    }
+  });
 });
