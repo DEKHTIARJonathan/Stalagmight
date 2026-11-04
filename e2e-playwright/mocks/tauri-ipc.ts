@@ -19,6 +19,7 @@ import { speleodbCommands } from './ipc/speleodb';
 import { tileCacheCommands } from './ipc/tileCache';
 import { buildMockShot } from './ipc/shots';
 import { INERT_COMMANDS } from './ipc/inert';
+import { openerMockSource, type OpenerMock } from './ipc/opener';
 
 declare global {
   interface Window {
@@ -180,6 +181,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
     families: MockCommandFamily[],
     buildShot: typeof buildMockShot,
     inertCommands: Record<string, { reply: unknown; reason: string }>,
+    opener: OpenerMock,
   ) => {
     // Event listener registry for mock Tauri events (plugin:event|listen/emit/unlisten)
     // This is defined early so it can be used by both mockHandler and __tauriEventMock
@@ -983,6 +985,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         if (cmd !== 'push_frontend_log') {
           console.log(`[Mock IPC] Command: ${cmd}`, args);
         }
+
+        // [#576 NF-W12FE-1] A plugin call the real app refuses (an argument its Rust command
+        // lacks or cannot read, or a command the capabilities do not grant) is refused here as
+        // Tauri refuses it, before any override, and fails the test at teardown (`./ipc/opener.ts`).
+        const refusedPluginCall = opener.refuse(cmd, args);
+        if (refusedPluginCall !== null) return Promise.reject(refusedPluginCall);
 
         const overrideMap = (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
           | Record<string, unknown>
@@ -2594,18 +2602,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'plugin:dialog|confirm':
             return false;
 
-          // Opener plugin commands
-          case 'plugin:opener|open_url':
-            console.log('[Mock IPC] open_url called with:', args);
-            return undefined;
-
-          case 'plugin:opener|reveal_item_in_dir':
-            console.log('[Mock IPC] reveal_item_in_dir called with:', args);
-            return undefined;
-
-          case 'plugin:opener|open_path':
-            console.log('[Mock IPC] open_path called with:', args);
-            return undefined;
+          // The opener plugin's commands are answered in `default` by `./ipc/opener.ts`.
 
           // Export commands
           case 'export_csv':
@@ -3160,6 +3157,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return [] satisfies MockReply<'take_unrecognised_shot_kinds'>;
 
           default: {
+            if (opener.answers(cmd)) return opener.reply(cmd, args);
             for (const handle of familyHandlers) {
               const result = handle(cmd as MockCommandName, args);
               if (result !== UNHANDLED) return result;
@@ -3304,7 +3302,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
   // addInitScript serializes a function.
   const families = MOCK_COMMAND_FAMILIES.map((family) => family.toString()).join(',\n');
   await page.addInitScript({
-    content: `(${installTauriIpcMock.toString()})([${families}], ${buildMockShot.toString()}, ${JSON.stringify(INERT_COMMANDS)});`,
+    content: `(${installTauriIpcMock.toString()})([${families}], ${buildMockShot.toString()}, ${JSON.stringify(INERT_COMMANDS)}, ${openerMockSource()});`,
   });
 }
 

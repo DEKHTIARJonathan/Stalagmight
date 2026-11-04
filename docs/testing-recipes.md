@@ -1178,6 +1178,13 @@ Tauri plugin bridge calls (`plugin:dialog|confirm`, `plugin:opener|open_url`,
 goes in `mocks/ipc/inert.ts` with its fixed reply and a reason (today:
 telemetry and the console log bridge) - not into a silent default.
 
+The opener plugin's calls are also checked against what the real app takes
+(#576 NF-W12FE-1, `mocks/ipc/opener.ts`): arguments its Rust command would
+refuse (`reveal_item_in_dir` takes `paths`, not `path`) or a command the
+capability file does not grant (`open_path`) are rejected the way Tauri
+rejects them and fail the test at teardown, so call the plugin through its JS
+API rather than a hand-built `invoke`.
+
 ```typescript
 case 'your_new_command':
   return { warnings: [], remote_link: remoteLink() } satisfies MockReply<'your_new_command'>;
