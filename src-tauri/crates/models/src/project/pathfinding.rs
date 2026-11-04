@@ -725,10 +725,12 @@ impl Project {
     ///
     /// ⚠ **A rider is the second quantity along the COST-optimal path, not its own minimum.** The
     /// caller wants what the chosen route costs in the rider's units, not the different route that
-    /// would minimise the rider. For the gas engine that is both the honest reading (the diver flies
-    /// one route, the gas-optimal one) and the conservative one: scooter distance along the
-    /// gas-optimal path is by definition `>=` the achievable minimum, so a cap on it can only ever
-    /// under-state reach. Do not "fix" this into a second search.
+    /// would minimise the rider. Scooter distance along the gas-optimal path is by definition `>=`
+    /// the achievable minimum, so a cap on it can only ever under-state reach. Where the gas engine
+    /// needs more - the cheapest gas among the routes a scooter's range covers, which round a loop
+    /// is not the gas-optimal path when that runs out of range - it does its own two-criteria search,
+    /// in `gas/range_route.rs` (#576 NF-W11GAS-1, NF-W12GAS-1), and reads this function's riders only
+    /// along the gas-optimal path it also needs. Keep this one single-criterion.
     ///
     /// `cost_scale` must be finite and positive, or an infinite edge could stop reading as
     /// unreachable; callers validate their speeds at the config boundary.
