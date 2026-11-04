@@ -150,7 +150,10 @@ engine budgets exactly the Z-derated span from the real fill down to
 `fill - usable` - the pressure the turn gauge and a Free stage's drop show. The
 usable bar is clamped to `[0, capped fill]` so an oversized value cannot credit
 gas the tank does not hold; under the conservative cap that ceiling is the rated
-pressure. The window is never slid down to `[rated - usable, rated]`: the same
+pressure. A Free allowance larger than the fill spends the whole tank and leaves
+no reserve (with the cap on, an overfill still keeps the bar above its rating) -
+it is the diver's own setting, accepted as is (#576 RV9a-5-D2;
+`gas_free_clamps_usable_over_fill`). The window is never slid down to `[rated - usable, rated]`: the same
 usable bar holds less gas at an overfill than at rated (12 L rated 207 bar,
 filled to 250, 100 bar usable: 1018 L between 250 and 150 bar, against 1096 L
 between 207 and 107). An overfill never buys extra penetration, and switching the
