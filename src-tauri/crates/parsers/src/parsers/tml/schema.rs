@@ -184,8 +184,28 @@ pub const DEPTH_IN_SAME_AS_PREVIOUS: f64 = -1.0;
 
 /// Whether a `DepthIn` value read from a file is the sentinel. Exact: the
 /// sentinel is a spelling (`-1.0`), not a measurement with a tolerance.
+///
+/// A METRIC file can also spell it as -1 FOOT in metres (#576 HFI-1): see
+/// [`DEPTH_IN_SAME_AS_PREVIOUS_SCALED`]. That reading is the parser's, per file
+/// (`parsers::tml::restore_scaled_depth_in_marker`), not this per-value test's.
 pub fn is_depth_in_sentinel(depth_in: f64) -> bool {
     depth_in == DEPTH_IN_SAME_AS_PREVIOUS
+}
+
+/// [#576 HFI-1] The sentinel after a feet-to-metre conversion that did not
+/// except it: -1.0 ft x 0.3048 = -0.3048, kept to 1-4 decimals, rounded or
+/// truncated. Ariane writes lengths with two decimals and trims a trailing zero,
+/// so its own conversion leaves `-0.3` (-0.30); the other spellings are the same
+/// value at the other precisions a converter can keep. Each is matched to a
+/// micrometre - the finest precision any writer in this format uses (our export
+/// writes six decimals) - so a nearby real depth (-0.31, -0.2) is never one.
+pub const DEPTH_IN_SAME_AS_PREVIOUS_SCALED: [f64; 4] = [-0.3, -0.304, -0.305, -0.3048];
+
+/// Whether `depth_in` is one of [`DEPTH_IN_SAME_AS_PREVIOUS_SCALED`].
+pub fn is_scaled_depth_in_sentinel(depth_in: f64) -> bool {
+    DEPTH_IN_SAME_AS_PREVIOUS_SCALED
+        .iter()
+        .any(|spelling| (depth_in - spelling).abs() < 1e-6)
 }
 
 /// Whether `c` is in XML 1.0's `Char` production -
@@ -400,5 +420,17 @@ mod tests {
         assert!(!is_depth_in_sentinel(-1.000_001));
         assert!(!is_depth_in_sentinel(-0.999_999));
         assert!(!is_depth_in_sentinel(1.0));
+    }
+
+    /// [#576 HFI-1] -1 ft in metres at the precisions a converter keeps, and
+    /// nothing a micrometre or more away from one of them.
+    #[test]
+    fn the_scaled_depth_in_sentinel_is_its_spellings_only() {
+        for spelling in [-0.3, -0.30, -0.304, -0.305, -0.3048, -0.304_800_000_4] {
+            assert!(is_scaled_depth_in_sentinel(spelling), "{spelling}");
+        }
+        for real in [-0.31, -0.29, -0.2, -0.3049, -0.303, -0.300_002, 0.3, -1.0] {
+            assert!(!is_scaled_depth_in_sentinel(real), "{real}");
+        }
     }
 }

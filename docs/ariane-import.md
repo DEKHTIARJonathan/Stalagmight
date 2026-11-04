@@ -272,6 +272,12 @@ When the file specifies imperial units, lengths, LRUD values, depths, section st
 
 An absent or recognised `<unit>` (empty, `m`, `metric`, `ft`, `imperial`) is handled silently. Anything else falls back to metric AND raises an import warning naming the unrecognised string, so a silent mis-scaling is visible on the receipt.
 
+### A "same as previous" marker scaled from feet (#576 HFI-1)
+
+The `DepthIn` value `-1.0` is the format's "this shot starts where the previous one ended" marker, not a depth, and the feet-to-metre conversion above leaves it alone. A file converted to metres by a tool that did NOT leave it alone carries -1 ft written in metres instead: -0.3048, which Ariane (two decimals, trailing zero trimmed) writes as `-0.3`. Read literally, every such shot started 0.3 m above the datum, and the validator flagged the impossible geometry without naming the cause.
+
+In a metric file, the spellings of -0.3048 at 1-4 decimals, rounded or truncated (`-0.3`, `-0.304`, `-0.305`, `-0.3048`, each matched to a micrometre), are read as the marker when MORE THAN HALF of the file's shots carry one - the marker is on nearly every shot of an Ariane file, a real start depth shared by half a survey is not, and a flat stretch that did sit there reads back the same depth either way. Below that a `-0.3` is a measurement (a station 0.3 m above the datum), and in a feet file `-0.3` is always -0.3 ft. The reading is `restore_scaled_depth_in_marker` (`parsers/tml/mod.rs`) with the spellings in `schema::DEPTH_IN_SAME_AS_PREVIOUS_SCALED`; it adds no receipt line.
+
 ### Entrance elevation's zero-is-absent convention
 
 Ariane encodes "no entrance elevation recorded" as `firstStartAbsoluteElevation = 0.0` rather than an absent field, so import treats an exact `0.0` as "not recorded" and anything else, however small, as a real value. This is format-forced, not a Stalagmight choice: a genuine entrance at exactly 0.0 m above mean sea level is not representable and will read back as unset. The convention lives in `crate::models::ariane_elevation_or_absent`, called by import and SpeleoDB pull-adoption; export mirrors it independently (it writes `0.0` back out for an unset `Project::surface_elevation` via its own `unwrap_or(0.0)`, rather than calling the helper), so the round trip is consistent.

@@ -1111,6 +1111,45 @@ fn apply_unit_conversion(
     }
 }
 
+/// [#576 HFI-1] Read the "same as previous" `DepthIn` marker in a METRIC file
+/// whose marker went through a feet-to-metre conversion: -1.0 ft written in
+/// metres ([`schema::DEPTH_IN_SAME_AS_PREVIOUS_SCALED`], `-0.3` as Ariane writes
+/// it) instead of `-1.0`. Read literally, every such shot started 0.3 m above the
+/// datum. Rewritten to the canonical marker in place, so every reader downstream
+/// (`resolve_tml_depth_in`, the linearizer) sees the file's intent.
+///
+/// Per FILE, never per value, because -0.3 m is also a legal start depth: the
+/// marker is written on nearly every shot of an Ariane file, so the scaled
+/// spelling counts as the marker only when MORE THAN HALF of the file's shots
+/// carry it. A real start depth
+/// shared by half a survey's shots is not a survey - and if a flat stretch did
+/// sit there, "same as previous" would read the same depth back. A feet file is
+/// left alone: its marker is `-1.0`, and its -0.3 is -0.3 ft.
+fn restore_scaled_depth_in_marker(sections: &mut [TmlSection], unit: TmlUnit) {
+    if unit != TmlUnit::Metric {
+        return;
+    }
+    let total: usize = sections.iter().map(|s| s.shots.len()).sum();
+    let scaled = sections
+        .iter()
+        .flat_map(|s| &s.shots)
+        .filter(|shot| schema::is_scaled_depth_in_sentinel(shot.depth_in))
+        .count();
+    if scaled * 2 <= total {
+        return;
+    }
+    for shot in sections.iter_mut().flat_map(|s| &mut s.shots) {
+        if schema::is_scaled_depth_in_sentinel(shot.depth_in) {
+            shot.depth_in = schema::DEPTH_IN_SAME_AS_PREVIOUS;
+        }
+    }
+    tracing::info!(
+        shots = scaled,
+        total,
+        "TML: DepthIn marker written as -1 ft in metres; read as same-as-previous"
+    );
+}
+
 // ============================================================================
 // Public parse entry point
 // ============================================================================
@@ -1138,6 +1177,7 @@ pub fn parse_tml(path: &Path) -> Result<TmlFile> {
     anomalies.duplicate_shot_ids = count_duplicate_shot_ids(&raw_shots);
 
     let (mut sections, closures) = build_sections(raw_shots);
+    restore_scaled_depth_in_marker(&mut sections, unit);
 
     // Apply unit conversion before returning
     let mut first_start_absolute_elevation = metadata.first_start_absolute_elevation;
@@ -3744,6 +3784,79 @@ mod tests {
             "the nudged value is a measurement, got {}",
             shots[1].depth_in
         );
+    }
+
+    /// The `DepthIn` of each imported shot of `xml`'s first section.
+    fn imported_depth_ins(xml: &str) -> Vec<f64> {
+        let tml = parse_synthetic_tmlu(xml);
+        let section = &tml.sections[0];
+        convert_shots_to_shot_data(&section.shots, section.start_depth, false)
+            .iter()
+            .map(|s| s.depth_in)
+            .collect()
+    }
+
+    /// [#576 HFI-1] A METRIC file whose "same as previous" marker went through a
+    /// feet-to-metre conversion carries -1 ft written in metres: -0.3048, which
+    /// Ariane (two decimals, trailing zero trimmed) writes as `-0.3`, on nearly
+    /// every shot. Read literally, every one of those shots started 0.3 m above the
+    /// datum - impossible geometry the validator flagged without naming the cause.
+    /// Each spelling a conversion can leave (rounded or truncated to 1-4 decimals)
+    /// is the marker there.
+    #[test]
+    fn a_metric_marker_scaled_from_feet_still_means_same_as_previous() {
+        for marker in [-0.3, -0.304, -0.305, -0.3048] {
+            let xml = wrap_xml(
+                &[
+                    tml_shot_xml_depth(0, -1, "START", "Start", 0.0, marker),
+                    tml_shot_xml_depth(1, 0, "REAL", "A", 7.0, marker),
+                    tml_shot_xml_depth(2, 1, "REAL", "A", 9.0, marker),
+                    tml_shot_xml_depth(3, 2, "REAL", "A", 12.0, marker),
+                ]
+                .join("\n"),
+            );
+            let depth_ins = imported_depth_ins(&xml);
+            assert_eq!(depth_ins, [0.0, 7.0, 9.0], "marker spelled {marker}");
+        }
+    }
+
+    /// [#576 HFI-1] ...but only where it IS the file's marker. A real start depth
+    /// of -0.3 m (a station 0.3 m above the datum) on one shot of a file that
+    /// marks "same as previous" with -1.0 stays a measurement, and a feet file's
+    /// -0.3 is -0.3 ft.
+    #[test]
+    fn a_real_start_depth_that_spells_the_scaled_marker_stays_a_measurement() {
+        let rows = |unit: &str| {
+            wrap_xml_with(
+                unit,
+                100.0,
+                &[
+                    tml_shot_xml_depth(0, -1, "START", "Start", 0.0, -1.0),
+                    tml_shot_xml_depth(1, 0, "REAL", "A", -0.2, -1.0),
+                    tml_shot_xml_depth(2, 1, "REAL", "A", 2.0, -0.3),
+                    tml_shot_xml_depth(3, 2, "REAL", "A", 3.0, -1.0),
+                ]
+                .join("\n"),
+            )
+        };
+        let metric = imported_depth_ins(&rows("m"));
+        assert_eq!(metric, [0.0, -0.3, 2.0], "metric");
+        let feet = imported_depth_ins(&rows("ft"));
+        assert!(
+            (feet[1] - (-0.3 * FEET_TO_METERS)).abs() < 1e-9,
+            "feet: {feet:?}"
+        );
+
+        // A marker is on nearly every shot: on half of them, and no more, it is not.
+        let half = wrap_xml(
+            &[
+                tml_shot_xml_depth(0, -1, "START", "Start", 0.0, -1.0),
+                tml_shot_xml_depth(1, 0, "REAL", "A", 1.0, -0.3),
+                tml_shot_xml_depth(2, 1, "REAL", "A", 2.0, -1.0),
+            ]
+            .join("\n"),
+        );
+        assert_eq!(imported_depth_ins(&half), [-0.3, 1.0], "half the shots");
     }
 
     // -------------------------------------------------------------------
