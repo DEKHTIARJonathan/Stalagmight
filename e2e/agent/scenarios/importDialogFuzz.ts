@@ -449,7 +449,13 @@ import {
   runUiStep,
   type Move,
 } from './importDialogBridge';
-import { CorpusEntryPaths, moveTraceStep, sourceTraceStep } from './importDialogTrace';
+import {
+  CorpusEntryPaths,
+  FileSeq,
+  moveFromTraceStep,
+  moveTraceStep,
+  sourceTraceStep,
+} from './importDialogTrace';
 import {
   AUX_INTERJECT_STREAM_SALT,
   auxInterjectProbability,
@@ -654,20 +660,6 @@ const ORPHAN_DECLINES: ReadonlySet<string> = new Set(['orphan-skip', 'orphan-clo
  */
 const OVERLAP_MODES_ALWAYS_LEGAL: ReadonlySet<string> = new Set(['existing_data', 'keep_both']);
 
-/**
- * `mutate` actions a REPLAYED trace may drive - the DOM allowlist's twin.
- *
- * One entry: `closeProject`, which the wave-3 auxiliary interjection plays at
- * `idle`. The set REFUSES anything else loudly, which is the point - a trace
- * naming `loadProject` or `deleteProject` must not be quietly skipped inside a
- * privileged webview with the `__E2E_TEST__` hooks live.
- *
- * `ui:confirmPlacement` is deliberately still absent: that store action
- * ABANDONS a placement rather than completing one (see the note in
- * `importDialogGenerators.ts`), so it reaches a state no user can.
- */
-const REPLAYABLE_UI_ACTIONS: ReadonlySet<string> = new Set(['closeProject']);
-
 function actionableCount(digest: ImportScreenDigest): number {
   let count = 0;
   for (const state of Object.values(digest.live)) if (state === 2) count += 1;
@@ -802,7 +794,8 @@ export const importDialogFuzz: Scenario = {
     const redact = redactCorpusText;
     /** Where this run's corpus entry tokens point, on a replay - see `CorpusEntryPaths`. */
     const corpusEntries = new CorpusEntryPaths();
-    let fileSeq = 0;
+    /** Numbers the walk's input files and new projects - see `FileSeq`. */
+    const files = new FileSeq();
     let lastUndoDepth = -1;
     /**
      * Episodes that ran with NO project open, recorded so a replay can reproduce
@@ -1020,7 +1013,7 @@ export const importDialogFuzz: Scenario = {
     const dispatchable = (move: FuzzMove): FuzzMove => {
       if (move.kind !== 'input' || move.value !== PROJECT_DIR_PLACEHOLDER) return move;
       fs.mkdirSync(projectsDir, { recursive: true });
-      return { ...move, value: path.join(projectsDir, `import-${ctx.seed}-${fileSeq}.stalx`) };
+      return { ...move, value: path.join(projectsDir, `import-${ctx.seed}-${files.value}.stalx`) };
     };
 
     /** The map's current centre, so a placement click lands on the survey. */
@@ -1563,7 +1556,7 @@ export const importDialogFuzz: Scenario = {
       ctx,
       digest,
       filesRel: FILES_REL,
-      fileSeq,
+      fileSeq: files.value,
       corpus,
     });
 
@@ -1611,7 +1604,7 @@ export const importDialogFuzz: Scenario = {
         const move = buildInterjection(kind, genEnv(digest));
         if (move !== null) {
           ctx.metric(`interject:${kind}`);
-          if (move.kind === 'openFile') fileSeq += 1;
+          files.noteMove(move);
           return move;
         }
       }
@@ -1620,7 +1613,7 @@ export const importDialogFuzz: Scenario = {
         const move = buildAuxInterjection(kind, genEnv(digest));
         if (move !== null) {
           ctx.metric(`interject:${kind}`);
-          if (move.kind === 'keyFile') fileSeq += 1;
+          files.noteMove(move);
           return move;
         }
         ctx.metric(`interjectSkipped:${kind}`);
@@ -1646,77 +1639,11 @@ export const importDialogFuzz: Scenario = {
         // screen samples, which is an estimate presented as a measurement. This
         // is the measurement.
         if (generator.screens.length > 1) ctx.metric(`gen@${digest.screen}:${generator.name}`);
-        if (move.kind === 'openFile') fileSeq += 1;
+        files.noteMove(move);
         return move;
       }
       ctx.metric(`noMove:${digest.screen}`);
       return null;
-    };
-
-    /** A replayed file reference: the bytes are already on disk at `rel`. */
-    const replaySource = (rel: string): FileSource =>
-      rel.startsWith('fixtures/')
-        ? { origin: 'fixture', name: path.basename(rel), rel }
-        : { origin: 'disk', rel };
-
-    /** Turn a recorded step back into a move, or null when it is not one. */
-    const moveFromStep = (step: TraceStep): FuzzMove | null => {
-      switch (step.kind) {
-        case 'ui':
-          return step.double === true
-            ? { kind: 'ui', testid: step.testid, double: true, label: step.label }
-            : { kind: 'ui', testid: step.testid, label: step.label };
-        case 'input':
-          return { kind: 'input', testid: step.testid, value: step.value, mode: step.mode, label: step.label };
-        case 'route':
-          return {
-            kind: 'openFile',
-            source: replaySource(step.rel),
-            via: 'route',
-            trigger: 'routeOpenedFile',
-            label: step.label,
-          };
-        case 'fileDialog': {
-          if (step.rel === null) return { kind: 'cancelDialog', trigger: step.trigger, label: step.label };
-          const rel = Array.isArray(step.rel) ? (step.rel[0] as string) : step.rel;
-          // A `key:<chord>` trigger is the ARMED-KEYBOARD picker, not a click on
-          // an element - it has no testid, so it cannot go through the click
-          // path at all.
-          if (step.trigger.startsWith('key:')) {
-            return {
-              kind: 'keyFile',
-              chord: step.trigger.slice('key:'.length),
-              source: replaySource(rel),
-              label: step.label,
-            };
-          }
-          return {
-            kind: 'openFile',
-            source: replaySource(rel),
-            via: 'dialog',
-            trigger: step.trigger,
-            label: step.label,
-          };
-        }
-        case 'mapClick':
-          return { kind: 'mapClick', lngLat: step.lngLat, label: step.label };
-        case 'undo':
-          return { kind: 'undo', label: 'replay undo' };
-        case 'redo':
-          return { kind: 'redo', label: 'replay redo' };
-        case 'save':
-          return { kind: 'save', label: 'replay save' };
-        case 'mutate':
-          // The store-action twin of the DOM allowlist: a trace names an action,
-          // and only the ones this scenario produces may be dispatched.
-          if (step.action === 'closeProject') return { kind: 'closeProject', label: step.label };
-          throw new Error(
-            `refusing to replay mutate "${step.action}": ${SCENARIO} replays ` +
-              `${REPLAYABLE_UI_ACTIONS.size === 0 ? 'no store actions' : [...REPLAYABLE_UI_ACTIONS].join(', ')}`,
-          );
-        default:
-          return null;
-      }
     };
 
     // ---- injection + generator self-check ---------------------------------
@@ -2515,7 +2442,8 @@ export const importDialogFuzz: Scenario = {
               }
               continue;
             }
-            const move = moveFromStep(step);
+            // Counted as the live walk counts a drawn one - see `FileSeq`.
+            const move = moveFromTraceStep(step, files, SCENARIO);
             if (move === null) {
               ctx.metric(`replay:unsupported:${step.kind}`);
               continue;
