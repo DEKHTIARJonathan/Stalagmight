@@ -2789,7 +2789,7 @@ mod start_order {
         pub(super) fn speleodb_probe_before_acquire(
             &self,
             _lock_ops: &LockOpsHeld<'_>,
-            account: &InSpan<(String, String)>,
+            account: &InSpan<'_, (String, String)>,
             insecure_http: bool,
             project_id: &str,
         ) -> HolderProbed {
@@ -2810,7 +2810,7 @@ mod start_order {
             &self,
             _probed: &HolderProbed,
             _flow: &FlowBegun,
-            account: &InSpan<(String, String)>,
+            account: &InSpan<'_, (String, String)>,
             insecure_http: bool,
             project_id: &str,
         ) -> Result<Project, SpeleoDbError> {

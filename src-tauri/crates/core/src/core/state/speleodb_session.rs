@@ -200,6 +200,8 @@ impl LockClaim {
 /// [#576 A8 RV8a-5] The lock-ops span's proof and its one producer, apart: nothing
 /// outside this module can build a [`LockOpsHeld`] from a guard of its own.
 mod lock_ops_span {
+    use std::marker::PhantomData;
+
     use super::AppState;
     use crate::speleodb::SpeleoDbError;
 
@@ -224,41 +226,54 @@ mod lock_ops_span {
     /// [#576 RV9a-3] The reads are the span's methods, not a closure it runs: a
     /// generic `read(|| v)` wrapped whatever `v` was, so an account read BEFORE the
     /// span could be laundered into one.
-    pub(in crate::core::state) struct InSpan<T> {
+    ///
+    /// [#576 RV10a-3] And it lives no longer than the span that read it: `'s` is the
+    /// borrow of that span's [`LockOpsHeld`], so ending the span - dropping the
+    /// guard, or handing it on by value - while one is still in use does not compile
+    /// (E0505). A value read in one span therefore cannot reach a step running in a
+    /// LATER span, read before THAT span opened (a logout and login can land between
+    /// two spans): a later span needs the same mutex, so it cannot open while the
+    /// earlier one - and with it every value it read - is alive.
+    pub(in crate::core::state) struct InSpan<'s, T> {
         value: T,
+        span: PhantomData<&'s ()>,
     }
 
     impl LockOpsHeld<'_> {
         /// The signed-in account (endpoint, token), read while this span is held.
         pub(in crate::core::state) fn read_account(
             &self,
-        ) -> InSpan<Result<(String, String), SpeleoDbError>> {
-            InSpan {
-                value: self.state.speleodb_active_token(),
-            }
+        ) -> InSpan<'_, Result<(String, String), SpeleoDbError>> {
+            InSpan::read(self.state.speleodb_active_token())
         }
 
         /// Who holds `project_id`'s write mutex, asked with the account this span
         /// read, while this span is held.
         pub(in crate::core::state) fn read_holder(
             &self,
-            account: &InSpan<(String, String)>,
+            account: &InSpan<'_, (String, String)>,
             insecure_http: bool,
             project_id: &str,
-        ) -> InSpan<Result<Option<String>, SpeleoDbError>> {
+        ) -> InSpan<'_, Result<Option<String>, SpeleoDbError>> {
             let (endpoint, token) = account.get();
-            InSpan {
-                value: self.state.speleodb_lock_holder_checked(
-                    endpoint,
-                    token,
-                    insecure_http,
-                    project_id,
-                ),
-            }
+            InSpan::read(self.state.speleodb_lock_holder_checked(
+                endpoint,
+                token,
+                insecure_http,
+                project_id,
+            ))
         }
     }
 
-    impl<T> InSpan<T> {
+    impl<T> InSpan<'_, T> {
+        /// Private: only the span's reads above (and `transpose`) wrap a value.
+        fn read(value: T) -> Self {
+            Self {
+                value,
+                span: PhantomData,
+            }
+        }
+
         pub(in crate::core::state) fn get(&self) -> &T {
             &self.value
         }
@@ -268,10 +283,10 @@ mod lock_ops_span {
         }
     }
 
-    impl<T, E> InSpan<Result<T, E>> {
+    impl<'s, T, E> InSpan<'s, Result<T, E>> {
         /// A fallible read: the error, or the value still marked as read in the span.
-        pub(in crate::core::state) fn transpose(self) -> Result<InSpan<T>, E> {
-            self.value.map(|value| InSpan { value })
+        pub(in crate::core::state) fn transpose(self) -> Result<InSpan<'s, T>, E> {
+            self.value.map(InSpan::read)
         }
     }
 

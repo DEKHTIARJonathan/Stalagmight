@@ -291,7 +291,7 @@ impl AppState {
         //
         // [#576 A8] Both halves by type. Everything the lock decision rests on is read
         // INSIDE the span (`InSpan`, made only by the span's own reads), and the decision
-        // consumes the span (`adopt_take_lock` takes the guard by value): the account
+        // ends the span (`LockTaken::end_span` takes the guard by value): the account
         // read and the probe cannot drift above it, and the download - a method of the
         // guard armed from that decision - cannot drift into it.
         let (endpoint, token, insecure_http, my_email, concurrent_session, decision) = {
@@ -350,9 +350,10 @@ impl AppState {
             // READ_ONLY member and an offline machine both converted their project before
             // this flow existed, and both still do - the copy simply stays local, stamped
             // with un-pushed edits, which is exactly what it is.
-            let decision =
-                self.adopt_take_lock(lock_ops, &account, insecure_http, &project_id, holder);
+            let taken =
+                self.adopt_take_lock(&lock_ops, &account, insecure_http, &project_id, holder);
             let (endpoint, token) = account.into_inner();
+            let decision = taken.end_span(lock_ops);
             (
                 endpoint,
                 token,
@@ -709,7 +710,7 @@ impl AppState {
     /// acquire.
     ///
     /// [#576 A8] The span-held body of `adopt_order`'s `adopt_take_lock`, which reads
-    /// its inputs inside the span and ends the span with the decision.
+    /// its inputs inside the span; `LockTaken::end_span` then ends the span.
     fn adopt_acquire_in_span(
         &self,
         _lock_ops: &super::speleodb_session::LockOpsHeld<'_>,
@@ -1256,30 +1257,45 @@ mod adopt_order {
         lock: AdoptLock,
     }
 
+    /// The decision, taken inside the span and not usable until the span has ended
+    /// ([`LockTaken::end_span`]). [#576 RV10a-3] Two steps because the values the
+    /// decision rests on borrow the span (`InSpan<'s, _>`): the guard can be given up
+    /// only once they are done with, so the decision cannot also take it by value.
+    pub(super) struct LockTaken {
+        lock: AdoptLock,
+    }
+
     impl AppState {
         /// Decide the adoption's write lock (see `adopt_acquire_in_span`) from the
-        /// account and the holder read inside `lock_ops`, and END the span here: the
-        /// download that follows must not run inside it (an import-long span would
-        /// block logout and every other lock operation for as long as it takes).
+        /// account and the holder read inside `lock_ops`.
         pub(super) fn adopt_take_lock(
             &self,
-            lock_ops: LockOpsHeld<'_>,
-            account: &InSpan<(String, String)>,
+            lock_ops: &LockOpsHeld<'_>,
+            account: &InSpan<'_, (String, String)>,
             insecure_http: bool,
             project_id: &str,
-            holder: InSpan<Result<Option<String>, SpeleoDbError>>,
-        ) -> LockDecision {
+            holder: InSpan<'_, Result<Option<String>, SpeleoDbError>>,
+        ) -> LockTaken {
             let (endpoint, token) = account.get();
             let lock = self.adopt_acquire_in_span(
-                &lock_ops,
+                lock_ops,
                 endpoint,
                 token,
                 insecure_http,
                 project_id,
                 holder.into_inner(),
             );
+            LockTaken { lock }
+        }
+    }
+
+    impl LockTaken {
+        /// END the span the decision was taken in: the download that follows must
+        /// not run inside it (an import-long span would block logout and every other
+        /// lock operation for as long as it takes).
+        pub(super) fn end_span(self, lock_ops: LockOpsHeld<'_>) -> LockDecision {
             drop(lock_ops);
-            LockDecision { lock }
+            LockDecision { lock: self.lock }
         }
     }
 
@@ -2636,7 +2652,7 @@ mod tests {
     }
 
     /// The adoption's lock decision runs INSIDE the lock-ops span (`adopt_take_lock`
-    /// takes the guard by value, the acquire under it takes its proof), so neither half
+    /// takes the span's proof, the acquire under it takes it too), so neither half
     /// may take the guard itself. `std::sync::Mutex` is not reentrant, so a second
     /// acquisition inside the span is not a redundancy - it is a self-deadlock on the
     /// first adoption anyone runs.

@@ -675,7 +675,8 @@ it. So it is allowed for one kind of rule only (#576 A8):
   `adopt_order` chain, Start Editing's `start_order`, the update's
   `update_restore`, `PinnedDump`, `StoodDown`, `PrePushSave`), or a guard
   wrapper the in-span step borrows (`LockOpsHeld`, like `CommandsHeld`; a value
-  read inside the span is an `InSpan`). When two steps must share ONE span, not
+  read inside the span is an `InSpan`, which borrows the span so it cannot outlive
+  it). When two steps must share ONE span, not
   just each hold a span, the earlier step's proof borrows the span and the later
   step takes only that proof (`GatesDropped` in logout, `Relocated` in publish):
   dropping the span between them is then E0505. Put the proof type and its
