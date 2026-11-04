@@ -59,3 +59,65 @@ export function failureDetail(input: FailureDetailInput): string {
     .slice(-TAIL_LINES)
     .join('\n');
 }
+
+/**
+ * What one cell's child process amounted to.
+ *
+ * - `pass`: it printed `PASS:` and exited 0.
+ * - `fail`: the SCENARIO reached a verdict and it was not a pass - a `FAIL:`
+ *   line, or a `PASS:` line with a non-zero exit.
+ * - `lost`: there is NO verdict. The spawn failed, the cell hit its timeout, or
+ *   the child died without printing either line - which is what an app that
+ *   never attached looks like. Measured (#576 HFI-7): with the debug build's
+ *   single-instance plugin, a `--workers 4` matrix lost 9 of 12 cells at about
+ *   33 s each, and because those cells cost seconds rather than minutes the
+ *   summary still printed a 3.91x speedup. A lost cell says nothing about the
+ *   scenario, so it is reported apart from the failures and it voids the
+ *   speedup.
+ */
+export type CellVerdict = 'pass' | 'fail' | 'lost';
+
+export interface CellExit {
+  spawnFailed: boolean;
+  timedOut: boolean;
+  code: number | null;
+  sawPass: boolean;
+  sawFail: boolean;
+}
+
+export function cellVerdict(exit: CellExit): CellVerdict {
+  if (exit.spawnFailed || exit.timedOut) return 'lost';
+  if (exit.sawFail) return 'fail';
+  if (exit.sawPass) return exit.code === 0 ? 'pass' : 'fail';
+  return 'lost';
+}
+
+/**
+ * The closing lines of a matrix report: the counts, and the speedup ONLY when
+ * every cell reached a verdict.
+ *
+ * The speedup compares the summed cell durations against the wall clock, which
+ * is a measure of parallel throughput only if every cell did its work. A lost
+ * cell's duration is an attach timeout, so including it inflates the ratio and
+ * excluding it measures a different matrix than the one that ran - neither is a
+ * number worth printing next to a run that did not happen.
+ */
+export function matrixSummary(
+  cells: readonly { verdict: CellVerdict; durationMs: number }[],
+  wallMs: number,
+): string[] {
+  const secs = (ms: number): string => `${(ms / 1000).toFixed(1)}s`;
+  const failed = cells.filter((cell) => cell.verdict === 'fail').length;
+  const lost = cells.filter((cell) => cell.verdict === 'lost').length;
+  const serialMs = cells.reduce((sum, cell) => sum + cell.durationMs, 0);
+  const lines = [
+    lost > 0
+      ? `wall clock ${secs(wallMs)}; speedup NOT reported: ${lost} cell(s) LOST (no PASS or FAIL - the ` +
+        'child died before its scenario reached a verdict, e.g. an app that never attached)'
+      : `wall clock ${secs(wallMs)}; serial-equivalent ${secs(serialMs)}; ` +
+        `speedup ${(serialMs / Math.max(wallMs, 1)).toFixed(2)}x`,
+    `${failed} failed, ${lost} lost / ${cells.length} run(s)`,
+  ];
+  if (lost > 0) lines.push(`MATRIX INCOMPLETE: ${lost} of ${cells.length} cell(s) produced no verdict`);
+  return lines;
+}

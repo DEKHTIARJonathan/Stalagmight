@@ -50,7 +50,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { checkBuildFreshness } from './lib/build';
 import { agentBuildMode } from '../lib/env';
-import { failureDetail } from './lib/fuzzMatrixReport';
+import { cellVerdict, failureDetail, matrixSummary, type CellVerdict } from './lib/fuzzMatrixReport';
 import { RUN_START_ENV, runStartMs } from './lib/recorder';
 import {
   BASE_PORT,
@@ -96,6 +96,8 @@ interface RunResult {
   fixture: string;
   seed: number;
   axis: AxisValue | null;
+  /** `lib/fuzzMatrixReport.ts` `cellVerdict`: a LOST cell reached no verdict at all. */
+  verdict: CellVerdict;
   passed: boolean;
   durationMs: number;
   metrics: Record<string, number>;
@@ -198,7 +200,14 @@ function runOne(
       const allLines = outLines.concat(stderr.join('').split('\n'));
       const passLine = outLines.find((line) => line.startsWith('PASS: '));
       const failIndex = outLines.findIndex((line) => line.startsWith('FAIL: '));
-      const passed = !spawnError && code === 0 && Boolean(passLine);
+      const verdict = cellVerdict({
+        spawnFailed: spawnError !== undefined,
+        timedOut,
+        code,
+        sawPass: passLine !== undefined,
+        sawFail: failIndex >= 0,
+      });
+      const passed = verdict === 'pass';
 
       let headline = '';
       if (spawnError) headline = `spawn failed: ${spawnError.message}`;
@@ -209,11 +218,13 @@ function runOne(
           ? `${failLine} ${(outLines.slice(failIndex + 1).find((line) => line.trim()) ?? '').trim()}`
           : failLine;
       } else if (!passed) headline = `child exited code=${code} signal=${signal ?? 'none'} with no FAIL line`;
+      if (verdict === 'lost') headline = `LOST (no verdict): ${headline}`;
 
       resolve({
         fixture,
         seed,
         axis,
+        verdict,
         passed,
         durationMs: Date.now() - startedAt,
         metrics: passLine ? parseMetrics(passLine) : {},
@@ -233,7 +244,7 @@ function secs(ms: number): string {
 
 function printDone(result: RunResult, label: string): void {
   process.stdout.write(
-    `${label} ${result.passed ? 'PASS ' : 'FAIL '} ${result.fixture} seed=${result.seed}` +
+    `${label} ${result.verdict === 'lost' ? 'LOST ' : result.passed ? 'PASS ' : 'FAIL '} ${result.fixture} seed=${result.seed}` +
       `${result.axis ? ` ${axisLabel(result.axis)}` : ''} ` +
       `(${secs(result.durationMs)})${result.passed ? '' : ` ${result.headline}`}\n`,
   );
@@ -246,7 +257,7 @@ function printReport(results: RunResult[], opts: Options, wallMs: number): void 
       r.fixture,
       String(r.seed),
       ...(withAxis ? [r.axis ? r.axis.value : ''] : []),
-      r.passed ? 'PASS' : 'FAIL',
+      r.verdict === 'lost' ? 'LOST' : r.passed ? 'PASS' : 'FAIL',
       secs(r.durationMs),
       r.headline,
     ],
@@ -306,12 +317,7 @@ function printReport(results: RunResult[], opts: Options, wallMs: number): void 
   );
   for (const key of Object.keys(merged).sort()) process.stdout.write(`  ${key} = ${merged[key]}\n`);
 
-  const serialMs = results.reduce((sum, r) => sum + r.durationMs, 0);
-  process.stdout.write(
-    `\nwall clock ${secs(wallMs)}; serial-equivalent ${secs(serialMs)}; ` +
-      `speedup ${(serialMs / Math.max(wallMs, 1)).toFixed(2)}x\n` +
-      `${failures.length} failed / ${results.length} run(s)\n`,
-  );
+  process.stdout.write(`\n${matrixSummary(results, wallMs).join('\n')}\n`);
 }
 
 /**
