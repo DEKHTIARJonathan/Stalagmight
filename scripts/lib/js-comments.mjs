@@ -94,6 +94,16 @@ export function stripComments(lines) {
 // when the call never closes: an unterminated call reads as running to the end
 // of the file, the conservative answer for a scope check.
 export function matchParen(code, open) {
+  return matchPair(code, open, '(', ')');
+}
+
+// {@link matchParen} for the `{` at code[open]: index just past the `}` that
+// closes it (a function body), by the same rules (#576 RV10b-G1).
+export function matchBrace(code, open) {
+  return matchPair(code, open, '{', '}');
+}
+
+function matchPair(code, open, openCh, closeCh) {
   let depth = 0;
   let quote = null;
   let lineStart = code.lastIndexOf('\n', open) + 1;
@@ -112,8 +122,8 @@ export function matchParen(code, open) {
       const end = regexEnd(code.slice(0, lineEnd < 0 ? code.length : lineEnd), i);
       if (end > 0) { i = end - 1; continue; }
     }
-    if (c === '(') depth++;
-    else if (c === ')' && --depth === 0) return i + 1;
+    if (c === openCh) depth++;
+    else if (c === closeCh && --depth === 0) return i + 1;
   }
   return code.length;
 }

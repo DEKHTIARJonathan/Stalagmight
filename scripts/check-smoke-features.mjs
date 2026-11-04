@@ -37,7 +37,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { matchParen, stripComments } from './lib/js-comments.mjs';
+import { matchBrace, matchParen, stripComments } from './lib/js-comments.mjs';
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 export const LIST_FILE = 'docs/TESTING.md';
@@ -92,22 +92,41 @@ export function parseFeatureList(md) {
 //     (TEST_CALL_RE does not read `test.fail('title')` as a test at all).
 // Scopes are the paren extents of the calls (scripts/lib/js-comments.mjs
 // matchParen), so nesting depth and line breaks do not matter. The
-// annotation's receiver is `test`, `test.info()` or the TestInfo parameter
-// of a test or hook callback that encloses it - the second parameter, after
-// the fixtures object (`async ({ page }, testInfo) =>`) - so `reader.skip(4)`
-// or a helper's own `info.skip()` is not one (#576 RV9b-6); the lookbehind
-// keeps `test.describe.skip(` / `test.step.skip(` (a member of a member) from
-// reading as one. A skip made in a helper the canary calls is not seen.
+// annotation's receiver is `test`, `test.info()` or a TestInfo in scope:
+//   - the TestInfo parameter of a test or hook callback that encloses it - the
+//     second parameter, after the fixtures object (`async ({ page }, testInfo)
+//     =>`), either of them type-annotated or not (`({ page }: { page: Page },
+//     testInfo: TestInfo)`, #576 RV10b-G1);
+//   - a local bound to `test.info()` (`const info = test.info()`), within the
+//     test or hook callback that declares it (#576 RV10b-G1);
+// so `reader.skip(4)` or a helper's own `info.skip()` is not one (#576 RV9b-6);
+// the lookbehind keeps `test.describe.skip(` / `test.step.skip(` (a member of a
+// member) from reading as one. A test or hook whose callback is a NAMED
+// function (`test.beforeEach(gate)`, `async function gate({ page }, testInfo)
+// { testInfo.skip() }`, or a `const gate = async (...) =>`) is read through
+// that function's own TestInfo parameter: a hook's skips the describe that
+// holds the hook call, a test's skips that test (#576 RV10b-G1). A skip made in
+// a helper the canary calls and hands its TestInfo to is not seen.
 const TEST_CALL_RE = /\btest(?:\.(only|slow))?\s*\(\s*(['"`])((?:\\.|(?!\2)[^\\])*)\2/g;
 const DECLARED_NOT_RUN_RE = /\btest\.(skip|fixme|fail)\s*\(\s*(['"`])((?:\\.|(?!\2)[^\\])*)\2/g;
 const SKIPPED_GROUP_RE = /\b(?:test\.)?describe\.(skip|fixme)\s*\(/g;
 const GROUP_RE = /\b(?:test\.)?describe(?:\.(?:only|parallel|serial))?\s*\(/g;
 const ANNOTATION_RE = /(?<![\w$.])(test\.info\(\)|[A-Za-z_$][\w$]*)\.(skip|fixme|fail)\s*\(\s*(?!['"`])/g;
-// A test or hook call, and - read from the start of its arguments, past an
-// optional title and details object - its callback's TestInfo parameter.
-const TEST_OR_HOOK_RE = /\btest(?:\.(?:only|slow|skip|fixme|fail|beforeEach|afterEach|beforeAll|afterAll))?\s*\(/g;
-const TESTINFO_PARAM_RE =
-  /^\s*(?:(['"`])(?:\\.|(?!\1)[^\\])*\1\s*,\s*)?(?:\{[^{}]*\}\s*,\s*)?(?:async\s+)?(?:function\s*[\w$]*\s*)?\(\s*\{[^}]*\}\s*,\s*([A-Za-z_$][\w$]*)/;
+// A test or hook call (group 1: its modifier or hook name), and - read from the
+// start of its arguments, past an optional title and details object - its
+// callback's TestInfo parameter, or the name of the function it is handed.
+const TEST_OR_HOOK_RE = /\btest(?:\.(only|slow|skip|fixme|fail|beforeEach|afterEach|beforeAll|afterAll))?\s*\(/g;
+const HOOKS = new Set(['beforeEach', 'afterEach', 'beforeAll', 'afterAll']);
+// `{ ... }` with one level of nesting: a destructure, a details object, an object type.
+const BRACED = String.raw`\{(?:[^{}]|\{[^{}]*\})*\}`;
+const TYPED = String.raw`(?:\s*:\s*(?:${BRACED}|[\w$.]+(?:<[^<>]*>)?))?`;
+// From a parameter list's `(`: the fixtures destructure, then the TestInfo name.
+const FIXTURES_THEN_INFO = String.raw`\(\s*${BRACED}${TYPED}\s*,\s*([A-Za-z_$][\w$]*)`;
+const LEAD = String.raw`^\s*(?:(['"\`])(?:\\.|(?!\1)[^\\])*\1\s*,\s*)?(?:${BRACED}\s*,\s*)?`;
+const TESTINFO_PARAM_RE = new RegExp(`${LEAD}(?:async\\s+)?(?:function\\s*[\\w$]*\\s*)?${FIXTURES_THEN_INFO}`);
+const NAMED_CALLBACK_RE = new RegExp(`${LEAD}([A-Za-z_$][\\w$]*)\\s*$`);
+const PARAMS_INFO_RE = new RegExp(`^${FIXTURES_THEN_INFO}`);
+const INFO_LOCAL_RE = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::\s*[\w$.]+\s*)?=\s*test\.info\(\)/g;
 
 // [{start, end, kind, open}] extents of every call `re` matches (its `(` is the
 // match's last character); `kind` is the match's group 1, if any.
@@ -122,8 +141,50 @@ function callExtents(code, re) {
   return out;
 }
 
-// Every test the spec declares: {title, runs, why}, `why` saying what stops one
-// that does not run (#576 RV9b-6).
+// Why an annotation of `kind` makes a test no canary (#576 RV10b-G5): a skip or
+// fixme stops it running; a fail one runs, and passes only while it fails.
+const noCanary = (kind, what) =>
+  kind === 'fail'
+    ? `it is no canary: ${what}, so it passes only while the feature is broken`
+    : `it does not run: ${what}`;
+
+// The innermost of `scopes` that encloses `at`, else the whole file.
+const innermost = (scopes, at, code) =>
+  scopes
+    .filter((s) => s.start < at && at < s.end)
+    .reduce((best, s) => (best === null || s.start > best.start ? s : best), null) ?? { start: 0, end: code.length };
+
+// The first annotation the function NAMED `name` makes through its own TestInfo
+// parameter - `function name(...)` or `const name = (async) (...) =>` /
+// `function (...)` - as {kind, receiver}, or null (#576 RV10b-G1).
+function namedFunctionAnnotation(code, name) {
+  const id = name.replace(/\$/g, '\\$');
+  const def = new RegExp(
+    String.raw`(?:\bfunction\s+${id}\s*|\b(?:const|let|var)\s+${id}\s*(?::[^=;]+)?=\s*(?:async\s+)?(?:function\s*[\w$]*\s*)?)(?=\()`,
+    'g',
+  );
+  let d;
+  while ((d = def.exec(code)) !== null) {
+    const open = d.index + d[0].length;
+    const paramsEnd = matchParen(code, open);
+    const param = PARAMS_INFO_RE.exec(code.slice(open, paramsEnd))?.[1];
+    if (param === undefined) continue;
+    const brace = /^\s*(?::[^={]+)?(?:=>\s*)?\{/.exec(code.slice(paramsEnd));
+    const bodyEnd = brace
+      ? matchBrace(code, paramsEnd + brace[0].length - 1)
+      : (code.indexOf('\n', paramsEnd) + 1 || code.length);
+    const id2 = param.replace(/\$/g, '\\$');
+    const hit = new RegExp(String.raw`(?<![\w$.])${id2}\.(skip|fixme|fail)\s*\(\s*(?!['"\`])`).exec(
+      code.slice(paramsEnd, bodyEnd),
+    );
+    if (hit) return { kind: hit[1], receiver: param };
+  }
+  return null;
+}
+
+// Every test the spec declares: {title, canary, why}. `canary` is false for a
+// test that does not run (skipped / fixme'd) or runs as an expected failure,
+// and `why` says which (#576 RV9b-6, RV10b-G5).
 export function testEntries(source) {
   const code = stripComments(source.split('\n')).join('\n');
   const lineOf = (at) => code.slice(0, at).split('\n').length;
@@ -134,16 +195,23 @@ export function testEntries(source) {
     const open = code.indexOf('(', m.index);
     tests.push({ title: m[3], start: m.index, end: matchParen(code, open) });
   }
+  const groups = callExtents(code, GROUP_RE);
   const skipped = callExtents(code, SKIPPED_GROUP_RE).map((g) => ({
     ...g,
-    why: `it is in a describe.${g.kind} group (line ${lineOf(g.start)})`,
+    why: noCanary('skip', `it is in a describe.${g.kind} group (line ${lineOf(g.start)})`),
   }));
-  // The TestInfo parameters in scope: each test or hook callback's own.
-  const infoScopes = callExtents(code, TEST_OR_HOOK_RE)
+  // The TestInfo receivers in scope: each test or hook callback's own parameter,
+  // and a local bound to test.info() within the callback that declares it.
+  const calls = callExtents(code, TEST_OR_HOOK_RE);
+  const infoScopes = calls
     .map((c) => ({ ...c, name: TESTINFO_PARAM_RE.exec(code.slice(c.open + 1, c.end))?.[2] }))
     .filter((c) => c.name !== undefined);
+  INFO_LOCAL_RE.lastIndex = 0;
+  while ((m = INFO_LOCAL_RE.exec(code)) !== null) {
+    infoScopes.push({ start: m.index, end: innermost(calls, m.index, code).end, name: m[1] });
+  }
   // An annotation skips its innermost enclosing test or describe, else the file.
-  const scopes = [...tests, ...callExtents(code, GROUP_RE)];
+  const scopes = [...tests, ...groups];
   ANNOTATION_RE.lastIndex = 0;
   while ((m = ANNOTATION_RE.exec(code)) !== null) {
     const at = m.index;
@@ -153,25 +221,33 @@ export function testEntries(source) {
       receiver === 'test.info()' ||
       infoScopes.some((c) => c.name === receiver && c.start < at && at < c.end);
     if (!isTestInfo) continue;
-    const inner = scopes
-      .filter((s) => s.start < at && at < s.end)
-      .reduce((best, s) => (best === null || s.start > best.start ? s : best), null);
-    skipped.push({ ...(inner ?? { start: 0, end: code.length }), why: `${receiver}.${m[2]}() in its scope (line ${lineOf(at)})` });
+    skipped.push({ ...innermost(scopes, at, code), why: noCanary(m[2], `${receiver}.${m[2]}() in its scope (line ${lineOf(at)})`) });
+  }
+  // A test or hook handed a named function: that function's own annotation
+  // skips the test, or the describe holding the hook call.
+  for (const c of calls) {
+    const name = NAMED_CALLBACK_RE.exec(code.slice(c.open + 1, c.end - 1))?.[2];
+    const hit = name === undefined ? null : namedFunctionAnnotation(code, name);
+    if (hit === null) continue;
+    const via = `${name}'s ${hit.receiver}.${hit.kind}() via test${c.kind ? `.${c.kind}` : ''}(${name}) (line ${lineOf(c.start)})`;
+    const scope = HOOKS.has(c.kind) ? innermost(groups, c.start, code) : { start: c.start, end: c.end };
+    skipped.push({ ...scope, why: noCanary(hit.kind, via) });
   }
   const entries = tests.map((t) => {
     const stop = skipped.find((s) => s.start <= t.start && t.start < s.end);
-    return { title: t.title, runs: stop === undefined, why: stop?.why ?? null };
+    return { title: t.title, canary: stop === undefined, why: stop?.why ?? null };
   });
   DECLARED_NOT_RUN_RE.lastIndex = 0;
   while ((m = DECLARED_NOT_RUN_RE.exec(code)) !== null) {
-    entries.push({ title: m[3], runs: false, why: `it is declared test.${m[1]}(...) (line ${lineOf(m.index)})` });
+    entries.push({ title: m[3], canary: false, why: noCanary(m[1], `it is declared test.${m[1]}(...) (line ${lineOf(m.index)})`) });
   }
   return entries;
 }
 
+// Titles of the tests that can be canaries: they run, and not as expected failures.
 export function testTitles(source) {
   return testEntries(source)
-    .filter((e) => e.runs)
+    .filter((e) => e.canary)
     .map((e) => e.title);
 }
 
@@ -202,15 +278,15 @@ export function checkFeatures(read) {
       problems.push(`"${row.feature}": ${rel} does not exist (${LIST_FILE}:${row.line})`);
       continue;
     }
-    const titles = entries.filter((e) => e.runs).map((e) => e.title);
+    const titles = entries.filter((e) => e.canary).map((e) => e.title);
     const hit = titles.find((t) => t.includes('@smoke') && t.includes(row.canary));
     if (!hit) {
       const near = titles.find((t) => t.includes(row.canary));
-      const stopped = entries.find((e) => !e.runs && e.title.includes(row.canary));
+      const stopped = entries.find((e) => !e.canary && e.title.includes(row.canary));
       const why = near
         ? ` (found it untagged: "${near}")`
         : stopped
-          ? ` (found it, but it does not run: ${stopped.why})`
+          ? ` (found it, but ${stopped.why})`
           : ' (renamed or deleted?)';
       problems.push(`"${row.feature}": no @smoke test in ${rel} whose title contains "${row.canary}"${why} - ${LIST_FILE}:${row.line}`);
       continue;

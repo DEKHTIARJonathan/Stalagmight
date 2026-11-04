@@ -149,10 +149,60 @@ test('a skip/fail call on some other object, or in a helper on an untyped parame
   assert.equal(run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': tagged }).problems.length, 1);
 });
 
+// #576 RV10b-G1: three skipped-canary shapes the RV9b-6 receiver narrowing let
+// through - a TestInfo held in a local, a typed callback, a named hook function.
+const G1_DISQUALIFIED = {
+  'a TestInfo held in a local disqualifies the canary: const info = test.info(); info.skip()':
+    "test('confirming deletes @smoke', async () => {\n  const info = test.info();\n  info.skip(true, 'broken');\n});",
+  'a typed callback still names its TestInfo: ({ page }: { page: Page }, testInfo: TestInfo)':
+    "test('confirming deletes @smoke', async ({ page }: { page: Page }, testInfo: TestInfo) => {\n  testInfo.skip(true, 'broken');\n});",
+  'a typed callback still names its TestInfo: ({ page }: Fixtures, info)':
+    "test('confirming deletes @smoke', async ({ page }: PlaywrightTestArgs, info) => {\n  info.fixme();\n});",
+  'a named hook function skips through its own TestInfo: test.beforeEach(gate)':
+    "async function gate({ page }, testInfo) {\n  testInfo.skip(true, 'broken');\n}\ntest.beforeEach(gate);\ntest('confirming deletes @smoke', async () => {});",
+  'a named hook arrow skips through its own TestInfo, in the canary describe':
+    "const gate = async ({}: object, info: TestInfo) => { info.fixme(); };\ntest.describe('G', () => {\n  test.beforeEach(gate);\n  test('confirming deletes @smoke', async () => {});\n});",
+};
+for (const [name, spec] of Object.entries(G1_DISQUALIFIED)) {
+  test(name, () => {
+    assert.equal(run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': spec }).problems.length, 1);
+  });
+}
+
+test('a local that is not test.info(), a named hook in another describe and a named function no hook takes do not disqualify the canary', () => {
+  const spec = [
+    "async function gate({ page }, testInfo) { testInfo.skip(true, 'x'); }",
+    "async function unused({ page }, testInfo) { testInfo.skip(true, 'x'); }",
+    "test.describe('Other', () => { test.beforeEach(gate); test('a', async () => {}); });",
+    "test.describe('C', () => {",
+    "  test.beforeEach(async ({ page }: { page: Page }) => { await page.goto('/'); });",
+    "  test('confirming deletes @smoke', async ({ page }: { page: Page }, testInfo: TestInfo) => {",
+    '    const info = makeReader();',
+    '    info.skip(2);',
+    "    testInfo.attach('x', { body: 'y' });",
+    '  });',
+    '});',
+  ].join('\n');
+  assert.deepEqual(run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': spec }).problems, []);
+});
+
+// #576 RV10b-G5: a test.fail test runs - it is no canary because it passes only
+// while the feature is broken, and the message says that.
+test('a test.fail canary is reported as no canary, not as one that does not run', () => {
+  for (const spec of [
+    "test.fail('confirming deletes @smoke', async () => {});",
+    "test('confirming deletes @smoke', async () => {\n  test.fail();\n});",
+    "test('confirming deletes @smoke', async ({}, testInfo) => {\n  testInfo.fail();\n});",
+  ]) {
+    const [problem] = run({ 'docs/TESTING.md': doc([ROW]), 'e2e-playwright/delete.spec.ts': spec }).problems;
+    assert.match(problem ?? '', /found it, but it is no canary: .*passes only while the feature is broken/, spec);
+    assert.doesNotMatch(problem ?? '', /does not run/, spec);
+  }
+});
+
 test('a canary that is there but does not run says why, not "renamed or deleted"', () => {
   for (const spec of [
     "test.skip('confirming deletes @smoke', async () => {});",
-    "test.fail('confirming deletes @smoke', async () => {});",
     "test.describe.fixme('G', () => {\n  test('confirming deletes @smoke', async () => {});\n});",
     "test('confirming deletes @smoke', async ({}, testInfo) => {\n  testInfo.skip();\n});",
   ]) {
