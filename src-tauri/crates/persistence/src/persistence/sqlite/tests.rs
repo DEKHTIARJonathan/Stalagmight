@@ -4821,6 +4821,19 @@ fn test_raw_tables_leave_out_virtual_tables_even_when_pragmas_are_shadowed() {
 }
 
 #[test]
+fn test_raw_tables_keep_a_legacy_table_with_an_is_virtual_column() {
+    // Pre-v4 shots tables had an `is_virtual` column; it is still an ordinary table.
+    let db = Database::in_memory().unwrap();
+    db.conn
+        .execute_batch("CREATE TABLE legacy_shots (id INTEGER, is_virtual INTEGER);")
+        .unwrap();
+
+    let names = db.list_raw_table_names().unwrap();
+
+    assert!(names.iter().any(|n| n == "legacy_shots"), "{names:?}");
+}
+
+#[test]
 fn test_declares_virtual_table_matches_keywords_not_substrings() {
     use super::declares_virtual_table as virt;
     assert!(virt("CREATE VIRTUAL TABLE t USING fts5(x)"));
