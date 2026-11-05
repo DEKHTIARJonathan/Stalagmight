@@ -19,6 +19,11 @@ impl Database {
         let file_existed = path.exists();
 
         let conn = Connection::open(path).context("Failed to open database")?;
+        if file_existed {
+            // An existing file may come from anywhere; refuse a hostile schema
+            // before init_schema or a migration touches it (#608).
+            super::check_schema(&conn)?;
+        }
 
         let mut db = Self { conn };
         db.enable_foreign_keys()?;
@@ -118,6 +123,8 @@ impl Database {
     /// `untrusted` keeps the caller's hardened pragmas instead of the app's
     /// performance ones.
     fn finish_open_existing(conn: Connection, untrusted: bool) -> Result<Self> {
+        // Before the integrity check, which would connect any virtual table (#608).
+        super::check_schema(&conn)?;
         let db = Self { conn };
         db.enable_foreign_keys()?;
         if !untrusted {
@@ -205,6 +212,7 @@ impl Database {
         }
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .context("Failed to open database read-only for metadata")?;
+        super::check_schema(&conn)?;
         Ok(Self { conn })
     }
 
@@ -237,6 +245,7 @@ impl Database {
         }
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .context("Failed to open database read-write for metadata")?;
+        super::check_schema(&conn)?;
         Ok(Self { conn })
     }
 
@@ -259,6 +268,7 @@ impl Database {
         // Open in read-only mode - no writes possible
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .context("Failed to open database read-only")?;
+        super::check_schema(&conn)?;
 
         let db = Self { conn };
         db.enable_foreign_keys()?;
