@@ -4,6 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useProject } from '../../hooks/useProject';
 import { performQuit } from '../../utils/quit';
 import { holdAutosave } from '../../utils/autosaveHold';
+import { openPendingImport, readPendingImport } from '../../utils/pendingImport';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { trackDialogComplete } from '../../utils/telemetry';
@@ -36,6 +37,10 @@ export default function UnsavedChangesDialog() {
   // Save saves then quits, Cancel stays. Unlike the New/Open paths, quit offers a
   // Save option so the user isn't forced to choose between losing work and staying.
   const pendingQuit = dialogData?.pendingQuit === true;
+  // [#576 HFI-4-D2] Set by "Import as new project" after the file parsed: Discard
+  // closes the project and opens the new-project dialog with the parsed file;
+  // Cancel keeps the project and drops the file.
+  const pendingImport = readPendingImport(dialogData?.pendingImport);
   // Set by `openExitPrompt` when this prompt displaced a dialog in the single
   // `activeDialog` slot. Cancelling leaves the app running, so that dialog - which
   // may be a multi-step import wizard whose state lives in its `dialogData` - has to
@@ -80,6 +85,7 @@ export default function UnsavedChangesDialog() {
       const result = await closeProject();
       if (result.success) {
         setView('global');
+        if (pendingImport) openPendingImport(pendingImport);
       }
     } finally {
       release();

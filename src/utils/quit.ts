@@ -8,6 +8,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import { holdAutosave, withAutosaveHeld } from './autosaveHold';
+import { openPendingImport, readPendingImport, type PendingImport } from './pendingImport';
 
 /**
  * Set by {@link performQuit} for exactly one `tauri://close-requested` round
@@ -178,6 +179,8 @@ export type PendingExit =
       pendingOpenPath?: string | null;
       /** A New Project request the close prompt displaced (#270). */
       pendingNewProject?: boolean;
+      /** A parsed "Import as new project" file the close prompt displaced (#576 HFI-4-D2). */
+      pendingImport?: PendingImport | null;
     };
 
 /**
@@ -193,10 +196,12 @@ export function readPendingExit(data: Record<string, unknown>): PendingExit | nu
   const { kind, pendingOpenPath, pendingNewProject } = raw as Record<string, unknown>;
   if (kind === 'quit') return { kind: 'quit' };
   if (kind !== 'close') return null;
+  const pendingImport = readPendingImport((raw as Record<string, unknown>).pendingImport);
   return {
     kind: 'close',
     pendingOpenPath: typeof pendingOpenPath === 'string' ? pendingOpenPath : null,
     pendingNewProject: pendingNewProject === true,
+    ...(pendingImport ? { pendingImport } : {}),
   };
 }
 
@@ -213,7 +218,7 @@ export function readPendingExit(data: Record<string, unknown>): PendingExit | nu
  * growing a second copy of the ordering argument above.
  */
 export async function handBackProject(
-  exit: { pendingOpenPath?: string | null; pendingNewProject?: boolean },
+  exit: { pendingOpenPath?: string | null; pendingNewProject?: boolean; pendingImport?: PendingImport | null },
   opts?: { releaseLock?: boolean },
 ): Promise<void> {
   const { closeProject, loadProject } = useProjectStore.getState();
@@ -227,6 +232,8 @@ export async function handBackProject(
   // `createProject` seeds the shell from here; the close above already left us on the
   // global view (App falls back to it whenever no project is open).
   else if (exit.pendingNewProject) useUIStore.getState().openDialog('new-project');
+  // [#576 HFI-4-D2] The parsed file of an "Import as new project" this close stood in for.
+  else if (exit.pendingImport) openPendingImport(exit.pendingImport);
 }
 
 /**

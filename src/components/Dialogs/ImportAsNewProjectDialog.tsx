@@ -23,9 +23,10 @@ import { routeOpenedFile } from '../../utils/openOrImport';
  * nothing on screen, so a large file left an empty home screen for seconds and
  * the new-project dialog arrived late - over a project opened meanwhile, too.
  *
- * A close that must ask first (unsaved changes, SpeleoDB hand-back) still asks
- * before any parse, and this dialog steps aside for that prompt as it always
- * did: the user can re-launch the import once the project is actually closed.
+ * A close that must ask first (unsaved changes, SpeleoDB hand-back) asks only
+ * after a good parse (#576 HFI-4-D2), replacing this dialog and carrying the
+ * parsed file: its own close opens the new-project dialog with it, its Cancel
+ * keeps the project and drops the file. A failed parse asks nothing.
  */
 export default function ImportAsNewProjectDialog() {
   const { t } = useTranslation();

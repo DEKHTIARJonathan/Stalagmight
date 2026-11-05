@@ -43,6 +43,7 @@ import { extractFilename } from './path';
 import { openDialog, openOrImportFilters, DMP_EXTENSION } from './fileDialogs';
 import { clearProjectActionSource } from './telemetry';
 import { needsSpeleoHandBackPrompt } from './quit';
+import { openPendingImport, type PendingImport } from './pendingImport';
 import { TOAST_KEYS } from './toastKeys';
 import i18n from '../i18n';
 
@@ -199,8 +200,9 @@ function importFlowOwnsScreen(ui: ReturnType<typeof useUIStore.getState>): boole
  *   parses; only a successful parse closes it, through `closeCurrent` (the same
  *   guarded close as File > Close), and hands over to `new-project-for-import`.
  *   A failed parse leaves the project untouched. A close that must ask first
- *   (unsaved changes, SpeleoDB hand-back) still asks before any parse, as it
- *   always did, and the import ends at that prompt.
+ *   (unsaved changes, SpeleoDB hand-back) asks only after a good parse, carrying
+ *   the parsed file (#576 HFI-4-D2): its own close then opens the new-project
+ *   dialog with it, and its Cancel keeps the project and drops the file.
  * @param opts.allow  Restricts which extensions this call may route. `'project-
  *   only'` refuses everything but `.stalx` with the same unsupported-file
  *   dialog used for an unrecognized extension. Recents entries are read from
@@ -245,23 +247,28 @@ export async function routeOpenedFile(
   const dropLateResult = (): void => {
     if (importAsNew && !stillWanted() && confirmStillShowing()) useUIStore.getState().closeDialog();
   };
-  // Import as new over a project whose close must ask first (unsaved changes,
-  // SpeleoDB hand-back): ask now, before the parse, exactly as before - the
-  // prompt takes the screen and this import ends there. True when it asked.
-  const askedBeforeParse = async (): Promise<boolean> => {
-    if (!importAsNew || !store.project) return false;
-    if (!needsSpeleoHandBackPrompt(useSpeleoStore.getState().link) && !useProjectStore.getState().isDirty) {
-      return false;
+  // After a successful parse, switch to the new project. Over an open project the
+  // close comes first. A close that must ask (a SpeleoDB hand-back, then unsaved
+  // changes: `handleCloseProject`'s order) asks NOW, after the good parse, and
+  // carries the parsed file (#576 HFI-4-D2): its own close opens the new-project
+  // dialog with it (`pendingImport`), its Cancel keeps the project and drops the
+  // file. A close with nothing to ask goes through the guarded close as before.
+  // True when a dialog took the screen (it owns the entry-point source from here);
+  // false when the close was refused and the import ends.
+  const handOverParsed = async (pending: PendingImport): Promise<boolean> => {
+    if (importAsNew && useProjectStore.getState().project) {
+      if (needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
+        ui.openDialog('speleodb-close', { pendingImport: pending });
+        return true;
+      }
+      if (useProjectStore.getState().isDirty) {
+        ui.openDialog('unsaved-changes', { pendingImport: pending });
+        return true;
+      }
+      if (!(await importAsNew.closeCurrent()).success) return false;
     }
-    await importAsNew.closeCurrent();
+    openPendingImport(pending);
     return true;
-  };
-  // After a successful parse, switch: close the project the import was confirmed
-  // over, through the same guarded close. False when the close did not happen (a
-  // prompt took over, or the close was refused); the import ends there.
-  const switchedForImport = async (): Promise<boolean> => {
-    if (!importAsNew || !useProjectStore.getState().project) return true;
-    return (await importAsNew.closeCurrent()).success;
   };
 
   // A dialog (or the terminal command it triggers) now owns the pending entry-
@@ -434,15 +441,12 @@ export async function routeOpenedFile(
         handedOff = true;
         return;
       }
-      if (await askedBeforeParse()) return;
       const gpxFile = await parseForImport(store.parseGpx(path), errorTitle, stillWanted);
       if (!gpxFile) {
         dropLateResult();
         return;
       }
-      if (!(await switchedForImport())) return;
-      ui.setImportContext('new-project');
-      ui.openDialog('new-project-for-import', {
+      handedOff = await handOverParsed({
         gpxFile,
         filePath: path,
         defaultName: projectNameFromCaveOrFile(
@@ -451,7 +455,6 @@ export async function routeOpenedFile(
         ),
         importType: 'gpx',
       });
-      handedOff = true;
     } else if (lowerPath.endsWith('.tml') || lowerPath.endsWith('.tmlu')) {
       // TML/TMLU import always creates a new project.
       if (store.project && !importAsNew) {
@@ -459,18 +462,15 @@ export async function routeOpenedFile(
         handedOff = true;
         return;
       }
-      if (await askedBeforeParse()) return;
       const tmlFile = await parseForImport(store.parseTml(path), errorTitle, stillWanted);
       if (!tmlFile) {
         dropLateResult();
         return;
       }
-      if (!(await switchedForImport())) return;
       // Mirror the DMP branch: the project about to be created exists only for
-      // this import, and the import dialog has to know that to offer to discard
-      // it again if the import is cancelled or fails (#411 C2).
-      ui.setImportContext('new-project');
-      ui.openDialog('new-project-for-import', {
+      // this import (`openPendingImport` sets the 'new-project' import context the
+      // import dialog reads to offer to discard it again, #411 C2).
+      handedOff = await handOverParsed({
         tmlFile,
         filePath: path,
         defaultName: projectNameFromCaveOrFile(
@@ -479,7 +479,6 @@ export async function routeOpenedFile(
         ),
         importType: 'tml',
       });
-      handedOff = true;
     } else if (lowerPath.endsWith('.mak') || lowerPath.endsWith('.dat')) {
       // Compass import always creates a new project.
       if (store.project && !importAsNew) {
@@ -487,15 +486,12 @@ export async function routeOpenedFile(
         handedOff = true;
         return;
       }
-      if (await askedBeforeParse()) return;
       const compassFile = await parseForImport(store.parseCompass(path), errorTitle, stillWanted);
       if (!compassFile) {
         dropLateResult();
         return;
       }
-      if (!(await switchedForImport())) return;
-      ui.setImportContext('new-project');
-      ui.openDialog('new-project-for-import', {
+      handedOff = await handOverParsed({
         compassFile,
         filePath: path,
         defaultName: projectNameFromCaveOrFile(
@@ -504,7 +500,6 @@ export async function routeOpenedFile(
         ),
         importType: 'compass',
       });
-      handedOff = true;
     } else if (lowerPath.endsWith('.wpj') || lowerPath.endsWith('.srv')) {
       // Walls import always creates a new project.
       if (store.project && !importAsNew) {
@@ -512,15 +507,12 @@ export async function routeOpenedFile(
         handedOff = true;
         return;
       }
-      if (await askedBeforeParse()) return;
       const wallsFile = await parseForImport(store.parseWalls(path), errorTitle, stillWanted);
       if (!wallsFile) {
         dropLateResult();
         return;
       }
-      if (!(await switchedForImport())) return;
-      ui.setImportContext('new-project');
-      ui.openDialog('new-project-for-import', {
+      handedOff = await handOverParsed({
         wallsFile,
         filePath: path,
         defaultName: projectNameFromCaveOrFile(
@@ -529,7 +521,6 @@ export async function routeOpenedFile(
         ),
         importType: 'walls',
       });
-      handedOff = true;
     } else if (isDmp) {
       // mNemo DMP: import into the current project, or seed a new one.
       const dmpFile = await parseForImport(store.importDmp(path), errorTitle, stillWanted);

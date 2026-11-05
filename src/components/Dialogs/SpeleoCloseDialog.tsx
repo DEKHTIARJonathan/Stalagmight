@@ -7,6 +7,7 @@ import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { getErrorMessage } from '../../utils/ipc';
 import { handBackProject, holdsWriteLock, type PendingExit } from '../../utils/quit';
+import { readPendingImport } from '../../utils/pendingImport';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
@@ -45,6 +46,9 @@ export default function SpeleoCloseDialog() {
   const pendingOpenPath =
     typeof dialogData.pendingOpenPath === 'string' ? dialogData.pendingOpenPath : null;
   const pendingNewProject = dialogData.pendingNewProject === true;
+  // [#576 HFI-4-D2] "Import as new project" after the file parsed: the parsed file,
+  // opened in the new-project dialog once the project is handed back.
+  const pendingImport = readPendingImport(dialogData.pendingImport);
 
   const sdbDirty = link?.hasUnpushedEdits ?? false;
   // [#303] Dirty ONLY because a chain step walked the copy back - the user edited nothing.
@@ -100,7 +104,7 @@ export default function SpeleoCloseDialog() {
    * can finish by itself (#303). The hand-back and the replay live in `handBackProject`
    * so both finishers order them identically.
    */
-  const closeIntent: PendingExit = { kind: 'close', pendingOpenPath, pendingNewProject };
+  const closeIntent: PendingExit = { kind: 'close', pendingOpenPath, pendingNewProject, pendingImport };
   const closeThen = (opts?: { releaseLock?: boolean }) => handBackProject(closeIntent, opts);
 
   const pushReleaseThenClose = async () => {

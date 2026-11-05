@@ -219,23 +219,6 @@ describe('import as new project: parse first, then switch (#576 HFI-4-D1)', () =
     expect.soft(useUIStore.getState().dialogData).toBe(second);
   });
 
-  it.each([
-    ['unsaved changes', () => useProjectStore.setState({ isDirty: true })],
-    [
-      'a held SpeleoDB write lock',
-      () => useSpeleoStore.setState({ link: makeSpeleoLink({ editState: 'editing' }), projectLinkKind: 'remote' }),
-    ],
-  ] as const)('a close that must ask first (%s) asks before any parse, as before', async (_why, arrange) => {
-    arrange();
-    closeCurrent.mockResolvedValue({ success: false });
-    confirmOver('/cave/CaveA.srv');
-    await confirm('/cave/CaveA.srv');
-
-    expect.soft(closeCurrent).toHaveBeenCalledTimes(1);
-    expect.soft(parsers.parseWalls).not.toHaveBeenCalled();
-    expect.soft(peekProjectActionSource()).toBeUndefined();
-  });
-
   it('a close refused after the parse ends the import: no new-project dialog, the source dropped', async () => {
     closeCurrent.mockResolvedValue({ success: false });
     const dialogData = confirmOver('/cave/CaveA.srv');
@@ -255,6 +238,101 @@ describe('import as new project: parse first, then switch (#576 HFI-4-D1)', () =
     expect.soft(useUIStore.getState().activeDialog).toBe('import-as-new-project');
     expect.soft(parsers.parseWalls).not.toHaveBeenCalled();
     expect.soft(closeCurrent).not.toHaveBeenCalled();
+  });
+});
+
+/** A close that must ask first, and the prompt it asks with. */
+const ASKING_CLOSES = [
+  ['unsaved changes', 'unsaved-changes', () => useProjectStore.setState({ isDirty: true })],
+  [
+    'a SpeleoDB hand-back',
+    'speleodb-close',
+    () => useSpeleoStore.setState({ link: makeSpeleoLink({ editState: 'editing' }), projectLinkKind: 'remote' }),
+  ],
+] as const;
+
+describe('import as new project: the close prompts come after a good parse (#576 HFI-4-D2)', () => {
+  it.each(ASKING_CLOSES)('%s: the file parses first, with the project open and no prompt', async (_why, _prompt, arrange) => {
+    arrange();
+    const dialogData = confirmOver('/cave/CaveA.srv');
+    const run = confirm('/cave/CaveA.srv');
+    await settle();
+
+    expect.soft(parsers.parseWalls).toHaveBeenCalledWith('/cave/CaveA.srv');
+    expect.soft(useUIStore.getState().activeDialog).toBe('import-as-new-project');
+    expect.soft(useUIStore.getState().dialogData).toBe(dialogData);
+    expect.soft(useProjectStore.getState().project).toBe(PROJECT_A);
+    expect.soft(closeCurrent).not.toHaveBeenCalled();
+    held.reject(new Error('stop'));
+    await run;
+  });
+
+  it.each(ASKING_CLOSES)('%s: after a good parse that prompt asks, carrying the parsed file', async (_why, prompt, arrange) => {
+    arrange();
+    confirmOver('/cave/CaveA.srv');
+    const run = confirm('/cave/CaveA.srv');
+    held.resolve({ project_name: 'CaveA' });
+    await run;
+
+    expect.soft(useUIStore.getState().activeDialog).toBe(prompt);
+    expect.soft(useUIStore.getState().dialogData.pendingImport).toMatchObject({ filePath: '/cave/CaveA.srv', importType: 'walls' });
+    // Nothing is closed yet: the prompt's own close does that (or its Cancel keeps it).
+    expect.soft(closeCurrent).not.toHaveBeenCalled();
+    expect.soft(useProjectStore.getState().project).toBe(PROJECT_A);
+    // The prompt owns the entry-point source now, as the .stalx open's prompt does.
+    expect.soft(peekProjectActionSource()).toBe('keyboard');
+  });
+
+  it.each(FORMATS)('%s: the prompt carries exactly what the new-project dialog would have got', async (path, parser, importType, parsed) => {
+    useProjectStore.setState({ isDirty: true });
+    confirmOver(path);
+    const run = confirm(path);
+    held.resolve(parsed);
+    await run;
+
+    expect.soft(parsers[parser]).toHaveBeenCalledTimes(1);
+    expect.soft(useUIStore.getState().activeDialog).toBe('unsaved-changes');
+    const pending = useUIStore.getState().dialogData.pendingImport as Record<string, unknown> | undefined;
+    expect.soft(pending).toMatchObject({ filePath: path, defaultName: 'CaveA', importType });
+    expect.soft(Object.values(pending ?? {})).toContain(parsed);
+  });
+
+  it('a SpeleoDB hand-back asks first, ahead of unsaved changes', async () => {
+    useProjectStore.setState({ isDirty: true });
+    ASKING_CLOSES[1][2]();
+    confirmOver('/cave/CaveA.srv');
+    const run = confirm('/cave/CaveA.srv');
+    held.resolve({ project_name: 'CaveA' });
+    await run;
+
+    expect.soft(useUIStore.getState().activeDialog).toBe('speleodb-close');
+    expect.soft(useUIStore.getState().dialogData.pendingImport).toMatchObject({ importType: 'walls' });
+  });
+
+  it.each(ASKING_CLOSES)('%s: a failed parse shows its error and no prompt', async (_why, _prompt, arrange) => {
+    arrange();
+    confirmOver('/cave/CaveA.srv');
+    const run = confirm('/cave/CaveA.srv');
+    held.reject(new Error('line 3: bad shot'));
+    await run;
+
+    expect.soft(useUIStore.getState().activeDialog).toBe('error');
+    expect.soft(String(useUIStore.getState().dialogData.message)).toContain('line 3: bad shot');
+    expect.soft(closeCurrent).not.toHaveBeenCalled();
+    expect.soft(useProjectStore.getState().project).toBe(PROJECT_A);
+  });
+
+  it.each(ASKING_CLOSES)('%s: a project opened during the parse still drops the result, with no prompt', async (_why, _prompt, arrange) => {
+    arrange();
+    confirmOver('/cave/CaveA.srv');
+    const run = confirm('/cave/CaveA.srv');
+    openAnotherProject();
+    held.resolve({ project_name: 'CaveA' });
+    await run;
+
+    expect.soft(useUIStore.getState().activeDialog).toBeNull();
+    expect.soft(closeCurrent).not.toHaveBeenCalled();
+    expect.soft(useProjectStore.getState().project).toBe(PROJECT_B);
   });
 });
 

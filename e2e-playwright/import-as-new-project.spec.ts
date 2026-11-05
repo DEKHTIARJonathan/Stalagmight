@@ -10,8 +10,15 @@ import { setupMockedPage, createProject } from './helpers/app';
  * dropped. The parse (`parse_walls`) is HELD on a promise the test settles in
  * the page, so every state in between can be looked at.
  *
+ * Decision HFI-4-D2 "prompt after a good parse": over a project with unsaved
+ * changes the save-changes prompt comes only after the parse succeeded (a failed
+ * parse asks nothing); Discard there closes the project and opens the new-project
+ * dialog with the parsed file, Cancel keeps the project and drops the file.
+ *
  * The router-level rules - every format, a project switch during the parse, the
- * close prompts - are pinned in src/utils/__tests__/openOrImport.importAsNew.test.ts.
+ * SpeleoDB hand-back prompt - are pinned in
+ * src/utils/__tests__/openOrImport.importAsNew.test.ts and
+ * src/components/Dialogs/__tests__/importAsNewPrompts.test.tsx.
  */
 
 const FILE = '/mock/CaveA.srv';
@@ -76,6 +83,16 @@ async function openProjectName(page: Page): Promise<string | null> {
   });
 }
 
+/** Mark the open project as having unsaved changes (its close then asks first). */
+async function makeDirty(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const e2e = (window as unknown as {
+      __E2E_TEST__: { projectStore: { setState: (s: { isDirty: boolean }) => void } };
+    }).__E2E_TEST__;
+    e2e.projectStore.setState({ isDirty: true });
+  });
+}
+
 /** Ctrl+I with a project open: the confirm, then "Close and import". */
 async function confirmImportAsNew(page: Page): Promise<void> {
   await page.keyboard.press('Control+i');
@@ -136,5 +153,65 @@ test.describe('Import as new project: parse first, then switch (#576 HFI-4)', ()
     await expect(page.getByTestId('new-project-for-import-dialog')).toBeHidden();
     expect(await openProjectName(page)).toBe('ProjectA');
     await expect(page.getByTestId('single-system-view')).toBeVisible();
+  });
+});
+
+test.describe('Import as new project over unsaved changes: the prompt comes after a good parse (#576 HFI-4-D2)', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupMockedPage(page);
+    await createProject(page, 'ProjectA');
+    await makeDirty(page);
+    await pickWithHeldParse(page);
+  });
+
+  test('parses first with no prompt; after the parse, Discard closes the project and opens the new-project dialog', async ({ page }) => {
+    await confirmImportAsNew(page);
+
+    // While the file parses: no save-changes prompt yet, the project is open.
+    await expect(page.getByTestId('import-as-new-project-parsing')).toBeVisible();
+    await expect(page.getByTestId('unsaved-changes-dialog')).toBeHidden();
+    expect(await openProjectName(page)).toBe('ProjectA');
+
+    await settleParse(page, { value: WALLS_FILE });
+
+    // Only after the good parse: the prompt, over the still-open project.
+    await expect(page.getByTestId('unsaved-changes-dialog')).toBeVisible();
+    await expect(page.getByTestId('import-as-new-project-dialog')).toBeHidden();
+    expect(await openProjectName(page)).toBe('ProjectA');
+
+    await page.getByTestId('unsaved-changes-discard').click();
+
+    // The parsed file goes on to the new-project dialog: no second pick, no second parse.
+    await expect(page.getByTestId('new-project-for-import-dialog')).toBeVisible();
+    await expect.poll(() => openProjectName(page)).toBeNull();
+  });
+
+  test('a failed parse shows its error and asks nothing', async ({ page }) => {
+    await confirmImportAsNew(page);
+    await expect(page.getByTestId('import-as-new-project-parsing')).toBeVisible();
+
+    await settleParse(page, { error: { code: 'PARSE_FAILED', message: 'Synthetic: the survey file could not be read' } });
+
+    await expect(page.getByTestId('error-dialog')).toContainText('Synthetic: the survey file could not be read');
+    await expect(page.getByTestId('unsaved-changes-dialog')).toBeHidden();
+    expect(await openProjectName(page)).toBe('ProjectA');
+  });
+
+  test('cancelling the prompt keeps the project, unsaved changes and all, and drops the parsed file', async ({ page }) => {
+    await confirmImportAsNew(page);
+    await settleParse(page, { value: WALLS_FILE });
+    await expect(page.getByTestId('unsaved-changes-dialog')).toBeVisible();
+
+    await page.getByTestId('unsaved-changes-cancel').click();
+
+    await expect(page.getByTestId('unsaved-changes-dialog')).toBeHidden();
+    await expect(page.getByTestId('new-project-for-import-dialog')).toBeHidden();
+    expect(await openProjectName(page)).toBe('ProjectA');
+    await expect(page.getByTestId('single-system-view')).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __E2E_TEST__: { projectStore: { getState: () => { isDirty: boolean } } } }).__E2E_TEST__.projectStore.getState().isDirty,
+      ),
+    ).toBe(true);
   });
 });
