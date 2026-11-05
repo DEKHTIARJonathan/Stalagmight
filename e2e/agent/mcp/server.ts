@@ -17,7 +17,7 @@ import { LogCursor, type LogLevel } from '../lib/logs';
 import { invokeInApp, evalInApp, capJson } from '../lib/page';
 import { newOracleState, runSweep, type OracleState } from '../lib/oracles';
 import { listScenarios, runScenario } from '../scenarios';
-import { publishableErrorMessage, redactCorpusText } from '../lib/fixtureCorpus';
+import { publishableErrorMessage, redactCorpusText, redactCorpusValue } from '../lib/fixtureCorpus';
 import { DEFAULT_FIXTURE, materializeFixture } from '../lib/fixtures';
 import {
   waitForAppReady,
@@ -46,8 +46,13 @@ let oracleState: OracleState = newOracleState();
 
 type ToolResult = { content: Array<Record<string, unknown>>; isError?: boolean };
 
+/**
+ * A tool's answer, folded through the corpus redaction like every error the server
+ * returns (`asMessage`): the `logs` tool, for one, returns the backend's line for a
+ * failed parse, which quotes the corpus copy it was handed (#576 RV13-4).
+ */
 function textResult(value: unknown): ToolResult {
-  return { content: [{ type: 'text', text: JSON.stringify(value ?? null) }] };
+  return { content: [{ type: 'text', text: JSON.stringify(redactCorpusValue(value) ?? null) }] };
 }
 function errorResult(message: string): ToolResult {
   return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }], isError: true };
@@ -102,7 +107,9 @@ async function record<T>(
         params,
         resolved,
         outcome: { ok: true, durationMs: Date.now() - start },
-        result: capJson(result, 4096).value,
+        // Folded BEFORE the cap: a cut through a corpus name would leave a stub the
+        // recorder's own folding cannot recognise (#576 RV13-4).
+        result: capJson(redactCorpusValue(result), 4096).value,
         artifacts,
         post,
       });

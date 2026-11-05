@@ -730,6 +730,28 @@ export function redactCorpusText(text: string): string {
 }
 
 /**
+ * `value` as it may be recorded: every string in it, keys included, through
+ * `redactCorpusText` (#576 RV13-4). String by string rather than over the JSON
+ * text, so a name that JSON would escape (a quote, a backslash) is still found,
+ * and folding cannot break the encoding. A value with `toJSON` (a Date) is
+ * folded in the form JSON would write. Returns `value` itself when no corpus
+ * entry was copied in this process.
+ */
+export function redactCorpusValue(value: unknown): unknown {
+  if (REDACTED_DIRS.length === 0 && REDACTED_NAMES.length === 0) return value;
+  return foldValue(value);
+}
+
+function foldValue(value: unknown): unknown {
+  if (typeof value === 'string') return redactCorpusText(value);
+  if (Array.isArray(value)) return value.map(foldValue);
+  if (value === null || typeof value !== 'object') return value;
+  const toJSON = (value as { toJSON?: unknown }).toJSON;
+  if (typeof toJSON === 'function') return foldValue((toJSON as () => unknown).call(value));
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [redactCorpusText(key), foldValue(item)]));
+}
+
+/**
  * An error's message as it may be recorded or returned: `err.message` (or the
  * thrown value as text) through `redactCorpusText`. An import that fails quotes
  * the corpus copy it was handed, and the MCP server records a tool's error in the

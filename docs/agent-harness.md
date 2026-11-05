@@ -968,10 +968,14 @@ a corpus copy any other way - without quoting it. What the APP echoes back - an
 import error quoting the path it was handed - is folded by one per-process list
 (`fixtureCorpus.redactCorpusText`, filled as entries are copied) that the
 scenario's failure message, `agent:scenario`'s FAIL/findings lines,
-`fuzz-shrink`'s output and the MCP `run_scenario` result all pass through.
-Not covered, because they are not published: the session's working files - the
-copies themselves, the sweep's `findings/` JSON and the app's own logs. Attach
-the trace and the printed failure, not the session directory.
+`fuzz-shrink`'s output, the sweep's findings (`findings/` JSON included), every
+line of the session's `actions.jsonl` (a tool's params and result, its error,
+events; the recorder folds each line, and the MCP server folds a result before
+capping it) and every MCP tool result and error all pass through
+(`redactCorpusValue` folds a value string by string). Not covered, because they
+are not published: the copies themselves, the `state/` snapshots and
+screenshots, and the app's own log files. Attach the trace and the printed
+failure, not the session directory.
 
 **`corpusId` labels; `corpusHash` resolves.** The 5-hex crc20 is 20 bits, which
 is ample for telling two files apart in one run's output and far too little to

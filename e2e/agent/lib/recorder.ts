@@ -9,6 +9,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
+import { redactCorpusValue } from './fixtureCorpus';
 import { isPidAlive } from './procs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -258,8 +259,13 @@ export class Recorder {
     pruneOldSessions(root, RETAIN_SESSIONS);
   }
 
+  /**
+   * Every line of the action log goes through the corpus redaction (#576 RV13-4):
+   * a tool's params and result carry whatever the app echoed back, and a corpus
+   * copy keeps its real names (`fixtureCorpus.redactCorpusValue`).
+   */
   private append(line: object): void {
-    fs.appendFileSync(this.jsonlPath, `${JSON.stringify(line)}\n`);
+    fs.appendFileSync(this.jsonlPath, `${JSON.stringify(redactCorpusValue(line))}\n`);
   }
 
   nextSeq(): number {
