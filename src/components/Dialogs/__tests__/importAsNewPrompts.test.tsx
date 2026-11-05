@@ -106,7 +106,7 @@ describe('the unsaved-changes prompt after a good parse (#576 HFI-4-D2)', () => 
   });
 
   it('the plain unsaved-changes prompt (no parsed file) keeps its own text', () => {
-    useUIStore.setState({ dialogData: null });
+    useUIStore.setState({ dialogData: {} });
     render(<DialogHost />);
     const dialog = screen.getByTestId('unsaved-changes-dialog');
 
