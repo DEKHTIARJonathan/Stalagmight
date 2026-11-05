@@ -1389,7 +1389,7 @@
       "messageOpenProject": "You have unsaved changes. Open another project anyway?",
       "messageBack": "You have unsaved changes. Are you sure you want to go back?",
       "messageImportAsNew": "Import as a new project?",
-      "noteImportAsNew": "Unsaved changes in {{project}} will be lost.",
+      "noteImportAsNew": "Unsaved changes in {{project}} will be lost. The import continues after that.",
       "noteQuit": "Save your changes, or discard them and quit.",
       "note": "Your changes will be lost.",
       "discardQuit": "Discard & Quit",
@@ -3946,7 +3946,8 @@
       "messageNoLock": "You have changes that have not been uploaded to SpeleoDB, and you no longer hold the write lock - so they cannot be uploaded right now. They stay on this computer and will still be here next time you open the project.",
       "closeAnyway": "Close anyway",
       "thenOpen": "Once this project is closed, the project you chose opens.",
-      "thenNew": "Once this project is closed, the new-project dialog opens."
+      "thenNew": "Once this project is closed, the new-project dialog opens.",
+      "thenImport": "Once this project is closed, the import continues."
     },
     "quit": {
       "title": "Quit with changes not on SpeleoDB",

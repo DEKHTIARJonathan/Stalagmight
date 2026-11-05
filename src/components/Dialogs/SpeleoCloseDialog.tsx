@@ -157,11 +157,16 @@ export default function SpeleoCloseDialog() {
 
         {/* Say what happens AFTER the close when the user did not ask for one. Every
             verb below is honest as written - the project really is closed - but the
-            title and buttons all say "close", and someone who pressed Ctrl+O or New
-            Project needs to be told their request survived the prompt. */}
-        {(pendingOpenPath || pendingNewProject) && (
+            title and buttons all say "close", and someone who pressed Ctrl+O, New
+            Project or Import as new project needs to be told their request survived
+            the prompt. */}
+        {(pendingOpenPath || pendingNewProject || pendingImport) && (
           <p className="text-xs text-text-secondary" data-testid="speleodb-close-pending-note">
-            {pendingOpenPath ? t('speleodb.close.thenOpen') : t('speleodb.close.thenNew')}
+            {pendingOpenPath
+              ? t('speleodb.close.thenOpen')
+              : pendingNewProject
+                ? t('speleodb.close.thenNew')
+                : t('speleodb.close.thenImport')}
           </p>
         )}
 

@@ -105,6 +105,14 @@ describe('the unsaved-changes prompt after a good parse (#576 HFI-4-D2)', () => 
     expect(screen.getByTestId('unsaved-changes-discard')).toHaveTextContent('Discard Changes');
   });
 
+  // #576 RV13-9: Discard does not end the flow; the prompt says what follows it.
+  it('says the import continues after it', () => {
+    render(<DialogHost />);
+    expect(screen.getByTestId('unsaved-changes-dialog')).toHaveTextContent(
+      'Unsaved changes in ProjectA will be lost. The import continues after that.',
+    );
+  });
+
   it('the plain unsaved-changes prompt (no parsed file) keeps its own text', () => {
     useUIStore.setState({ dialogData: {} });
     render(<DialogHost />);
@@ -113,6 +121,7 @@ describe('the unsaved-changes prompt after a good parse (#576 HFI-4-D2)', () => 
     expect(dialog).toHaveTextContent('You have unsaved changes. Are you sure you want to go back?');
     expect(dialog).toHaveTextContent('Your changes will be lost.');
     expect(dialog).not.toHaveTextContent('Import as a new project?');
+    expect(dialog).not.toHaveTextContent('The import continues');
   });
 });
 
@@ -131,6 +140,14 @@ describe('the SpeleoDB hand-back prompt after a good parse (#576 HFI-4-D2)', () 
     expect(closeProject).toHaveBeenCalledTimes(1);
     expect(useUIStore.getState().dialogData).toEqual(PENDING);
     expect(useUIStore.getState().importContext).toBe('new-project');
+  });
+
+  // #576 RV13-9: like the Open / New Project notes, it says the request survives the prompt.
+  it('says the import continues once the project is closed', () => {
+    render(<DialogHost />);
+    expect(screen.getByTestId('speleodb-close-pending-note')).toHaveTextContent(
+      'Once this project is closed, the import continues.',
+    );
   });
 
   it('the parsed file rides through the unwound-push confirmation too (readPendingExit / handBackProject)', async () => {
