@@ -91,13 +91,19 @@ impl AppState {
     /// Examples:
     /// - `Cave.stalx` -> `Cave_1.stalx` (if `Cave.stalx` exists)
     /// - `Cave_1.stalx` -> `Cave_2.stalx` (if both previous files exist)
+    ///
+    /// [#576 RV13-1] A link at a name is a name taken, even one that leads nowhere
+    /// yet: `symlink_metadata`, not `exists()`/`metadata()`, which follow it - a
+    /// dangling link was "free" and a link to an empty file a placeholder, and the
+    /// create then made or wrote the link's target, wherever it points.
     pub(super) fn next_available_project_path(path: &PathBuf) -> PathBuf {
-        if !path.exists() {
+        let taken = |candidate: &std::path::Path| candidate.symlink_metadata().is_ok();
+        if !taken(path) {
             return path.clone();
         }
         // Treat 0-byte files as non-existent: Android's SAF (ACTION_CREATE_DOCUMENT)
         // creates an empty placeholder at the chosen path before returning.
-        if path.metadata().is_ok_and(|m| m.len() == 0) {
+        if path.symlink_metadata().is_ok_and(|m| m.len() == 0) {
             return path.clone();
         }
 
@@ -125,7 +131,7 @@ impl AppState {
                 PathBuf::from(&candidate_name)
             };
 
-            if !candidate_path.exists() {
+            if !taken(&candidate_path) {
                 return candidate_path;
             }
 
@@ -378,9 +384,12 @@ impl AppState {
     /// the commit only, as the create always has. First in this impl because the
     /// source tripwire that pins the create's shared commit (`speleodb_session`
     /// tests) reads the first full-create definition in this file.
+    ///
+    /// `check_target` [#576 RV13-1]: see [`Self::do_create_project_full_checked`].
     fn do_create_project_full_with(
         &self,
         held: Option<&CommandsHeld<'_>>,
+        check_target: Option<&dyn Fn(&std::path::Path) -> Result<(), String>>,
         name: String,
         project_location: Option<String>,
         save_directory: Option<PathBuf>,
@@ -442,6 +451,15 @@ impl AppState {
                 "Project path already exists; using auto-renamed path"
             );
             db_path = available_db_path;
+        }
+
+        // [#576 RV13-1] The caller's write-path check, on the file this create
+        // opens - the name resolved and any `_N` rename made - before anything is
+        // created, the missing folders included.
+        if let Some(check) = check_target {
+            if let Err(why) = check(&db_path) {
+                early_return_err!(LoadError::internal(why));
+            }
         }
 
         // Create parent directories if they don't exist
@@ -630,6 +648,40 @@ impl AppState {
     {
         self.do_create_project_full_with(
             None,
+            None,
+            name,
+            project_location,
+            save_directory,
+            save_path,
+            defer_initial_save,
+        )
+    }
+
+    /// [`Self::do_create_project_full`] with the caller's write-path check run on
+    /// the file the create opens [#576 RV13-1]: `check_target` is handed that path
+    /// once the name is resolved and any `_N` rename made, before anything is
+    /// created; its `Err` refuses the create with that message. The
+    /// `create_project_full` command's entry when the webview names a file or a
+    /// folder - checking a name of its own instead (the folder's
+    /// `project.stalx`) let a link at the name the create really opens through.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the LoadError every create path returns; this only delegates to the body \
+                  above, and boxing the error type is a repo-wide change outside NF-W4C-3"
+    )]
+    pub fn do_create_project_full_checked(
+        &self,
+        check_target: &dyn Fn(&std::path::Path) -> Result<(), String>,
+        name: String,
+        project_location: Option<String>,
+        save_directory: Option<PathBuf>,
+        save_path: Option<PathBuf>,
+        defer_initial_save: bool,
+    ) -> Result<crate::core::loading::CreateProjectFullResult, crate::core::loading::LoadError>
+    {
+        self.do_create_project_full_with(
+            None,
+            Some(check_target),
             name,
             project_location,
             save_directory,
@@ -658,6 +710,7 @@ impl AppState {
     {
         self.do_create_project_full_with(
             Some(commands),
+            None,
             name,
             project_location,
             save_directory,
@@ -865,6 +918,37 @@ mod tests {
 
         let available = AppState::next_available_project_path(&base_path);
         assert_eq!(available, temp_dir.path().join("Collision_2.stalx"));
+    }
+
+    /// [#576 RV13-1] A link at a name is a name taken - even one that leads
+    /// nowhere yet, or to an empty file. `exists()` and `metadata()` follow the
+    /// link: a dangling one was "free" and a link to an empty file a "placeholder",
+    /// so the create opened the name and SQLite made or wrote the link's target,
+    /// wherever it points.
+    #[cfg(unix)]
+    #[test]
+    fn next_available_project_path_takes_a_link_as_a_name_taken() {
+        let temp_dir = TempDir::new().unwrap();
+        let elsewhere = TempDir::new().unwrap();
+        let dir = temp_dir.path();
+        let link = |name: &str, to: &str| {
+            std::os::unix::fs::symlink(elsewhere.path().join(to), dir.join(name)).unwrap();
+        };
+        link("Cave.stalx", "planted.stalx");
+        link("Cave_1.stalx", "planted-1.stalx");
+        std::fs::write(elsewhere.path().join("empty.stalx"), b"").unwrap();
+        link("Empty.stalx", "empty.stalx");
+        // A real empty file is still a placeholder (Android's SAF makes one).
+        std::fs::write(dir.join("Placeholder.stalx"), b"").unwrap();
+
+        for (name, expected) in [
+            ("Cave.stalx", "Cave_2.stalx"),
+            ("Empty.stalx", "Empty_1.stalx"),
+            ("Placeholder.stalx", "Placeholder.stalx"),
+        ] {
+            let available = AppState::next_available_project_path(&dir.join(name));
+            assert_eq!(available, dir.join(expected), "{name}");
+        }
     }
 }
 

@@ -457,3 +457,130 @@ fn a_link_to_a_file_of_another_type_is_refused_naming_its_target() {
         "Refused to change notes.txt: the file must end in .stalx"
     );
 }
+
+/// [#576 RV13-1] `create_project_full` with a folder and no file name ran the
+/// policy on a stand-in `<folder>/project.stalx`, but the create opens
+/// `<folder>/<Name>.stalx` - or the `_N` name it moves on to when that one is
+/// taken. A link at that name leading nowhere yet, into the app's own folder,
+/// passed: the create took it for a free name (`exists()` is false for a link
+/// that leads nowhere) and SQLite created its target inside the app folder. The
+/// same with a file named: `<user>/Taken.stalx` taken, `Taken_1.stalx` such a
+/// link. And a stand-in link at `project.stalx` refused a create that never
+/// touches that name. The policy now runs on the file the create opens, before
+/// anything is created, and a link at a name is a name taken.
+#[cfg(unix)]
+#[test]
+fn a_create_checks_the_file_it_opens_and_never_opens_a_link() {
+    use crate::commands::project::create_project_full_checked;
+    use std::cell::RefCell;
+    use std::os::unix::fs::symlink;
+
+    let _cfg = crate::test_helpers::isolated_config();
+    let app = TempDir::new().expect("app dir");
+    let user = TempDir::new().expect("user dir");
+    let u = user.path();
+    let dirs = AppDirs {
+        internal: vec![app.path().to_path_buf()],
+        managed_projects: None,
+    };
+    let checked: RefCell<Vec<PathBuf>> = RefCell::new(Vec::new());
+    let policy = |path: &Path| {
+        checked.borrow_mut().push(path.to_path_buf());
+        check_write_path_with(path, WriteTarget::Project, &dirs)
+    };
+    let state = stalagmight_core::test_fixtures::state_with_null_sink();
+    let shown = |p: &Path| -> String {
+        if let Ok(rest) = p.strip_prefix(u) {
+            format!("<user>/{}", rest.display())
+        } else if let Ok(rest) = p.strip_prefix(app.path()) {
+            format!("<app>/{}", rest.display())
+        } else {
+            p.display().to_string()
+        }
+    };
+    let mut wrong: Vec<String> = Vec::new();
+    let mut create = |what: &str,
+                      dir: Option<PathBuf>,
+                      file: Option<PathBuf>,
+                      want: Result<PathBuf, &str>,
+                      want_checked: PathBuf| {
+        checked.borrow_mut().clear();
+        let created =
+            create_project_full_checked(&state, &policy, "Cave".into(), None, dir, file, false)
+                .map(|c| c.project.file_path.unwrap_or_default())
+                .map_err(|e| e.message);
+        let ran_on = checked.borrow().clone();
+        let in_app: Vec<String> = std::fs::read_dir(app.path())
+            .expect("app dir")
+            .map(|e| shown(&e.expect("entry").path()))
+            .collect();
+        println!(
+            "RV13-1 {what}: created {:?}; policy run on {:?}; the app folder holds {in_app:?}",
+            created.as_deref().map(shown),
+            ran_on.iter().map(|p| shown(p)).collect::<Vec<_>>(),
+        );
+        let as_wanted = match (&created, &want) {
+            (Ok(at), Ok(want)) => at == want,
+            (Err(why), Err(want)) => why.contains(want),
+            _ => false,
+        };
+        if !as_wanted || ran_on != [want_checked] || !in_app.is_empty() {
+            wrong.push(what.to_owned());
+        }
+    };
+
+    // A folder named; a dangling link at `<user>/Cave.stalx` into the app folder:
+    // a name taken, so `Cave_1.stalx`, and that is the file checked.
+    symlink(
+        app.path().join("planted-create.stalx"),
+        u.join("Cave.stalx"),
+    )
+    .expect("a link");
+    create(
+        "Cave in <user>, Cave.stalx -> <app>/planted-create.stalx",
+        Some(u.to_path_buf()),
+        None,
+        Ok(u.join("Cave_1.stalx")),
+        u.join("Cave_1.stalx"),
+    );
+
+    // A file named and taken; the `_1` name a dangling link into the app folder.
+    std::fs::write(u.join("Taken.stalx"), b"a project").expect("a taken name");
+    symlink(app.path().join("planted-1.stalx"), u.join("Taken_1.stalx")).expect("a link");
+    create(
+        "<user>/Taken.stalx (taken), Taken_1.stalx -> <app>/planted-1.stalx",
+        None,
+        Some(u.join("Taken.stalx")),
+        Ok(u.join("Taken_2.stalx")),
+        u.join("Taken_2.stalx"),
+    );
+
+    // A link at `project.stalx` is no reason to refuse a create of Cave.
+    let other = u.join("other");
+    std::fs::create_dir(&other).expect("a user folder");
+    symlink(
+        app.path().join("planted-p.stalx"),
+        other.join("project.stalx"),
+    )
+    .expect("a link");
+    create(
+        "Cave in <user>/other, project.stalx -> <app>/planted-p.stalx",
+        Some(other.clone()),
+        None,
+        Ok(other.join("Cave.stalx")),
+        other.join("Cave.stalx"),
+    );
+
+    // A refusal comes before anything is made - not the missing folder either.
+    let refused_dir = app.path().join("new-folder");
+    create(
+        "Cave in <app>/new-folder",
+        Some(refused_dir.clone()),
+        None,
+        Err("app's own settings, data or cache folder"),
+        refused_dir.join("Cave.stalx"),
+    );
+
+    println!("RV13-1 not as they should be: {wrong:?}");
+    assert!(wrong.is_empty(), "{wrong:?}");
+}

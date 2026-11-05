@@ -615,6 +615,47 @@ pub async fn set_workspace_mode<R: Runtime>(
     .await
 }
 
+/// The body of [`create_project_full`], with the write-path check passed in (the
+/// testable core).
+///
+/// [#576 C11-D1, RV13-1] A create the webview names a file or a folder for runs
+/// `check` on the file the create opens: the folder's `<Name>.stalx`, or the
+/// `_N` name it moves on to when that one is taken. It used to check a stand-in
+/// `<folder>/project.stalx` for a folder, and the named file before any rename,
+/// so a link at the name really opened was never judged. The default location
+/// (neither named) is not the webview's to choose and is not checked, as before.
+#[expect(
+    clippy::result_large_err,
+    reason = "the LoadError every create path returns; boxing it is a repo-wide change"
+)]
+pub(crate) fn create_project_full_checked(
+    state: &AppState,
+    check: &dyn Fn(&std::path::Path) -> Result<(), String>,
+    name: String,
+    project_location: Option<String>,
+    save_directory: Option<PathBuf>,
+    save_path: Option<PathBuf>,
+    defer_initial_save: bool,
+) -> Result<CreateProjectFullResult, LoadError> {
+    if save_path.is_none() && save_directory.is_none() {
+        return state.do_create_project_full(
+            name,
+            project_location,
+            None,
+            None,
+            defer_initial_save,
+        );
+    }
+    state.do_create_project_full_checked(
+        check,
+        name,
+        project_location,
+        save_directory,
+        save_path,
+        defer_initial_save,
+    )
+}
+
 #[tauri::command]
 pub async fn create_project_full(
     app_handle: tauri::AppHandle,
@@ -628,17 +669,9 @@ pub async fn create_project_full(
     // (State<'_, T> cannot be moved due to lifetime constraints)
     let result: Result<Result<CreateProjectFullResult, LoadError>, _> =
         tauri::async_runtime::spawn_blocking(move || {
-            // [#576 C11-D1] The file the project is created in (or a stand-in name in
-            // the folder it is created in).
-            let target = save_path
-                .clone()
-                .map(with_stalx_extension)
-                .or_else(|| save_directory.as_ref().map(|dir| dir.join("project.stalx")));
-            if let Some(target) = target {
-                check_project_target(&target).map_err(LoadError::internal)?;
-            }
-            let state = app_handle.state::<AppState>();
-            state.do_create_project_full(
+            create_project_full_checked(
+                &app_handle.state::<AppState>(),
+                &check_project_target,
                 name,
                 project_location,
                 save_directory,
