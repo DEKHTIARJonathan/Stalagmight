@@ -581,7 +581,9 @@ impl AppState {
         };
         Ok(PlnxContext {
             path,
-            project_created_at: p.created_at.to_rfc3339(),
+            // [#576 NF-W18-1] The UTC form every `.plnx` was stamped with, not
+            // the stored text: a plan stays its project's whatever form that has.
+            project_created_at: p.created_at.utc().to_rfc3339(),
             project_name: p.name.clone(),
         })
     }
@@ -1072,6 +1074,33 @@ mod tests {
             bytes_before, bytes_after,
             "a Foreign .plnx must not be mutated by ANY dive-plan command"
         );
+    }
+
+    /// [#576 NF-W18-1] A project's creation time is kept as its file stored it
+    /// (`+05:00` here), but the `.plnx` identity stays the UTC form every plan file
+    /// was stamped with: the plans beside such a project are still its own.
+    #[test]
+    fn a_plnx_stays_owned_by_a_project_whose_created_at_is_stored_in_another_offset() {
+        let temp = TempDir::new().unwrap();
+        let plnx_path = temp.path().join("cave.plnx");
+        {
+            let store = PlnxStore::open(&plnx_path).unwrap();
+            store
+                .ensure_identity("2020-01-01T22:04:05+00:00", "Mine")
+                .unwrap();
+            store
+                .insert("Mine's plan", "2020-01-01T00:00:00Z", 1, "{}")
+                .unwrap();
+        }
+        let state = AppState::new().unwrap();
+        let mut project = Project::new("Mine".to_string(), None);
+        project.created_at =
+            crate::models::CreationStamp::parse("2020-01-02T03:04:05+05:00").unwrap();
+        project.file_path = Some(temp.path().join("cave.stalx"));
+        *state.project.lock() = Some(project).into();
+
+        let listed = state.list_dive_plans().unwrap();
+        assert_eq!(listed.len(), 1, "its own plan is listed: {listed:?}");
     }
 
     /// #275 B3: a deferred new project has a RESERVED file_path that was never

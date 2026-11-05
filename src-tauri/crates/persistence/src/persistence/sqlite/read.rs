@@ -269,7 +269,9 @@ impl Database {
             (n, l, c, m, None)
         };
 
-        let created_at = chrono::DateTime::parse_from_rfc3339(&created_at)?.with_timezone(&Utc);
+        // [#576 NF-W18-1] Kept as stored, so a save writes it back byte for byte
+        // (a `CreationStamp`, as a section's); an unreadable one refuses the open.
+        let created_at = CreationStamp::read(created_at)?;
         let modified_at = chrono::DateTime::parse_from_rfc3339(&modified_at)?.with_timezone(&Utc);
 
         // What this load could not read, or reset because it could not use it.

@@ -6,9 +6,9 @@ use std::path::PathBuf;
 use ts_rs::TS;
 
 use super::{
-    AzimuthReference, GpsBounds, LoopClosure, Section, SectionData, SectionId, SectionIdentity,
-    SectionUpdates, ShotData, ShotId, StationAnchor, StationKey, StationMerge, StationMergeWire,
-    StationRef, ZeroDatum,
+    AzimuthReference, CreationStamp, GpsBounds, LoopClosure, Section, SectionData, SectionId,
+    SectionIdentity, SectionUpdates, ShotData, ShotId, StationAnchor, StationKey, StationMerge,
+    StationMergeWire, StationRef, ZeroDatum,
 };
 use super::{LoopClosureWire, ZeroDatumWire};
 
@@ -253,9 +253,10 @@ pub struct Project {
     pub name: String,
     /// Optional location description
     pub location: Option<String>,
-    /// Creation timestamp
+    /// Creation timestamp. [#576 NF-W18-1] Kept as the text the `.stalx` stored
+    /// (a save writes it back byte for byte); the IPC carries its UTC moment.
     #[ts(type = "string")]
-    pub created_at: DateTime<Utc>,
+    pub created_at: CreationStamp,
     /// Last modification timestamp
     #[ts(type = "string")]
     pub modified_at: DateTime<Utc>,
@@ -706,7 +707,9 @@ impl Serialize for ProjectIpc<'_> {
         let mut st = serializer.serialize_struct("Project", 17)?;
         st.serialize_field("name", &p.name)?;
         st.serialize_field("location", &p.location)?;
-        st.serialize_field("created_at", &p.created_at)?;
+        // [#576 NF-W18-1] The moment, as before the stored text was kept: the
+        // frontend's project identity, and the same for every form of the text.
+        st.serialize_field("created_at", &p.created_at.utc())?;
         st.serialize_field("modified_at", &p.modified_at)?;
         st.serialize_field("sections", &p.sections)?;
         st.serialize_field("station_merges", &station_merges)?;
@@ -743,7 +746,7 @@ pub fn serialize_project_ipc<S: serde::ser::Serializer>(
 pub struct LoadedProject {
     pub name: String,
     pub location: Option<String>,
-    pub created_at: DateTime<Utc>,
+    pub created_at: CreationStamp,
     pub modified_at: DateTime<Utc>,
     pub sections: Vec<Section>,
     pub station_merges: Vec<StationMerge>,
@@ -771,7 +774,7 @@ impl Project {
         Self {
             name,
             location,
-            created_at: now,
+            created_at: CreationStamp::at(now),
             modified_at: now,
             sections: Vec::new(),
             station_merges: MergeTopology::default(),

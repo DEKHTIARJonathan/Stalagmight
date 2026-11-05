@@ -377,6 +377,13 @@ pub(super) fn reapply_heals_after_restore(restored: &mut Project, live: Option<&
     let Some(live) = live else {
         return;
     };
+    // [#576 NF-W18-1] The project's creation time as the live project holds it
+    // (its file's text) when the snapshot names the same moment: one persisted
+    // before that text was kept holds it as `DateTime<Utc>` serialized it, which
+    // the next save would otherwise write.
+    if restored.created_at.utc() == live.created_at.utc() {
+        restored.created_at.clone_from(&live.created_at);
+    }
     for section in &mut restored.sections {
         if section.created_at.is_none() {
             section.created_at = live

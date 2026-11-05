@@ -14,19 +14,20 @@
 
 use std::path::Path;
 
+use rusqlite::Connection;
 use tempfile::TempDir;
 
 use super::{AppState, DisplaySettingTarget};
 use crate::core::{Command, CommandErrorCode};
-use crate::models::Project;
+use crate::models::{serialize_project_ipc, CreationStamp, Project};
 use crate::persistence::Database;
 use crate::test_fixtures::state_with_project;
 
 /// The identity the frontend holds for `project`: its `created_at` as the wire
-/// carries it, and its `file_path`.
+/// carries it (the IPC encoding of the project), and its `file_path`.
 fn wire_identity(project: &Project) -> DisplaySettingTarget {
-    let created_at = serde_json::to_value(project.created_at)
-        .expect("serialize created_at")
+    let created_at = serialize_project_ipc(project, serde_json::value::Serializer)
+        .expect("serialize the project for the wire")["created_at"]
         .as_str()
         .expect("created_at is a string on the wire")
         .to_string();
@@ -50,7 +51,7 @@ fn unsaved_identity(created_at: &str) -> DisplaySettingTarget {
 /// A saved project at `path`, open in `state` with its database.
 fn open_saved(state: &AppState, path: &Path, name: &str, created: &str) -> Project {
     let mut project = Project::new(name.to_string(), None);
-    project.created_at = created.parse().expect("timestamp");
+    project.created_at = CreationStamp::parse(created).expect("timestamp");
     let mut db = Database::open(path).expect("create");
     db.save_project(&project).expect("write");
     drop(db);
@@ -166,7 +167,7 @@ fn a_write_made_for_one_copy_does_not_land_in_another_copy_of_the_same_file() {
     let path_a = temp.path().join("CaveA.stalx");
     let path_b = temp.path().join("CaveA copy.stalx");
     let mut project = Project::new("CaveA".to_string(), None);
-    project.created_at = "2026-01-01T10:00:00Z".parse().expect("timestamp");
+    project.created_at = CreationStamp::parse("2026-01-01T10:00:00Z").expect("timestamp");
     Database::open(&path_a)
         .expect("create")
         .save_project(&project)
@@ -217,7 +218,7 @@ fn a_write_made_just_before_a_save_as_still_lands_in_the_project() {
     let path_a = temp.path().join("CaveA.stalx");
     let path_c = temp.path().join("CaveA renamed.stalx");
     let mut project = Project::new("CaveA".to_string(), None);
-    project.created_at = "2026-01-01T10:00:00Z".parse().expect("timestamp");
+    project.created_at = CreationStamp::parse("2026-01-01T10:00:00Z").expect("timestamp");
     Database::open(&path_a)
         .expect("create")
         .save_project(&project)
@@ -274,7 +275,7 @@ fn a_write_queued_across_a_second_save_as_still_lands_in_the_project() {
     let path_b = temp.path().join("CaveA second.stalx");
     let path_c = temp.path().join("CaveA third.stalx");
     let mut project = Project::new("CaveA".to_string(), None);
-    project.created_at = "2026-01-01T10:00:00Z".parse().expect("timestamp");
+    project.created_at = CreationStamp::parse("2026-01-01T10:00:00Z").expect("timestamp");
     Database::open(&path_a)
         .expect("create")
         .save_project(&project)
@@ -335,7 +336,7 @@ fn a_new_open_forgets_the_files_the_previous_session_was_saved_through() {
     let path_a = temp.path().join("CaveA.stalx");
     let path_b = temp.path().join("CaveA second.stalx");
     let mut project = Project::new("CaveA".to_string(), None);
-    project.created_at = "2026-01-01T10:00:00Z".parse().expect("timestamp");
+    project.created_at = CreationStamp::parse("2026-01-01T10:00:00Z").expect("timestamp");
     Database::open(&path_a)
         .expect("create")
         .save_project(&project)
@@ -355,4 +356,79 @@ fn a_new_open_forgets_the_files_the_previous_session_was_saved_through() {
         Err(CommandErrorCode::ProjectChanged)
     );
     assert_eq!(grid_spacing_in(&path_a), None);
+}
+
+/// The project's `created_at` as `path` stores it.
+fn stored_created_at(path: &Path) -> String {
+    Connection::open(path)
+        .expect("open the file")
+        .query_row("SELECT created_at FROM project", [], |row| row.get(0))
+        .expect("read it")
+}
+
+#[test]
+fn a_write_queued_across_a_save_of_a_project_stored_in_another_offset_lands() {
+    // [#576 NF-W18-1] `created_at` is the identity a display-setting write names.
+    // A project another tool stored with a non-UTC offset is saved while a write
+    // the frontend made before the save is still queued: the write is still this
+    // project's, and the identity a later open hands the frontend is the same.
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().expect("temp dir");
+    let path = temp.path().join("CaveA.stalx");
+    let stored = "2026-01-01T15:00:00+05:00";
+    Database::open(&path)
+        .expect("create")
+        .save_project(&Project::new("CaveA".to_string(), None))
+        .expect("write");
+    Connection::open(&path)
+        .expect("open the file")
+        .execute("UPDATE project SET created_at = ?1", [stored])
+        .expect("store another tool's created_at");
+
+    let state = AppState::new().expect("state");
+    assert!(state.open_project(path.clone()).success, "open the project");
+    let made_before = wire_identity(&state.get_project_state().expect("open"));
+    let saved = state.execute(Command::SaveProject { path: None });
+    assert!(saved.success, "save: {:?}", saved.error);
+    let after_save = stored_created_at(&path);
+
+    let answer = state.save_display_setting_for(Some(&made_before), "gridSpacing", "40");
+    let landed = grid_spacing_in(&path);
+    let reread = wire_identity(&state.get_project_state().expect("open"));
+
+    // The same across a Save As to a copy: a write made before it still lands.
+    let copy = temp.path().join("CaveA copy.stalx");
+    let saved_as = state.save_project(Some(copy.clone()));
+    assert!(saved_as.success, "save as: {:?}", saved_as.error);
+    let in_copy = stored_created_at(&copy);
+    let answer_copy = state.save_display_setting_for(Some(&made_before), "gridSpacing", "45");
+    let landed_copy = grid_spacing_in(&copy);
+    drop(state);
+    let state = AppState::new().expect("state");
+    assert!(state.open_project(copy).success, "open the copy");
+    let reopened = wire_identity(&state.get_project_state().expect("open"));
+    println!(
+        "[NF-W18-1] stored {stored:?}; after the save {after_save:?}, in the Save As copy \
+         {in_copy:?}; identity made before the save {:?}, re-read after it {:?}, after \
+         reopening the copy {:?}; the queued write after the save: answer={:?}, \
+         gridSpacing={landed:?} (expected Ok, Some(\"40\")); after the Save As: answer={:?}, \
+         gridSpacing={landed_copy:?} (expected Ok, Some(\"45\"))",
+        made_before.created_at,
+        reread.created_at,
+        reopened.created_at,
+        answer.as_ref().map_err(|e| e.code),
+        answer_copy.as_ref().map_err(|e| e.code)
+    );
+    assert!(answer.is_ok());
+    assert_eq!(landed.as_deref(), Some("40"));
+    assert!(answer_copy.is_ok());
+    assert_eq!(landed_copy.as_deref(), Some("45"));
+    assert_eq!(
+        reread.created_at, made_before.created_at,
+        "re-read after the save"
+    );
+    assert_eq!(
+        reopened.created_at, made_before.created_at,
+        "after a reopen"
+    );
 }

@@ -288,3 +288,34 @@ fn a_stamp_in_another_offset_is_written_back_as_stored() {
     assert_eq!(save_as, expected, "save as");
     assert_eq!(after_undo, expected, "undo from the persisted history");
 }
+
+/// [#576 NF-W18-1] A whole-project snapshot persisted before the project's own
+/// creation time was kept as text holds it as `DateTime<Utc>` serialized it (a
+/// `Z`). A restore keeps the text the live project holds - its file's - when the
+/// snapshot names the same moment, so an undo and a save do not write it in that
+/// other form; a snapshot naming another moment keeps its own.
+#[test]
+fn a_restore_keeps_the_live_projects_created_at_text() {
+    let stored = "2020-01-02T03:04:05+05:00";
+    let mut live = crate::models::Project::new("CaveA".to_string(), None);
+    live.created_at = CreationStamp::parse(stored).expect("stamp");
+    let mut restored = live.clone();
+    restored.created_at = CreationStamp::parse("2020-01-01T22:04:05Z").expect("stamp");
+    let other = CreationStamp::parse("2021-01-01T00:00:00Z").expect("stamp");
+    let mut elsewhere = live.clone();
+    elsewhere.created_at = other.clone();
+
+    super::project_io::reapply_heals_after_restore(&mut restored, Some(&live));
+    super::project_io::reapply_heals_after_restore(&mut elsewhere, Some(&live));
+    println!(
+        "NF-W18-1 live {stored:?}; restored from a snapshot holding \"2020-01-01T22:04:05Z\": \
+         {:?}; from one holding another moment: {:?}",
+        restored.created_at.as_str(),
+        elsewhere.created_at.as_str()
+    );
+    assert_eq!(restored.created_at.as_str(), stored, "the live text");
+    assert_eq!(
+        elsewhere.created_at, other,
+        "another moment is the snapshot's own"
+    );
+}

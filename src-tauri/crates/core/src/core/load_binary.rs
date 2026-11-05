@@ -476,7 +476,9 @@ fn encode_project(
     let project_header = ProjectHeaderBinary {
         name: project.name.clone(),
         location: project.location.clone(),
-        created_at: project.created_at,
+        // [#576 NF-W18-1] The moment, as the JSON project state carries it: the
+        // frontend's project identity must not depend on which one it read.
+        created_at: project.created_at.utc(),
         modified_at: project.modified_at,
         file_path: project
             .file_path

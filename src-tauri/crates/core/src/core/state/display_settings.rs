@@ -87,7 +87,7 @@ impl AppState {
             .project
             .lock()
             .as_ref()
-            .map(|p| (p.created_at, p.file_path.clone()));
+            .map(|p| (p.created_at.utc(), p.file_path.clone()));
         let same_project = match (made_for, open) {
             (None, None) => true,
             (Some(made_for), Some((open_created_at, open_path))) => {

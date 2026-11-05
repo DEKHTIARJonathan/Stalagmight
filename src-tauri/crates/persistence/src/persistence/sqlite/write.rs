@@ -82,7 +82,8 @@ impl Database {
             params![
                 project.name,
                 project.location,
-                project.created_at.to_rfc3339(),
+                // [#576 NF-W18-1] As stored, byte for byte (as a section's stamp).
+                project.created_at.as_str(),
                 project.modified_at.to_rfc3339(),
                 SCHEMA_VERSION,
                 next_closure_id_i64

@@ -231,3 +231,55 @@ fn an_unreadable_stamp_is_stamped_anew_by_the_next_save() {
         );
     }
 }
+
+/// [#576 NF-W18-1] The project's own `created_at` follows the same rule. The load
+/// parsed it to UTC and the save printed that, so a value another tool stored in
+/// another offset (`+05:00`) came back as the same moment in another text.
+#[test]
+fn a_project_created_at_in_any_form_survives_a_save_byte_for_byte() {
+    let dir = TempDir::new().unwrap();
+    let (path, _) = saved_an_hour_ago(&dir);
+    let project_created_at = |file: &Path| -> String {
+        Connection::open(file)
+            .unwrap()
+            .query_row("SELECT created_at FROM project", [], |row| row.get(0))
+            .unwrap()
+    };
+    let mut wrong = Vec::new();
+    for (i, stored) in [
+        "2020-01-02T03:04:05+05:00",
+        "2020-01-02T03:04:05Z",
+        "2020-01-02T03:04:05.120-03:30",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        Connection::open(&path)
+            .unwrap()
+            .execute("UPDATE project SET created_at = ?1", [stored])
+            .unwrap();
+        let reopened = Database::open_existing(&path)
+            .unwrap()
+            .load_project()
+            .unwrap();
+        let fresh = dir.path().join(format!("CaveA-project-{i}.stalx"));
+        Database::open(&fresh)
+            .unwrap()
+            .save_project(&reopened)
+            .unwrap();
+        Database::open_existing(&path)
+            .unwrap()
+            .save_project(&reopened)
+            .unwrap();
+        for (how, file) in [("to a fresh file", &fresh), ("in place", &path)] {
+            let written = project_created_at(file);
+            println!(
+                "NF-W18-1 project created_at stored {stored:?}; after a save {how}: {written:?}"
+            );
+            if written != stored {
+                wrong.push(format!("{stored} -> {written} ({how})"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "rewritten: {wrong:?}");
+}
