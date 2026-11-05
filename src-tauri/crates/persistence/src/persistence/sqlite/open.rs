@@ -195,6 +195,16 @@ impl Database {
         Ok(self)
     }
 
+    /// Refuse the file at `path` if its schema could run SQL the file chose
+    /// ([`super::check_schema`]), without opening it as a project. For files
+    /// that arrive from elsewhere before anything else touches them, e.g. a
+    /// SpeleoDB download about to replace the local cache.
+    pub fn check_schema_at(path: &Path) -> Result<()> {
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("open {} to check its schema", path.display()))?;
+        super::check_schema(&conn)
+    }
+
     /// Open a database for read-only metadata extraction only.
     ///
     /// Skips the per-file integrity check, foreign-key validation, schema

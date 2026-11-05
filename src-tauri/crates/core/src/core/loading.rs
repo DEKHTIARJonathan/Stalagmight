@@ -1337,7 +1337,7 @@ mod unsafe_file_tests {
 
         assert_eq!(load.code, "UNSAFE_FILE");
         assert!(
-            load.message.contains("a view named \"eviltxt\""),
+            load.message.contains("a view named \"evil?txt\""),
             "{}",
             load.message
         );

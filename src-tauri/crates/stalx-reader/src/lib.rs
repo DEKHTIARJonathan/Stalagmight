@@ -407,61 +407,6 @@ fn remaining(expires: Instant) -> Result<Duration, ReadError> {
         .ok_or_else(|| ReadError::invalid(InvalidKind::Deadline, "deadline passed"))
 }
 
-/// Whether a column default, as `pragma_table_xinfo` reports it (an expression
-/// default loses its parentheses there), is a plain literal: a number, a string
-/// or blob literal, NULL, TRUE/FALSE or CURRENT_TIME/DATE/TIMESTAMP.
-fn is_literal_default(default: &str) -> bool {
-    let d = default.trim();
-    let quoted = |body: &str| {
-        body.len() >= 2
-            && body.starts_with('\'')
-            && body.ends_with('\'')
-            && !body[1..body.len() - 1].replace("''", "").contains('\'')
-    };
-    let upper = d.to_ascii_uppercase();
-    let unsigned = d.trim_start_matches(['+', '-']);
-    matches!(
-        upper.as_str(),
-        "NULL" | "TRUE" | "FALSE" | "CURRENT_TIME" | "CURRENT_DATE" | "CURRENT_TIMESTAMP"
-    ) || quoted(d)
-        || (upper.starts_with("X'") && quoted(&d[1..]))
-        || (!unsigned.is_empty()
-            && unsigned
-                .chars()
-                .all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
-            && unsigned.parse::<f64>().is_ok())
-}
-
-/// Whether every CHECK constraint in a table's `CREATE TABLE` text is the app's
-/// own singleton guard, `CHECK (id = 1)`. Scans for the keyword anywhere, so a
-/// spelling this misreads is refused, never allowed.
-fn checks_are_the_apps(sql: &str) -> bool {
-    let upper = sql.to_ascii_uppercase();
-    let bytes = upper.as_bytes();
-    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let mut from = 0;
-    while let Some(at) = upper[from..].find("CHECK").map(|i| from + i) {
-        from = at + "CHECK".len();
-        let before = at.checked_sub(1).map(|i| bytes[i]);
-        let after = bytes.get(from).copied();
-        if before.is_some_and(word) || after.is_some_and(word) {
-            continue; // part of a longer identifier, e.g. `checked_at`
-        }
-        let rest = upper[from..].trim_start();
-        let Some(body) = rest.strip_prefix('(') else {
-            return false;
-        };
-        let Some(end) = body.find(')') else {
-            return false;
-        };
-        let expr: String = body[..end].chars().filter(|c| !c.is_whitespace()).collect();
-        if expr != "ID=1" {
-            return false;
-        }
-    }
-    true
-}
-
 /// Refuse a file whose tables hold more rows than `limits` allow, before the
 /// load builds them in memory. A table the file lacks counts as empty.
 fn check_row_counts(conn: &rusqlite::Connection, limits: CountLimits) -> Result<(), ReadError> {
@@ -589,80 +534,15 @@ fn inspect(
         .map_err(sql_err)?;
 
     // The app's own hostile-schema check (`persistence::refused_schema_object`):
-    // one pass over `sqlite_master` refusing pragma-shadowing names, any type but
-    // exact `table`/`index`, and virtual tables, before any pragma below runs.
+    // pragma-shadowing names, unexpected types, virtual tables, and any schema
+    // expression the file chose (generated columns, expression or partial
+    // indexes, expression defaults, CHECKs other than the app's).
     if let Some(refused) = refused_schema_object(&conn).map_err(sql_err)? {
         return Err(ReadError::invalid(
             InvalidKind::RefusedSchemaObject,
             refused.to_string(),
         ));
     }
-    // A generated column evaluates file-chosen expressions on every read, and
-    // built-ins such as zeroblob stay allowed with trusted_schema off.
-    let generated: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master AS m, pragma_table_xinfo(m.name) AS c \
-             WHERE m.type = 'table' AND c.hidden IN (2, 3)",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(sql_err)?;
-    if generated > 0 {
-        return Err(ReadError::invalid(
-            InvalidKind::RefusedSchemaObject,
-            format!("the file defines {generated} generated column(s)"),
-        ));
-    }
-    // Expression and partial indexes, and `DEFAULT (expr)`, evaluate file-chosen
-    // expressions whenever a migration writes the table.
-    let indexes: i64 = conn
-        .query_row(
-            "SELECT (SELECT COUNT(*) FROM sqlite_master AS m, pragma_index_list(m.name) AS i \
-                     WHERE m.type = 'table' AND i.partial = 1) \
-                  + (SELECT COUNT(*) FROM sqlite_master AS m, pragma_index_xinfo(m.name) AS x \
-                     WHERE m.type = 'index' AND x.cid = -2)",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(sql_err)?;
-    let mut defaults = conn
-        .prepare(
-            "SELECT c.dflt_value FROM sqlite_master AS m, pragma_table_xinfo(m.name) AS c \
-             WHERE m.type = 'table' AND c.dflt_value IS NOT NULL",
-        )
-        .map_err(sql_err)?;
-    let mut expressions = indexes;
-    for default in defaults
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(sql_err)?
-    {
-        if !is_literal_default(&default.map_err(sql_err)?) {
-            expressions += 1;
-        }
-    }
-    drop(defaults);
-    if expressions > 0 {
-        return Err(ReadError::invalid(
-            InvalidKind::RefusedSchemaObject,
-            format!("the file defines {expressions} expression index(es) or default(s)"),
-        ));
-    }
-    let mut tables = conn
-        .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL")
-        .map_err(sql_err)?;
-    let mut rows = tables.query([]).map_err(sql_err)?;
-    while let Some(row) = rows.next().map_err(sql_err)? {
-        let sql: String = row.get(1).map_err(sql_err)?;
-        if !checks_are_the_apps(&sql) {
-            let name: String = row.get(0).map_err(sql_err)?;
-            return Err(ReadError::invalid(
-                InvalidKind::RefusedSchemaObject,
-                format!("table {name} defines a CHECK constraint the app never writes"),
-            ));
-        }
-    }
-    drop(rows);
-    drop(tables);
     check_row_counts(&conn, limits)?;
 
     let stamped: i32 = conn
