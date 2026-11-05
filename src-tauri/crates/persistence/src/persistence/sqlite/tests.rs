@@ -4788,6 +4788,41 @@ fn test_list_raw_table_names_excludes_sqlite_internal() {
 }
 
 #[test]
+fn test_raw_tables_leave_out_virtual_and_shadow_tables() {
+    // A crafted file's virtual tables would run their module's code over the
+    // file's own data on `SELECT *`; the viewer must neither list nor read them.
+    let mut db = Database::in_memory().unwrap();
+    db.save_project(&Project::new("Hostile Cave".to_string(), None))
+        .unwrap();
+    db.conn
+        .execute_batch(
+            "CREATE VIRTUAL TABLE docs USING fts5(body);
+             INSERT INTO docs VALUES ('lead');
+             CREATE VIRTUAL TABLE boxes USING rtree(id, x0, x1);",
+        )
+        .unwrap();
+
+    let names = db.list_raw_table_names().unwrap();
+
+    for hidden in [
+        "docs",
+        "docs_data",
+        "docs_idx",
+        "docs_content",
+        "boxes",
+        "boxes_node",
+    ] {
+        assert!(
+            !names.iter().any(|n| n == hidden),
+            "{hidden} listed: {names:?}"
+        );
+        let err = db.read_raw_table(hidden, 100, 0).unwrap_err();
+        assert!(err.to_string().contains("Unknown table"), "{hidden}: {err}");
+    }
+    assert!(names.iter().any(|n| n == "shots"));
+}
+
+#[test]
 fn test_read_raw_table_stringifies_values() {
     let db = Database::in_memory().unwrap();
     db.conn

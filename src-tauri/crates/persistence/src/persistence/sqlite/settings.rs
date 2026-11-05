@@ -293,10 +293,17 @@ impl Database {
         }
     }
 
-    /// List user table names in the database, excluding sqlite-internal tables.
+    /// List the ordinary tables in the database, excluding sqlite-internal ones.
+    ///
+    /// Virtual tables (and their shadow tables) are left out: a `.stalx` can come
+    /// from anyone, and `SELECT *` on a virtual table runs its module's code
+    /// (FTS5, RTREE) over the file's own data. `sqlite_master` lists virtual
+    /// tables as `type = 'table'` too, so this asks `pragma_table_list`, which
+    /// reports what SQLite parsed (#608).
     pub fn list_raw_table_names(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+            "SELECT name FROM pragma_table_list \
+             WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
         )?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
 
