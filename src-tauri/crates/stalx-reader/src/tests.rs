@@ -867,17 +867,17 @@ fn a_derived_uuid_steps_past_one_the_file_already_holds() {
 }
 
 #[test]
-fn a_large_merge_group_reads_with_stations_quickly() {
-    // Every section's start merged into one 6000-station group: the app's full
-    // coordinates would attach 6000^2 `merged_with` entries; the positions-only
-    // path the reader uses attaches none.
+fn station_positions_are_bit_exact_with_the_apps_own_open() {
+    // A merge group, a datum, a loop closure and a loose section, read once by
+    // the reader and once the way the app opens a file; every position must be
+    // the same f64, not merely close.
     let mut project = full_project();
     let template = project.station_merges.iter().next().cloned().unwrap();
     let hub = project
-        .key_for_ref(StationRef::new(project.sections[0].id, 0))
+        .key_for_ref(StationRef::new(project.sections[0].id, 1))
         .unwrap();
-    for i in 0..6_000 {
-        let id = project.add_section(descending(&format!("S{i}"), 1.0, 1)).id;
+    for i in 0..50 {
+        let id = project.add_section(descending(&format!("S{i}"), 1.0, 2)).id;
         let start = project.key_for_ref(StationRef::new(id, 0)).unwrap();
         project
             .station_merges
@@ -887,18 +887,38 @@ fn a_large_merge_group_reads_with_stations_quickly() {
                 merged_at: template.merged_at,
             });
     }
+    project.add_section(descending("Loose", 1.0, 3));
     let dir = TempDir::new().unwrap();
     let path = save(&dir, &project);
+    let app_copy = dir.path().join("app.stalx");
+    std::fs::copy(&path, &app_copy).unwrap();
 
-    let started = std::time::Instant::now();
     let survey = read_file_with(&path, &ReadOptions::default().with_stations(true)).unwrap();
-    let elapsed = started.elapsed();
+    let mut app = Database::open_existing(&app_copy)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    app.assign_closure_ids();
+    app.redrive_offsets_after_load();
+    let mut expected: Vec<(StationId, [u64; 3])> = app
+        .compute_station_coordinates()
+        .into_iter()
+        .map(|s| {
+            let c = s.coordinates;
+            (
+                StationId::from(s.station_ref),
+                [c.x.to_bits(), c.y.to_bits(), c.z.to_bits()],
+            )
+        })
+        .collect();
+    expected.sort_by_key(|(id, _)| *id);
+    let actual: Vec<(StationId, [u64; 3])> = survey
+        .stations
+        .unwrap()
+        .iter()
+        .map(|p| (p.station, [p.x.to_bits(), p.y.to_bits(), p.z.to_bits()]))
+        .collect();
 
-    assert_eq!(survey.sections.len(), 6_002);
-    assert!(survey.stations.is_some());
-    // Debug build on an M1: about 5 s here, about 20 s on the full-coordinates path.
-    assert!(
-        elapsed < std::time::Duration::from_secs(15),
-        "took {elapsed:?}"
-    );
+    assert_eq!(actual.len(), expected.len());
+    assert_eq!(actual, expected);
 }

@@ -128,27 +128,6 @@ impl Default for CountLimits {
     }
 }
 
-/// Which [`CountLimits`] cap a file exceeded.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[non_exhaustive]
-pub enum Limit {
-    Sections,
-    Shots,
-    StationMerges,
-    LoopClosures,
-}
-
-impl std::fmt::Display for Limit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Sections => "sections",
-            Self::Shots => "shots",
-            Self::StationMerges => "station merges",
-            Self::LoopClosures => "loop closures",
-        })
-    }
-}
-
 impl CountLimits {
     #[must_use]
     pub fn sections(mut self, max: usize) -> Self {
@@ -172,6 +151,31 @@ impl CountLimits {
     pub fn loop_closures(mut self, max: usize) -> Self {
         self.loop_closures = max;
         self
+    }
+}
+
+/// Which [`CountLimits`] cap a file exceeded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Limit {
+    /// [`CountLimits::sections`].
+    Sections,
+    /// [`CountLimits::shots`].
+    Shots,
+    /// [`CountLimits::station_merges`].
+    StationMerges,
+    /// [`CountLimits::loop_closures`].
+    LoopClosures,
+}
+
+impl std::fmt::Display for Limit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Sections => "sections",
+            Self::Shots => "shots",
+            Self::StationMerges => "station merges",
+            Self::LoopClosures => "loop closures",
+        })
     }
 }
 
