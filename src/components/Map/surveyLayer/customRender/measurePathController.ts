@@ -12,7 +12,7 @@
 // on clear, and - since there is no stock tint behind it - surface a GL failure
 // via `onFatal` while dropping the dead layer, rather than vanishing silently.
 
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import { SurveyMeasurePathLayer, type MeasurePathRenderData } from './surveyMeasurePathLayer';
 
 /** The surface the controller uses from its GL layer (real or a test fake). */

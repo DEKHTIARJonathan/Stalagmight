@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useState, forwardRef, useImperativeHandle } from 'react';
 import { useTranslation } from 'react-i18next';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import type { ProjectMetadata } from '../../types/project';
 import GlobalSurveyLayer, { type SystemGeometry, generateSystemColor } from './GlobalSurveyLayer';
 import type { SurveyGeometry } from '../../types/survey';
@@ -471,7 +471,7 @@ const GlobalViewMap = forwardRef<GlobalViewMapHandle, GlobalViewMapProps>(functi
     let isRubberBanding = false;
     let rubberBandIdleHandler: (() => void) | null = null;
 
-    const handleMoveEndRubberBand = (e: maplibregl.MapLibreEvent & { originalEvent?: Event }) => {
+    const handleMoveEndRubberBand = (e: maplibregl.MapMovementEvent) => {
       if (!map.current || !softBoundsRef.current) return;
 
       // Skip if we're already in a rubber-band animation (prevents infinite loop)

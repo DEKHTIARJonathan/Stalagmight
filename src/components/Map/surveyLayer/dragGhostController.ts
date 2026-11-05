@@ -23,7 +23,7 @@
 // originals, the interact-overlay follow, and the commit/flash sequencing; this
 // controller only drives the ghost geometry.
 
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import { GhostFollow } from './dragGhostFollow';
 import {
   DRAG_PREVIEW_SOURCE,

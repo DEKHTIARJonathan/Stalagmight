@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useCallback, useState, useMemo, memo, startTransition } from 'react';
 import { useTranslation } from 'react-i18next';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/project';
 import type { GasReachField } from '../../types/ipc.generated';
 import type { BatchCommand, ProjectWarning } from '../../types/commands';
@@ -3212,7 +3212,7 @@ function MapCanvas() {
 
     // Store reference for cleanup
     const currentMap = map.current;
-    let errorHandler: ((e: { error?: { status?: number }; sourceId?: string }) => void) | null = null;
+    let errorHandler: ((e: maplibregl.ErrorEvent & { sourceId?: string }) => void) | null = null;
 
     if (showSatellite) {
       // Add satellite layer if not already present
@@ -3243,7 +3243,7 @@ function MapCanvas() {
 
         // Add error handler for tile fetch failures
         const sourceId = 'satellite-tiles';
-        errorHandler = (e: { error?: { status?: number }; sourceId?: string }) => {
+        errorHandler = (e: maplibregl.ErrorEvent & { sourceId?: string }) => {
           if (e.sourceId === sourceId) {
             console.warn('[MapCanvas] Satellite tile load failed - the imagery provider could not be reached');
             // The map will gracefully show the background color where tiles fail to load

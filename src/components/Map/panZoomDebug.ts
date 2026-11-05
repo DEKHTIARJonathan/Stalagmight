@@ -3,7 +3,7 @@
 // the build is run with VITE_DEBUG_MACOS_LOCKUP=true. See
 // docs/debugging-macos-pan-zoom.md for the protocol this enables.
 
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 
 const ENABLED = import.meta.env.VITE_DEBUG_MACOS_LOCKUP === 'true';
 

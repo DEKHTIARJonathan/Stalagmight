@@ -1,5 +1,5 @@
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import { GlobalCustomController } from './customRender/globalController';
 import { generateSystemColor, type SystemGeometry } from './systemColor';
 import { getMapThemeColors, type MapThemeColors } from '../../utils/themeColors';

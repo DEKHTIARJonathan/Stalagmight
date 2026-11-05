@@ -1,5 +1,5 @@
 import type { Map as MaplibreMap, MapMouseEvent, ExpressionSpecification } from 'maplibre-gl';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { LoopClosure, Section, SectionId, ShotId, Station, StationRef } from '../../types/project';
 import type { Config, GpsOrigin, DecimalPrecision } from '../../types/config';
 import type { RouteLeg } from '../../types/ipc.generated';
