@@ -869,8 +869,8 @@ fn build_export_shots_with_report(
 
         // A section that never merges into the tree is a separate entrance, not a
         // child of anything - two unconnected galleries in one project is an ordinary
-        // state. Ariane represents those as additional START shots and its own files
-        // do exactly that (`chanchemuyil_sur.tml` ships two). Leaving the first shot
+        // state. Ariane represents those as additional START shots, and files Ariane
+        // writes for a survey with two entrances carry two. Leaving the first shot
         // parentless instead produces an orphan root, which makes Ariane abandon the
         // loop solve and draw an empty map for the WHOLE survey once any closure
         // exists. Zero-datum splitting below applies to every entrance (#378 item
@@ -4441,9 +4441,9 @@ mod tests {
 
     /// Two galleries with no merge between them is an ordinary project, not an error.
     /// Each is an entrance and gets its own START, which is how Ariane stores them
-    /// (`chanchemuyil_sur.tml` ships two). Before this, the second gallery's first
-    /// shot was left parentless - harmless until the survey gained a closure, at
-    /// which point Ariane drew nothing at all.
+    /// (a file Ariane writes for two entrances carries two). Before this, the second
+    /// gallery's first shot was left parentless - harmless until the survey gained a
+    /// closure, at which point Ariane drew nothing at all.
     #[test]
     fn a_detached_section_exports_as_its_own_entrance() {
         let mut project = Project::new("Detached".to_string(), None);
