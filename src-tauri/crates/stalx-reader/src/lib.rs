@@ -464,7 +464,11 @@ fn check_row_counts(conn: &rusqlite::Connection, limits: CountLimits) -> Result<
     for (table, what, max) in [
         ("sections", Limit::Sections, limits.sections),
         ("shots", Limit::Shots, limits.shots),
-        ("station_merges", Limit::StationMerges, limits.station_merges),
+        (
+            "station_merges",
+            Limit::StationMerges,
+            limits.station_merges,
+        ),
         ("loop_closures", Limit::LoopClosures, limits.loop_closures),
     ] {
         let exists: i64 = conn
