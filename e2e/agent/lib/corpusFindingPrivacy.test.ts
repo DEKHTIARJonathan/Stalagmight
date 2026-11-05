@@ -123,6 +123,24 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
     expect(report).not.toContain(MARK);
   });
 
+  it('keeps the name out of a crash marker copied into a finding (#576 NF-W17-2)', async () => {
+    const markerDir = path.join(scratch, 'markers');
+    fs.mkdirSync(markerDir, { recursive: true });
+    const marker = path.join(markerDir, 'panic.log');
+    fs.writeFileSync(marker, `thread 'main' panicked: could not read ${copyPath}\n`);
+    const target: OracleTarget = { ...webviewLogging('INFO nothing to see'), findCrashMarkers: () => [marker] };
+    const recorder = new Recorder('run-markers', sessionsRoot);
+    await runSweep(target, newOracleState(), { recorder });
+
+    const findings = path.join(sessionsRoot, 'run-markers', 'findings');
+    const copied = fs
+      .readdirSync(findings, { recursive: true, withFileTypes: true })
+      .filter((e) => e.isFile() && e.name === 'panic.log');
+    expect(copied.length).toBeGreaterThan(0); // the marker really was copied
+    expect(allText(findings)).toContain('<corpus #');
+    expect(allText(findings)).not.toContain(MARK);
+  });
+
   it('keeps the name out of an MCP error outcome', () => {
     const message = publishableErrorMessage(new Error(`import failed: no sections in ${copyPath}`));
     expect(message).toContain('<corpus #');

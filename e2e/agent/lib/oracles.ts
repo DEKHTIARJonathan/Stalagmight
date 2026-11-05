@@ -415,10 +415,12 @@ async function captureFinding(
   } catch {
     // Webview may be dead; the finding is still recorded.
   }
-  // Copy any crash markers.
+  // Copy any crash markers, through the corpus fold (#576 NF-W17-2): a marker
+  // carries the panic message, which can quote a corpus copy path.
   for (const marker of target.findCrashMarkers()) {
     try {
-      fs.copyFileSync(marker, path.join(dir, path.basename(marker)));
+      const text = fs.readFileSync(marker, 'utf8');
+      fs.writeFileSync(path.join(dir, path.basename(marker)), redactCorpusText(text));
     } catch {
       // Best-effort.
     }

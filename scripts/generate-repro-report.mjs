@@ -214,7 +214,7 @@ P('- Driver log: `tauri-driver.log`');
 P('');
 P('## Notes');
 P('');
-P('_Paths above are relative to the session artifact directory. Attach it or the relevant files when filing._');
+P('_Paths above are relative to the session artifact directory. Attach this report and the specific files you checked; do not attach the whole directory, which can hold corpus copies, screenshots and logs that name private files._');
 P('');
 
 const outPath = path.join(sessionDir, 'report.md');
