@@ -15947,7 +15947,7 @@ fn random_project(seed: u64) -> Project {
     let n = 2 + rng.below(11) as usize;
     let ids: Vec<SectionId> = (0..n)
         .map(|_| {
-            let shots = (0..1 + rng.below(3))
+            let shots = (0..=rng.below(3))
                 .map(|_| {
                     let az = rng.real(0.0, 360.0);
                     shot(az, az, rng.real(0.5, 20.0), 0.0, 0.0)
