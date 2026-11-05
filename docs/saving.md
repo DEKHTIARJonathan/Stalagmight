@@ -218,6 +218,23 @@ apart (`Database::load_project_with_report`):
   When the list is empty, saves (and auto-save) work again; the banner and the
   refusal both say how.
 
+### Creation times are written back as stored
+
+The project's `created_at` and each section's (`sections.created_at`) are kept
+as the RFC 3339 text the file holds (`CreationStamp`, #576 RV14-2, NF-W18-1) and
+written back byte for byte, whatever form another tool stored them in. A section
+with no readable stamp - new, or its column empty or unreadable - is stamped by
+the save on the model (`stamp_section_creation_times`, #576 NF-W14BE-1), so every
+later save writes that same value.
+
+What crosses to the webview: the project payload's `created_at` is still the UTC
+moment in `DateTime<Utc>` serde form (`...Z`). Each section's `created_at` in
+the JSON project payload (`#[ts(skip)]`, absent from the TS type) and the text
+inside persisted undo payloads, for the project and its sections, are now the
+stored text (`...+00:00` for every file this app wrote) rather than the `...Z`
+form. Nothing in the frontend reads a section's `created_at`, and older builds
+parse every RFC 3339 form, so this has no functional effect (#576 RV15-3).
+
 ### `section_offsets` rows are never all-zero
 
 The `section_offsets` table records sections that are **actually displaced**. A
