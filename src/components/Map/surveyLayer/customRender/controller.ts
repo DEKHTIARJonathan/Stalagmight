@@ -60,6 +60,7 @@ import {
   DEFAULT_STATION_SELECT_SIZE_MUL,
 } from './shaders';
 import { CUSTOM_RENDER_SYNC_HOOK } from './gate';
+import { reAddCustomLayer } from './styleRestore';
 
 /**
  * Defer a fail-safe restore off MapLibre's render stack. A self-disable fires
@@ -364,12 +365,7 @@ export class SurveyCustomController {
     layer.setStationsVisible(this.stationsVisible);
     layer.setReferenceShotsVisible(this.referenceShotsVisible);
     layer.setJumpShotsVisible(this.jumpShotsVisible);
-    // Insert below the interact overlay (the lowest kept layer above the survey
-    // geometry) so the custom geometry sits above loop closures / ghosts and
-    // beneath every hover/selection overlay + labels. Falls back to the top if
-    // absent (unit-test fakes).
-    const beforeId = this.map.getLayer('survey-interact-shots') ? 'survey-interact-shots' : undefined;
-    this.map.addLayer(layer, beforeId);
+    this.map.addLayer(layer, this.beforeId());
     if (layer.isDisabled()) {
       // FATAL: the custom layer cannot draw (no WebGL2 / shader link failure).
       // Custom render is the sole renderer - there is NO stock fallback - so
@@ -395,6 +391,26 @@ export class SurveyCustomController {
       stations: data.circle.stationCount,
       bytes: data.line.byteLength + data.circle.byteLength,
     });
+    this.map.triggerRepaint();
+  }
+
+  /** Insert below the interact overlay (the lowest kept layer above the survey
+   *  geometry) so the custom geometry sits above loop closures / ghosts and
+   *  beneath every hover/selection overlay + labels. Falls back to the top if
+   *  absent (unit-test fakes). */
+  private beforeId(): string | undefined {
+    return this.map.getLayer('survey-interact-shots') ? 'survey-interact-shots' : undefined;
+  }
+
+  /** Re-add the layer after MapLibre rebuilt the style without it (context
+   *  restore / worker restart, see styleRestore.ts). */
+  reattach(): void {
+    const layer = this.layer;
+    if (!this.active || !layer) return;
+    if (!reAddCustomLayer(this.map, layer, this.beforeId())) {
+      this.tearDownFatal(layer.getDisabledReason() ?? 'unknown');
+      return;
+    }
     this.map.triggerRepaint();
   }
 

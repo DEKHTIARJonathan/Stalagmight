@@ -14,6 +14,7 @@
 
 import type * as maplibregl from 'maplibre-gl';
 import { SurveyMeasurePathLayer, type MeasurePathRenderData } from './surveyMeasurePathLayer';
+import { reAddCustomLayer, type RestorableCustomLayer } from './styleRestore';
 
 /** The surface the controller uses from its GL layer (real or a test fake). */
 export interface MeasurePathLayerLike {
@@ -59,6 +60,8 @@ export class MeasurePathController {
   private fatalEmitted = false;
   /** Last render data handed to the layer, for {@link drawnCounts}. */
   private lastData: MeasurePathRenderData | null = null;
+  /** z-order anchors of the last {@link setPath}, replayed by {@link reattach}. */
+  private beforeIdCandidates: readonly string[] = [];
 
   constructor(
     private readonly map: maplibregl.Map,
@@ -113,6 +116,7 @@ export class MeasurePathController {
       this.clear();
       return;
     }
+    this.beforeIdCandidates = beforeIdCandidates;
     if (this.layer) {
       this.lastData = data;
       this.layer.setData(data);
@@ -120,6 +124,22 @@ export class MeasurePathController {
       return;
     }
     this.add(data, beforeIdCandidates);
+  }
+
+  /** Re-add the layer after MapLibre rebuilt the style without it (context
+   *  restore / worker restart, see styleRestore.ts). */
+  reattach(): void {
+    const layer = this.layer;
+    if (!layer) return;
+    const restorable = layer as unknown as RestorableCustomLayer;
+    if (!reAddCustomLayer(this.map, restorable, this.resolveBeforeId(this.beforeIdCandidates))) {
+      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+      this.layer = null;
+      this.lastData = null;
+      this.emitFatal(layer.getDisabledReason() ?? 'unknown');
+      return;
+    }
+    this.map.triggerRepaint();
   }
 
   /** Remove the custom measure-path layer (idempotent). */

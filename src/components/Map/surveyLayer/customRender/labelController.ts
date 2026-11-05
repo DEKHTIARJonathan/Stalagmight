@@ -81,6 +81,7 @@ import {
 import { resolveHaloColors, type LabelStyleInputs } from './labelStyle';
 import { SurveyCustomLabelLayer, type LabelRenderData } from './surveyCustomLabelLayer';
 import { CUSTOM_LABELS_SYNC_HOOK } from './labelsGate';
+import { reAddCustomLayer } from './styleRestore';
 
 /** Same off-the-render-stack deferral as the geometry controller. Used both for
  *  the fail-safe restore and to coalesce camera-settle viewport rebuilds. */
@@ -978,6 +979,18 @@ export class SurveyLabelController {
     console.info('[customRender] label layer enabled', {
       glyphs: data.buffers.glyphCount,
     });
+    this.map.triggerRepaint();
+  }
+
+  /** Re-add the layer after MapLibre rebuilt the style without it (context
+   *  restore / worker restart, see styleRestore.ts). Labels stay on top. */
+  reattach(): void {
+    const layer = this.layer;
+    if (!this.active || !layer) return;
+    if (!reAddCustomLayer(this.map, layer)) {
+      this.tearDownFatal(layer.getDisabledReason() ?? 'unknown');
+      return;
+    }
     this.map.triggerRepaint();
   }
 

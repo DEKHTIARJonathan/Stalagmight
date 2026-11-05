@@ -38,6 +38,7 @@ import {
   type Projector,
 } from './dragPreviewSource';
 import { SurveyGhostLayer, type GhostRenderData } from './customRender/surveyGhostLayer';
+import { reAddCustomLayer } from './customRender/styleRestore';
 
 /** Which ghost path is live for the current drag. */
 export type GhostMode = 'idle' | 'custom' | 'stock';
@@ -127,6 +128,19 @@ export class DragGhostController {
     } else if (this.mode === 'stock') {
       this.ghostFollow?.move(dx, dy);
     }
+  }
+
+  /** Re-add the custom ghost after MapLibre rebuilt the style without it (context
+   *  restore / worker restart, see styleRestore.ts); falls back to the stock
+   *  preview if it cannot start again. */
+  reattach(): void {
+    const layer = this.layer;
+    if (this.mode !== 'custom' || !layer) return;
+    if (!reAddCustomLayer(this.map, layer)) {
+      this.handleSelfDisable(layer.getDisabledReason() ?? 'unknown');
+      return;
+    }
+    this.map.triggerRepaint();
   }
 
   /** Tear down both paths and remove the ghost (on drag end / cancel / destroy). */

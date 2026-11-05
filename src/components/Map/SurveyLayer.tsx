@@ -44,6 +44,7 @@ import { SurveyCustomController, buildCustomDimState, type CustomRenderExclusion
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
 import { overlayInputFrom } from './surveyLayer/customRender/overlayColor';
 import { MeasurePathController } from './surveyLayer/customRender/measurePathController';
+import { onStyleRestored } from './surveyLayer/customRender/styleRestore';
 import type { MeasurePathRenderData } from './surveyLayer/customRender/surveyMeasurePathLayer';
 import {
   buildMeasurePathBuffers,
@@ -407,6 +408,8 @@ export default class SurveyLayer {
   private measurePath: MeasurePathController | null = null;
   /** Dispose for the device-pixel-ratio watcher (custom layers bake dpr). */
   private dprWatcherDispose: (() => void) | undefined;
+  /** Dispose for the re-add after a style rebuild (context / worker restore). */
+  private styleRestoreDispose: (() => void) | undefined;
 
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
@@ -443,6 +446,17 @@ export default class SurveyLayer {
     // The custom layers bake devicePixelRatio into their device-pixel sizes, so a
     // DPR change (window dragged to a different-scale monitor) must rebuild them.
     this.dprWatcherDispose = watchDevicePixelRatio(() => this.handleDprChange());
+    this.styleRestoreDispose = onStyleRestored(map, () => this.reattachCustomLayers());
+  }
+
+  /** MapLibre rebuilt the style without the custom layers; put them back in
+   *  their original z-order (geometry, measure tint above it, labels, then the
+   *  drag ghost on top). */
+  private reattachCustomLayers(): void {
+    this.customRender?.reattach();
+    this.measurePath?.reattach();
+    this.customLabels?.reattach();
+    this.dragGhost.reattach();
   }
 
   /**
@@ -3588,6 +3602,8 @@ export default class SurveyLayer {
     // Remove the dedicated custom measure-path layer (#26, stage 2a).
     this.measurePath?.destroy();
     this.measurePath = null;
+    this.styleRestoreDispose?.();
+    this.styleRestoreDispose = undefined;
 
     // Drop the module-level VT registry entries + zero the memory-probe counts.
     // (releaseVtRegistry also disposes the DPR watcher, covering both this path

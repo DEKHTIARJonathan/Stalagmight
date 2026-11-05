@@ -20,6 +20,7 @@ import type { Map as MaplibreMap } from 'maplibre-gl';
 import type { ProjectMetadata } from '../../../types/project';
 import type { SystemGeometry } from '../systemColor';
 import { packCssColor } from '../../Map/surveyLayer/customRender/colorPack';
+import { reAddCustomLayer } from '../../Map/surveyLayer/customRender/styleRestore';
 import {
   buildGlobalBuffers,
   recomputeDimFlags,
@@ -193,6 +194,18 @@ export class GlobalCustomController {
       shotSegments: data.line.segmentCount,
       stations: data.circle.stationCount,
     });
+    this.map.triggerRepaint();
+  }
+
+  /** Re-add the layer after MapLibre rebuilt the style without it (context
+   *  restore / worker restart, see styleRestore.ts). */
+  reattach(): void {
+    const layer = this.layer;
+    if (!this.active || !layer) return;
+    if (!reAddCustomLayer(this.map, layer)) {
+      this.tearDownFatal(layer.getDisabledReason() ?? 'unknown');
+      return;
+    }
     this.map.triggerRepaint();
   }
 

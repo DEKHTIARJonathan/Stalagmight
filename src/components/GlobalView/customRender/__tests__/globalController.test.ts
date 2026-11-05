@@ -41,6 +41,10 @@ const h = vi.hoisted(() => {
         this.reason = layerState.disabledReason;
       }
     }
+    onRemoveCalls = 0;
+    onRemove(): void {
+      this.onRemoveCalls++;
+    }
     isDisabled(): boolean {
       return this.disabled;
     }
@@ -73,11 +77,12 @@ const CUSTOM_ID = 'global-survey-custom';
  * them). The custom layer is added at the top; `added` / `removed` record the
  * layer lifecycle so the tests can assert it without a real style.
  */
-function makeFakeMap(): { map: MaplibreMap; added: string[]; removed: string[] } {
+function makeFakeMap(): { map: MaplibreMap; added: string[]; removed: string[]; existing: Set<string> } {
   const existing = new Set<string>();
   const added: string[] = [];
   const removed: string[] = [];
   const map = {
+    painter: { context: { gl: {} } },
     getStyle: () => ({}),
     getLayer: (id: string) => (existing.has(id) ? { id } : undefined),
     addLayer: (layer: { id: string; onAdd?: (m: unknown, gl: unknown) => void }) => {
@@ -92,7 +97,7 @@ function makeFakeMap(): { map: MaplibreMap; added: string[]; removed: string[] }
     project: ([lng, lat]: [number, number]) => ({ x: lng, y: lat }),
     triggerRepaint: () => {},
   } as unknown as MaplibreMap;
-  return { map, added, removed };
+  return { map, added, removed, existing };
 }
 
 function shot(from: [number, number], to: [number, number], isReference = false): GeometryShot {
@@ -172,6 +177,34 @@ describe('GlobalCustomController', () => {
     c.sync(makeSystems());
     expect(removed.filter((id) => id === CUSTOM_ID).length).toBe(1);
     expect(fatals).toEqual(['webgl2-unavailable']); // at most once
+  });
+
+  it('reattach re-adds the same layer after a style rebuild dropped it, freeing it first', () => {
+    const { map, added, existing } = makeFakeMap();
+    const c = new GlobalCustomController(map);
+    c.sync(makeSystems());
+    const layer = h.layerState.last!;
+    existing.clear(); // the rebuilt style holds no custom layers
+    c.reattach();
+    expect(added).toEqual([CUSTOM_ID, CUSTOM_ID]);
+    expect(h.layerState.last).toBe(layer);
+    expect(layer.onRemoveCalls).toBe(1);
+    expect(c.isActive()).toBe(true);
+    c.reattach(); // still in the style: no-op
+    expect(added).toEqual([CUSTOM_ID, CUSTOM_ID]);
+  });
+
+  it('reattach that cannot start again routes to onFatal', () => {
+    const { map, existing, removed } = makeFakeMap();
+    const fatals: string[] = [];
+    const c = new GlobalCustomController(map, undefined, { onFatal: (r) => fatals.push(r) });
+    c.sync(makeSystems());
+    existing.clear();
+    h.layerState.disabledAfterAdd = true;
+    c.reattach();
+    expect(removed).toContain(CUSTOM_ID);
+    expect(fatals).toEqual(['program-link-failed']);
+    expect(c.isActive()).toBe(false);
   });
 
   it('self-disable fires onFatal (deferred), removes the layer, no stock republish', () => {
