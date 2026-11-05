@@ -8,8 +8,9 @@
  * (`../../fixtures/coverage.ts`) fails the test naming it.
  *
  * `src/test/__tests__/openerMock.test.ts` drives the real `@tauri-apps/plugin-opener`
- * functions through a stub IPC and checks what they send fits these shapes, and that the
- * capability file still grants no `open_path`.
+ * functions through a stub IPC and checks what they send fits these shapes, that the
+ * capability file still grants no `open_path`, and that the URL scope below is still the
+ * one it grants.
  */
 
 /**
@@ -45,16 +46,31 @@ export const OPENER_ARG_SHAPES: { [K in keyof OpenerCommandArgs]: ArgShape<Opene
 export const OPENER_COMMANDS_NOT_GRANTED: readonly (keyof OpenerCommandArgs)[] = ['plugin:opener|open_path'];
 
 /**
+ * The URLs `open_url` may open in the real app (#576 RV13-8): `opener:default` brings the
+ * plugin's `allow-default-urls` (tauri-plugin-opener 2.5.3 `permissions/allow-default-urls.toml`:
+ * mailto, tel, http, https), and `src-tauri/capabilities/default.json` adds its own
+ * `opener:allow-open-url` entries. The plugin matches each as a `glob::Pattern` with the
+ * default options - case-sensitive, `*` crossing `/` - and only for a call with no `with`
+ * (an entry without `app` is the default application). Anything else it refuses.
+ */
+export const OPENER_DEFAULT_URL_SCOPE: readonly string[] = ['mailto:*', 'tel:*', 'http://*', 'https://*'];
+/** `opener:allow-open-url`'s `allow` URLs in `src-tauri/capabilities/default.json`. */
+export const OPENER_CAPABILITY_URL_SCOPE: readonly string[] = ['x-apple.systempreferences:*'];
+export const OPENER_URL_SCOPE: readonly string[] = [...OPENER_DEFAULT_URL_SCOPE, ...OPENER_CAPABILITY_URL_SCOPE];
+
+/**
  * The refusal the real app answers plugin command `cmd` with when sent `args`, or null when
  * it would run it (a command with no shape is not checked). The message follows Tauri's
- * own for a missing or mistyped argument. Runs in the page, serialized with
- * `Function.prototype.toString`, so it reads nothing but its parameters.
+ * own for a missing or mistyped argument, and the opener plugin's for a URL outside
+ * `urlScope` ({@link OPENER_URL_SCOPE}; null checks no URL). Runs in the page, serialized
+ * with `Function.prototype.toString`, so it reads nothing but its parameters.
  */
 export function pluginArgsRefusal(
   cmd: string,
   args: Record<string, unknown> | undefined,
   shapes: Record<string, Record<string, string>>,
   notGranted: readonly string[],
+  urlScope: readonly string[] | null,
 ): string | null {
   if (notGranted.includes(cmd)) {
     return `${cmd} not allowed: src-tauri/capabilities/default.json does not grant it`;
@@ -77,6 +93,18 @@ export function pluginArgsRefusal(
       return `invalid args \`${key}\` for command \`${command}\`: invalid type: ${JSON.stringify(value)}, expected ${expected}`;
     }
   }
+  if (urlScope !== null && cmd === 'plugin:opener|open_url') {
+    const url = String(args?.url);
+    const app = args?.with ?? null;
+    // A glob as the plugin's `glob::Pattern` reads one: `*` any run, `?` any one character.
+    const inScope = (pattern: string) => {
+      const source = pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+      return new RegExp(`^${source}$`, 's').test(url);
+    };
+    if (app !== null || !urlScope.some(inScope)) {
+      return `Not allowed to open url ${url}${app === null ? '' : ` with ${String(app)}`}`;
+    }
+  }
   return null;
 }
 
@@ -89,6 +117,7 @@ export function installOpenerMock(
   refusal: typeof pluginArgsRefusal,
   shapes: Record<string, Record<string, string>>,
   notGranted: readonly string[],
+  urlScope: readonly string[],
 ) {
   // Every refused call, in call order: the teardown fixture reads it (and gets each one
   // live through the __E2E_REPORT_REFUSED_PLUGIN_CALL__ binding, which survives a reload).
@@ -97,7 +126,7 @@ export function installOpenerMock(
   return {
     /** The refusal the real app answers this call with, recorded; null when it would run it. Asked first, before any override. */
     refuse(cmd: string, args?: Record<string, unknown>): string | null {
-      const why = refusal(cmd, args, shapes, notGranted);
+      const why = refusal(cmd, args, shapes, notGranted, urlScope);
       if (why === null) return null;
       console.warn(`[Mock IPC] Refused plugin call: ${why}`);
       refused.push(why);
@@ -123,5 +152,6 @@ export type OpenerMock = ReturnType<typeof installOpenerMock>;
 export function openerMockSource(): string {
   const shapes = JSON.stringify(OPENER_ARG_SHAPES);
   const notGranted = JSON.stringify(OPENER_COMMANDS_NOT_GRANTED);
-  return `(${installOpenerMock.toString()})(${pluginArgsRefusal.toString()}, ${shapes}, ${notGranted})`;
+  const urlScope = JSON.stringify(OPENER_URL_SCOPE);
+  return `(${installOpenerMock.toString()})(${pluginArgsRefusal.toString()}, ${shapes}, ${notGranted}, ${urlScope})`;
 }
