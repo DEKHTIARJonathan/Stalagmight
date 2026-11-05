@@ -6,9 +6,10 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { setWorkerUrl } from 'maplibre-gl';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
+// Before App so every app stylesheet cascades over MapLibre's own rules.
+import 'maplibre-gl/dist/maplibre-gl.css';
 import App from './App';
 import './i18n';
-import 'maplibre-gl/dist/maplibre-gl.css';
 import './index.css';
 import { installConsoleCapture } from './utils/consoleCapture';
 import { installGlobalErrorCapture } from './utils/globalErrorCapture';
