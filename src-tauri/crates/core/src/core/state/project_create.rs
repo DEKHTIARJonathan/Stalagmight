@@ -405,6 +405,38 @@ impl AppState {
             .get_event_sink()
             .ok_or_else(|| LoadError::internal("EventSink not initialized"))?;
 
+        // [#576 RV14-1] The file this create opens is resolved, and the caller's
+        // write-path check run on it, before the create cancels any open or load
+        // in progress or emits a progress phase: a create refused here (or whose
+        // name does not resolve) leaves both as they were.
+        //
+        // Resolve database path from explicit save path or from project name + optional save directory.
+        let mut db_path = if let Some(path) = save_path {
+            crate::persistence::with_stalx_extension(path)
+        } else {
+            self.resolve_project_path(&name, save_directory.as_ref())
+                .map_err(|e| LoadError::new(crate::models::CommandErrorCode::Io, e))?
+        };
+
+        // Avoid collisions by selecting the next available path instead of overwriting.
+        let available_db_path = Self::next_available_project_path(&db_path);
+        if available_db_path != db_path {
+            tracing::warn!(
+                requested_path = ?db_path,
+                selected_path = ?available_db_path,
+                purpose = "avoid overwriting existing project on create",
+                "Project path already exists; using auto-renamed path"
+            );
+            db_path = available_db_path;
+        }
+
+        // [#576 RV13-1] The caller's write-path check, on the file this create
+        // opens - the name resolved and any `_N` rename made - before anything is
+        // created, the missing folders included.
+        if let Some(check) = check_target {
+            check(&db_path).map_err(LoadError::internal)?;
+        }
+
         // Start new load - cancels any existing load
         let cancel_token = self.start_new_load();
         let mut progress = ProgressEmitter::new_for_create(sink, Arc::clone(&cancel_token));
@@ -428,39 +460,6 @@ impl AppState {
 
         // === PHASE 0: Creating database (40%) ===
         progress.start_phase(LoadingPhase::CreatingDatabase);
-
-        // Resolve database path from explicit save path or from project name + optional save directory.
-        let mut db_path = if let Some(path) = save_path {
-            crate::persistence::with_stalx_extension(path)
-        } else {
-            match self.resolve_project_path(&name, save_directory.as_ref()) {
-                Ok(path) => path,
-                Err(e) => {
-                    early_return_err!(LoadError::new(crate::models::CommandErrorCode::Io, e));
-                }
-            }
-        };
-
-        // Avoid collisions by selecting the next available path instead of overwriting.
-        let available_db_path = Self::next_available_project_path(&db_path);
-        if available_db_path != db_path {
-            tracing::warn!(
-                requested_path = ?db_path,
-                selected_path = ?available_db_path,
-                purpose = "avoid overwriting existing project on create",
-                "Project path already exists; using auto-renamed path"
-            );
-            db_path = available_db_path;
-        }
-
-        // [#576 RV13-1] The caller's write-path check, on the file this create
-        // opens - the name resolved and any `_N` rename made - before anything is
-        // created, the missing folders included.
-        if let Some(check) = check_target {
-            if let Err(why) = check(&db_path) {
-                early_return_err!(LoadError::internal(why));
-            }
-        }
 
         // Create parent directories if they don't exist
         if let Some(parent) = db_path.parent() {
@@ -949,6 +948,67 @@ mod tests {
             let available = AppState::next_available_project_path(&dir.join(name));
             assert_eq!(available, dir.join(expected), "{name}");
         }
+    }
+
+    /// [#576 RV14-1] A create the write-path policy refuses leaves everything else
+    /// as it was. The check ran on the final path only after the create had
+    /// cancelled whatever open or load was in progress and emitted its "creating
+    /// database" phase, so a refused create stopped a load the user was waiting on
+    /// and showed a progress step before its error.
+    #[test]
+    fn a_refused_create_cancels_no_load_and_emits_no_progress() {
+        struct Recording(std::sync::Mutex<Vec<String>>);
+        impl crate::core::events::EventSink for Recording {
+            fn emit(&self, event: &str, _payload: serde_json::Value) {
+                self.0.lock().unwrap().push(event.to_owned());
+            }
+
+            fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
+                false
+            }
+        }
+
+        let dir = TempDir::new().unwrap();
+        let state = AppState::new().unwrap();
+        let events = Arc::new(Recording(std::sync::Mutex::new(Vec::new())));
+        state.set_event_sink(Arc::clone(&events) as Arc<dyn crate::core::events::EventSink>);
+        // An open or a load the user is waiting on.
+        let in_flight = state.start_new_load();
+
+        let checked = std::cell::RefCell::new(Vec::new());
+        let refuse = |path: &std::path::Path| {
+            checked.borrow_mut().push(path.to_path_buf());
+            Err("Refused to write here".to_string())
+        };
+        let refused = state.do_create_project_full_checked(
+            &refuse,
+            "Cave".into(),
+            None,
+            Some(dir.path().to_path_buf()),
+            None,
+            false,
+        );
+
+        let cancelled = in_flight.load(std::sync::atomic::Ordering::SeqCst);
+        let emitted = events.0.lock().unwrap().clone();
+        assert_eq!(
+            refused.map(|_| ()).map_err(|e| e.message),
+            Err("Refused to write here".to_string())
+        );
+        assert_eq!(
+            *checked.borrow(),
+            [dir.path().join("Cave.stalx")],
+            "the check runs on the file the create opens"
+        );
+        assert!(
+            !cancelled && emitted.is_empty(),
+            "a refused create: the load in progress cancelled = {cancelled}; \
+             progress events emitted = {emitted:?} (want false and none)"
+        );
+        assert!(
+            std::fs::read_dir(dir.path()).unwrap().next().is_none(),
+            "a refused create makes nothing"
+        );
     }
 }
 
