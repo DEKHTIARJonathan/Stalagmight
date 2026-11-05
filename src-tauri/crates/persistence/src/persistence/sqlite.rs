@@ -553,6 +553,7 @@ mod open;
 mod read;
 mod repair;
 mod schema;
+mod schema_guard;
 mod settings;
 mod undo;
 mod warnings;
@@ -561,7 +562,9 @@ mod write;
 /// How many `resolved_warnings` rows a carry-over will examine (#517). Exported
 /// so a caller's test can size a fixture against the real ceiling instead of
 /// hard-coding a copy of it.
-pub use settings::declares_virtual_table;
+pub use schema_guard::{
+    check_schema, declares_virtual_table, refused_schema_object, RefusedSchemaObject,
+};
 pub use warnings::MAX_CARRIED_RESOLVED_WARNINGS;
 
 /// A stringified page of rows from a raw sqlite table.

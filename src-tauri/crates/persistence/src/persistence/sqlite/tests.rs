@@ -5884,6 +5884,12 @@ fn inherited_undo_cut_rolls_back_all_deletes_on_failure() {
         format!("{err:#}").contains("blocked inherited delete"),
         "the injected delete failure must surface, got {err:#}"
     );
+    // The inducer is a trigger, which the app's own open refuses (#608); drop it
+    // before reopening to count what the failed cut left behind.
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("DROP TRIGGER block_second_inherited_delete")
+        .unwrap();
     assert_eq!(
         surviving_undo_commands(&path).len(),
         3,
@@ -8521,6 +8527,124 @@ fn unrecognised_shot_kinds_saturates_an_over_bound_section_id() {
         u32::MAX,
         "an over-bound section id saturates the encode instead of panicking"
     );
+}
+
+// === Hostile schema refused at open (#608) ===
+
+/// A saved project with `sql` run on it through a raw connection afterwards.
+fn project_file_with(dir: &TempDir, sql: &str) -> std::path::PathBuf {
+    let path = dir.path().join("crafted.stalx");
+    Database::open(&path)
+        .unwrap()
+        .save_project(&Project::new("Crafted".to_string(), None))
+        .unwrap();
+    Connection::open(&path).unwrap().execute_batch(sql).unwrap();
+    path
+}
+
+#[test]
+fn every_open_of_an_existing_file_refuses_a_hostile_schema() {
+    for (sql, what) in [
+        ("CREATE VIEW v AS SELECT 1;", "a view"),
+        (
+            "CREATE TRIGGER t AFTER UPDATE ON project BEGIN SELECT 1; END;",
+            "a trigger",
+        ),
+        (
+            "PRAGMA writable_schema = ON;
+             INSERT INTO sqlite_master (type, name, tbl_name, rootpage, sql)
+             VALUES ('table', 'docs', 'docs', 0, 'CREATE VIRTUAL TABLE docs USING fts5(body)');",
+            "a virtual table",
+        ),
+        (
+            "CREATE TABLE pragma_table_info (cid, name, type);",
+            "an object named like a SQLite pragma",
+        ),
+        (
+            "CREATE VIEW w AS SELECT 1;
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = 'View' WHERE name = 'w';",
+            "a view",
+        ),
+        (
+            "CREATE TABLE c (x CHECK (length(zeroblob(10)) > 0));",
+            "a table with a CHECK constraint the app never writes",
+        ),
+        (
+            "CREATE TABLE g (a, b AS (zeroblob(10)));",
+            "a table with a generated column",
+        ),
+        (
+            "CREATE TABLE d (x TEXT DEFAULT (hex(zeroblob(10))));",
+            "a table with an expression default",
+        ),
+        (
+            "CREATE INDEX e ON shots (length(hex(zeroblob(10))) + length);",
+            "an expression or partial index",
+        ),
+        (
+            "CREATE INDEX p ON shots (length) WHERE length > 0;",
+            "an expression or partial index",
+        ),
+        (
+            "PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET name = CAST('project' AS BLOB) WHERE name = 'project';",
+            "a schema object of an unexpected type",
+        ),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let path = project_file_with(&dir, sql);
+        let openers: [(&str, fn(&Path) -> Result<Database>); 5] = [
+            ("open", Database::open),
+            ("open_existing", Database::open_existing),
+            ("open_readonly", Database::open_readonly),
+            ("open_for_metadata", Database::open_for_metadata),
+            (
+                "open_for_metadata_recovering",
+                Database::open_for_metadata_recovering,
+            ),
+        ];
+        for (name, opener) in openers {
+            let Err(err) = opener(&path) else {
+                unreachable!("{name} opened a file with {what}: {sql}");
+            };
+            let refused = err
+                .chain()
+                .find_map(|c| c.downcast_ref::<RefusedSchemaObject>())
+                .unwrap_or_else(|| unreachable!("{name}: not a schema refusal: {err:#}"));
+            assert_eq!(refused.what, what, "{name}: {sql}");
+        }
+    }
+}
+
+#[test]
+fn every_opener_still_opens_what_sqlite_itself_adds_to_a_real_file() {
+    // AUTOINCREMENT adds sqlite_sequence, UNIQUE an autoindex with NULL sql, and
+    // ANALYZE sqlite_stat1: all ordinary, none written by the app's schema code.
+    let dir = TempDir::new().unwrap();
+    let path = project_file_with(
+        &dir,
+        "CREATE TABLE extra (id INTEGER PRIMARY KEY AUTOINCREMENT, tag TEXT UNIQUE,
+                             n REAL DEFAULT -1.5, t TEXT DEFAULT CURRENT_TIMESTAMP);
+         INSERT INTO extra (tag) VALUES ('a');
+         CREATE INDEX extra_tag_n ON extra (tag, n);
+         ANALYZE;",
+    );
+
+    Database::open(&path).unwrap();
+    Database::open_existing(&path).unwrap();
+    Database::open_readonly(&path).unwrap();
+    Database::open_for_metadata(&path).unwrap();
+    Database::open_for_metadata_recovering(&path).unwrap();
+    Database::check_schema_at(&path).unwrap();
+}
+
+#[test]
+fn a_legacy_is_virtual_column_still_opens() {
+    let dir = TempDir::new().unwrap();
+    let path = project_file_with(&dir, "ALTER TABLE shots ADD COLUMN is_virtual INTEGER;");
+
+    Database::open_existing(&path).unwrap();
 }
 
 /// A hostile `.stalx` must not reach FTS, RTREE or DBSTAT code, nor load an

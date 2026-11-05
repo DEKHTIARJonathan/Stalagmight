@@ -3,6 +3,7 @@ use rusqlite::params;
 use rusqlite::types::ValueRef;
 use std::collections::HashMap;
 
+use super::schema_guard::declares_virtual_table;
 use super::{format_blob_placeholder, Database, RawTableData, MAX_RAW_PAGE_ROWS};
 
 impl Database {
@@ -375,35 +376,4 @@ impl Database {
             total_rows,
         })
     }
-}
-
-/// Whether a `sqlite_master.sql` text declares a virtual table: its first two
-/// keywords, after any whitespace and comments, are `CREATE VIRTUAL`. A token
-/// match, not a substring one, so a legacy column such as `is_virtual` does not
-/// count. An unterminated comment counts as virtual, so a malformed text is
-/// treated as the dangerous case.
-pub fn declares_virtual_table(sql: &str) -> bool {
-    let mut rest = sql;
-    let mut words = Vec::with_capacity(2);
-    while words.len() < 2 {
-        rest = rest.trim_start();
-        if let Some(after) = rest.strip_prefix("/*") {
-            match after.find("*/") {
-                Some(end) => rest = &after[end + 2..],
-                None => return true,
-            }
-        } else if let Some(after) = rest.strip_prefix("--") {
-            rest = after.find('\n').map_or("", |end| &after[end..]);
-        } else {
-            let end = rest
-                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-                .unwrap_or(rest.len());
-            if end == 0 {
-                break;
-            }
-            words.push(rest[..end].to_ascii_uppercase());
-            rest = &rest[end..];
-        }
-    }
-    words == ["CREATE", "VIRTUAL"]
 }
