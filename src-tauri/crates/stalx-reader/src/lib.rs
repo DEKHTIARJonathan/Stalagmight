@@ -53,7 +53,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use stalagmight_models::ClassifyScope;
-use stalagmight_persistence::persistence::{declares_virtual_table, Database, SCHEMA_VERSION};
+use stalagmight_persistence::persistence::{refused_schema_object, Database, SCHEMA_VERSION};
 
 pub use survey::{
     CorrectionSource, Direction, LoopClosure, North, Section, Shot, ShotKind, StationComment,
@@ -407,61 +407,6 @@ fn remaining(expires: Instant) -> Result<Duration, ReadError> {
         .ok_or_else(|| ReadError::invalid(InvalidKind::Deadline, "deadline passed"))
 }
 
-/// Whether a column default, as `pragma_table_xinfo` reports it (an expression
-/// default loses its parentheses there), is a plain literal: a number, a string
-/// or blob literal, NULL, TRUE/FALSE or CURRENT_TIME/DATE/TIMESTAMP.
-fn is_literal_default(default: &str) -> bool {
-    let d = default.trim();
-    let quoted = |body: &str| {
-        body.len() >= 2
-            && body.starts_with('\'')
-            && body.ends_with('\'')
-            && !body[1..body.len() - 1].replace("''", "").contains('\'')
-    };
-    let upper = d.to_ascii_uppercase();
-    let unsigned = d.trim_start_matches(['+', '-']);
-    matches!(
-        upper.as_str(),
-        "NULL" | "TRUE" | "FALSE" | "CURRENT_TIME" | "CURRENT_DATE" | "CURRENT_TIMESTAMP"
-    ) || quoted(d)
-        || (upper.starts_with("X'") && quoted(&d[1..]))
-        || (!unsigned.is_empty()
-            && unsigned
-                .chars()
-                .all(|c| c.is_ascii_digit() || matches!(c, '.' | 'e' | 'E' | '+' | '-'))
-            && unsigned.parse::<f64>().is_ok())
-}
-
-/// Whether every CHECK constraint in a table's `CREATE TABLE` text is the app's
-/// own singleton guard, `CHECK (id = 1)`. Scans for the keyword anywhere, so a
-/// spelling this misreads is refused, never allowed.
-fn checks_are_the_apps(sql: &str) -> bool {
-    let upper = sql.to_ascii_uppercase();
-    let bytes = upper.as_bytes();
-    let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
-    let mut from = 0;
-    while let Some(at) = upper[from..].find("CHECK").map(|i| from + i) {
-        from = at + "CHECK".len();
-        let before = at.checked_sub(1).map(|i| bytes[i]);
-        let after = bytes.get(from).copied();
-        if before.is_some_and(word) || after.is_some_and(word) {
-            continue; // part of a longer identifier, e.g. `checked_at`
-        }
-        let rest = upper[from..].trim_start();
-        let Some(body) = rest.strip_prefix('(') else {
-            return false;
-        };
-        let Some(end) = body.find(')') else {
-            return false;
-        };
-        let expr: String = body[..end].chars().filter(|c| !c.is_whitespace()).collect();
-        if expr != "ID=1" {
-            return false;
-        }
-    }
-    true
-}
-
 /// Refuse a file whose tables hold more rows than `limits` allow, before the
 /// load builds them in memory. A table the file lacks counts as empty.
 fn check_row_counts(conn: &rusqlite::Connection, limits: CountLimits) -> Result<(), ReadError> {
@@ -588,112 +533,16 @@ fn inspect(
     conn.execute_batch("PRAGMA mmap_size = 0; PRAGMA cell_size_check = ON;")
         .map_err(sql_err)?;
 
-    // One pass over `sqlite_master`, which a file cannot shadow (`sqlite_` names
-    // are reserved) and whose reading connects nothing. It refuses, first, any
-    // object named `pragma_*`: a file's own table or view of that name would be
-    // read in place of SQLite's table-valued pragmas, by the checks below and by
-    // the app's load path, and could hide anything. Then views, triggers and
-    // virtual tables (rootpage 0, or SQL opening with the CREATE VIRTUAL
-    // keywords), so no later pragma is ever pointed at one: preparing a virtual
-    // table runs its module's connect code over the file's arguments.
-    let mut objects = conn
-        .prepare("SELECT type, name, rootpage, sql FROM sqlite_master")
-        .map_err(sql_err)?;
-    let mut rows = objects.query([]).map_err(sql_err)?;
-    while let Some(row) = rows.next().map_err(sql_err)? {
-        let kind: String = row.get(0).map_err(sql_err)?;
-        let name: String = row.get(1).map_err(sql_err)?;
-        let rootpage: Option<i64> = row.get(2).map_err(sql_err)?;
-        let sql: Option<String> = row.get(3).map_err(sql_err)?;
-        let refused = if name.to_ascii_lowercase().starts_with("pragma_") {
-            Some("an object named like a SQLite pragma")
-        } else if kind != "table" && kind != "index" {
-            // Exact, lowercase: SQLite matches `type` case-insensitively when it
-            // loads the schema, so a 'View' or 'TABLE' row is still a view or a
-            // table to it while slipping past every `type = '...'` filter below.
-            Some("a view, trigger or schema object of an unexpected type")
-        } else if rootpage == Some(0)
-            || (kind == "table" && declares_virtual_table(sql.as_deref().unwrap_or("")))
-        {
-            Some("a virtual table")
-        } else {
-            None
-        };
-        if let Some(what) = refused {
-            return Err(ReadError::invalid(
-                InvalidKind::RefusedSchemaObject,
-                format!("the file defines {what}"),
-            ));
-        }
-    }
-    drop(rows);
-    drop(objects);
-    // A generated column evaluates file-chosen expressions on every read, and
-    // built-ins such as zeroblob stay allowed with trusted_schema off.
-    let generated: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM sqlite_master AS m, pragma_table_xinfo(m.name) AS c \
-             WHERE m.type = 'table' AND c.hidden IN (2, 3)",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(sql_err)?;
-    if generated > 0 {
+    // The app's own hostile-schema check (`persistence::refused_schema_object`):
+    // pragma-shadowing names, unexpected types, virtual tables, and any schema
+    // expression the file chose (generated columns, expression or partial
+    // indexes, expression defaults, CHECKs other than the app's).
+    if let Some(refused) = refused_schema_object(&conn).map_err(sql_err)? {
         return Err(ReadError::invalid(
             InvalidKind::RefusedSchemaObject,
-            format!("the file defines {generated} generated column(s)"),
+            refused.to_string(),
         ));
     }
-    // Expression and partial indexes, and `DEFAULT (expr)`, evaluate file-chosen
-    // expressions whenever a migration writes the table.
-    let indexes: i64 = conn
-        .query_row(
-            "SELECT (SELECT COUNT(*) FROM sqlite_master AS m, pragma_index_list(m.name) AS i \
-                     WHERE m.type = 'table' AND i.partial = 1) \
-                  + (SELECT COUNT(*) FROM sqlite_master AS m, pragma_index_xinfo(m.name) AS x \
-                     WHERE m.type = 'index' AND x.cid = -2)",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(sql_err)?;
-    let mut defaults = conn
-        .prepare(
-            "SELECT c.dflt_value FROM sqlite_master AS m, pragma_table_xinfo(m.name) AS c \
-             WHERE m.type = 'table' AND c.dflt_value IS NOT NULL",
-        )
-        .map_err(sql_err)?;
-    let mut expressions = indexes;
-    for default in defaults
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(sql_err)?
-    {
-        if !is_literal_default(&default.map_err(sql_err)?) {
-            expressions += 1;
-        }
-    }
-    drop(defaults);
-    if expressions > 0 {
-        return Err(ReadError::invalid(
-            InvalidKind::RefusedSchemaObject,
-            format!("the file defines {expressions} expression index(es) or default(s)"),
-        ));
-    }
-    let mut tables = conn
-        .prepare("SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL")
-        .map_err(sql_err)?;
-    let mut rows = tables.query([]).map_err(sql_err)?;
-    while let Some(row) = rows.next().map_err(sql_err)? {
-        let sql: String = row.get(1).map_err(sql_err)?;
-        if !checks_are_the_apps(&sql) {
-            let name: String = row.get(0).map_err(sql_err)?;
-            return Err(ReadError::invalid(
-                InvalidKind::RefusedSchemaObject,
-                format!("table {name} defines a CHECK constraint the app never writes"),
-            ));
-        }
-    }
-    drop(rows);
-    drop(tables);
     check_row_counts(&conn, limits)?;
 
     let stamped: i32 = conn
