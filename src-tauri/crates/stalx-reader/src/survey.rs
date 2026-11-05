@@ -7,7 +7,6 @@
 
 use std::collections::HashMap;
 
-use serde::Serialize;
 use stalagmight_models::station::{StationKey, StationRef};
 use stalagmight_models::{NorthReference, Project, ShotKind as ModelShotKind, SurveyDirection};
 
@@ -38,7 +37,7 @@ use stalagmight_models::{NorthReference, Project, ShotKind as ModelShotKind, Sur
 /// survey order, merges by `(a, b)`, zero datums and comments and station
 /// positions by station, loop closures by id. [`Survey::modified_at`] changes
 /// on every save; leave it out of any content hash.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Survey {
     /// The file's schema version as uploaded, read before the private copy is
@@ -70,14 +69,14 @@ pub struct Survey {
 }
 
 /// A station: `index` 0 is the section's start, index `i` is the end of shot `i - 1`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub struct StationId {
     pub section_id: u32,
     pub index: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Section {
     pub id: u32,
@@ -101,8 +100,7 @@ pub struct Section {
 }
 
 /// Provenance of a section's azimuth correction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CorrectionSource {
     /// No azimuth reference is recorded at all.
@@ -117,7 +115,7 @@ pub enum CorrectionSource {
     Manual,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub struct Shot {
     /// Stable identity across revisions. See [`Shot::uuid_derived`].
@@ -144,8 +142,7 @@ pub struct Shot {
     pub comment: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ShotKind {
     /// A surveyed leg of the cave line.
@@ -156,16 +153,14 @@ pub enum ShotKind {
     Reference,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Direction {
     In,
     Out,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum North {
     Magnetic,
@@ -174,7 +169,7 @@ pub enum North {
 }
 
 /// Two stations that are the same physical point.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct StationMerge {
     pub a: StationId,
@@ -182,7 +177,7 @@ pub struct StationMerge {
 }
 
 /// A station with a known GPS position.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct ZeroDatum {
     pub station: StationId,
@@ -198,7 +193,7 @@ pub struct ZeroDatum {
     pub residual_m: Option<f64>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct LoopClosure {
     pub id: u64,
@@ -206,7 +201,7 @@ pub struct LoopClosure {
     pub b: StationId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct StationComment {
     pub station: StationId,
@@ -231,7 +226,7 @@ pub struct StationComment {
 /// - Only a station whose [`StationPosition::anchor`] is `Some` sits in a
 ///   component tied to a datum. A floating component (`anchor: None`) is placed
 ///   wherever the user's offsets put it, so its georeference is not meaningful.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct StationPosition {
     pub station: StationId,

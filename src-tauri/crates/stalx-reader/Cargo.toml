@@ -13,7 +13,6 @@ workspace = true
 stalagmight-models = { path = "../models" }
 stalagmight-persistence = { path = "../persistence" }
 rusqlite = { workspace = true, features = ["bundled", "hooks", "limits"] }
-serde = { workspace = true, features = ["derive"] }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
