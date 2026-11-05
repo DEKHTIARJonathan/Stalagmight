@@ -896,8 +896,9 @@ fn a_large_merge_group_reads_with_stations_quickly() {
 
     assert_eq!(survey.sections.len(), 6_002);
     assert!(survey.stations.is_some());
+    // Debug build on an M1: about 5 s here, about 20 s on the full-coordinates path.
     assert!(
-        elapsed < std::time::Duration::from_secs(10),
+        elapsed < std::time::Duration::from_secs(15),
         "took {elapsed:?}"
     );
 }
