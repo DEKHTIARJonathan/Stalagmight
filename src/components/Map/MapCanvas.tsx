@@ -52,6 +52,8 @@ import { MapDevStatsPanels } from './MapDevStatsPanels';
 import CommentOverlay from './CommentOverlay';
 import MoveCommentCursorTag from './MoveCommentCursorTag';
 import { installPanZoomDebug } from './panZoomDebug';
+import { createMap } from './createMap';
+import { MapUnavailable } from './MapUnavailable';
 import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
@@ -316,6 +318,7 @@ function MapCanvas() {
   const [zoomBox, setZoomBox] = useState<ZoomBoxState>({ start: null, end: null });
   const [moveDrag, setMoveDrag] = useState<MoveDragState | null>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [webgl2Unavailable, setWebgl2Unavailable] = useState(false);
   const [ctrlHeld, setCtrlHeld] = useState(false);
   // True briefly after placement confirmation to suppress the spurious MapLibre click
   const placementJustConfirmedRef = useRef(false);
@@ -1732,7 +1735,7 @@ function MapCanvas() {
     // Transform to map coordinates
     const mapCenter = metersToMapCoords(centerX, centerY, gpsOrigin);
 
-    map.current = new maplibregl.Map({
+    const created = createMap({
       container: mapContainer.current,
       style: {
         version: 8,
@@ -1776,6 +1779,11 @@ function MapCanvas() {
         },
       } as Record<string, unknown>),
     });
+    if (!created) {
+      setWebgl2Unavailable(true);
+      return;
+    }
+    map.current = created;
 
     // Optional MapLibre instrumentation; inert unless VITE_DEBUG_MACOS_LOCKUP
     // is set at build time. See docs/debugging-macos-pan-zoom.md.
@@ -4035,6 +4043,7 @@ function MapCanvas() {
       onContextMenu={handleContextMenu}
     >
       <div ref={mapContainer} className="w-full h-full" data-testid="maplibre-container" />
+      {webgl2Unavailable && <MapUnavailable testId="map-webgl2-unavailable" />}
 
       {/* Zoom box overlay */}
       {zoomBox.start && zoomBox.end && (
