@@ -17,7 +17,7 @@ import { LogCursor, type LogLevel } from '../lib/logs';
 import { invokeInApp, evalInApp, capJson } from '../lib/page';
 import { newOracleState, runSweep, type OracleState } from '../lib/oracles';
 import { listScenarios, runScenario } from '../scenarios';
-import { publishableErrorMessage, redactCorpusText, redactCorpusValue } from '../lib/fixtureCorpus';
+import { publishableErrorMessage, redactCorpusValue } from '../lib/fixtureCorpus';
 import { DEFAULT_FIXTURE, materializeFixture } from '../lib/fixtures';
 import {
   waitForAppReady,
@@ -56,18 +56,6 @@ function textResult(value: unknown): ToolResult {
 }
 function errorResult(message: string): ToolResult {
   return { content: [{ type: 'text', text: JSON.stringify({ error: message }) }], isError: true };
-}
-/**
- * `value` with every corpus name the process has copied replaced by its tag
- * (`fixtureCorpus.redactCorpusText`). A name that ends in a backslash could
- * split a JSON escape; that value is withheld rather than sent half-redacted.
- */
-function redactedJson(value: unknown): unknown {
-  try {
-    return JSON.parse(redactCorpusText(JSON.stringify(value ?? null))) as unknown;
-  } catch {
-    return '(withheld: redacting a corpus name broke the encoding)';
-  }
 }
 /** Every error the server records or returns, worded publishably (#576 RV12-F1). */
 function asMessage(err: unknown): string {
@@ -1166,13 +1154,14 @@ define(
         recorder: session.hasRecorder ? session.recorder : undefined,
       });
       // The findings quote the app's error log, which quotes the path of a
-      // corpus copy it failed to import (#576 HFI-13); a no-op without one.
+      // corpus copy it failed to import (#576 HFI-13): runSweep hands them over
+      // folded, and textResult folds the whole answer again.
       return textResult({
         scenario: args.name,
         metrics,
         ok: sweep.worst === null || sweep.worst === 'warning',
         worst: sweep.worst,
-        findings: redactedJson(sweep.findings),
+        findings: sweep.findings,
       });
     } catch (err) {
       return errorResult(asMessage(err));

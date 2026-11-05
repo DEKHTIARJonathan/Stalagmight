@@ -12,6 +12,10 @@
  * snapshot taken after a corpus import carries the copy's path, and
  * `Recorder.writeState` wrote it as given.
  *
+ * NF-W16FE-2: `run_scenario` folded its findings through a JSON-text pass of its
+ * own before `textResult`, which folds every answer anyway. That pass is gone;
+ * the answer is the same.
+ *
  * Everything here is synthetic: a token-named corpus entry built in a temp
  * directory, and the lines the app would echo back for it.
  */
@@ -30,6 +34,7 @@ import {
   redactCorpusValue,
   registerCorpusRedactions,
 } from './fixtureCorpus';
+import { publishableFinding, type Finding } from './oracles';
 import { capJson } from './page';
 import { Recorder } from './recorder';
 
@@ -200,5 +205,40 @@ describe('a state snapshot names no corpus file (#576 NF-W16FE-1)', () => {
     const report = fs.readFileSync(path.join(session, 'report.md'), 'utf8');
     expect(report).toContain('`screenshots/`');
     expect(report).not.toMatch(/!\[|<img|data:image|iVBORw0KGgo/);
+  });
+});
+
+describe('run_scenario returns its findings through textResult alone (#576 NF-W16FE-2)', () => {
+  it('dropping the extra JSON-text fold leaves the answer unchanged', () => {
+    // The findings as runSweep hands them over: already publishable.
+    const raw: Finding[] = [
+      { severity: 'error', kind: 'log-error', message: failedParseLine() },
+      {
+        severity: 'warning',
+        kind: 'probe',
+        message: `opened ${copyPath}`,
+        detail: { path: copyPath, [copyPath]: [copyPath, 1, null], when: new Date(0), skipped: undefined },
+      },
+      { severity: 'fatal', kind: 'odd', message: 'escapes', detail: { name: `${copyPath}"\\`, list: [`"${copyPath}"`] } },
+    ];
+    const findings = raw.map(publishableFinding);
+    // The pass server.ts ran before textResult, as it was.
+    const jsonTextFold = (value: unknown): unknown => {
+      try {
+        return JSON.parse(redactCorpusText(JSON.stringify(value ?? null))) as unknown;
+      } catch {
+        return '(withheld: redacting a corpus name broke the encoding)';
+      }
+    };
+    // textResult's text for run_scenario's answer.
+    const answer = (f: unknown) =>
+      JSON.stringify(redactCorpusValue({ scenario: 'probe', metrics: {}, ok: false, worst: 'fatal', findings: f }) ?? null);
+    expect(answer(findings)).toBe(answer(jsonTextFold(findings)));
+    expect(answer(findings)).toContain('<corpus #');
+    expect(answer(findings)).not.toContain(MARK);
+
+    const server = fs.readFileSync(path.join(REPO, 'e2e', 'agent', 'mcp', 'server.ts'), 'utf8');
+    expect(server).not.toContain('redactedJson');
+    expect(server).toContain('findings: sweep.findings,');
   });
 });
