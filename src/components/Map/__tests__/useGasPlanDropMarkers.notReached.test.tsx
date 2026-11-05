@@ -103,10 +103,10 @@ describe('useGasPlanDropMarkers: a drop the dive does not reach (#576 RV8c-2-D3)
     expect(markers).toHaveLength(2);
     const [onRoute, past] = markers as [HTMLElement, HTMLElement];
     expect(onRoute.getAttribute('data-reached')).toBe('true');
-    expect(onRoute.querySelector('path')?.getAttribute('fill')).toBe('#e08a1e');
+    expect(onRoute.querySelector('path[stroke="#ffffff"]')?.getAttribute('fill')).toBe('#e08a1e');
     expect(past.getAttribute('data-reached')).toBe('false');
     expect(past.getAttribute('data-over-reserve')).toBe('false');
-    expect(past.querySelector('path')?.getAttribute('fill')).toBe('#8a8f98');
+    expect(past.querySelector('path[stroke="#ffffff"]')?.getAttribute('fill')).toBe('#8a8f98');
     expect(past.title).toContain('not reached');
     unmount();
     expect(document.querySelectorAll('[data-testid="gas-drop-marker"]')).toHaveLength(0);
