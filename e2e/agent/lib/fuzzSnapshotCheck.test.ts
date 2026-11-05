@@ -83,6 +83,20 @@ describe('checkSnapshot', () => {
     expect(check.text).not.toContain('largest absorbed numeric change');
   });
 
+  it('attributes the creation time a save stamps on a section, and not one that changes (#576 NF-FZDET-1)', () => {
+    const before = snap({ sections: [section(0, SHOTS)] });
+    const stamped = snap({ sections: [{ created_at: '2026-11-05T21:57:28.5+00:00', ...section(0, SHOTS) }] });
+    const restamped = snap({ sections: [{ created_at: '2026-11-05T21:58:00+00:00', ...section(0, SHOTS) }] });
+
+    const first = checkSnapshot(before, stamped, SAVE_HEALING_MUTATIONS, LIMITS);
+    const again = checkSnapshot(stamped, restamped, SAVE_HEALING_MUTATIONS, LIMITS);
+
+    expect(first.attributed.map((entry) => entry.id)).toEqual(['save-stamps-section-creation-times']);
+    expect(first.text.startsWith('  ATTRIBUTED [save-stamps-section-creation-times]: ')).toBe(true);
+    expect(again.attributed).toEqual([]);
+    expect(again.text).toContain('at project.sections[0].created_at');
+  });
+
   it('puts the absorbed MAGNITUDE of a reload re-solve on the record', () => {
     const expected = snap({ section_offsets: { 3: [0, 0] }, sections: [] });
     const actual = snap({ section_offsets: { 3: [1.5, 0] }, sections: [] });

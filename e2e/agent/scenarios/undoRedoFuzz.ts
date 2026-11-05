@@ -247,7 +247,8 @@
  *
  *   - `SAVE_HEALING_MUTATIONS` - `save_project` mints missing shot uuids, dedupes
  *     within-section duplicates, captures missing gauge anchors, drops orphan
- *     `section_offsets` and sanitizes non-finite values, all with no undo entry.
+ *     `section_offsets`, stamps a creation time on a section that has none and
+ *     sanitizes non-finite values, all with no undo entry.
  *   - `RELOAD_RESOLVED_GEOMETRY` - `redrive_offsets_after_load` ends in an
  *     unconditional `resolve_offsets()` ("Zero-trust: never honor a persisted
  *     derivable offset", offsets.rs:186-188), so a reload RECOMPUTES
