@@ -742,7 +742,7 @@ impl Project {
 
     /// One authoritative anchor section per connected merge group, preferring a
     /// zero-datum section so the realign keeps the group pinned to GPS.
-    fn realign_seeds(&self) -> Vec<SectionId> {
+    pub(super) fn realign_seeds(&self) -> Vec<SectionId> {
         let datum_sections: HashSet<SectionId> = self
             .zero_datums
             .iter()

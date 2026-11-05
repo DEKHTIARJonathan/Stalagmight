@@ -15751,6 +15751,19 @@ fn resolving_offsets_is_fast_with_thousands_of_closures_doubling_merges() {
 fn resolve_offsets_before_602(project: &mut Project) -> usize {
     let before = project.check_merge_alignment().len();
     let offsets_before = project.section_offsets.clone();
+    let seeds = realign_seeds_before_602(project);
+    let was_deferred = project.cascade_deferred;
+    project.cascade_deferred = false;
+    project.cascade_connection_offsets(&seeds);
+    project.cascade_deferred = was_deferred;
+    if project.section_offsets != offsets_before {
+        project.touch();
+    }
+    before.saturating_sub(project.check_merge_alignment().len())
+}
+
+/// The pre-#602 seed choice, verbatim: one walk per unvisited section.
+fn realign_seeds_before_602(project: &Project) -> Vec<SectionId> {
     let datum_sections: HashSet<SectionId> = project
         .zero_datums
         .iter()
@@ -15774,19 +15787,19 @@ fn resolve_offsets_before_602(project: &mut Project) -> usize {
         }
         visited.extend(component);
     }
-    let was_deferred = project.cascade_deferred;
-    project.cascade_deferred = false;
-    project.cascade_connection_offsets(&seeds);
-    project.cascade_deferred = was_deferred;
-    if project.section_offsets != offsets_before {
-        project.touch();
-    }
-    before.saturating_sub(project.check_merge_alignment().len())
+    seeds
 }
 
 /// Run the oracle and the live solve on two copies of `project` and require
 /// bit-identical offsets, return values and `modified_at` behaviour.
 fn assert_resolve_matches_oracle(project: &Project, label: &str) {
+    // The seeds directly, not only the offsets the cascade derives from them: a
+    // seed bug the cascade happens to converge past would otherwise hide.
+    assert_eq!(
+        project.realign_seeds(),
+        realign_seeds_before_602(project),
+        "{label}: seeds"
+    );
     let stamp = DateTime::<Utc>::from_timestamp(1_000_000, 0).unwrap();
     let mut old = project.clone();
     let mut new = project.clone();
