@@ -287,7 +287,7 @@ export function installPanZoomDebug(map: maplibregl.Map, refs: DebugRefs): void 
     // Dump primitive-typed own properties of HandlerManager so we can see
     // its internal flags (e.g. _running, _started, _changes pending, etc.)
     // without knowing their names in advance.
-    const hmObj = (map as unknown as { handlers?: Record<string, unknown> }).handlers ?? {};
+    const hmObj = (map._handlers as unknown as Record<string, unknown> | undefined) ?? {};
     const hmInternals: Record<string, unknown> = {};
     for (const k of Object.keys(hmObj)) {
       const v = (hmObj as Record<string, unknown>)[k];
