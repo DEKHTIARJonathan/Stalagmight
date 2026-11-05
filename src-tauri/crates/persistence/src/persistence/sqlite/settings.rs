@@ -295,21 +295,32 @@ impl Database {
 
     /// List the ordinary tables in the database, excluding sqlite-internal ones.
     ///
-    /// Virtual tables (and their shadow tables) are left out: a `.stalx` can come
-    /// from anyone, and `SELECT *` on a virtual table runs its module's code
-    /// (FTS5, RTREE) over the file's own data. `sqlite_master` lists virtual
-    /// tables as `type = 'table'` too, so this asks `pragma_table_list`, which
-    /// reports what SQLite parsed (#608).
+    /// Virtual tables are left out: a `.stalx` can come from anyone, and touching
+    /// a virtual table runs its module's code (FTS5, RTREE) over the file's own
+    /// data. Classified from `sqlite_master` alone (#608): it cannot be shadowed
+    /// (`sqlite_` names are reserved) and reading it connects nothing, unlike
+    /// `pragma_table_list`, which a file can shadow with its own table or view
+    /// and which prepares every virtual table it reports. Shadow tables are plain
+    /// b-trees, so they stay listed.
     pub fn list_raw_table_names(&self) -> Result<Vec<String>> {
         let mut stmt = self.conn.prepare(
-            "SELECT name FROM pragma_table_list \
-             WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+            "SELECT name, rootpage, sql FROM sqlite_master \
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
         )?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<String>>(2)?,
+            ))
+        })?;
 
         let mut names = Vec::new();
         for row in rows {
-            names.push(row?);
+            let (name, rootpage, sql) = row?;
+            if rootpage != 0 && !declares_virtual_table(sql.as_deref().unwrap_or("")) {
+                names.push(name);
+            }
         }
         Ok(names)
     }
@@ -364,4 +375,35 @@ impl Database {
             total_rows,
         })
     }
+}
+
+/// Whether a `sqlite_master.sql` text declares a virtual table: its first two
+/// keywords, after any whitespace and comments, are `CREATE VIRTUAL`. A token
+/// match, not a substring one, so a legacy column such as `is_virtual` does not
+/// count. An unterminated comment counts as virtual, so a malformed text is
+/// treated as the dangerous case.
+pub fn declares_virtual_table(sql: &str) -> bool {
+    let mut rest = sql;
+    let mut words = Vec::with_capacity(2);
+    while words.len() < 2 {
+        rest = rest.trim_start();
+        if let Some(after) = rest.strip_prefix("/*") {
+            match after.find("*/") {
+                Some(end) => rest = &after[end + 2..],
+                None => return true,
+            }
+        } else if let Some(after) = rest.strip_prefix("--") {
+            rest = after.find('\n').map_or("", |end| &after[end..]);
+        } else {
+            let end = rest
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len());
+            if end == 0 {
+                break;
+            }
+            words.push(rest[..end].to_ascii_uppercase());
+            rest = &rest[end..];
+        }
+    }
+    words == ["CREATE", "VIRTUAL"]
 }

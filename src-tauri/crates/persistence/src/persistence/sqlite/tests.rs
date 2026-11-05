@@ -4788,9 +4788,11 @@ fn test_list_raw_table_names_excludes_sqlite_internal() {
 }
 
 #[test]
-fn test_raw_tables_leave_out_virtual_and_shadow_tables() {
+fn test_raw_tables_leave_out_virtual_tables_even_when_pragmas_are_shadowed() {
     // A crafted file's virtual tables would run their module's code over the
-    // file's own data on `SELECT *`; the viewer must neither list nor read them.
+    // file's own data; the viewer must neither list nor read them. The file
+    // also ships its own `pragma_table_list`, which a table-valued pragma
+    // query would read instead of SQLite's and so list `docs` as ordinary.
     let mut db = Database::in_memory().unwrap();
     db.save_project(&Project::new("Hostile Cave".to_string(), None))
         .unwrap();
@@ -4798,20 +4800,16 @@ fn test_raw_tables_leave_out_virtual_and_shadow_tables() {
         .execute_batch(
             "CREATE VIRTUAL TABLE docs USING fts5(body);
              INSERT INTO docs VALUES ('lead');
-             CREATE VIRTUAL TABLE boxes USING rtree(id, x0, x1);",
+             CREATE VIRTUAL TABLE/**/boxes USING rtree(id, x0, x1);
+             CREATE TABLE pragma_table_list (name, schema, type);
+             INSERT INTO pragma_table_list VALUES ('docs', 'main', 'table'),
+                                                  ('boxes', 'main', 'table');",
         )
         .unwrap();
 
     let names = db.list_raw_table_names().unwrap();
 
-    for hidden in [
-        "docs",
-        "docs_data",
-        "docs_idx",
-        "docs_content",
-        "boxes",
-        "boxes_node",
-    ] {
+    for hidden in ["docs", "boxes"] {
         assert!(
             !names.iter().any(|n| n == hidden),
             "{hidden} listed: {names:?}"
@@ -4820,6 +4818,20 @@ fn test_raw_tables_leave_out_virtual_and_shadow_tables() {
         assert!(err.to_string().contains("Unknown table"), "{hidden}: {err}");
     }
     assert!(names.iter().any(|n| n == "shots"));
+}
+
+#[test]
+fn test_declares_virtual_table_matches_keywords_not_substrings() {
+    use super::declares_virtual_table as virt;
+    assert!(virt("CREATE VIRTUAL TABLE t USING fts5(x)"));
+    assert!(virt("create virtual table t using rtree(a, b, c)"));
+    assert!(virt("CREATE/**/VIRTUAL  TABLE t USING fts5(x)"));
+    assert!(virt("CREATE -- note\n VIRTUAL TABLE t USING fts5(x)"));
+    assert!(virt("CREATE /* unterminated"));
+    // A legacy (pre-v4) shots table has an `is_virtual` column.
+    assert!(!virt("CREATE TABLE shots (id INTEGER, is_virtual INTEGER)"));
+    assert!(!virt("CREATE TABLE \"virtual\" (x)"));
+    assert!(!virt(""));
 }
 
 #[test]
