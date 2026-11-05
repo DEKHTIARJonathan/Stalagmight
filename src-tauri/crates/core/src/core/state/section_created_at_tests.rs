@@ -18,7 +18,7 @@ use tempfile::TempDir;
 
 use super::AppState;
 use crate::core::Command;
-use crate::models::ShotData;
+use crate::models::{CreationStamp, ShotData};
 use crate::test_fixtures::state_with_project;
 
 /// `(section name, created_at)` of every row, in id order.
@@ -221,13 +221,70 @@ fn a_restore_carries_the_live_sections_creation_time_forward() {
         .id;
     let mut restored = live.clone();
     let own = Utc::now() - Duration::hours(2);
-    restored.sections[1].created_at = Some(own);
+    restored.sections[1].created_at = Some(CreationStamp::at(own));
 
     let stamped = Utc::now() - Duration::hours(1);
     super::project_io::stamp_section_creation_times(&mut live, stamped);
     super::project_io::reapply_heals_after_restore(&mut restored, Some(&live));
 
-    let at = |id| restored.get_section(id).expect("restored").created_at;
-    assert_eq!(at(first), Some(stamped), "carried forward");
-    assert_eq!(at(second), Some(own), "its own time is kept");
+    let at = |id| {
+        restored
+            .get_section(id)
+            .expect("restored")
+            .created_at
+            .clone()
+    };
+    assert_eq!(
+        at(first),
+        Some(CreationStamp::at(stamped)),
+        "carried forward"
+    );
+    assert_eq!(
+        at(second),
+        Some(CreationStamp::at(own)),
+        "its own time is kept"
+    );
+}
+
+/// [#576 RV14-2] A stamp in another offset (another tool's) is written back as it
+/// was stored by every save path, an undo from the persisted history included:
+/// it was read as a UTC time and printed as one, the same moment in another text.
+#[test]
+fn a_stamp_in_another_offset_is_written_back_as_stored() {
+    let _config = crate::test_helpers::isolated_config();
+    let dir = TempDir::new().expect("tempdir");
+    let stored = "2020-01-02T03:04:05+05:00";
+    let (state, path, _) = opened_an_hour_after_its_first_save(&dir, "CaveA");
+    drop(state);
+    backdate(&path, stored);
+    let state = AppState::new().expect("state");
+    assert!(state.open_project(path.clone()).success);
+    let section_id = state.get_project_state().expect("open").sections[0].id;
+
+    let saved = state.execute(Command::SaveProject { path: None });
+    assert!(saved.success, "implicit save: {:?}", saved.error);
+    let implicit = created_at(&path);
+
+    // An undo that brings the section back, from the history persisted in the file.
+    assert!(state.execute(Command::DeleteSection { section_id }).success);
+    assert!(state.save_project(None).success);
+    drop(state);
+    let state = AppState::new().expect("state");
+    assert!(state.open_project(path.clone()).success);
+    assert!(state.undo().success, "undo the delete after a reopen");
+    assert!(state.save_project(None).success);
+    let after_undo = created_at(&path);
+
+    let copy = dir.path().join("CaveA-copy.stalx");
+    assert!(state.save_project(Some(copy.clone())).success, "save as");
+    let save_as = created_at(&copy);
+
+    let expected = vec![("SectionA".to_string(), stored.to_string())];
+    println!("RV14-2 stored {stored:?}");
+    println!("RV14-2 implicit save: {implicit:?}");
+    println!("RV14-2 Save As: {save_as:?}");
+    println!("RV14-2 undo of a delete after a reopen, saved: {after_undo:?}");
+    assert_eq!(implicit, expected, "implicit save");
+    assert_eq!(save_as, expected, "save as");
+    assert_eq!(after_undo, expected, "undo from the persisted history");
 }

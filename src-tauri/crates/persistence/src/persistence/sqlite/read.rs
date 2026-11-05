@@ -4,10 +4,10 @@ use rusqlite::{params, OptionalExtension};
 use std::collections::HashMap;
 
 use crate::models::{
-    AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoadedProject,
-    LoopClosure, NorthReference, Project, Section, SectionData, SectionId, Shot, ShotKind,
-    StationKey, StationMerge, SurveyDirection, UnrecognisedShotKind, ZeroDatum, FEATURE_ID_STRIDE,
-    MAX_SECTION_ID,
+    AzimuthReference, ClosureStrategy, CorrectionSource, CreationStamp, GpsCoordinates,
+    LoadedProject, LoopClosure, NorthReference, Project, Section, SectionData, SectionId, Shot,
+    ShotKind, StationKey, StationMerge, SurveyDirection, UnrecognisedShotKind, ZeroDatum,
+    FEATURE_ID_STRIDE, MAX_SECTION_ID,
 };
 
 use super::Database;
@@ -385,11 +385,13 @@ impl Database {
                     // since the first. Only TEXT this app can parse counts: a
                     // value of another type or shape loads as "never stamped"
                     // (the next save stamps it) rather than failing the open.
+                    // [#576 RV14-2] Kept as the text it is, so the next save
+                    // writes it back unchanged rather than the same moment in
+                    // UTC form.
                     row.get_ref(14)?
                         .as_str()
                         .ok()
-                        .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
-                        .map(|stamp| stamp.with_timezone(&Utc)),
+                        .and_then(CreationStamp::parse),
                 ))
             })?;
             for row in rows {

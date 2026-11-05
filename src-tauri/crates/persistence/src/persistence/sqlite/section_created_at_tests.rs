@@ -15,7 +15,7 @@ use rusqlite::Connection;
 use tempfile::TempDir;
 
 use super::Database;
-use crate::models::{Project, SectionData, ShotData};
+use crate::models::{CreationStamp, Project, SectionData, ShotData};
 
 fn section(name: &str) -> SectionData {
     SectionData {
@@ -142,10 +142,13 @@ fn a_stored_created_at_reads_back_into_the_model_and_an_unparseable_one_does_not
         .unwrap()
         .load_project()
         .unwrap();
-    let expected = DateTime::parse_from_rfc3339(&first_save)
-        .unwrap()
-        .with_timezone(&Utc);
-    assert_eq!(loaded.sections[0].created_at, Some(expected));
+    assert_eq!(
+        loaded.sections[0]
+            .created_at
+            .as_ref()
+            .map(CreationStamp::as_str),
+        Some(first_save.as_str())
+    );
 
     // Not a value this app writes: it loads as "never stamped", so the next
     // save writes a time it can read rather than carrying text it cannot.
@@ -155,4 +158,76 @@ fn a_stored_created_at_reads_back_into_the_model_and_an_unparseable_one_does_not
         .load_project()
         .unwrap();
     assert_eq!(loaded.sections[0].created_at, None);
+}
+
+/// [#576 RV14-2] A stored stamp this app can read is written back exactly as it
+/// was stored. The load parsed it to UTC and the save printed that, so a stamp in
+/// another offset (another tool's, `+05:00`) came back as the same moment in
+/// another text: `2020-01-01T22:04:05+00:00`, in a column no edit had touched.
+#[test]
+fn a_readable_stamp_in_any_form_survives_a_save_byte_for_byte() {
+    let dir = TempDir::new().unwrap();
+    let (path, _) = saved_an_hour_ago(&dir);
+    let mut wrong = Vec::new();
+    for (i, stored) in [
+        "2020-01-02T03:04:05+05:00",
+        "2020-01-02T03:04:05Z",
+        "2020-01-02T03:04:05.120-03:30",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        backdate(&path, stored);
+        let reopened = Database::open_existing(&path)
+            .unwrap()
+            .load_project()
+            .unwrap();
+        let fresh = dir.path().join(format!("CaveA-{i}.stalx"));
+        Database::open(&fresh)
+            .unwrap()
+            .save_project(&reopened)
+            .unwrap();
+        Database::open_existing(&path)
+            .unwrap()
+            .save_project(&reopened)
+            .unwrap();
+        for (how, file) in [("to a fresh file", &fresh), ("in place", &path)] {
+            let written = created_at(file).remove(0).1;
+            println!("RV14-2 stored {stored:?}; after a save {how}: {written:?}");
+            if written != stored {
+                wrong.push(format!("{stored} -> {written} ({how})"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "rewritten: {wrong:?}");
+}
+
+/// [#576 RV14-2] A stored value this app cannot read, or none, is still stamped
+/// by the next save: the time of that save, in the form this app writes.
+#[test]
+fn an_unreadable_stamp_is_stamped_anew_by_the_next_save() {
+    let dir = TempDir::new().unwrap();
+    let (path, _) = saved_an_hour_ago(&dir);
+    for stored in ["yesterday", "", "2020-01-02 03:04:05"] {
+        backdate(&path, stored);
+        let reopened = Database::open_existing(&path)
+            .unwrap()
+            .load_project()
+            .unwrap();
+        let before = Utc::now();
+        Database::open_existing(&path)
+            .unwrap()
+            .save_project(&reopened)
+            .unwrap();
+        let after = Utc::now();
+        let written = created_at(&path).remove(0).1;
+        println!("RV14-2 stored {stored:?}; after a save: {written:?}");
+        let stamped = DateTime::parse_from_rfc3339(&written)
+            .unwrap()
+            .with_timezone(&Utc);
+        assert!(
+            before <= stamped && stamped <= after,
+            "{stored:?} is stamped by the save: {written} not in [{before}, {after}]"
+        );
+    }
 }

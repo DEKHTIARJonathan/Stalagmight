@@ -2,7 +2,7 @@ use anyhow::Result;
 use chrono::Utc;
 use rusqlite::params;
 
-use crate::models::Project;
+use crate::models::{CreationStamp, Project};
 
 use super::{Database, SCHEMA_VERSION};
 
@@ -93,8 +93,9 @@ impl Database {
         // section's creation time, stamped once: the model carries the value its
         // first save recorded (read back on open, stamped by the app's save heals
         // before that first save), and only a section that has none yet - a
-        // writer that skips the heals - takes this save's time.
-        let now = Utc::now();
+        // writer that skips the heals - takes this save's time. [#576 RV14-2]
+        // A stamp is written as the text it holds: as stored, byte for byte.
+        let now = Utc::now().to_rfc3339();
         for section in &project.sections {
             tx.execute(
                 "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, reverse_parity, gauge_shot_uuid, gauge_neighbour_uuid, azimuth_north, azimuth_correction, azimuth_source, azimuth_epoch_year, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
@@ -122,7 +123,10 @@ impl Database {
                     section
                         .azimuth_reference
                         .and_then(|r| r.source.epoch_year()),
-                    section.created_at.unwrap_or(now).to_rfc3339()
+                    section
+                        .created_at
+                        .as_ref()
+                        .map_or(now.as_str(), CreationStamp::as_str)
                 ],
             )?;
 

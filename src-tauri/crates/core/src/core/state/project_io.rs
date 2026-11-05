@@ -3,7 +3,7 @@ use super::save_sidecars::{SaveMode, SaveRequest};
 use super::session_commit::{CommandsHeld, SessionCommit};
 use super::AppState;
 use crate::core::{CommandError, CommandErrorCode, CommandResult, PersistStack, UndoStack};
-use crate::models::{Project, SectionId};
+use crate::models::{CreationStamp, Project, SectionId};
 use crate::persistence::Database;
 use chrono::{DateTime, Utc};
 use std::path::{Path, PathBuf};
@@ -197,7 +197,9 @@ pub(super) fn save_failure(context: &str, target: &Path, err: &anyhow::Error) ->
 /// on open, carried by an undo) keeps it.
 pub(super) fn stamp_section_creation_times(project: &mut Project, now: DateTime<Utc>) {
     for section in &mut project.sections {
-        section.created_at.get_or_insert(now);
+        section
+            .created_at
+            .get_or_insert_with(|| CreationStamp::at(now));
     }
 }
 
@@ -377,7 +379,9 @@ pub(super) fn reapply_heals_after_restore(restored: &mut Project, live: Option<&
     };
     for section in &mut restored.sections {
         if section.created_at.is_none() {
-            section.created_at = live.get_section(section.id).and_then(|s| s.created_at);
+            section.created_at = live
+                .get_section(section.id)
+                .and_then(|s| s.created_at.clone());
         }
         if section.gauge_shot_uuid.is_some() {
             continue;
