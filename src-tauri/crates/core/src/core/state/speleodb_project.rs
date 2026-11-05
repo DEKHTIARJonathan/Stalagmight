@@ -264,6 +264,13 @@ impl AppState {
                     }
                     (project.name != name).then(|| {
                         project.name = name.to_owned();
+                        // [#576 NF-W14BE-1] The in-place write below is a
+                        // never-saved section's first save too: stamp it on the
+                        // model, or the next save would write a second time.
+                        super::project_io::stamp_section_creation_times(
+                            project,
+                            chrono::Utc::now(),
+                        );
                         project.clone()
                     })
                 }

@@ -136,6 +136,8 @@ mod format_property_tests;
 )]
 mod forward_epilogue_tests;
 #[cfg(test)]
+mod fuzz_crossing_tests;
+#[cfg(test)]
 mod fuzz_rarity_tests;
 #[cfg(test)]
 mod fuzz_shrink_tests;
@@ -532,6 +534,14 @@ mod sdb_silent_release_claim_tests;
               values are the evidence a run captures"
 )]
 mod sdb_swap_gate_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod section_created_at_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

@@ -5,6 +5,7 @@ use super::AppState;
 use crate::core::{CommandError, CommandErrorCode, CommandResult, PersistStack, UndoStack};
 use crate::models::{Project, SectionId};
 use crate::persistence::Database;
+use chrono::{DateTime, Utc};
 use std::path::{Path, PathBuf};
 
 /// What a failed save actually was, once the error chain and the destination
@@ -187,6 +188,19 @@ pub(super) fn save_failure(context: &str, target: &Path, err: &anyhow::Error) ->
     }
 }
 
+/// [#576 NF-W14BE-1] Give every section that has no creation time yet `now`.
+///
+/// On the MODEL, not only in the file: the `.stalx` `sections.created_at`
+/// column is written from `Section::created_at`, so a section stamped here
+/// writes this same value on every later save - the time it was first saved,
+/// not the time of the latest save. A section that already has one (read back
+/// on open, carried by an undo) keeps it.
+pub(super) fn stamp_section_creation_times(project: &mut Project, now: DateTime<Utc>) {
+    for section in &mut project.sections {
+        section.created_at.get_or_insert(now);
+    }
+}
+
 /// The undo-less heals a save applies to the LIVE project, in one place.
 ///
 /// Every one of them mutates the open project with **no undo entry of its own**,
@@ -226,6 +240,9 @@ fn apply_save_heals(project: &mut Project) {
     // means capturing never moves anybody's coordinates; from here on the gauge is named by
     // a pair of shots rather than re-derived from an index that a later append can shift.
     project.capture_missing_gauge_anchors();
+
+    // Stamp each section's creation time on its first save (#576 NF-W14BE-1).
+    stamp_section_creation_times(project, Utc::now());
 
     // Drop section_offsets for sections that no longer exist. An orphan entry
     // (a section removed via a path that bypassed cleanup) is dead data, and the
@@ -310,6 +327,12 @@ fn apply_save_heals(project: &mut Project) {
 ///   direction can OVERWRITE an anchor - both the app's capture and this
 ///   carry-forward skip a section that already has one - so the pair a section
 ///   is pinned to never moves.
+/// * `stamp_section_creation_times` - RE-APPLIED AS A CARRY-FORWARD, for the
+///   same reason (#576 NF-W14BE-1): a restored section with no creation time
+///   takes the one its live counterpart (same id) holds, so a save recorded
+///   before the undo still writes the time the first save stamped. Never over a
+///   time the restored section has, and never a fresh stamp - that is the
+///   save's to make.
 ///
 /// # The half of finding 11 this does NOT cover, and what does
 ///
@@ -353,6 +376,9 @@ pub(super) fn reapply_heals_after_restore(restored: &mut Project, live: Option<&
         return;
     };
     for section in &mut restored.sections {
+        if section.created_at.is_none() {
+            section.created_at = live.get_section(section.id).and_then(|s| s.created_at);
+        }
         if section.gauge_shot_uuid.is_some() {
             continue;
         }

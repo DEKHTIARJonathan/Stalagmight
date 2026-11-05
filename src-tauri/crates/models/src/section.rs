@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashSet;
 use std::fmt;
@@ -120,6 +120,19 @@ pub struct Section {
     #[serde(default)]
     #[ts(optional)]
     pub azimuth_reference: Option<AzimuthReference>,
+    /// When this section was created, as its first save recorded it: the
+    /// `.stalx` `sections.created_at` column, read back on open (#576
+    /// NF-W14BE-1). `None` until that first save stamps it - the save path's
+    /// heals do, on the model, so every later save writes the same value back
+    /// instead of its own time.
+    ///
+    /// Backend only (`#[ts(skip)]`): nothing in the frontend reads it. It is in
+    /// serde so an undo snapshot that brings the section back keeps it, and a
+    /// `None` is left out, so a payload recorded before the field existed and
+    /// one for a never-saved section are the same bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(skip)]
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 /// Everything about a section that [`SectionData`] cannot carry: the identity of
@@ -158,6 +171,13 @@ pub struct SectionIdentity {
     /// have had anyway before the field existed.
     #[serde(default)]
     pub azimuth_reference: Option<AzimuthReference>,
+    /// The section's creation time ([`Section::created_at`]), so an undo that
+    /// re-creates a deleted section writes the time its first save recorded
+    /// rather than a new one (#576 NF-W14BE-1). `None` on a legacy entry or a
+    /// never-saved section: the next save stamps it. Left out when `None`, so
+    /// such an entry serializes exactly as it did before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<DateTime<Utc>>,
 }
 
 impl SectionIdentity {
@@ -169,6 +189,7 @@ impl SectionIdentity {
             gauge_shot_uuid: section.gauge_shot_uuid.clone(),
             gauge_neighbour_uuid: section.gauge_neighbour_uuid.clone(),
             azimuth_reference: section.azimuth_reference,
+            created_at: section.created_at,
         }
     }
 }
@@ -448,6 +469,7 @@ impl Section {
             gauge_shot_uuid: None,
             gauge_neighbour_uuid: None,
             azimuth_reference: None,
+            created_at: None,
         };
 
         // Per-section UUID uniqueness, enforced where a `Vec<ShotData>` becomes
@@ -540,6 +562,7 @@ impl Section {
             .gauge_neighbour_uuid
             .clone_from(&identity.gauge_neighbour_uuid);
         section.azimuth_reference = identity.azimuth_reference;
+        section.created_at = identity.created_at;
         section
     }
 

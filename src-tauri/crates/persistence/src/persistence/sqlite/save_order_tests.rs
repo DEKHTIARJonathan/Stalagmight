@@ -57,9 +57,9 @@ fn project() -> Project {
 }
 
 /// Every row of every table the save writes, with its rowid, in rowid order -
-/// the table as stored. The one value the save takes from the clock rather
-/// than the project, `sections.created_at` (stamped with the save's time), is
-/// masked: a timestamp, not an order.
+/// the table as stored. Nothing is masked: `sections.created_at` is stamped by
+/// a section's first save and read back on open, so a save of an opened
+/// project writes the value it read (#576 NF-W14BE-1).
 fn rows(path: &Path) -> Vec<String> {
     let conn = Connection::open(path).unwrap();
     let mut out = Vec::new();
@@ -67,20 +67,10 @@ fn rows(path: &Path) -> Vec<String> {
         let mut stmt = conn
             .prepare(&format!("SELECT rowid, * FROM {table} ORDER BY rowid"))
             .unwrap();
-        let names: Vec<String> = stmt.column_names().iter().map(|&n| n.to_owned()).collect();
+        let columns = stmt.column_count();
         let mut query = stmt.query([]).unwrap();
         while let Some(row) = query.next().unwrap() {
-            let values: Vec<Value> = names
-                .iter()
-                .enumerate()
-                .map(|(c, name)| {
-                    if *table == "sections" && name == "created_at" {
-                        Value::Text("<save time>".to_owned())
-                    } else {
-                        row.get(c).unwrap()
-                    }
-                })
-                .collect();
+            let values: Vec<Value> = (0..columns).map(|c| row.get(c).unwrap()).collect();
             out.push(format!("{table} {values:?}"));
         }
     }

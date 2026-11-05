@@ -361,7 +361,7 @@ impl Database {
 
             let mut stmt = self.conn.prepare(&format!(
                 "SELECT id, name, surveyor, date, color, direction, {quality_expr}, {parity_expr}, \
-                 {gauge_expr}, {gauge_nb_expr}, {azimuth_exprs} FROM sections ORDER BY id"
+                 {gauge_expr}, {gauge_nb_expr}, {azimuth_exprs}, created_at FROM sections ORDER BY id"
             ))?;
 
             let mut section_rows = Vec::new();
@@ -381,6 +381,15 @@ impl Database {
                     row.get::<_, Option<f64>>(11)?,
                     row.get::<_, Option<String>>(12)?,
                     row.get::<_, Option<i32>>(13)?,
+                    // [#576 NF-W14BE-1] The creation stamp, in every schema
+                    // since the first. Only TEXT this app can parse counts: a
+                    // value of another type or shape loads as "never stamped"
+                    // (the next save stamps it) rather than failing the open.
+                    row.get_ref(14)?
+                        .as_str()
+                        .ok()
+                        .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
+                        .map(|stamp| stamp.with_timezone(&Utc)),
                 ))
             })?;
             for row in rows {
@@ -406,6 +415,7 @@ impl Database {
                     azimuth_correction,
                     azimuth_source,
                     azimuth_epoch_year,
+                    created_at,
                 ) = section_row;
                 let date = date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
                 let direction = direction_str
@@ -461,6 +471,7 @@ impl Database {
                 section.gauge_shot_uuid = gauge_shot_uuid;
                 section.gauge_neighbour_uuid = gauge_neighbour_uuid;
                 section.azimuth_reference = azimuth_reference;
+                section.created_at = created_at;
                 section_by_id.insert(id, sections.len());
                 // Cannot overflow once ids are bounded above; saturating keeps
                 // the counter rebuild total even if the bound ever moves.

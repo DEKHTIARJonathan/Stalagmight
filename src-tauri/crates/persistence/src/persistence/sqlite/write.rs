@@ -89,7 +89,12 @@ impl Database {
             ],
         )?;
 
-        // Save sections and shots
+        // Save sections and shots. [#576 NF-W14BE-1] `created_at` is the
+        // section's creation time, stamped once: the model carries the value its
+        // first save recorded (read back on open, stamped by the app's save heals
+        // before that first save), and only a section that has none yet - a
+        // writer that skips the heals - takes this save's time.
+        let now = Utc::now();
         for section in &project.sections {
             tx.execute(
                 "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, reverse_parity, gauge_shot_uuid, gauge_neighbour_uuid, azimuth_north, azimuth_correction, azimuth_source, azimuth_epoch_year, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
@@ -117,7 +122,7 @@ impl Database {
                     section
                         .azimuth_reference
                         .and_then(|r| r.source.epoch_year()),
-                    Utc::now().to_rfc3339()
+                    section.created_at.unwrap_or(now).to_rfc3339()
                 ],
             )?;
 

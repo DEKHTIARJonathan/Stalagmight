@@ -794,6 +794,7 @@ use std::sync::{Mutex, OnceLock, PoisonError};
 
 use tempfile::TempDir;
 
+use super::fuzz_crossing_tests::{attributable_to_reload, attributable_to_save};
 use super::AppState;
 use crate::core::undo::history_view::UndoHistoryItem;
 use crate::core::{Command, CommandResult};
@@ -1031,7 +1032,7 @@ pub(super) struct Diff {
     pub(super) actual: String,
 }
 
-const ABSENT: &str = "<absent>";
+pub(super) const ABSENT: &str = "<absent>";
 /// Diffs collected before the walk gives up. Enough to classify and to read.
 const MAX_DIFFS: usize = 60;
 /// The walk collects ONE more than it reports.
@@ -1481,7 +1482,7 @@ impl StaleTargets {
 /// spellings are the same defect seen through a different starting state, and a
 /// classifier that knew only the first silently stopped classifying as soon as
 /// the section already had an offset.
-fn offset_key_of(path: &str) -> Option<(SectionId, Option<usize>)> {
+pub(super) fn offset_key_of(path: &str) -> Option<(SectionId, Option<usize>)> {
     let rest = path.strip_prefix("section_offsets.")?;
     match rest.split_once('[') {
         None => rest.parse().ok().map(|id| (id, None)),
@@ -1534,7 +1535,7 @@ struct ShotTarget {
 /// A prefix-walking version got this wrong for a trailing `#` (`section_offsets.5`
 /// did not match `section_offsets.#`), which silently un-classified finding 2 -
 /// the failure mode a clever matcher invites and a boring one does not.
-fn path_is(diff: &Diff, pattern: &str) -> bool {
+pub(super) fn path_is(diff: &Diff, pattern: &str) -> bool {
     let mut normalized = String::with_capacity(diff.path.len());
     let mut in_digits = false;
     for ch in diff.path.chars() {
@@ -1628,34 +1629,6 @@ fn classify(diff: &Diff, ctx: &MoveCtx) -> Option<&'static str> {
         .iter()
         .find(|classifier| (classifier.matches)(diff, ctx))
         .map(|classifier| classifier.id)
-}
-
-/// Changes a SAVE makes to live state with no undo entry of its own
-/// (`AppState::save_project`), subtracted only from comparisons that cross a
-/// save. Deliberately narrow by direction: an anchor may only be GAINED, a uuid
-/// filled in, an offset entry dropped.
-fn attributable_to_save(diff: &Diff) -> bool {
-    ((path_is(diff, "sections[#].gauge_shot_uuid")
-        || path_is(diff, "sections[#].gauge_neighbour_uuid"))
-        && diff.expected == "null"
-        && diff.actual != "null")
-        || (path_is(diff, "sections[#].shots[#].uuid")
-            && (diff.expected == ABSENT || diff.expected == "null")
-            && diff.actual != ABSENT)
-        || (path_is(diff, "section_offsets.#") && diff.actual == ABSENT)
-}
-
-/// Derived geometry a RELOAD re-solves from scratch: `redrive_offsets_after_load`
-/// ends in an unconditional `resolve_offsets()` ("Zero-trust: never honor a
-/// persisted derivable offset"), so `section_offsets` and the station offsets
-/// derived from them are RECOMPUTED rather than restored.
-fn attributable_to_reload(diff: &Diff) -> bool {
-    // BOTH spellings of an offset difference: the whole key when it is present
-    // on one side only, and the element when it exists on both and the differ
-    // recurses into the pair. The re-solve recomputes the whole map, so the two
-    // are the same fact - and matching only the first left every value change
-    // across a reload reading as unexplained.
-    offset_key_of(&diff.path).is_some() || diff.path.starts_with("station_offsets")
 }
 
 // A block of DIFF SUBTRACTIONS lived here, each stripping one known bug's shape

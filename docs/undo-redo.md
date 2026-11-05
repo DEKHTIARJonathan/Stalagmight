@@ -140,8 +140,9 @@ still loads and falls back to the previous behaviour - no schema bump.
 
 `save_project` mutates the live project with **no undo entry of its own** - it
 mints missing shot uuids, re-mints within-section duplicates, captures the
-least-squares gauge pair, drops orphan `section_offsets` and sanitizes non-finite
-values (`apply_save_heals`, `core/state/project_io.rs`). A `ProjectSnapshotPair`
+least-squares gauge pair, stamps a never-saved section's creation time, drops
+orphan `section_offsets` and sanitizes non-finite values (`apply_save_heals`,
+`core/state/project_io.rs`). A `ProjectSnapshotPair`
 captured BEFORE that save holds the pre-heal project in both halves, so restoring
 one used to revert the heal as a side effect of an unrelated undo - which made
 the project at a given undo depth depend on the ROUTE taken to reach it.
@@ -149,7 +150,7 @@ the project at a given undo depth depend on the ROUTE taken to reach it.
 `restore_snapshot_into` - the single place a restored project enters the live
 slot - therefore ends in `reapply_heals_after_restore`, which re-applies the
 heals that are pure fill-in (missing uuids, and a carry-forward of the gauge
-anchors the live project already holds). The heals that DROP or REWRITE state
+anchors and section creation times the live project already holds). The heals that DROP or REWRITE state
 (the duplicate-uuid re-mint, the orphan-offset retain, the non-finite sanitize)
 are deliberately not re-applied: an undo has to be an exact inverse, and undoing
 a Repair has to restore the very state that Repair healed. The per-heal argument
