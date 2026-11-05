@@ -11,7 +11,7 @@ stale or hand-edited; regenerate after any dependency change.
 
 <!-- lockfile-hashes
 Cargo.lock=cfd2ee7af87c00bb20ef701d1958056c8701da9072cd87b75c41907a4b3f2985
-pnpm-lock.yaml=1fdc055d3c894ac76e59e13a7a253e52f910c3b414a2984baf155990a05c15e8
+pnpm-lock.yaml=b9113c679eadacc3f468b84b9002aa3c543fd20f43f46dacfd45ef6e91990ab6
 gen-third-party-licenses.mjs=ebb68f24487c3cca49f60ec5c0867729efa22850dc3fc7d5780e163eb707c1f1
 about.toml=a6751e567d54df96b63b6e14089a1763d14443b34a815b085dbb45a57436d455
 bundle-body=d405ac5c55375148fbdcdb804ec0276e810c9993e1f12da18d897e21a843f84a
