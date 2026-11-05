@@ -8554,4 +8554,16 @@ fn bundled_sqlite_omits_virtual_table_modules_and_extension_loading() {
         options.iter().any(|o| o == "OMIT_LOAD_EXTENSION"),
         "extension loading compiled in: {options:?}"
     );
+    // And by behaviour, not only by name: none of the modules can be used.
+    for module in ["fts3", "fts4", "fts5", "rtree", "dbstat"] {
+        let err = conn
+            .execute_batch(&format!(
+                "CREATE VIRTUAL TABLE t_{module} USING {module}(x)"
+            ))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("no such module"),
+            "{module}: {err}"
+        );
+    }
 }
