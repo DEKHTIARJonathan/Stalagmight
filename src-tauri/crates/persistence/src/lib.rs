@@ -4,9 +4,9 @@
 //! Internal to the Stalagmight app. It is published to crates.io only because
 //! `stalx-reader` depends on it, and makes no semver promise: depend on
 //! `stalx-reader`, whose API is the supported one.
-//! The root
-//! re-exports [`persistence`], [`cache`] and [`tilemap_cache`] under their old
-//! `crate::…` paths, so dependents keep compiling unchanged.
+//!
+//! The root crate re-exports [`persistence`], [`cache`] and [`tilemap_cache`]
+//! under their old `crate::…` paths, so dependents keep compiling unchanged.
 
 pub mod cache;
 pub mod persistence;
