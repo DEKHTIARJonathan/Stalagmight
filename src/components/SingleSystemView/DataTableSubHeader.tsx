@@ -8,6 +8,7 @@ import { useAnchoredFixedMenu } from '../../hooks/useAnchoredFixedMenu';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { ChevronDownIcon } from '../common/icons';
+import { useGrayscalePaint } from '../../hooks/useGrayscalePaint';
 
 /** Pill-as-trigger picker used in the sub-header: the whole pill (rendered via
  *  {@link renderTrigger}, which embeds the chevron) toggles the dropdown.
@@ -33,6 +34,7 @@ export function SubHeaderPickerMenu({
   renderTrigger: (state: { open: boolean }) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  const paint = useGrayscalePaint();
   const triggerRef = useRef<HTMLButtonElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const toggle = () => setOpen((v) => !v);
@@ -113,7 +115,7 @@ export function SubHeaderPickerMenu({
               {o.dot !== undefined && (
                 <span
                   className="h-2 w-2 shrink-0 rounded-full"
-                  style={{ backgroundColor: o.dot }}
+                  style={{ backgroundColor: paint(o.dot) }}
                   aria-hidden="true"
                 />
               )}

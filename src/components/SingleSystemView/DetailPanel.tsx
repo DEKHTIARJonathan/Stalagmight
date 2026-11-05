@@ -26,6 +26,7 @@ import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 import { SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
 import { warningTextAfterOwnShot } from './warningShotRef';
+import { useGrayscalePaint } from '../../hooks/useGrayscalePaint';
 
 /** Center/locate glyph (small ring + edge spokes), filled so it stays crisp
  *  under the page-zoom UI scale. Shared by the per-entity "center on map"
@@ -1185,6 +1186,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerZoomToSection: s.triggerZoomToSection, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation }))
   );
   const precision = useDecimalPrecision();
+  const paint = useGrayscalePaint();
 
   // Calculate section statistics
   const sectionLength = section.shots.reduce((sum, s) => sum + s.length, 0);
@@ -1275,7 +1277,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
               <div className="flex items-center gap-2">
                 <span
                   className="w-4 h-4 rounded"
-                  style={{ backgroundColor: section.color }}
+                  style={{ backgroundColor: paint(section.color) }}
                 />
                 <span>{section.color}</span>
               </div>

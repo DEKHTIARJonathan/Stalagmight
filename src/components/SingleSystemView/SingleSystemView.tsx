@@ -42,6 +42,8 @@ import { setSource, withTrackingSuppressed, withPersistSuppressed, setProjectAct
 import { useTranslation } from 'react-i18next';
 import { formatFixed, formatNumber } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { useGrayscaleTokens } from '../../hooks/useGrayscaleTokens';
+import { GrayscalePaintContext } from '../../hooks/useGrayscalePaint';
 
 // #50: after double-click collapses the side panels, the map grows. fitToSection
 // reads the container size at call time, so re-fit once the layout has reflowed
@@ -618,30 +620,35 @@ export default function SingleSystemView() {
   // Details subtrees: the Docks receive the SAME element reference and React bails
   // out of the child render. Dimmed during placement (dim wraps content only,
   // never the tab/handle).
-  // NOTE: the `grayscale` filter establishes a containing block for
-  // `position:fixed` descendants - which would re-trap the data-table sub-header
-  // dropdowns inside the Dock's clip box (the exact #162 bug). It is safe ONLY
-  // because the same wrapper is `pointer-events-none`, so those triggers can't be
-  // clicked to open a dropdown while the filter is live. Keep `grayscale` paired
-  // with `pointer-events-none` (or move the dim to an overlay) - don't dim the
-  // panel subtree with a filter while leaving it interactive.
-  const dimCls = placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : '';
+  // The gray is drawn without a CSS filter (#576 NF-W13FE-CSS-D1, #605: on WebKitGTK a
+  // filtered subtree repaints through a GPU promise image, which a memory release can
+  // deadlock): every colour token re-declared gray on the wrapper (useGrayscaleTokens, as
+  // the toolbar does), and the colours that are no token (a section's own colour on its
+  // swatch) gray themselves through GrayscalePaintContext / useGrayscalePaint. The text
+  // colour the panels inherit was resolved on App's root from the coloured token, so the
+  // wrapper re-declares it (`text-text-primary`) to resolve against the gray one. The wrapper
+  // stays `pointer-events-none`: the dimmed panels are not interactive while placing.
+  const dimCls = placementModeActive ? 'pointer-events-none select-none opacity-45 text-text-primary' : '';
+  const dimStyle = useGrayscaleTokens(placementModeActive);
   const sections = project?.sections;
   const sectionsContent = useMemo(
     () =>
       sections ? (
-        <div className={`h-full ${dimCls}`}>
-          <ErrorBoundary panelName="Sections">
-            <SectionsPanel sections={sections} />
-          </ErrorBoundary>
+        <div className={`h-full ${dimCls}`} style={dimStyle}>
+          <GrayscalePaintContext.Provider value={placementModeActive}>
+            <ErrorBoundary panelName="Sections">
+              <SectionsPanel sections={sections} />
+            </ErrorBoundary>
+          </GrayscalePaintContext.Provider>
         </div>
       ) : null,
-    [sections, dimCls],
+    [sections, dimCls, dimStyle, placementModeActive],
   );
   const detailContent = useMemo(
     () => (
       <div
         className={`h-full ${dimCls}`}
+        style={dimStyle}
         // A programmatic hover-mode reveal (jump-to-warning) arms a timed auto-close
         // that otherwise only cancels on pointer-enter. Treat keyboard focus / typing
         // inside the panel as engagement too (onRegionEnter clears the grace), so a
@@ -649,18 +656,20 @@ export default function SingleSystemView() {
         onFocusCapture={revealDetail}
         onKeyDownCapture={revealDetail}
       >
-        <ErrorBoundary panelName="Details">
-          {appMode === 'plan' ? (
-            <GasPlanPanel />
-          ) : appMode === 'export' ? (
-            <ExportPanel />
-          ) : (
-            <DetailPanel />
-          )}
-        </ErrorBoundary>
+        <GrayscalePaintContext.Provider value={placementModeActive}>
+          <ErrorBoundary panelName="Details">
+            {appMode === 'plan' ? (
+              <GasPlanPanel />
+            ) : appMode === 'export' ? (
+              <ExportPanel />
+            ) : (
+              <DetailPanel />
+            )}
+          </ErrorBoundary>
+        </GrayscalePaintContext.Provider>
       </div>
     ),
-    [dimCls, revealDetail, appMode],
+    [dimCls, dimStyle, placementModeActive, revealDetail, appMode],
   );
   const dataInner = useMemo(
     () =>
@@ -673,13 +682,15 @@ export default function SingleSystemView() {
           </div>
         ) : null
       ) : sections ? (
-        <div className={`h-full ${dimCls}`}>
-          <ErrorBoundary panelName="Data Table">
-            <DataTable sections={sections} />
-          </ErrorBoundary>
+        <div className={`h-full ${dimCls}`} style={dimStyle}>
+          <GrayscalePaintContext.Provider value={placementModeActive}>
+            <ErrorBoundary panelName="Data Table">
+              <DataTable sections={sections} />
+            </ErrorBoundary>
+          </GrayscalePaintContext.Provider>
         </div>
       ) : null,
-    [appMode, gasOriginChosen, sections, dimCls],
+    [appMode, gasOriginChosen, sections, dimCls, dimStyle, placementModeActive],
   );
 
   // Memoized on `t` (changes only on locale switch): each Dock's `label` and

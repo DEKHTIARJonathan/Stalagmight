@@ -9,6 +9,10 @@ import type { GasReachField } from '../../types/ipc.generated';
 import type { Station, StationRef } from '../../types/project';
 import { metersToMapCoords } from '../../utils/coordinates';
 import { stageDropReached } from '../../utils/gasReach';
+import { markerHalo } from './gasMarkerShadow';
+
+/** The stage-drop triangle ("drop the stage here"), in the marker's 24-unit viewBox. */
+const DROP_PATH = 'M3 6h18L12 20z';
 
 /**
  * The Plan workspace's staged-strategy ▼ drop markers (#233) plus the distinct final-turn marker
@@ -157,14 +161,15 @@ export function useGasPlanDropMarkers({
         : overReserve
           ? t('gasPanel.map.dropOverReserveTooltip', { n: i + 1 })
           : t('gasPanel.map.dropDraggableTooltip', { n: i + 1 });
-      el.style.cssText =
-        'line-height:0;cursor:grab;touch-action:none;filter:drop-shadow(0 0 1px rgba(0,0,0,0.6));';
+      // The halo is drawn, not filtered (#605): see gasMarkerShadow.ts.
+      el.style.cssText = 'line-height:0;cursor:grab;touch-action:none;';
       // Downward triangle = "drop the stage here"; red when the diver dragged it over-reserve (#246),
       // grey when the dive never gets there (#576 RV8c-2-D3).
       const fill = !reached ? '#8a8f98' : overReserve ? '#d64545' : '#e08a1e';
       el.innerHTML =
-        '<svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">' +
-        `<path d="M3 6h18L12 20z" fill="${fill}" stroke="#ffffff" stroke-width="1.5" ` +
+        '<svg width="20" height="20" viewBox="0 0 24 24" overflow="visible" aria-hidden="true">' +
+        markerHalo(DROP_PATH, 20, 1.5) +
+        `<path d="${DROP_PATH}" fill="${fill}" stroke="#ffffff" stroke-width="1.5" ` +
         'stroke-linejoin="round"/></svg>';
       const marker = new maplibregl.Marker({ element: el, draggable: true })
         .setLngLat(lngLat)

@@ -20,6 +20,7 @@ import { ExternalLinkIcon, PlusIcon } from '../common/icons';
 import { setSource } from '../../utils/telemetry';
 import { useLongPress } from '../../hooks';
 import { DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from './layoutConstants';
+import { useGrayscalePaint } from '../../hooks/useGrayscalePaint';
 
 interface SectionsPanelProps {
   sections: Section[];
@@ -726,6 +727,7 @@ const SectionRow = memo(function SectionRow({
   optionRefs,
 }: SectionRowProps) {
   const { t } = useTranslation();
+  const paint = useGrayscalePaint();
   const stats = useMemo(
     () => calculateSectionStats(section, meta, surveyData),
     [section, meta, surveyData],
@@ -782,7 +784,7 @@ const SectionRow = memo(function SectionRow({
       >
         <span
           className="w-3 h-3 rounded-full flex-shrink-0"
-          style={{ backgroundColor: section.color }}
+          style={{ backgroundColor: paint(section.color) }}
         />
         <span className="flex-1 truncate">
           {section.name ?? t('sections.defaultName', { id: section.id })}

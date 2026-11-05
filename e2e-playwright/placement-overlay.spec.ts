@@ -2,6 +2,7 @@ import { test, expect } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
+  seedProjectWithSections,
   waitForMapReady,
   waitForNoDialogs,
 } from './helpers/app';
@@ -14,6 +15,63 @@ import type { E2EWindow } from './helpers/e2eWindow';
 type PlacementWindow = E2EWindow & { __PLACEMENT_CANCELLED__?: boolean; __keydownAdds__: number };
 
 test.describe('Placement Overlay Coverage', () => {
+  // #576 NF-W13FE-CSS-D1 (#605): the docked panels dim to gray WITHOUT a CSS filter (on
+  // WebKitGTK a filtered subtree repaints through a GPU promise image that a memory release
+  // can deadlock). Their tokens, inherited text and section swatches are gray instead.
+  test('dims the docked panels to gray with no CSS filter', async ({ page }) => {
+    await setupMockedPage(page);
+    await createProject(page, 'Placement Dim');
+    await seedProjectWithSections(page, [
+      { name: 'SectionA', direction: 'in', color: '#ff6b6b', shots: [{ azimuth_in: 45, azimuth_out: 45, length: 10, depth_in: 0, depth_out: -1 }] },
+    ]);
+    await waitForMapReady(page);
+    await waitForNoDialogs(page);
+    await page.locator('[data-testid^="section-item-"]').first().click();
+    await expect(page.getByTestId('detail-panel')).toContainText('SectionA');
+    await page.evaluate(() => {
+      (window as E2EWindow).__E2E_TEST__.uiStore.getState().startPlacementMode(
+        {
+          name: 'Placement Section', surveyor: null, date: null, color: '#ff6b6b', direction: 'in', quality: 1,
+          shots: [{
+            azimuth_in: 45, azimuth_out: 225, length: 12, depth_in: -2, depth_out: -3, pitch_in: null, pitch_out: null,
+            left: null, right: null, up: null, down: null, comment: null, kind: 'Normal', marker_index: null, temperature: null,
+          }],
+        },
+        0,
+        undefined,
+        () => {},
+      );
+    });
+
+    const paint = await page.evaluate(() => {
+      const gray = (c: string) => {
+        const m = /^rgba?\(([\d.]+)[, ]+([\d.]+)[, ]+([\d.]+)/.exec(c.trim());
+        return m !== null && Math.abs(Number(m[1]) - Number(m[2])) < 1 && Math.abs(Number(m[2]) - Number(m[3])) < 1;
+      };
+      return ['sections-panel', 'detail-panel'].map((id) => {
+        const panel = document.querySelector(`[data-testid="${id}"]`) as HTMLElement;
+        const filters: string[] = [];
+        for (let el: HTMLElement | null = panel; el; el = el.parentElement) {
+          if (getComputedStyle(el).filter !== 'none') filters.push(el.className.toString());
+        }
+        const swatch = panel.querySelector('[style*="background-color"]') as HTMLElement | null;
+        return {
+          id,
+          filters,
+          accentGray: gray(getComputedStyle(panel).getPropertyValue('--cc-accent')),
+          textGray: gray(getComputedStyle(panel).color),
+          swatchGray: swatch ? gray(getComputedStyle(swatch).backgroundColor) : 'no swatch',
+          dimmed: getComputedStyle(panel.parentElement as HTMLElement).opacity,
+        };
+      });
+    });
+    console.log(`[dim] ${JSON.stringify(paint)}`);
+    for (const p of paint) {
+      expect(p.filters, `${p.id}: no filter on the panel or its ancestors`).toEqual([]);
+      expect(p, p.id).toMatchObject({ accentGray: true, textGray: true, swatchGray: true, dimmed: '0.45' });
+    }
+  });
+
   test('shows placement preview and cancels on Escape @smoke', async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Placement Overlay');

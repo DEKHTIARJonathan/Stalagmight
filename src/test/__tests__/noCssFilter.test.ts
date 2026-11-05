@@ -7,16 +7,18 @@
  * compositor re-takes its own Skia GL-context lock while fulfilling it), and with the app's
  * memory budget a large page gets one every second. The grid marquee's tiled gradient was the
  * hot source (HFI-9, `marqueeNoTiledGradient.test.ts`); the filters were the rest: the map
- * zoom icons' `brightness(0) invert(1)` on dark themes and the toolbar's placement-mode
- * `grayscale`, now drawn without one (white icons; desaturated colour tokens,
- * `src/utils/grayscaleTokens.ts`).
+ * zoom icons' `brightness(0) invert(1)` on dark themes, the toolbar's and the docked panels'
+ * placement-mode `grayscale`, and the Plan-mode gas markers' drop shadow, all now drawn
+ * without one (white icons; desaturated colour tokens, `src/utils/grayscaleTokens.ts`, and
+ * `src/hooks/useGrayscalePaint.ts` for the non-token colours; halo strokes,
+ * `src/components/Map/gasMarkerShadow.ts`).
  *
  * What this inventories, in `src/` outside tests: `filter` / `backdrop-filter` declarations
  * in CSS; Tailwind filter utilities (`grayscale`, `blur-*`, `drop-shadow-*`, `backdrop-*`,
  * ...) in class strings; `filter:` in inline CSS text; `filter` / `backdropFilter` style
- * properties; `.style.filter`; SVG `<filter>` and `filter=`. Each one left has an ALLOWED
- * entry with its reason. jsdom cannot paint, so the sources are read as text (CSS) and as a
- * TypeScript syntax tree (TS/TSX).
+ * properties; `.style.filter`; SVG `<filter>` and `filter=`. None may be left (#576
+ * NF-W13FE-CSS-D1): there is no allowlist. jsdom cannot paint, so the sources are read as
+ * text (CSS) and as a TypeScript syntax tree (TS/TSX).
  */
 import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
@@ -129,30 +131,6 @@ function tsFilterUses(root = SRC): string[] {
  * The filters that stay, each with its reason. Matched on `file` and a substring of the
  * finding (line numbers drift); every entry must still match something.
  */
-const ALLOWED: Array<{ file: string; match: string; reason: string }> = [
-  {
-    file: 'src/components/SingleSystemView/SingleSystemView.tsx',
-    match: 'class grayscale',
-    reason:
-      'the placement-mode dim of the docked panels: unlike the toolbar, the panels paint colours ' +
-      'that are not custom properties (section colour swatches, the data-table section dot, the ' +
-      "profile chart's colours read in JS), so desaturated tokens would leave those in colour; " +
-      'open question in #576 NF-W12DMP-1',
-  },
-  {
-    file: 'src/components/Map/useGasPlanDropMarkers.ts',
-    match: 'inline CSS filter: line-height:0;cursor:grab;touch-action:none;filter:drop-shadow',
-    reason: "Plan-mode gas drop markers' drop shadow: the gas frontend's, outside this package; reported for #605",
-  },
-  {
-    file: 'src/components/Map/useGasPlanPointMarkers.ts',
-    match: 'inline CSS filter: cursor:pointer;line-height:0;filter:drop-shadow',
-    reason: "Plan-mode gas point markers' drop shadow: the gas frontend's, outside this package; reported for #605",
-  },
-];
-
-const allowedFor = (finding: string) => ALLOWED.find((a) => finding.startsWith(`${a.file}:`) && finding.includes(a.match));
-
 describe('no CSS filter in the app styles (#576 NF-W12DMP-1, #605)', () => {
   const css = cssFilterDeclarations();
   const tsUses = tsFilterUses();
@@ -165,23 +143,16 @@ describe('no CSS filter in the app styles (#576 NF-W12DMP-1, #605)', () => {
     ).toEqual([]);
   });
 
-  it('RULE ts-filter: every filter in the TS/TSX sources is one ALLOWED, with its reason', () => {
-    const unexplained = tsUses.filter((f) => !allowedFor(f));
+  it('RULE ts-filter: no filter in the TS/TSX sources', () => {
     expect(
-      unexplained,
+      tsUses,
       'RULE ts-filter: a CSS filter (Tailwind utility, inline CSS, style property, SVG filter) repaints through ' +
-        'a GPU promise image on WebKitGTK (#605); draw it without one (src/utils/grayscaleTokens.ts for a gray dim) ' +
-        'or add an ALLOWED entry with the reason it must stay',
+        'a GPU promise image on WebKitGTK (#605); draw it without one (src/utils/grayscaleTokens.ts and ' +
+        'src/hooks/useGrayscalePaint.ts for a gray dim, src/components/Map/gasMarkerShadow.ts for a soft shadow)',
     ).toEqual([]);
   });
 
-  it('has no stale ALLOWED entry', () => {
-    const stale = ALLOWED.filter((a) => !tsUses.some((f) => f.startsWith(`${a.file}:`) && f.includes(a.match)));
-    expect(stale.map((a) => `${a.file}: ${a.match}`)).toEqual([]);
-  });
-
-  it('is not vacuous: it sees the uses it allows, and would see the ones it replaced', () => {
-    expect(tsUses.some((f) => f.includes('SingleSystemView.tsx') && f.includes('class grayscale'))).toBe(true);
+  it('is not vacuous: it would see the uses it replaced', () => {
     const probe = (snippet: string) => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'filter-probe-'));
       try {
@@ -194,6 +165,9 @@ describe('no CSS filter in the app styles (#576 NF-W12DMP-1, #605)', () => {
     // The toolbar's old dim, in a template class list and in a `*Cls` binding.
     expect(probe("export const A = (on: boolean) => <div className={`flex ${on ? 'opacity-45 grayscale' : ''}`} />;\n")).toHaveLength(1);
     expect(probe("export const dimCls = 'grayscale';\n")).toHaveLength(1);
+    // The docked panels' old dim and the gas markers' old shadow (#576 NF-W13FE-CSS-D1).
+    expect(probe("const on = true;\nexport const dimCls = on ? 'pointer-events-none select-none opacity-45 grayscale' : '';\n")).toHaveLength(1);
+    expect(probe("export const mark = (el: HTMLElement) => { el.style.cssText = 'line-height:0;filter:drop-shadow(0 0 1px rgba(0,0,0,0.6));'; };\n")).toHaveLength(1);
     expect(probe("export const s = { filter: 'blur(2px)' };\nexport const t = 'a:b;filter:invert(1)';\n")).toHaveLength(2);
     // Not filters: an event name, a MapLibre layer filter, Array#filter.
     expect(probe("window.addEventListener('blur', () => {});\nexport const l = { filter: ['==', 'a', 1] };\nexport const f = [1].filter(Boolean);\n")).toEqual([]);
