@@ -607,10 +607,13 @@ fn inspect(
         let sql: Option<String> = row.get(3).map_err(sql_err)?;
         let refused = if name.to_ascii_lowercase().starts_with("pragma_") {
             Some("an object named like a SQLite pragma")
-        } else if kind == "view" || kind == "trigger" {
-            Some("a view or trigger")
-        } else if kind == "table"
-            && (rootpage == Some(0) || declares_virtual_table(sql.as_deref().unwrap_or("")))
+        } else if kind != "table" && kind != "index" {
+            // Exact, lowercase: SQLite matches `type` case-insensitively when it
+            // loads the schema, so a 'View' or 'TABLE' row is still a view or a
+            // table to it while slipping past every `type = '...'` filter below.
+            Some("a view, trigger or schema object of an unexpected type")
+        } else if rootpage == Some(0)
+            || (kind == "table" && declares_virtual_table(sql.as_deref().unwrap_or("")))
         {
             Some("a virtual table")
         } else {

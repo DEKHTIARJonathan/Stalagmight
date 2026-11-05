@@ -950,3 +950,29 @@ fn a_column_named_like_virtual_is_not_a_virtual_table() {
 
     read_file(&path).unwrap();
 }
+
+#[test]
+fn schema_rows_retyped_in_another_case_are_refused() {
+    // SQLite loads `type` case-insensitively; an exact-match check would let a
+    // 'View', a 'TABLE'-typed virtual table, or a 'Table'-typed table whose
+    // generated column every `type = 'table'` filter then misses, straight through.
+    for sql in [
+        "CREATE VIEW v AS SELECT 42;
+         PRAGMA writable_schema = ON;
+         UPDATE sqlite_master SET type = 'View' WHERE name = 'v';",
+        "CREATE VIRTUAL TABLE vt USING fts5(x);
+         PRAGMA writable_schema = ON;
+         UPDATE sqlite_master SET type = 'TABLE' WHERE name = 'vt';",
+        "CREATE TABLE g (a, b AS (zeroblob(1000)));
+         PRAGMA writable_schema = ON;
+         UPDATE sqlite_master SET type = 'Table' WHERE name = 'g';",
+        "CREATE TABLE PRAGMA_INDEX_LIST (seq);",
+    ] {
+        let err = read_file(&with_schema_sql(sql)).unwrap_err();
+        assert_eq!(
+            invalid_kind(&err),
+            Some(InvalidKind::RefusedSchemaObject),
+            "{sql}: {err}"
+        );
+    }
+}
