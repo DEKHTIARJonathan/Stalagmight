@@ -8,6 +8,7 @@ import { setWorkerUrl } from 'maplibre-gl';
 import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import App from './App';
 import './i18n';
+import 'maplibre-gl/dist/maplibre-gl.css';
 import './index.css';
 import { installConsoleCapture } from './utils/consoleCapture';
 import { installGlobalErrorCapture } from './utils/globalErrorCapture';
