@@ -315,6 +315,28 @@ started while the user's own Stalagmight was open forwarded its launch into the
 user's app. Unsetting `DBUS_SESSION_BUS_ADDRESS` did not help - zbus falls back
 to `$XDG_RUNTIME_DIR/bus`.
 
+**No accessibility bridge on the virtual display (#576 NF-W12H-2).** A session
+on a throwaway Xvfb starts its app with `NO_AT_BRIDGE=1` (beside the X11 pin;
+`headlessAppEnv` in `e2e/lib/display.ts`); a `headed: true` session keeps the
+desktop's environment. The cause is outside this repo: GTK and WebKit ask the
+session bus for the AT-SPI accessibility bus, the bus activates
+`at-spi-bus-launcher`, and the launcher serves that bus from
+`$XDG_RUNTIME_DIR/at-spi/bus` - one path per runtime directory, whichever
+session bus started it. Several runs started together, each under its own
+`dbus-run-session` (one runtime directory), each start a launcher that binds that
+same path; an app whose launcher lost the race logs `Couldn't register with
+accessibility bus: Did not receive a reply`, never finishes starting, and its
+harness dies in `waitForAppReady` with WebDriver `invalid session id`. Measured
+on the Linux harness host, six sessions released at once per round: 11 of 30
+died that way over five rounds; with the bridge off, 0 of 42; with a private
+`XDG_RUNTIME_DIR` per `dbus-run-session`, 0 of 18. Nothing the harness drives
+goes through AT-SPI. An older checkout, or anything else that launches a GTK app
+beside harness runs, can take the second workaround:
+`XDG_RUNTIME_DIR=$(mktemp -d) dbus-run-session -- ...` (`mktemp -d` makes the
+directory 0700, as a runtime directory must be). The cells of one
+`agent:fuzz-matrix` run share its bus and so its one launcher; the race is
+between separate `dbus-run-session`s.
+
 **Cost.** One-time cold release build: about 3.5 minutes wall clock on the
 self-hosted runner (`Finished release profile [optimized] in 2m 08s` plus the
 vite leg and the link), against roughly 4.5 minutes for debug. Both profiles are
@@ -1496,5 +1518,11 @@ hand-rolled runner of many `agent:scenario` processes can export it the same way
 - Orphan `tauri-driver` / `WebKitWebDriver` after an unclean server kill -> the
   next `app_start` scoped-reaps PIDs recorded in each session's `pids` file
   (verified by `/proc/<pid>/comm`); it never broadly `pkill`s.
+- `invalid session id` in `waitForAppReady` while other runs start, and the
+  session's `tauri-driver.log` stops after the config load with `Couldn't
+  register with accessibility bus` -> the AT-SPI launcher race between
+  `dbus-run-session`s (see "No accessibility bridge on the virtual display"
+  above). The harness avoids it for a headless app; for anything else, give each
+  `dbus-run-session` its own `XDG_RUNTIME_DIR`.
 - Second instance -> set `STALAGMIGHT_AGENT_BASE_PORT` to move the driver/native
   ports (default 4544 / 5544, probed +1 up to +10).
