@@ -728,3 +728,13 @@ export function redactCorpusText(text: string): string {
   for (const entry of REDACTED_NAMES) out = out.split(entry.find).join(entry.say);
   return out;
 }
+
+/**
+ * An error's message as it may be recorded or returned: `err.message` (or the
+ * thrown value as text) through `redactCorpusText`. An import that fails quotes
+ * the corpus copy it was handed, and the MCP server records a tool's error in the
+ * session's action log, which the repro report prints (#576 RV12-F1).
+ */
+export function publishableErrorMessage(err: unknown): string {
+  return redactCorpusText(err instanceof Error ? err.message : String(err));
+}

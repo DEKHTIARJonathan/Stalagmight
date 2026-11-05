@@ -31,12 +31,19 @@ if (!fs.existsSync(jsonlPath)) {
 
 const home = process.env.HOME || '';
 const absSession = path.resolve(sessionDir);
+// A fuzz run copies each private corpus entry it draws into
+// `fuzz-files/corpus-<n>/` and keeps its real names there; the app quotes that
+// path when an import fails. The harness redacts what it records (#576 RV12-F1),
+// but this script only sees the log and cannot know the names, so it also folds
+// everything after such a directory - up to the closing quote of the quoted path
+// a log line carries, else to the end of the line - to a placeholder.
+const CORPUS_COPY = /(fuzz-files[\\/]corpus-\d+)[\\/][^"'`\n]*/g;
 const scrub = (s) => {
   if (typeof s !== 'string') return s;
   let out = s;
   if (absSession) out = out.split(absSession).join('<artifacts>');
   if (home) out = out.split(home).join('$HOME');
-  return out;
+  return out.replace(CORPUS_COPY, '$1/<corpus file>');
 };
 
 /**

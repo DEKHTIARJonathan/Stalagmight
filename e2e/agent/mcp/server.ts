@@ -17,7 +17,7 @@ import { LogCursor, type LogLevel } from '../lib/logs';
 import { invokeInApp, evalInApp, capJson } from '../lib/page';
 import { newOracleState, runSweep, type OracleState } from '../lib/oracles';
 import { listScenarios, runScenario } from '../scenarios';
-import { redactCorpusText } from '../lib/fixtureCorpus';
+import { publishableErrorMessage, redactCorpusText } from '../lib/fixtureCorpus';
 import { DEFAULT_FIXTURE, materializeFixture } from '../lib/fixtures';
 import {
   waitForAppReady,
@@ -64,8 +64,9 @@ function redactedJson(value: unknown): unknown {
     return '(withheld: redacting a corpus name broke the encoding)';
   }
 }
+/** Every error the server records or returns, worded publishably (#576 RV12-F1). */
 function asMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return publishableErrorMessage(err);
 }
 
 interface RunOutput<T> {
@@ -1167,7 +1168,7 @@ define(
         findings: redactedJson(sweep.findings),
       });
     } catch (err) {
-      return errorResult(redactCorpusText(asMessage(err)));
+      return errorResult(asMessage(err));
     }
   },
 );

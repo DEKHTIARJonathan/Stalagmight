@@ -20,6 +20,7 @@ import type { Browser } from 'webdriverio';
 import { invokeInApp, evalInApp } from './page';
 import { readStore } from './stores';
 import { isErrorLine, isWarnLine } from './logs';
+import { redactCorpusText } from './fixtureCorpus';
 
 export type Severity = 'fatal' | 'error' | 'warning';
 
@@ -356,7 +357,12 @@ export async function runSweep(
   state: OracleState,
   opts: { full?: boolean; recorder?: RecorderLike | undefined } = {},
 ): Promise<SweepResult> {
-  const findings = opts.full ? await fullSweep(target, state) : await cheapSweep(target, state);
+  // Redacted at the SOURCE (#576 RV12-F1): a `log-error` finding's message is the
+  // backend's log line, and an import that failed logs the corpus copy it was
+  // handed. Everything below - the dedupe key, the action log event,
+  // finding.json, the caller's printout - only ever sees the publishable text.
+  const swept = opts.full ? await fullSweep(target, state) : await cheapSweep(target, state);
+  const findings = swept.map(publishableFinding);
   const newFindings: Finding[] = [];
   for (const f of findings) {
     const key = `${f.kind}:${f.message}`;
@@ -373,6 +379,24 @@ export async function runSweep(
     if (!worst || SEVERITY_RANK[f.severity] > SEVERITY_RANK[worst]) worst = f.severity;
   }
   return { findings, newFindings, worst };
+}
+
+/**
+ * `finding` with every corpus name the process has copied replaced by its tag
+ * (`fixtureCorpus.redactCorpusText`), in the message and in the detail. A detail
+ * whose redaction breaks its JSON (a name ending in a backslash splits an escape)
+ * is withheld rather than recorded half-redacted.
+ */
+export function publishableFinding(finding: Finding): Finding {
+  const out: Finding = { ...finding, message: redactCorpusText(finding.message) };
+  if (finding.detail !== undefined) {
+    try {
+      out.detail = JSON.parse(redactCorpusText(JSON.stringify(finding.detail))) as unknown;
+    } catch {
+      out.detail = '(withheld: redacting a corpus name broke the encoding)';
+    }
+  }
+  return out;
 }
 
 async function captureFinding(
