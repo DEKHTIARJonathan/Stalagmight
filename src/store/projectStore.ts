@@ -1263,6 +1263,23 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // Project operations - uses consolidated create_project_full command
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) =>
     runProjectSwitch(async () => {
+    // [#576 RV15-2] A create that names its file or folder is judged by the
+    // write-path policy before anything else (the backend does the same, RV14-1):
+    // one it refuses must not stop the open or load in progress, nor show the
+    // loading state, on its way to the error. The create checks again.
+    if (options?.savePath !== undefined || options?.saveDirectory !== undefined) {
+      try {
+        await invokeIpc(
+          'check_create_target',
+          { name, saveDirectory: options.saveDirectory, savePath: options.savePath },
+          { purpose: 'check the new project file is somewhere the app may write', fields: { name } }
+        );
+      } catch (e) {
+        clearProjectActionSource();
+        return emptyCommandResult(false, getErrorMessage(e));
+      }
+    }
+
     // ALWAYS cancel first - NO isLoading guard
     await get().cancelLoading();
 

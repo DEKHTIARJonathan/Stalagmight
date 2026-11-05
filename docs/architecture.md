@@ -204,7 +204,11 @@ path, with one exception: the overwrite prompts' existence probe
 same three rules), so it tells a page script nothing about the app's own or a
 system folder; a failed probe is an error, and the prompt then asks as if the file
 were there (#576 E10-D1), while a refused one (`WRITE_PATH_REFUSED`) goes straight
-to the write, which refuses it with the reason (#576 HFI-2-D2).
+to the write, which refuses it with the reason (#576 HFI-2-D2). The New Project
+pre-check (`check_create_target`, #576 RV15-2) is the create's own check run
+alone - same file, same answer, nothing created - so the webview can refuse a
+create before it cancels a load in progress or shows its loading state; it tells
+a page script nothing `create_project_full` would not.
 
 ## Data Model
 

@@ -424,6 +424,7 @@ pub fn run() {
             commands::project::load_project_full,
             commands::project::load_project_full_binary,
             commands::project::create_project_full,
+            commands::project::check_create_target,
             commands::project::cancel_loading,
             // SpeleoDB commands (read-only spike, #183)
             commands::speleodb::speleodb_login,

@@ -690,3 +690,49 @@ pub async fn create_project_full(
         }
     }
 }
+
+/// [#576 RV15-2] Whether [`create_project_full`] would refuse this create's
+/// target, asked before the webview cancels a load in progress or shows its
+/// loading state: the write-path check that create runs, on the same file (the
+/// name resolved, any `_N` rename made), with the same error, and nothing
+/// created, cancelled or emitted. The create checks again, so this is a
+/// courtesy to the user, not the guard.
+#[tauri::command]
+pub async fn check_create_target<R: Runtime>(
+    app: tauri::AppHandle<R>,
+    name: String,
+    save_directory: Option<PathBuf>,
+    save_path: Option<PathBuf>,
+) -> Result<(), CommandError> {
+    pool::run(app, move |state| {
+        check_create_target_checked(
+            state,
+            &check_project_target,
+            &name,
+            save_directory,
+            save_path,
+        )
+        .map_err(CommandError::from)
+    })
+    .await
+}
+
+/// The body of [`check_create_target`], with the write-path check passed in (the
+/// testable core). A create that names neither a file nor a folder is not
+/// checked, as [`create_project_full_checked`] does not check it.
+#[expect(
+    clippy::result_large_err,
+    reason = "the LoadError every create path returns; boxing it is a repo-wide change"
+)]
+pub(crate) fn check_create_target_checked(
+    state: &AppState,
+    check: &dyn Fn(&std::path::Path) -> Result<(), String>,
+    name: &str,
+    save_directory: Option<PathBuf>,
+    save_path: Option<PathBuf>,
+) -> Result<(), LoadError> {
+    if save_path.is_none() && save_directory.is_none() {
+        return Ok(());
+    }
+    state.check_create_target(check, name, save_directory.as_ref(), save_path)
+}

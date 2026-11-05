@@ -411,12 +411,7 @@ impl AppState {
         // name does not resolve) leaves both as they were.
         //
         // Resolve database path from explicit save path or from project name + optional save directory.
-        let mut db_path = if let Some(path) = save_path {
-            crate::persistence::with_stalx_extension(path)
-        } else {
-            self.resolve_project_path(&name, save_directory.as_ref())
-                .map_err(|e| LoadError::new(crate::models::CommandErrorCode::Io, e))?
-        };
+        let mut db_path = self.requested_create_path(&name, save_directory.as_ref(), save_path)?;
 
         // Avoid collisions by selecting the next available path instead of overwriting.
         let available_db_path = Self::next_available_project_path(&db_path);
@@ -717,6 +712,55 @@ impl AppState {
             defer_initial_save,
         )
     }
+
+    /// The file a create asks for, before any `_N` rename: `save_path` with the
+    /// project extension, else `name` resolved in `save_directory` (or the default
+    /// folder). A name that does not resolve is an `Io` refusal.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the LoadError every create path returns; boxing it is a repo-wide change"
+    )]
+    fn requested_create_path(
+        &self,
+        name: &str,
+        save_directory: Option<&PathBuf>,
+        save_path: Option<PathBuf>,
+    ) -> Result<PathBuf, crate::core::loading::LoadError> {
+        match save_path {
+            Some(path) => Ok(crate::persistence::with_stalx_extension(path)),
+            None => self
+                .resolve_project_path(name, save_directory)
+                .map_err(|e| {
+                    crate::core::loading::LoadError::new(crate::models::CommandErrorCode::Io, e)
+                }),
+        }
+    }
+
+    /// [#576 RV15-2] The write-path check [`Self::do_create_project_full_checked`]
+    /// would run, alone: `check_target` on the file that create would open (the
+    /// name resolved, any `_N` rename made), with the error that create would
+    /// return. Nothing is created, cancelled or emitted, so the webview can ask
+    /// before it stops a load in progress or shows its loading state for a create
+    /// that will be refused. The create checks again (the disk may change between
+    /// the two), so this is a courtesy, not the guard.
+    ///
+    /// Only for a create that names `save_directory` or `save_path`: the default
+    /// location is not checked, and resolving it would create the default folder.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the LoadError every create path returns; boxing it is a repo-wide change"
+    )]
+    pub fn check_create_target(
+        &self,
+        check_target: &dyn Fn(&std::path::Path) -> Result<(), String>,
+        name: &str,
+        save_directory: Option<&PathBuf>,
+        save_path: Option<PathBuf>,
+    ) -> Result<(), crate::core::loading::LoadError> {
+        let requested = self.requested_create_path(name, save_directory, save_path)?;
+        check_target(&Self::next_available_project_path(&requested))
+            .map_err(crate::core::loading::LoadError::internal)
+    }
 }
 
 #[cfg(test)]
@@ -1008,6 +1052,82 @@ mod tests {
         assert!(
             std::fs::read_dir(dir.path()).unwrap().next().is_none(),
             "a refused create makes nothing"
+        );
+    }
+
+    /// [#576 RV15-2] The pre-check the webview runs before it touches its loading
+    /// state judges the file the create would open - the name resolved and any
+    /// `_N` rename made - and answers what the create would, touching nothing.
+    #[test]
+    fn check_create_target_judges_the_file_the_create_would_open() {
+        let dir = TempDir::new().unwrap();
+        // The folder's `Cave.stalx` is taken, so a create there opens `Cave_1`.
+        std::fs::write(dir.path().join("Cave.stalx"), b"taken").unwrap();
+        struct Silent;
+        impl crate::core::events::EventSink for Silent {
+            fn emit(&self, _event: &str, _payload: serde_json::Value) {}
+
+            fn with_app_state(&self, _f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
+                false
+            }
+        }
+        let state = AppState::new().unwrap();
+        // The create needs a sink to reach its check; the pre-check needs none.
+        state.set_event_sink(Arc::new(Silent));
+        let in_flight = state.start_new_load();
+        let checked = std::cell::RefCell::new(Vec::new());
+        let refuse = |path: &std::path::Path| {
+            checked.borrow_mut().push(path.to_path_buf());
+            Err("Refused to write here".to_string())
+        };
+
+        let named_folder = state
+            .check_create_target(&refuse, "Cave", Some(&dir.path().to_path_buf()), None)
+            .map_err(|e| (e.code, e.message));
+        let named_file = state
+            .check_create_target(&refuse, "Ignored", None, Some(dir.path().join("Cave")))
+            .map_err(|e| e.message);
+        let refused_create = state
+            .do_create_project_full_checked(
+                &refuse,
+                "Cave".into(),
+                None,
+                Some(dir.path().to_path_buf()),
+                None,
+                false,
+            )
+            .map(|_| ())
+            .map_err(|e| (e.code, e.message));
+
+        assert_eq!(named_folder, refused_create, "the create's own refusal");
+        assert_eq!(named_file, Err("Refused to write here".to_string()));
+        assert_eq!(
+            *checked.borrow(),
+            [
+                dir.path().join("Cave_1.stalx"),
+                dir.path().join("Cave_1.stalx"),
+                dir.path().join("Cave_1.stalx"),
+            ],
+            "the pre-checks and the create judge the same file"
+        );
+        assert!(
+            !in_flight.load(std::sync::atomic::Ordering::SeqCst),
+            "a pre-check cancels no load"
+        );
+        let accept = |_: &std::path::Path| Ok(());
+        assert!(state
+            .check_create_target(&accept, "Cave", Some(&dir.path().join("new")), None)
+            .is_ok());
+        assert!(
+            !dir.path().join("new").exists() && !dir.path().join("Cave_1.stalx").exists(),
+            "a pre-check makes nothing"
+        );
+        // A name that does not resolve is refused as the create refuses it.
+        assert_eq!(
+            state
+                .check_create_target(&accept, "  ", Some(&dir.path().to_path_buf()), None)
+                .map_err(|e| e.code),
+            Err(crate::models::CommandErrorCode::Io)
         );
     }
 }

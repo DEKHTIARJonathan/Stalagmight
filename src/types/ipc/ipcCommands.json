@@ -88,6 +88,42 @@
       }
     },
     {
+      "name": "check_create_target",
+      "module": "project",
+      "async": true,
+      "args": [
+        {
+          "name": "name",
+          "key": "name",
+          "rust": "String",
+          "ts": "string",
+          "optional": false
+        },
+        {
+          "name": "save_directory",
+          "key": "saveDirectory",
+          "rust": "Option<PathBuf>",
+          "ts": "string | null",
+          "optional": true
+        },
+        {
+          "name": "save_path",
+          "key": "savePath",
+          "rust": "Option<PathBuf>",
+          "ts": "string | null",
+          "optional": true
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
       "name": "check_duplicate_import",
       "module": "import",
       "async": true,

@@ -122,6 +122,7 @@ export interface IpcCommands {
   can_redo: { args: Record<string, never>; result: boolean; error: CommandError };
   can_undo: { args: Record<string, never>; result: boolean; error: CommandError };
   cancel_loading: { args: Record<string, never>; result: null; error: CommandError };
+  check_create_target: { args: { name: string; saveDirectory?: string | null; savePath?: string | null }; result: null; error: CommandError };
   check_duplicate_import: { args: { hash: string }; result: boolean; error: CommandError };
   check_merge_connectivity: { args: { stationA: StationRef; stationB: StationRef }; result: ConnectivityResult; error: CommandError };
   check_project_integrity: { args: Record<string, never>; result: IntegrityCheckResult; error: CommandError };
@@ -310,6 +311,7 @@ export const IPC_COMMAND_NAMES = [
   "can_redo",
   "can_undo",
   "cancel_loading",
+  "check_create_target",
   "check_duplicate_import",
   "check_merge_connectivity",
   "check_project_integrity",

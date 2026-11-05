@@ -471,7 +471,7 @@ fn a_link_to_a_file_of_another_type_is_refused_naming_its_target() {
 #[cfg(unix)]
 #[test]
 fn a_create_checks_the_file_it_opens_and_never_opens_a_link() {
-    use crate::commands::project::create_project_full_checked;
+    use crate::commands::project::{check_create_target_checked, create_project_full_checked};
     use std::cell::RefCell;
     use std::os::unix::fs::symlink;
 
@@ -504,6 +504,12 @@ fn a_create_checks_the_file_it_opens_and_never_opens_a_link() {
                       file: Option<PathBuf>,
                       want: Result<PathBuf, &str>,
                       want_checked: PathBuf| {
+        // [#576 RV15-2] The webview's pre-check first, on the same disk: the same
+        // verdict on the same file, and nothing made.
+        checked.borrow_mut().clear();
+        let pre = check_create_target_checked(&state, &policy, "Cave", dir.clone(), file.clone())
+            .map_err(|e| e.message);
+        let pre_ran_on = checked.borrow().clone();
         checked.borrow_mut().clear();
         let created =
             create_project_full_checked(&state, &policy, "Cave".into(), None, dir, file, false)
@@ -524,8 +530,20 @@ fn a_create_checks_the_file_it_opens_and_never_opens_a_link() {
             (Err(why), Err(want)) => why.contains(want),
             _ => false,
         };
-        if !as_wanted || ran_on != [want_checked] || !in_app.is_empty() {
+        let pre_agrees = match (&pre, &created) {
+            (Ok(()), Ok(_)) => true,
+            (Err(said), Err(why)) => said == why,
+            _ => false,
+        };
+        println!(
+            "RV15-2 {what}: pre-check {pre:?} on {:?}",
+            pre_ran_on.iter().map(|p| shown(p)).collect::<Vec<_>>()
+        );
+        if !as_wanted || ran_on != [want_checked.clone()] || !in_app.is_empty() {
             wrong.push(what.to_owned());
+        }
+        if !pre_agrees || pre_ran_on != [want_checked] {
+            wrong.push(format!("pre-check: {what}"));
         }
     };
 
@@ -583,6 +601,26 @@ fn a_create_checks_the_file_it_opens_and_never_opens_a_link() {
 
     println!("RV13-1 not as they should be: {wrong:?}");
     assert!(wrong.is_empty(), "{wrong:?}");
+}
+
+/// [#576 RV15-2] The create checks nothing at the default location, so neither
+/// does its pre-check (which would otherwise resolve, and so create, the default
+/// folder).
+#[test]
+fn the_pre_check_of_a_create_at_the_default_location_checks_nothing() {
+    use crate::commands::project::check_create_target_checked;
+
+    let state = stalagmight_core::test_fixtures::state_with_null_sink();
+    let ran = std::cell::Cell::new(false);
+    let refuse = |_: &Path| {
+        ran.set(true);
+        Err("refused".to_string())
+    };
+    assert!(check_create_target_checked(&state, &refuse, "Cave", None, None).is_ok());
+    assert!(
+        !ran.get(),
+        "the default location is not the webview's to name"
+    );
 }
 
 /// [#576 RV13-2] Linux, on the disk, unchanged by the Windows rules: a chain of
