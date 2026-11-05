@@ -922,3 +922,31 @@ fn station_positions_are_bit_exact_with_the_apps_own_open() {
     assert_eq!(actual.len(), expected.len());
     assert_eq!(actual, expected);
 }
+
+#[test]
+fn objects_that_shadow_sqlite_pragmas_are_refused() {
+    // A file's own `pragma_table_list` would be read in place of SQLite's and
+    // could report the view below as an ordinary table.
+    for sql in [
+        "CREATE TABLE pragma_table_list (schema, name, type, ncol, wr, strict);
+         CREATE VIEW sneaky AS SELECT 1;",
+        "CREATE VIEW PRAGMA_TABLE_XINFO AS SELECT 0 AS hidden;",
+        "CREATE TABLE pragma_index_list (seq, name, \"unique\", origin, partial);",
+    ] {
+        let err = read_file(&with_schema_sql(sql)).unwrap_err();
+        assert_eq!(
+            invalid_kind(&err),
+            Some(InvalidKind::RefusedSchemaObject),
+            "{sql}: {err}"
+        );
+    }
+}
+
+#[test]
+fn a_column_named_like_virtual_is_not_a_virtual_table() {
+    // Pre-v4 shots tables had an `is_virtual` column; a substring match on
+    // "virtual" would refuse every such file.
+    let path = with_schema_sql("ALTER TABLE shots ADD COLUMN is_virtual INTEGER;");
+
+    read_file(&path).unwrap();
+}
