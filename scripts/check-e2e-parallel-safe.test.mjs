@@ -115,6 +115,19 @@ const DESTRUCTURE_EVASIONS = {
     "import * as nodeFs from 'node:fs/promises';\nconst P = fs.promises;\nawait nodeFs.open(f, 'w');\nawait P.link(a, b);",
     [['disk-write', 3], ['disk-write', 4]],
   ],
+  // #576 RV12-F4: a short name destructured from an alias of fs / fs.promises.
+  "disk-write fires on a destructure from an fs alias: const p = fs.promises; const { open } = p": [
+    "const p = fs.promises;\nconst { open } = p;\nawait open(f, 'w');",
+    [['disk-write', 2]],
+  ],
+  'disk-write fires on a renamed destructure from an fs alias: const { chmod: c } = p': [
+    "import * as nodeFs from 'node:fs/promises';\nconst { chmod: c, readFile } = nodeFs;\nawait c(f, 0o600);",
+    [['disk-write', 2]],
+  ],
+  'disk-write fires on a destructure from an alias of an alias': [
+    "const { promises: p } = fs;\nconst q = p;\nconst {\n  link,\n} = q;",
+    [['disk-write', 4]],
+  ],
 };
 for (const [name, [text, expected]] of Object.entries(DESTRUCTURE_EVASIONS)) {
   test(name, () => {
@@ -126,6 +139,9 @@ for (const [name, [text, expected]] of Object.entries(DESTRUCTURE_EVASIONS)) {
 test('an fs alias does NOT make a read or another object\'s open fire', () => {
   assert.deepEqual(ids("const { promises: p } = fs;\nawait p.readFile(f);\nawait p.stat(f);\nwindow.open(url);\nawait menu.open();"), []);
   assert.deepEqual(ids("const { ['readFile']: r } = fs.promises;\nconst { ['open']: o } = menu;"), []);
+  // #576 RV12-F4: a read destructured from an alias, and a destructure from a member of
+  // an alias that is not fs (`p.menu`), stay quiet.
+  assert.deepEqual(ids('const p = fs.promises;\nconst { readFile, stat } = p;\nconst { open } = p.menu;\nconst { open: o } = pp;'), []);
 });
 
 test('a nested destructure does NOT fire on a read name, a non-fs source, or an object literal', () => {

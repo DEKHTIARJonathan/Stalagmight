@@ -124,19 +124,38 @@ function fsImportLines(code) {
     }
   }
   const aliases = new Set();
-  FS_DESTRUCTURE_RE.lastIndex = 0;
-  while ((m = FS_DESTRUCTURE_RE.exec(text)) !== null) {
-    const open = openingBrace(text, m.index);
-    if (open < 0) continue;
-    const pattern = text.slice(open, m.index + 1);
-    for (const key of pattern.matchAll(PATTERN_KEY_RE)) {
-      if (FS_IMPORTED.has(keyName(key))) lines.add(lineOf(open + key.index + key[0].length));
+  // A destructure `{...} = <source>`: its fs names are disk-write lines, and a renamed
+  // `promises` key is one more alias.
+  const destructures = (re) => {
+    re.lastIndex = 0;
+    while ((m = re.exec(text)) !== null) {
+      const open = openingBrace(text, m.index);
+      if (open < 0) continue;
+      const pattern = text.slice(open, m.index + 1);
+      for (const key of pattern.matchAll(PATTERN_KEY_RE)) {
+        if (FS_IMPORTED.has(keyName(key))) lines.add(lineOf(open + key.index + key[0].length));
+      }
+      for (const alias of pattern.matchAll(PROMISES_ALIAS_RE)) aliases.add(alias[1]);
     }
-    for (const alias of pattern.matchAll(PROMISES_ALIAS_RE)) aliases.add(alias[1]);
-  }
+  };
+  destructures(FS_DESTRUCTURE_RE);
   for (const re of [FS_NAMESPACE_IMPORT_RE, FS_ALIAS_RE]) {
     re.lastIndex = 0;
     while ((m = re.exec(text)) !== null) aliases.add(m[1]);
+  }
+  // [#576 RV12-F4] An alias is an fs source like `fs` itself: a destructure from it
+  // (`const p = fs.promises; const { open } = p`) binds fs names, and `const q = p`
+  // is one more alias. Walked to a fixpoint, each alias once.
+  const walked = new Set();
+  for (let next = [...aliases]; next.length > 0; next = [...aliases].filter((a) => !walked.has(a))) {
+    for (const alias of next) {
+      walked.add(alias);
+      const id = alias.replace(/\$/g, '\\$');
+      const source = `${id}(?![\\w$.])`;
+      destructures(new RegExp(String.raw`\}\s*(?::[^=;{}]+)?=(?![=>])\s*` + source, 'g'));
+      const rebind = new RegExp(String.raw`\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;{}]+)?=(?![=>])\s*` + source, 'g');
+      while ((m = rebind.exec(text)) !== null) aliases.add(m[1]);
+    }
   }
   for (const alias of aliases) {
     const id = alias.replace(/\$/g, '\\$');
