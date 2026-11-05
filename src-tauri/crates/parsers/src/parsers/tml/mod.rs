@@ -1990,7 +1990,8 @@ fn convert_shots_to_shot_data(
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::panic,
-    clippy::print_stderr
+    clippy::print_stderr,
+    clippy::print_stdout
 )]
 mod tests {
     use super::linearize::{MAX_TRIP_CUTS_PER_FILE, MAX_TRIP_CUTS_PER_RUN};
