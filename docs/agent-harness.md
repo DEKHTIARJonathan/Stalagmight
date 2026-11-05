@@ -923,8 +923,10 @@ It covers all five importable families - mNemo `.dmp`, Ariane `.tml`/`.tmlu`,
 Compass `.dat`/`.mak`, Walls `.srv`/`.wpj` and GPX - which is not just five
 parsers but two flow SHAPES: `.dmp` is the only additive import, and every other
 extension routes to `new-project-for-import` whether or not a project is open
-(with one open it goes through `import-as-new-project`, whose confirm closes the
-project first). So a non-DMP flow always creates a project in the middle of
+(with one open it goes through `import-as-new-project`: its confirm parses the
+file while the project stays open, and only after a good parse closes it -
+asking first, with the parsed file carried, when it has unsaved changes or a
+SpeleoDB hand-back). So a non-DMP flow always creates a project in the middle of
 itself. `STALAGMIGHT_FUZZ_IMPORT_FORMAT` is a csv of family names that restricts
 the draw, and it is the natural third matrix axis.
 
@@ -1526,3 +1528,10 @@ hand-rolled runner of many `agent:scenario` processes can export it the same way
   `dbus-run-session` its own `XDG_RUNTIME_DIR`.
 - Second instance -> set `STALAGMIGHT_AGENT_BASE_PORT` to move the driver/native
   ports (default 4544 / 5544, probed +1 up to +10).
+- `app_start` never gets a WebDriver session (the backend starts, `POST /session`
+  times out) -> check the environment for `WEBKIT_INSPECTOR_HTTP_SERVER` or
+  `JSC_useJITDump`. tauri-driver and the app inherit the harness server's
+  environment, and with either one set the session does not attach; the same
+  run without the variable does. Unset both for harness runs. To profile the
+  frontend over the WebKit remote inspector, launch the app binary directly
+  and drive it over the inspector instead of through the harness.
