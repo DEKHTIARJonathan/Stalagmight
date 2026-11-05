@@ -53,7 +53,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use stalagmight_models::ClassifyScope;
-use stalagmight_persistence::persistence::{Database, SCHEMA_VERSION};
+use stalagmight_persistence::persistence::{declares_virtual_table, Database, SCHEMA_VERSION};
 
 pub use survey::{
     CorrectionSource, Direction, LoopClosure, North, Section, Shot, ShotKind, StationComment,
@@ -477,7 +477,7 @@ fn check_row_counts(conn: &rusqlite::Connection, limits: CountLimits) -> Result<
     ] {
         let exists: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM pragma_table_list WHERE schema = 'main' AND name = ?1",
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
                 [table],
                 |row| row.get(0),
             )
@@ -588,24 +588,46 @@ fn inspect(
     conn.execute_batch("PRAGMA mmap_size = 0; PRAGMA cell_size_check = ON;")
         .map_err(sql_err)?;
 
-    // Decided by what SQLite PARSED, not by the stored `sql` text: SQLite accepts
-    // `CREATE/**/VIRTUAL TABLE` and other spellings a text match would miss.
-    // `pragma_table_list` reports each object's parsed type without connecting it.
-    let refused: i64 = conn
-        .query_row(
-            "SELECT (SELECT COUNT(*) FROM pragma_table_list \
-                     WHERE type IN ('view', 'virtual', 'shadow')) \
-                  + (SELECT COUNT(*) FROM sqlite_master WHERE type = 'trigger')",
-            [],
-            |row| row.get(0),
-        )
+    // One pass over `sqlite_master`, which a file cannot shadow (`sqlite_` names
+    // are reserved) and whose reading connects nothing. It refuses, first, any
+    // object named `pragma_*`: a file's own table or view of that name would be
+    // read in place of SQLite's table-valued pragmas, by the checks below and by
+    // the app's load path, and could hide anything. Then views, triggers and
+    // virtual tables (rootpage 0, or SQL opening with the CREATE VIRTUAL
+    // keywords), so no later pragma is ever pointed at one: preparing a virtual
+    // table runs its module's connect code over the file's arguments.
+    let mut objects = conn
+        .prepare("SELECT type, name, rootpage, sql FROM sqlite_master")
         .map_err(sql_err)?;
-    if refused > 0 {
-        return Err(ReadError::invalid(
-            InvalidKind::RefusedSchemaObject,
-            format!("the file defines {refused} view(s), trigger(s) or virtual table(s)"),
-        ));
+    let mut rows = objects.query([]).map_err(sql_err)?;
+    while let Some(row) = rows.next().map_err(sql_err)? {
+        let kind: String = row.get(0).map_err(sql_err)?;
+        let name: String = row.get(1).map_err(sql_err)?;
+        let rootpage: Option<i64> = row.get(2).map_err(sql_err)?;
+        let sql: Option<String> = row.get(3).map_err(sql_err)?;
+        let refused = if name.to_ascii_lowercase().starts_with("pragma_") {
+            Some("an object named like a SQLite pragma")
+        } else if kind != "table" && kind != "index" {
+            // Exact, lowercase: SQLite matches `type` case-insensitively when it
+            // loads the schema, so a 'View' or 'TABLE' row is still a view or a
+            // table to it while slipping past every `type = '...'` filter below.
+            Some("a view, trigger or schema object of an unexpected type")
+        } else if rootpage == Some(0)
+            || (kind == "table" && declares_virtual_table(sql.as_deref().unwrap_or("")))
+        {
+            Some("a virtual table")
+        } else {
+            None
+        };
+        if let Some(what) = refused {
+            return Err(ReadError::invalid(
+                InvalidKind::RefusedSchemaObject,
+                format!("the file defines {what}"),
+            ));
+        }
     }
+    drop(rows);
+    drop(objects);
     // A generated column evaluates file-chosen expressions on every read, and
     // built-ins such as zeroblob stay allowed with trusted_schema off.
     let generated: i64 = conn
