@@ -18,6 +18,8 @@ import SurveyLayer from '../SurveyLayer';
 import { AUX_IDS } from '../surveyLayer/auxiliaryLayers';
 import type { SurveyGeometryIndex } from '../surveyLayer/geometryIndex';
 import { makeFakeSurveyMap, type FakeSurveyMap } from './surveyLayerFakeMap';
+import type { CustomDimState } from '../surveyLayer/customRender/controller';
+import { BEYOND_GAS_RANGE } from '../../../utils/gasReach';
 
 let fake: FakeSurveyMap;
 let layer: SurveyLayer;
@@ -119,5 +121,26 @@ describe('a gas route cleared while the context is lost (#576 RV4-FE-SL3)', () =
 
     console.log('[SL3] gas-route features after clear-during-loss + restore:', featureCount());
     expect(featureCount()).toBe(0);
+  });
+});
+
+describe('gas reach turned off while the context is lost (#576 NF-W13FE-1)', () => {
+  it('the restore applies the gas dim the setter could not, so no later unchanged call has to', () => {
+    const beyond = new Map([[7, BEYOND_GAS_RANGE]]);
+    const controller = (layer as unknown as { customRender: { setDimming: (s: CustomDimState) => void } }).customRender;
+    const setDimming = vi.spyOn(controller, 'setDimming');
+    layer.setGasReach(true, { shots: beyond, stations: beyond, max: 1500 });
+    expect(setDimming.mock.lastCall?.[0].gasDimShotFeatureIds.has(7)).toBe(true);
+
+    loseContext();
+    // Leaving Plan during the loss: the setter stores the state but cannot apply it.
+    layer.setGasReach(false, null);
+    setDimming.mockClear();
+    restoreContext();
+
+    const last = setDimming.mock.lastCall?.[0];
+    console.log('[NF-W13FE-1] gas-dimmed shots after off-during-loss + restore:', last ? last.gasDimShotFeatureIds.size : 'no setDimming');
+    expect(last?.gasDimShotFeatureIds.size).toBe(0);
+    expect(last?.gasDimStationFeatureIds.size).toBe(0);
   });
 });

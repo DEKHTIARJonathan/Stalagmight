@@ -417,6 +417,10 @@ export default class SurveyLayer {
     this.drag.replayAfterContextRestore();
     // Closure dimming is a paint property the lost window could not write.
     this.updateClosureOpacity();
+    // So is the gas dim a setGasReach during the loss stored but could not apply (it
+    // bails without a style), and an unchanged later call no longer re-applies it
+    // (#576 NF-W13FE-1).
+    this.syncCustomDimming();
     // So are the rest of the stock layers' style state: the restored style is the
     // one serialized at the loss, and the setters below skipped their writes
     // while it was gone (#576 NF-MAP-5).
@@ -1231,13 +1235,15 @@ export default class SurveyLayer {
    * Re-rooting just calls this again - no feature rebuild.
    */
   setDistanceGradient(enabled: boolean, state: DistanceFeatureState | null): void {
+    // Unchanged (the off -> off every survey-data change sends): nothing to redraw.
+    if (this.overlays.distanceMode === enabled && this.overlays.distanceState === state) return;
     this.overlays.distanceMode = enabled;
     this.overlays.distanceState = state;
     if (!this.map || !hasLiveStyle(this.map)) return;
     // Interact overlay follows the mode swap; the custom renderer (no feature-state)
     // rebuilds the survey geometry with the new overlay colors.
     this.applyOverlayPaint();
-    this.resyncCustomRenderFromStore();
+    this.resyncOverlayColors();
   }
 
   /**
@@ -1248,13 +1254,15 @@ export default class SurveyLayer {
    * Re-running on an input change just calls this again - no feature rebuild.
    */
   setGasReach(enabled: boolean, state: GasReachFeatureState | null): void {
+    // Unchanged (the off -> off every survey-data change sends): nothing to redraw.
+    if (this.overlays.gasReachMode === enabled && this.overlays.gasReachState === state) return;
     this.overlays.gasReachMode = enabled;
     this.overlays.gasReachState = state;
     if (!this.map || !hasLiveStyle(this.map)) return;
     // Interact overlay follows the mode swap; the custom renderer rebuilds the
     // survey geometry with the new overlay colors.
     this.applyOverlayPaint();
-    this.resyncCustomRenderFromStore();
+    this.resyncOverlayColors();
     // Beyond-gas-range dimming (#395) follows the same mode/state - toggling
     // Plan mode (or a budget change) applies/clears the gas-dim set.
     this.syncCustomDimming();
@@ -2061,6 +2069,18 @@ export default class SurveyLayer {
       precision: this.cachedPrecision,
       commentTint: this.activeTool === 'move_comment',
     });
+  }
+
+  /**
+   * The custom-render rebuild behind an analytical-overlay change (#576 NF-W13FE-1).
+   * A coalesced update() flush still queued rebuilds from the store with the overlay
+   * state as it is when it runs, so an overlay set in the same commit as a survey-data
+   * change (useAnalyticalOverlays' passive effects run before update()'s microtask)
+   * leaves the rebuild to it: one rebuild per change instead of one per setter.
+   */
+  private resyncOverlayColors(): void {
+    if (this.updateScheduled) return;
+    this.resyncCustomRenderFromStore();
   }
 
   /**
