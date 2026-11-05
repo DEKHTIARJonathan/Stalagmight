@@ -121,6 +121,18 @@ pub(crate) fn check_write_path_with(
     target: WriteTarget,
     dirs: &AppDirs,
 ) -> Result<(), String> {
+    check_write_path_under(path, target, dirs, Walk::HOST)
+}
+
+/// [`check_write_path_with`] under given path rules, on a given file system
+/// (#576 RV13-2): another platform's rules, tested on any host against a model of
+/// the disk.
+pub(crate) fn check_write_path_under(
+    path: &Path,
+    target: WriteTarget,
+    dirs: &AppDirs,
+    walk: Walk<'_>,
+) -> Result<(), String> {
     let name = path.file_name().map_or_else(
         || path.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
@@ -155,18 +167,22 @@ pub(crate) fn check_write_path_with(
     }
     // [#576 RV13-5] The name is right and the link at it leads to a file of
     // another type (or a folder): said of the target, not of the name.
-    let lands = resolved(&absolute(path));
-    if !has_expected(&lands) {
-        let to = lands.file_name().map_or_else(
-            || lands.display().to_string(),
-            |n| n.to_string_lossy().into_owned(),
-        );
-        return refuse(format!(
-            "it is a link to {to}, which is not a {} file",
-            expected()
-        ));
+    // A chain of links past what Windows follows has no landing to judge: the
+    // location check below refuses it.
+    if let Some(lands) = resolved(&absolute(path), walk) {
+        if !has_expected(&lands) {
+            let to = lands.file_name().map_or_else(
+                || lands.display().to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            );
+            return refuse(format!(
+                "it is a link to {to}, which is not a {} file",
+                expected()
+            ));
+        }
     }
-    location_refusal(path, matches!(target, WriteTarget::Project), dirs).map_or(Ok(()), refuse)
+    location_refusal(path, matches!(target, WriteTarget::Project), dirs, walk)
+        .map_or(Ok(()), refuse)
 }
 
 /// [#576 RV4-R-M3-OPEN] What a load of `path` may not write, as the message to
@@ -192,7 +208,7 @@ pub(crate) fn load_upgrade_refusal(path: &Path) -> Option<UpgradeRefusal> {
 
 /// [`load_upgrade_refusal`] against given app directories (the testable core).
 pub(crate) fn load_upgrade_refusal_with(path: &Path, dirs: &AppDirs) -> Option<UpgradeRefusal> {
-    let why = location_refusal(path, true, dirs)?;
+    let why = location_refusal(path, true, dirs, Walk::HOST)?;
     let name = path.file_name().map_or_else(
         || path.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
@@ -214,13 +230,17 @@ pub(crate) fn load_upgrade_refusal_with(path: &Path, dirs: &AppDirs) -> Option<U
 
 /// Why `path` is in a place no command may write, or `None`. `project` lets a
 /// project live in the SpeleoDB managed-project cache.
-fn location_refusal(path: &Path, project: bool, dirs: &AppDirs) -> Option<String> {
-    let forms = path_forms(path);
+fn location_refusal(path: &Path, project: bool, dirs: &AppDirs, walk: Walk<'_>) -> Option<String> {
+    // [#576 RV13-2] Past the links Windows follows on one path, where the write
+    // would land cannot be told: refused, not judged by the last link's name.
+    let Some(forms) = path_forms(path, walk) else {
+        return Some("that is reached through more links than Windows follows".to_owned());
+    };
     let inside = |dir: &Path| {
-        let dir_forms = path_forms(dir);
+        let dir_forms = path_forms(dir, walk).unwrap_or_else(|| vec![lexical(&absolute(dir))]);
         forms
             .iter()
-            .any(|p| dir_forms.iter().any(|d| starts_with_dir(p, d)))
+            .any(|p| dir_forms.iter().any(|d| starts_with_dir(p, d, walk.rules)))
     };
     let managed = project && dirs.managed_projects.as_deref().is_some_and(inside);
     if !managed && dirs.internal.iter().any(|d| inside(d)) {
@@ -235,10 +255,10 @@ fn location_refusal(path: &Path, project: bool, dirs: &AppDirs) -> Option<String
 /// The forms of `path` to compare: as given (made absolute) with `.`/`..` folded,
 /// and as a write would reach it on disk ([`resolved`]: links followed), so `/etc`
 /// reached as `/private/etc` or through a link is still recognised. The file
-/// itself need not exist.
-fn path_forms(path: &Path) -> Vec<PathBuf> {
+/// itself need not exist. `None` past the links Windows follows ([`resolved`]).
+fn path_forms(path: &Path, walk: Walk<'_>) -> Option<Vec<PathBuf>> {
     let absolute = absolute(path);
-    vec![lexical(&absolute), resolved(&absolute)]
+    Some(vec![lexical(&absolute), resolved(&absolute, walk)?])
 }
 
 /// `path` made absolute against the working directory, without touching it
@@ -251,10 +271,54 @@ fn absolute(path: &Path) -> PathBuf {
     }
 }
 
-/// How many links that lead nowhere [`resolved`] follows before it stops: the
-/// Linux kernel's own limit for one lookup (`MAXSYMLINKS`). A longer chain - or
-/// a loop - is one no write can follow either.
+/// How many links that lead nowhere [`resolved`] follows before it stops, under
+/// POSIX rules: the Linux kernel's own limit for one lookup (`MAXSYMLINKS`). A
+/// longer chain - or a loop - is one no write can follow either (`ELOOP`, nothing
+/// written), so the walk judges the last link's own name.
 const MAX_DANGLING_LINKS: usize = 40;
+
+/// [#576 RV13-2] The same under Windows rules: the 63 reparse points Windows
+/// follows on one path. Past them the walk refuses rather than judge the last
+/// link's name - where the write would land cannot be told.
+const MAX_DANGLING_LINKS_WINDOWS: usize = 63;
+
+/// What [`resolved`] asks the file system (#576 RV13-2): the disk, or a test's
+/// model of one.
+pub(crate) trait LinkLookup {
+    /// `path` with every link on it followed, when it exists (`canonicalize`).
+    fn canonical(&self, path: &Path) -> Option<PathBuf>;
+    /// What the link at `path` points to, when there is a link there.
+    fn link_target(&self, path: &Path) -> Option<PathBuf>;
+}
+
+/// The disk.
+struct Disk;
+
+impl LinkLookup for Disk {
+    fn canonical(&self, path: &Path) -> Option<PathBuf> {
+        std::fs::canonicalize(path).ok()
+    }
+
+    fn link_target(&self, path: &Path) -> Option<PathBuf> {
+        std::fs::read_link(path).ok()
+    }
+}
+
+/// How [`resolved`] walks a path: under which platform's rules, asking which
+/// file system.
+#[derive(Clone, Copy)]
+pub(crate) struct Walk<'a> {
+    pub(crate) rules: PathRules,
+    pub(crate) disk: &'a dyn LinkLookup,
+}
+
+impl Walk<'static> {
+    /// This platform's rules, on the disk.
+    const HOST: Self = Self {
+        rules: PathRules::HOST,
+        disk: &Disk,
+    };
+}
 
 /// `path` as a write reaches it, component by component: a name that exists is
 /// resolved (`canonicalize`: links followed), a name that does not is kept as
@@ -275,15 +339,42 @@ const MAX_DANGLING_LINKS: usize = 40;
 /// link is followed here too: its target is read and resolved in its place,
 /// relative to the link's folder when it is relative, so the policy judges the
 /// place the write lands.
-fn resolved(path: &Path) -> PathBuf {
+///
+/// [#576 RV13-2] That walk is POSIX's: `..` steps back from the folder a link
+/// led to. Windows folds `..` by name BEFORE it follows any link (Win32 path
+/// normalization, before the path reaches the file system) - so under Windows
+/// rules the path is folded first, and so is a link's target, from the link's
+/// folder: `<u>\j1\..\applink\x` is `<u>\applink\x` whatever `j1` links to. And
+/// Windows follows up to 63 links where Linux follows 40: `None` when a chain of
+/// links leading nowhere runs past that under Windows rules (refused by the
+/// policy); under POSIX rules the walk judges the last link's own name, as no
+/// write gets through such a chain.
+pub(crate) fn resolved(path: &Path, walk: Walk<'_>) -> Option<PathBuf> {
     let mut reached = PathBuf::new();
     let mut links_followed = 0;
-    resolve_onto(&mut reached, path, &mut links_followed);
-    reached
+    let start = if walk.rules.windows {
+        lexical(path)
+    } else {
+        path.to_path_buf()
+    };
+    let complete = resolve_onto(&mut reached, &start, &mut links_followed, walk);
+    (complete || !walk.rules.windows).then_some(reached)
 }
 
-/// [`resolved`]'s walk: `path`'s components resolved onto `reached`.
-fn resolve_onto(reached: &mut PathBuf, path: &Path, links_followed: &mut usize) {
+/// [`resolved`]'s walk: `path`'s components resolved onto `reached`. `false` when
+/// a link was left unfollowed at the cap.
+fn resolve_onto(
+    reached: &mut PathBuf,
+    path: &Path,
+    links_followed: &mut usize,
+    walk: Walk<'_>,
+) -> bool {
+    let cap = if walk.rules.windows {
+        MAX_DANGLING_LINKS_WINDOWS
+    } else {
+        MAX_DANGLING_LINKS
+    };
+    let mut complete = true;
     for component in path.components() {
         match component {
             Component::CurDir => {}
@@ -292,16 +383,24 @@ fn resolve_onto(reached: &mut PathBuf, path: &Path, links_followed: &mut usize) 
             }
             Component::Normal(name) => {
                 reached.push(name);
-                if let Ok(canonical) = std::fs::canonicalize(reached.as_path()) {
+                if let Some(canonical) = walk.disk.canonical(reached) {
                     *reached = canonical;
-                } else if let Ok(target) = std::fs::read_link(reached.as_path()) {
+                } else if let Some(target) = walk.disk.link_target(reached) {
                     // A link that leads nowhere (yet): continue from its target,
                     // which replaces `reached` when absolute and is taken from
                     // the link's folder when relative.
-                    if *links_followed < MAX_DANGLING_LINKS {
+                    if *links_followed < cap {
                         *links_followed += 1;
                         reached.pop();
-                        resolve_onto(reached, &target, links_followed);
+                        complete &= if walk.rules.windows {
+                            let next = lexical(&reached.join(&target));
+                            *reached = PathBuf::new();
+                            resolve_onto(reached, &next, links_followed, walk)
+                        } else {
+                            resolve_onto(reached, &target, links_followed, walk)
+                        };
+                    } else {
+                        complete = false;
                     }
                 }
             }
@@ -310,6 +409,7 @@ fn resolve_onto(reached: &mut PathBuf, path: &Path, links_followed: &mut usize) 
             other => reached.push(other),
         }
     }
+    complete
 }
 
 /// `path` with `.` and `..` folded away, without touching the disk.
@@ -349,13 +449,10 @@ impl PathRules {
     };
 }
 
-/// Whether `path` is `dir` or inside it, under this platform's rules.
-fn starts_with_dir(path: &Path, dir: &Path) -> bool {
-    path_is_within(
-        &path.to_string_lossy(),
-        &dir.to_string_lossy(),
-        PathRules::HOST,
-    )
+/// Whether `path` is `dir` or inside it, under `rules` (this platform's, but for
+/// a test of another's).
+fn starts_with_dir(path: &Path, dir: &Path, rules: PathRules) -> bool {
+    path_is_within(&path.to_string_lossy(), &dir.to_string_lossy(), rules)
 }
 
 /// Whether `path` is `dir` or inside it, compared component by component as text

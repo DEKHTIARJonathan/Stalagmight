@@ -584,3 +584,57 @@ fn a_create_checks_the_file_it_opens_and_never_opens_a_link() {
     println!("RV13-1 not as they should be: {wrong:?}");
     assert!(wrong.is_empty(), "{wrong:?}");
 }
+
+/// [#576 RV13-2] Linux, on the disk, unchanged by the Windows rules: a chain of
+/// 40 links leading nowhere into the app folder is refused (the kernel creates
+/// through 40); a chain of 41 is judged by its last link's own name and allowed -
+/// and no write gets through it: the kernel stops at 40 (`ELOOP`) and nothing is
+/// created.
+#[cfg(target_os = "linux")]
+#[test]
+fn on_linux_a_chain_past_40_links_is_one_no_write_gets_through() {
+    use std::os::unix::fs::symlink;
+
+    let app = TempDir::new().expect("app dir");
+    let user = TempDir::new().expect("user dir");
+    let dirs = AppDirs {
+        internal: vec![app.path().to_path_buf()],
+        managed_projects: None,
+    };
+    for n in [40_usize, 41] {
+        let link = |i: usize| user.path().join(format!("c{n}-{i}.stalx"));
+        let planted = app.path().join(format!("planted-{n}.stalx"));
+        for i in 1..=n {
+            let to = if i == n { planted.clone() } else { link(i + 1) };
+            symlink(&to, link(i)).expect("a link");
+        }
+        let got = verdict(&link(1), WriteTarget::Project, &dirs);
+        let opened = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(link(1));
+        println!(
+            "RV13-2 linux chain of {n}: policy {got}; kernel open(O_CREAT): {:?}; planted \
+             exists: {}",
+            opened
+                .as_ref()
+                .map(|_| ())
+                .map_err(std::io::Error::raw_os_error),
+            planted.exists()
+        );
+        if n == 40 {
+            assert!(got.contains("app's own"), "{got}");
+            assert!(
+                opened.is_ok() && planted.exists(),
+                "the kernel creates through 40"
+            );
+        } else {
+            assert_eq!(got, "allowed");
+            assert!(
+                opened.is_err() && !planted.exists(),
+                "ELOOP: nothing written"
+            );
+        }
+    }
+}
