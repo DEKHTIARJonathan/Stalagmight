@@ -97,13 +97,14 @@ impl Database {
         if !path.exists() {
             anyhow::bail!("File does not exist");
         }
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
-            .context("Failed to open database - file may not be a valid SQLite database")?;
+        let mut conn =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+                .context("Failed to open database - file may not be a valid SQLite database")?;
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
         conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
-        conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, max_value_bytes);
+        conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, max_value_bytes)?;
         let expires = std::time::Instant::now() + deadline;
-        conn.progress_handler(1_000, Some(move || std::time::Instant::now() > expires));
+        conn.progress_handler(1_000, Some(move || std::time::Instant::now() > expires))?;
         // SQLite's guidance for untrusted files: no memory-mapping (a crafted
         // page is read through the checked path), validate cell sizes as pages
         // are read, and keep temporary sort data on disk, not in RAM.

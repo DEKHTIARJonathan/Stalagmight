@@ -572,7 +572,7 @@ fn inspect(
     use rusqlite::limits::Limit;
 
     let sql_err = sql_invalid;
-    let conn =
+    let mut conn =
         rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(sql_err)?;
     // Same hardening as the load connection: this one parses the file's schema too.
@@ -580,9 +580,11 @@ fn inspect(
         .map_err(sql_err)?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)
         .map_err(sql_err)?;
-    conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, max_value_bytes);
+    conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, max_value_bytes)
+        .map_err(sql_err)?;
     let expires = Instant::now() + deadline;
-    conn.progress_handler(1_000, Some(move || Instant::now() > expires));
+    conn.progress_handler(1_000, Some(move || Instant::now() > expires))
+        .map_err(sql_err)?;
     conn.execute_batch("PRAGMA mmap_size = 0; PRAGMA cell_size_check = ON;")
         .map_err(sql_err)?;
 
