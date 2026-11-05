@@ -377,6 +377,7 @@
     "src-tauri/crates/models/src/project/gas/route_sweep_tests.rs": 149,
     "src-tauri/crates/models/src/project/gas/tests.rs": 4540,
     "src-tauri/crates/models/src/project/lookup_parity_tests.rs": 1048,
+    "src-tauri/crates/models/src/project/lsq_topology_tests.rs": 202,
     "src-tauri/crates/models/src/project/mock_narrowing_tests.rs": 351,
     "src-tauri/crates/models/src/project/reverse_swap_tests.rs": 32,
     "src-tauri/crates/models/src/project/station_ref_collision_tests.rs": 117,
