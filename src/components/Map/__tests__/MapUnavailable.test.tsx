@@ -21,13 +21,17 @@ const h = vi.hoisted(() => {
   return { GPUInitializationError, FakeMap, state };
 });
 
-vi.mock('maplibre-gl', () => ({
+vi.mock('maplibre-gl', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('maplibre-gl')>()),
   Map: h.FakeMap,
   GPUInitializationError: h.GPUInitializationError,
 }));
 
 import '../../../i18n';
 import SectionPreview from '../../Dialogs/SectionPreview';
+import GlobalViewMap from '../../GlobalView/GlobalViewMap';
+import MapCanvas from '../MapCanvas';
+import type { ProjectMetadata } from '../../../types/project';
 import { createMap } from '../createMap';
 
 describe('map without WebGL2', () => {
@@ -36,12 +40,47 @@ describe('map without WebGL2', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
 
-  it('shows the WebGL2 message in place of the map', () => {
-    render(<SectionPreview />);
-    const status = screen.getByTestId('section-preview-webgl2-unavailable');
+  function expectMessage(testId: string): void {
+    const status = screen.getByTestId(testId);
     expect(status).toHaveTextContent(en.map.webgl2Unavailable.title);
     expect(status).toHaveTextContent(en.map.webgl2Unavailable.body);
+  }
+
+  it('shows the WebGL2 message in place of the section preview', () => {
+    render(<SectionPreview />);
+    expectMessage('section-preview-webgl2-unavailable');
     expect(screen.getByTestId('section-preview')).toBeInTheDocument();
+  });
+
+  it('shows the WebGL2 message in place of the survey map', () => {
+    render(<MapCanvas />);
+    expectMessage('map-webgl2-unavailable');
+    expect(screen.getByTestId('map-canvas')).toBeInTheDocument();
+  });
+
+  it('shows the WebGL2 message in place of the Global View map', () => {
+    const project: ProjectMetadata = {
+      name: 'a',
+      location: null,
+      file_path: 'a.stalx',
+      modified_at: '2026-01-01T00:00:00Z',
+      section_count: 1,
+      total_length: 100,
+      station_count: 2,
+      gps_center: [-87.4, 20.2],
+      gps_bounds: null,
+      is_remote: false,
+    };
+    render(
+      <GlobalViewMap
+        projects={[project]}
+        selectedProjectId={null}
+        onProjectSelect={() => {}}
+        onProjectOpen={() => {}}
+      />,
+    );
+    expectMessage('globalview-webgl2-unavailable');
+    expect(screen.getByTestId('globalview-map')).toBeInTheDocument();
   });
 
   it('createMap returns null only for the WebGL2 error and rethrows anything else', () => {
