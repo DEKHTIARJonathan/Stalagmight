@@ -185,6 +185,10 @@ folders (the SpeleoDB managed-project cache excepted, for projects), and must no
 be inside a system folder (`/etc`, `/usr`, `/bin`, ..., `C:\Windows`,
 `C:\Program Files`). The list is deliberately narrow - `/home`, `/var`,
 `/run/media`, `/mnt`, `/media`, `/opt` and `/tmp` are places users save to.
+A folder counts however the path reaches it: the path is compared folded and as
+the write reaches it on disk, one component at a time, links followed - so
+`<dir>/missing/../link-to-the-app-folder/x`, which a write that makes the missing
+folders first goes through, is refused like the link itself (#576 RV12-1).
 Opening a project (`load_project_full`, `load_project_full_binary`) opens it
 wherever it is - viewing and exporting a project kept in the app's folders or a
 system folder work as anywhere else - but it is not always read-only: an

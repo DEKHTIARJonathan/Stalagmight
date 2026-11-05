@@ -176,3 +176,101 @@ fn the_commands_refuse_before_writing_or_deleting() {
     assert!(export.is_ok(), "{export:?}");
     assert!(csv.exists());
 }
+
+/// [#576 RV12-1] A folder reached through a link that follows a folder not made
+/// yet and a `..`: `<user>/nope/../app-link/x`, where `app-link` points into the
+/// app's own folder and `nope` does not exist. The OS cannot walk through `nope`,
+/// but a write that first makes the missing folders (creating a project does,
+/// `create_dir_all` on the parent) then goes `nope` -> `..` -> through the link.
+/// The policy compared the path folded without looking at the disk (which cannot
+/// see the link) and the deepest existing ancestor resolved with the rest
+/// appended as given (whose `..` then matched nothing), so this passed every
+/// caller of the policy. Each caller is asked here, for every file type.
+#[cfg(unix)]
+#[test]
+fn a_link_reached_through_a_missing_folder_and_dot_dot_is_refused_by_every_caller() {
+    use crate::commands::recovery::write_salvaged_data_with;
+    use crate::commands::save_target::save_target_exists_with;
+    use crate::commands::write_path::{check_write_path, load_upgrade_refusal_with};
+
+    let app = TempDir::new().expect("app dir");
+    let user = TempDir::new().expect("user dir");
+    std::fs::write(app.path().join("settings.json"), b"{}").expect("an app file");
+    std::os::unix::fs::symlink(app.path(), user.path().join("app-link")).expect("app link");
+    std::os::unix::fs::symlink("/etc", user.path().join("etc-link")).expect("etc link");
+    let dirs = AppDirs {
+        internal: vec![app.path().to_path_buf()],
+        managed_projects: None,
+    };
+    let shapes = |link: &str, file: &str| -> Vec<PathBuf> {
+        let u = user.path();
+        vec![
+            u.join("nope").join("..").join(link).join(file),
+            u.join("nope").join(".").join("..").join(link).join(file),
+            u.join("nope")
+                .join("deeper")
+                .join("..")
+                .join("..")
+                .join(link)
+                .join(file),
+        ]
+    };
+    let files = [
+        "x.stalx", "x.csv", "x.json", "x.tmlu", "x.png", "x.svg", "x.pdf", "x.xml", "x.txt",
+    ];
+    let mut passed: Vec<String> = Vec::new();
+    for file in files {
+        let target = WriteTarget::of_path(Path::new(file)).expect("a file type the app writes");
+        for path in shapes("app-link", file) {
+            let got = verdict(&path, target, &dirs);
+            println!("RV12-1 check_write_path {}: {got}", path.display());
+            if got == "allowed" {
+                passed.push(format!("check_write_path {}", path.display()));
+            }
+            let probe = save_target_exists_with(&path, &dirs);
+            if !probe
+                .as_ref()
+                .is_err_and(|e| e.code.as_str() == "WRITE_PATH_REFUSED")
+            {
+                passed.push(format!("save_target_exists {}: {probe:?}", path.display()));
+            }
+        }
+        // The system folder, through the policy with the app's real directories:
+        // the check `create_project_full` runs before it makes the missing folders.
+        for path in shapes("etc-link", file) {
+            if check_write_path(&path, target).is_ok() {
+                passed.push(format!("check_write_path (system) {}", path.display()));
+            }
+        }
+    }
+    for path in shapes("app-link", "x.stalx") {
+        if load_upgrade_refusal_with(&path, &dirs).is_none() {
+            passed.push(format!("load_upgrade_refusal {}", path.display()));
+        }
+    }
+    let damaged = user.path().join("damaged.stalx");
+    std::fs::write(&damaged, b"not a database").expect("a damaged project");
+    for path in shapes("app-link", "x.json") {
+        let wrote = write_salvaged_data_with(&damaged, &path, &dirs);
+        let refused = wrote
+            .as_ref()
+            .is_err_and(|e| e.message.starts_with("Refused to change"));
+        if !refused {
+            passed.push(format!("write_salvaged_data {}: {wrote:?}", path.display()));
+        }
+    }
+    println!("RV12-1 passed the policy: {} of them", passed.len());
+    for line in &passed {
+        println!("RV12-1   {line}");
+    }
+    assert!(
+        passed.is_empty(),
+        "{} paths passed the policy",
+        passed.len()
+    );
+
+    // The same shape that lands in a user folder is still allowed.
+    let mine = user.path().join("nope").join("..").join("CaveA.stalx");
+    assert_eq!(verdict(&mine, WriteTarget::Project, &dirs), "allowed");
+    assert!(!app.path().join("x.stalx").exists(), "nothing written");
+}

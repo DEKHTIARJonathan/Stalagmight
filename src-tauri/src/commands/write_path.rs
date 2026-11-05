@@ -210,36 +210,50 @@ fn location_refusal(path: &Path, project: bool, dirs: &AppDirs) -> Option<String
     None
 }
 
-/// The forms of `path` to compare: as given (made absolute), and with its deepest
-/// existing ancestor resolved (symlinks, `..`), so `/etc` reached as `/private/etc`
-/// or through a link is still recognised. The file itself need not exist.
+/// The forms of `path` to compare: as given (made absolute) with `.`/`..` folded,
+/// and as a write would reach it on disk ([`resolved`]: links followed), so `/etc`
+/// reached as `/private/etc` or through a link is still recognised. The file
+/// itself need not exist.
 fn path_forms(path: &Path) -> Vec<PathBuf> {
     let absolute = if path.is_absolute() {
         path.to_path_buf()
     } else {
         std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
     };
-    let mut forms = vec![lexical(&absolute)];
-    let mut existing = absolute.as_path();
-    let mut rest: Vec<&std::ffi::OsStr> = Vec::new();
-    loop {
-        if let Ok(canonical) = std::fs::canonicalize(existing) {
-            let mut resolved = canonical;
-            for part in rest.iter().rev() {
-                resolved.push(part);
+    vec![lexical(&absolute), resolved(&absolute)]
+}
+
+/// `path` as a write reaches it, component by component: a name that exists is
+/// resolved (`canonicalize`: links followed), a name that does not is kept as
+/// the folder or file the write would create, and `..` steps back from what was
+/// reached so far.
+///
+/// [#576 RV12-1] Component by component, not "the deepest existing ancestor
+/// resolved, the rest appended as given": a write that first makes the missing
+/// folders (creating a project does) reaches `<dir>/nope/../app-link/x` as
+/// `nope`, back out of it, then THROUGH `app-link`. Appended as given, the `..`
+/// matched no folder and the link was never followed, so a link into the app's
+/// own folder or a system folder passed the policy.
+fn resolved(path: &Path) -> PathBuf {
+    let mut reached = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                reached.pop();
             }
-            forms.push(resolved);
-            break;
-        }
-        match (existing.parent(), existing.file_name()) {
-            (Some(parent), Some(name)) => {
-                rest.push(name);
-                existing = parent;
+            Component::Normal(name) => {
+                reached.push(name);
+                if let Ok(canonical) = std::fs::canonicalize(&reached) {
+                    reached = canonical;
+                }
             }
-            _ => break,
+            // The root and a Windows drive prefix are kept as they are:
+            // canonicalizing a bare `C:` names that drive's working directory.
+            other => reached.push(other),
         }
     }
-    forms
+    reached
 }
 
 /// `path` with `.` and `..` folded away, without touching the disk.
