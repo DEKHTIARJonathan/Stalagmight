@@ -128,6 +128,27 @@ impl Default for CountLimits {
     }
 }
 
+/// Which [`CountLimits`] cap a file exceeded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Limit {
+    Sections,
+    Shots,
+    StationMerges,
+    LoopClosures,
+}
+
+impl std::fmt::Display for Limit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Sections => "sections",
+            Self::Shots => "shots",
+            Self::StationMerges => "station merges",
+            Self::LoopClosures => "loop closures",
+        })
+    }
+}
+
 impl CountLimits {
     #[must_use]
     pub fn sections(mut self, max: usize) -> Self {
@@ -204,7 +225,7 @@ pub enum ReadError {
     /// One of the [`CountLimits`] was exceeded; `what` names it.
     #[error("file has {count} {what}, over the limit of {max}")]
     TooComplex {
-        what: &'static str,
+        what: Limit,
         count: usize,
         max: usize,
     },
@@ -441,10 +462,10 @@ fn checks_are_the_apps(sql: &str) -> bool {
 /// load builds them in memory. A table the file lacks counts as empty.
 fn check_row_counts(conn: &rusqlite::Connection, limits: CountLimits) -> Result<(), ReadError> {
     for (table, what, max) in [
-        ("sections", "sections", limits.sections),
-        ("shots", "shots", limits.shots),
-        ("station_merges", "station merges", limits.station_merges),
-        ("loop_closures", "loop closures", limits.loop_closures),
+        ("sections", Limit::Sections, limits.sections),
+        ("shots", Limit::Shots, limits.shots),
+        ("station_merges", Limit::StationMerges, limits.station_merges),
+        ("loop_closures", Limit::LoopClosures, limits.loop_closures),
     ] {
         let exists: i64 = conn
             .query_row(
@@ -683,15 +704,15 @@ fn check_counts(
 ) -> Result<(), ReadError> {
     let shots = project.sections.iter().map(|s| s.shots.len()).sum();
     for (what, count, max) in [
-        ("sections", project.sections.len(), limits.sections),
-        ("shots", shots, limits.shots),
+        (Limit::Sections, project.sections.len(), limits.sections),
+        (Limit::Shots, shots, limits.shots),
         (
-            "station merges",
+            Limit::StationMerges,
             project.station_merges.len(),
             limits.station_merges,
         ),
         (
-            "loop closures",
+            Limit::LoopClosures,
             project.loop_closures.len(),
             limits.loop_closures,
         ),

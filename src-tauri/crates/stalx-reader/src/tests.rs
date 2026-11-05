@@ -14,7 +14,7 @@ use stalagmight_persistence::persistence::Database;
 use tempfile::TempDir;
 
 use super::{
-    read_bytes, read_file, read_file_with, CountLimits, Direction, InvalidKind, ReadError,
+    read_bytes, read_file, read_file_with, CountLimits, Direction, InvalidKind, Limit, ReadError,
     ReadOptions, ShotKind, StationId, SUPPORTED_SCHEMA_VERSION,
 };
 
@@ -563,7 +563,7 @@ fn count_limits_refuse_a_file_before_the_post_load_steps() {
         matches!(
             err,
             ReadError::TooComplex {
-                what: "loop closures",
+                what: Limit::LoopClosures,
                 count: 1,
                 max: 0
             }
@@ -789,7 +789,7 @@ fn row_counts_are_refused_before_the_load() {
         matches!(
             err,
             ReadError::TooComplex {
-                what: "shots",
+                what: Limit::Shots,
                 max: 1,
                 ..
             }
