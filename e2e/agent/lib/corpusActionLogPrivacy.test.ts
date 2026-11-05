@@ -8,9 +8,14 @@
  * the corpus redaction (RV12-F1). Now the recorder folds every line it writes,
  * and the server caps a result only after redacting it.
  *
+ * NF-W16FE-1: the same holds for the session's `state/` snapshots. A store
+ * snapshot taken after a corpus import carries the copy's path, and
+ * `Recorder.writeState` wrote it as given.
+ *
  * Everything here is synthetic: a token-named corpus entry built in a temp
  * directory, and the lines the app would echo back for it.
  */
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -148,5 +153,52 @@ describe('the action log names no corpus file (#576 RV13-4)', () => {
     expect(server).toMatch(
       /function textResult\(value: unknown\): ToolResult \{\s*return \{ content: \[\{ type: 'text', text: JSON\.stringify\(redactCorpusValue\(value\) \?\? null\) \}\] \};/,
     );
+  });
+});
+
+describe('a state snapshot names no corpus file (#576 NF-W16FE-1)', () => {
+  it('folds the copy path out of every string and key of the snapshot, and keeps its shape', () => {
+    const recorder = new Recorder('run-2', sessionsRoot);
+    // What a store snapshot after a corpus import looks like: the open path, a
+    // recent-projects list keyed by path, and a log line quoting the copy.
+    const snapshot = {
+      projectPath: copyPath,
+      recentProjects: [{ path: copyPath, name: path.basename(copyPath) }],
+      byPath: { [copyPath]: { opened: true } },
+      lastError: failedParseLine(),
+      count: 3,
+      flags: [true, null],
+    };
+    const rel = recorder.writeState(recorder.nextSeq(), snapshot);
+    expect(rel).toBe(path.join('state', '0001.json'));
+
+    const text = fs.readFileSync(path.join(sessionsRoot, 'run-2', rel), 'utf8');
+    expect(text).not.toContain(MARK);
+    expect(text).toContain('<corpus #');
+    // Still pretty-printed JSON, the same keys and non-string values.
+    expect(text).toContain('\n  "projectPath": ');
+    expect(JSON.parse(text)).toEqual(redactCorpusValue(snapshot));
+    expect(JSON.parse(text)).toMatchObject({ count: 3, flags: [true, null] });
+  });
+
+  it('the repro report embeds no screenshot (they are app pixels and may show a corpus name): it names the folder only', () => {
+    const recorder = new Recorder('run-3', sessionsRoot);
+    const seq = recorder.nextSeq();
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+    const shot = recorder.writeScreenshot(seq, 'import-dialog', png);
+    recorder.action({
+      seq,
+      ts: '2026-01-01T00:00:01Z',
+      tool: 'screenshot',
+      params: { name: 'import-dialog' },
+      outcome: { ok: true, durationMs: 1 },
+      result: { path: shot },
+      artifacts: { screenshot: shot },
+    });
+    const session = path.join(sessionsRoot, 'run-3');
+    execFileSync('node', [path.join(REPO, 'scripts', 'generate-repro-report.mjs'), session], { encoding: 'utf8' });
+    const report = fs.readFileSync(path.join(session, 'report.md'), 'utf8');
+    expect(report).toContain('`screenshots/`');
+    expect(report).not.toMatch(/!\[|<img|data:image|iVBORw0KGgo/);
   });
 });

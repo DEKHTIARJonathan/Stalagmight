@@ -972,10 +972,16 @@ scenario's failure message, `agent:scenario`'s FAIL/findings lines,
 line of the session's `actions.jsonl` (a tool's params and result, its error,
 events; the recorder folds each line, and the MCP server folds a result before
 capping it) and every MCP tool result and error all pass through
-(`redactCorpusValue` folds a value string by string). Not covered, because they
-are not published: the copies themselves, the `state/` snapshots and
-screenshots, and the app's own log files. Attach the trace and the printed
-failure, not the session directory.
+(`redactCorpusValue` folds a value string by string), and so does every
+`state/` snapshot the recorder writes (`Recorder.writeState`; a store snapshot
+taken after a corpus import carries the copy's path). Not covered, because they
+are not published: the copies themselves and the app's own log files.
+Screenshots (`screenshots/`, and the one in each `findings/` entry) are images
+of the app, so nothing can fold them: they may show a corpus file name wherever
+the UI prints one. No report or trace embeds them - `report.md` names the
+`screenshots/` folder and the `findings/` entries by path only, and a fuzz
+trace carries no image - so look at one before you publish it. Attach the
+trace and the printed failure, not the session directory.
 
 **`corpusId` labels; `corpusHash` resolves.** The 5-hex crc20 is 20 bits, which
 is ample for telling two files apart in one run's output and far too little to

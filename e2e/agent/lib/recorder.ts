@@ -299,10 +299,14 @@ export class Recorder {
     return path.join('screenshots', file);
   }
 
-  /** Write a JSON state snapshot into state/ and return the session-relative path. */
+  /**
+   * Write a JSON state snapshot into state/ and return the session-relative path.
+   * Folded like the action log (#576 NF-W16FE-1): a store snapshot taken after a
+   * corpus import carries the copy's path.
+   */
   writeState(seq: number, value: unknown): string {
     const file = `${String(seq).padStart(4, '0')}.json`;
-    fs.writeFileSync(path.join(this.stateDir, file), JSON.stringify(value, null, 2));
+    fs.writeFileSync(path.join(this.stateDir, file), JSON.stringify(redactCorpusValue(value), null, 2));
     return path.join('state', file);
   }
 }
