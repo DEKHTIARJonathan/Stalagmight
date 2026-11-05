@@ -315,7 +315,10 @@ fn views_triggers_and_virtual_tables_are_refused() {
          CREATE VIEW shots AS WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n)
            SELECT * FROM real_shots, n;",
         "CREATE TRIGGER t AFTER UPDATE ON shots BEGIN UPDATE shots SET length = 0; END;",
-        "CREATE VIRTUAL TABLE v USING rtree(id, a, b);",
+        // Written as a schema row: release builds compile SQLite without RTREE.
+        "PRAGMA writable_schema = ON;
+         INSERT INTO sqlite_master (type, name, tbl_name, rootpage, sql)
+           VALUES ('table', 'v', 'v', 0, 'CREATE VIRTUAL TABLE v USING rtree(id, a, b)');",
         // A non-canonical spelling SQLite still parses as a virtual table, which
         // a match on the stored text would miss.
         "PRAGMA writable_schema = ON;
@@ -960,9 +963,9 @@ fn schema_rows_retyped_in_another_case_are_refused() {
         "CREATE VIEW v AS SELECT 42;
          PRAGMA writable_schema = ON;
          UPDATE sqlite_master SET type = 'View' WHERE name = 'v';",
-        "CREATE VIRTUAL TABLE vt USING fts5(x);
-         PRAGMA writable_schema = ON;
-         UPDATE sqlite_master SET type = 'TABLE' WHERE name = 'vt';",
+        "PRAGMA writable_schema = ON;
+         INSERT INTO sqlite_master (type, name, tbl_name, rootpage, sql)
+           VALUES ('TABLE', 'vt', 'vt', 0, 'CREATE VIRTUAL TABLE vt USING fts5(x)');",
         "CREATE TABLE g (a, b AS (zeroblob(1000)));
          PRAGMA writable_schema = ON;
          UPDATE sqlite_master SET type = 'Table' WHERE name = 'g';",
