@@ -748,13 +748,38 @@ impl Project {
             .iter()
             .map(|z| z.station_ref.section_id)
             .collect();
+        // The graph `get_connected_section_ids` walks (every merge and every
+        // closure, by stored section id), built once: that walk rescans every
+        // edge per visited section, which made this O(sections x edges) (#602).
+        let mut adjacency: HashMap<SectionId, Vec<SectionId>> = HashMap::new();
+        let edges = self
+            .station_merges
+            .iter()
+            .map(|m| (m.station_a.section_id, m.station_b.section_id))
+            .chain(
+                self.loop_closures
+                    .iter()
+                    .map(|c| (c.station_a.section_id, c.station_b.section_id)),
+            );
+        for (a, b) in edges {
+            adjacency.entry(a).or_default().push(b);
+            adjacency.entry(b).or_default().push(a);
+        }
         let mut seeds = Vec::new();
         let mut visited: HashSet<SectionId> = HashSet::new();
         for section in &self.sections {
             if visited.contains(&section.id) {
                 continue;
             }
-            let component = self.get_connected_section_ids(section.id);
+            let mut component: HashSet<SectionId> = HashSet::new();
+            let mut queue = vec![section.id];
+            while let Some(current) = queue.pop() {
+                if component.insert(current) {
+                    if let Some(neighbours) = adjacency.get(&current) {
+                        queue.extend(neighbours.iter().filter(|n| !component.contains(n)));
+                    }
+                }
+            }
             let anchor = component
                 .iter()
                 .copied()
