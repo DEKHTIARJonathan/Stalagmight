@@ -187,8 +187,13 @@ fn lsq_realistic_topology_preserves_geometry() {
 
     let config = ClosureAdjustmentConfig::default();
     let component: HashSet<SectionId> = [a, b, c].into_iter().collect();
-    let result =
-        project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config);
+    // [#576 RV15-4] This test checks the merge itself, a thousand times tighter
+    // than the 0.01 m tripwire the command runs in test builds; held back, that
+    // tripwire cannot pre-empt the check below and its measured gap.
+    let result = {
+        let _own_merge_check = offsets::merge_alignment_assert::suspend();
+        project.adjust_least_squares(&component, &[closure], StationRef::new(a, 0), &config)
+    };
     assert!(result.is_ok(), "LSQ should succeed: {result:?}");
 
     // Verify closure endpoints now coincide
@@ -225,10 +230,17 @@ fn lsq_realistic_topology_preserves_geometry() {
 
     // The branch is a spur: none of its shots is touched, and its merged far end
     // still sits on A:merge_at after A moved.
-    assert_eq!(
-        shots_of(&project, c),
-        orig_c,
-        "branch C shots were modified"
+    let new_c = shots_of(&project, c);
+    let moved_c: Vec<usize> = (0..orig_c.len())
+        .filter(|&i| new_c.get(i) != orig_c.get(i))
+        .collect();
+    assert!(
+        new_c.len() == orig_c.len() && moved_c.is_empty(),
+        "branch C untouched: {} of {} shots modified (first: {:?}), {} shots now",
+        moved_c.len(),
+        orig_c.len(),
+        moved_c.first().map(|&i| (i, orig_c[i], new_c.get(i))),
+        new_c.len()
     );
     let a_merge_after = project
         .compute_station_raw_coords(StationRef::new(a, merge_at))

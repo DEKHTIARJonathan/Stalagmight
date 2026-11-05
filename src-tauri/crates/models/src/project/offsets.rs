@@ -10,6 +10,39 @@ use tracing::error;
 
 use crate::{ClosureStrategy, LoopClosure, SectionId, StationKey, StationMerge, StationRef};
 
+/// [#576 RV15-4] Test-only: the panic [`Project::debug_assert_merge_alignment`]
+/// raises in test builds, held back on this thread while a test holds the guard
+/// [`merge_alignment_assert::suspend`] returns (the `error!` log still fires). A
+/// test that checks merge alignment itself, more tightly, suspends it so that its
+/// own check is the one that fails and says what it measured - otherwise the
+/// product's 0.01 m tripwire inside the command shadows it.
+#[cfg(test)]
+pub(super) mod merge_alignment_assert {
+    use std::cell::Cell;
+
+    thread_local! {
+        static SUSPENDED: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// Holds the panic back until dropped.
+    pub(in crate::project) struct Suspended(());
+
+    impl Drop for Suspended {
+        fn drop(&mut self) {
+            SUSPENDED.with(|s| s.set(false));
+        }
+    }
+
+    pub(in crate::project) fn suspend() -> Suspended {
+        SUSPENDED.with(|s| s.set(true));
+        Suspended(())
+    }
+
+    pub(super) fn is_suspended() -> bool {
+        SUSPENDED.with(Cell::get)
+    }
+}
+
 use super::Project;
 
 /// A rigid merge a command MINTED out of a coincidence CLAIM - a loop closure
@@ -665,7 +698,8 @@ impl Project {
                     }
                     #[cfg(test)]
                     debug_assert!(
-                        dist < Self::MERGE_ALIGNMENT_INVARIANT_M,
+                        merge_alignment_assert::is_suspended()
+                            || dist < Self::MERGE_ALIGNMENT_INVARIANT_M,
                         "Merge alignment violated after {context}: stations {a_ref:?} and {b_ref:?} \
                          are {dist:.6}m apart (threshold {threshold}m). \
                          A=({ax:.6}, {ay:.6}), B=({bx:.6}, {by:.6})",
