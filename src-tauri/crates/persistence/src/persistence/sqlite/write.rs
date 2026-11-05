@@ -218,8 +218,17 @@ impl Database {
             )?;
         }
 
+        // [#576 NF-W13BE-3] The three tables held in a `HashMap` (section
+        // offsets, station offsets, station comments) are written in key order,
+        // not map order. Every map built anew - an open builds them from the
+        // file - has its own random seed, so the same project opened and saved
+        // again wrote these rows in another order: other rowids, other page
+        // bytes, though nothing had changed.
+
         // Save section offsets
-        for (section_id, (offset_x, offset_y)) in project.section_offsets() {
+        let mut section_offsets: Vec<_> = project.section_offsets().iter().collect();
+        section_offsets.sort_by_key(|(section_id, _)| **section_id);
+        for (section_id, (offset_x, offset_y)) in section_offsets {
             tx.execute(
                 "INSERT INTO section_offsets (section_id, offset_x, offset_y) VALUES (?1, ?2, ?3)",
                 params![section_id, offset_x, offset_y],
@@ -227,7 +236,8 @@ impl Database {
         }
 
         // Save station offsets
-        for (key, (offset_x, offset_y, offset_z)) in &project.station_offsets {
+        let mut station_offsets = Vec::with_capacity(project.station_offsets.len());
+        for (key, offset) in &project.station_offsets {
             let Some(sr) = project.resolve_key(key) else {
                 tracing::warn!(
                     purpose = "skip orphan station offset on save",
@@ -235,6 +245,10 @@ impl Database {
                 );
                 continue;
             };
+            station_offsets.push((sr, offset));
+        }
+        station_offsets.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
+        for (sr, (offset_x, offset_y, offset_z)) in station_offsets {
             tx.execute(
                 "INSERT INTO station_offsets (section_id, station_index, offset_x, offset_y, offset_z) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![sr.section_id, sr.station_index, offset_x, offset_y, offset_z],
@@ -242,6 +256,7 @@ impl Database {
         }
 
         // Save station comments
+        let mut station_comments = Vec::with_capacity(project.station_comments.len());
         for (key, comment) in &project.station_comments {
             let Some(sr) = project.resolve_key(key) else {
                 tracing::warn!(
@@ -250,6 +265,10 @@ impl Database {
                 );
                 continue;
             };
+            station_comments.push((sr, comment));
+        }
+        station_comments.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
+        for (sr, comment) in station_comments {
             tx.execute(
                 "INSERT INTO station_comments (section_id, station_index, comment) VALUES (?1, ?2, ?3)",
                 params![sr.section_id, sr.station_index, comment],

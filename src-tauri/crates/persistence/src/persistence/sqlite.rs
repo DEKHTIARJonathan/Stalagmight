@@ -801,6 +801,15 @@ mod open_to_read_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
+mod save_order_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
     clippy::panic,
     clippy::print_stdout,
     reason = "test module: panics on a failed assumption are the point, and the printed \

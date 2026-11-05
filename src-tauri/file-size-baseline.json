@@ -407,6 +407,7 @@
     "src-tauri/crates/persistence/src/persistence/sqlite/open_order_tests.rs": 124,
     "src-tauri/crates/persistence/src/persistence/sqlite/open_to_read_tests.rs": 145,
     "src-tauri/crates/persistence/src/persistence/sqlite/recovery_tests.rs": 347,
+    "src-tauri/crates/persistence/src/persistence/sqlite/save_order_tests.rs": 162,
     "src-tauri/crates/persistence/src/persistence/sqlite/tests.rs": 6713,
     "src-tauri/crates/persistence/src/persistence/sqlite/upgrade_safety_tests.rs": 282,
     "src-tauri/crates/speleodb/src/speleodb/server_enum_tests.rs": 74,
