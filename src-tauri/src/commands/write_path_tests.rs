@@ -274,3 +274,121 @@ fn a_link_reached_through_a_missing_folder_and_dot_dot_is_refused_by_every_calle
     assert_eq!(verdict(&mine, WriteTarget::Project, &dirs), "allowed");
     assert!(!app.path().join("x.stalx").exists(), "nothing written");
 }
+
+/// [#576 NF-W13BE-1] A dangling link as the file itself: `<user>/x.stalx` ->
+/// `<app>/planted.stalx`, a file that does not exist yet. A link that leads to
+/// nothing cannot be canonicalized, so the policy kept its own name - a file in
+/// the user's folder - and let it through. But a write that follows the link
+/// lands on the target: creating a project opens the name with SQLite, which
+/// follows the link and creates `<app>/planted.stalx` inside the app's own
+/// folder. Each caller of the policy is asked here, for every file type and for
+/// each link shape that reaches a missing target: absolute, relative, a chain of
+/// dangling links, a target in a missing folder, and a system folder.
+#[cfg(unix)]
+#[test]
+fn a_dangling_link_as_the_file_is_judged_by_its_target_by_every_caller() {
+    use crate::commands::recovery::write_salvaged_data_with;
+    use crate::commands::save_target::save_target_exists_with;
+    use crate::commands::write_path::{check_write_path, load_upgrade_refusal_with};
+    use std::os::unix::fs::symlink;
+
+    let app = TempDir::new().expect("app dir");
+    let user = TempDir::new().expect("user dir");
+    let dirs = AppDirs {
+        internal: vec![app.path().to_path_buf()],
+        managed_projects: None,
+    };
+    let app_name = app.path().file_name().expect("app dir name");
+    let files = [
+        "x.stalx", "x.csv", "x.json", "x.tmlu", "x.png", "x.svg", "x.pdf", "x.xml", "x.txt",
+    ];
+    let mut passed: Vec<String> = Vec::new();
+    for file in files {
+        let target = WriteTarget::of_path(Path::new(file)).expect("a file type the app writes");
+        let planted = format!("planted-{file}");
+        let u = user.path();
+        let mut links: Vec<PathBuf> = Vec::new();
+        let mut link = |name: String, to: PathBuf| {
+            let at = u.join(name);
+            symlink(&to, &at).expect("a dangling link");
+            links.push(at);
+        };
+        link(format!("abs-{file}"), app.path().join(&planted));
+        link(
+            format!("rel-{file}"),
+            Path::new("..").join(app_name).join(&planted),
+        );
+        link(format!("hop-{file}"), app.path().join(&planted));
+        link(format!("chain-{file}"), u.join(format!("hop-{file}")));
+        link(
+            format!("deep-{file}"),
+            app.path().join("not-yet").join(&planted),
+        );
+        for path in &links {
+            assert!(!path.exists(), "the link dangles: {}", path.display());
+            let got = verdict(path, target, &dirs);
+            println!("NF-W13BE-1 check_write_path {}: {got}", path.display());
+            if got == "allowed" {
+                passed.push(format!("check_write_path {}", path.display()));
+            }
+            let probe = save_target_exists_with(path, &dirs);
+            if !probe
+                .as_ref()
+                .is_err_and(|e| e.code.as_str() == "WRITE_PATH_REFUSED")
+            {
+                passed.push(format!("save_target_exists {}: {probe:?}", path.display()));
+            }
+        }
+        // The system folder, through the policy with the app's real directories.
+        let etc = u.join(format!("etc-{file}"));
+        symlink(Path::new("/etc").join(&planted), &etc).expect("a link into /etc");
+        if check_write_path(&etc, target).is_ok() {
+            passed.push(format!("check_write_path (system) {}", etc.display()));
+        }
+    }
+    for name in [
+        "abs-x.stalx",
+        "rel-x.stalx",
+        "chain-x.stalx",
+        "deep-x.stalx",
+    ] {
+        let path = user.path().join(name);
+        if load_upgrade_refusal_with(&path, &dirs).is_none() {
+            passed.push(format!("load_upgrade_refusal {}", path.display()));
+        }
+    }
+    let damaged = user.path().join("damaged.stalx");
+    std::fs::write(&damaged, b"not a database").expect("a damaged project");
+    for name in ["abs-x.json", "rel-x.json", "chain-x.json", "deep-x.json"] {
+        let path = user.path().join(name);
+        let wrote = write_salvaged_data_with(&damaged, &path, &dirs);
+        let refused = wrote
+            .as_ref()
+            .is_err_and(|e| e.message.starts_with("Refused to change"));
+        if !refused {
+            passed.push(format!("write_salvaged_data {}: {wrote:?}", path.display()));
+        }
+    }
+    println!("NF-W13BE-1 passed the policy: {} of them", passed.len());
+    for line in &passed {
+        println!("NF-W13BE-1   {line}");
+    }
+    assert!(
+        passed.is_empty(),
+        "{} paths passed the policy",
+        passed.len()
+    );
+
+    // A dangling link whose target is in a user folder is still allowed.
+    let mine = user.path().join("mine.stalx");
+    symlink(user.path().join("CaveA.stalx"), &mine).expect("a link to a user file");
+    assert_eq!(verdict(&mine, WriteTarget::Project, &dirs), "allowed");
+    // A target of another file type is refused as that name would be.
+    let other = user.path().join("other.stalx");
+    symlink(user.path().join("notes.txt"), &other).expect("a link to another type");
+    let got = verdict(&other, WriteTarget::Project, &dirs);
+    println!("NF-W13BE-1 other.stalx -> notes.txt: {got}");
+    assert!(got.contains("must end in .stalx"), "{got}");
+    let entries = std::fs::read_dir(app.path()).expect("app dir").count();
+    assert_eq!(entries, 0, "nothing written into the app folder");
+}

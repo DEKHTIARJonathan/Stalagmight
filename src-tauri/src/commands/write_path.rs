@@ -11,7 +11,8 @@
 //! saves to is refused:
 //!
 //! - the file has the extension of what is being written (`.stalx` for a project,
-//!   the export format's own for an export);
+//!   the export format's own for an export) - and so does the file a link at that
+//!   name leads to, even one that does not exist yet;
 //! - it is not inside the app's own directories (configuration, data, cache) -
 //!   except the SpeleoDB managed-project cache, where projects legitimately live;
 //! - it is not inside a system directory (`/etc`, `/usr`, `C:\Windows`,
@@ -135,12 +136,17 @@ pub(crate) fn check_write_path_with(
         Err(format!("Refused to change {name}: {why}"))
     };
 
+    // [#576 NF-W13BE-1] The name, and the file a write through it lands on: a link
+    // at the name (even one that leads nowhere yet) is followed by the writes that
+    // open the path (SQLite creating a project does), so its target has to be a
+    // file of this type too.
     let extensions = target.extensions();
-    let has_expected = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| extensions.iter().any(|x| e.eq_ignore_ascii_case(x)));
-    if !has_expected {
+    let has_expected = |file: &Path| {
+        file.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| extensions.iter().any(|x| e.eq_ignore_ascii_case(x)))
+    };
+    if !has_expected(path) || !has_expected(&resolved(&absolute(path))) {
         let expected: Vec<String> = extensions.iter().map(|e| format!(".{e}")).collect();
         return refuse(format!("the file must end in {}", expected.join(" or ")));
     }
@@ -215,13 +221,24 @@ fn location_refusal(path: &Path, project: bool, dirs: &AppDirs) -> Option<String
 /// reached as `/private/etc` or through a link is still recognised. The file
 /// itself need not exist.
 fn path_forms(path: &Path) -> Vec<PathBuf> {
-    let absolute = if path.is_absolute() {
+    let absolute = absolute(path);
+    vec![lexical(&absolute), resolved(&absolute)]
+}
+
+/// `path` made absolute against the working directory, without touching it
+/// otherwise.
+fn absolute(path: &Path) -> PathBuf {
+    if path.is_absolute() {
         path.to_path_buf()
     } else {
         std::env::current_dir().map_or_else(|_| path.to_path_buf(), |cwd| cwd.join(path))
-    };
-    vec![lexical(&absolute), resolved(&absolute)]
+    }
 }
+
+/// How many links that lead nowhere [`resolved`] follows before it stops: the
+/// Linux kernel's own limit for one lookup (`MAXSYMLINKS`). A longer chain - or
+/// a loop - is one no write can follow either.
+const MAX_DANGLING_LINKS: usize = 40;
 
 /// `path` as a write reaches it, component by component: a name that exists is
 /// resolved (`canonicalize`: links followed), a name that does not is kept as
@@ -234,8 +251,23 @@ fn path_forms(path: &Path) -> Vec<PathBuf> {
 /// `nope`, back out of it, then THROUGH `app-link`. Appended as given, the `..`
 /// matched no folder and the link was never followed, so a link into the app's
 /// own folder or a system folder passed the policy.
+///
+/// [#576 NF-W13BE-1] A link whose target does not exist yet cannot be
+/// canonicalized, and was kept as its own name - but a write that opens the
+/// path follows it and creates the target (SQLite creating a project at
+/// `<user>/x.stalx` -> `<app>/planted.stalx` makes `<app>/planted.stalx`). Such a
+/// link is followed here too: its target is read and resolved in its place,
+/// relative to the link's folder when it is relative, so the policy judges the
+/// place the write lands.
 fn resolved(path: &Path) -> PathBuf {
     let mut reached = PathBuf::new();
+    let mut links_followed = 0;
+    resolve_onto(&mut reached, path, &mut links_followed);
+    reached
+}
+
+/// [`resolved`]'s walk: `path`'s components resolved onto `reached`.
+fn resolve_onto(reached: &mut PathBuf, path: &Path, links_followed: &mut usize) {
     for component in path.components() {
         match component {
             Component::CurDir => {}
@@ -244,8 +276,17 @@ fn resolved(path: &Path) -> PathBuf {
             }
             Component::Normal(name) => {
                 reached.push(name);
-                if let Ok(canonical) = std::fs::canonicalize(&reached) {
-                    reached = canonical;
+                if let Ok(canonical) = std::fs::canonicalize(reached.as_path()) {
+                    *reached = canonical;
+                } else if let Ok(target) = std::fs::read_link(reached.as_path()) {
+                    // A link that leads nowhere (yet): continue from its target,
+                    // which replaces `reached` when absolute and is taken from
+                    // the link's folder when relative.
+                    if *links_followed < MAX_DANGLING_LINKS {
+                        *links_followed += 1;
+                        reached.pop();
+                        resolve_onto(reached, &target, links_followed);
+                    }
                 }
             }
             // The root and a Windows drive prefix are kept as they are:
@@ -253,7 +294,6 @@ fn resolved(path: &Path) -> PathBuf {
             other => reached.push(other),
         }
     }
-    reached
 }
 
 /// `path` with `.` and `..` folded away, without touching the disk.
