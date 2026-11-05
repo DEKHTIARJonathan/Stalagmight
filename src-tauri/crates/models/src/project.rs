@@ -608,8 +608,9 @@ fn rekey_station_map<V>(
 
 /// [#576 NF-W13BE-2] `other` folded into `kept` when two station comments land
 /// on one station: both are kept, `other` on a line of its own after `kept` -
-/// unless it is empty or `kept` already holds it.
-fn join_station_comment(kept: &mut String, other: String) {
+/// unless it is empty or `kept` already holds it. Public for the save, which
+/// settles two keys naming one station the same way (#576 RV13-6).
+pub fn join_station_comment(kept: &mut String, other: String) {
     if other.is_empty() || *kept == other || kept.lines().any(|line| line == other) {
         return;
     }
@@ -1369,6 +1370,45 @@ impl Project {
                  joined the comments"
             );
         }
+    }
+
+    /// [#576 RV13-6] The rows a save writes for a station-keyed map: one per
+    /// station, in station order - `(section_id, station_index)` is the primary key
+    /// of those tables. `entries` are the map's keys with the station each resolves
+    /// to (a key that resolves to none is the caller's to drop). Two keys naming one
+    /// station - a legacy `Index` anchor beside the canonical key - are settled as
+    /// [`Self::map_station_refs`] settles them on the re-anchor: the canonical key's
+    /// entry first, then the others by key ([`station_key_order`]); the first is
+    /// kept and `fold` is handed each later one beside it. So the save writes what
+    /// an open and its re-anchor would hold, where each key used to write a row and
+    /// the second failed the whole save on the primary key.
+    pub fn one_row_per_station<V>(
+        &self,
+        entries: Vec<(&StationKey, StationRef, V)>,
+        mut fold: impl FnMut(&mut V, V),
+    ) -> Vec<(StationRef, V)> {
+        let mut ranked: Vec<_> = entries
+            .into_iter()
+            .map(|(key, sr, value)| {
+                let rewritten = self.key_for_ref(sr).as_ref() != Some(key);
+                let rank = (
+                    sr.section_id,
+                    sr.station_index,
+                    rewritten,
+                    station_key_order(key),
+                );
+                (rank, sr, value)
+            })
+            .collect();
+        ranked.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
+        let mut rows: Vec<(StationRef, V)> = Vec::with_capacity(ranked.len());
+        for (_, sr, value) in ranked {
+            match rows.last_mut() {
+                Some((last, kept)) if *last == sr => fold(kept, value),
+                _ => rows.push((sr, value)),
+            }
+        }
+        rows
     }
 
     fn station_ref_key(station_ref: &StationRef) -> (SectionId, u32) {

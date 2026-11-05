@@ -240,6 +240,14 @@ impl Database {
             )?;
         }
 
+        // [#576 RV13-6] One row per station: two keys naming one station each
+        // wrote a row, and the second failed the whole save on the tables'
+        // primary key. They are settled as the re-anchor on open settles them
+        // (`Project::one_row_per_station`): the canonical key's offset, both
+        // comments.
+        let mut offsets_dropped = 0_usize;
+        let mut comments_joined = 0_usize;
+
         // Save station offsets
         let mut station_offsets = Vec::with_capacity(project.station_offsets.len());
         for (key, offset) in &project.station_offsets {
@@ -250,9 +258,10 @@ impl Database {
                 );
                 continue;
             };
-            station_offsets.push((sr, offset));
+            station_offsets.push((key, sr, *offset));
         }
-        station_offsets.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
+        let station_offsets =
+            project.one_row_per_station(station_offsets, |_kept, _other| offsets_dropped += 1);
         for (sr, (offset_x, offset_y, offset_z)) in station_offsets {
             tx.execute(
                 "INSERT INTO station_offsets (section_id, station_index, offset_x, offset_y, offset_z) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -270,14 +279,26 @@ impl Database {
                 );
                 continue;
             };
-            station_comments.push((sr, comment));
+            station_comments.push((key, sr, comment.clone()));
         }
-        station_comments.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
+        let station_comments = project.one_row_per_station(station_comments, |kept, other| {
+            comments_joined += 1;
+            crate::models::join_station_comment(kept, other);
+        });
         for (sr, comment) in station_comments {
             tx.execute(
                 "INSERT INTO station_comments (section_id, station_index, comment) VALUES (?1, ?2, ?3)",
                 params![sr.section_id, sr.station_index, comment],
             )?;
+        }
+        if offsets_dropped > 0 || comments_joined > 0 {
+            tracing::warn!(
+                offsets_dropped,
+                comments_joined,
+                purpose = "write one station offset and comment row per station (#576 RV13-6)",
+                "Two keys named one station on save: kept the canonical key's offset and \
+                 joined the comments"
+            );
         }
 
         // Save loop closures. The `closure_id`, `strategy` and `is_aligned`
