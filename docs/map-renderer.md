@@ -202,6 +202,18 @@ measure tint, labels, drag ghost; one layer on the Global View). The instance
 still holds its last data, so `onRemove` + `onAdd` re-upload it to fresh GL
 objects. A layer that cannot start again goes down the same fatal path as a
 failed first `onAdd`.
+
+From the loss to that `style.load` no layer can be added (the style is null,
+then not yet loaded), so `addCustomLayer` holds a new layer back and the
+reattach adds it; a self-disable in that window is ignored, because the re-add
+rebuilds the layer. `SurveyLayer` also keeps the last survey update that
+arrived in the window and replays it, then redraws the interact overlay and
+the measure tint. Two limits: other stock overlay setters that ran in the window
+(gas route, closures highlight, and the like) show their pre-loss state until
+they next change, and the custom layers come back at their own anchors, so a
+stock layer that had been appended above the labels ends up below them.
+Teardown goes through `removeCustomLayer`, which frees the GL objects directly
+when a worker restart already dropped the layer from the style.
 - **Mid-render**: each layer calls `gl.getError()` after its draws for the first
   5 frames only (a `getError` is a pipeline stall, and WebKitGTK can drop a
   layer silently), self-disabling with a `gl-error-0x<code>` reason. This fires

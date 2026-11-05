@@ -44,7 +44,7 @@ import { SurveyCustomController, buildCustomDimState, type CustomRenderExclusion
 import { SurveyLabelController } from './surveyLayer/customRender/labelController';
 import { overlayInputFrom } from './surveyLayer/customRender/overlayColor';
 import { MeasurePathController } from './surveyLayer/customRender/measurePathController';
-import { onStyleRestored } from './surveyLayer/customRender/styleRestore';
+import { isStyleRestoring, onStyleRestored } from './surveyLayer/customRender/styleRestore';
 import type { MeasurePathRenderData } from './surveyLayer/customRender/surveyMeasurePathLayer';
 import {
   buildMeasurePathBuffers,
@@ -410,6 +410,9 @@ export default class SurveyLayer {
   private dprWatcherDispose: (() => void) | undefined;
   /** Dispose for the re-add after a style rebuild (context / worker restore). */
   private styleRestoreDispose: (() => void) | undefined;
+  /** The last update that arrived while a restore was under way; replayed once
+   *  the rebuilt style has loaded. */
+  private deferredUpdate: (() => void) | null = null;
 
   constructor(map: MaplibreMap, callbacks: SurveyLayerCallbacks = {}) {
     this.map = map;
@@ -457,6 +460,14 @@ export default class SurveyLayer {
     this.measurePath?.reattach();
     this.customLabels?.reattach();
     this.dragGhost.reattach();
+    const update = this.deferredUpdate;
+    this.deferredUpdate = null;
+    update?.();
+    // Overlay changes made while the style was gone never reached the rebuilt
+    // one (the snapshot predates them); redraw the ones derived from live state.
+    this.lastInteractKey = null;
+    this.refreshInteractOverlay();
+    this.syncCustomMeasurePath();
   }
 
   /**
@@ -3363,6 +3374,14 @@ export default class SurveyLayer {
     showIssueSeverity: boolean = false,
     warnings: ProjectWarning[] = [],
   ): void {
+    if (isStyleRestoring(this.map)) {
+      this.deferredUpdate = () =>
+        this.flushUpdate(
+          sections, stations, loopClosures, gpsOrigin, showDepthGradient, depthRange,
+          precision, showIssueSeverity, warnings,
+        );
+      return;
+    }
     // Early bail when the map is gone or its style has been torn down - the
     // coalescer's queueMicrotask can race with MapCanvas unmount → map.remove().
     if (!hasLiveStyle(this.map)) return;

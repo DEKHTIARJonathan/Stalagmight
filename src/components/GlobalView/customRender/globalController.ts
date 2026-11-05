@@ -20,7 +20,12 @@ import type { Map as MaplibreMap } from 'maplibre-gl';
 import type { ProjectMetadata } from '../../../types/project';
 import type { SystemGeometry } from '../systemColor';
 import { packCssColor } from '../../Map/surveyLayer/customRender/colorPack';
-import { reAddCustomLayer } from '../../Map/surveyLayer/customRender/styleRestore';
+import {
+  addCustomLayer,
+  isStyleRestoring,
+  reAddCustomLayer,
+  removeCustomLayer,
+} from '../../Map/surveyLayer/customRender/styleRestore';
 import {
   buildGlobalBuffers,
   recomputeDimFlags,
@@ -171,7 +176,7 @@ export class GlobalCustomController {
     // Add at the top of the global map: the only other GL layer is the satellite
     // basemap (below), and the system markers are DOM overlays that always sit
     // above the canvas, so no beforeId anchor is needed.
-    this.map.addLayer(layer);
+    addCustomLayer(this.map, layer);
     if (layer.isDisabled()) {
       // FATAL: the custom layer cannot draw. There is NO stock fallback - remove
       // the dead layer and route to the error state instead of restoring stock.
@@ -180,7 +185,7 @@ export class GlobalCustomController {
         `[globalCustomRender] custom layer failed to initialize (${reason}); ` +
           'survey rendering unavailable',
       );
-      if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+      removeCustomLayer(this.map, layer);
       this.layer = null;
       this.fatal = true;
       this.setActive(false); // active was never true here, so this does not fire.
@@ -214,13 +219,14 @@ export class GlobalCustomController {
    *  (destroy); the fatal path uses {@link tearDownFatal}. */
   private teardown(): void {
     this.setActive(false);
-    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.map.triggerRepaint();
   }
 
   private handleSelfDisable(reason: string): void {
-    if (!this.active || this.selfDisableScheduled) return;
+    // A lost context fails every GL call; the restore's re-add rebuilds the layer.
+    if (!this.active || this.selfDisableScheduled || isStyleRestoring(this.map)) return;
     this.selfDisableScheduled = true;
     console.warn(
       `[globalCustomRender] custom layer self-disabled (${reason}); survey rendering unavailable`,
@@ -239,7 +245,7 @@ export class GlobalCustomController {
    */
   private tearDownFatal(reason: string): void {
     this.fatal = true;
-    if (this.map.getLayer?.(this.layerId)) this.map.removeLayer(this.layerId);
+    removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.active = false; // set directly: onActiveChange must NOT fire (no republish).
     this.map.triggerRepaint();

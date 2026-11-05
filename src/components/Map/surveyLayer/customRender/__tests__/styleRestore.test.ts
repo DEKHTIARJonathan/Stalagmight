@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import { onStyleRestored, reAddCustomLayer, type RestorableCustomLayer } from '../styleRestore';
+import {
+  addCustomLayer,
+  isStyleRestoring,
+  onStyleRestored,
+  reAddCustomLayer,
+  removeCustomLayer,
+  type RestorableCustomLayer,
+} from '../styleRestore';
 
 type Listener = () => void;
 
@@ -50,8 +57,8 @@ describe('onStyleRestored', () => {
     expect(calls).toBe(1);
   });
 
-  it('dispose drops the restore listener and a pending reattach', () => {
-    const { map, fire, count } = makeEventedMap();
+  it('dispose drops a pending reattach and every later one', () => {
+    const { map, fire } = makeEventedMap();
     let calls = 0;
     const dispose = onStyleRestored(map, () => calls++);
     fire('webglcontextrestored');
@@ -60,7 +67,74 @@ describe('onStyleRestored', () => {
     fire('webglcontextrestored');
     fire('style.load');
     expect(calls).toBe(0);
-    expect(count('webglcontextrestored') + count('style.load')).toBe(0);
+  });
+
+  it('subscribers on one map share one set of map listeners', () => {
+    const { map, count } = makeEventedMap();
+    onStyleRestored(map, () => {});
+    onStyleRestored(map, () => {});
+    expect(count('webglcontextlost')).toBe(1);
+    expect(count('webglcontextrestored')).toBe(1);
+  });
+});
+
+describe('isStyleRestoring', () => {
+  it('covers the loss, the restore and the frame until the rebuilt style loads', () => {
+    const { map, fire } = makeEventedMap();
+    let restoringAtReattach: boolean | null = null;
+    onStyleRestored(map, () => (restoringAtReattach = isStyleRestoring(map)));
+    expect(isStyleRestoring(map)).toBe(false);
+    fire('webglcontextlost');
+    expect(isStyleRestoring(map)).toBe(true);
+    fire('webglcontextrestored');
+    expect(isStyleRestoring(map)).toBe(true);
+    fire('style.load');
+    expect(isStyleRestoring(map)).toBe(false);
+    expect(restoringAtReattach).toBe(false);
+  });
+
+  it('is true for a lost context MapLibre has not reported yet', () => {
+    const map = { painter: { context: { gl: { isContextLost: () => true } } } } as unknown as MaplibreMap;
+    expect(isStyleRestoring(map)).toBe(true);
+  });
+});
+
+describe('addCustomLayer / removeCustomLayer', () => {
+  function setup(inStyle: boolean) {
+    const log: string[] = [];
+    const { map: evented, fire } = makeEventedMap();
+    const map = Object.assign(evented, {
+      painter: { context: { gl: {} } },
+      getLayer: (id: string) => (inStyle && id === 'custom' ? { id } : undefined),
+      addLayer: () => log.push('addLayer'),
+      removeLayer: () => log.push('removeLayer'),
+    });
+    const layer = { id: 'custom', type: 'custom' as const, render: () => {}, onRemove: () => log.push('onRemove') };
+    onStyleRestored(map, () => {});
+    return { map, layer, log, fire };
+  }
+
+  it('holds a layer back while a restore is under way', () => {
+    const { map, layer, log, fire } = setup(false);
+    fire('webglcontextlost');
+    addCustomLayer(map, layer);
+    expect(log).toEqual([]);
+    fire('webglcontextrestored');
+    fire('style.load');
+    addCustomLayer(map, layer);
+    expect(log).toEqual(['addLayer']);
+  });
+
+  it('removes a layer the style holds', () => {
+    const { map, layer, log } = setup(true);
+    removeCustomLayer(map, layer);
+    expect(log).toEqual(['removeLayer']);
+  });
+
+  it('frees the GL resources of a layer a rebuild already dropped', () => {
+    const { map, layer, log } = setup(false);
+    removeCustomLayer(map, layer);
+    expect(log).toEqual(['onRemove']);
   });
 });
 

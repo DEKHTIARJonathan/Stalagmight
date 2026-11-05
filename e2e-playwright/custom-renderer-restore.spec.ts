@@ -7,6 +7,8 @@ import {
   waitForMapReady,
   waitForDrawnStations,
   getDrawnGeometry,
+  getMeasuredPathCounts,
+  getStationScreenPositions,
   readCanvasPixel,
   countCanvasInk,
   type SectionSeed,
@@ -16,8 +18,9 @@ import {
  * MapLibre 6 rebuilds the style from `style.serialize()` after a WebGL context
  * loss and after a worker restart, and custom layers cannot be serialized, so
  * both paths drop every survey custom layer (#606). `styleRestore.ts` re-adds
- * them. Each test forces one restore path for real and requires the same custom
- * layers back, in the same order, and survey ink at a shot midpoint again.
+ * them. Each test forces one restore path for real and requires the same style
+ * layers back, custom and stock, in the same order, and survey ink at a shot
+ * midpoint again.
  */
 
 const sectionSeeds: SectionSeed[] = [
@@ -33,17 +36,25 @@ const sectionSeeds: SectionSeed[] = [
 
 type RestoreMap = {
   getLayersOrder: () => string[];
-  getLayer: (id: string) => { type: string } | undefined;
   once: (ev: string, cb: () => void) => void;
   painter: { context: { gl: WebGL2RenderingContext } };
   _handleWorkersRestarted: () => void;
 };
 
-function customLayerOrder(page: Page): Promise<string[]> {
+type UiStore = {
+  getState: () => Record<string, unknown>;
+  setState: (partial: Record<string, unknown>) => void;
+};
+
+type LoseContextWindow = {
+  __stalagmight_map__: RestoreMap;
+  __restoreLoseContext__?: WEBGL_lose_context;
+};
+
+function layerOrder(page: Page): Promise<string[]> {
   return page.evaluate(() => {
     const map = (window as unknown as { __stalagmight_map__?: RestoreMap }).__stalagmight_map__;
-    if (!map) return [];
-    return map.getLayersOrder().filter((id) => map.getLayer(id)?.type === 'custom');
+    return map?.getLayersOrder() ?? [];
   });
 }
 
@@ -62,18 +73,53 @@ async function bootSurvey(page: Page): Promise<string[]> {
   await waitForMapReady(page);
   await waitForDrawnStations(page, 1);
   await expect.poll(() => surveyInk(page), { timeout: 10000 }).toBeGreaterThan(0);
-  const before = await customLayerOrder(page);
+  const before = await layerOrder(page);
   expect(before).toContain('survey-custom-render');
   return before;
 }
 
 async function expectRestored(page: Page, before: string[]): Promise<void> {
-  await expect.poll(() => customLayerOrder(page), { timeout: 10000 }).toEqual(before);
+  await expect.poll(() => layerOrder(page), { timeout: 10000 }).toEqual(before);
   await expect.poll(() => surveyInk(page), { timeout: 10000 }).toBeGreaterThan(0);
 }
 
+/** Lose the WebGL context for real and wait until MapLibre has handled it. */
+async function loseContext(page: Page): Promise<boolean> {
+  return page.evaluate(async () => {
+    const w = window as unknown as LoseContextWindow;
+    const map = w.__stalagmight_map__;
+    const ext = map.painter.context.gl.getExtension('WEBGL_lose_context');
+    if (!ext) return false;
+    w.__restoreLoseContext__ = ext;
+    const lost = new Promise<void>((resolve) => map.once('webglcontextlost', resolve));
+    ext.loseContext();
+    await lost;
+    // Chromium allows restoreContext only once the lost event's dispatch,
+    // whose preventDefault grants it, has finished.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return true;
+  });
+}
+
+async function restoreContext(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const w = window as unknown as LoseContextWindow;
+    const back = new Promise<void>((resolve) => w.__stalagmight_map__.once('webglcontextrestored', resolve));
+    w.__restoreLoseContext__?.restoreContext();
+    await back;
+  });
+}
+
+async function clickStation(page: Page, index: number): Promise<void> {
+  const target = (await getStationScreenPositions(page))[index];
+  const box = await page.locator('canvas').first().boundingBox();
+  if (!box || !target) throw new Error('no canvas/station');
+  await page.mouse.move(box.x + target.x, box.y + target.y);
+  await page.mouse.click(box.x + target.x, box.y + target.y);
+}
+
 test.describe('Custom renderer restore', () => {
-  test('survey custom layers come back after a worker restart', async ({ page }) => {
+  test('survey layers come back in order after a worker restart', async ({ page }) => {
     const before = await bootSurvey(page);
     await page.evaluate(() => {
       const map = (window as unknown as { __stalagmight_map__: RestoreMap }).__stalagmight_map__;
@@ -82,24 +128,57 @@ test.describe('Custom renderer restore', () => {
     await expectRestored(page, before);
   });
 
-  test('survey custom layers come back after a WebGL context loss', async ({ page }) => {
+  test('survey layers come back in order after a WebGL context loss', async ({ page }) => {
     const before = await bootSurvey(page);
-    const restored = await page.evaluate(async () => {
-      const map = (window as unknown as { __stalagmight_map__: RestoreMap }).__stalagmight_map__;
-      const ext = map.painter.context.gl.getExtension('WEBGL_lose_context');
-      if (!ext) return false;
-      const lost = new Promise<void>((resolve) => map.once('webglcontextlost', resolve));
-      ext.loseContext();
-      await lost;
-      // Chromium allows restoreContext only once the lost event's dispatch,
-      // whose preventDefault grants it, has finished.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      const back = new Promise<void>((resolve) => map.once('webglcontextrestored', resolve));
-      ext.restoreContext();
-      await back;
-      return true;
-    });
-    expect(restored, 'WEBGL_lose_context unavailable').toBe(true);
+    expect(await loseContext(page), 'WEBGL_lose_context unavailable').toBe(true);
+    await restoreContext(page);
     await expectRestored(page, before);
+  });
+
+  test('a section added while the context is lost is drawn after the restore', async ({ page }) => {
+    const before = await bootSurvey(page);
+    const stationsBefore = (await getDrawnGeometry(page)).stations.length;
+    expect(await loseContext(page), 'WEBGL_lose_context unavailable').toBe(true);
+    await seedProjectWithSections(page, [
+      {
+        name: 'Restore Added',
+        direction: 'in',
+        shots: [
+          { azimuth_in: 180, azimuth_out: 0, length: 12, depth_in: -1, depth_out: -2, left: 1, right: 1, up: 1, down: 1 },
+        ],
+      },
+    ]);
+    await restoreContext(page);
+    await expectRestored(page, before);
+    await expect
+      .poll(async () => (await getDrawnGeometry(page)).stations.length, { timeout: 10000 })
+      .toBeGreaterThan(stationsBefore);
+  });
+
+  test('a ruler path that starts drawing while the context is lost draws after the restore', async ({ page }) => {
+    await bootSurvey(page);
+    await page.keyboard.press('r');
+    await clickStation(page, 0);
+    await clickStation(page, 1);
+    await expect.poll(async () => (await getMeasuredPathCounts(page)).shots, { timeout: 10000 }).toBeGreaterThan(0);
+    // Hit-testing is off while the style is gone, so the measurement is taken
+    // first, cleared, and handed back to the store inside the loss window: the
+    // tint layer's first add then lands on the null style.
+    await page.evaluate(() => {
+      const w = window as unknown as { __E2E_TEST__: { uiStore: UiStore }; __savedMeasure__?: unknown };
+      const { measureStart, measureEnd, measureAlongLine } = w.__E2E_TEST__.uiStore.getState();
+      w.__savedMeasure__ = { measureStart, measureEnd, measureAlongLine };
+    });
+    await page.keyboard.press('Escape');
+    await expect.poll(async () => (await getMeasuredPathCounts(page)).shots).toBe(0);
+    expect(await loseContext(page), 'WEBGL_lose_context unavailable').toBe(true);
+    await page.evaluate(() => {
+      const w = window as unknown as { __E2E_TEST__: { uiStore: UiStore }; __savedMeasure__: Record<string, unknown> };
+      w.__E2E_TEST__.uiStore.setState(w.__savedMeasure__);
+    });
+    await restoreContext(page);
+    await expect.poll(() => layerOrder(page), { timeout: 10000 }).toContain('survey-measure-path-custom');
+    await expect.poll(async () => (await getMeasuredPathCounts(page)).shots, { timeout: 10000 }).toBeGreaterThan(0);
+    await expect.poll(() => surveyInk(page), { timeout: 10000 }).toBeGreaterThan(0);
   });
 });
