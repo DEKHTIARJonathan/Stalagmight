@@ -379,6 +379,7 @@
     "src-tauri/crates/models/src/project/lookup_parity_tests.rs": 1048,
     "src-tauri/crates/models/src/project/mock_narrowing_tests.rs": 351,
     "src-tauri/crates/models/src/project/reverse_swap_tests.rs": 32,
+    "src-tauri/crates/models/src/project/station_ref_collision_tests.rs": 117,
     "src-tauri/crates/models/src/project/station_walk_parity_tests.rs": 104,
     "src-tauri/crates/models/src/project/tests.rs": 12262,
     "src-tauri/crates/models/src/raw_lock_scan_tests.rs": 531,

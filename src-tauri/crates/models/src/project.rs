@@ -58,6 +58,9 @@ mod mock_narrowing_tests;
 #[cfg(test)]
 mod reverse_swap_tests;
 #[cfg(test)]
+#[expect(clippy::print_stdout, clippy::expect_used)]
+mod station_ref_collision_tests;
+#[cfg(test)]
 mod station_walk_parity_tests;
 
 pub use classify::ClassifyScope;
@@ -565,6 +568,57 @@ fn station_key_order(key: &StationKey) -> (SectionId, u8, &str, u32) {
         StationAnchor::AfterShot(uuid) => (key.section_id, 1, uuid.as_str(), 0),
         StationAnchor::Index(index) => (key.section_id, 2, "", *index),
     }
+}
+
+/// [#576 NF-W13BE-2] A station-keyed map rebuilt from `(old key, new key, value)`
+/// entries - the rewrite [`Project::map_station_refs`] makes. When two entries
+/// land on one key, the outcome is a function of the keys alone: the entry that
+/// was already on that key (its key not rewritten - the canonical one) comes
+/// first, then the others by their old key ([`station_key_order`]); the first is
+/// kept and `fold` is handed each later one beside it. `collect()` used to keep
+/// whichever the map handed out last, so the same project could keep either.
+fn rekey_station_map<V>(
+    mut entries: Vec<(StationKey, StationKey, V)>,
+    mut fold: impl FnMut(&mut V, V),
+) -> HashMap<StationKey, V> {
+    // The common case - every entry on a key of its own - needs no order.
+    let collides = {
+        let mut seen = HashSet::with_capacity(entries.len());
+        !entries.iter().all(|(_, new, _)| seen.insert(new))
+    };
+    if collides {
+        entries.sort_by(|(a_old, a_new, _), (b_old, b_new, _)| {
+            station_key_order(a_new)
+                .cmp(&station_key_order(b_new))
+                .then_with(|| (a_old != a_new).cmp(&(b_old != b_new)))
+                .then_with(|| station_key_order(a_old).cmp(&station_key_order(b_old)))
+        });
+    }
+    let mut out = HashMap::with_capacity(entries.len());
+    for (_, new, value) in entries {
+        match out.entry(new) {
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(value);
+            }
+            std::collections::hash_map::Entry::Occupied(mut slot) => fold(slot.get_mut(), value),
+        }
+    }
+    out
+}
+
+/// [#576 NF-W13BE-2] `other` folded into `kept` when two station comments land
+/// on one station: both are kept, `other` on a line of its own after `kept` -
+/// unless it is empty or `kept` already holds it.
+fn join_station_comment(kept: &mut String, other: String) {
+    if other.is_empty() || *kept == other || kept.lines().any(|line| line == other) {
+        return;
+    }
+    if kept.is_empty() {
+        *kept = other;
+        return;
+    }
+    kept.push('\n');
+    kept.push_str(&other);
 }
 
 /// Serialize station_offsets as a Vec of (StationRef, (f64, f64, f64)) tuples
@@ -1259,6 +1313,14 @@ impl Project {
     /// the offset/comment HashMaps rebuilt with transformed keys. Used by
     /// [`Self::reanchor_station_refs`]. (Keys are position-independent, so
     /// insert/delete no longer rewrite them - `shift_station_refs` is gone.)
+    ///
+    /// [#576 NF-W13BE-2] When two offsets or two comments land on one key (a
+    /// legacy `Index` anchor beside the canonical key of the same station, which
+    /// the re-anchor rewrites onto it), the outcome is settled by key, never by
+    /// map order: see [`rekey_station_map`]. Both comments are kept (joined by
+    /// [`join_station_comment`]); of two offsets the one already on that key -
+    /// else the one whose old key sorts first - is kept and the other dropped.
+    /// Either is logged.
     pub fn map_station_refs(&mut self, mut f: impl FnMut(StationKey) -> StationKey) {
         // `iter_mut` invalidates the merge-adjacency memo: `f` can move an
         // endpoint to another section (the delete-shot split does exactly that),
@@ -1274,10 +1336,39 @@ impl Project {
         for zd in &mut self.zero_datums {
             zd.station_ref = f(zd.station_ref.clone());
         }
-        let offsets = std::mem::take(&mut self.station_offsets);
-        self.station_offsets = offsets.into_iter().map(|(k, v)| (f(k), v)).collect();
-        let comments = std::mem::take(&mut self.station_comments);
-        self.station_comments = comments.into_iter().map(|(k, v)| (f(k), v)).collect();
+        // `f` is called once per entry, in each map's own order: the re-anchor
+        // pairs these calls with `for_each_station_ref`'s by position.
+        let offsets: Vec<_> = std::mem::take(&mut self.station_offsets)
+            .into_iter()
+            .map(|(old, value)| {
+                let new = f(old.clone());
+                (old, new, value)
+            })
+            .collect();
+        let comments: Vec<_> = std::mem::take(&mut self.station_comments)
+            .into_iter()
+            .map(|(old, value)| {
+                let new = f(old.clone());
+                (old, new, value)
+            })
+            .collect();
+        let mut offsets_dropped = 0_usize;
+        self.station_offsets = rekey_station_map(offsets, |_kept, _dropped| offsets_dropped += 1);
+        let mut comments_joined = 0_usize;
+        self.station_comments = rekey_station_map(comments, |kept, other| {
+            comments_joined += 1;
+            join_station_comment(kept, other);
+        });
+        if offsets_dropped > 0 || comments_joined > 0 {
+            tracing::warn!(
+                offsets_dropped,
+                comments_joined,
+                purpose = "keep station offsets and comments when two refs land on one station \
+                           (#576 NF-W13BE-2)",
+                "Station refs collided on a rewrite: kept the offset already on the station and \
+                 joined the comments"
+            );
+        }
     }
 
     fn station_ref_key(station_ref: &StationRef) -> (SectionId, u32) {
@@ -1634,6 +1725,10 @@ impl Project {
     /// (`Index`) to the stable `AfterShot(uuid)` / `SectionStart` form, now that
     /// shots (with UUIDs) are present. Run on load so a v6 file's positional refs
     /// open with stable identity and no `Index` anchor survives into the live model.
+    ///
+    /// [#576 NF-W13BE-2] A legacy `Index` key beside the canonical key of the same
+    /// station lands on that key: `map_station_refs` keeps both comments (the
+    /// canonical one first) and the canonical key's offset, and logs the drop.
     pub fn reanchor_station_refs(&mut self) {
         let canon: Vec<Option<StationKey>> = {
             let mut out = Vec::new();
