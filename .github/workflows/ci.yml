@@ -215,6 +215,15 @@ jobs:
         run: cargo check --release --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      # stalx-reader and the two internal crates it depends on are published to
+      # crates.io (#593). Keep them publishable between releases: a path
+      # dependency without a version, a new unpublished internal dependency or
+      # missing metadata fails here, not on release day. --no-verify skips the
+      # rebuild from the packaged sources (minutes); the release runs it in full.
+      - name: crates.io packaging check (stalx-reader)
+        run: >-
+          cargo publish --dry-run --no-verify --manifest-path src-tauri/Cargo.toml
+          -p stalagmight-models -p stalagmight-persistence -p stalx-reader
       # sccache health on the self-hosted path (the cache that replaces rust-cache
       # on the ephemeral runner). Skipped on hosted. !cancelled() (not always()):
       # still report on cargo FAILURE, but skip on a superseded/cancelled run.
