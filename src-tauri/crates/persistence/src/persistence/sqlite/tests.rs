@@ -4793,14 +4793,18 @@ fn test_raw_tables_leave_out_virtual_tables_even_when_pragmas_are_shadowed() {
     // file's own data; the viewer must neither list nor read them. The file
     // also ships its own `pragma_table_list`, which a table-valued pragma
     // query would read instead of SQLite's and so list `docs` as ordinary.
+    // The schema rows are written directly: release builds compile SQLite
+    // without FTS5 or RTREE, so `CREATE VIRTUAL TABLE` would fail there.
     let mut db = Database::in_memory().unwrap();
     db.save_project(&Project::new("Hostile Cave".to_string(), None))
         .unwrap();
     db.conn
         .execute_batch(
-            "CREATE VIRTUAL TABLE docs USING fts5(body);
-             INSERT INTO docs VALUES ('lead');
-             CREATE VIRTUAL TABLE/**/boxes USING rtree(id, x0, x1);
+            "PRAGMA writable_schema = ON;
+             INSERT INTO sqlite_master (type, name, tbl_name, rootpage, sql) VALUES
+               ('table', 'docs', 'docs', 0, 'CREATE VIRTUAL TABLE docs USING fts5(body)'),
+               ('table', 'boxes', 'boxes', 0, 'CREATE VIRTUAL TABLE/**/boxes USING rtree(id, x0, x1)');
+             PRAGMA writable_schema = RESET;
              CREATE TABLE pragma_table_list (name, schema, type);
              INSERT INTO pragma_table_list VALUES ('docs', 'main', 'table'),
                                                   ('boxes', 'main', 'table');",
@@ -8641,4 +8645,49 @@ fn a_legacy_is_virtual_column_still_opens() {
     let path = project_file_with(&dir, "ALTER TABLE shots ADD COLUMN is_virtual INTEGER;");
 
     Database::open_existing(&path).unwrap();
+}
+
+/// A hostile `.stalx` must not reach FTS, RTREE or DBSTAT code, nor load an
+/// extension (#608). The modules are stripped at build time by
+/// `LIBSQLITE3_FLAGS`, which CI, release and the dev scripts set; a plain
+/// local `cargo test` builds without it, so CI runs this one with `--ignored`.
+#[test]
+#[ignore = "needs the LIBSQLITE3_FLAGS build; CI runs it explicitly"]
+fn bundled_sqlite_omits_virtual_table_modules_and_extension_loading() {
+    let conn = Connection::open_in_memory().unwrap();
+    let options: Vec<String> = conn
+        .prepare("PRAGMA compile_options")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    for stripped in [
+        "ENABLE_FTS3",
+        "ENABLE_FTS5",
+        "ENABLE_RTREE",
+        "ENABLE_DBSTAT_VTAB",
+    ] {
+        assert!(
+            !options.iter().any(|o| o == stripped),
+            "{stripped} compiled in: {options:?}"
+        );
+    }
+    assert!(
+        options.iter().any(|o| o == "OMIT_LOAD_EXTENSION"),
+        "extension loading compiled in: {options:?}"
+    );
+    // And by behaviour, not only by name: none of the modules can be used.
+    for module in ["fts3", "fts4", "fts5", "rtree", "dbstat"] {
+        let err = conn
+            .execute_batch(&format!(
+                "CREATE VIRTUAL TABLE t_{module} USING {module}(x)"
+            ))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("no such module"),
+            "{module}: {err}"
+        );
+    }
 }
