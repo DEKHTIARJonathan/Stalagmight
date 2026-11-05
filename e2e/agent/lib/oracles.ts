@@ -20,7 +20,7 @@ import type { Browser } from 'webdriverio';
 import { invokeInApp, evalInApp } from './page';
 import { readStore } from './stores';
 import { isErrorLine, isWarnLine } from './logs';
-import { redactCorpusText } from './fixtureCorpus';
+import { redactCorpusText, redactCorpusValue } from './fixtureCorpus';
 
 export type Severity = 'fatal' | 'error' | 'warning';
 
@@ -383,20 +383,32 @@ export async function runSweep(
 
 /**
  * `finding` with every corpus name the process has copied replaced by its tag
- * (`fixtureCorpus.redactCorpusText`), in the message and in the detail. A detail
- * whose redaction breaks its JSON (a name ending in a backslash splits an escape)
- * is withheld rather than recorded half-redacted.
+ * (`fixtureCorpus.redactCorpusText`), in the message and in the detail. The
+ * detail is folded string by string (`redactCorpusValue`, #576 RV15-1): over its
+ * JSON text, a name JSON escapes (a quote, a backslash) was never found - a
+ * crash marker's detail is the parsed marker, and report.md prints it.
  */
 export function publishableFinding(finding: Finding): Finding {
   const out: Finding = { ...finding, message: redactCorpusText(finding.message) };
-  if (finding.detail !== undefined) {
-    try {
-      out.detail = JSON.parse(redactCorpusText(JSON.stringify(finding.detail))) as unknown;
-    } catch {
-      out.detail = '(withheld: redacting a corpus name broke the encoding)';
-    }
-  }
+  if (finding.detail !== undefined) out.detail = redactCorpusValue(finding.detail);
   return out;
+}
+
+/**
+ * A crash marker's text as it may be copied into a finding (#576 NF-W17-2,
+ * RV15-1). A marker is serde_json output, so it is parsed and folded value by
+ * value: folding its text never finds a name JSON escapes. A marker that does not
+ * parse (cut off mid-write) is folded as text; if a backslash is left in it, an
+ * escaped name may be hiding there, and the copy says so instead of quoting it.
+ */
+export function publishableCrashMarker(text: string): string {
+  try {
+    return JSON.stringify(redactCorpusValue(JSON.parse(text) as unknown), null, 2);
+  } catch {
+    const folded = redactCorpusText(text);
+    if (!folded.includes('\\')) return folded;
+    return `(withheld: the crash marker is not JSON, and a corpus name escaped in it could not be folded; ${text.length} characters)\n`;
+  }
 }
 
 async function captureFinding(
@@ -420,7 +432,7 @@ async function captureFinding(
   for (const marker of target.findCrashMarkers()) {
     try {
       const text = fs.readFileSync(marker, 'utf8');
-      fs.writeFileSync(path.join(dir, path.basename(marker)), redactCorpusText(text));
+      fs.writeFileSync(path.join(dir, path.basename(marker)), publishableCrashMarker(text));
     } catch {
       // Best-effort.
     }

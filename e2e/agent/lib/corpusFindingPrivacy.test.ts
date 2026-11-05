@@ -141,6 +141,65 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
     expect(allText(findings)).not.toContain(MARK);
   });
 
+  /**
+   * #576 RV15-1: a marker is serde_json text, where a quote in a name reads `\"`
+   * and a backslash `\\`. Folding the TEXT never found such a name, in the copied
+   * marker or in the finding's detail (the parsed marker, folded over its JSON
+   * text too), and report.md prints the detail.
+   */
+  it.each([
+    ['a quote', 'rv15q', 'qzrv15q "quoted" trip.dmp', 'qzrv15q'],
+    ['a backslash', 'rv15b', 'qzrv15b back\\slash trip.dmp', 'qzrv15b'],
+  ])('keeps a name with %s out of a copied crash marker, finding.json and report.md (#576 RV15-1)', async (_what, id, name, token) => {
+    // A copy directory the report's own path fold does not recognise, so only
+    // the corpus fold can keep the name out.
+    const destination = path.join(scratch, 'copies', id);
+    registerCorpusRedactions(id, destination, [name]);
+    const markerDir = path.join(scratch, `markers-${id}`);
+    fs.mkdirSync(markerDir, { recursive: true });
+    const marker = path.join(markerDir, 'crash-1-2-0.json');
+    const payload = { message: `could not read ${path.join(destination, name)}`, location: 'src/lib.rs:1:1' };
+    fs.writeFileSync(marker, JSON.stringify(payload, null, 2));
+    expect(fs.readFileSync(marker, 'utf8')).not.toContain(name); // the marker text escapes the name
+    const target: OracleTarget = { ...webviewLogging('INFO nothing to see'), findCrashMarkers: () => [marker] };
+    const session = path.join(sessionsRoot, `run-${id}`);
+    const recorder = new Recorder(`run-${id}`, sessionsRoot);
+    const sweep = await runSweep(target, newOracleState(), { recorder });
+    execFileSync('node', [path.join(REPO, 'scripts', 'generate-repro-report.mjs'), session], { encoding: 'utf8' });
+
+    expect(sweep.newFindings.map((f) => f.kind)).toEqual(['crash-marker']);
+    const finding = fs.readFileSync(path.join(session, 'findings', '001', 'finding.json'), 'utf8');
+    const copied = fs.readFileSync(path.join(session, 'findings', '001', 'crash-1-2-0.json'), 'utf8');
+    const report = fs.readFileSync(path.join(session, 'report.md'), 'utf8');
+    // Where the name still is, all at once.
+    const leaks = { marker: copied.includes(token), findingJson: finding.includes(token), reportMd: report.includes(token) };
+    expect(leaks).toEqual({ marker: false, findingJson: false, reportMd: false });
+    // Still a readable marker and finding, naming the entry by its tag.
+    expect(JSON.parse(copied)).toEqual({ message: `could not read <corpus #${id}>/<corpus #${id}>/file`, location: 'src/lib.rs:1:1' });
+    expect(finding).toContain(`<corpus #${id}>`);
+    expect(report).toContain('crash-marker');
+  });
+
+  it('withholds a torn crash marker that may hide an escaped name (#576 RV15-1)', async () => {
+    const id = 'rv15t';
+    const name = 'qzrv15t "torn" trip.dmp';
+    const destination = path.join(scratch, 'copies', id);
+    registerCorpusRedactions(id, destination, [name]);
+    const markerDir = path.join(scratch, `markers-${id}`);
+    fs.mkdirSync(markerDir, { recursive: true });
+    const marker = path.join(markerDir, 'crash-3-4-0.json');
+    // A marker cut off mid-write: not JSON, but escaped as JSON.
+    const whole = JSON.stringify({ message: `could not read ${path.join(destination, name)}`, location: 'src/lib.rs:1:1' });
+    fs.writeFileSync(marker, whole.slice(0, whole.indexOf('location')));
+    const target: OracleTarget = { ...webviewLogging('INFO nothing to see'), findCrashMarkers: () => [marker] };
+    const recorder = new Recorder(`run-${id}`, sessionsRoot);
+    await runSweep(target, newOracleState(), { recorder });
+
+    const copied = fs.readFileSync(path.join(sessionsRoot, `run-${id}`, 'findings', '001', 'crash-3-4-0.json'), 'utf8');
+    expect(copied).toContain('withheld');
+    expect(copied).not.toContain('qzrv15t');
+  });
+
   it('keeps the name out of an MCP error outcome', () => {
     const message = publishableErrorMessage(new Error(`import failed: no sections in ${copyPath}`));
     expect(message).toContain('<corpus #');
