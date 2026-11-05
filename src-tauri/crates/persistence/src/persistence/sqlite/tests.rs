@@ -8562,6 +8562,31 @@ fn every_open_of_an_existing_file_refuses_a_hostile_schema() {
              UPDATE sqlite_master SET type = 'View' WHERE name = 'w';",
             "a view",
         ),
+        (
+            "CREATE TABLE c (x CHECK (length(zeroblob(10)) > 0));",
+            "a table with a CHECK constraint the app never writes",
+        ),
+        (
+            "CREATE TABLE g (a, b AS (zeroblob(10)));",
+            "a table with a generated column",
+        ),
+        (
+            "CREATE TABLE d (x TEXT DEFAULT (hex(zeroblob(10))));",
+            "a table with an expression default",
+        ),
+        (
+            "CREATE INDEX e ON shots (length(hex(zeroblob(10))) + length);",
+            "an expression or partial index",
+        ),
+        (
+            "CREATE INDEX p ON shots (length) WHERE length > 0;",
+            "an expression or partial index",
+        ),
+        (
+            "PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET name = CAST('project' AS BLOB) WHERE name = 'project';",
+            "a schema object of an unexpected type",
+        ),
     ] {
         let dir = TempDir::new().unwrap();
         let path = project_file_with(&dir, sql);
@@ -8586,6 +8611,28 @@ fn every_open_of_an_existing_file_refuses_a_hostile_schema() {
             assert_eq!(refused.what, what, "{name}: {sql}");
         }
     }
+}
+
+#[test]
+fn every_opener_still_opens_what_sqlite_itself_adds_to_a_real_file() {
+    // AUTOINCREMENT adds sqlite_sequence, UNIQUE an autoindex with NULL sql, and
+    // ANALYZE sqlite_stat1: all ordinary, none written by the app's schema code.
+    let dir = TempDir::new().unwrap();
+    let path = project_file_with(
+        &dir,
+        "CREATE TABLE extra (id INTEGER PRIMARY KEY AUTOINCREMENT, tag TEXT UNIQUE,
+                             n REAL DEFAULT -1.5, t TEXT DEFAULT CURRENT_TIMESTAMP);
+         INSERT INTO extra (tag) VALUES ('a');
+         CREATE INDEX extra_tag_n ON extra (tag, n);
+         ANALYZE;",
+    );
+
+    Database::open(&path).unwrap();
+    Database::open_existing(&path).unwrap();
+    Database::open_readonly(&path).unwrap();
+    Database::open_for_metadata(&path).unwrap();
+    Database::open_for_metadata_recovering(&path).unwrap();
+    Database::check_schema_at(&path).unwrap();
 }
 
 #[test]

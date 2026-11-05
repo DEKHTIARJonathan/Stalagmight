@@ -1315,7 +1315,7 @@ mod unsafe_file_tests {
 
     /// A real refused open of a file carrying a view whose name hides a
     /// right-to-left override: the load error is UNSAFE_FILE, names what was
-    /// found, and does not echo the override character.
+    /// found, and shows the override as `?` rather than echoing it.
     #[test]
     fn a_hostile_schema_becomes_an_unsafe_file_error_with_a_safe_name() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -1346,5 +1346,25 @@ mod unsafe_file_tests {
             load.details.as_deref(),
             Some(path.display().to_string().as_str())
         );
+    }
+
+    /// The production load maps a schema refusal to UNSAFE_FILE before the
+    /// permission and corruption classifiers can claim it. Guarded by order in
+    /// the source: the load needs a Wry AppHandle no unit test has (the idiom of
+    /// `the_production_load_refuses_a_managed_file_before_it_opens_the_database`).
+    #[test]
+    fn the_production_load_reports_a_refused_schema_as_unsafe_file() {
+        let src = include_str!("state/project_load.rs");
+        let start = src.find("fn do_load_project_full").unwrap();
+        let body = &src[start..];
+        // The open's error arm: the refusal check, then (in the same arm) the
+        // permission and corruption classifiers it must run ahead of.
+        let open = body.find("Database::open_existing(&path)").unwrap();
+        let arm = &body[open..];
+        let refused = arm.find("loading::refused_schema(&e)").unwrap();
+        let unsafe_file = arm.find("LoadError::unsafe_file(").unwrap();
+        let permission = arm.find("loading::is_permission_denied(&e)").unwrap();
+        let corrupt = arm.find("LoadError::corrupt(").unwrap();
+        assert!(refused < unsafe_file && unsafe_file < permission && permission < corrupt);
     }
 }
