@@ -141,14 +141,30 @@ pub(crate) fn check_write_path_with(
     // open the path (SQLite creating a project does), so its target has to be a
     // file of this type too.
     let extensions = target.extensions();
+    let expected = || {
+        let expected: Vec<String> = extensions.iter().map(|e| format!(".{e}")).collect();
+        expected.join(" or ")
+    };
     let has_expected = |file: &Path| {
         file.extension()
             .and_then(|e| e.to_str())
             .is_some_and(|e| extensions.iter().any(|x| e.eq_ignore_ascii_case(x)))
     };
-    if !has_expected(path) || !has_expected(&resolved(&absolute(path))) {
-        let expected: Vec<String> = extensions.iter().map(|e| format!(".{e}")).collect();
-        return refuse(format!("the file must end in {}", expected.join(" or ")));
+    if !has_expected(path) {
+        return refuse(format!("the file must end in {}", expected()));
+    }
+    // [#576 RV13-5] The name is right and the link at it leads to a file of
+    // another type (or a folder): said of the target, not of the name.
+    let lands = resolved(&absolute(path));
+    if !has_expected(&lands) {
+        let to = lands.file_name().map_or_else(
+            || lands.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        return refuse(format!(
+            "it is a link to {to}, which is not a {} file",
+            expected()
+        ));
     }
     location_refusal(path, matches!(target, WriteTarget::Project), dirs).map_or(Ok(()), refuse)
 }

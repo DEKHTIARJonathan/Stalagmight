@@ -388,7 +388,72 @@ fn a_dangling_link_as_the_file_is_judged_by_its_target_by_every_caller() {
     symlink(user.path().join("notes.txt"), &other).expect("a link to another type");
     let got = verdict(&other, WriteTarget::Project, &dirs);
     println!("NF-W13BE-1 other.stalx -> notes.txt: {got}");
-    assert!(got.contains("must end in .stalx"), "{got}");
+    assert!(got.ends_with("which is not a .stalx file"), "{got}");
     let entries = std::fs::read_dir(app.path()).expect("app dir").count();
     assert_eq!(entries, 0, "nothing written into the app folder");
+}
+
+/// [#576 RV13-5] A link at a name of the right type whose target is a file of
+/// another type (or a folder, or a file with no extension) is refused - and the
+/// message says the link's target is the problem. It used to say "the file must
+/// end in .stalx" of a name that does end in .stalx.
+#[cfg(unix)]
+#[test]
+fn a_link_to_a_file_of_another_type_is_refused_naming_its_target() {
+    use std::os::unix::fs::symlink;
+
+    let user = TempDir::new().expect("user dir");
+    let dirs = no_app_dirs();
+    let u = user.path();
+    std::fs::write(u.join("notes.txt"), b"user notes").expect("a text file");
+    std::fs::write(u.join("noext"), b"user data").expect("a file with no extension");
+    std::fs::create_dir(u.join("folder")).expect("a folder");
+    for (link, to, target, expected) in [
+        (
+            "n.stalx",
+            "notes.txt",
+            WriteTarget::Project,
+            "notes.txt, which is not a .stalx file",
+        ),
+        (
+            "d.stalx",
+            "folder",
+            WriteTarget::Project,
+            "folder, which is not a .stalx file",
+        ),
+        (
+            "e.stalx",
+            "noext",
+            WriteTarget::Project,
+            "noext, which is not a .stalx file",
+        ),
+        (
+            "m.stalx",
+            "missing.txt",
+            WriteTarget::Project,
+            "missing.txt, which is not a .stalx file",
+        ),
+        (
+            "a.tmlu",
+            "notes.txt",
+            WriteTarget::Ariane,
+            "notes.txt, which is not a .tml or .tmlu file",
+        ),
+    ] {
+        symlink(u.join(to), u.join(link)).expect("a link");
+        let got = verdict(&u.join(link), target, &dirs);
+        println!("RV13-5 {link} -> {to}: {got}");
+        assert_eq!(
+            got,
+            format!("Refused to change {link}: it is a link to {expected}"),
+            "{link} -> {to}"
+        );
+    }
+    // A name of another type is still refused by its name.
+    let got = verdict(&u.join("notes.txt"), WriteTarget::Project, &dirs);
+    println!("RV13-5 notes.txt: {got}");
+    assert_eq!(
+        got,
+        "Refused to change notes.txt: the file must end in .stalx"
+    );
 }
