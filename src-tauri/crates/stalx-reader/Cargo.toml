@@ -2,7 +2,9 @@
 name = "stalx-reader"
 version = "0.1.0"
 description = "Read-only reader for Stalagmight .stalx project files"
-publish = false
+repository = "https://github.com/Stalagmight/Stalagmight"
+readme = false
+keywords = ["cave", "survey", "speleology", "sqlite"]
 edition.workspace = true
 license.workspace = true
 
@@ -10,8 +12,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-stalagmight-models = { path = "../models" }
-stalagmight-persistence = { path = "../persistence" }
+stalagmight-models = { path = "../models", version = "=0.1.0" }
+stalagmight-persistence = { path = "../persistence", version = "=0.1.0" }
 rusqlite = { workspace = true, features = ["bundled", "hooks", "limits"] }
 tempfile = { workspace = true }
 thiserror = { workspace = true }

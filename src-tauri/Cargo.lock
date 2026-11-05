@@ -4524,7 +4524,7 @@ dependencies = [
 
 [[package]]
 name = "stalagmight-models"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "chrono",
  "serde",
@@ -4557,7 +4557,7 @@ dependencies = [
 
 [[package]]
 name = "stalagmight-persistence"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
