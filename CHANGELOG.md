@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Security
+
+- **Bundled SQLite updated from 3.45.0 to 3.54.1** - `.stalx` project files are SQLite databases you may be sent by others, and this picks up the upstream memory-safety fixes since January 2024, including several for crafted database files ([#598](https://github.com/Stalagmight/Stalagmight/issues/598))
+
 ## [0.5.0] - 2026-08-13
 
 The first release with builds for all three platforms. The headline additions are
