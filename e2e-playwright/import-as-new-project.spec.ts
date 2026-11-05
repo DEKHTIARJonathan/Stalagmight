@@ -178,6 +178,9 @@ test.describe('Import as new project over unsaved changes: the prompt comes afte
     await expect(page.getByTestId('unsaved-changes-dialog')).toBeVisible();
     await expect(page.getByTestId('import-as-new-project-dialog')).toBeHidden();
     expect(await openProjectName(page)).toBe('ProjectA');
+    // It says what it is about (#576 HFI-4-D3), not the generic "go back" text.
+    await expect(page.getByTestId('unsaved-changes-dialog')).toContainText('Import as a new project?');
+    await expect(page.getByTestId('unsaved-changes-dialog')).toContainText('Unsaved changes in ProjectA will be lost.');
 
     await page.getByTestId('unsaved-changes-discard').click();
 

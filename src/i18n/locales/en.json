@@ -1388,6 +1388,8 @@
       "messageNewProject": "You have unsaved changes. Create a new project anyway?",
       "messageOpenProject": "You have unsaved changes. Open another project anyway?",
       "messageBack": "You have unsaved changes. Are you sure you want to go back?",
+      "messageImportAsNew": "Import as a new project?",
+      "noteImportAsNew": "Unsaved changes in {{project}} will be lost.",
       "noteQuit": "Save your changes, or discard them and quit.",
       "note": "Your changes will be lost.",
       "discardQuit": "Discard & Quit",

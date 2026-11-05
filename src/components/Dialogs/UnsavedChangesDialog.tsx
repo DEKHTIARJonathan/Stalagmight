@@ -24,6 +24,7 @@ export default function UnsavedChangesDialog() {
     useShallow((s) => ({ closeProject: s.closeProject, loadProject: s.loadProject })),
   );
   const { handleSaveProject } = useProject();
+  const projectName = useProjectStore((s) => s.project?.name ?? '');
 
   // Set by handleOpenProject when discarding the current project to open another
   // one: on discard we load this project over the dirty one instead of going
@@ -122,10 +123,16 @@ export default function UnsavedChangesDialog() {
             ? t('dialogs.unsavedChanges.messageNewProject')
             : pendingOpenPath
             ? t('dialogs.unsavedChanges.messageOpenProject')
+            : pendingImport
+            ? t('dialogs.unsavedChanges.messageImportAsNew')
             : t('dialogs.unsavedChanges.messageBack')}
         </p>
         <p className="text-text-secondary text-sm">
-          {pendingQuit ? t('dialogs.unsavedChanges.noteQuit') : t('dialogs.unsavedChanges.note')}
+          {pendingQuit
+            ? t('dialogs.unsavedChanges.noteQuit')
+            : pendingImport
+            ? t('dialogs.unsavedChanges.noteImportAsNew', { project: projectName })
+            : t('dialogs.unsavedChanges.note')}
         </p>
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">

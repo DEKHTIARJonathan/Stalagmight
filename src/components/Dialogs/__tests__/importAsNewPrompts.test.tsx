@@ -90,6 +90,30 @@ describe('the unsaved-changes prompt after a good parse (#576 HFI-4-D2)', () => 
     await waitFor(() => expect(closeProject).toHaveBeenCalled());
     expect(useUIStore.getState().activeDialog).toBeNull();
   });
+
+  // #576 HFI-4-D3: the prompt names what it is about (the import, the project it closes),
+  // not the generic "Are you sure you want to go back?"; the buttons stay the same.
+  it('asks "Import as a new project?" and names the project whose changes are lost', () => {
+    render(<DialogHost />);
+    const dialog = screen.getByTestId('unsaved-changes-dialog');
+
+    expect(dialog).toHaveTextContent('Import as a new project?');
+    expect(dialog).toHaveTextContent('Unsaved changes in ProjectA will be lost.');
+    expect(dialog).not.toHaveTextContent('go back');
+    expect(dialog).not.toHaveTextContent('Your changes will be lost.');
+    expect(screen.getByTestId('unsaved-changes-cancel')).toHaveTextContent('Cancel');
+    expect(screen.getByTestId('unsaved-changes-discard')).toHaveTextContent('Discard Changes');
+  });
+
+  it('the plain unsaved-changes prompt (no parsed file) keeps its own text', () => {
+    useUIStore.setState({ dialogData: null });
+    render(<DialogHost />);
+    const dialog = screen.getByTestId('unsaved-changes-dialog');
+
+    expect(dialog).toHaveTextContent('You have unsaved changes. Are you sure you want to go back?');
+    expect(dialog).toHaveTextContent('Your changes will be lost.');
+    expect(dialog).not.toHaveTextContent('Import as a new project?');
+  });
 });
 
 describe('the SpeleoDB hand-back prompt after a good parse (#576 HFI-4-D2)', () => {
