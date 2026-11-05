@@ -58,8 +58,9 @@ Stalagmight app --push .stalx--> SpeleoDB (stored as-is, versioned)
   default); refuses newer schemas.
 - **Bounds:** one deadline covers the read. SQLite statements are interrupted mid-run; the
   post-load Rust steps are checked between, so a started step finishes. Those steps are
-  near-linear once #596 and #597 land. No heap cap beyond input size and row caps, and the
-  bundled SQLite is old (#598). SpeleoDB should run each read in a worker it can kill.
+  near-linear (#596, #597) except the offset cascade on load (#602). No heap cap beyond input
+  size and row caps, and the bundled SQLite is old (#598). SpeleoDB should run each read in a
+  worker it can kill.
 - Semver. A `.stalx` schema bump is a crate release; SpeleoDB upgrades the crate to read new files.
 - License: AGPL-3.0-or-later, same as both projects.
 

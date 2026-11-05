@@ -327,15 +327,15 @@ impl Survey {
         let stations = with_stations.then(|| {
             let anchors = Anchors::new(project, &station_merges, &zero_datums, frame_datum);
             let mut positions: Vec<StationPosition> = project
-                .compute_station_coordinates()
+                .compute_station_positions()
                 .into_iter()
-                .map(|s| {
-                    let station = StationId::from(s.station_ref);
+                .map(|(station_ref, coordinates)| {
+                    let station = StationId::from(station_ref);
                     StationPosition {
                         station,
-                        x: s.coordinates.x,
-                        y: s.coordinates.y,
-                        z: s.coordinates.z,
+                        x: coordinates.x,
+                        y: coordinates.y,
+                        z: coordinates.z,
                         anchor: anchors.of(station),
                         latitude: None,
                         longitude: None,

@@ -26,10 +26,10 @@
 //! mid-run; the steps after the load (the app's post-load normalisation, the
 //! conversion, optional station positions) are plain Rust, and the deadline is
 //! checked between them, so a step that has started runs to completion. How
-//! long such a step can run is set by the app code it calls: the orphan-closure
-//! sweep in the normalisation is super-linear until #597 lands, and station
-//! positions build per-station merge lists quadratic in merge-group size until
-//! this crate moves to the app's positions-only path (#596). Memory is bounded
+//! long such a step can run is set by the app code it calls; the known
+//! super-linear one left is the offset cascade in the normalisation (#602).
+//! Station positions come from the app's positions-only path, near-linear in
+//! the station count whatever the merge-group sizes (#596). Memory is bounded
 //! only by the input size and [`CountLimits`]. SQLite's own temporary files go
 //! to the process temp dir (`SQLITE_TMPDIR`), not [`ReadOptions::temp_dir`].
 //! A server should run reads in a worker it can kill: stack overflow and

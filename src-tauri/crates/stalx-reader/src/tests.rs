@@ -865,3 +865,39 @@ fn a_derived_uuid_steps_past_one_the_file_already_holds() {
     assert_eq!(shots[0].uuid, squat);
     assert!(shots[1].uuid_derived && shots[1].uuid != squat);
 }
+
+#[test]
+fn a_large_merge_group_reads_with_stations_quickly() {
+    // Every section's start merged into one 6000-station group: the app's full
+    // coordinates would attach 6000^2 `merged_with` entries; the positions-only
+    // path the reader uses attaches none.
+    let mut project = full_project();
+    let template = project.station_merges.iter().next().cloned().unwrap();
+    let hub = project
+        .key_for_ref(StationRef::new(project.sections[0].id, 0))
+        .unwrap();
+    for i in 0..6_000 {
+        let id = project.add_section(descending(&format!("S{i}"), 1.0, 1)).id;
+        let start = project.key_for_ref(StationRef::new(id, 0)).unwrap();
+        project
+            .station_merges
+            .push(stalagmight_models::station::StationMerge {
+                station_a: hub.clone(),
+                station_b: start,
+                merged_at: template.merged_at,
+            });
+    }
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &project);
+
+    let started = std::time::Instant::now();
+    let survey = read_file_with(&path, &ReadOptions::default().with_stations(true)).unwrap();
+    let elapsed = started.elapsed();
+
+    assert_eq!(survey.sections.len(), 6_002);
+    assert!(survey.stations.is_some());
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "took {elapsed:?}"
+    );
+}
