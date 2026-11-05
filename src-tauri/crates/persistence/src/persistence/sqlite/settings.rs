@@ -331,11 +331,7 @@ impl Database {
         let mut stmt = self
             .conn
             .prepare(&format!("SELECT * FROM {ident} LIMIT ?1 OFFSET ?2"))?;
-        let columns: Vec<String> = stmt
-            .column_names()
-            .iter()
-            .map(|c| (*c).to_string())
-            .collect();
+        let columns: Vec<String> = stmt.column_names().map(str::to_string).collect();
         let column_count = columns.len();
         let mapped = stmt.query_map(params![limit, offset], |row| {
             let mut values = Vec::with_capacity(column_count);

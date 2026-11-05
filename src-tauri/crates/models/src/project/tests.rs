@@ -15472,3 +15472,217 @@ fn count_unanchored_sections_is_scoped_to_the_newly_imported_component() {
          this import's problem"
     );
 }
+
+/// Two zero-datum-anchored components of `n` one-shot sections each (chained by
+/// merges), and `closures` cross-component loop closures between them. Every
+/// closure is an orphan whose promotion is refused (it would double-anchor), so
+/// the pre-#597 sweep ran a full walk per closure, rescanning every merge per
+/// visited station, on every pass.
+fn two_anchored_components_with_orphan_closures(n: usize, closures: usize) -> Project {
+    let mut project = Project::new("Orphans".to_string(), None);
+    let component = |project: &mut Project| -> Vec<SectionId> {
+        let ids: Vec<SectionId> = (0..n)
+            .map(|_| {
+                project
+                    .add_section(SectionData {
+                        shots: vec![shot(90.0, 90.0, 1.0, 0.0, 0.0)],
+                        ..Default::default()
+                    })
+                    .id
+            })
+            .collect();
+        for pair in ids.windows(2) {
+            project.station_merges.push(StationMerge {
+                station_a: StationKey::new(
+                    pair[0],
+                    StationAnchor::AfterShot(
+                        project.get_section(pair[0]).unwrap().shots[0]
+                            .uuid
+                            .clone()
+                            .unwrap(),
+                    ),
+                ),
+                station_b: StationKey::new(pair[1], StationAnchor::SectionStart),
+                merged_at: Utc::now(),
+            });
+        }
+        ids
+    };
+    let a = component(&mut project);
+    let b = component(&mut project);
+    for (ids, lat) in [(&a, 20.5), (&b, 20.6)] {
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationKey::new(ids[0], StationAnchor::SectionStart),
+            gps: GpsCoordinates::new(lat, -87.4, 0.0).unwrap(),
+        });
+    }
+    for i in 0..closures {
+        let (sa, sb) = (a[i % n], b[(i * 7) % n]);
+        project.loop_closures.push(LoopClosure {
+            id: i as u64 + 1,
+            station_a: StationKey::new(sa, StationAnchor::SectionStart),
+            station_b: StationKey::new(sb, StationAnchor::SectionStart),
+            path_length: 0.0,
+            misclosure_distance: 0.0,
+            error_percentage: 0.0,
+            horizontal_misclosure: 0.0,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::default(),
+            is_aligned: false,
+        });
+    }
+    project.next_closure_id = closures as u64 + 1;
+    project
+}
+
+#[test]
+fn the_orphan_sweep_is_fast_with_thousands_of_refused_promotions() {
+    let mut project = two_anchored_components_with_orphan_closures(1_000, 2_000);
+
+    let started = std::time::Instant::now();
+    project.redrive_offsets_after_load();
+    let elapsed = started.elapsed();
+
+    assert_eq!(
+        project.loop_closures.len(),
+        2_000,
+        "every promotion is refused (both sides anchored), so all stay closures"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "the whole post-load redrive took {elapsed:?}"
+    );
+}
+
+#[test]
+fn the_orphan_sweep_still_promotes_in_order_and_keeps_a_redundant_twin() {
+    // One anchored component and one free one, bridged by two closures between
+    // the same stations: the first becomes the merge, the second is then a
+    // genuine (redundant) loop and stays a closure.
+    let mut project = two_anchored_components_with_orphan_closures(3, 0);
+    project.zero_datums.pop();
+    let (a0, b0) = (project.sections[0].id, project.sections[3].id);
+    for id in [11, 12] {
+        project.loop_closures.push(LoopClosure {
+            id,
+            station_a: StationKey::new(a0, StationAnchor::SectionStart),
+            station_b: StationKey::new(b0, StationAnchor::SectionStart),
+            path_length: 0.0,
+            misclosure_distance: 0.0,
+            error_percentage: 0.0,
+            horizontal_misclosure: 0.0,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::default(),
+            is_aligned: false,
+        });
+    }
+
+    let converted = project.convert_orphan_closures_to_merges();
+
+    assert_eq!(converted, 1);
+    assert_eq!(
+        project
+            .loop_closures
+            .iter()
+            .map(|c| c.id)
+            .collect::<Vec<_>>(),
+        [12]
+    );
+}
+
+#[test]
+fn the_orphan_sweep_sees_merges_through_a_deleted_section() {
+    // Two anchored sections bridged only by merges through a section id that no
+    // longer exists. The merges do not connect them (they do not resolve), so the
+    // closure is an orphan; but `merge_would_double_anchor` walks stored ids, sees
+    // one merge component, and allows the promotion. The sweep must agree.
+    let mut project = two_anchored_components_with_orphan_closures(1, 1);
+    let (a, b) = (project.sections[0].id, project.sections[1].id);
+    let gone: SectionId = project.sections.iter().map(|s| s.id).max().unwrap_or(0) + 100;
+    for (x, y) in [(a, gone), (gone, b)] {
+        project.station_merges.push(StationMerge {
+            station_a: StationKey::new(x, StationAnchor::SectionStart),
+            station_b: StationKey::new(y, StationAnchor::SectionStart),
+            merged_at: Utc::now(),
+        });
+    }
+
+    assert_eq!(project.convert_orphan_closures_to_merges(), 1);
+    assert!(project.loop_closures.is_empty());
+}
+
+#[test]
+fn the_orphan_sweep_examines_the_closure_right_after_a_converted_one() {
+    // Two different orphans side by side: converting the first must not skip
+    // the second.
+    let mut project = two_anchored_components_with_orphan_closures(3, 0);
+    project.zero_datums.pop();
+    let loose = project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 1.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let (a0, b0) = (project.sections[0].id, project.sections[3].id);
+    for (id, other) in [(11, b0), (12, loose)] {
+        project.loop_closures.push(LoopClosure {
+            id,
+            station_a: StationKey::new(a0, StationAnchor::SectionStart),
+            station_b: StationKey::new(other, StationAnchor::SectionStart),
+            path_length: 0.0,
+            misclosure_distance: 0.0,
+            error_percentage: 0.0,
+            horizontal_misclosure: 0.0,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::default(),
+            is_aligned: false,
+        });
+    }
+
+    assert_eq!(project.convert_orphan_closures_to_merges(), 2);
+    assert!(project.loop_closures.is_empty());
+}
+
+#[test]
+fn remeasuring_alignment_is_fast_with_thousands_of_aligned_closures_in_one_component() {
+    // One 4000-section merge chain, with a snap-to-merge closure doubling every
+    // merge: each closure's gap is zero, so each reaches the double-anchor
+    // question, which a per-closure merge walk made quadratic.
+    let mut project = two_anchored_components_with_orphan_closures(4_000, 0);
+    let doubled: Vec<(StationKey, StationKey)> = project
+        .station_merges
+        .iter()
+        .map(|m| (m.station_a.clone(), m.station_b.clone()))
+        .collect();
+    for (i, (a, b)) in doubled.into_iter().enumerate() {
+        project.loop_closures.push(LoopClosure {
+            id: i as u64 + 1,
+            station_a: a,
+            station_b: b,
+            path_length: 0.0,
+            misclosure_distance: 0.0,
+            error_percentage: 0.0,
+            horizontal_misclosure: 0.0,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::Move,
+            is_aligned: false,
+        });
+    }
+
+    // Place the sections (untimed: the offset cascade's own cost is tracked
+    // separately), then re-measure from scratch.
+    project.redrive_offsets_after_load();
+    for closure in &mut project.loop_closures {
+        closure.is_aligned = false;
+    }
+
+    let started = std::time::Instant::now();
+    project.remeasure_closure_alignment();
+    let elapsed = started.elapsed();
+
+    assert!(project.loop_closures.iter().all(|c| c.is_aligned));
+    assert!(
+        elapsed < std::time::Duration::from_secs(5),
+        "took {elapsed:?}"
+    );
+}

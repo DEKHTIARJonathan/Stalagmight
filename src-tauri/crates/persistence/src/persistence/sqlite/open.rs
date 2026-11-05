@@ -72,15 +72,66 @@ impl Database {
         // Open in read-only mode first to check if it's valid
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .context("Failed to open database - file may not be a valid SQLite database")?;
+        Self::finish_open_existing(conn, false)
+    }
 
-        let mut db = Self { conn };
+    /// [`Self::open_existing`] for a file from an untrusted source, e.g. a server
+    /// upload. Callers must pass a private COPY: this runs the same forward
+    /// migrations, which write to the file.
+    ///
+    /// The file can carry its own schema, so before anything reads it the
+    /// connection is put in defensive mode with `trusted_schema` off (no
+    /// non-innocuous functions from schema code), every string or blob SQLite
+    /// produces is capped at `max_value_bytes`, and any statement still running
+    /// once `deadline` has passed since the open is interrupted. SQLite checks the
+    /// deadline every 1,000 VM steps within a statement, so it bounds long
+    /// statements; many short ones are bounded by the input size instead.
+    pub fn open_existing_untrusted(
+        path: &Path,
+        max_value_bytes: i32,
+        deadline: std::time::Duration,
+    ) -> Result<Self> {
+        use rusqlite::config::DbConfig;
+        use rusqlite::limits::Limit;
+
+        if !path.exists() {
+            anyhow::bail!("File does not exist");
+        }
+        let mut conn =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+                .context("Failed to open database - file may not be a valid SQLite database")?;
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
+        conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, max_value_bytes)?;
+        let expires = std::time::Instant::now() + deadline;
+        conn.progress_handler(1_000, Some(move || std::time::Instant::now() > expires))?;
+        // SQLite's guidance for untrusted files: no memory-mapping (a crafted
+        // page is read through the checked path), validate cell sizes as pages
+        // are read, and keep temporary sort data on disk, not in RAM.
+        conn.pragma_update(None, "mmap_size", 0i64)?;
+        conn.pragma_update(None, "cell_size_check", true)?;
+        conn.pragma_update(None, "temp_store", "FILE")?;
+        Self::finish_open_existing(conn, true)
+    }
+
+    /// The checks and migrations every existing-file open runs on `conn`.
+    /// `untrusted` keeps the caller's hardened pragmas instead of the app's
+    /// performance ones.
+    fn finish_open_existing(conn: Connection, untrusted: bool) -> Result<Self> {
+        let db = Self { conn };
         db.enable_foreign_keys()?;
+        if !untrusted {
+            db.apply_load_performance_pragmas();
+        }
+        db.run_existing_open_checks()
+    }
 
+    fn apply_load_performance_pragmas(&self) {
         // Let SQLite mmap the whole file (up to 256 MB).  Sequential
         // scans during integrity check / shot load go through the OS
         // page cache without a per-row copy into SQLite's buffer.
         // Cheap to enable; bounded by SQLite's own mmap_size cap.
-        let _ = db
+        let _ = self
             .conn
             .pragma_update(None, "mmap_size", 256i64 * 1024 * 1024);
         // Default cache_size is 2 000 pages (~2 MB). Large projects
@@ -88,12 +139,15 @@ impl Database {
         // shot SELECT and the integrity check don't re-fault from
         // mmap. 32 MiB covers the 11 MB 92.stalx with headroom for
         // the indexes; SQLite caps this against its own limits.
-        let _ = db.conn.pragma_update(None, "cache_size", -32_000i64); // negative = KiB
-                                                                       // Skip syncing on read-only-equivalent operations.
-                                                                       // (load path doesn't write - this is harmless on writes too;
-                                                                       // we already use a single transaction in save_project.)
-        let _ = db.conn.pragma_update(None, "temp_store", "MEMORY");
+        let _ = self.conn.pragma_update(None, "cache_size", -32_000i64); // negative = KiB
+                                                                         // Skip syncing on read-only-equivalent operations.
+                                                                         // (load path doesn't write - this is harmless on writes too;
+                                                                         // we already use a single transaction in save_project.)
+        let _ = self.conn.pragma_update(None, "temp_store", "MEMORY");
+    }
 
+    fn run_existing_open_checks(mut self) -> Result<Self> {
+        let db = &mut self;
         // Run quick integrity check before reading any data (SPEC 14.4)
         let t = std::time::Instant::now();
         db.validate_integrity()
@@ -131,7 +185,7 @@ impl Database {
             "open_existing: validate_foreign_keys"
         );
 
-        Ok(db)
+        Ok(self)
     }
 
     /// Open a database for read-only metadata extraction only.
