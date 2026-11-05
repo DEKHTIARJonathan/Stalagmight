@@ -1400,7 +1400,7 @@ impl Project {
                 (rank, sr, value)
             })
             .collect();
-        ranked.sort_by(|(a, _, _), (b, _, _)| a.cmp(b));
+        ranked.sort_by_key(|(rank, _, _)| *rank);
         let mut rows: Vec<(StationRef, V)> = Vec::with_capacity(ranked.len());
         for (_, sr, value) in ranked {
             match rows.last_mut() {
