@@ -314,6 +314,76 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
     expect(redactCorpusText('p="qzrv17h bad\\u{fffd} name.dmp"')).toBe(`p="${tag}"`);
   });
 
+  /**
+   * #576 RV17-2: a log line was cut to 400 characters, and the error-boundary
+   * text to 300 in the page, BEFORE the fold - so a name straddling the cut was
+   * no longer whole, nothing matched it, and its beginning stayed.
+   */
+  it('folds a name that straddles the 400-character cut of a log line (#576 RV17-2)', async () => {
+    const id = 'rv17cut';
+    const name = 'qzrv17cutname secret cave.dmp';
+    registerCorpusRedactions(id, path.join(scratch, 'copies', id), [name]);
+    const head = 'ERROR stalagmight_lib::commands::import_runner: Failed to parse DMP file for import {reason=could not read ';
+    const line = `${head}${'p'.repeat(390 - head.length)}${name}: bad header}`;
+    expect(line.indexOf(name)).toBe(390);
+    const session = path.join(sessionsRoot, `run-${id}`);
+    const sweep = await runSweep(webviewLogging(line), newOracleState(), { recorder: new Recorder(`run-${id}`, sessionsRoot) });
+
+    const message = sweep.findings[0]?.message ?? '';
+    const leaks = {
+      findings: JSON.stringify(sweep.findings).includes('qzrv17cut'),
+      session: allText(path.join(session, 'findings')).includes('qzrv17cut'),
+      actions: fs.readFileSync(path.join(session, 'actions.jsonl'), 'utf8').includes('qzrv17cut'),
+    };
+    expect(leaks).toEqual({ findings: false, session: false, actions: false });
+    expect(message.length).toBe(400); // still cut, after the fold
+    expect(message.slice(390)).toBe(`<corpus #${id}>`.slice(0, 10));
+  });
+
+  it('folds a name that straddles the 300-character cut of the error-boundary text (#576 RV17-2)', async () => {
+    const id = 'rv17eb';
+    const name = 'qzrv17ebname secret cave.dmp';
+    registerCorpusRedactions(id, path.join(scratch, 'copies', id), [name]);
+    const fallback = `${'x'.repeat(290)}${name} could not be opened`;
+    // Runs the oracle's real page script against a stand-in document.
+    const browser = {
+      executeAsync: (fn: (args: unknown, done: (r: unknown) => void) => void, first: unknown) => {
+        if (first === 'get_recent_logs_since') {
+          return Promise.resolve({ value: { entries: [], latest_seq: 0, dropped: false } });
+        }
+        return new Promise((resolve) => fn(first, resolve));
+      },
+      takeScreenshot: async () => {
+        throw new Error('no screen in a unit test');
+      },
+    };
+    const target: OracleTarget = {
+      browser: browser as unknown as OracleTarget['browser'],
+      exclusive: (fn) => fn(),
+      findCrashMarkers: () => [],
+    };
+    const g = globalThis as { document?: unknown };
+    g.document = { querySelector: () => ({ textContent: fallback }) };
+    const session = path.join(sessionsRoot, `run-${id}`);
+    let sweep: Awaited<ReturnType<typeof runSweep>>;
+    try {
+      sweep = await runSweep(target, newOracleState(), { recorder: new Recorder(`run-${id}`, sessionsRoot) });
+    } finally {
+      delete g.document;
+    }
+    execFileSync('node', [path.join(REPO, 'scripts', 'generate-repro-report.mjs'), session], { encoding: 'utf8' });
+
+    expect(sweep.findings.map((f) => f.kind)).toEqual(['error-boundary']);
+    const leaks = {
+      findings: JSON.stringify(sweep.findings).includes('qzrv17eb'),
+      session: allText(path.join(session, 'findings')).includes('qzrv17eb'),
+      actions: fs.readFileSync(path.join(session, 'actions.jsonl'), 'utf8').includes('qzrv17eb'),
+      reportMd: fs.readFileSync(path.join(session, 'report.md'), 'utf8').includes('qzrv17eb'),
+    };
+    expect(leaks).toEqual({ findings: false, session: false, actions: false, reportMd: false });
+    expect(String(sweep.findings[0]?.detail).length).toBe(300); // still cut, after the fold
+  });
+
   it('withholds every torn crash marker, a plain name cut mid-way included (#576 RV16-2)', async () => {
     const id = 'rv16p';
     const name = 'qzrv16plain secret cave.dmp';
