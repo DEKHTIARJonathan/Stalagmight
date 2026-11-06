@@ -668,7 +668,8 @@ pub struct BackupInfo {
     /// For [`BackupKind::PreRestore`]: which restore replaced it (1 = the
     /// first), or `None` for the unnumbered copy older builds kept.
     pub restore_number: Option<u32>,
-    /// It opens, passes SQLite's quick integrity check and holds a project -
+    /// It opens, has no schema object every open refuses (#608), passes
+    /// SQLite's quick integrity check and holds a project -
     /// checked the way a restore would install it (with its rollback journal, if
     /// one is beside it), without changing it. The dialog greys out the rest.
     pub usable: bool,

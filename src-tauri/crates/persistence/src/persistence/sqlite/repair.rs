@@ -149,21 +149,37 @@ impl Database {
     /// with the busy timeout set here rather than left to whatever the caller's
     /// open happened to configure (rusqlite's default today), so the wait the
     /// busy-timeout test pins on every other open path holds on this one too.
+    ///
+    /// [#576 RV18-1] A candidate is an existing file like any other, so the
+    /// schema guard (#608) runs here, before quick_check evaluates the file's
+    /// CHECKs or anything else reads it: a file every open would refuse is never
+    /// offered as usable, nor installed over the project.
     pub(super) fn for_candidate_check(conn: Connection) -> Result<Self> {
         conn.busy_timeout(CANDIDATE_BUSY_TIMEOUT)
             .context("Failed to set the busy timeout on a restore candidate")?;
+        super::check_schema(&conn)?;
         Ok(Self { conn })
     }
 }
 
 /// The checks a restore candidate has to pass, on a connection that already
-/// sees its committed contents: quick_check, and a project inside.
+/// sees its committed contents: the schema guard, quick_check, and a project
+/// inside.
 ///
 /// The reasons are worded for the dialog; SQLite's own error goes to the log.
 fn check_candidate_connection(conn: Connection) -> std::result::Result<(), String> {
     let unreadable = |e: &anyhow::Error| {
         tracing::info!(error = %e, purpose = "check a restore candidate", "Candidate refused");
-        if format!("{e:#}").contains("integrity check failed") {
+        let refused = e
+            .chain()
+            .find_map(|cause| cause.downcast_ref::<super::RefusedSchemaObject>());
+        if let Some(refused) = refused {
+            format!(
+                "it contains {} named \"{}\", which Stalagmight never creates",
+                refused.what,
+                refused.display_name()
+            )
+        } else if format!("{e:#}").contains("integrity check failed") {
             "it fails the database integrity check".to_string()
         } else {
             "it is not a readable project file".to_string()
@@ -713,8 +729,9 @@ impl Database {
     /// numbered copies and the pre-upgrade copy), an interrupted save's `.tmp`,
     /// and the files earlier restores replaced (`.pre-restore.N`, which used to
     /// be left out - so a restore could not be undone from the dialog). A
-    /// candidate that does not open, fails the quick integrity check or holds no
-    /// project is still listed - so the user sees it exists - but marked
+    /// candidate that does not open, has a schema every open refuses (#608),
+    /// fails the quick integrity check or holds no project is still listed - so
+    /// the user sees it exists - but marked
     /// unusable with the reason. Journals, staging files and the project itself
     /// are never offered.
     pub fn list_backups(path: &Path) -> Vec<BackupInfo> {
@@ -761,8 +778,9 @@ impl Database {
         backups
     }
 
-    /// [#576 C15] Can `candidate` be restored? It must open, pass the quick
-    /// integrity check and hold a project - as a restore would install it, i.e.
+    /// [#576 C15] Can `candidate` be restored? It must open, pass the schema
+    /// guard (#608) and the quick integrity check and hold a project - as a
+    /// restore would install it, i.e.
     /// together with the rollback journal beside it if there is one - and the
     /// check must not change it.
     ///
@@ -795,8 +813,9 @@ impl Database {
     /// 1. The candidate (with its rollback journal, if one is beside it - an
     ///    interrupted save's `.tmp` can have one) is copied to a staging file
     ///    beside the project and checked there: opening it read-write rolls the
-    ///    journal back to the last committed state, then quick_check and a
-    ///    project inside. A candidate that fails is refused here, with nothing
+    ///    journal back to the last committed state, then the schema guard
+    ///    (#608), quick_check and a project inside. A candidate that fails is
+    ///    refused here, with nothing
     ///    else touched. The candidate itself is never changed.
     /// 2. The current project file is kept as a NUMBERED safety copy
     ///    (`.pre-restore.N`, the first free N), never overwriting an earlier one,
