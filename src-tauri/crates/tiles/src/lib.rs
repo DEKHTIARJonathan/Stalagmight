@@ -107,6 +107,14 @@ const ALLOWED_CONTENT_TYPES: &[&str] = &["image/jpeg", "image/jpg", "image/png"]
 /// Default content type when upstream doesn't provide one or it's invalid
 const DEFAULT_CONTENT_TYPE: &str = "image/jpeg";
 
+/// Most bytes a tile response body may hold (#576 W30-7a). A map tile is a
+/// 256 or 512 px JPEG/PNG: real ones are tens of KB, and even an
+/// incompressible 512 px RGBA PNG is about 1 MiB (512 * 512 * 4 bytes plus
+/// framing). 4 MiB is four times that worst case, so no real tile comes near
+/// it, while a provider (or anything between us and it) streaming a huge body
+/// is cut off there instead of at ureq's silent 10 MiB default.
+const TILE_BODY_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
 /// Maximum retry attempts for transient network errors (total attempts = 1 + TILE_FETCH_MAX_RETRIES).
 const TILE_FETCH_MAX_RETRIES: u32 = 2;
 /// Backoff delays between retries.
@@ -166,6 +174,39 @@ fn classify_fetch_error(err: &ureq::Error) -> TileFetchError {
     }
 }
 
+/// Classify a failed read of a tile's body.
+///
+/// A body over `limit` is ureq's `BodyExceedsLimit`, matched structurally (it
+/// is not wrapped in `Io`: `From<io::Error> for ureq::Error` unwraps its own
+/// error). That is the provider answering with more than any tile can be, not
+/// the connection failing, so it is reported as a status - like an unknown
+/// provider - and therefore never served off a stored copy, and never counted
+/// as "existence unknown", which would leave the tile to be downloaded again
+/// on every request. Any other read failure is a truncated transfer: transport.
+fn classify_body_error(err: &ureq::Error, limit: u64) -> TileFetchError {
+    match err {
+        ureq::Error::BodyExceedsLimit(_) => TileFetchError::status(
+            0,
+            format!(
+                "Tile refused: the response body is larger than the {} limit for a map tile",
+                describe_body_limit(limit)
+            ),
+        ),
+        _ => TileFetchError::transport(format!("Failed to read response body: {err}")),
+    }
+}
+
+/// A body limit as a person reads it: whole MiB from 1 MiB up, exact bytes
+/// otherwise (where the test limits live).
+fn describe_body_limit(bytes: u64) -> String {
+    const MIB: u64 = 1024 * 1024;
+    if bytes >= MIB && bytes.is_multiple_of(MIB) {
+        format!("{} MiB", bytes / MIB)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
 fn is_retryable_error(err: &ureq::Error) -> bool {
     match err {
         ureq::Error::StatusCode(_) => false, // Server responded - don't retry
@@ -200,7 +241,31 @@ fn fetch_tile_from_network(
         TileFetchError::status(0, format!("Unknown provider: {provider}"))
     })?;
     let url = tile_providers::expand_url(tile_provider, z, y, x);
+    fetch_tile_from_url(
+        &url,
+        provider,
+        z,
+        y,
+        x,
+        stats,
+        if_none_match,
+        TILE_BODY_MAX_BYTES,
+    )
+}
 
+/// [`fetch_tile_from_network`] once the provider's URL is known, with the body
+/// ceiling spelled out, so a test can serve a tile from a loopback stub and
+/// trip the ceiling without sending megabytes.
+fn fetch_tile_from_url(
+    url: &str,
+    provider: &str,
+    z: u32,
+    y: u32,
+    x: u32,
+    stats: Option<&TileFetchStats>,
+    if_none_match: Option<&str>,
+    body_limit: u64,
+) -> Result<TileFetchResponse, TileFetchError> {
     tracing::debug!(url = %url, provider = %provider, "Fetching tile from network");
 
     if let Some(s) = stats {
@@ -233,7 +298,7 @@ fn fetch_tile_from_network(
             .build()
             .new_agent();
 
-        let mut request = agent.get(&url);
+        let mut request = agent.get(url);
         if let Some(validator) = if_none_match {
             request = request.header("If-None-Match", validator);
         }
@@ -278,15 +343,19 @@ fn fetch_tile_from_network(
                     .and_then(|v| v.to_str().ok())
                     .map(str::to_string);
 
-                let body = response.into_body().read_to_vec().map_err(|e| {
-                    if let Some(s) = stats {
-                        s.record_error();
-                    }
-                    // The provider answered; the body just did not arrive
-                    // intact. Treated as transport, because a truncated read is
-                    // a connection problem rather than a decision by the origin.
-                    TileFetchError::transport(format!("Failed to read response body: {e}"))
-                })?;
+                // A failed read returns from here rather than reaching the
+                // retry arm below, so an oversized body is downloaded once.
+                let body = response
+                    .into_body()
+                    .with_config()
+                    .limit(body_limit)
+                    .read_to_vec()
+                    .map_err(|e| {
+                        if let Some(s) = stats {
+                            s.record_error();
+                        }
+                        classify_body_error(&e, body_limit)
+                    })?;
 
                 if let Some(s) = stats {
                     s.record_success(latency_ms);
@@ -1515,3 +1584,7 @@ mod tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod crop_storage_rv4_tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod body_limit_tests;
