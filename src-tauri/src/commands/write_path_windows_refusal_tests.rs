@@ -113,6 +113,40 @@ fn a_device_volume_or_drive_relative_path_is_refused() {
         ("drive-relative", "C:CaveL.stalx", NOT_PLAIN),
         ("drive-relative folder", r"c:Users\a\CaveL.stalx", NOT_PLAIN),
         ("drive-relative parent", r"C:..\CaveL.stalx", NOT_PLAIN),
+        // [#576 RV18-W24-1] Win32 takes the device prefix as the root of a `\\.\`
+        // path (and of a `\\?\` one in forward slashes, which it normalizes), so
+        // a `..` after it climbs over the drive: this is the GLOBALROOT device.
+        (
+            "device drive, .. over the drive",
+            r"\\.\C:\..\GLOBALROOT\Device\HarddiskVolume3\Windows\CaveL.stalx",
+            NOT_PLAIN,
+        ),
+        (
+            "device prefix in forward slashes, .. over the drive",
+            "//?/C:/../GLOBALROOT/Device/HarddiskVolume3/Windows/CaveL.stalx",
+            NOT_PLAIN,
+        ),
+        (
+            "device drive, .. deeper in",
+            r"\\.\C:\Users\..\..\pipe\CaveL.stalx",
+            NOT_PLAIN,
+        ),
+        (
+            "device drive, a . folder",
+            r"\\.\C:\.\Users\a\CaveL.stalx",
+            NOT_PLAIN,
+        ),
+        (
+            "device drive in forward slashes, ..",
+            "//./C:/Users/a/../CaveL.stalx",
+            NOT_PLAIN,
+        ),
+        (
+            "verbatim drive keeps .. as a name",
+            r"\\?\C:\Users\a\..\b\CaveL.stalx",
+            None,
+        ),
+        ("plain drive with ..", r"C:\Users\a\..\b\CaveL.stalx", None),
         ("plain drive", r"C:\Users\a\CaveL.stalx", None),
         ("verbatim drive", r"\\?\C:\Users\a\CaveL.stalx", None),
         ("device drive", r"\\.\C:\Users\a\CaveL.stalx", None),
@@ -318,6 +352,18 @@ fn this_computer_reached_as_a_network_share_is_refused() {
         ),
         ("device UNC", r"\\.\unc\127.0.0.1\c$\CaveL.stalx", LOOPBACK),
         ("forward slashes", "//localhost/c$/CaveL.stalx", LOOPBACK),
+        // [#576 RV18-W24-1] A `..` after a device prefix climbs over the UNC
+        // server or the drive: refused as a device path before the server is read.
+        (
+            "device UNC, .. over the server",
+            r"\\.\UNC\server\..\localhost\c$\Windows\CaveL.stalx",
+            NOT_PLAIN,
+        ),
+        (
+            "device drive, .. onto UNC",
+            r"\\.\C:\..\UNC\localhost\c$\Windows\CaveL.stalx",
+            NOT_PLAIN,
+        ),
         ("another server", r"\\server\share\CaveL.stalx", None),
         ("128.0.0.1", r"\\128.0.0.1\share\CaveL.stalx", None),
         (

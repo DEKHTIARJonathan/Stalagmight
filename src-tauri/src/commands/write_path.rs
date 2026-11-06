@@ -284,7 +284,9 @@ fn windows_refusal(path: &Path, rules: PathRules) -> Option<String> {
 /// `\\?\` or `\\.\` path must name a drive (`X:\`) or a UNC path: any other
 /// (`\\?\GLOBALROOT\..`, `\\?\Volume{..}\..`, `\\.\HarddiskVolume3\..`,
 /// `\\.\pipe\..`) is a device or volume, and so is a path under the NT prefix
-/// `\??\`. A drive letter not followed by `\` (`C:x`) names a place in that
+/// `\??\`, and so is a `\\.\` path (or a `\\?\` one in forward slashes) with a
+/// `.` or `..` after the prefix, which Win32 lets climb over the drive or
+/// server. A drive letter not followed by `\` (`C:x`) names a place in that
 /// drive's current folder, which the text does not tell. A UNC path whose
 /// server is this computer ([`is_this_computer`]; `own_name` its name, when
 /// known) reaches a local folder under another name.
@@ -298,7 +300,20 @@ pub(crate) fn windows_path_refusal(path: &str, own_name: Option<&str>) -> Option
     let after_drive = if drive { &plain[2..] } else { plain.as_str() };
     let drive_root = drive && after_drive.starts_with('\\');
     let prefixed = text.starts_with(r"\\?\") || text.starts_with(r"\\.\");
+    // [#576 RV18-W24-1] Win32 takes the device prefix itself as the root of a
+    // `\\.\` path, and of a `\\?\` one not spelled exactly so (forward slashes),
+    // which it normalizes: a `.` or `..` after the prefix climbs over the drive
+    // or the UNC server (`\\.\C:\..\GLOBALROOT\..` is the GLOBALROOT device).
+    // Only an exact `\\?\` path is passed on as written.
+    let climbs = prefixed
+        && !path.starts_with(r"\\?\")
+        && text
+            .get(4..)
+            .unwrap_or_default()
+            .split('\\')
+            .any(|name| matches!(name.trim_end_matches(' '), "." | ".."));
     if text.starts_with(r"\??\")
+        || climbs
         || (prefixed && !drive_root && !plain.starts_with(r"\\"))
         || (drive && !drive_root)
     {
