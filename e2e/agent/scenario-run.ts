@@ -35,7 +35,7 @@
 import * as path from 'path';
 import { readTrace, restoreTraceEnv, type FuzzTrace } from './lib/fuzzTrace';
 import { parseScenarioArgs, scenarioRunOptions } from './lib/scenarioRunArgs';
-import { scenarioFailOutput, shareableErrorText } from './lib/shareableFailure';
+import { progressLogger, scenarioFailOutput, shareableErrorText } from './lib/shareableFailure';
 
 async function main(): Promise<void> {
   const args = parseScenarioArgs(process.argv.slice(2));
@@ -123,7 +123,11 @@ async function main(): Promise<void> {
       // A replay runs at the trace's seed and iteration count unless a flag says
       // otherwise (#576 NF-E12-1); a fresh run passes only the flags given.
       ...scenarioRunOptions(args, trace),
-      log: (line) => process.stdout.write(`   . ${line}\n`),
+      // Shareable progress lines (#576 W23-NF3); the full text goes to actions.jsonl.
+      log: progressLogger(
+        (line) => process.stdout.write(`   . ${line}\n`),
+        session.hasRecorder ? session.recorder : undefined,
+      ),
     });
     const sweep = await runSweep(session, newOracleState(), { full: true, recorder: session.recorder });
     const fatal = sweep.findings.filter((finding) => finding.severity === 'fatal');

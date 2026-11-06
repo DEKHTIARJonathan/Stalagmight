@@ -9,7 +9,7 @@
 import { createSession } from './createSession';
 import { listScenarios, runScenario } from './scenarios';
 import { findingsSummary, runSweep, newOracleState } from './lib/oracles';
-import { scenarioFailOutput, shareableErrorText } from './lib/shareableFailure';
+import { progressLogger, scenarioFailOutput, shareableErrorText } from './lib/shareableFailure';
 import { callStoreAction } from './lib/stores';
 
 // Small iteration counts for a fast gate; the real stress values are the
@@ -108,7 +108,11 @@ async function main(): Promise<void> {
       try {
         const metrics = await runScenario(name, session, {
           iterations: SMOKE_ITERATIONS[name],
-          log: (m) => process.stdout.write(`   · ${m}\n`),
+          // Shareable progress lines (#576 W23-NF3); the full text goes to actions.jsonl.
+          log: progressLogger(
+            (m) => process.stdout.write(`   · ${m}\n`),
+            session.hasRecorder ? session.recorder : undefined,
+          ),
         });
         const sweep = await runSweep(session, oracle, { full: true, recorder: session.recorder });
         const fatal = sweep.findings.filter((f) => f.severity === 'fatal');

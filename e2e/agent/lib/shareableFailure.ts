@@ -181,3 +181,34 @@ export function shareableErrorText(err: unknown): string {
   const name = /^\w+$/.test(err.name) ? err.name : 'Error';
   return `${name}: ${shareableFailureText([err.message, ...frames].join('\n'), [STACK_FRAME], CRASH_WITHHELD)}`;
 }
+
+/**
+ * A scenario's progress line (`ctx.log`) as the runners print it (#576
+ * W23-NF3): the corpus and path folds, and the line treated as a headline, so
+ * the app's text after an `APP_ERROR_HEADLINES` prefix (`<what> failed: <the
+ * app's error>`) is replaced by its length. The progress lines are part of what
+ * people paste with a FAIL block. A scenario words a line from counts, seeds,
+ * fixture and corpus ids and paths; where one reports the app's text it uses
+ * the `... failed: <text>` shape, and `shareableRunnerOutput.test.ts` checks
+ * every `ctx.log` call against that rule.
+ */
+export function shareableProgressLine(line: string): string {
+  // A progress line is one line; an app error it ends in can run over several,
+  // and those go the way of any other line the harness did not word.
+  return shareableFailureText(line);
+}
+
+/**
+ * The `log` a runner hands `runScenario`: the full line goes to the session's
+ * `actions.jsonl` as a `scenario-progress` event (not for sharing; the
+ * recorder folds it), and `print` gets the shareable line.
+ */
+export function progressLogger(
+  print: (line: string) => void,
+  recorder?: { event(event: string, detail?: unknown): void },
+): (line: string) => void {
+  return (line) => {
+    recorder?.event('scenario-progress', { line });
+    print(shareableProgressLine(line));
+  };
+}

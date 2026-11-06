@@ -1011,6 +1011,13 @@ locations:
 - A fuzz trace's `failure` is that form, with the signature of that form.
   `fuzz-shrink` prints that shareable signature and checks it against the
   trace header; ddmin still compares full signatures, in memory.
+- A scenario's progress lines (`   . <line>`) print in the headline form
+  (`shareableProgressLine`): folded, and the app's text after a `<what>
+  failed:` prefix replaced by its length. A scenario reports the app's text in
+  a progress line only at the end of such a line; `shareableRunnerOutput.test.ts`
+  checks every value a `ctx.log` call interpolates against the list of harness
+  values (counts, seeds, ids, paths) or that rule. The full line is a
+  `scenario-progress` event in `actions.jsonl`.
 - A harness crash - a runner's `fatal:` line, `fuzz-shrink`'s `shrink
   failed:` - prints the error's name, its headline in the same form, and its
   stack frames, folded; the other lines of its message are counted
@@ -1024,7 +1031,8 @@ locations:
 
 **Not for sharing** - the full text, for triage where the run happened: the
 session's `actions.jsonl` (each `finding` event with its detail, each
-`scenario-failure` event with the whole failure message), the screenshots
+`scenario-failure` event with the whole failure message, each
+`scenario-progress` event with the whole progress line), the screenshots
 (`screenshots/`, `findings/<n>/screenshot.png`), the crash-marker copies in
 `findings/<n>/`, the `state/` snapshots, `tauri-driver.log`, and the app's own
 log files.

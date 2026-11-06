@@ -9,6 +9,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { foldLocalPaths, shareableFailureText } from './shareableFailure';
@@ -115,5 +116,161 @@ describe('a harness crash prints codes, counts and code locations (#576 W23-NF2)
       for (const line of crashLines) expect(line, runner).toContain('${shareableErrorText(err)}');
       expect(source, runner).not.toMatch(/err\.stack/);
     }
+  });
+});
+
+/**
+ * What the scenarios interpolate into a `ctx.log` line, each a value the
+ * harness owns: a count, a seed, a duration, a knob, a fixture or corpus id, a
+ * format list, a path (folded), or a harness table's words. A new
+ * interpolation joins this list only once someone has checked it cannot carry
+ * the app's text; one that can goes at the end of a `... failed: ${...}` line,
+ * where the runner withholds it.
+ */
+const HARNESS_VALUES = new Set([
+  'counts.sections',
+  'counts.stations',
+  'counts.view',
+  'tag',
+  'variant',
+  'fixture',
+  'iterations',
+  'finalDepth',
+  'UNDO_LIMIT',
+  'nodesBefore',
+  'nodesAfter',
+  'created',
+  "Object.entries(UNREACHABLE_VARIANTS) .map(([name, why]) => `${name} (${why})`) .join('; ')",
+  'name',
+  'why',
+  'ctx.seed',
+  'totalEntries',
+  "[...seen.entries()].map(([v, c]) => `${v}=${c}`).sort().join(' ')",
+  'v',
+  'c',
+  'sections.length',
+  'totalShots',
+  'merges.length',
+  "enabledFormats().join(',')",
+  'digest.missingUuids',
+  'digest.duplicateUuids',
+  'replay.steps.length',
+  'replayPath',
+  'episode + 1',
+  'moves',
+  'written',
+  "enabledFamilies().join(',')",
+  "formats.join(',')",
+  'describeCorpus(inventory)',
+  'CORPUS_DIR_ENV',
+  'noProjectEpisodeProbability()',
+  'suggestiveDrawn',
+  'maxJumpMs',
+  'Math.round(probeMax)',
+  'seed',
+  'durationMs',
+  'recorder.length',
+  "replay ? `REPLAY of ${replayPath} (${replay.steps.length} recorded step(s)) ` : ''",
+  'streamName()',
+  'swarm.name',
+  'strippedRows',
+  'ctx.metrics.mutations ?? 0',
+  'ctx.metrics.undos ?? 0',
+  'ctx.metrics.redos ?? 0',
+  'ctx.metrics.rejected ?? 0',
+  'ctx.metrics.noops ?? 0',
+  'deepest',
+  'maxBytes',
+]);
+
+interface Interpolation {
+  where: string;
+  text: string;
+  /** At the very end of a template whose text before it ends in ` failed: `. */
+  afterFailed: boolean;
+}
+
+/** Every value a `ctx.log(...)` call in `file` interpolates, nested templates included. */
+function logInterpolations(file: string): Interpolation[] {
+  const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+  const found: Interpolation[] = [];
+  const where = (node: ts.Node): string =>
+    `${path.basename(file)}:${source.getLineAndCharacterOfPosition(node.getStart()).line + 1}`;
+  const text = (node: ts.Node): string => node.getText(source).replace(/\s+/g, ' ');
+  // A template nested in an interpolated value: its own values are values of the line too.
+  const nested = (node: ts.Node): void =>
+    node.forEachChild(function walk(child: ts.Node): void {
+      if (ts.isTemplateExpression(child)) collect(child);
+      else child.forEachChild(walk);
+    });
+  const collect = (node: ts.Node): void => {
+    if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return;
+    if (ts.isParenthesizedExpression(node)) return collect(node.expression);
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
+      collect(node.left);
+      collect(node.right);
+      return;
+    }
+    if (ts.isTemplateExpression(node)) {
+      node.templateSpans.forEach((span, i) => {
+        const before = i === 0 ? node.head.text : (node.templateSpans[i - 1] as ts.TemplateSpan).literal.text;
+        const last = i === node.templateSpans.length - 1 && span.literal.text === '';
+        found.push({ where: where(span), text: text(span.expression), afterFailed: last && before.endsWith(' failed: ') });
+        nested(span.expression);
+      });
+      return;
+    }
+    found.push({ where: where(node), text: text(node), afterFailed: false });
+    nested(node);
+  };
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && text(node.expression) === 'ctx.log') node.arguments.forEach(collect);
+    node.forEachChild(visit);
+  };
+  visit(source);
+  return found;
+}
+
+describe("a scenario's progress lines share no app text (#576 W23-NF3)", () => {
+  it('withholds the app text a progress line reports, after the corpus and path folds', async () => {
+    const { shareableProgressLine } = await import('./shareableFailure');
+    const appError = 'Station "qzstation" of qzproject vanished';
+    expect(shareableProgressLine(`x5: first import failed: ${appError}`)).toBe(
+      `x5: first import failed: (${appError.length} characters of the app's text withheld)`,
+    );
+    expect(shareableProgressLine(`trace written to ${SESSION}/traces/t.json (12 step(s))`)).toBe(
+      'trace written to <repo>/.agent-artifacts/sessions/s1/traces/t.json (12 step(s))',
+    );
+    const counts = 'fixture=demo.stalx seed=3: 4 mutations, 2 undos; max depth 7; snapshot <=1024B';
+    expect(shareableProgressLine(counts)).toBe(counts);
+    // An app error that runs over several lines: only the prefix and a count stay.
+    expect(names(shareableProgressLine('x7: createSection failed: qzsection\nexists in qzproject'))).toEqual([]);
+  });
+
+  it('is what the runners print, while the full line goes to the recorder', async () => {
+    const { progressLogger } = await import('./shareableFailure');
+    const printed: string[] = [];
+    const events: unknown[] = [];
+    const log = progressLogger((line) => printed.push(line), { event: (event, detail) => events.push({ event, detail }) });
+    const appError = 'qzsection exists';
+    log(`x7: createSection failed: ${appError}`);
+    expect(printed).toEqual([`x7: createSection failed: (${appError.length} characters of the app's text withheld)`]);
+    expect(events).toEqual([{ event: 'scenario-progress', detail: { line: 'x7: createSection failed: qzsection exists' } }]);
+    for (const runner of ['scenario-run.ts', 'scenarios-smoke.ts']) {
+      const source = fs.readFileSync(path.join(REPO, 'e2e/agent', runner), 'utf8');
+      expect(source, runner).toMatch(/log: progressLogger\(/);
+    }
+  });
+
+  it('every ctx.log value is a harness value, or the app text at the end of a `failed:` line', () => {
+    const dir = path.join(REPO, 'e2e/agent/scenarios');
+    const all = fs
+      .readdirSync(dir)
+      .filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts'))
+      .flatMap((name) => logInterpolations(path.join(dir, name)));
+    // The walk found the calls: a parse that saw none would pass vacuously.
+    expect(all.length).toBeGreaterThan(40);
+    const unchecked = all.filter((value) => !HARNESS_VALUES.has(value.text) && !value.afterFailed);
+    expect(unchecked.map((value) => `${value.where} \${${value.text}}`)).toEqual([]);
   });
 });
