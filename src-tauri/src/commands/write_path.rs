@@ -329,14 +329,16 @@ pub(crate) fn windows_path_refusal(path: &str, own_name: Option<&str>) -> Option
 }
 
 /// Whether a UNC server name is this computer (#576 W24-D1): `localhost`, an
-/// IPv4 address in 127.0.0.0/8 (also in a short form Windows reads, such as
-/// `127.1`), `::1` (also as an `ipv6-literal.net` name, `--1.ipv6-literal.net`),
-/// or `own_name` - alone or as the start of a domain name. A trailing dot (the
-/// fully qualified form) and letter case do not matter.
+/// IPv4 address in 127.0.0.0/8 in any spelling Windows reads as one
+/// ([`ipv4_any_form`]: `127.1`, `2130706433`, `0x7f000001`, `0x7f.1`), `::1`
+/// (also as an `ipv6-literal.net` name, `--1.ipv6-literal.net`), or `own_name` -
+/// alone or as the start of a domain name. A trailing dot (the fully qualified
+/// form) and letter case do not matter.
 fn is_this_computer(server: &str, own_name: Option<&str>) -> bool {
     let server = server.trim_end_matches('.').to_ascii_lowercase();
     if server == "localhost"
         || (server.starts_with("127.") && server.bytes().all(|b| b.is_ascii_digit() || b == b'.'))
+        || ipv4_any_form(&server).is_some_and(|address| address.is_loopback())
     {
         return true;
     }
@@ -359,10 +361,53 @@ fn is_this_computer(server: &str, own_name: Option<&str>) -> bool {
     })
 }
 
-/// The Windows device names a file name may not have (#576 W24-D1).
-const DEVICE_NAMES: [&str; 22] = [
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+/// [#576 W30-3] The IPv4 address `server` spells in any form Windows reads as
+/// one (the `inet_addr` rules): one to four parts split by dots, each decimal,
+/// hex (`0x7f`) or octal (a leading `0`, `0177`), the last part filling the bytes
+/// the others leave - `127.1`, `0x7f.1`, the single numbers `2130706433` and
+/// `0x7f000001`. `None` for anything else, which is a name.
+fn ipv4_any_form(server: &str) -> Option<std::net::Ipv4Addr> {
+    let parts: Vec<&str> = server.split('.').collect();
+    if parts.len() > 4 {
+        return None;
+    }
+    let mut values = Vec::with_capacity(parts.len());
+    for part in parts {
+        let (digits, radix) = match part.strip_prefix("0x").or_else(|| part.strip_prefix("0X")) {
+            Some(hex) => (hex, 16),
+            None if part.len() > 1 && part.starts_with('0') => (&part[1..], 8),
+            None => (part, 10),
+        };
+        // `from_str_radix` takes a leading `+`; `inet_addr` does not.
+        if digits.is_empty() || !digits.chars().all(|c| c.is_digit(radix)) {
+            return None;
+        }
+        values.push(u32::from_str_radix(digits, radix).ok()?);
+    }
+    let (&last, leading) = values.split_last()?;
+    let mut address = 0_u32;
+    for (i, &value) in leading.iter().enumerate() {
+        if value > 0xff {
+            return None;
+        }
+        address |= value << (24 - 8 * i);
+    }
+    // The last part fills the 32, 24, 16 or 8 bits the leading bytes leave.
+    let free_bits = 32 - 8 * leading.len();
+    if free_bits < 32 && last >> free_bits != 0 {
+        return None;
+    }
+    Some(std::net::Ipv4Addr::from(address | last))
+}
+
+/// The Windows device names a file name may not have (#576 W24-D1), compared
+/// ignoring ASCII case. [#576 W30-3] Port zero, the ports spelled with the
+/// ISO 8859-1 superscript digits Windows reads as digits (`COM¹`,
+/// `LPT²`, ...) and the console's input and output are reserved too.
+const DEVICE_NAMES: [&str; 32] = [
+    "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+    "COM8", "COM9", "COM¹", "COM²", "COM³", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6",
+    "LPT7", "LPT8", "LPT9", "LPT¹", "LPT²", "LPT³", "CONIN$", "CONOUT$",
 ];
 
 /// The forms of `path` to compare: as given (made absolute) with `.`/`..` folded,

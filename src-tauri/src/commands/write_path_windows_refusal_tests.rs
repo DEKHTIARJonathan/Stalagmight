@@ -189,12 +189,97 @@ fn a_device_name_is_refused() {
         ),
         ("relative", "NUL.stalx", DEVICE_NAME),
         ("on a share", r"\\server\share\aux.stalx", DEVICE_NAME),
+        // [#576 W30-3] The rest of the reserved names: port zero, the ISO 8859-1
+        // superscript digits Windows reads as port digits, and the console's
+        // input and output.
+        ("COM0", r"C:\Users\a\COM0.stalx", DEVICE_NAME),
+        ("LPT0", r"C:\Users\a\LPT0.stalx", DEVICE_NAME),
+        (
+            "COM superscript 1",
+            "C:\\Users\\a\\COM\u{b9}.stalx",
+            DEVICE_NAME,
+        ),
+        (
+            "COM superscript 2",
+            "C:\\Users\\a\\COM\u{b2}.stalx",
+            DEVICE_NAME,
+        ),
+        (
+            "COM superscript 3",
+            "C:\\Users\\a\\COM\u{b3}.stalx",
+            DEVICE_NAME,
+        ),
+        (
+            "LPT superscript 1",
+            "C:\\Users\\a\\LPT\u{b9}.stalx",
+            DEVICE_NAME,
+        ),
+        (
+            "LPT superscript 2",
+            "C:\\Users\\a\\LPT\u{b2}.stalx",
+            DEVICE_NAME,
+        ),
+        (
+            "LPT superscript 3",
+            "C:\\Users\\a\\LPT\u{b3}.stalx",
+            DEVICE_NAME,
+        ),
+        ("CONIN$", r"C:\Users\a\CONIN$.stalx", DEVICE_NAME),
+        ("CONOUT$", r"C:\Users\a\CONOUT$.stalx", DEVICE_NAME),
         ("COM10 is a file", r"C:\Users\a\COM10.stalx", None),
         ("NULL is a file", r"C:\Users\a\NULL.stalx", None),
         ("CONSOLE is a file", r"C:\Users\a\CONSOLE.stalx", None),
+        (
+            "COM superscript 4 is a file",
+            "C:\\Users\\a\\COM\u{2074}.stalx",
+            None,
+        ),
+        ("CONIN is a file", r"C:\Users\a\CONIN.stalx", None),
         ("a folder named NUL", r"C:\Users\a\NUL\CaveL.stalx", None),
     ];
     let wrong = wrong_writes(WINDOWS, &cases);
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// Class 3, every spelling of the names added in #576 W30-3 (the text judged
+/// alone, so a name without an extension counts too): in any case, with or
+/// without an extension, with trailing dots or spaces.
+#[test]
+fn every_spelling_of_the_other_device_names_is_refused() {
+    let names = [
+        "COM0",
+        "LPT0",
+        "COM\u{b9}",
+        "COM\u{b2}",
+        "COM\u{b3}",
+        "LPT\u{b9}",
+        "LPT\u{b2}",
+        "LPT\u{b3}",
+        "CONIN$",
+        "CONOUT$",
+    ];
+    let mut wrong = Vec::new();
+    for name in names {
+        for spelling in [
+            name.to_owned(),
+            name.to_lowercase(),
+            format!("{name}.stalx"),
+            format!("{}.STALX", name.to_lowercase()),
+            format!("{name}."),
+            format!("{name} "),
+            format!("{name}. ."),
+            format!("{name} .stalx"),
+            format!("{name}..stalx"),
+            format!("{name} . .stalx"),
+        ] {
+            let path = format!(r"C:\Users\a\{spelling}");
+            let got = windows_path_refusal(&path, None);
+            println!("W30-3 device name: {path:?}: {got:?}");
+            if !got.is_some_and(|why| why.contains("a Windows device name")) {
+                wrong.push(format!("{path:?}: {got:?}"));
+            }
+        }
+    }
     assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
@@ -210,6 +295,16 @@ fn this_computer_reached_as_a_network_share_is_refused() {
         ("127.0.0.1", r"\\127.0.0.1\c$\CaveL.stalx", LOOPBACK),
         ("127.1.2.3", r"\\127.1.2.3\share\CaveL.stalx", LOOPBACK),
         ("127.1", r"\\127.1\share\CaveL.stalx", LOOPBACK),
+        // [#576 W30-3] Every spelling Windows reads as an IPv4 address: one
+        // decimal or hex number, fewer than four parts, octal parts.
+        ("2130706433", r"\\2130706433\c$\CaveL.stalx", LOOPBACK),
+        ("0x7f000001", r"\\0x7f000001\c$\CaveL.stalx", LOOPBACK),
+        ("0X7F000001", r"\\0X7F000001\c$\CaveL.stalx", LOOPBACK),
+        ("0x7f.1", r"\\0x7f.1\share\CaveL.stalx", LOOPBACK),
+        ("0x7f.0.0.1", r"\\0x7f.0.0.1\share\CaveL.stalx", LOOPBACK),
+        ("127.0.1", r"\\127.0.1\share\CaveL.stalx", LOOPBACK),
+        ("0177.0.0.1", r"\\0177.0.0.1\share\CaveL.stalx", LOOPBACK),
+        ("0x7f.0x1", r"\\0x7f.0x1\share\CaveL.stalx", LOOPBACK),
         ("::1", r"\\::1\c$\CaveL.stalx", LOOPBACK),
         (
             "::1 as an ipv6-literal.net name",
@@ -225,6 +320,23 @@ fn this_computer_reached_as_a_network_share_is_refused() {
         ("forward slashes", "//localhost/c$/CaveL.stalx", LOOPBACK),
         ("another server", r"\\server\share\CaveL.stalx", None),
         ("128.0.0.1", r"\\128.0.0.1\share\CaveL.stalx", None),
+        (
+            "2147483649 (128.0.0.1)",
+            r"\\2147483649\share\CaveL.stalx",
+            None,
+        ),
+        (
+            "0x80000001 (128.0.0.1)",
+            r"\\0x80000001\share\CaveL.stalx",
+            None,
+        ),
+        (
+            "0x7f.1 past 24 bits",
+            r"\\0x7f.0x1000000\share\CaveL.stalx",
+            None,
+        ),
+        ("a hex-looking name", r"\\0x7g.1\share\CaveL.stalx", None),
+        ("08.0.0.1, not octal", r"\\08.0.0.1\share\CaveL.stalx", None),
         ("localhostx", r"\\localhostx\share\CaveL.stalx", None),
         (
             "another ipv6-literal.net name",
