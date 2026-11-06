@@ -331,7 +331,10 @@ pub(crate) fn windows_path_refusal(path: &str, own_name: Option<&str>) -> Option
         return Some("that is an alternate data stream of a file or folder");
     }
     // A last name whose stem - up to its first dot, trailing spaces dropped -
-    // is a device name opens that device, extension or not (`NUL.stalx`).
+    // is a device name is refused, extension or not (`NUL.stalx`): Microsoft
+    // reserves both, and Windows before 11 opens the device for either. Windows
+    // 11 opens a name with an extension as a file, but which Windows the app
+    // runs on does not change what the name is, so the rule is the same.
     let last = after_drive.rsplit('\\').find(|name| !name.is_empty());
     let stem = last
         .and_then(|name| name.split('.').next())
@@ -357,9 +360,16 @@ fn is_this_computer(server: &str, own_name: Option<&str>) -> bool {
     {
         return true;
     }
-    // An ipv6-literal.net name spells `:` as `-` and a zone as `s<zone>`.
+    // An ipv6-literal.net name spells `:` as `-` and a zone as `s<zone>`;
+    // [#576 RV18-W24-5] an address may come in brackets, as in a URL (`[::1]`).
     let v6 = server.strip_suffix(".ipv6-literal.net").map_or_else(
-        || server.clone(),
+        || {
+            server
+                .strip_prefix('[')
+                .and_then(|inner| inner.strip_suffix(']'))
+                .unwrap_or(&server)
+                .to_owned()
+        },
         |name| name.split('s').next().unwrap_or_default().replace('-', ":"),
     );
     if v6.parse::<std::net::Ipv6Addr>().is_ok_and(|address| {

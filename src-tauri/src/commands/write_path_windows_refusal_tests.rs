@@ -340,6 +340,14 @@ fn this_computer_reached_as_a_network_share_is_refused() {
         ("0177.0.0.1", r"\\0177.0.0.1\share\CaveL.stalx", LOOPBACK),
         ("0x7f.0x1", r"\\0x7f.0x1\share\CaveL.stalx", LOOPBACK),
         ("::1", r"\\::1\c$\CaveL.stalx", LOOPBACK),
+        // [#576 RV18-W24-5] In brackets, as a URL writes it: this computer, not
+        // an alternate data stream (its `:` comes before the share).
+        ("[::1]", r"\\[::1]\c$\CaveL.stalx", LOOPBACK),
+        (
+            "[::ffff:127.0.0.1]",
+            r"\\[::ffff:127.0.0.1]\c$\CaveL.stalx",
+            LOOPBACK,
+        ),
         (
             "::1 as an ipv6-literal.net name",
             r"\\--1.ipv6-literal.net\c$\CaveL.stalx",
