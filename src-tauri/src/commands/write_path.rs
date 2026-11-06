@@ -18,6 +18,12 @@
 //! - it is not inside a system directory (`/etc`, `/usr`, `C:\Windows`,
 //!   `C:\Program Files`, ...). `/home`, `/var`, `/run/media`, `/mnt`, `/media`,
 //!   `/opt` and `/tmp` are not system directories here: users save there.
+//!
+//! On Windows a fourth, from the text alone (#576 W24-D1): the path names a
+//! plain file in a folder - not a device, volume or drive-relative path
+//! (`\\?\GLOBALROOT\..`, `\??\..`, `C:x`), not an alternate data stream (a `:`
+//! after the drive), not a device name (`NUL.stalx`, `COM1`), and not this
+//! computer reached as a network share (`\\localhost\C$\..`).
 
 use std::path::{Component, Path, PathBuf};
 

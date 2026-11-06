@@ -186,6 +186,16 @@ folders (the SpeleoDB managed-project cache excepted, for projects), and must no
 be inside a system folder (`/etc`, `/usr`, `/bin`, ..., `C:\Windows`,
 `C:\Program Files`). The list is deliberately narrow - `/home`, `/var`,
 `/run/media`, `/mnt`, `/media`, `/opt` and `/tmp` are places users save to.
+On Windows the path must also name a plain file in a folder, judged from its
+text before the disk is asked (#576 W24-D1): a device, volume or drive-relative
+path (`\\?\GLOBALROOT\...`, `\\?\Volume{...}\...`, `\\.\pipe\...`, the NT prefix
+`\??\`, `C:x.stalx`), an alternate data stream (a `:` after the drive:
+`notes.txt:x.stalx`, `C:\Windows:x.stalx`), a device name (CON, PRN, AUX, NUL,
+COM1-9, LPT1-9, in any case, with any extension) and this computer reached as a
+network share (`localhost`, 127.0.0.0/8, `::1`, its own name) are refused, as
+are older-file upgrades there. The `\\?\` and `\\.\` forms of a drive or UNC
+path, `UNC` in any case, name the plain folder, and a name is compared as Win32
+opens it (`C:\Windows.\` is `C:\Windows\`), except in a `\\?\` path.
 A folder counts however the path reaches it: the path is compared folded and as
 the write reaches it on disk, one component at a time, links followed - so
 `<dir>/missing/../link-to-the-app-folder/x`, which a write that makes the missing
