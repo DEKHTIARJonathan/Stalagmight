@@ -195,3 +195,34 @@ describe('OrphanPlacementDialog - receipt surface routing (#411/#420)', () => {
     expect(showToast).not.toHaveBeenCalled();
   });
 });
+
+describe('OrphanPlacementDialog - the overlap picker while an Accept runs (#576 HFI2-F6)', () => {
+  it('disables the overlap-treatment picker until the Accept finishes, like the Accept button', async () => {
+    // The Accept captured the mode at click; a change made while it runs would
+    // not apply to it and would carry over to the next suggestion unannounced.
+    let release: () => void = () => {};
+    const merging = new Promise<CommandOutcome<EditOutcome>>((resolve) => {
+      release = () => resolve(accepted<EditOutcome>({ warnings: [], remote_link: null }));
+    });
+    useProjectStore.setState({ mergeStations: vi.fn(() => merging) });
+    const suggestions = [
+      makeSuggestion({ matchedShots: 2 }),
+      makeSuggestion({ orphanSectionId: 3, matchedShots: 2 }),
+    ];
+    render(<OrphanPlacementDialog suggestions={suggestions} />);
+    expect(screen.getByTestId('overlap-mode-select')).toBeEnabled();
+
+    await userEvent.click(screen.getByTestId('orphan-accept'));
+
+    await waitFor(() => expect(screen.getByTestId('orphan-accept')).toBeDisabled());
+    const whileRunning = {
+      accept: screen.getByTestId('orphan-accept').hasAttribute('disabled'),
+      picker: screen.getByTestId('overlap-mode-select').hasAttribute('disabled'),
+    };
+    expect(whileRunning).toEqual({ accept: true, picker: true });
+
+    release();
+    await waitFor(() => expect(screen.getByTestId('orphan-accept')).toBeEnabled());
+    expect(screen.getByTestId('overlap-mode-select')).toBeEnabled();
+  });
+});

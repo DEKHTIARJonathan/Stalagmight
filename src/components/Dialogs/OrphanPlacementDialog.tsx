@@ -680,6 +680,10 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                 <Select
                   value={overlapMode}
                   onChange={(v) => setOverlapMode(v as OverlapMode)}
+                  // [#576 HFI2-F6] Like Accept: a running Accept captured the
+                  // mode at click, so a change now would not apply to it and
+                  // would carry over to the next suggestion unannounced.
+                  disabled={processing}
                   options={[
                     { value: 'interpolate', label: overlapModeLabels.interpolate, disabled: isTargetDoublyAnchored },
                     { value: 'import_data', label: overlapModeLabels.import_data, disabled: isTargetDoublyAnchored },
