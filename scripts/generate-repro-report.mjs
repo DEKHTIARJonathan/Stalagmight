@@ -189,11 +189,26 @@ P('- Actual: _what happened (see findings below)._');
 P('');
 P('## Oracle findings');
 P('');
+// A log finding's message IS the app's log line, and a log line names the data
+// it is about - a section, a project, a station - which neither scrub above can
+// know (#576 HFI2-F2). This report is pasted into public issues, so it says
+// where the line came from (the log target, `oracles.logLineCode`) and leaves
+// the line in the session's actions.jsonl and findings/, which are not shared.
+const LOG_FINDING_KINDS = new Set(['log-warn', 'log-error']);
+const LOG_TARGET = /^(?:ERROR|WARN)\s+([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*):\s/;
+const logFindingCode = (f) => {
+  if (typeof f.code === 'string' && /^[\w:.-]{1,120}$/.test(f.code)) return f.code;
+  return LOG_TARGET.exec(String(f.message ?? ''))?.[1] ?? 'unattributed';
+};
+const findingText = (f) =>
+  LOG_FINDING_KINDS.has(f.kind)
+    ? `from \`${logFindingCode(f)}\` (line withheld: it can name survey data; see the session's actions.jsonl)`
+    : scrub(f.message ?? '');
 const allFindings = capturedFindings.length ? capturedFindings : findingEvents.map((e) => e.detail);
 if (allFindings.length) {
   for (const f of allFindings) {
     if (!f) continue;
-    P(`- **[${f.severity ?? '?'}] ${f.kind ?? '?'}** ${scrub(f.message ?? '')}`);
+    P(`- **[${f.severity ?? '?'}] ${f.kind ?? '?'}** ${findingText(f)}`);
     if (f.detail !== undefined) {
       P('  ```json');
       P('  ' + scrub(JSON.stringify(f.detail, null, 2)).split('\n').join('\n  '));

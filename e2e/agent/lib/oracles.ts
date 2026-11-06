@@ -27,8 +27,54 @@ export type Severity = 'fatal' | 'error' | 'warning';
 export interface Finding {
   severity: Severity;
   kind: string;
+  /**
+   * Where the finding came from, as the APP'S CODE names it - for a `log-warn` /
+   * `log-error`, the log target (`logLineCode`). Never text from the data, so a
+   * summary line can carry it where it cannot carry `message` (#576 HFI2-F2).
+   */
+  code?: string;
   message: string;
   detail?: unknown;
+}
+
+/**
+ * The code-defined source of a ring log line: its tracing target
+ * (`WARN stalagmight_parsers::tml: Section ...` -> `stalagmight_parsers::tml`),
+ * else the frontend crash tag the line carries. Nothing after the target is
+ * read: that is the message, and a message quotes the data it is about - a
+ * section, a project, a station (#576 HFI2-F2).
+ */
+export function logLineCode(line: string): string {
+  const target = /^(?:ERROR|WARN)\s+([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*):\s/.exec(line);
+  if (target?.[1]) return target[1];
+  if (line.includes('[unhandled-error]')) return 'unhandled-error';
+  if (line.includes('[unhandled-rejection]')) return 'unhandled-rejection';
+  if (line.includes('PANIC:')) return 'panic';
+  return 'unattributed';
+}
+
+/**
+ * A sweep's findings as a run's summary line prints them: a count per
+ * severity, kind and code, and nothing else (#576 HFI2-F2).
+ *
+ * The PASS/FAIL line used to carry the findings as JSON, message and detail
+ * included, and a `log-warn` message IS the app's log line - `Section "<name>"
+ * has no shots after filtering`, a project's name in a datum warning. The
+ * corpus fold hides corpus FILE names only, so every name inside a file reached
+ * a run log, and run logs are what a campaign publishes. The full text stays in
+ * the session directory (`actions.jsonl`, `findings/`), which
+ * docs/agent-harness.md says not to attach, and in the app's own log files.
+ * Every key is built from harness-defined `kind` and the code-defined `code`,
+ * and is still reduced to identifier characters.
+ */
+export function findingsSummary(findings: readonly Finding[]): string {
+  const label = (text: string): string => text.replace(/[^\w:.-]/g, '?').slice(0, 120);
+  const counts = new Map<string, number>();
+  for (const f of findings) {
+    const key = `${f.severity}:${label(f.kind)}${f.code === undefined ? '' : `@${label(f.code)}`}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return JSON.stringify(Object.fromEntries([...counts].sort(([a], [b]) => a.localeCompare(b))));
 }
 
 export interface OracleTarget {
@@ -199,9 +245,9 @@ export async function cheapSweep(target: OracleTarget, state: OracleState): Prom
     }
     for (const e of probe.logs.entries) {
       if (isErrorLine(e.line)) {
-        findings.push({ severity: 'error', kind: 'log-error', message: e.line.slice(0, 400) });
+        findings.push({ severity: 'error', kind: 'log-error', code: logLineCode(e.line), message: e.line.slice(0, 400) });
       } else if (isWarnLine(e.line) && !isAllowedWarn(e.line)) {
-        findings.push({ severity: 'warning', kind: 'log-warn', message: e.line.slice(0, 400) });
+        findings.push({ severity: 'warning', kind: 'log-warn', code: logLineCode(e.line), message: e.line.slice(0, 400) });
       }
     }
     state.logCursor = Math.max(state.logCursor, probe.logs.latest_seq);
@@ -369,7 +415,7 @@ export async function runSweep(
     if (state.reported.has(key)) continue;
     state.reported.add(key);
     newFindings.push(f);
-    opts.recorder?.event('finding', { severity: f.severity, kind: f.kind, message: f.message });
+    opts.recorder?.event('finding', { severity: f.severity, kind: f.kind, code: f.code, message: f.message });
     if (opts.recorder && (f.severity === 'fatal' || f.severity === 'error')) {
       await captureFinding(target, opts.recorder, ++state.findingCount, f).catch(() => undefined);
     }

@@ -983,6 +983,16 @@ the UI prints one. No report or trace embeds them - `report.md` names the
 trace carries no image - so look at one before you publish it. Attach the
 trace and the printed failure, not the session directory.
 
+**A finding's text stays in the session directory (#576 HFI2-F2).** A
+`log-warn` / `log-error` finding's message is the app's log line, and the app's
+lines name the data they are about - a section, a project, a station - which no
+corpus fold knows. So the PASS/FAIL line of `agent:scenario`, `agent:scenarios`
+and `agent:journeys` prints findings as counts per severity, kind and code
+(`findings={"warning:log-warn@stalagmight_parsers::tml":2}`; a log finding's
+code is its line's log target, `oracles.logLineCode`), and `report.md` names a
+log finding by that target and withholds the line. The text is in the
+session's `actions.jsonl` and `findings/`, for triage where the run happened.
+
 **`corpusId` labels; `corpusHash` resolves.** The 5-hex crc20 is 20 bits, which
 is ample for telling two files apart in one run's output and far too little to
 look one up: discovery permits 20000 entries, and by the birthday bound a corpus

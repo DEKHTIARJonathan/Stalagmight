@@ -19,7 +19,7 @@ import { fileURLToPath } from 'url';
 import { createSession } from './createSession';
 import { listJourneys, getJourney } from './journeys';
 import { runJourney, type JourneyResult } from './journeys/framework';
-import { runSweep, newOracleState, type Finding } from './lib/oracles';
+import { findingsSummary, runSweep, newOracleState, type Finding } from './lib/oracles';
 import { callStoreAction } from './lib/stores';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -149,7 +149,8 @@ async function main(): Promise<void> {
         `${verdict.toUpperCase()}: ${name} (${result.durationMs}ms, ` +
           `${result.checks.length - failedChecks.length}/${result.checks.length} checks)` +
           `${result.aborted ? ` aborted: ${result.aborted}` : ''}` +
-          `${breaches.length ? ` sweep=${JSON.stringify(breaches)}` : ''}\n`,
+          // Counts only (#576 HFI2-F2); the text is in the session's run.jsonl.
+          `${breaches.length ? ` sweep=${findingsSummary(breaches)}` : ''}\n`,
       );
     }
   } finally {

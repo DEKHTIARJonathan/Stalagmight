@@ -8,7 +8,7 @@
  */
 import { createSession } from './createSession';
 import { listScenarios, runScenario } from './scenarios';
-import { runSweep, newOracleState } from './lib/oracles';
+import { findingsSummary, runSweep, newOracleState } from './lib/oracles';
 import { callStoreAction } from './lib/stores';
 
 // Small iteration counts for a fast gate; the real stress values are the
@@ -119,7 +119,8 @@ async function main(): Promise<void> {
         const label = fatal.length ? 'FAIL' : sweep.findings.length ? 'PASS+findings' : 'PASS';
         process.stdout.write(
           `${label}: ${name} (${metrics.durationMs}ms) ${JSON.stringify(metrics.metrics)}` +
-            `${sweep.findings.length ? ` findings=${JSON.stringify(sweep.findings)}` : ''}\n`,
+            // Counts only (#576 HFI2-F2): a log finding's message names the data.
+            `${sweep.findings.length ? ` findings=${findingsSummary(sweep.findings)}` : ''}\n`,
         );
       } catch (err) {
         failed = true;

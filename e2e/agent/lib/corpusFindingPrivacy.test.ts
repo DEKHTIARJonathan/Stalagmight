@@ -225,6 +225,16 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
           event: 'finding',
           detail: { severity: 'error', kind: 'log-error', message: `ERROR import failed path="${quoted}" reason="x"` },
         },
+        // A log line is withheld from the report whole (#576 HFI2-F2), so the
+        // path fold is exercised by a finding the report still quotes.
+        {
+          type: 'event',
+          v: 1,
+          seq: 1,
+          ts: '2026-01-01T00:00:02Z',
+          event: 'finding',
+          detail: { severity: 'warning', kind: 'sweep-probe-failed', message: `oracle probe failed: could not read ${quoted}` },
+        },
       ]
         .map((r) => JSON.stringify(r))
         .join('\n') + '\n',

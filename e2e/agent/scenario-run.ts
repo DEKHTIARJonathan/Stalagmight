@@ -106,7 +106,7 @@ async function main(): Promise<void> {
   // refusal in #422 - and the macOS backend it should pick (`MacSession`,
   // tauri-wd) was unreachable from here.
   const { createSession } = await import('./createSession');
-  const { runSweep, newOracleState } = await import('./lib/oracles');
+  const { findingsSummary, runSweep, newOracleState } = await import('./lib/oracles');
   if (!getScenario(args.name)) {
     throw new Error(`unknown scenario "${args.name}"; known: ${listScenarios().join(', ')}`);
   }
@@ -132,10 +132,10 @@ async function main(): Promise<void> {
       `${fatal.length ? 'FAIL' : 'PASS'}: ${args.name} seed=${metrics.seed} iterations=${metrics.iterations} ` +
         `mode=${started.buildMode} ` +
         `(${metrics.durationMs}ms) ${JSON.stringify(metrics.metrics)}` +
-        // Through the corpus redaction: a finding quotes the app's error log,
-        // and the app quotes the path of a corpus copy it failed to import
-        // (#576 HFI-13). A no-op in a run that copied no corpus entry.
-        `${sweep.findings.length ? ` findings=${redactCorpusText(JSON.stringify(sweep.findings))}` : ''}\n`,
+        // Counts per severity, kind and code only (#576 HFI2-F2): a finding's
+        // message is the app's log line, which names sections and projects of
+        // the loaded data. The text stays in the session's actions.jsonl.
+        `${sweep.findings.length ? ` findings=${findingsSummary(sweep.findings)}` : ''}\n`,
     );
   } catch (err) {
     failed = true;
