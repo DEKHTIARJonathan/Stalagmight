@@ -8,7 +8,7 @@
  * `.tsx` so vitest runs it under jsdom.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 import type { SalvagedData } from '../../../types/ipc/SalvagedData';
 
@@ -38,6 +38,7 @@ vi.mock('../DialogWrapper', async () => (await import('../../../test/factories/c
 import '../../../i18n';
 import CorruptionRecoveryDialog from '../CorruptionRecoveryDialog';
 import { invokeIpcMock as invokeIpc } from '../../../test/factories/ipc';
+import { useOverwritePromptStore } from '../../../utils/overwriteGuard';
 
 const SALVAGED: SalvagedData = {
   projectName: 'CaveA',
@@ -122,5 +123,75 @@ describe('CorruptionRecoveryDialog salvage export (#576 HFI-3)', () => {
     expect(screen.getByText('Database integrity check failed.')).toBeInTheDocument();
     expect(screen.queryByText('Data Exported')).toBeNull();
     expect(screen.queryByText('Salvage Failed')).toBeNull();
+  });
+});
+
+/**
+ * [#576 HFI2-F1] GTK's save dialog does not append the filter's extension, so a
+ * name typed bare reached the backend as `salvaged` and was refused ("the file
+ * must end in .json"). The answer now goes through `resolveSavePath`, as every
+ * other save and export does: the extension is added, and only a REWRITTEN name
+ * that already exists is asked about.
+ */
+describe('CorruptionRecoveryDialog salvage export, a name typed without .json (#576 HFI2-F1)', () => {
+  /** The backend, with a file at the rewritten name or not. */
+  function backendWith(rewrittenExists: boolean): void {
+    invokeIpc.mockImplementation(async (command: string) => {
+      if (command === 'export_salvageable_data') return SALVAGED;
+      if (command === 'save_target_exists') return rewrittenExists;
+      if (command === 'write_salvaged_data') return null;
+      throw new Error(`unexpected ${command}`);
+    });
+  }
+  const written = (): unknown[] =>
+    invokeIpc.mock.calls.filter(([command]) => command === 'write_salvaged_data').map(([, args]) => args);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invokeIpc.mockReset();
+    useOverwritePromptStore.setState({ request: null });
+    saveDialogMock.mockResolvedValue('/survey/rescued/salvaged');
+  });
+
+  it('adds .json and writes there, without asking when nothing is at that name', async () => {
+    backendWith(false);
+
+    await exportSalvage();
+
+    expect(await screen.findByText('Data Exported')).toBeInTheDocument();
+    expect(written()).toEqual([{ path: '/survey/CaveA.stalx', destPath: '/survey/rescued/salvaged.json' }]);
+    expect(invokeIpc).toHaveBeenCalledWith(
+      'save_target_exists',
+      { path: '/survey/rescued/salvaged.json' },
+      expect.anything(),
+    );
+    expect(screen.getByText(/\/survey\/rescued\/salvaged\.json/)).toBeInTheDocument();
+    expect(useOverwritePromptStore.getState().request).toBeNull();
+  });
+
+  it('asks before replacing a file at the rewritten name, and writes nothing when declined', async () => {
+    backendWith(true);
+
+    await exportSalvage();
+
+    await waitFor(() => expect(useOverwritePromptStore.getState().request).not.toBeNull());
+    expect(useOverwritePromptStore.getState().request?.path).toBe('/survey/rescued/salvaged.json');
+    act(() => useOverwritePromptStore.getState().request?.resolve(false));
+
+    // Declining is a cancel: back to the choices, nothing written, no result.
+    expect(await screen.findByTestId('recovery-export-salvage')).toBeInTheDocument();
+    expect(written()).toEqual([]);
+    expect(screen.queryByText('Salvage Failed')).toBeNull();
+  });
+
+  it('does not probe a name the dialog returned with .json already (the dialog asked)', async () => {
+    saveDialogMock.mockResolvedValue('/survey/rescued/salvaged.json');
+    backendWith(true);
+
+    await exportSalvage();
+
+    expect(await screen.findByText('Data Exported')).toBeInTheDocument();
+    expect(written()).toEqual([{ path: '/survey/CaveA.stalx', destPath: '/survey/rescued/salvaged.json' }]);
+    expect(invokeIpc).not.toHaveBeenCalledWith('save_target_exists', expect.anything(), expect.anything());
   });
 });

@@ -5,6 +5,7 @@ import { saveDialog } from '../../utils/fileDialogs';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { invokeIpc } from '../../utils/ipc';
+import { resolveSavePath } from '../../utils/overwriteGuard';
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -158,12 +159,16 @@ export default function CorruptionRecoveryDialog() {
       });
 
       // Prompt user for save location
-      const destPath = await saveDialog({
+      const answer = await saveDialog({
         title: t('dialogs.corruptionRecovery.salvage.saveTitle'),
         defaultPath: 'salvaged-data.json',
         filters: [{ name: 'JSON', extensions: ['json'] }],
       }, 'recovery-export-salvage');
 
+      // [#576 HFI2-F1] As every other save: GTK does not append the filter's
+      // extension, so `.json` is added here, and a rewritten name that is
+      // already taken is asked about (declining is a cancel).
+      const destPath = answer ? await resolveSavePath(answer, 'json') : null;
       if (!destPath) {
         cancelled = true;
         return;
