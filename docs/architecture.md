@@ -560,7 +560,7 @@ sides agree to within 1e-9 degrees.
 | Caller | Longitude | Beyond the horizon |
 |--------|-----------|--------------------|
 | Global View (`survey_geometry.rs`) | `unwrap_longitude`: continuous with the origin across the antimeridian, may leave [-180, 180] | the project shows as failed to load, with the reason |
-| Workspace map (`metersToMapCoords`) | `unwrapLongitude`, the same step | pinned on the horizon in its own direction, so the camera and bounds stay finite |
+| Workspace map (`metersToMapCoords`) | `unwrapLongitude`, the same step | pinned near the horizon in its own direction (the vertical's closest approach to the ellipsoid, a point above the surface), so the camera and bounds stay finite |
 | GPS column (`xyToGps`) | [-180, 180] | blank cell |
 | TML import, datum carried past dropped shots | [-180, 180] (a storable `GpsCoordinates`) | anchored at the file's own fix, with a log warning |
 | stalx reader (`stalx-reader`) | [-180, 180] | station left without coordinates |

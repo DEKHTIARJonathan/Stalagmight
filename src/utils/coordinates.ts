@@ -124,9 +124,10 @@ function gpsToEnu(
  *
  * `null` when the vertical misses the ellipsoid (an offset beyond the horizon,
  * roughly an earth radius out) or an input is not finite. With `pinToHorizon`,
- * a finite offset beyond the horizon instead takes the discriminant as zero,
- * which lands it on the horizon in (very nearly) its own direction: the map's
- * choice, see `metersToMapCoords`.
+ * a finite offset beyond the horizon instead takes the discriminant as zero:
+ * the vertical's closest approach to the ellipsoid, a point above the surface,
+ * so it lands near the horizon in (very nearly) its own direction, not on it.
+ * The map's choice, see `metersToMapCoords`.
  */
 function surfacePoint(
   east: number,
@@ -226,7 +227,7 @@ function unwrapLongitude(lon: number, reference: number): number {
  * Beyond the horizon (roughly an earth radius from the origin; no survey gets
  * there, only corrupt coordinates) there is no point on the earth to draw. The
  * map still needs a finite one - a NaN would break its camera and bounds - so
- * the point is pinned to the horizon in its own direction, where the rest of
+ * the point is pinned near the horizon in its own direction, where the rest of
  * the survey shows a line heading off towards it. GlobalView refuses such a
  * project instead, and the GPS column leaves the cell blank. A non-finite
  * input gives [NaN, NaN], as it always did.

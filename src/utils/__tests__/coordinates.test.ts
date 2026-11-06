@@ -249,8 +249,8 @@ describe('one local-to-GPS algorithm with the backend (#576 GEO-D1)', () => {
   });
 
   // The map needs a finite point even for a corrupt station: beyond the
-  // horizon it is pinned on the horizon in its own direction. Due east of
-  // (0, 0) the horizon is longitude 90, one semi-major axis out.
+  // horizon it is pinned near the horizon in its own direction (on it here:
+  // due east of (0, 0) the horizon is longitude 90, one semi-major axis out).
   it('the map pins a point beyond the horizon on the horizon', () => {
     const [inside] = metersToMapCoords(6_378_000, 0, EQUATOR_ORIGIN);
     expect(inside).toBeCloseTo(89.62446, 4);
