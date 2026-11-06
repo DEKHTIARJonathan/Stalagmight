@@ -563,3 +563,202 @@ fn resolve_offsets_matches_the_pre_602_solve_on_random_projects() {
         assert_resolve_matches_oracle(&random_project(seed), &format!("seed {seed}"));
     }
 }
+
+/// `convert_closures_orphaned_since` as it was before #597, kept as the
+/// equivalence oracle for the one-pass sweep. Ported from
+/// `1178568c8^:src-tauri/crates/models/src/project/offsets.rs` (the parent of
+/// 1178568c8, "perf(models #597): orphan-closure sweep in one pass over section
+/// components"): restart the scan from the first closure after every
+/// conversion, answer orphanhood with a station walk per closure, and ask
+/// `plan_merge_promotion` about every candidate. Adapted only to run outside
+/// `impl Project` (`self` is `project`); it also hands back the refused ids so
+/// the sweep can count them.
+fn convert_closures_orphaned_since_before_597(
+    project: &mut Project,
+    preexisting: &HashSet<u64>,
+) -> (Vec<offsets::MintedMerge>, HashSet<u64>) {
+    let mut minted = Vec::new();
+    // Sole-bridge closures left UNCONVERTED because turning them into a rigid
+    // merge would fuse two independently zero-datum-anchored groups. Tracked by
+    // id so the orphan scan below does not reconsider them on every iteration
+    // (which would loop forever, since they are never removed).
+    let mut left_as_closure: HashSet<u64> = HashSet::new();
+    loop {
+        let orphan = project.loop_closures.iter().position(|c| {
+            if left_as_closure.contains(&c.id) || preexisting.contains(&c.id) {
+                return false;
+            }
+            is_orphan_closure_before_597(project, c)
+        });
+        let Some(idx) = orphan else { break };
+
+        let (id, a, b) = {
+            let closure = &project.loop_closures[idx];
+            (
+                closure.id,
+                closure.station_a.clone(),
+                closure.station_b.clone(),
+            )
+        };
+        let Some(plan) = project.plan_merge_promotion(&a, &b) else {
+            left_as_closure.insert(id);
+            continue;
+        };
+
+        let closure = project.loop_closures.remove(idx);
+        let already = match (
+            project.resolve_key(&closure.station_a),
+            project.resolve_key(&closure.station_b),
+        ) {
+            (Some(a), Some(b)) => project.has_direct_merge(a, b),
+            _ => false,
+        };
+        if !already {
+            project.record_station_merge(StationMerge {
+                station_a: closure.station_a,
+                station_b: closure.station_b,
+                merged_at: Utc::now(),
+            });
+        }
+        minted.push(plan);
+    }
+    (minted, left_as_closure)
+}
+
+/// The pre-#597 orphan predicate (same source as above): a station walk over
+/// shots and merges, closures excluded.
+fn is_orphan_closure_before_597(project: &Project, closure: &LoopClosure) -> bool {
+    if closure.station_a.section_id == closure.station_b.section_id {
+        return false;
+    }
+    let (Some(a), Some(b)) = (
+        project.resolve_key(&closure.station_a),
+        project.resolve_key(&closure.station_b),
+    ) else {
+        return false;
+    };
+    !project.are_stations_connected_excluding_shot(a, b, None, false)
+}
+
+/// What a sweep leaves behind, in order: the closures (every field), the merge
+/// endpoints (not `merged_at`, a wall-clock stamp) and the offsets' bits.
+type SweepOutcome = (
+    String,
+    Vec<(StationKey, StationKey)>,
+    Vec<(SectionId, u64, u64)>,
+);
+
+fn sweep_outcome(project: &Project) -> SweepOutcome {
+    let mut offsets: Vec<(SectionId, u64, u64)> = project
+        .section_offsets
+        .iter()
+        .map(|(&id, &(x, y))| (id, x.to_bits(), y.to_bits()))
+        .collect();
+    offsets.sort_unstable();
+    (
+        format!("{:?}", project.loop_closures),
+        project
+            .station_merges
+            .iter()
+            .map(|m| (m.station_a.clone(), m.station_b.clone()))
+            .collect(),
+        offsets,
+    )
+}
+
+/// Sweep two copies of `project`, one with the oracle and one live, and require
+/// the same promotions with the same plans in the same order, then the same
+/// closures, merges and settled offsets. Returns the oracle's (conversions,
+/// refusals) so the caller can prove the run was not vacuous.
+fn assert_sweep_matches_oracle(
+    project: &Project,
+    preexisting: &HashSet<u64>,
+    label: &str,
+) -> (usize, usize) {
+    let mut old = project.clone();
+    let mut new = project.clone();
+    let (old_minted, refused) = convert_closures_orphaned_since_before_597(&mut old, preexisting);
+    let new_minted = new.convert_closures_orphaned_since(preexisting);
+    assert_eq!(
+        format!("{new_minted:?}"),
+        format!("{old_minted:?}"),
+        "{label}: promotions"
+    );
+    old.settle_minted_merges(&old_minted);
+    new.settle_minted_merges(&new_minted);
+    let (old_closures, old_merges, old_offsets) = sweep_outcome(&old);
+    let (new_closures, new_merges, new_offsets) = sweep_outcome(&new);
+    assert_eq!(new_closures, old_closures, "{label}: closures");
+    assert_eq!(new_merges, old_merges, "{label}: merges");
+    assert_eq!(new_offsets, old_offsets, "{label}: settled offsets");
+    (old_minted.len(), refused.len())
+}
+
+/// [`random_project`] with more of what the sweep decides on: extra closures
+/// across sections, and extra zero datums so both kinds of orphan (promotable
+/// and double-anchored) turn up.
+fn random_orphan_project(seed: u64) -> Project {
+    let mut p = random_project(seed);
+    let mut rng = Lcg(seed ^ 0x5eed_0597);
+    let ids: Vec<SectionId> = p.sections.iter().map(|s| s.id).collect();
+    let station = |rng: &mut Lcg, p: &Project| -> StationKey {
+        let id = ids[rng.below(ids.len() as u64) as usize];
+        let section = p.get_section(id).unwrap();
+        match rng.below(section.shots.len() as u64 + 1) as usize {
+            0 => start_key(id),
+            k => StationKey::new(
+                id,
+                StationAnchor::AfterShot(section.shots[k - 1].uuid.clone().unwrap()),
+            ),
+        }
+    };
+    for _ in 0..rng.below(3) {
+        let k = station(&mut rng, &p);
+        let lat = rng.real(20.0, 21.0);
+        p.zero_datums.push(datum_at(k, lat));
+    }
+    let first = p.loop_closures.iter().map(|c| c.id).max().unwrap_or(0) + 1;
+    for id in first..first + rng.below(6) {
+        let (a, b) = (station(&mut rng, &p), station(&mut rng, &p));
+        p.loop_closures
+            .push(test_closure(id, a, b, ClosureStrategy::Batch, false));
+    }
+    p
+}
+
+#[test]
+fn the_orphan_sweep_matches_the_pre_597_sweep_on_random_projects() {
+    let (mut conversions, mut refusals) = (0, 0);
+    let (mut seeds_converting, mut seeds_refusing) = (0, 0);
+    for seed in 0..600 {
+        let project = random_orphan_project(seed);
+        let (c, r) =
+            assert_sweep_matches_oracle(&project, &HashSet::new(), &format!("seed {seed}"));
+        // A mutation path's sweep, which leaves the orphans it saw beforehand.
+        let mut rng = Lcg(seed);
+        let preexisting: HashSet<u64> = project
+            .loop_closures
+            .iter()
+            .map(|c| c.id)
+            .filter(|_| rng.below(3) == 0)
+            .collect();
+        let (pc, pr) =
+            assert_sweep_matches_oracle(&project, &preexisting, &format!("seed {seed} scoped"));
+        conversions += c + pc;
+        refusals += r + pr;
+        seeds_converting += usize::from(c > 0);
+        seeds_refusing += usize::from(r > 0);
+    }
+    println!(
+        "orphan sweep coverage: {conversions} conversions, {refusals} refused promotions, \
+         {seeds_converting} seeds converting, {seeds_refusing} seeds refusing"
+    );
+    assert!(
+        conversions >= 300 && seeds_converting >= 150,
+        "too few conversions to mean anything"
+    );
+    assert!(
+        refusals >= 100 && seeds_refusing >= 50,
+        "too few refused promotions to mean anything"
+    );
+}
