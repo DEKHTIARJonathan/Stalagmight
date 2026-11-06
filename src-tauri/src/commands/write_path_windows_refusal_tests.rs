@@ -70,6 +70,7 @@ fn wrong_writes(rules: PathRules, cases: &[(&str, &str, Option<&str>)]) -> Vec<S
 
 const NOT_PLAIN: Option<&str> = Some("a Windows device, volume or drive-relative path");
 const STREAM: Option<&str> = Some("an alternate data stream");
+const DEVICE_NAME: Option<&str> = Some("a Windows device name");
 
 /// Class 1: a `\\?\` or `\\.\` path that is not a drive or UNC path, the NT
 /// prefix `\??\`, and a path relative to a drive's current folder (`C:x`).
@@ -152,6 +153,45 @@ fn an_alternate_data_stream_is_refused() {
         ),
         ("stream, relative", "notes.txt:x.stalx", STREAM),
         ("the drive's own colon", r"C:\Users\a\CaveL.stalx", None),
+    ];
+    let wrong = wrong_writes(WINDOWS, &cases);
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// Class 3: a last name that is a Windows device name, with or without an
+/// extension, in any case, with trailing dots or spaces before the extension.
+#[test]
+fn a_device_name_is_refused() {
+    let cases = [
+        ("NUL", r"C:\Users\a\NUL.stalx", DEVICE_NAME),
+        ("con, lower case", r"C:\Users\a\con.stalx", DEVICE_NAME),
+        ("PRN", r"C:\Users\a\PRN.stalx", DEVICE_NAME),
+        ("Aux, mixed case", r"C:\Users\a\Aux.stalx", DEVICE_NAME),
+        ("COM1", r"C:\Users\a\COM1.stalx", DEVICE_NAME),
+        ("com9", r"C:\Users\a\com9.stalx", DEVICE_NAME),
+        ("LPT1", r"C:\Users\a\LPT1.stalx", DEVICE_NAME),
+        ("lpt9", r"C:\Users\a\lpt9.stalx", DEVICE_NAME),
+        (
+            "two extensions",
+            r"C:\Users\a\NUL.backup.stalx",
+            DEVICE_NAME,
+        ),
+        (
+            "space before the dot",
+            r"C:\Users\a\nul .stalx",
+            DEVICE_NAME,
+        ),
+        (
+            "dots before the extension",
+            r"C:\Users\a\CON..stalx",
+            DEVICE_NAME,
+        ),
+        ("relative", "NUL.stalx", DEVICE_NAME),
+        ("on a share", r"\\server\share\aux.stalx", DEVICE_NAME),
+        ("COM10 is a file", r"C:\Users\a\COM10.stalx", None),
+        ("NULL is a file", r"C:\Users\a\NULL.stalx", None),
+        ("CONSOLE is a file", r"C:\Users\a\CONSOLE.stalx", None),
+        ("a folder named NUL", r"C:\Users\a\NUL\CaveL.stalx", None),
     ];
     let wrong = wrong_writes(WINDOWS, &cases);
     assert!(wrong.is_empty(), "{wrong:#?}");

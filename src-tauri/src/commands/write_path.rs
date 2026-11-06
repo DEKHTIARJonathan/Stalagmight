@@ -295,8 +295,24 @@ pub(crate) fn windows_path_refusal(path: &str) -> Option<&'static str> {
     if after_drive.contains(':') {
         return Some("that is an alternate data stream of a file or folder");
     }
+    // A last name whose stem - up to its first dot, trailing spaces dropped -
+    // is a device name opens that device, extension or not (`NUL.stalx`).
+    let last = after_drive.rsplit('\\').find(|name| !name.is_empty());
+    let stem = last
+        .and_then(|name| name.split('.').next())
+        .unwrap_or_default()
+        .trim_end_matches(' ');
+    if DEVICE_NAMES.iter().any(|d| stem.eq_ignore_ascii_case(d)) {
+        return Some("that is a Windows device name");
+    }
     None
 }
+
+/// The Windows device names a file name may not have (#576 W24-D1).
+const DEVICE_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
 
 /// The forms of `path` to compare: as given (made absolute) with `.`/`..` folded,
 /// and as a write would reach it on disk ([`resolved`]: links followed), so `/etc`
