@@ -265,7 +265,13 @@ fn windows_refusal(path: &Path, rules: PathRules) -> Option<String> {
     if !rules.windows {
         return None;
     }
-    windows_path_refusal(&path.to_string_lossy()).map(str::to_owned)
+    // This computer's own name is a loopback server too: known on Windows.
+    let own_name = if cfg!(windows) {
+        std::env::var("COMPUTERNAME").ok()
+    } else {
+        None
+    };
+    windows_path_refusal(&path.to_string_lossy(), own_name.as_deref()).map(str::to_owned)
 }
 
 /// [`windows_refusal`] on a path's text - pure, so every host tests it. A
@@ -273,8 +279,10 @@ fn windows_refusal(path: &Path, rules: PathRules) -> Option<String> {
 /// (`\\?\GLOBALROOT\..`, `\\?\Volume{..}\..`, `\\.\HarddiskVolume3\..`,
 /// `\\.\pipe\..`) is a device or volume, and so is a path under the NT prefix
 /// `\??\`. A drive letter not followed by `\` (`C:x`) names a place in that
-/// drive's current folder, which the text does not tell.
-pub(crate) fn windows_path_refusal(path: &str) -> Option<&'static str> {
+/// drive's current folder, which the text does not tell. A UNC path whose
+/// server is this computer ([`is_this_computer`]; `own_name` its name, when
+/// known) reaches a local folder under another name.
+pub(crate) fn windows_path_refusal(path: &str, own_name: Option<&str>) -> Option<&'static str> {
     let text = path.replace('/', "\\");
     let plain = windows_form(path);
     let drive = plain
@@ -289,6 +297,12 @@ pub(crate) fn windows_path_refusal(path: &str) -> Option<&'static str> {
         || (drive && !drive_root)
     {
         return Some("that is a Windows device, volume or drive-relative path");
+    }
+    let server = plain
+        .strip_prefix(r"\\")
+        .and_then(|unc| unc.split('\\').next());
+    if server.is_some_and(|server| is_this_computer(server, own_name)) {
+        return Some("that is this computer reached as a network share");
     }
     // A `:` after the drive names an alternate data stream: of another file
     // (`notes.txt:x.stalx`) or of a folder itself (`C:\Windows:x.stalx`).
@@ -306,6 +320,37 @@ pub(crate) fn windows_path_refusal(path: &str) -> Option<&'static str> {
         return Some("that is a Windows device name");
     }
     None
+}
+
+/// Whether a UNC server name is this computer (#576 W24-D1): `localhost`, an
+/// IPv4 address in 127.0.0.0/8 (also in a short form Windows reads, such as
+/// `127.1`), `::1` (also as an `ipv6-literal.net` name, `--1.ipv6-literal.net`),
+/// or `own_name` - alone or as the start of a domain name. A trailing dot (the
+/// fully qualified form) and letter case do not matter.
+fn is_this_computer(server: &str, own_name: Option<&str>) -> bool {
+    let server = server.trim_end_matches('.').to_ascii_lowercase();
+    if server == "localhost"
+        || (server.starts_with("127.") && server.bytes().all(|b| b.is_ascii_digit() || b == b'.'))
+    {
+        return true;
+    }
+    // An ipv6-literal.net name spells `:` as `-` and a zone as `s<zone>`.
+    let v6 = server.strip_suffix(".ipv6-literal.net").map_or_else(
+        || server.clone(),
+        |name| name.split('s').next().unwrap_or_default().replace('-', ":"),
+    );
+    if v6.parse::<std::net::Ipv6Addr>().is_ok_and(|address| {
+        address.is_loopback() || address.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())
+    }) {
+        return true;
+    }
+    own_name.is_some_and(|own| {
+        let own = own.to_ascii_lowercase();
+        !own.is_empty()
+            && server
+                .strip_prefix(own.as_str())
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+    })
 }
 
 /// The Windows device names a file name may not have (#576 W24-D1).
