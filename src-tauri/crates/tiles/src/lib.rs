@@ -1130,6 +1130,32 @@ fn refetch_left_it_unknown(result: &Result<TileFetchResponse, TileFetchError>) -
     }
 }
 
+/// Largest width or height a tile may decode to (#576 W30-7b). Tiles are 256
+/// or 512 px; 4096 is eight times the larger, room for any high-DPI variant,
+/// while a header claiming more is refused before anything is allocated.
+const TILE_DECODE_MAX_SIDE: u32 = 4096;
+
+/// Most bytes decoding one tile may allocate (#576 W30-7b): the 8-bit RGBA
+/// buffer of a tile at the side cap (4096 * 4096 * 4 bytes = 64 MiB). A 512 px
+/// RGBA tile needs 1 MiB; the image crate's own default would allow 512 MiB.
+const TILE_DECODE_MAX_ALLOC: u64 = 64 * 1024 * 1024;
+
+/// Decode tile bytes under [`TILE_DECODE_MAX_SIDE`] and
+/// [`TILE_DECODE_MAX_ALLOC`]. `image::load_from_memory` applies only the image
+/// crate's defaults - no side cap, up to 512 MiB of output - so a few bytes of
+/// header claiming a huge image made it reserve hundreds of MiB before finding
+/// no pixel data behind them. The checks run on the header, before the output
+/// buffer is reserved.
+fn decode_tile_image(bytes: &[u8]) -> image::ImageResult<DynamicImage> {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(TILE_DECODE_MAX_SIDE);
+    limits.max_image_height = Some(TILE_DECODE_MAX_SIDE);
+    limits.max_alloc = Some(TILE_DECODE_MAX_ALLOC);
+    let mut reader = image::ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
+    reader.limits(limits);
+    reader.decode()
+}
+
 fn derive_tile_from_parent(
     provider: &str,
     provider_info: &tile_providers::TileProvider,
@@ -1162,7 +1188,7 @@ fn derive_tile_from_parent(
         if let Some(cached) = cache.get(provider, parent_z, parent_y, parent_x) {
             cached
         } else {
-            let decoded = image::load_from_memory(&parent_tile.data)
+            let decoded = decode_tile_image(&parent_tile.data)
                 .map_err(|e| format!("Failed to decode parent tile: {e}"))?;
             let arc = Arc::new(decoded);
             cache.put(provider, parent_z, parent_y, parent_x, Arc::clone(&arc));
@@ -1588,3 +1614,7 @@ mod crop_storage_rv4_tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod body_limit_tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod decode_limits_tests;
