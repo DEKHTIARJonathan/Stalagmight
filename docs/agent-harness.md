@@ -1011,6 +1011,11 @@ locations:
 - A fuzz trace's `failure` is that form, with the signature of that form.
   `fuzz-shrink` prints that shareable signature and checks it against the
   trace header; ddmin still compares full signatures, in memory.
+- A harness crash - a runner's `fatal:` line, `fuzz-shrink`'s `shrink
+  failed:` - prints the error's name, its headline in the same form, and its
+  stack frames, folded; the other lines of its message are counted
+  (`shareableErrorText`). A crash in session setup can carry an IPC rejection
+  or a page script's error, so the raw stack is not printed.
 - `findings/<n>/finding.json` and `report.md` carry the shareable projection
   of each finding (`scripts/lib/shareable-finding.mjs`): a panic's `file:line`
   and thread but only its message's length, the error boundary's text length,

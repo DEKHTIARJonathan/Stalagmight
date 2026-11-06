@@ -100,8 +100,13 @@ function shareableHeadline(headline: string): string {
   return headline;
 }
 
-function withheldLine(count: number): string {
-  return `  (${count} line(s) withheld: they can quote the app's text - the full failure is in the session's actions.jsonl)`;
+/**
+ * The count line for a run of withheld lines. `where` says where the full text
+ * is: a scenario failure's is in the session's `actions.jsonl`; a crash's and a
+ * dead cell's are nowhere a run keeps.
+ */
+function withheldLine(count: number, where = "the full failure is in the session's actions.jsonl"): string {
+  return `  (${count} line(s) withheld: they can quote the app's text - ${where})`;
 }
 
 /**
@@ -111,16 +116,20 @@ function withheldLine(count: number): string {
  * (scenario, fixture, move, screen) - except the app's text an
  * `APP_ERROR_HEADLINES` shape ends in, which is replaced by its length.
  */
-export function shareableFailureText(message: string): string {
+export function shareableFailureText(
+  message: string,
+  alsoKept: readonly RegExp[] = [],
+  withheldWhere?: string,
+): string {
   const [first = '', ...rest] = foldLocalPaths(redactCorpusText(message)).split('\n');
   const out = [shareableHeadline(first)];
   let withheld = 0;
   const flush = (): void => {
-    if (withheld > 0) out.push(withheldLine(withheld));
+    if (withheld > 0) out.push(withheldLine(withheld, withheldWhere));
     withheld = 0;
   };
   for (const line of rest) {
-    if (KEPT_LINES.some((shape) => shape.test(line))) {
+    if (KEPT_LINES.some((shape) => shape.test(line)) || alsoKept.some((shape) => shape.test(line))) {
       flush();
       out.push(line);
       continue;
@@ -144,4 +153,31 @@ export function shareableFailureText(message: string): string {
  */
 export function scenarioFailOutput(name: string, err: unknown): string {
   return `FAIL: ${name} threw:\n${shareableFailureText(err instanceof Error ? err.message : String(err))}\n`;
+}
+
+/**
+ * A stack frame - a code location: `at fn (file:line:col)`, `at file:line:col`,
+ * `at fn (<anonymous>)`, `at async fn (node:internal/...:1:2)`. The function
+ * part is identifiers, `.`, `<anonymous>` and `[as name]` only, and the
+ * location has no spaces, so a frame cannot carry a sentence.
+ */
+export const STACK_FRAME =
+  /^\s+at (?:(?:async |new )?[\w$.<>]+(?: \[as [\w$]+\])? \()?(?:[^\s()]+:\d+:\d+|<anonymous>|native)\)?$/;
+
+/** No session records a crash's message: what is withheld is not printed anywhere. */
+const CRASH_WITHHELD = 'the rest of the error is not printed';
+
+/**
+ * A harness CRASH as the runners print it after `fatal: ` or `shrink failed: `
+ * (#576 W23-NF2): the error's name, its headline as a FAIL headline is printed
+ * (`ipc <command>: <the app's error>` keeps the prefix and the length), and its
+ * stack frames; every other line of the message is withheld and counted. A
+ * crash in session setup can carry the app's text - an IPC rejection, a page
+ * script's error - so the raw stack is not for sharing either.
+ */
+export function shareableErrorText(err: unknown): string {
+  if (!(err instanceof Error)) return shareableFailureText(String(err), [], CRASH_WITHHELD);
+  const frames = (err.stack ?? '').split('\n').filter((line) => STACK_FRAME.test(line));
+  const name = /^\w+$/.test(err.name) ? err.name : 'Error';
+  return `${name}: ${shareableFailureText([err.message, ...frames].join('\n'), [STACK_FRAME], CRASH_WITHHELD)}`;
 }

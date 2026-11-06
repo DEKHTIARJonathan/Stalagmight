@@ -9,7 +9,7 @@
 import { createSession } from './createSession';
 import { listScenarios, runScenario } from './scenarios';
 import { findingsSummary, runSweep, newOracleState } from './lib/oracles';
-import { scenarioFailOutput } from './lib/shareableFailure';
+import { scenarioFailOutput, shareableErrorText } from './lib/shareableFailure';
 import { callStoreAction } from './lib/stores';
 
 // Small iteration counts for a fast gate; the real stress values are the
@@ -141,6 +141,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+  // The shareable crash form (#576 W23-NF2): a crash in session setup can quote
+  // the app (an IPC rejection, a page script's error).
+  process.stderr.write(`fatal: ${shareableErrorText(err)}\n`);
   process.exit(1);
 });

@@ -35,7 +35,7 @@
 import * as path from 'path';
 import { readTrace, restoreTraceEnv, type FuzzTrace } from './lib/fuzzTrace';
 import { parseScenarioArgs, scenarioRunOptions } from './lib/scenarioRunArgs';
-import { scenarioFailOutput } from './lib/shareableFailure';
+import { scenarioFailOutput, shareableErrorText } from './lib/shareableFailure';
 
 async function main(): Promise<void> {
   const args = parseScenarioArgs(process.argv.slice(2));
@@ -158,6 +158,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+  // The shareable crash form (#576 W23-NF2): a crash in session setup can quote
+  // the app (an IPC rejection, a page script's error).
+  process.stderr.write(`fatal: ${shareableErrorText(err)}\n`);
   process.exit(1);
 });
