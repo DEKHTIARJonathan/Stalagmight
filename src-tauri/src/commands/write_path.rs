@@ -165,6 +165,11 @@ pub(crate) fn check_write_path_under(
     if !has_expected(path) {
         return refuse(format!("the file must end in {}", expected()));
     }
+    // [#576 W24-D1] A Windows path that names no plain file in a folder is
+    // refused from its text, before the walk below asks the disk about it.
+    if let Some(why) = windows_refusal(path, walk.rules) {
+        return refuse(why);
+    }
     // [#576 RV13-5] The name is right and the link at it leads to a file of
     // another type (or a folder): said of the target, not of the name.
     // A chain of links past what Windows follows has no landing to judge: the
@@ -208,7 +213,8 @@ pub(crate) fn load_upgrade_refusal(path: &Path) -> Option<UpgradeRefusal> {
 
 /// [`load_upgrade_refusal`] against given app directories (the testable core).
 pub(crate) fn load_upgrade_refusal_with(path: &Path, dirs: &AppDirs) -> Option<UpgradeRefusal> {
-    let why = location_refusal(path, true, dirs, Walk::HOST)?;
+    let why = windows_refusal(path, PathRules::HOST)
+        .or_else(|| location_refusal(path, true, dirs, Walk::HOST))?;
     let name = path.file_name().map_or_else(
         || path.display().to_string(),
         |n| n.to_string_lossy().into_owned(),
@@ -248,6 +254,41 @@ fn location_refusal(path: &Path, project: bool, dirs: &AppDirs, walk: Walk<'_>) 
     }
     if system_dirs().iter().any(|d| inside(d)) {
         return Some("that is inside a system folder".to_owned());
+    }
+    None
+}
+
+/// [#576 W24-D1] Why, under Windows rules, `path` names no plain file in a
+/// folder - or `None`. Judged on the text as given, before anything on the disk
+/// is asked; under Unix and macOS rules every such text is a plain name.
+fn windows_refusal(path: &Path, rules: PathRules) -> Option<String> {
+    if !rules.windows {
+        return None;
+    }
+    windows_path_refusal(&path.to_string_lossy()).map(str::to_owned)
+}
+
+/// [`windows_refusal`] on a path's text - pure, so every host tests it. A
+/// `\\?\` or `\\.\` path must name a drive (`X:\`) or a UNC path: any other
+/// (`\\?\GLOBALROOT\..`, `\\?\Volume{..}\..`, `\\.\HarddiskVolume3\..`,
+/// `\\.\pipe\..`) is a device or volume, and so is a path under the NT prefix
+/// `\??\`. A drive letter not followed by `\` (`C:x`) names a place in that
+/// drive's current folder, which the text does not tell.
+pub(crate) fn windows_path_refusal(path: &str) -> Option<&'static str> {
+    let text = path.replace('/', "\\");
+    let plain = windows_form(path);
+    let drive = plain
+        .as_bytes()
+        .get(..2)
+        .is_some_and(|d| d[0].is_ascii_alphabetic() && d[1] == b':');
+    let after_drive = if drive { &plain[2..] } else { plain.as_str() };
+    let drive_root = drive && after_drive.starts_with('\\');
+    let prefixed = text.starts_with(r"\\?\") || text.starts_with(r"\\.\");
+    if text.starts_with(r"\??\")
+        || (prefixed && !drive_root && !plain.starts_with(r"\\"))
+        || (drive && !drive_root)
+    {
+        return Some("that is a Windows device, volume or drive-relative path");
     }
     None
 }
