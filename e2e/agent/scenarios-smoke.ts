@@ -9,6 +9,7 @@
 import { createSession } from './createSession';
 import { listScenarios, runScenario } from './scenarios';
 import { findingsSummary, runSweep, newOracleState } from './lib/oracles';
+import { scenarioFailOutput } from './lib/shareableFailure';
 import { callStoreAction } from './lib/stores';
 
 // Small iteration counts for a fast gate; the real stress values are the
@@ -124,7 +125,11 @@ async function main(): Promise<void> {
         );
       } catch (err) {
         failed = true;
-        process.stdout.write(`FAIL: ${name} threw: ${err instanceof Error ? err.message : String(err)}\n`);
+        // Shareable form only (#576 W21-NF1); the full text goes to actions.jsonl.
+        if (session.hasRecorder) {
+          session.recorder.event('scenario-failure', { scenario: name, message: err instanceof Error ? err.message : String(err) });
+        }
+        process.stdout.write(scenarioFailOutput(name, err));
       }
     }
   } finally {

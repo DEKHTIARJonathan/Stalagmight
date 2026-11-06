@@ -121,3 +121,40 @@ export function matrixSummary(
   if (lost > 0) lines.push(`MATRIX INCOMPLETE: ${lost} of ${cells.length} cell(s) produced no verdict`);
   return lines;
 }
+
+/**
+ * A cell's metrics, read off its PASS line as `scenario-run.ts` prints it: the
+ * JSON after `(<n>ms) `, before an optional ` findings={...}`
+ * (`oracles.findingsSummary`). Anything that does not parse, or is not a finite
+ * number, is no metric.
+ */
+export function parseMetrics(line: string): Record<string, number> {
+  const marker = line.match(/\(\d+ms\)\s/);
+  if (!marker || marker.index === undefined) return {};
+  let json = line.slice(marker.index + marker[0].length);
+  const findingsAt = json.indexOf(' findings=');
+  if (findingsAt >= 0) json = json.slice(0, findingsAt);
+  try {
+    const parsed: unknown = JSON.parse(json);
+    if (!parsed || typeof parsed !== 'object') return {};
+    const out: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The headline a failed cell reports, from the FAIL line at `failIndex`. A
+ * scenario that THREW prints `FAIL: <name> threw:` and its failure on the next
+ * lines (`shareableFailure.scenarioFailOutput`), so the first non-blank line
+ * after it is the failure's headline; any other FAIL line is its own headline.
+ */
+export function failHeadline(outLines: readonly string[], failIndex: number): string {
+  const failLine = (outLines[failIndex] ?? '').slice('FAIL: '.length).trim();
+  if (!failLine.endsWith('threw:')) return failLine;
+  return `${failLine} ${(outLines.slice(failIndex + 1).find((line) => line.trim()) ?? '').trim()}`;
+}

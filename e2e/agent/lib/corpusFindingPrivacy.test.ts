@@ -179,7 +179,8 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
     expect(leaks).toEqual({ marker: false, findingJson: false, reportMd: false });
     // Still a readable marker and finding, naming the entry by its tag.
     expect(JSON.parse(copied)).toEqual({ message: `could not read <corpus #${id}>/<corpus #${id}>/file`, location: 'src/lib.rs:1:1' });
-    expect(finding).toContain(`<corpus #${id}>`);
+    // finding.json is shareable: the panic's code location, not its message (#576 W21-NF2).
+    expect(JSON.parse(finding)).toMatchObject({ kind: 'crash-marker', detail: { location: 'src/lib.rs:1:1' } });
     expect(report).toContain('crash-marker');
   });
 
@@ -431,8 +432,8 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
           event: 'finding',
           detail: { severity: 'error', kind: 'log-error', message: `ERROR import failed path="${quoted}" reason="x"` },
         },
-        // A log line is withheld from the report whole (#576 HFI2-F2), so the
-        // path fold is exercised by a finding the report still quotes.
+        // No finding's text reaches the report (#576 HFI2-F2, W21-NF2), so the
+        // path fold is exercised by a step the report still quotes.
         {
           type: 'event',
           v: 1,
@@ -440,6 +441,16 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
           ts: '2026-01-01T00:00:02Z',
           event: 'finding',
           detail: { severity: 'warning', kind: 'sweep-probe-failed', message: `oracle probe failed: could not read ${quoted}` },
+        },
+        {
+          type: 'action',
+          v: 1,
+          seq: 2,
+          ts: '2026-01-01T00:00:03Z',
+          tool: 'ipc',
+          mutating: true,
+          params: { command: 'import_file', args: { path: quoted } },
+          outcome: { ok: false, durationMs: 1 },
         },
       ]
         .map((r) => JSON.stringify(r))

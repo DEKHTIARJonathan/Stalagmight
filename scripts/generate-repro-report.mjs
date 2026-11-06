@@ -13,6 +13,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { shareableFinding } from './lib/shareable-finding.mjs';
+
 const args = process.argv.slice(2);
 if (args.length === 0 || args[0].startsWith('--')) {
   process.stderr.write('usage: node scripts/generate-repro-report.mjs <sessionDir> [--title ...] [--summary ...]\n');
@@ -189,32 +191,31 @@ P('- Actual: _what happened (see findings below)._');
 P('');
 P('## Oracle findings');
 P('');
-// A log finding's message IS the app's log line, and a log line names the data
-// it is about - a section, a project, a station - which neither scrub above can
-// know (#576 HFI2-F2). This report is pasted into public issues, so it says
-// where the line came from (the log target, `oracles.logLineCode`) and leaves
-// the line in the session's actions.jsonl and findings/, which are not shared.
+// Every finding goes through the shareable projection (#576 HFI2-F2, W21-NF2):
+// codes, counts and code locations. A log line, a panic message, the error
+// boundary's text, integrity messages and leftover file names all quote the
+// app, which names the data it is about - a section, a project, a station -
+// and neither scrub above can know that. This report is pasted into public
+// issues; the full finding is the `finding` event in the session's
+// actions.jsonl, which is not shared. A log finding is named by its target
+// (`oracles.logLineCode`), read off the line for a session older than `code`.
 const LOG_FINDING_KINDS = new Set(['log-warn', 'log-error']);
 const LOG_TARGET = /^(?:ERROR|WARN)\s+([A-Za-z_]\w*(?:::[A-Za-z_]\w*)*):\s/;
 const logFindingCode = (f) => {
   if (typeof f.code === 'string' && /^[\w:.-]{1,120}$/.test(f.code)) return f.code;
   return LOG_TARGET.exec(String(f.message ?? ''))?.[1] ?? 'unattributed';
 };
-const findingText = (f) =>
-  LOG_FINDING_KINDS.has(f.kind)
-    ? `from \`${logFindingCode(f)}\` (line withheld: it can name survey data; see the session's actions.jsonl)`
-    : scrub(f.message ?? '');
-const allFindings = capturedFindings.length ? capturedFindings : findingEvents.map((e) => e.detail);
+const allFindings = (capturedFindings.length ? capturedFindings : findingEvents.map((e) => e.detail)).filter(Boolean);
 if (allFindings.length) {
-  for (const f of allFindings) {
-    if (!f) continue;
-    P(`- **[${f.severity ?? '?'}] ${f.kind ?? '?'}** ${findingText(f)}`);
+  for (const raw of allFindings) {
+    const f = shareableFinding(LOG_FINDING_KINDS.has(raw.kind) ? { ...raw, code: logFindingCode(raw) } : raw);
+    P(`- **[${f.severity}] ${f.kind}**${f.code ? ` from \`${f.code}\`` : ''} ${scrub(f.message)}`);
     if (f.detail !== undefined) {
       P('  ```json');
       P('  ' + scrub(JSON.stringify(f.detail, null, 2)).split('\n').join('\n  '));
       P('  ```');
     }
-    if (f.dir) P(`  evidence: \`findings/${f.dir}/\``);
+    if (raw.dir) P(`  evidence: \`findings/${raw.dir}/\``);
   }
 } else {
   P('_No findings recorded (add the failure detail manually)._');
@@ -224,7 +225,9 @@ P('## Evidence');
 P('');
 P('- Action log: `actions.jsonl`');
 P('- Screenshots: `screenshots/`');
-if (capturedFindings.length) P('- Findings (screenshot + finding.json + crash markers): `findings/`');
+if (capturedFindings.length) {
+  P('- Findings: `findings/` (each `finding.json` is shareable; the screenshot and crash-marker copies beside it are not)');
+}
 P('- Driver log: `tauri-driver.log`');
 P('');
 P('## Notes');

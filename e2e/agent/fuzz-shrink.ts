@@ -43,6 +43,7 @@ import {
   readTrace,
   restoreTraceEnv,
   sameSignature,
+  shareableSignature,
   shrinkableSteps,
   writeTrace,
   type FailureSignature,
@@ -211,11 +212,18 @@ async function main(): Promise<number> {
       failed = true;
       return 1;
     }
-    process.stdout.write(`baseline failure reproduced in ${replayTimesMs[0]} ms:\n${describeSignature(baseline.signature)}\n`);
-    if (trace.failure && !sameSignature(trace.failure.signature, baseline.signature)) {
+    // What is printed and compared with the trace header is the SHAREABLE
+    // signature (#576 W21-NF1): the full one can quote the app's text, and a
+    // written trace carries only the shareable one. ddmin below still compares
+    // full signatures, in memory. The full baseline goes to the session's
+    // actions.jsonl, which is not for sharing.
+    if (session.hasRecorder) session.recorder.event('scenario-failure', { scenario: trace.scenario, message: baseline.message });
+    const published = shareableSignature(baseline.message);
+    process.stdout.write(`baseline failure reproduced in ${replayTimesMs[0]} ms:\n${describeSignature(published)}\n`);
+    if (trace.failure && !sameSignature(shareableSignature(trace.failure.message), published)) {
       process.stdout.write(
         'NOTE: the replay signature differs from the one recorded in the trace header.\n' +
-          `  recorded:\n${describeSignature(trace.failure.signature)}\n` +
+          `  recorded:\n${describeSignature(shareableSignature(trace.failure.message))}\n` +
           '  Shrinking against the REPLAYED signature, which is what this build does now.\n',
       );
     }

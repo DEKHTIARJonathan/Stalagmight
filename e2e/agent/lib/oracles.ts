@@ -21,6 +21,7 @@ import { invokeInApp, evalInApp } from './page';
 import { readStore } from './stores';
 import { isErrorLine, isWarnLine } from './logs';
 import { redactCorpusText, redactCorpusValue } from './fixtureCorpus';
+import { shareableFinding } from '../../../scripts/lib/shareable-finding.mjs';
 
 export type Severity = 'fatal' | 'error' | 'warning';
 
@@ -431,7 +432,15 @@ export async function runSweep(
     if (state.reported.has(key)) continue;
     state.reported.add(key);
     newFindings.push(f);
-    opts.recorder?.event('finding', { severity: f.severity, kind: f.kind, code: f.code, message: f.message });
+    // The whole finding, detail included, goes to the action log - the private
+    // record (#576 W21-NF2); finding.json carries the shareable projection.
+    opts.recorder?.event('finding', {
+      severity: f.severity,
+      kind: f.kind,
+      code: f.code,
+      message: f.message,
+      ...(f.detail === undefined ? {} : { detail: f.detail }),
+    });
     if (opts.recorder && (f.severity === 'fatal' || f.severity === 'error')) {
       await captureFinding(target, opts.recorder, ++state.findingCount, f).catch(() => undefined);
     }
@@ -481,7 +490,9 @@ async function captureFinding(
 ): Promise<void> {
   const dir = path.join(recorder.findingsDir, String(index).padStart(3, '0'));
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'finding.json'), JSON.stringify(finding, null, 2));
+  // Codes, counts and code locations only (#576 W21-NF2): finding.json is what
+  // gets attached; the full finding is the `finding` event in actions.jsonl.
+  fs.writeFileSync(path.join(dir, 'finding.json'), JSON.stringify(shareableFinding(finding), null, 2));
   // Screenshot (best-effort).
   try {
     const b64 = await target.exclusive(() => target.browser.takeScreenshot());

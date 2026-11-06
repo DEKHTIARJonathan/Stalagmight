@@ -986,15 +986,40 @@ the UI prints one. No report or trace embeds them - `report.md` names the
 trace carries no image - so look at one before you publish it. Attach the
 trace and the printed failure, not the session directory.
 
-**A finding's text stays in the session directory (#576 HFI2-F2).** A
-`log-warn` / `log-error` finding's message is the app's log line, and the app's
-lines name the data they are about - a section, a project, a station - which no
-corpus fold knows. So the PASS/FAIL line of `agent:scenario`, `agent:scenarios`
-and `agent:journeys` prints findings as counts per severity, kind and code
-(`findings={"warning:log-warn@stalagmight_parsers::tml":2}`; a log finding's
-code is its line's log target, `oracles.logLineCode`), and `report.md` names a
-log finding by that target and withholds the line. The text is in the
-session's `actions.jsonl` and `findings/`, for triage where the run happened.
+**What a run shares carries codes, counts and code locations (#576 HFI2-F2,
+W21-NF1, W21-NF2).** The app's text names the data it is about - a section, a
+project, a station - which no corpus fold knows: a log line, a panic message,
+the error boundary's text, `check_project_integrity` messages, an IPC rejection
+that quotes its arguments, an undo diff's values, a leftover temp file's name.
+So every artifact meant for an issue keeps only codes, counts and code
+locations:
+
+- The PASS/FAIL line of `agent:scenario`, `agent:scenarios` and
+  `agent:journeys` prints findings as counts per severity, kind and code
+  (`findings={"warning:log-warn@stalagmight_parsers::tml":2}`; a log finding's
+  code is its line's log target, `oracles.logLineCode`).
+- A scenario that threw prints `FAIL: <name> threw:`, its headline, the
+  `reproduce:` and `trace:` lines, diff paths (`at project.sections[3].name`)
+  and classifier ids, and one count line for each run of other lines
+  (`lib/shareableFailure.ts`). It is fail-closed: a line is kept only if its
+  shape is one the harness writes, so a new oracle that quotes the app is
+  covered. An `ipc <command>:` / `eval:` headline keeps the prefix and the
+  length of the app's text.
+- A fuzz trace's `failure` is that form, with the signature of that form.
+  `fuzz-shrink` prints that shareable signature and checks it against the
+  trace header; ddmin still compares full signatures, in memory.
+- `findings/<n>/finding.json` and `report.md` carry the shareable projection
+  of each finding (`scripts/lib/shareable-finding.mjs`): a panic's `file:line`
+  and thread but only its message's length, the error boundary's text length,
+  the number of integrity messages, leftover temp files counted by suffix, a
+  log finding named by its target.
+
+**Not for sharing** - the full text, for triage where the run happened: the
+session's `actions.jsonl` (each `finding` event with its detail, each
+`scenario-failure` event with the whole failure message), the screenshots
+(`screenshots/`, `findings/<n>/screenshot.png`), the crash-marker copies in
+`findings/<n>/`, the `state/` snapshots, `tauri-driver.log`, and the app's own
+log files.
 
 **`corpusId` labels; `corpusHash` resolves.** The 5-hex crc20 is 20 bits, which
 is ample for telling two files apart in one run's output and far too little to
