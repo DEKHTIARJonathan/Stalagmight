@@ -976,7 +976,8 @@ scenario's failure message, `agent:scenario`'s FAIL/findings lines,
 `fuzz-shrink`'s output, the sweep's findings (`findings/` JSON included), every
 line of the session's `actions.jsonl` (a tool's params and result, its error,
 events; the recorder folds each line, and the MCP server folds a result before
-capping it) and every MCP tool result and error all pass through
+each cap - the 16 KB one too, as the fuzzer folds a stall's error line before
+cutting it, RV18-W23-6) and every MCP tool result and error all pass through
 (`redactCorpusValue` folds a value string by string), and so does every
 `state/` snapshot the recorder writes (`Recorder.writeState`; a store snapshot
 taken after a corpus import carries the copy's path). Not covered, because they
