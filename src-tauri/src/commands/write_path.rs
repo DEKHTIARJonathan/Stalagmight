@@ -290,6 +290,11 @@ pub(crate) fn windows_path_refusal(path: &str) -> Option<&'static str> {
     {
         return Some("that is a Windows device, volume or drive-relative path");
     }
+    // A `:` after the drive names an alternate data stream: of another file
+    // (`notes.txt:x.stalx`) or of a folder itself (`C:\Windows:x.stalx`).
+    if after_drive.contains(':') {
+        return Some("that is an alternate data stream of a file or folder");
+    }
     None
 }
 

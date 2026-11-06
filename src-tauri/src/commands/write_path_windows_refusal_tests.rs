@@ -69,6 +69,7 @@ fn wrong_writes(rules: PathRules, cases: &[(&str, &str, Option<&str>)]) -> Vec<S
 }
 
 const NOT_PLAIN: Option<&str> = Some("a Windows device, volume or drive-relative path");
+const STREAM: Option<&str> = Some("an alternate data stream");
 
 /// Class 1: a `\\?\` or `\\.\` path that is not a drive or UNC path, the NT
 /// prefix `\??\`, and a path relative to a drive's current folder (`C:x`).
@@ -118,6 +119,39 @@ fn a_device_volume_or_drive_relative_path_is_refused() {
         ("device UNC", r"\\.\unc\server\share\CaveL.stalx", None),
         ("rooted on the current drive", r"\Users\a\CaveL.stalx", None),
         ("relative", r"Documents\CaveL.stalx", None),
+    ];
+    let wrong = wrong_writes(WINDOWS, &cases);
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// Class 2: a `:` after the drive prefix names an alternate data stream - of
+/// another file (`notes.txt:x.stalx`) or of a folder itself (`C:\Windows:x`).
+#[test]
+fn an_alternate_data_stream_is_refused() {
+    let cases = [
+        (
+            "stream of another file",
+            r"C:\Users\a\notes.txt:x.stalx",
+            STREAM,
+        ),
+        ("stream of a folder", r"C:\Windows:CaveL.stalx", STREAM),
+        (
+            "stream named like the file",
+            r"C:\Users\a\CaveL.stalx:x.stalx",
+            STREAM,
+        ),
+        (
+            "stream, verbatim",
+            r"\\?\C:\Users\a\notes.txt:x.stalx",
+            STREAM,
+        ),
+        (
+            "stream on a share",
+            r"\\server\share\notes.txt:x.stalx",
+            STREAM,
+        ),
+        ("stream, relative", "notes.txt:x.stalx", STREAM),
+        ("the drive's own colon", r"C:\Users\a\CaveL.stalx", None),
     ];
     let wrong = wrong_writes(WINDOWS, &cases);
     assert!(wrong.is_empty(), "{wrong:#?}");
