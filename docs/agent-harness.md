@@ -969,7 +969,9 @@ import error quoting the path it was handed - is folded by one per-process list
 (`fixtureCorpus.redactCorpusText`, filled as entries are copied, each name
 matched in every form JSON and Rust's `{:?}` write it in, at any depth: a
 quote or backslash escaped, any control or non-ASCII character as itself,
-`\u{hex}` or `\uXXXX`, #576 RV16-1, RV17-1) that the
+`\u{hex}` or `\uXXXX`, #576 RV16-1, RV17-1; percent-encoded as a `file://`
+URL writes it, and in both Unicode normal forms, NFC and NFD, RV18-W23-5 - but
+not a change of case, an HTML entity, base64 or a part of a name) that the
 scenario's failure message, `agent:scenario`'s FAIL/findings lines,
 `fuzz-shrink`'s output, the sweep's findings (`findings/` JSON included), every
 line of the session's `actions.jsonl` (a tool's params and result, its error,

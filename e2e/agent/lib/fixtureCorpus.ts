@@ -699,13 +699,13 @@ export const MIN_REDACTED_NAME = 3;
 
 /** One registered name (or copy directory), and what it folds to. */
 interface Redaction {
-  /** The name as it is on disk; the list is ordered by its length. */
+  /** The name as it is on disk, or one of its Unicode normal forms; the list is ordered by its length. */
   readonly text: string;
   readonly say: string;
   /**
-   * A run of the name that every escaped form keeps verbatim (printable ASCII
-   * but `"` and `\`), checked with `includes` before the pattern runs; empty
-   * when the name has none.
+   * A run of the name that every form keeps verbatim (letters, digits and
+   * `-._~`, which no escape and no URL encoder touches), checked with
+   * `includes` before the pattern runs; empty when the name has none.
    */
   readonly anchor: string;
   readonly pattern: RegExp;
@@ -744,6 +744,14 @@ function hexPattern(value: number, width: number): string {
     .replace(/[a-f]/g, (digit) => `[${digit}${digit.toUpperCase()}]`);
 }
 
+/** What a URL encoder leaves as it is (RFC 3986 unreserved); every other character it may write `%HH`. */
+const UNRESERVED = /^[A-Za-z0-9._~-]$/;
+
+/** `c` percent-encoded: its UTF-8 bytes, each `%HH` in either case. */
+function percentPattern(c: string): string {
+  return Array.from(Buffer.from(c, 'utf8'), (byte) => `%${hexPattern(byte, 2)}`).join('');
+}
+
 /**
  * What one character of a name can look like in text the app wrote and the
  * harness read back (#576 RV17-1). Printable ASCII is itself - `"` and `\` with
@@ -756,17 +764,26 @@ function hexPattern(value: number, width: number): string {
  * character, past U+FFFF a surrogate pair), and a control's named escape.
  * U+FFFD also stands for bytes that are not UTF-8: Node reads such a file name
  * with U+FFFD in their place, and Rust's `{:?}` of the path writes them `\xHH`.
+ * Any character but a letter, a digit and `-._~` is also its percent-encoding,
+ * as a `file://` URL writes it (`Caf%C3%A9%20Nord.srv`, #576 RV18-W23-5).
  * `at` is where `c` sits in the name (`CharAt`).
  */
 function charPattern(c: string, at: CharAt): string {
   const lead = at === 'afterBackslash' ? '\\\\' : at === 'first' ? `(?<!\\\\)${BACKSLASHES}` : BACKSLASHES;
-  if (c === '"') return at === 'afterBackslash' ? '"' : at === 'first' ? '(?<!\\\\)\\\\*"' : '\\\\*"';
-  if (c === '\\') return lead;
+  const percent = percentPattern(c);
+  if (c === '"') {
+    const quote = at === 'afterBackslash' ? '"' : at === 'first' ? '(?<!\\\\)\\\\*"' : '\\\\*"';
+    return `(?:${quote}|${percent})`;
+  }
+  if (c === '\\') return `(?:${lead}|${percent})`;
   const code = c.codePointAt(0) ?? 0;
-  if (code >= 0x20 && code < 0x7f) return c.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
+  if (code >= 0x20 && code < 0x7f) {
+    const literal = c.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
+    return UNRESERVED.test(c) ? literal : `(?:${literal}|${percent})`;
+  }
   let json = '';
   for (let i = 0; i < c.length; i++) json += `${i === 0 ? lead : BACKSLASHES}u${hexPattern(c.charCodeAt(i), 4)}`;
-  const forms = [c, `${lead}u\\{0*${hexPattern(code, 1)}\\}`, json];
+  const forms = [c, `${lead}u\\{0*${hexPattern(code, 1)}\\}`, json, percent];
   const named = NAMED_ESCAPES[c];
   if (named !== undefined) forms.push(`${lead}${named}`);
   if (code === 0xfffd) {
@@ -777,7 +794,7 @@ function charPattern(c: string, at: CharAt): string {
 }
 
 function redactionFor(text: string, say: string): Redaction {
-  const runs = text.match(/[\x20-\x21\x23-\x5b\x5d-\x7e]+/g) ?? [];
+  const runs = text.match(/[A-Za-z0-9._~-]+/g) ?? [];
   const anchor = runs.reduce((longest, run) => (run.length > longest.length ? run : longest), '');
   const chars = Array.from(text);
   const at = (i: number): CharAt => (i === 0 ? 'first' : chars[i - 1] === '\\' ? 'afterBackslash' : 'inside');
@@ -792,8 +809,13 @@ function redactionFor(text: string, say: string): Redaction {
  */
 export function registerCorpusRedactions(id: string, destination: string, names: readonly string[]): void {
   const tag = `<corpus #${id}>`;
+  // Each in both Unicode normal forms too (#576 RV18-W23-5): a macOS file name
+  // comes decomposed (`e` then U+0301), and a layer that normalizes it on the
+  // way writes it composed (U+00E9) - or the other way round.
   const add = (list: Redaction[], text: string, say: string): void => {
-    if (!list.some((entry) => entry.text === text)) list.push(redactionFor(text, say));
+    for (const form of new Set([text, text.normalize('NFC'), text.normalize('NFD')])) {
+      if (!list.some((entry) => entry.text === form)) list.push(redactionFor(form, say));
+    }
   };
   if (destination !== '') add(REDACTED_DIRS, destination, tag);
   for (const name of names) {

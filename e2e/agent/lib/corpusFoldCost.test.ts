@@ -84,6 +84,13 @@ describe('the corpus fold is linear in the line it folds (#576 RV18-W23-1)', () 
       name: '\ufffdCaveF.dmp',
       body: (n: number) => `${`${B}x41`.repeat(n / 4)} CaveF.dmp`,
     },
+    {
+      // #576 RV18-W23-5: every character but a letter, a digit and `-._~` may be `%HH` too.
+      what: 'a name that starts with a non-ASCII character, after a run of %HH bytes',
+      id: 'cost7',
+      name: '\u00e9 CaveG.dmp',
+      body: (n: number) => `${'%C3'.repeat(Math.floor(n / 3))}%20CaveG.dmp`,
+    },
   ])('folds $what in linear time, and still folds the name', ({ id, name, body }) => {
     registerCorpusRedactions(id, '', [name]);
     // The name as an ASCII-only JSON encoder writes it, inside a `{:?}` path.
