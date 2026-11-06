@@ -433,7 +433,9 @@ pub(crate) struct PathRules {
     /// Windows path syntax: `\` and `/` both separate, and a verbatim or device
     /// prefix (`\\?\C:\..`, `\\.\C:\..`, `\\?\UNC\server\share\..`,
     /// `\\.\UNC\server\share\..`, `UNC` in any case) names the same place as the
-    /// plain form (`C:\..`, `\\server\share\..`).
+    /// plain form (`C:\..`, `\\server\share\..`); outside a `\\?\` path a name
+    /// loses the trailing dots and spaces Win32 drops (`C:\Windows.\..` is
+    /// `C:\Windows\..`).
     pub(crate) windows: bool,
     /// Names match whatever their letter case: Windows (NTFS) and macOS, whose
     /// default file systems (APFS, HFS+) are case-insensitive. On a macOS volume
@@ -470,11 +472,15 @@ pub(crate) fn path_is_within(path: &str, dir: &str, rules: PathRules) -> bool {
 /// a UNC path's `\\` is a different one from a rooted path's `\` (#576 RV8a-F5):
 /// `\\server\share\x` and `\server\share\x` (that folder on the current drive)
 /// are different places, which split into the same names otherwise.
+///
+/// [#576 W24] Under Windows rules a name is compared as Win32 opens it
+/// ([`win32_name`]), except in a verbatim (`\\?\`) path, which reaches the file
+/// system as typed.
 fn path_components(path: &str, rules: PathRules) -> Vec<String> {
-    let mut text = if rules.windows {
-        windows_form(path)
+    let (mut text, win32_names) = if rules.windows {
+        (windows_form(path), !path.starts_with(r"\\?\"))
     } else {
-        path.to_owned()
+        (path.to_owned(), false)
     };
     if rules.fold_case {
         text = text.to_lowercase();
@@ -486,12 +492,44 @@ fn path_components(path: &str, rules: PathRules) -> Vec<String> {
     } else if text.starts_with(separator) {
         parts.push(separator.to_string());
     }
+    let names: Vec<&str> = text
+        .split(separator)
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    // The last name, unless the path ends in a separator: then it ends in a folder.
+    let last = names
+        .len()
+        .checked_sub(1)
+        .filter(|_| !text.ends_with(separator));
     parts.extend(
-        text.split(separator)
-            .filter(|part| !part.is_empty() && *part != ".")
+        names
+            .into_iter()
+            .enumerate()
+            .map(|(i, name)| {
+                if win32_names {
+                    win32_name(name, Some(i) == last)
+                } else {
+                    name
+                }
+            })
+            .filter(|name| !name.is_empty())
             .map(str::to_owned),
     );
     parts
+}
+
+/// `name` as Win32 opens it (#576 W24): a folder's name loses one trailing dot,
+/// the last name every trailing dot and space. `C:\Windows.\x` is written in
+/// `C:\Windows`; `C:\Windows \x` and `C:\Windows..\x` in other folders. `..`
+/// is left as it is (folded before this compare).
+fn win32_name(name: &str, last: bool) -> &str {
+    if name.bytes().all(|b| b == b'.') {
+        name
+    } else if last {
+        name.trim_end_matches(['.', ' '])
+    } else {
+        name.strip_suffix('.').unwrap_or(name)
+    }
 }
 
 /// `path` as the Windows rules compare it: `/` read as `\`, and a DOS device

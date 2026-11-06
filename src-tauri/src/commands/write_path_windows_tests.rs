@@ -1,8 +1,9 @@
 //! [#576 W24] The write-path policy's Windows path model (`PathRules` with
 //! `windows: true`) against the spellings Windows accepts for one place: the
-//! network-path forms, the DOS device prefixes, separators and letter case.
-//! Pure text, so every host runs it; no Windows host was used to confirm the
-//! Windows behaviour each case states.
+//! network-path forms, the DOS device prefixes, separators, letter case and the
+//! trailing dots and spaces Win32 drops from a name. Pure text, so every host
+//! runs it; no Windows host was used to confirm the Windows behaviour each case
+//! states.
 //!
 //! All paths are synthetic.
 
@@ -122,6 +123,88 @@ fn every_spelling_of_a_network_path_is_the_unc_path() {
         (
             "a drive",
             r"C:\server\share\AppData\CaveL.stalx",
+            share,
+            false,
+        ),
+    ];
+    let wrong = wrong_verdicts(&cases);
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// Win32 opens every path but a verbatim (`\\?\`) one normalized: a folder's
+/// name loses one trailing dot, and the last name every trailing dot and space,
+/// so `C:\Windows.\x` is written in `C:\Windows`. A trailing space before a
+/// separator stays (`C:\Windows \` is another folder), so does all but one of
+/// several dots, and a verbatim path keeps its names as they are.
+#[test]
+fn win32_drops_a_trailing_dot_where_a_verbatim_path_keeps_it() {
+    let windows = r"C:\Windows";
+    let app = r"C:\Users\a\AppData\Roaming\Stalagmight";
+    let share = r"\\server\share\AppData";
+    let cases = [
+        (
+            "dot after a system folder",
+            r"C:\Windows.\CaveL.stalx",
+            windows,
+            true,
+        ),
+        (
+            "dot after the user folder",
+            r"C:\Users\a.\AppData\Roaming\Stalagmight\CaveL.stalx",
+            app,
+            true,
+        ),
+        (
+            "dot after the app folder",
+            r"C:\Users\a\AppData\Roaming\Stalagmight.\CaveL.stalx",
+            app,
+            true,
+        ),
+        (
+            "dot after a folder, device prefix",
+            r"\\.\C:\Windows.\CaveL.stalx",
+            windows,
+            true,
+        ),
+        (
+            "dot after a folder, verbatim prefix in forward slashes",
+            "//?/C:/Windows./CaveL.stalx",
+            windows,
+            true,
+        ),
+        (
+            "dot after a folder on a share",
+            r"\\server\share\AppData.\CaveL.stalx",
+            share,
+            true,
+        ),
+        (
+            "dots and spaces at the end",
+            r"C:\Windows. .",
+            windows,
+            true,
+        ),
+        (
+            "space before a separator",
+            r"C:\Windows \CaveL.stalx",
+            windows,
+            false,
+        ),
+        (
+            "two dots before a separator",
+            r"C:\Windows..\CaveL.stalx",
+            windows,
+            false,
+        ),
+        (
+            "dot after a folder, verbatim",
+            r"\\?\C:\Windows.\CaveL.stalx",
+            windows,
+            false,
+        ),
+        (
+            "dot after a folder on a share, verbatim",
+            r"\\?\UNC\server\share\AppData.\CaveL.stalx",
             share,
             false,
         ),
