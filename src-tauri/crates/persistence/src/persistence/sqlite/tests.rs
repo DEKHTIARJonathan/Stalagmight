@@ -8809,10 +8809,10 @@ fn a_project_setting_of_the_wrong_type_reads_as_not_set() {
 
 /// A hostile `.stalx` must not reach FTS, RTREE or DBSTAT code, nor load an
 /// extension (#608). The modules are stripped at build time by
-/// `LIBSQLITE3_FLAGS`, which CI, release and the dev scripts set; a plain
-/// local `cargo test` builds without it, so CI runs this one with `--ignored`.
+/// `LIBSQLITE3_FLAGS`, which the repo-root `.cargo/config.toml` sets for every
+/// cargo command run inside the clone. Not ignored, so a build that misses it
+/// (cargo started outside the clone, the `[env]` entry dropped) fails here.
 #[test]
-#[ignore = "needs the LIBSQLITE3_FLAGS build; CI runs it explicitly"]
 fn bundled_sqlite_omits_virtual_table_modules_and_extension_loading() {
     let conn = Connection::open_in_memory().unwrap();
     let options: Vec<String> = conn

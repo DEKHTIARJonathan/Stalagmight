@@ -60,8 +60,6 @@ fi
 # ── Environment ──────────────────────────────────────────────────────────────
 # Treat this as a CI build (suppresses -dev version suffix in telemetry)
 export CI=true
-# Strip SQLite modules a hostile .stalx could reach (#608, docs/toolchain.md).
-export LIBSQLITE3_FLAGS="-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -DSQLITE_OMIT_LOAD_EXTENSION"
 
 # Load .env if present (contains TELEMETRY_ENDPOINT and other secrets)
 if [[ -f "$PROJECT_DIR/.env" ]]; then
@@ -155,9 +153,11 @@ info "Running Rust tests (ulimit -n $(ulimit -n))"
 # Mirrors the CI command: --workspace is required (without it only the app
 # package runs and the member crates under src-tauri/crates are skipped), and
 # --features telemetry compiles the telemetry collector and its tests. The dummy endpoint
-# just satisfies build.rs under that feature; a real one from .env wins.
-if TELEMETRY_ENDPOINT="${TELEMETRY_ENDPOINT:-http://localhost/dummy}" \
-  cargo test --manifest-path "$PROJECT_DIR/src-tauri/Cargo.toml" --workspace --features telemetry; then
+# just satisfies build.rs under that feature; a real one from .env wins. Run
+# from inside PROJECT_DIR: cargo reads the bundled-SQLite build flags from its
+# .cargo/config.toml, found from the working directory (docs/toolchain.md).
+if (cd "$PROJECT_DIR" && TELEMETRY_ENDPOINT="${TELEMETRY_ENDPOINT:-http://localhost/dummy}" \
+  cargo test --manifest-path src-tauri/Cargo.toml --workspace --features telemetry); then
   ok "Rust tests passed"
 else
   warn "Some Rust tests failed (continuing with build)"
