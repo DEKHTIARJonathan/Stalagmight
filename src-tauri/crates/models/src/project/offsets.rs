@@ -21,30 +21,34 @@ pub(super) mod merge_alignment_assert {
     use std::cell::Cell;
 
     thread_local! {
-        static SUSPENDED: Cell<bool> = const { Cell::new(false) };
+        /// How many guards are alive on this thread ([#576 RV17-5]: a count,
+        /// not a saved flag, so the order the guards drop in does not matter).
+        static DEPTH: Cell<u32> = const { Cell::new(0) };
     }
 
-    /// Holds the panic back until dropped, then puts back what it found
-    /// ([#576 RV16-4]: a nested guard used to end the outer suspension).
+    /// Holds the panic back until dropped. Nested guards count: the suspension
+    /// ends when the last live guard drops, whichever order they drop in
+    /// ([#576 RV16-4]: a nested guard used to end the outer suspension;
+    /// [#576 RV17-5]: putting back a saved flag left the thread suspended when
+    /// the outer guard dropped first).
     #[must_use = "the panic is held back only while the guard lives"]
     pub(in crate::project) struct Suspended {
-        previous: bool,
+        _private: (),
     }
 
     impl Drop for Suspended {
         fn drop(&mut self) {
-            SUSPENDED.with(|s| s.set(self.previous));
+            DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
         }
     }
 
     pub(in crate::project) fn suspend() -> Suspended {
-        Suspended {
-            previous: SUSPENDED.with(|s| s.replace(true)),
-        }
+        DEPTH.with(|d| d.set(d.get().saturating_add(1)));
+        Suspended { _private: () }
     }
 
     pub(super) fn is_suspended() -> bool {
-        SUSPENDED.with(Cell::get)
+        DEPTH.with(Cell::get) > 0
     }
 
     mod tests {
@@ -67,6 +71,24 @@ pub(super) mod merge_alignment_assert {
                 (after_inner, after_outer),
                 (true, false),
                 "suspended after the inner guard dropped, after the outer guard dropped"
+            );
+        }
+
+        /// [#576 RV17-5] Dropped out of order - the outer guard first - the
+        /// suspension still lasts while any guard lives and ends with the last.
+        #[test]
+        fn dropping_the_outer_guard_first_still_ends_with_the_last_guard() {
+            assert!(!is_suspended());
+            let outer = suspend();
+            let inner = suspend();
+            drop(outer);
+            let after_outer = is_suspended();
+            drop(inner);
+            let after_inner = is_suspended();
+            assert_eq!(
+                (after_outer, after_inner),
+                (true, false),
+                "suspended after the outer guard dropped, after the inner guard dropped"
             );
         }
     }
