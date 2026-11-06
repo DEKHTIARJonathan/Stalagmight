@@ -541,6 +541,29 @@ When a station is set as zero datum with GPS coordinates, the system converts GP
 - `geodetic_to_ecef(lat, lon, alt)` - WGS84 to ECEF (public)
 - `ecef_to_enu(dx, dy, dz, lat0, lon0)` - ECEF diff to ENU (private)
 - `gps_to_local(gps, origin)` - Main entry point returning (east, north)
+- `local_to_gps(east, north, origin)` - the inverse, `Option<(lat, lon)>` (below)
+- `unwrap_longitude(lon, reference)` - the explicit drawing step (below)
+
+**The inverse, one algorithm** (#576 GEO-D1): `local_to_gps` finds where the
+origin's vertical through (east, north) meets the WGS84 surface - a quadratic
+for the up offset, then the closed-form latitude of a surface point. It is exact
+to rounding (the round trip through `gps_to_local` is within nanometres out to
+50 km), returns the longitude in [-180, 180], and is `None` only beyond the
+horizon (about an earth radius out) or for a non-finite input. The frontend's
+`enuToGps` (`src/utils/coordinates.ts`) runs the same solve operation for
+operation, so the workspace map, the data table's GPS column and Global View put
+a station on the same fix (#576 D36). The parity table `FRONTEND_PARITY` in
+geo.rs is pinned to the backend there and read from source by
+`src/utils/__tests__/coordinates.test.ts`, which holds `enuToGps` to it: the two
+sides agree to within 1e-9 degrees.
+
+| Caller | Longitude | Beyond the horizon |
+|--------|-----------|--------------------|
+| Global View (`survey_geometry.rs`) | `unwrap_longitude`: continuous with the origin across the antimeridian, may leave [-180, 180] | the project shows as failed to load, with the reason |
+| Workspace map (`metersToMapCoords`) | `unwrapLongitude`, the same step | pinned on the horizon in its own direction, so the camera and bounds stay finite |
+| GPS column (`xyToGps`) | [-180, 180] | blank cell |
+| TML import, datum carried past dropped shots | [-180, 180] (a storable `GpsCoordinates`) | anchored at the file's own fix, with a log warning |
+| stalx reader (`stalx-reader`) | [-180, 180] | station left without coordinates |
 
 **Important notes**:
 - Altitude is always 0; `depth_reference` is meters below surface, not ellipsoid height
