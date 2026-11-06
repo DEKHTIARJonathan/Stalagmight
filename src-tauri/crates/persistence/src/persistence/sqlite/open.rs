@@ -157,6 +157,8 @@ impl Database {
         };
         match Self::open_existing_with(path, Some(&read_only_here)) {
             Err(e) if e.downcast_ref::<super::UpgradeRefused>().is_some() => {
+                #[cfg(test)]
+                between_opens::run(path);
                 tracing::info!(
                     path = ?path,
                     purpose = "read an older project without upgrading it in place (#576 RV6b-R1)",
@@ -205,7 +207,9 @@ impl Database {
         let source =
             Connection::open_with_flags(&source_path, OpenFlags::SQLITE_OPEN_READ_WRITE | uri)
                 .context("Failed to open the project to copy it")?;
-        // Another open of an existing file: the schema guard first (#608).
+        // Another open of an existing file: the schema guard first (#608). The
+        // refusing first open already refused a hostile schema, so this catches a
+        // file swapped in between (#576 RV18-2, tested through `between_opens`).
         super::check_schema(&source)?;
         source
             .execute("VACUUM INTO ?1", [&name])
@@ -430,9 +434,14 @@ impl Database {
     /// tuning pragmas are, because they are per connection.
     pub fn into_read_only(self, path: &Path) -> Result<Self> {
         drop(self);
+        #[cfg(test)]
+        between_opens::run(path);
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .context("Failed to reopen the database read-only")?;
-        // Another open of an existing file: the schema guard first (#608).
+        // Another open of an existing file: the schema guard first (#608). The
+        // open that made this handle already refused a hostile schema, so this
+        // catches a file swapped in between (#576 RV18-2, tested through
+        // `between_opens`).
         super::check_schema(&conn)?;
         let db = Self { conn };
         db.enable_foreign_keys()?;
@@ -574,5 +583,32 @@ impl Database {
         db.init_schema()?;
         db.set_user_version(SCHEMA_VERSION)?;
         Ok(db)
+    }
+}
+
+/// Test-only seam (#576 RV18-2): a hook that runs between the two opens of one
+/// existing file - the refusing first open of [`Database::open_existing_to_read`]
+/// and its copy into memory, and the handle [`Database::into_read_only`] drops
+/// and its read-only reopen - with no connection to the file held. A test swaps
+/// the file there: the only way a file reaches the second open's schema guard,
+/// because the first open refuses a hostile one itself.
+#[cfg(test)]
+pub(super) mod between_opens {
+    use std::cell::Cell;
+    use std::path::Path;
+
+    thread_local! {
+        static HOOK: Cell<Option<fn(&Path)>> = const { Cell::new(None) };
+    }
+
+    /// The next open sequence on this thread runs `hook` between its opens, once.
+    pub(in crate::persistence::sqlite) fn set(hook: fn(&Path)) {
+        HOOK.with(|slot| slot.set(Some(hook)));
+    }
+
+    pub(super) fn run(path: &Path) {
+        if let Some(hook) = HOOK.with(Cell::take) {
+            hook(path);
+        }
     }
 }

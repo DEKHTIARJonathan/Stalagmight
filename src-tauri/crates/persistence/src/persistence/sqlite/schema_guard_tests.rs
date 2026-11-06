@@ -82,12 +82,17 @@ fn test_declares_virtual_table_matches_keywords_not_substrings() {
 /// A saved project with `sql` run on it through a raw connection afterwards.
 fn project_file_with(dir: &TempDir, sql: &str) -> std::path::PathBuf {
     let path = dir.path().join("crafted.stalx");
-    Database::open(&path)
+    project_at(&path, sql);
+    path
+}
+
+/// [`project_file_with`] at `path`.
+fn project_at(path: &Path, sql: &str) {
+    Database::open(path)
         .unwrap()
         .save_project(&Project::new("Crafted".to_string(), None))
         .unwrap();
-    Connection::open(&path).unwrap().execute_batch(sql).unwrap();
-    path
+    Connection::open(path).unwrap().execute_batch(sql).unwrap();
 }
 
 #[test]
@@ -195,4 +200,74 @@ fn a_legacy_is_virtual_column_still_opens() {
     let path = project_file_with(&dir, "ALTER TABLE shots ADD COLUMN is_virtual INTEGER;");
 
     Database::open_existing(&path).unwrap();
+}
+
+// === The second open of an open sequence keeps its own guard (#576 RV18-2) ===
+
+/// Stamps a saved project as an older format, so `open_existing_to_read` reads
+/// it through its copy into memory.
+const OLDER_FORMAT: &str = "UPDATE project SET schema_version = 16; PRAGMA user_version = 16;";
+
+/// The schema refusal in `result`, if that is why it failed.
+fn refused_what(result: Result<Database>) -> Option<&'static str> {
+    result.err().and_then(|err| {
+        err.chain()
+            .find_map(|c| c.downcast_ref::<RefusedSchemaObject>())
+            .map(|refused| refused.what)
+    })
+}
+
+/// The `between_opens` hook the swap tests set: replaces the file being opened
+/// with the hostile `swapped.stalx` beside it.
+fn swap_in_the_hostile_file(path: &Path) {
+    std::fs::rename(path.with_file_name("swapped.stalx"), path).unwrap();
+}
+
+/// [#576 RV18-2] `open_existing_to_read` opens an older file twice: once to find
+/// it needs an upgrade (refused, so nothing is written), then again to copy it
+/// into memory. The first open refuses a hostile schema itself, so the copy's
+/// own guard only matters for a file swapped in between - which this does.
+#[test]
+fn the_copy_into_memory_refuses_a_file_swapped_in_after_the_first_open() {
+    let dir = TempDir::new().unwrap();
+    let path = project_file_with(&dir, OLDER_FORMAT);
+    project_at(
+        &dir.path().join("swapped.stalx"),
+        &format!("CREATE VIEW v AS SELECT 1; {OLDER_FORMAT}"),
+    );
+
+    open::between_opens::set(swap_in_the_hostile_file);
+    let refused = refused_what(Database::open_existing_to_read(&path));
+    println!("older file swapped for a hostile one before the copy: refused as {refused:?}");
+
+    assert!(
+        !dir.path().join("swapped.stalx").exists(),
+        "premise: the swap happened"
+    );
+    assert_eq!(refused, Some("a view"));
+}
+
+/// [#576 RV18-2] `into_read_only` drops the read-write handle and reopens the
+/// file read-only. The open that made the handle refused a hostile schema, so
+/// the reopen's own guard only matters for a file swapped in between - which
+/// this does.
+#[test]
+fn the_read_only_reopen_refuses_a_file_swapped_in_after_the_first_open() {
+    let dir = TempDir::new().unwrap();
+    let path = project_file_with(&dir, "");
+    project_at(
+        &dir.path().join("swapped.stalx"),
+        "CREATE VIEW v AS SELECT 1;",
+    );
+    let db = Database::open_existing(&path).unwrap();
+
+    open::between_opens::set(swap_in_the_hostile_file);
+    let refused = refused_what(db.into_read_only(&path));
+    println!("file swapped for a hostile one before the read-only reopen: refused as {refused:?}");
+
+    assert!(
+        !dir.path().join("swapped.stalx").exists(),
+        "premise: the swap happened"
+    );
+    assert_eq!(refused, Some("a view"));
 }
