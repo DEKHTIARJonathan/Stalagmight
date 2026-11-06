@@ -590,6 +590,11 @@ impl Database {
 
     /// Open a database for recovery purposes, skipping integrity checks.
     /// This allows reading whatever data is still accessible from a corrupt file.
+    ///
+    /// [#576 RV18-1] The schema guard (#608) is not skipped: it reads only the
+    /// schema, which SQLite has to parse before it can read any table of a
+    /// damaged file anyway, and the salvage that follows must not run SQL the
+    /// file chose.
     pub fn open_for_recovery(path: &Path) -> Result<Self> {
         tracing::info!("Opening database for recovery at: {:?}", path);
 
@@ -599,6 +604,7 @@ impl Database {
 
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .context("Failed to open database for recovery")?;
+        super::check_schema(&conn)?;
 
         let db = Self { conn };
         // Skip integrity check intentionally - we know the file may be corrupt
@@ -619,8 +625,12 @@ impl Database {
         let backup_path = Self::create_numbered_backup(path)?;
         tracing::info!("Created backup at: {:?}", backup_path);
 
-        // 2. Open read-write (skip our integrity check wrapper)
+        // 2. Open read-write (skip our integrity check wrapper). [#576 RV18-1] The
+        // schema guard still runs (#608), before REINDEX evaluates an expression
+        // index or the final quick_check a CHECK: a file every open refuses is
+        // left as it is, beside the plain copy step 1 took of it.
         let conn = Connection::open(path).context("Failed to open database for repair")?;
+        super::check_schema(&conn)?;
 
         // 3. Rebuild indexes
         if let Err(e) = conn.execute_batch("REINDEX;") {
