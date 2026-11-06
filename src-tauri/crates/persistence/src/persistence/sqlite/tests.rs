@@ -5808,6 +5808,12 @@ fn inherited_undo_cut_rolls_back_all_deletes_on_failure() {
         format!("{err:#}").contains("blocked inherited delete"),
         "the injected delete failure must surface, got {err:#}"
     );
+    // The inducer is a trigger, which the app's own open refuses (#608); drop it
+    // before reopening to count what the failed cut left behind.
+    Connection::open(&path)
+        .unwrap()
+        .execute_batch("DROP TRIGGER block_second_inherited_delete")
+        .unwrap();
     assert_eq!(
         surviving_undo_commands(&path).len(),
         3,
@@ -8799,4 +8805,49 @@ fn a_project_setting_of_the_wrong_type_reads_as_not_set() {
         )
         .unwrap();
     assert_eq!(db.load_project_surface_elevation().unwrap(), None);
+}
+
+/// A hostile `.stalx` must not reach FTS, RTREE or DBSTAT code, nor load an
+/// extension (#608). The modules are stripped at build time by
+/// `LIBSQLITE3_FLAGS`, which CI, release and the dev scripts set; a plain
+/// local `cargo test` builds without it, so CI runs this one with `--ignored`.
+#[test]
+#[ignore = "needs the LIBSQLITE3_FLAGS build; CI runs it explicitly"]
+fn bundled_sqlite_omits_virtual_table_modules_and_extension_loading() {
+    let conn = Connection::open_in_memory().unwrap();
+    let options: Vec<String> = conn
+        .prepare("PRAGMA compile_options")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+
+    for stripped in [
+        "ENABLE_FTS3",
+        "ENABLE_FTS5",
+        "ENABLE_RTREE",
+        "ENABLE_DBSTAT_VTAB",
+    ] {
+        assert!(
+            !options.iter().any(|o| o == stripped),
+            "{stripped} compiled in: {options:?}"
+        );
+    }
+    assert!(
+        options.iter().any(|o| o == "OMIT_LOAD_EXTENSION"),
+        "extension loading compiled in: {options:?}"
+    );
+    // And by behaviour, not only by name: none of the modules can be used.
+    for module in ["fts3", "fts4", "fts5", "rtree", "dbstat"] {
+        let err = conn
+            .execute_batch(&format!(
+                "CREATE VIRTUAL TABLE t_{module} USING {module}(x)"
+            ))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("no such module"),
+            "{module}: {err}"
+        );
+    }
 }

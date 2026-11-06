@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, type MutableRefObject } from 'react';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { Station } from '../../types/project';
 import type { GpsOrigin } from '../../types/config';
 import type { ProjectWarning } from '../../types/commands';

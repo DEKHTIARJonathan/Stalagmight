@@ -10,7 +10,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import type { MutableRefObject } from 'react';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 
 import { useSurveyLayerSync } from '../useSurveyLayerSync';
 import type SurveyLayer from '../SurveyLayer';

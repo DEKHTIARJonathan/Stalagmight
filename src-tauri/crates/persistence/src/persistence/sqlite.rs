@@ -92,7 +92,10 @@ use std::path::Path;
 /// fenced table, so the carry-forward fence is unaffected, and the persisted
 /// undo payloads keep their meaning (`SectionIdentity` gained an OPTIONAL field,
 /// absent in every pre-v18 entry), so the stacks are NOT dropped.
-const SCHEMA_VERSION: i32 = 18;
+///
+/// Public so readers outside the app (the `stalx-reader` crate) can refuse a
+/// file written by a newer schema instead of misreading it.
+pub const SCHEMA_VERSION: i32 = 18;
 
 /// [#576 B1-D1] The oldest schema this build opens: the one the first public
 /// release (v0.0.3) shipped. A file whose `PRAGMA user_version` - or, when it
@@ -622,6 +625,7 @@ mod open;
 mod read;
 mod repair;
 mod schema;
+mod schema_guard;
 mod settings;
 mod undo;
 mod warnings;
@@ -635,6 +639,9 @@ pub use write::SAVE_PROJECT_TABLES;
 /// How many `resolved_warnings` rows a carry-over will examine (#517). Exported
 /// so a caller's test can size a fixture against the real ceiling instead of
 /// hard-coding a copy of it.
+pub use schema_guard::{
+    check_schema, declares_virtual_table, refused_schema_object, RefusedSchemaObject,
+};
 pub use warnings::MAX_CARRIED_RESOLVED_WARNINGS;
 
 /// A stringified page of rows from a raw sqlite table.
@@ -864,6 +871,13 @@ mod upgrade_safety_tests;
               values are the evidence a run captures"
 )]
 mod open_order_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod schema_guard_tests;
 
 #[cfg(test)]
 #[expect(

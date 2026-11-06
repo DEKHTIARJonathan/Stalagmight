@@ -45,12 +45,16 @@ mod offsets;
 mod relationships;
 mod reverse;
 mod stats;
+mod union_find;
 
 #[cfg(test)]
 mod anchor_fuzz;
 #[cfg(test)]
 #[expect(clippy::print_stdout)]
 mod cache_coherence_tests;
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod component_pass_tests;
 #[cfg(test)]
 mod lookup_parity_tests;
 #[cfg(test)]

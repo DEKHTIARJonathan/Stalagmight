@@ -22,7 +22,7 @@
 
 use std::path::Path;
 
-use super::speleodb::{local_dto, Landed};
+use super::speleodb::{local_dto, managed_type_patch, type_needs_managed_label, Landed};
 use super::speleodb_cache::LocalEditsPolicy;
 use super::AppState;
 use crate::core::events::IpcEvent as _;
@@ -1233,7 +1233,9 @@ impl AppState {
     }
 
     /// A project with a `.stalx` on the server is a Stalagmight project, so the server
-    /// `type` should say so. Flip it when it still says `ariane`.
+    /// `type` should say so. Flip it when it still says `ariane`, or the legacy
+    /// managed type `other`: SpeleoDB maps only `stalagmight` projects from the
+    /// `.stalx`, so an `other` project's map would stay frozen.
     ///
     /// Adoption does this itself on the push it performs, and that covers the ordinary
     /// route. It does NOT cover the one that skips that push: adoption declines to push
@@ -1246,13 +1248,13 @@ impl AppState {
     ///
     /// So the finishing move belongs to the push rather than to adoption: every push
     /// that lands is proof the project is Stalagmight-managed, whichever route got it
-    /// there. Idempotent - a project already typed `other` costs nothing, which is
-    /// every push after the first.
+    /// there. Idempotent - a project already typed `stalagmight` costs nothing, which
+    /// is every push after the first.
     ///
     /// Called only from arms where the upload CONCLUDED, never before one. Flipping
     /// ahead of a landing recreates the state this exists to avoid: a project typed
-    /// `other` whose only file is the Ariane one that type says to disregard, openable
-    /// by nobody.
+    /// as managed whose only file is the Ariane one that type says to disregard,
+    /// openable by nobody.
     ///
     /// `server_kind` is the type read before the upload. `None` means we do not have
     /// one - either the read failed, or it never ran (`fold_metadata == false`, the
@@ -1274,7 +1276,7 @@ impl AppState {
         project_id: &str,
         server_kind: Option<&str>,
     ) {
-        if !type_still_says_ariane(server_kind) {
+        if !type_needs_managed_label(server_kind) {
             return;
         }
         match client::patch_project(
@@ -1283,17 +1285,19 @@ impl AppState {
             token,
             insecure_http,
             project_id,
-            r#"{"type":"other"}"#,
+            &managed_type_patch(),
         ) {
             Ok(_) => tracing::info!(
                 project_id,
-                purpose = "finish an adoption whose own push never ran",
-                "speleodb: flipped the server project type ariane->other after a landed push"
+                from = server_kind.unwrap_or_default(),
+                purpose =
+                    "label a landed project stalagmight (unfinished adoption or legacy other)",
+                "speleodb: relabelled the server project type to stalagmight after a landed push"
             ),
             Err(e) => tracing::warn!(
                 error = %e,
                 project_id,
-                purpose = "finish an adoption whose own push never ran",
+                purpose = "label a landed project stalagmight (unfinished adoption or legacy other)",
                 "speleodb: could not flip the project type after a landed push; the next push retries"
             ),
         }

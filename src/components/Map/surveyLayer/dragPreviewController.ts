@@ -10,7 +10,7 @@
 // drag is active / committing, the follow offset and the moving sets) is public.
 
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { LoopClosure, Section, StationRef } from '../../../types/project';
 import type { GpsOrigin } from '../../../types/config';
 import type { SurveyData } from '../../../types/survey-data';

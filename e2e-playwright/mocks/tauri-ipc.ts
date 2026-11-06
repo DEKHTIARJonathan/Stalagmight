@@ -162,8 +162,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
   // stubbed above (the mock's arcgisonline url_template has no fetching
   // consumer). The #417 local-red/CI-green console noise was the dev-only
   // agent bridge's /__agent/token probe, now gated off under VITE_E2E in
-  // main.tsx. The maplibre CSS, once fetched from unpkg.com, is bundled since
-  // #576 C12, so the page makes no external fetch at all.
+  // main.tsx. The maplibre CSS, once fetched from unpkg.com, is bundled from the
+  // installed package since #576 C12 / #606, so the page makes no external fetch
+  // at all.
 
   // Inject the msgpack UMD bundle first so the load_project_full_binary
   // mock can encode its result the same way the real backend does.

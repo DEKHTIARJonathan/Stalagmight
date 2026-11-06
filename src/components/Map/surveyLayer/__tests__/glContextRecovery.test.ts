@@ -221,4 +221,56 @@ describe('watchGlContextLoss', () => {
     expect(fake.listenerCount('style.load')).toBe(0);
     expect(fake.container.listenerCount('webglcontextlost')).toBe(0);
   });
+
+  // MapLibre 6 `_handleWorkersRestarted` (#606): no canvas event; the map's
+  // synthetic webglcontextlost fires while the old style is still in place (it
+  // was already serialized), then the copy replaces it without the custom layers.
+  it('a worker restart: takes the order at the map event and runs beforeLoss on the rebuilt style', () => {
+    const { fake, calls, afterRestore, beforeLoss } = setUp();
+    const before = fake.layerOrder();
+
+    fake.fire('webglcontextlost');
+    expect(beforeLoss).not.toHaveBeenCalled();
+    fake.loseStyle();
+    fake.restoreStyle();
+    fake.fire('webglcontextrestored');
+    expect(calls).toEqual([]);
+
+    let customAtBeforeLoss: string[] | null = null;
+    beforeLoss.mockImplementation(() => (customAtBeforeLoss = fake.customLayers()));
+    fake.fire('style.load');
+    expect(beforeLoss).toHaveBeenCalledOnce();
+    expect(customAtBeforeLoss).toEqual([]); // on the rebuilt style, before the re-adds
+    expect(calls).toEqual(['survey-custom-labels<top', 'survey-custom-render<survey-interact-shots']);
+    expect(fake.layerOrder()).toEqual(before);
+    expect(afterRestore).toHaveBeenCalledOnce();
+  });
+
+  // #606: a layer a controller added while the style was being rebuilt is held
+  // back (styleRestore.addCustomLayer), so it is not in the snapshot; it goes back
+  // where a fresh add puts it, after the snapshotted ones.
+  it('a layer that was not on the map at the loss goes back where a fresh add puts it', () => {
+    const fake = makeFakeSurveyMap();
+    for (const [id, type] of [
+      ['background', 'background'],
+      ['survey-custom-render', 'custom'],
+      ['survey-interact-shots', 'line'],
+    ] as const) {
+      fake.map.addLayer({ id, type } as never);
+    }
+    const calls: string[] = [];
+    const owners = [
+      fakeOwner(fake, 'survey-custom-render', calls),
+      fakeOwner(fake, 'survey-measure-path-custom', calls),
+    ];
+    watchGlContextLoss(fake.map, { layers: () => owners, afterRestore: () => {} });
+
+    loseContext(fake);
+    fake.restoreStyle();
+    fake.fire('webglcontextrestored');
+    fake.fire('style.load');
+
+    expect(calls).toEqual(['survey-custom-render<survey-interact-shots', 'survey-measure-path-custom<top']);
+    expect(fake.rejectedAdds()).toEqual([]);
+  });
 });

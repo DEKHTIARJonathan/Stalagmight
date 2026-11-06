@@ -5,7 +5,7 @@
  * section. Each reads only what it is handed.
  */
 import type { Map as MaplibreMap } from 'maplibre-gl';
-import type maplibregl from 'maplibre-gl';
+import type * as maplibregl from 'maplibre-gl';
 import type { LoopClosure, Station, StationRef } from '../../../types/project';
 import type { GpsOrigin } from '../../../types/config';
 import type { RouteLeg } from '../../../types/ipc.generated';

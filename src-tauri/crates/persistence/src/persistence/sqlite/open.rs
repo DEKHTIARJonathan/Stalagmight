@@ -67,6 +67,11 @@ impl Database {
         let file_existed = path.exists();
 
         let conn = Connection::open(path).context("Failed to open database")?;
+        if file_existed {
+            // An existing file may come from anywhere; refuse a hostile schema
+            // before init_schema or a migration touches it (#608).
+            super::check_schema(&conn)?;
+        }
 
         let db = Self { conn };
         db.enable_foreign_keys()?;
@@ -200,6 +205,8 @@ impl Database {
         let source =
             Connection::open_with_flags(&source_path, OpenFlags::SQLITE_OPEN_READ_WRITE | uri)
                 .context("Failed to open the project to copy it")?;
+        // Another open of an existing file: the schema guard first (#608).
+        super::check_schema(&source)?;
         source
             .execute("VACUUM INTO ?1", [&name])
             .context("Failed to copy the project into memory")?;
@@ -237,15 +244,72 @@ impl Database {
         // Open in read-only mode first to check if it's valid
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .context("Failed to open database - file may not be a valid SQLite database")?;
+        Self::finish_open_existing(conn, false, refuse_upgrade)
+    }
 
+    /// [`Self::open_existing`] for a file from an untrusted source, e.g. a server
+    /// upload. Callers must pass a private COPY: this runs the same forward
+    /// migrations, which write to the file.
+    ///
+    /// The file can carry its own schema, so before anything reads it the
+    /// connection is put in defensive mode with `trusted_schema` off (no
+    /// non-innocuous functions from schema code), every string or blob SQLite
+    /// produces is capped at `max_value_bytes`, and any statement still running
+    /// once `deadline` has passed since the open is interrupted. SQLite checks the
+    /// deadline every 1,000 VM steps within a statement, so it bounds long
+    /// statements; many short ones are bounded by the input size instead.
+    pub fn open_existing_untrusted(
+        path: &Path,
+        max_value_bytes: i32,
+        deadline: std::time::Duration,
+    ) -> Result<Self> {
+        use rusqlite::config::DbConfig;
+        use rusqlite::limits::Limit;
+
+        if !path.exists() {
+            anyhow::bail!("File does not exist");
+        }
+        let mut conn =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+                .context("Failed to open database - file may not be a valid SQLite database")?;
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)?;
+        conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)?;
+        conn.set_limit(Limit::SQLITE_LIMIT_LENGTH, max_value_bytes)?;
+        let expires = std::time::Instant::now() + deadline;
+        conn.progress_handler(1_000, Some(move || std::time::Instant::now() > expires))?;
+        // SQLite's guidance for untrusted files: no memory-mapping (a crafted
+        // page is read through the checked path), validate cell sizes as pages
+        // are read, and keep temporary sort data on disk, not in RAM.
+        conn.pragma_update(None, "mmap_size", 0i64)?;
+        conn.pragma_update(None, "cell_size_check", true)?;
+        conn.pragma_update(None, "temp_store", "FILE")?;
+        Self::finish_open_existing(conn, true, None)
+    }
+
+    /// The checks and migrations every existing-file open runs on `conn`.
+    /// `untrusted` keeps the caller's hardened pragmas instead of the app's
+    /// performance ones; `refuse_upgrade` is [`Self::open_existing_with`]'s.
+    fn finish_open_existing(
+        conn: Connection,
+        untrusted: bool,
+        refuse_upgrade: Option<&UpgradeRefusal>,
+    ) -> Result<Self> {
+        // Before the integrity check, which would connect any virtual table (#608).
+        super::check_schema(&conn)?;
         let db = Self { conn };
         db.enable_foreign_keys()?;
+        if !untrusted {
+            db.apply_load_performance_pragmas();
+        }
+        db.run_existing_open_checks(refuse_upgrade)
+    }
 
+    fn apply_load_performance_pragmas(&self) {
         // Let SQLite mmap the whole file (up to 256 MB).  Sequential
         // scans during integrity check / shot load go through the OS
         // page cache without a per-row copy into SQLite's buffer.
         // Cheap to enable; bounded by SQLite's own mmap_size cap.
-        let _ = db
+        let _ = self
             .conn
             .pragma_update(None, "mmap_size", 256i64 * 1024 * 1024);
         // Default cache_size is 2 000 pages (~2 MB). Large projects
@@ -253,12 +317,15 @@ impl Database {
         // shot SELECT and the integrity check don't re-fault from
         // mmap. 32 MiB holds a large project's shot tables with headroom
         // for the indexes; SQLite caps this against its own limits.
-        let _ = db.conn.pragma_update(None, "cache_size", -32_000i64); // negative = KiB
-                                                                       // Skip syncing on read-only-equivalent operations.
-                                                                       // (load path doesn't write - this is harmless on writes too;
-                                                                       // we already use a single transaction in save_project.)
-        let _ = db.conn.pragma_update(None, "temp_store", "MEMORY");
+        let _ = self.conn.pragma_update(None, "cache_size", -32_000i64); // negative = KiB
+                                                                         // Skip syncing on read-only-equivalent operations.
+                                                                         // (load path doesn't write - this is harmless on writes too;
+                                                                         // we already use a single transaction in save_project.)
+        let _ = self.conn.pragma_update(None, "temp_store", "MEMORY");
+    }
 
+    fn run_existing_open_checks(self, refuse_upgrade: Option<&UpgradeRefusal>) -> Result<Self> {
+        let db = &self;
         // Run quick integrity check before reading any data (SPEC 14.4)
         let t = std::time::Instant::now();
         db.validate_integrity()
@@ -296,7 +363,17 @@ impl Database {
             "open_existing: validate_foreign_keys"
         );
 
-        Ok(db)
+        Ok(self)
+    }
+
+    /// Refuse the file at `path` if its schema could run SQL the file chose
+    /// ([`super::check_schema`]), without opening it as a project. For files
+    /// that arrive from elsewhere before anything else touches them, e.g. a
+    /// SpeleoDB download about to replace the local cache.
+    pub fn check_schema_at(path: &Path) -> Result<()> {
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("open {} to check its schema", path.display()))?;
+        super::check_schema(&conn)
     }
 
     /// [#576 B6-D1] The schema version stamped on this file when it is ABOVE the
@@ -355,6 +432,8 @@ impl Database {
         drop(self);
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .context("Failed to reopen the database read-only")?;
+        // Another open of an existing file: the schema guard first (#608).
+        super::check_schema(&conn)?;
         let db = Self { conn };
         db.enable_foreign_keys()?;
         let _ = db
@@ -382,6 +461,7 @@ impl Database {
         }
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .context("Failed to open database read-only for metadata")?;
+        super::check_schema(&conn)?;
         Ok(Self { conn })
     }
 
@@ -414,6 +494,7 @@ impl Database {
         }
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .context("Failed to open database read-write for metadata")?;
+        super::check_schema(&conn)?;
         Ok(Self { conn })
     }
 
@@ -435,6 +516,7 @@ impl Database {
         // Open in read-only mode - no writes possible
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .context("Failed to open database read-only")?;
+        super::check_schema(&conn)?;
 
         let db = Self { conn };
         db.enable_foreign_keys()?;

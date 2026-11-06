@@ -106,6 +106,11 @@ pub enum CommandErrorCode {
     NotFound,
     /// The project file is corrupt; `details` carries its path.
     Corrupt,
+    /// [#608] The open was refused because the file's database schema holds
+    /// something the app never creates (a view, trigger or virtual table, or an
+    /// object named like a SQLite pragma), so opening it could run SQL the file
+    /// chose; `details` carries its path.
+    UnsafeFile,
     /// The file is a non-canonical copy of a SpeleoDB project; the error carries
     /// `speleodb_managed`.
     SpeleodbManaged,
@@ -154,7 +159,7 @@ pub enum CommandErrorCode {
 impl CommandErrorCode {
     /// Every code, in declaration order, for the wire-name tests. A new variant
     /// gets a wire name from the exhaustive [`Self::as_str`]; list it here too.
-    pub const ALL: [Self; 41] = [
+    pub const ALL: [Self; 42] = [
         Self::Failed,
         Self::InternalError,
         Self::RefusedAfterInternalError,
@@ -180,6 +185,7 @@ impl CommandErrorCode {
         Self::Cancelled,
         Self::NotFound,
         Self::Corrupt,
+        Self::UnsafeFile,
         Self::SpeleodbManaged,
         Self::Database,
         Self::Io,
@@ -226,6 +232,7 @@ impl CommandErrorCode {
             Self::Cancelled => "CANCELLED",
             Self::NotFound => "NOT_FOUND",
             Self::Corrupt => "CORRUPT",
+            Self::UnsafeFile => "UNSAFE_FILE",
             Self::SpeleodbManaged => "SPELEODB_MANAGED",
             Self::Database => "DATABASE",
             Self::Io => "IO",
