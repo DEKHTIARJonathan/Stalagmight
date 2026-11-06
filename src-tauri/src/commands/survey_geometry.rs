@@ -13,11 +13,6 @@ use crate::core::CommandError;
 use crate::models::{GpsCoordinates, Project, SectionId, ShotKind, StationRef};
 use crate::persistence::Database;
 
-/// Minimum cosine value below which an origin counts as "at the pole" (beyond ±89.4°).
-/// The flat model this guarded divided by it; the WGS84 inverse has no singularity there, but
-/// the refusal is kept as it was so the set of projects GlobalView draws does not change.
-const MIN_COS_LAT: f64 = 0.01;
-
 /// A self-contained shot with GPS coordinates and metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct GeometryShot {
@@ -62,28 +57,19 @@ pub struct SurveyGeometryError {
 /// antimeridian, possibly outside [-180, 180], exactly as the workspace map's
 /// `metersToMapCoords` draws it.
 ///
+/// An origin beside a pole is drawn like any other (#576 W30-1): the refusal past about
+/// +-89.4 degrees guarded the old flat model's divide by cos(lat), which the exact solve does not
+/// have, and the workspace map always drew such an origin.
+///
 /// # Errors
-/// Returns an error if the origin latitude is too close to ±90° (beyond ±89.4°), or if the
-/// point is beyond the horizon (no point on the earth has that offset from the origin, about
-/// an earth radius out): GlobalView then shows the project as failed to load, with this message,
-/// rather than draw a station somewhere it is not.
+/// Returns an error if the point is beyond the horizon (no point on the earth has that offset
+/// from the origin, about an earth radius out): GlobalView then shows the project as failed to
+/// load, with this message, rather than draw a station somewhere it is not.
 pub fn local_to_gps(
     east: f64,
     north: f64,
     origin: &GpsCoordinates,
 ) -> Result<(f64, f64), SurveyGeometryError> {
-    let cos_lat = origin.latitude.to_radians().cos();
-
-    // Refuse a pole-adjacent origin, as before (see MIN_COS_LAT).
-    if cos_lat.abs() < MIN_COS_LAT {
-        return Err(SurveyGeometryError {
-            message: format!(
-                "Origin latitude {:.2}° is too close to the poles for accurate coordinate conversion",
-                origin.latitude
-            ),
-        });
-    }
-
     let (lat, lng) =
         crate::models::local_to_gps(east, north, origin).ok_or_else(|| SurveyGeometryError {
             message: format!(
@@ -460,26 +446,29 @@ mod tests {
         assert!(failures.is_empty(), "\n{}", failures.join("\n"));
     }
 
+    /// #576 W30-1: an origin beside a pole is drawn, where the workspace map draws it. The
+    /// refusal past +-89.4 degrees guarded the old flat model's divide by cos(lat); the exact
+    /// solve (GEO-D1) has no such divide, so GlobalView now places the station exactly where
+    /// `models::local_to_gps` (and the frontend's `enuToGps`) does.
     #[test]
-    fn test_local_to_gps_rejects_extreme_latitude() {
-        // Near poles, cos(lat) approaches 0, causing division issues
-        let near_pole = GpsCoordinates::new(89.5, 0.0, 0.0).unwrap();
-        let result = local_to_gps(1000.0, 0.0, &near_pole);
-        assert!(result.is_err(), "Should reject latitude near poles");
-        assert!(
-            result.unwrap_err().message.contains("poles"),
-            "Error should mention poles"
-        );
-
-        // -89.5 should also fail
-        let near_south_pole = GpsCoordinates::new(-89.5, 0.0, 0.0).unwrap();
-        let result = local_to_gps(1000.0, 0.0, &near_south_pole);
-        assert!(result.is_err(), "Should reject latitude near south pole");
+    fn globalview_draws_an_origin_beside_the_pole() {
+        for (lat0, lon0) in [(89.9, 12.5), (-89.9, -45.0), (89.5, 0.0), (90.0, 0.0)] {
+            let origin = GpsCoordinates::new(lat0, lon0, 0.0).unwrap();
+            for (east, north) in [(1_000.0, 0.0), (0.0, 1_000.0), (-700.0, -700.0)] {
+                let drawn = local_to_gps(east, north, &origin);
+                let (fix_lat, fix_lng) = crate::models::local_to_gps(east, north, &origin).unwrap();
+                let expected = (crate::models::unwrap_longitude(fix_lng, lon0), fix_lat);
+                assert_eq!(
+                    drawn.as_ref().map_err(|e| e.message.clone()),
+                    Ok(&expected),
+                    "origin ({lat0}, {lon0}), offset ({east}, {north}) m"
+                );
+            }
+        }
     }
 
     #[test]
     fn test_local_to_gps_accepts_high_but_valid_latitude() {
-        // 89° should still work (cos(89°) ≈ 0.0175 > MIN_COS_LAT)
         let high_lat = GpsCoordinates::new(89.0, 0.0, 0.0).unwrap();
         let result = local_to_gps(1000.0, 0.0, &high_lat);
         assert!(result.is_ok(), "89° latitude should be acceptable");
