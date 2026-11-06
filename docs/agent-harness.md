@@ -1023,6 +1023,12 @@ locations:
   stack frames, folded; the other lines of its message are counted
   (`shareableErrorText`). A crash in session setup can carry an IPC rejection
   or a page script's error, so the raw stack is not printed.
+- `fuzz-matrix` prints a failed cell's FAIL block as the child wrote it. For
+  a cell that died without one, it prints the last lines of the child's output
+  fail-closed (`shareableTail`): the session and verdict lines, progress lines
+  and crash headlines in the forms above, stack frames, and one count line for
+  each run of other lines (an uncaught error Node printed itself, a build's
+  output).
 - `findings/<n>/finding.json` and `report.md` carry the shareable projection
   of each finding (`scripts/lib/shareable-finding.mjs`): a panic's `file:line`
   and thread but only its message's length, the error boundary's text length,

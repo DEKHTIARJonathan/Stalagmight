@@ -274,3 +274,48 @@ describe("a scenario's progress lines share no app text (#576 W23-NF3)", () => {
     expect(unchecked.map((value) => `${value.where} \${${value.text}}`)).toEqual([]);
   });
 });
+
+describe('a matrix cell that died without a FAIL line shares no app text (#576 W23-NF1)', () => {
+  it('keeps the verdict-free tail as codes, counts and code locations', async () => {
+    const { failureDetail } = await import('./fuzzMatrixReport');
+    // What a child prints that dies in setup: its session line, its progress
+    // lines (one reporting the app's error), an uncaught error Node printed
+    // itself, and the runner's own crash line.
+    const outLines = [
+      'session started (debug build reused)',
+      '   . scenario export-roundtrip-fuzz start (seed=3, iterations=2)',
+      '   . x5: first import failed: Station "qzstation" vanished',
+    ];
+    const errLines = [
+      `${HOME}/src/qzproject/e2e/agent/lib/page.ts:120`,
+      '    throw new Error(`ipc ${command}: ${message}`);',
+      '          ^',
+      'Error: ipc load_project: qzproject is locked by qzbob',
+      `    at ipc (${REPO}/e2e/agent/lib/page.ts:120:11)`,
+      'Node.js v24.11.0',
+      'fatal: Error: ipc load_project: qzproject is locked',
+      `    at async main (file://${REPO}/e2e/agent/scenario-run.ts:114:19)`,
+    ];
+    const detail = failureDetail({ outLines, allLines: outLines.concat(errLines) });
+    expect(names(detail)).toEqual([]);
+    expect(detail).not.toContain(REPO);
+    const locked = 'qzproject is locked';
+    expect(detail.split('\n')).toEqual([
+      'session started (debug build reused)',
+      '   . scenario export-roundtrip-fuzz start (seed=3, iterations=2)',
+      `   . x5: first import failed: (${'Station "qzstation" vanished'.length} characters of the app's text withheld)`,
+      "  (4 line(s) withheld: they can quote the app's text - the matrix does not keep them)",
+      '    at ipc (<repo>/e2e/agent/lib/page.ts:120:11)',
+      "  (1 line(s) withheld: they can quote the app's text - the matrix does not keep them)",
+      `fatal: Error: ipc load_project: (${locked.length} characters of the app's text withheld)`,
+      '    at async main (file://<repo>/e2e/agent/scenario-run.ts:114:19)',
+    ]);
+  });
+
+  it('prints a FAIL block as the child wrote it', async () => {
+    const { failureDetail } = await import('./fuzzMatrixReport');
+    const { scenarioFailOutput } = await import('./shareableFailure');
+    const block = scenarioFailOutput('s', new Error('ipc save_project: qzproject')).trimEnd().split('\n');
+    expect(failureDetail({ outLines: block, allLines: block })).toBe(block.join('\n'));
+  });
+});

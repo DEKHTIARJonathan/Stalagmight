@@ -212,3 +212,53 @@ export function progressLogger(
     print(shareableProgressLine(line));
   };
 }
+
+/** A dead cell's output lives only in this process's memory: nothing keeps what is withheld. */
+const TAIL_WITHHELD = 'the matrix does not keep them';
+
+/** Lines of a runner's output that are shareable as printed: verdicts, the session line, frames, counts. */
+const TAIL_KEPT: readonly RegExp[] = [
+  /^session \w+ \([^()]*\)$/, // `session <state> (<mode> build <action>)`
+  /^(?:PASS|PASS\+findings|SKIP): /, // a verdict: counts per severity, kind and code (#576 HFI2-F2)
+  STACK_FRAME,
+  /^ {2}\(\d+ line\(s\) withheld: /,
+];
+
+/**
+ * The tail of a child that died without a `FAIL:` line, as `fuzz-matrix`
+ * prints it (#576 W23-NF1): fail-closed per line. A progress line and a
+ * `fatal:` / `shrink failed:` headline are projected again (projecting twice
+ * changes nothing), the `TAIL_KEPT` shapes stay, and everything else - an
+ * uncaught error Node printed itself with its source excerpt, a build's
+ * output, a driver's log - is withheld, a run of them replaced by one count
+ * line.
+ */
+export function shareableTail(lines: readonly string[]): string {
+  const out: string[] = [];
+  let withheld = 0;
+  const flush = (): void => {
+    if (withheld > 0) out.push(withheldLine(withheld, TAIL_WITHHELD));
+    withheld = 0;
+  };
+  for (const raw of lines) {
+    const line = foldLocalPaths(redactCorpusText(raw));
+    const progress = /^(\s+\S )(.*)$/.exec(line);
+    const crash = /^(fatal|shrink failed): (?:(\w*Error): )?(.*)$/.exec(line);
+    let kept: string | null = null;
+    if (crash) {
+      const [, label = '', name, rest = ''] = crash;
+      kept = `${label}: ${name ? `${name}: ` : ''}${shareableHeadline(rest)}`;
+    } else if (TAIL_KEPT.some((shape) => shape.test(line))) kept = line;
+    else if (progress && /^\s{3}[.\u00b7] $/.test(progress[1] ?? '')) {
+      kept = `${progress[1]}${shareableProgressLine(progress[2] ?? '')}`;
+    }
+    if (kept === null) {
+      withheld++;
+      continue;
+    }
+    flush();
+    out.push(kept);
+  }
+  flush();
+  return out.join('\n');
+}
