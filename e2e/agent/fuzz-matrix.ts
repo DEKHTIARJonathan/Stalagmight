@@ -131,7 +131,7 @@ function killGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
-/** Metrics live at the tail of a PASS line, before an optional ` findings=[...]`. */
+/** Metrics live at the tail of a PASS line, before an optional ` findings={...}` (`oracles.findingsSummary`). */
 function parseMetrics(line: string): Record<string, number> {
   const marker = line.match(/\(\d+ms\)\s/);
   if (!marker || marker.index === undefined) return {};
