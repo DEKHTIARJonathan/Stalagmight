@@ -24,22 +24,51 @@ pub(super) mod merge_alignment_assert {
         static SUSPENDED: Cell<bool> = const { Cell::new(false) };
     }
 
-    /// Holds the panic back until dropped.
-    pub(in crate::project) struct Suspended(());
+    /// Holds the panic back until dropped, then puts back what it found
+    /// ([#576 RV16-4]: a nested guard used to end the outer suspension).
+    #[must_use = "the panic is held back only while the guard lives"]
+    pub(in crate::project) struct Suspended {
+        previous: bool,
+    }
 
     impl Drop for Suspended {
         fn drop(&mut self) {
-            SUSPENDED.with(|s| s.set(false));
+            SUSPENDED.with(|s| s.set(self.previous));
         }
     }
 
     pub(in crate::project) fn suspend() -> Suspended {
-        SUSPENDED.with(|s| s.set(true));
-        Suspended(())
+        Suspended {
+            previous: SUSPENDED.with(|s| s.replace(true)),
+        }
     }
 
     pub(super) fn is_suspended() -> bool {
         SUSPENDED.with(Cell::get)
+    }
+
+    mod tests {
+        use super::{is_suspended, suspend};
+
+        /// [#576 RV16-4] A guard restores what it found, so an inner suspension
+        /// ending does not end the outer one early.
+        #[test]
+        fn dropping_a_nested_guard_keeps_the_outer_suspension() {
+            assert!(!is_suspended());
+            let outer = suspend();
+            {
+                let _inner = suspend();
+                assert!(is_suspended());
+            }
+            let after_inner = is_suspended();
+            drop(outer);
+            let after_outer = is_suspended();
+            assert_eq!(
+                (after_inner, after_outer),
+                (true, false),
+                "suspended after the inner guard dropped, after the outer guard dropped"
+            );
+        }
     }
 }
 
