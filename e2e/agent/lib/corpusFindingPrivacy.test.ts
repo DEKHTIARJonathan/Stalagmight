@@ -126,8 +126,10 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
   it('keeps the name out of a crash marker copied into a finding (#576 NF-W17-2)', async () => {
     const markerDir = path.join(scratch, 'markers');
     fs.mkdirSync(markerDir, { recursive: true });
-    const marker = path.join(markerDir, 'panic.log');
-    fs.writeFileSync(marker, `thread 'main' panicked: could not read ${copyPath}\n`);
+    // A marker as the panic hook writes it: serde_json (a marker that is not
+    // JSON is withheld whole, #576 RV16-2).
+    const marker = path.join(markerDir, 'crash-9-9-0.json');
+    fs.writeFileSync(marker, JSON.stringify({ message: `thread 'main' panicked: could not read ${copyPath}` }));
     const target: OracleTarget = { ...webviewLogging('INFO nothing to see'), findCrashMarkers: () => [marker] };
     const recorder = new Recorder('run-markers', sessionsRoot);
     await runSweep(target, newOracleState(), { recorder });
@@ -135,7 +137,7 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
     const findings = path.join(sessionsRoot, 'run-markers', 'findings');
     const copied = fs
       .readdirSync(findings, { recursive: true, withFileTypes: true })
-      .filter((e) => e.isFile() && e.name === 'panic.log');
+      .filter((e) => e.isFile() && e.name === 'crash-9-9-0.json');
     expect(copied.length).toBeGreaterThan(0); // the marker really was copied
     expect(allText(findings)).toContain('<corpus #');
     expect(allText(findings)).not.toContain(MARK);
@@ -198,6 +200,28 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
     const copied = fs.readFileSync(path.join(sessionsRoot, `run-${id}`, 'findings', '001', 'crash-3-4-0.json'), 'utf8');
     expect(copied).toContain('withheld');
     expect(copied).not.toContain('qzrv15t');
+  });
+
+  it('withholds every torn crash marker, a plain name cut mid-way included (#576 RV16-2)', async () => {
+    const id = 'rv16p';
+    const name = 'qzrv16plain secret cave.dmp';
+    const destination = path.join(scratch, 'copies', id);
+    registerCorpusRedactions(id, destination, [name]);
+    const markerDir = path.join(scratch, `markers-${id}`);
+    fs.mkdirSync(markerDir, { recursive: true });
+    const marker = path.join(markerDir, 'crash-7-8-0.json');
+    // Cut off six characters into the name's second word: no fold can match
+    // the partial name, and nothing in the text needs escaping.
+    const whole = JSON.stringify({ message: `could not read ${path.join(destination, name)}` });
+    fs.writeFileSync(marker, whole.slice(0, whole.indexOf('secret') + 6));
+    const target: OracleTarget = { ...webviewLogging('INFO nothing to see'), findCrashMarkers: () => [marker] };
+    await runSweep(target, newOracleState(), { recorder: new Recorder(`run-${id}`, sessionsRoot) });
+
+    const copied = fs.readFileSync(path.join(sessionsRoot, `run-${id}`, 'findings', '001', 'crash-7-8-0.json'), 'utf8');
+    expect({ withheld: copied.includes('withheld'), leaksPrefix: copied.includes('qzrv16plain') }).toEqual({
+      withheld: true,
+      leaksPrefix: false,
+    });
   });
 
   it('keeps the name out of an MCP error outcome', () => {

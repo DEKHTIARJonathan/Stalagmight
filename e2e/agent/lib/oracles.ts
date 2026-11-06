@@ -444,16 +444,16 @@ export function publishableFinding(finding: Finding): Finding {
  * A crash marker's text as it may be copied into a finding (#576 NF-W17-2,
  * RV15-1). A marker is serde_json output, so it is parsed and folded value by
  * value: folding its text never finds a name JSON escapes. A marker that does not
- * parse (cut off mid-write) is folded as text; if a backslash is left in it, an
- * escaped name may be hiding there, and the copy says so instead of quoting it.
+ * parse was cut off mid-write, and is withheld whole, its length kept
+ * (#576 RV16-2): the cut can fall inside a name, which no fold then matches, so
+ * the copy kept the name's beginning; and a torn marker has no field worth
+ * reading anyway.
  */
 export function publishableCrashMarker(text: string): string {
   try {
     return JSON.stringify(redactCorpusValue(JSON.parse(text) as unknown), null, 2);
   } catch {
-    const folded = redactCorpusText(text);
-    if (!folded.includes('\\')) return folded;
-    return `(withheld: the crash marker is not JSON, and a corpus name escaped in it could not be folded; ${text.length} characters)\n`;
+    return `(withheld: the crash marker is not JSON - cut off mid-write? - so a corpus name in it could not be folded; ${text.length} characters)\n`;
   }
 }
 
