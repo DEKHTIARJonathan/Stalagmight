@@ -966,7 +966,8 @@ list. That step now records `fuzz-files/corpus-N/@corpus-entry`
 counted), and `writeTrace` / `readTrace` refuse a step that names a file inside
 a corpus copy any other way - without quoting it. What the APP echoes back - an
 import error quoting the path it was handed - is folded by one per-process list
-(`fixtureCorpus.redactCorpusText`, filled as entries are copied) that the
+(`fixtureCorpus.redactCorpusText`, filled as entries are copied, each name
+also in its JSON- and Rust-`{:?}`-escaped forms, #576 RV16-1) that the
 scenario's failure message, `agent:scenario`'s FAIL/findings lines,
 `fuzz-shrink`'s output, the sweep's findings (`findings/` JSON included), every
 line of the session's `actions.jsonl` (a tool's params and result, its error,

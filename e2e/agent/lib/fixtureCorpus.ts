@@ -698,17 +698,50 @@ const REDACTED_NAMES: { find: string; say: string }[] = [];
 export const MIN_REDACTED_NAME = 3;
 
 /**
+ * `text` as Rust's `{:?}` writes it inside the quotes: `"` and `\` escaped, the
+ * common controls by name, any other control as `\u{hex}`. (Rust also escapes
+ * some non-printable Unicode; a corpus name made of those is not chased.)
+ */
+function rustDebugEscaped(text: string): string {
+  const named: Record<string, string> = { '"': '\\"', '\\': '\\\\', '\n': '\\n', '\r': '\\r', '\t': '\\t', '\0': '\\0' };
+  let out = '';
+  for (const c of text) {
+    const code = c.codePointAt(0) ?? 0;
+    out += named[c] ?? (code < 0x20 || code === 0x7f ? `\\u{${code.toString(16)}}` : c);
+  }
+  return out;
+}
+
+/**
+ * Every form a name takes in what the app writes and the harness reads back
+ * (#576 RV16-1): as is; escaped once, by JSON or by Rust's `{:?}` (a tracing
+ * field `path = ?path` in a log line, a PathBuf in a panic payload); and
+ * escaped twice (a `{:?}` form inside a crash marker's or a JSON line's text).
+ * A name with a quote or a backslash is found in none of them but the first,
+ * and a parsed marker still holds the `{:?}` form, one level inside its value.
+ */
+function escapedForms(text: string): string[] {
+  const json = (s: string): string => JSON.stringify(s).slice(1, -1);
+  const debug = rustDebugEscaped(text);
+  return [...new Set([text, json(text), debug, json(debug), json(json(text))])];
+}
+
+/**
  * Register one materialized entry: its copy directory, and every file and
- * directory name the copy created at any depth (`MaterializedCorpusEntry.names`).
+ * directory name the copy created at any depth (`MaterializedCorpusEntry.names`),
+ * in each of its escaped forms, folded to the same tag.
  */
 export function registerCorpusRedactions(id: string, destination: string, names: readonly string[]): void {
   const tag = `<corpus #${id}>`;
-  if (destination !== '' && !REDACTED_DIRS.some((entry) => entry.find === destination)) {
-    REDACTED_DIRS.push({ find: destination, say: tag });
-  }
+  const add = (list: { find: string; say: string }[], text: string, say: string): void => {
+    for (const find of escapedForms(text)) {
+      if (!list.some((entry) => entry.find === find)) list.push({ find, say });
+    }
+  };
+  if (destination !== '') add(REDACTED_DIRS, destination, tag);
   for (const name of names) {
-    if (name.length < MIN_REDACTED_NAME || REDACTED_NAMES.some((entry) => entry.find === name)) continue;
-    REDACTED_NAMES.push({ find: name, say: `${tag}/file` });
+    if (name.length < MIN_REDACTED_NAME) continue;
+    add(REDACTED_NAMES, name, `${tag}/file`);
   }
   // Longest first, so a name that is a prefix of another cannot leave the
   // other's tail behind (`cave` before `cave-north.srv` would print `-north.srv`,

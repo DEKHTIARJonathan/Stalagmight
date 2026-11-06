@@ -202,6 +202,46 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
     expect(copied).not.toContain('qzrv15t');
   });
 
+  /**
+   * #576 RV16-1: Rust's `{:?}` escapes a quote or a backslash in a path one level
+   * INSIDE the text (`qz \"quoted\"`): a tracing field `path = ?path` in a log
+   * line, a PathBuf in an unwrapped error's panic payload. Parsing a marker
+   * removes only the JSON layer, so the Debug form was left in the value and
+   * neither fold found it.
+   */
+  it.each([
+    ['a quote', 'rv16q', 'qzrv16q "quoted" trip.dmp', 'qzrv16q'],
+    ['a backslash', 'rv16b', 'qzrv16b back\\slash trip.dmp', 'qzrv16b'],
+  ])('keeps a Debug-formatted name with %s out of a log finding, a marker copy and report.md (#576 RV16-1)', async (_what, id, name, token) => {
+    const destination = path.join(scratch, 'copies', id);
+    registerCorpusRedactions(id, destination, [name]);
+    // `{:?}` of a str or a PathBuf: quoted, with `"` and `\` escaped, which is
+    // exactly what JSON.stringify writes for these names.
+    const debugPath = JSON.stringify(path.join(destination, name));
+    const markerDir = path.join(scratch, `markers-${id}`);
+    fs.mkdirSync(markerDir, { recursive: true });
+    const marker = path.join(markerDir, 'crash-5-6-0.json');
+    const payload = { message: `called \`Result::unwrap()\` on an \`Err\` value: Parse { path: ${debugPath} }` };
+    fs.writeFileSync(marker, JSON.stringify(payload, null, 2));
+    const line = `ERROR stalagmight_core::core::state::project_load: Failed to load project {path=${debugPath}}`;
+    expect(line).toContain(token); // the input really does carry the name
+    const target: OracleTarget = { ...webviewLogging(line), findCrashMarkers: () => [marker] };
+    const session = path.join(sessionsRoot, `run-${id}`);
+    const sweep = await runSweep(target, newOracleState(), { recorder: new Recorder(`run-${id}`, sessionsRoot) });
+    execFileSync('node', [path.join(REPO, 'scripts', 'generate-repro-report.mjs'), session], { encoding: 'utf8' });
+
+    expect(sweep.newFindings.map((f) => f.kind)).toEqual(['crash-marker', 'log-error']);
+    const leaks = {
+      findings: JSON.stringify(sweep.findings).includes(token),
+      session: allText(path.join(session, 'findings')).includes(token),
+      actions: fs.readFileSync(path.join(session, 'actions.jsonl'), 'utf8').includes(token),
+      reportMd: fs.readFileSync(path.join(session, 'report.md'), 'utf8').includes(token),
+    };
+    expect(leaks).toEqual({ findings: false, session: false, actions: false, reportMd: false });
+    // Folded to the entry's tag inside the Debug quotes, which stay as written.
+    expect(sweep.findings.find((f) => f.kind === 'log-error')?.message).toContain(`{path="<corpus #${id}>/<corpus #${id}>/file"}`);
+  });
+
   it('withholds every torn crash marker, a plain name cut mid-way included (#576 RV16-2)', async () => {
     const id = 'rv16p';
     const name = 'qzrv16plain secret cave.dmp';
