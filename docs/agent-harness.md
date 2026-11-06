@@ -967,7 +967,9 @@ counted), and `writeTrace` / `readTrace` refuse a step that names a file inside
 a corpus copy any other way - without quoting it. What the APP echoes back - an
 import error quoting the path it was handed - is folded by one per-process list
 (`fixtureCorpus.redactCorpusText`, filled as entries are copied, each name
-also in its JSON- and Rust-`{:?}`-escaped forms, #576 RV16-1) that the
+matched in every form JSON and Rust's `{:?}` write it in, at any depth: a
+quote or backslash escaped, any control or non-ASCII character as itself,
+`\u{hex}` or `\uXXXX`, #576 RV16-1, RV17-1) that the
 scenario's failure message, `agent:scenario`'s FAIL/findings lines,
 `fuzz-shrink`'s output, the sweep's findings (`findings/` JSON included), every
 line of the session's `actions.jsonl` (a tool's params and result, its error,
