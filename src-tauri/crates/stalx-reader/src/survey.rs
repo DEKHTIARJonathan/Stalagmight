@@ -430,8 +430,10 @@ fn georeference(
         if p.anchor.is_none() {
             continue;
         }
+        // Longitude in [-180, 180], as stored fixes have it. Beyond the horizon
+        // (`None`, no survey reaches it) the station is left without coordinates.
         if let Some((lat, lon)) =
-            stalagmight_models::geo::local_to_gps_checked(p.x - fx, p.y - fy, frame_gps)
+            stalagmight_models::geo::local_to_gps(p.x - fx, p.y - fy, frame_gps)
         {
             p.latitude = Some(lat);
             p.longitude = Some(lon);

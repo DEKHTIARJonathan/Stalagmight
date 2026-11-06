@@ -50,15 +50,23 @@ pub struct SurveyGeometryError {
 }
 
 /// Convert local meters (east, north) to GPS coordinates relative to origin, returned in
-/// MapLibre `(lng, lat)` order.
+/// MapLibre `(lng, lat)` order, ready to draw.
 ///
 /// The exact WGS84 inverse of the projection that placed the stations
 /// ([`crate::models::local_to_gps`] undoes `gps_to_local`). This used a flat
 /// 111 320 m-per-degree model, which put GlobalView's drawing of a project metres away from
 /// the workspace map's (#576 D36); the map runs the same inverse in TypeScript.
 ///
+/// GlobalView draws lines from the origin, so the longitude goes through the explicit
+/// [`crate::models::unwrap_longitude`] step: continuous with the origin's across the
+/// antimeridian, possibly outside [-180, 180], exactly as the workspace map's
+/// `metersToMapCoords` draws it.
+///
 /// # Errors
-/// Returns an error if the origin latitude is too close to ±90° (beyond ±89.4°).
+/// Returns an error if the origin latitude is too close to ±90° (beyond ±89.4°), or if the
+/// point is beyond the horizon (no point on the earth has that offset from the origin, about
+/// an earth radius out): GlobalView then shows the project as failed to load, with this message,
+/// rather than draw a station somewhere it is not.
 pub fn local_to_gps(
     east: f64,
     north: f64,
@@ -76,7 +84,14 @@ pub fn local_to_gps(
         });
     }
 
-    let (lat, lng) = crate::models::local_to_gps(east, north, origin);
+    let (lat, lng) =
+        crate::models::local_to_gps(east, north, origin).ok_or_else(|| SurveyGeometryError {
+            message: format!(
+                "A station {:.0} km from the zero datum is beyond the horizon and cannot be drawn",
+                east.hypot(north) / 1000.0
+            ),
+        })?;
+    let lng = crate::models::unwrap_longitude(lng, origin.longitude);
     Ok((lng, lat)) // MapLibre order
 }
 
@@ -468,6 +483,38 @@ mod tests {
         let high_lat = GpsCoordinates::new(89.0, 0.0, 0.0).unwrap();
         let result = local_to_gps(1000.0, 0.0, &high_lat);
         assert!(result.is_ok(), "89° latitude should be acceptable");
+    }
+
+    /// GEO-D1: `models::local_to_gps` returns a fix in [-180, 180]; GlobalView draws lines, so
+    /// it unwraps the longitude explicitly. 1000 m east of 179.999 is drawn at 180.0084, next to
+    /// the origin, not at -179.9916 on the far side of the globe; the mirror case too.
+    #[test]
+    fn globalview_draws_a_survey_across_the_antimeridian_in_one_piece() {
+        for (lon0, east) in [(179.999, 1_000.0), (-179.999, -1_000.0)] {
+            let origin = GpsCoordinates::new(-16.8, lon0, 0.0).unwrap();
+            let (lng, lat) = local_to_gps(east, 0.0, &origin).unwrap();
+            assert!(
+                (lng - lon0).abs() < 0.01,
+                "origin lng {lon0}, {east} m east: drawn at lng {lng}, across the globe"
+            );
+            let (fix_lat, fix_lng) = crate::models::local_to_gps(east, 0.0, &origin).unwrap();
+            assert_eq!(lat, fix_lat);
+            assert!(((lng - fix_lng).abs() - 360.0).abs() < 1e-9);
+        }
+    }
+
+    /// GEO-D1: beyond the horizon there is no point to draw; GlobalView reports the project as
+    /// failed with a message instead of drawing the station somewhere it is not.
+    #[test]
+    fn globalview_refuses_a_station_beyond_the_horizon() {
+        let origin = GpsCoordinates::new(20.5, -87.4, 0.0).unwrap();
+        let err = local_to_gps(20_000_000.0, 0.0, &origin).unwrap_err();
+        assert!(
+            err.message.contains("beyond the horizon"),
+            "{}",
+            err.message
+        );
+        assert!(err.message.contains("20000 km"), "{}", err.message);
     }
 
     #[test]
