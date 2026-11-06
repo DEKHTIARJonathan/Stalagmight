@@ -412,6 +412,7 @@ import type { ImportScreenDigest } from '../lib/importScreenDigest';
 import { LogCursor } from '../lib/logs';
 import {
   checkAccounting,
+  checkFrozenDelete,
   checkIpcContract,
   checkPushed,
   checkReceipt,
@@ -419,6 +420,7 @@ import {
   checkRoundtripState,
   checkTempFiles,
   ImportOracleError,
+  importGateRefusalSeen,
   leftoverTempNames,
   captureReceipt,
   s4WorkStarted,
@@ -1082,6 +1084,11 @@ export const importDialogFuzz: Scenario = {
       /** `dataTableFullScreen` at the same instant. `key:` chords only. */
       fullscreenAtDispatch: boolean | null;
       /**
+       * On a `route`, the toasts it raised, read when it returned
+       * (`RouteOutcome.toastsRaised`, #576 HFI2-F3). Null on every other move.
+       */
+      toastsRaisedAtDispatch: string[] | null;
+      /**
        * What a file entry point did with the path. Null for every other move.
        *
        * The distinction S4's grace window turns on - see `errorGraceVerdict`.
@@ -1122,6 +1129,7 @@ export const importDialogFuzz: Scenario = {
       let dialogAtDispatch: string | null = null;
       let placementAtDispatch: boolean | null = null;
       let fullscreenAtDispatch: boolean | null = null;
+      let toastsRaisedAtDispatch: string[] | null = null;
       let handoff: FileHandoff | null = null;
       let digest: ImportScreenDigest;
 
@@ -1165,6 +1173,7 @@ export const importDialogFuzz: Scenario = {
             performed = true;
             dialogAtDispatch = routed.dialogAtDispatch;
             placementAtDispatch = routed.placementAtDispatch;
+            toastsRaisedAtDispatch = routed.toastsRaised;
             // `routeOpenedFile` returns void, so acceptance is read off the two
             // values its guards consulted on the same tick. Those guards are
             // `importFlowOwnsScreen(ui)` (an import-flow dialog, or placement)
@@ -1285,6 +1294,7 @@ export const importDialogFuzz: Scenario = {
         dialogAtDispatch,
         placementAtDispatch,
         fullscreenAtDispatch,
+        toastsRaisedAtDispatch,
         handoff,
       };
     };
@@ -2038,7 +2048,6 @@ export const importDialogFuzz: Scenario = {
           // Snapshots taken BEFORE the move, for the three inline checks: each
           // is only meaningful against the state its own move acted on.
           const screenBefore = before.screen;
-          const rowsBefore = before.rows;
           // The two store values `importFlowOwnsScreen` consults, as the digest
           // that CLASSIFIED this move saw them - see the IMPORT GATE branch.
           const dialogBefore = before.dialog;
@@ -2168,18 +2177,8 @@ export const importDialogFuzz: Scenario = {
           }
           if (frozenDelete && outcome.performed) {
             ctx.metric('frozenDeleteRefused');
-            if (digest.rows !== rowsBefore) {
-              fail(
-                'FROZEN DELETE: an all-frozen selection was deleted anyway',
-                `  rendered rows ${rowsBefore} -> ${digest.rows}; the wizard must refuse and say so`,
-              );
-            }
-            if (!digest.toast.includes('dmp-wizard-frozen-delete')) {
-              fail(
-                'FROZEN DELETE: the refusal was SILENT',
-                `  no dmp-wizard-frozen-delete toast; toasts=${JSON.stringify(digest.toast)}`,
-              );
-            }
+            // On the grid's DATA rows, not the rendered window (#576 HFI2-F5).
+            guarded(() => checkFrozenDelete(before, digest));
           }
           // INCOMPLETE SHOTS. `handleConfirm`, `handleSkip` and
           // `handleSegmentPlace` all open with `if (refuseIncompleteShots()) return;`
@@ -2384,13 +2383,19 @@ export const importDialogFuzz: Scenario = {
             // move from `new-project` to `tml-config` three moves later, for a
             // reason that has nothing to do with the routed file, and a
             // screen-equality check reports the guard as broken when it worked.
-            if (sameScreenAtDispatch && !digest.toast.includes(IMPORT_GATE_TOAST_KEY)) {
+            // Read when the route RETURNED (#576 HFI2-F3): the settle behind
+            // `digest` can outlast the toast while a wizard calculation runs.
+            if (
+              sameScreenAtDispatch &&
+              !importGateRefusalSeen(outcome.toastsRaisedAtDispatch, digest.toast, IMPORT_GATE_TOAST_KEY)
+            ) {
               fail(
                 'IMPORT GATE: a second file was routed into a screen an import already owned',
                 `  screen ${screenBefore} -> ${digest.screen}; routeOpenedFile must refuse and SAY so (#411)\n` +
                   `  activeDialog at dispatch=${JSON.stringify(outcome.dialogAtDispatch)} ` +
                   `placement=${outcome.placementAtDispatch}\n` +
-                  `  toasts: ${JSON.stringify(digest.toast)}`,
+                  `  toasts raised by the route: ${JSON.stringify(outcome.toastsRaisedAtDispatch)}; ` +
+                  `after settle: ${JSON.stringify(digest.toast)}`,
               );
             }
           }

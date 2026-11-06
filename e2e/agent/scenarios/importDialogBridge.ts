@@ -44,6 +44,7 @@ import {
   type ImportScreenDigest,
   type ImportScreenSpec,
 } from '../lib/importScreenDigest';
+import { toastKeysRaised } from '../lib/importFlowOracles';
 import { SELECT_TESTIDS, TESTID_INVENTORY } from './importDialogModel';
 
 /**
@@ -389,7 +390,7 @@ export async function injectScreenDigest(ctx: ScenarioContext): Promise<void> {
  * than four so the settle rule cannot drift between the move path and the
  * observe path.
  */
-const HELPERS = `
+export const HELPERS = `
   const SCREEN = ${SCREEN};
   if (!SCREEN) throw new Error('the import screen digest is not injected');
   const q = (id) => (/["\\\\]/.test(id) ? null : document.querySelector('[data-testid="' + id + '"]'));
@@ -436,7 +437,25 @@ const HELPERS = `
     shown('wizard-importing-zero-datum') ||
     shown('wizard-placing') ||
     shown('tml-import-progress') ||
-    (!!q('dmp-new-import-dialog') && !shown('dmp-new-import-dialog'));
+    (!!q('dmp-new-import-dialog') && !shown('dmp-new-import-dialog')) ||
+    orphanAcceptRunning();
+  /**
+   * An orphan-placement Accept (or Accept all) in flight (#576 HFI2-F4). It
+   * awaits mergeStations and then the overlap treatment's setShotKind /
+   * updateShot, each an undo entry, and holds every button of the dialog
+   * \`disabled\` (\`processing\`) until the chain ends. A settle that returned
+   * mid-chain gave the next move an undo depth still climbing, and OVERLAP
+   * MODES blamed the picker for the Accept's pushes. Read off the disabled
+   * attribute, not visibility: a hidden dialog's chain is still running.
+   */
+  function orphanAcceptRunning() {
+    const ids = ['orphan-accept', 'orphan-accept-all', 'orphan-close'];
+    for (let i = 0; i < ids.length; i++) {
+      const el = q(ids[i]);
+      if (el && el.disabled === true) return true;
+    }
+    return false;
+  }
   const marker = () => {
     const ui = window.__E2E_TEST__ && window.__E2E_TEST__.uiStore
       ? window.__E2E_TEST__.uiStore.getState()
@@ -947,22 +966,38 @@ export interface RouteOutcome {
    */
   dialogAtDispatch: string | null;
   placementAtDispatch: boolean;
+  /**
+   * Keys of the toasts the route raised or refreshed, read from
+   * `uiStore.toasts` on the tick it returned (#576 HFI2-F3); null when the
+   * store has no toast stack. The router's refusal IS its toast, and a toast
+   * judged off the settled digest could have faded first.
+   */
+  toastsRaised: string[] | null;
 }
 
 export async function routeFile(ctx: ScenarioContext, absolutePath: string): Promise<RouteOutcome> {
   return ctx.eval<RouteOutcome>(
     `
+    const toastKeysRaised = ${toastKeysRaised.toString()};
     const route = window.__E2E_TEST__ && window.__E2E_TEST__.routeOpenedFile;
     const store = window.__E2E_TEST__ && window.__E2E_TEST__.uiStore;
     const ui = store ? store.getState() : null;
+    const toasts = () => {
+      const now = store ? store.getState() : null;
+      return now && Array.isArray(now.toasts) ? now.toasts : null;
+    };
     const out = {
       routed: false,
       dialogAtDispatch: ui && ui.activeDialog !== undefined && ui.activeDialog !== null ? ui.activeDialog : null,
       placementAtDispatch: !!(ui && ui.placementMode),
+      toastsRaised: null,
     };
     if (typeof route !== 'function') return out;
+    const before = toasts();
     await route(args[0], 'Import Failed');
     out.routed = true;
+    const after = toasts();
+    out.toastsRaised = before && after ? toastKeysRaised(before, after) : null;
     return out;
   `,
     [absolutePath],

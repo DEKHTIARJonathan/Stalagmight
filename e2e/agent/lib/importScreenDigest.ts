@@ -178,6 +178,12 @@ export interface ImportScreenDigest {
   opts: Record<string, string[]>;
   /** Rendered shot-table rows (the grid virtualizes, so this is the window). */
   rows: number;
+  /**
+   * The shot grids' DATA rows: each grid's `aria-rowcount` (its rows, plus the
+   * header), summed; -1 with no grid. Unlike `rows` it does not move when the
+   * grid measures its box and renders a bigger window (#576 HFI2-F5).
+   */
+  dataRows: number;
   /** Visible row indices carrying a `shot-frozen-*` lock icon. */
   frozen: number[];
   /** The grid's active row (`data-active`), or null. */
@@ -406,6 +412,12 @@ export async function computeImportScreenDigest(
 
   // ---- grid ---------------------------------------------------------------
   const rowNodes = byPrefix('shot-editor-row-');
+  let dataRows = -1;
+  const grids = doc.querySelectorAll('[data-testid="shot-table"] [role="grid"]');
+  for (let i = 0; i < grids.length; i++) {
+    const withHeader = Number(grids[i]!.getAttribute('aria-rowcount'));
+    if (Number.isInteger(withHeader) && withHeader >= 1) dataRows = Math.max(dataRows, 0) + withHeader - 1;
+  }
   const frozen: number[] = [];
   const frozenNodes = byPrefix('shot-frozen-');
   for (let i = 0; i < frozenNodes.length; i++) {
@@ -564,6 +576,7 @@ export async function computeImportScreenDigest(
     live,
     opts,
     rows: rowNodes.length,
+    dataRows,
     frozen,
     activeRow,
     selRows,
