@@ -374,8 +374,17 @@ impl Database {
     /// ([`super::check_schema`]), without opening it as a project. For files
     /// that arrive from elsewhere before anything else touches them, e.g. a
     /// SpeleoDB download about to replace the local cache.
+    ///
+    /// [#576 RV18-3] READ_WRITE without CREATE, though it writes nothing, for
+    /// the reason [`Self::upgraded_copy_in_memory`] gives (#576 RV8a-3): a
+    /// read-only connection to a file in WAL journal mode creates the `-wal` /
+    /// `-shm` beside it and cannot remove them when it closes, and no open may
+    /// follow this check to remove them. A read-write one removes them on its
+    /// last close, and without CREATE a missing file is an error, not a new empty
+    /// one. The one write it can make is the one every open makes: rolling back
+    /// a hot journal, which any read of the file would do first.
     pub fn check_schema_at(path: &Path) -> Result<()> {
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
             .with_context(|| format!("open {} to check its schema", path.display()))?;
         super::check_schema(&conn)
     }

@@ -271,3 +271,56 @@ fn the_read_only_reopen_refuses_a_file_swapped_in_after_the_first_open() {
     );
     assert_eq!(refused, Some("a view"));
 }
+
+// === check_schema_at leaves nothing beside the file (#576 RV18-3) ===
+
+fn files_in(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// [#576 RV18-3] `check_schema_at` runs on a SpeleoDB download before anything
+/// else opens it, and must leave its folder as it found it. Opened read-only,
+/// its connection created the WAL index of a file in WAL journal mode and could
+/// not remove it on close, so `-wal` and `-shm` were left beside the file - and
+/// beside a download no read-write open follows (a newer build's file, or one
+/// whose history is kept) they outlived it. It must not create a missing file
+/// either, and still refuses a hostile one.
+#[test]
+fn check_schema_at_leaves_nothing_beside_a_wal_mode_file() {
+    let dir = TempDir::new().unwrap();
+    let path = project_file_with(&dir, "PRAGMA journal_mode = WAL;");
+    let before = files_in(dir.path());
+
+    let checked = Database::check_schema_at(&path);
+    let after = files_in(dir.path());
+    let missing = dir.path().join("missing.stalx");
+    let on_missing = Database::check_schema_at(&missing).is_err();
+    let hostile = dir.path().join("hostile.stalx");
+    project_at(
+        &hostile,
+        "PRAGMA journal_mode = WAL; CREATE VIEW v AS SELECT 1;",
+    );
+    let refused = Database::check_schema_at(&hostile)
+        .err()
+        .and_then(|e| e.downcast_ref::<RefusedSchemaObject>().map(|r| r.what));
+    println!(
+        "WAL-mode file: check_schema_at -> {:?}; folder before {before:?}, after {after:?}; \
+         a missing file: error={on_missing}, created={}; a hostile one refused as {refused:?}",
+        checked.as_ref().map_err(|e| format!("{e:#}")),
+        missing.exists()
+    );
+
+    checked.unwrap();
+    assert_eq!(before, ["crafted.stalx"], "fixture: nothing beside it");
+    assert_eq!(after, before, "and still nothing beside it");
+    assert!(
+        on_missing && !missing.exists(),
+        "a missing file is not created"
+    );
+    assert_eq!(refused, Some("a view"));
+}
