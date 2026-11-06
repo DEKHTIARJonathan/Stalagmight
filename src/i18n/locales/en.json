@@ -2342,6 +2342,10 @@
   },
   "map": {
     "fitToViewTitle": "Fit to view",
+    "webgl2Unavailable": {
+      "title": "This map needs WebGL2",
+      "body": "Your graphics driver did not provide WebGL2, so the map cannot be drawn. Updating the driver may help. The rest of the app still works."
+    },
     "attribution": {
       "expandAria": "Show map imagery sources",
       "collapsed": "by {{source}}"
