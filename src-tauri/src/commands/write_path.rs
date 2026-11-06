@@ -430,9 +430,10 @@ fn lexical(path: &Path) -> PathBuf {
 /// How a platform's file system compares paths (#576 RV6b-R4).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PathRules {
-    /// Windows path syntax: `\` and `/` both separate, and a verbatim prefix
-    /// (`\\?\C:\..`, `\\?\UNC\server\share\..`) names the same place as the plain
-    /// form (`C:\..`, `\\server\share\..`).
+    /// Windows path syntax: `\` and `/` both separate, and a verbatim or device
+    /// prefix (`\\?\C:\..`, `\\.\C:\..`, `\\?\UNC\server\share\..`,
+    /// `\\.\UNC\server\share\..`, `UNC` in any case) names the same place as the
+    /// plain form (`C:\..`, `\\server\share\..`).
     pub(crate) windows: bool,
     /// Names match whatever their letter case: Windows (NTFS) and macOS, whose
     /// default file systems (APFS, HFS+) are case-insensitive. On a macOS volume
@@ -471,17 +472,7 @@ pub(crate) fn path_is_within(path: &str, dir: &str, rules: PathRules) -> bool {
 /// are different places, which split into the same names otherwise.
 fn path_components(path: &str, rules: PathRules) -> Vec<String> {
     let mut text = if rules.windows {
-        let text = path.replace('/', "\\");
-        if let Some(rest) = text.strip_prefix(r"\\?\UNC\") {
-            format!(r"\\{rest}")
-        } else if let Some(rest) = text
-            .strip_prefix(r"\\?\")
-            .or_else(|| text.strip_prefix(r"\\.\"))
-        {
-            rest.to_owned()
-        } else {
-            text
-        }
+        windows_form(path)
     } else {
         path.to_owned()
     };
@@ -501,6 +492,25 @@ fn path_components(path: &str, rules: PathRules) -> Vec<String> {
             .map(str::to_owned),
     );
     parts
+}
+
+/// `path` as the Windows rules compare it: `/` read as `\`, and a DOS device
+/// prefix (`\\?\` verbatim, `\\.\` device) taken off, leaving the drive path it
+/// names - or, before `UNC\`, the UNC path (#576 W24): `\\?\UNC\s\x`,
+/// `\\?\unc\s\x` and `\\.\UNC\s\x` are all `\\s\x`. `UNC` in any letter case:
+/// Windows looks it up in its object namespace, which ignores case.
+fn windows_form(path: &str) -> String {
+    let text = path.replace('/', "\\");
+    let Some(rest) = text
+        .strip_prefix(r"\\?\")
+        .or_else(|| text.strip_prefix(r"\\.\"))
+    else {
+        return text;
+    };
+    match rest.split_at_checked(4) {
+        Some((unc, share)) if unc.eq_ignore_ascii_case(r"UNC\") => format!(r"\\{share}"),
+        _ => rest.to_owned(),
+    }
 }
 
 /// The system directories no command may write into.
