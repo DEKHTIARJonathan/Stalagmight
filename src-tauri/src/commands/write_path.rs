@@ -219,8 +219,19 @@ pub(crate) fn load_upgrade_refusal(path: &Path) -> Option<UpgradeRefusal> {
 
 /// [`load_upgrade_refusal`] against given app directories (the testable core).
 pub(crate) fn load_upgrade_refusal_with(path: &Path, dirs: &AppDirs) -> Option<UpgradeRefusal> {
-    let why = windows_refusal(path, PathRules::HOST)
-        .or_else(|| location_refusal(path, true, dirs, Walk::HOST))?;
+    load_upgrade_refusal_under(path, dirs, Walk::HOST)
+}
+
+/// [`load_upgrade_refusal_with`] under given path rules, on a given file system
+/// (#576 RV18-W24-3), as [`check_write_path_under`]: the Windows refusals are
+/// tested on any host.
+pub(crate) fn load_upgrade_refusal_under(
+    path: &Path,
+    dirs: &AppDirs,
+    walk: Walk<'_>,
+) -> Option<UpgradeRefusal> {
+    let why =
+        windows_refusal(path, walk.rules).or_else(|| location_refusal(path, true, dirs, walk))?;
     let name = path.file_name().map_or_else(
         || path.display().to_string(),
         |n| n.to_string_lossy().into_owned(),

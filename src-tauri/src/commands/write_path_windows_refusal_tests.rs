@@ -9,7 +9,8 @@
 use std::path::{Path, PathBuf};
 
 use crate::commands::write_path::{
-    check_write_path_under, windows_path_refusal, AppDirs, LinkLookup, PathRules, Walk, WriteTarget,
+    check_write_path_under, load_upgrade_refusal_under, windows_path_refusal, AppDirs, LinkLookup,
+    PathRules, Walk, WriteTarget,
 };
 
 const WINDOWS: PathRules = PathRules {
@@ -448,6 +449,51 @@ fn this_computer_s_own_name_is_a_loopback_server() {
         };
         if !as_expected {
             wrong.push(format!("{path} ({own_name:?}): {got:?}"));
+        }
+    }
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// [#576 RV18-W24-3] Opening an older project upgrades it in place, so a load
+/// refuses the same Windows paths a write does - judged here under Windows rules
+/// on every host (CI runs on Linux, where the host rules never take this path).
+/// Under Linux rules the same text is a plain name and the load may upgrade.
+#[test]
+fn an_older_project_at_a_windows_device_path_is_not_upgraded() {
+    let dirs = AppDirs {
+        internal: Vec::new(),
+        managed_projects: None,
+    };
+    let on = |rules| Walk {
+        rules,
+        disk: &NoDisk,
+    };
+    let cases = [
+        (r"\\.\pipe\CaveL.stalx", NOT_PLAIN),
+        ("C:CaveL.stalx", NOT_PLAIN),
+        (r"C:\Users\a\notes.txt:x.stalx", STREAM),
+        (r"C:\Users\a\NUL.stalx", DEVICE_NAME),
+        (r"\\localhost\c$\Users\a\CaveL.stalx", LOOPBACK),
+        (r"C:\Users\a\CaveL.stalx", None),
+    ];
+    let mut wrong = Vec::new();
+    for (path, refused) in cases {
+        let windows = load_upgrade_refusal_under(Path::new(path), &dirs, on(WINDOWS));
+        let linux = load_upgrade_refusal_under(Path::new(path), &dirs, on(LINUX));
+        println!(
+            "RV18-W24-3 load {path:?}: windows {:?}, linux {:?}",
+            windows.as_ref().map(|r| &r.older_format),
+            linux.as_ref().map(|r| &r.older_format)
+        );
+        let as_expected = match (&windows, refused) {
+            (None, None) => true,
+            (Some(refusal), Some(reason)) => {
+                refusal.older_format.contains(reason) && refusal.unstamped.contains(reason)
+            }
+            _ => false,
+        };
+        if !as_expected || linux.is_some() {
+            wrong.push(format!("{path}: windows {windows:?}, linux {linux:?}"));
         }
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
