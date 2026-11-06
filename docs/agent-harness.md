@@ -1003,8 +1003,11 @@ locations:
   and classifier ids, and one count line for each run of other lines
   (`lib/shareableFailure.ts`). It is fail-closed: a line is kept only if its
   shape is one the harness writes, so a new oracle that quotes the app is
-  covered. An `ipc <command>:` / `eval:` headline keeps the prefix and the
-  length of the app's text.
+  covered. An `ipc <command>:` / `eval:` / `javascript error:` headline keeps
+  the prefix and the length of the app's text. Every line it keeps has the
+  checkout folded to `<repo>` and the home directory to `~`
+  (`foldLocalPaths`), so a `reproduce:` line's fixture path or a session
+  directory in a headline does not name the user.
 - A fuzz trace's `failure` is that form, with the signature of that form.
   `fuzz-shrink` prints that shareable signature and checks it against the
   trace header; ddmin still compares full signatures, in memory.

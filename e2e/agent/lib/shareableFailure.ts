@@ -17,7 +17,40 @@
  * its own vocabulary, and everything else is withheld and counted - so a new
  * oracle that quotes the app is covered without anyone remembering to mark it.
  */
+import * as os from 'os';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
+
 import { redactCorpusText } from './fixtureCorpus';
+
+/** The checkout: the session directories live in it (`.agent-artifacts/sessions/<id>`). */
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
+/**
+ * `text` with the checkout folded to `<repo>` and the home directory to `~`
+ * (#576 RV18-W23-4). A kept line can carry a path - a `reproduce:` line's
+ * fixture or `REPLAY of <trace>`, a headline naming the session directory - and
+ * a path under either root names the user. What follows the folded root is the
+ * harness's own layout, or a corpus id the corpus fold already put there. Read
+ * at call time, so a changed `HOME` is honoured; a root of `/` folds nothing.
+ */
+export function foldLocalPaths(text: string): string {
+  const roots = [
+    { root: REPO_ROOT, say: '<repo>' },
+    { root: os.homedir(), say: '~' },
+  ]
+    .filter(({ root }) => path.isAbsolute(root) && path.resolve(root) !== path.parse(root).root)
+    .map(({ root, say }) => ({ root: path.resolve(root), say }))
+    .sort((a, b) => b.root.length - a.root.length);
+  let out = text;
+  for (const { root, say } of roots) {
+    if (!out.includes(root)) continue;
+    const literal = root.replace(/[.*+?^$()|[\]{}\\]/g, '\\$&');
+    // Not inside a longer name: `/home/bob` must leave `/home/bobby` alone.
+    out = out.replace(new RegExp(`${literal}(?![\\w.-])`, 'g'), say);
+  }
+  return out;
+}
 
 /** Lines the harness writes from its own vocabulary, kept whole. */
 const KEPT_LINES: readonly RegExp[] = [
@@ -25,7 +58,11 @@ const KEPT_LINES: readonly RegExp[] = [
   /^\s*trace: /, // where the trace went
   // A diff path - a code location in the data model: field names, indices.
   /^\s*at [A-Za-z_]\w*(?:\[(?:\d+|\*)\]|\.(?:[A-Za-z_]\w*|\d+))*$/,
-  /^\s*last \d+ [^:]*:$/, // the move tail's heading, a count
+  // The move tail's heading, a count. The headings the scenarios write
+  // (`fuzzHarness.failureText`'s callers, `exportRoundtripFuzz`), and only
+  // those: lower-case words are not enough, `last 3 moves into <a name>:` is
+  // lower-case words too.
+  /^\s*last \d+ (?:action\(s\)(?: this iteration)?|move\(s\)):$/,
   /^ {2}\(\d+ line\(s\) withheld: /, // a count this function wrote: projecting twice changes nothing
 ];
 
@@ -36,14 +73,15 @@ const CLASSIFIER = /(KNOWN OPEN APP BUG|ATTRIBUTED) \[([a-z0-9-]+)\]/g;
  * Headlines that end in the app's or the page's own text, as `prefix: text`:
  * the prefix names the code path, the rest is the app's words.
  * - `page.ts` puts `ipc <command>:` / `eval compile:` / `eval:` in front of an
- *   error it rethrows;
+ *   error it rethrows, and WebDriver words a script that threw in the page as
+ *   `javascript error: <the page's message>`;
  * - a scenario words a refused action as `<action> failed: <its error>`
  *   (`loadProject(<fixture>) failed: ...`, `createSection 3 failed: ...`);
  * - a headline that ends in a JSON array or object carries values, such as
  *   `E2 INTEGRITY: ... at the start of episode 3: [<integrity messages>]`.
  */
 const APP_ERROR_HEADLINES: readonly RegExp[] = [
-  /^(ipc \w+|eval compile|eval): (.*)$/,
+  /^(ipc \w+|eval compile|eval|javascript error): (.*)$/,
   /^(.*? failed): (.*)$/,
   /^(.*?): ([[{].*)$/,
 ];
@@ -67,14 +105,14 @@ function withheldLine(count: number): string {
 }
 
 /**
- * `message` with the corpus fold applied and every line the harness did not
+ * `message` with the corpus and path folds applied and every line the harness did not
  * word itself withheld, a run of them replaced by one count line. The headline
  * (line 1) stays - a scenario writes it from harness words, numbers and names
  * (scenario, fixture, move, screen) - except the app's text an
  * `APP_ERROR_HEADLINES` shape ends in, which is replaced by its length.
  */
 export function shareableFailureText(message: string): string {
-  const [first = '', ...rest] = redactCorpusText(message).split('\n');
+  const [first = '', ...rest] = foldLocalPaths(redactCorpusText(message)).split('\n');
   const out = [shareableHeadline(first)];
   let withheld = 0;
   const flush = (): void => {
