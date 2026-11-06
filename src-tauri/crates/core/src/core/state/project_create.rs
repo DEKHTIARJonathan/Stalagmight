@@ -745,7 +745,8 @@ impl AppState {
     /// the two), so this is a courtesy, not the guard.
     ///
     /// Only for a create that names `save_directory` or `save_path`: the default
-    /// location is not checked, and resolving it would create the default folder.
+    /// location is not checked, and resolving it would create the default folder,
+    /// so with neither this answers `Ok` and touches nothing (#576 RV16-3).
     #[expect(
         clippy::result_large_err,
         reason = "the LoadError every create path returns; boxing it is a repo-wide change"
@@ -757,6 +758,9 @@ impl AppState {
         save_directory: Option<&PathBuf>,
         save_path: Option<PathBuf>,
     ) -> Result<(), crate::core::loading::LoadError> {
+        if save_directory.is_none() && save_path.is_none() {
+            return Ok(());
+        }
         let requested = self.requested_create_path(name, save_directory, save_path)?;
         check_target(&Self::next_available_project_path(&requested))
             .map_err(crate::core::loading::LoadError::internal)
@@ -1128,6 +1132,29 @@ mod tests {
                 .check_create_target(&accept, "  ", Some(&dir.path().to_path_buf()), None)
                 .map_err(|e| e.code),
             Err(crate::models::CommandErrorCode::Io)
+        );
+    }
+
+    /// [#576 RV16-3] With neither a folder nor a file named there is nothing to
+    /// check: the default location is not resolved (resolving it creates the
+    /// default folder) and the check is never asked.
+    #[test]
+    fn check_create_target_without_a_named_target_checks_and_makes_nothing() {
+        let state = AppState::new().unwrap();
+        let asked = std::cell::RefCell::new(Vec::new());
+        let record = |path: &std::path::Path| {
+            asked.borrow_mut().push(path.to_path_buf());
+            Ok(())
+        };
+
+        let answer = state
+            .check_create_target(&record, "Cave", None, None)
+            .map_err(|e| e.message);
+
+        assert_eq!(
+            (answer, asked.borrow().clone()),
+            (Ok(()), Vec::new()),
+            "the answer, and the paths the check was asked about"
         );
     }
 }
