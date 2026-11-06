@@ -713,6 +713,26 @@ interface Redaction {
 
 /** One or more backslashes: an escape written once, or escaped again (JSON of a `{:?}` form, and so on). */
 const BACKSLASHES = '\\\\+';
+/** A byte `{:?}` writes as `\xHH`, after its backslashes. */
+const BYTE = 'x[0-9A-Fa-f]{2}';
+/**
+ * Where a character sits in the name, which decides how its escapes take the
+ * backslashes in front of them (#576 RV18-W23-1). Taken as `BACKSLASHES`
+ * everywhere, a run of N backslashes was tried from each of its N backslashes
+ * and read to its end each time, and two runs side by side (a backslash of the
+ * name before an escaped character) split it every way there is: 40k
+ * backslashes took seconds, a 1 MB line did not finish.
+ * - `first`: an escape starts where a run of backslashes (or of `\xHH` bytes)
+ *   starts, never inside one. It folds the same text - a match from inside a
+ *   run also matches from the run's start, the extra backslashes taken in -
+ *   and each run is read once.
+ * - `afterBackslash`: the name's backslash before it (`BACKSLASHES`) has taken
+ *   the run, so an escape takes exactly one more backslash and a quote none.
+ *   `\\+\\u` and `\\+"` match what `\\+\\+u` and `\\+\\*"` did, one way only.
+ * - `inside`: after any other character, as before - the match comes to a run
+ *   from that character, so at the run's start.
+ */
+type CharAt = 'first' | 'afterBackslash' | 'inside';
 /** Escapes that name a control character, Rust's (`\0`) and JSON's (`\b`, `\f`) together. */
 const NAMED_ESCAPES: Readonly<Record<string, string>> = { '\n': 'n', '\r': 'r', '\t': 't', '\0': '0', '\b': 'b', '\f': 'f' };
 
@@ -736,25 +756,32 @@ function hexPattern(value: number, width: number): string {
  * character, past U+FFFF a surrogate pair), and a control's named escape.
  * U+FFFD also stands for bytes that are not UTF-8: Node reads such a file name
  * with U+FFFD in their place, and Rust's `{:?}` of the path writes them `\xHH`.
+ * `at` is where `c` sits in the name (`CharAt`).
  */
-function charPattern(c: string): string {
-  if (c === '"') return '\\\\*"';
-  if (c === '\\') return BACKSLASHES;
+function charPattern(c: string, at: CharAt): string {
+  const lead = at === 'afterBackslash' ? '\\\\' : at === 'first' ? `(?<!\\\\)${BACKSLASHES}` : BACKSLASHES;
+  if (c === '"') return at === 'afterBackslash' ? '"' : at === 'first' ? '(?<!\\\\)\\\\*"' : '\\\\*"';
+  if (c === '\\') return lead;
   const code = c.codePointAt(0) ?? 0;
   if (code >= 0x20 && code < 0x7f) return c.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
   let json = '';
-  for (let i = 0; i < c.length; i++) json += `${BACKSLASHES}u${hexPattern(c.charCodeAt(i), 4)}`;
-  const forms = [c, `${BACKSLASHES}u\\{0*${hexPattern(code, 1)}\\}`, json];
+  for (let i = 0; i < c.length; i++) json += `${i === 0 ? lead : BACKSLASHES}u${hexPattern(c.charCodeAt(i), 4)}`;
+  const forms = [c, `${lead}u\\{0*${hexPattern(code, 1)}\\}`, json];
   const named = NAMED_ESCAPES[c];
-  if (named !== undefined) forms.push(`${BACKSLASHES}${named}`);
-  if (code === 0xfffd) forms.push(`(?:${BACKSLASHES}x[0-9A-Fa-f]{2})+`);
+  if (named !== undefined) forms.push(`${lead}${named}`);
+  if (code === 0xfffd) {
+    const notAfterByte = at === 'first' ? `(?<!\\\\${BYTE})` : '';
+    forms.push(`${notAfterByte}${lead}${BYTE}(?:${BACKSLASHES}${BYTE})*`);
+  }
   return `(?:${forms.join('|')})`;
 }
 
 function redactionFor(text: string, say: string): Redaction {
   const runs = text.match(/[\x20-\x21\x23-\x5b\x5d-\x7e]+/g) ?? [];
   const anchor = runs.reduce((longest, run) => (run.length > longest.length ? run : longest), '');
-  return { text, say, anchor, pattern: new RegExp(Array.from(text, charPattern).join(''), 'g') };
+  const chars = Array.from(text);
+  const at = (i: number): CharAt => (i === 0 ? 'first' : chars[i - 1] === '\\' ? 'afterBackslash' : 'inside');
+  return { text, say, anchor, pattern: new RegExp(chars.map((c, i) => charPattern(c, at(i))).join(''), 'g') };
 }
 
 /**
