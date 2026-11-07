@@ -333,7 +333,9 @@ mod rename_during_save_tests;
     clippy::unwrap_used,
     clippy::indexing_slicing,
     clippy::float_cmp,
-    reason = "test module: panics on a failed assumption are the point"
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
 )]
 mod reverse_tests;
 #[cfg(test)]
