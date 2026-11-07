@@ -112,14 +112,17 @@ const DEFAULT_CONTENT_TYPE: &str = "image/jpeg";
 /// incompressible 512 px RGBA PNG is about 1 MiB (512 * 512 * 4 bytes plus
 /// framing). 4 MiB is four times that worst case, so no real tile comes near
 /// it, while a provider (or anything between us and it) streaming a huge body
-/// is cut off there instead of at ureq's silent 10 MiB default.
+/// is cut off there instead of at ureq's silent 10 MiB default. The cap counts
+/// the DECODED body ([`read_body_capped`]): ureq's own limit counts the bytes
+/// on the wire, which a gzip-encoded body can be a thousandth of.
 const TILE_BODY_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
 /// Most bytes a tilemap response body may hold (#576 W30-NF4), for the reason
 /// [`TILE_BODY_MAX_BYTES`] gives. A tilemap is 128 x 128 availability flags as
 /// compact JSON - `{"data":[1,0,...]}` and a few small fields, about 33 KB -
 /// so 1 MiB is some thirty times that, while a body streaming far more is cut
-/// off here instead of at ureq's silent 10 MiB default.
+/// off here instead of at ureq's silent 10 MiB default. Like the tile cap it
+/// counts the decoded body, not the (possibly gzip) bytes on the wire.
 const TILEMAP_BODY_MAX_BYTES: u64 = 1024 * 1024;
 
 /// Maximum retry attempts for transient network errors (total attempts = 1 + TILE_FETCH_MAX_RETRIES).
@@ -201,6 +204,32 @@ fn classify_body_error(err: &ureq::Error, limit: u64) -> TileFetchError {
         ),
         _ => TileFetchError::transport(format!("Failed to read response body: {err}")),
     }
+}
+
+/// Read a response body whole, refusing one that DECODES to more than `limit`
+/// bytes with ureq's own `BodyExceedsLimit(limit)` (#576 RV19a-1).
+///
+/// ureq's `with_config().limit()` alone does not bound what the caller gets:
+/// ureq asks for `accept-encoding: gzip` (its default `gzip` feature) and
+/// inflates ABOVE that limit, so it counts compressed bytes - 65 KB of gzip
+/// decoded to 64 MiB under a 4 MiB limit. The wire limit stays, so a stream
+/// that never ends but inflates to almost nothing (empty deflate blocks) is
+/// still cut off; the decoded stream is capped on top of it.
+pub fn read_body_capped(body: ureq::Body, limit: u64) -> Result<Vec<u8>, ureq::Error> {
+    use std::io::Read as _;
+    let mut decoded = Vec::new();
+    body.into_with_config()
+        .limit(limit)
+        .reader()
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut decoded)
+        // ureq's own errors (the wire limit, a timeout) arrive wrapped in an
+        // io::Error; `From` unwraps them, as ureq's `read_to_vec` does.
+        .map_err(ureq::Error::from)?;
+    if decoded.len() as u64 > limit {
+        return Err(ureq::Error::BodyExceedsLimit(limit));
+    }
+    Ok(decoded)
 }
 
 /// A body limit as a person reads it: whole MiB from 1 MiB up, exact bytes
@@ -352,17 +381,12 @@ fn fetch_tile_from_url(
 
                 // A failed read returns from here rather than reaching the
                 // retry arm below, so an oversized body is downloaded once.
-                let body = response
-                    .into_body()
-                    .with_config()
-                    .limit(body_limit)
-                    .read_to_vec()
-                    .map_err(|e| {
-                        if let Some(s) = stats {
-                            s.record_error();
-                        }
-                        classify_body_error(&e, body_limit)
-                    })?;
+                let body = read_body_capped(response.into_body(), body_limit).map_err(|e| {
+                    if let Some(s) = stats {
+                        s.record_error();
+                    }
+                    classify_body_error(&e, body_limit)
+                })?;
 
                 if let Some(s) = stats {
                     s.record_success(latency_ms);
@@ -435,12 +459,8 @@ fn fetch_tilemap(
         .call()
         .map_err(|e| format!("Tilemap network error: {e}"))?;
 
-    let body = response
-        .into_body()
-        .with_config()
-        .limit(TILEMAP_BODY_MAX_BYTES)
-        .read_to_vec()
-        .map_err(|e| match e {
+    let body =
+        read_body_capped(response.into_body(), TILEMAP_BODY_MAX_BYTES).map_err(|e| match e {
             ureq::Error::BodyExceedsLimit(_) => format!(
                 "Tilemap refused: the response body is larger than the {} limit for a tilemap",
                 describe_body_limit(TILEMAP_BODY_MAX_BYTES)
@@ -1633,6 +1653,10 @@ mod body_limit_tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod tilemap_body_limit_tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod gzip_body_limit_tests;
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]

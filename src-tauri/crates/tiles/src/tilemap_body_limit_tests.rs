@@ -10,7 +10,7 @@ use super::*;
 
 /// The tilemap a provider sends for a region: every flag set, compact JSON,
 /// then `padding` bytes of whitespace (which JSON allows after the value).
-fn tilemap_body(padding: usize) -> Vec<u8> {
+pub(super) fn tilemap_body(padding: usize) -> Vec<u8> {
     let cells = (tilemap_cache::TILEMAP_GRID_SIZE * tilemap_cache::TILEMAP_GRID_SIZE) as usize;
     let flags = vec!["1"; cells].join(",");
     let mut body = format!("{{\"adjusted\":false,\"data\":[{flags}]}}").into_bytes();
