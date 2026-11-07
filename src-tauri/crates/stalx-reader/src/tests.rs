@@ -902,6 +902,33 @@ fn schema_expressions_a_migration_would_evaluate_are_refused() {
 }
 
 #[test]
+fn a_schema_cell_not_stored_as_text_is_refused() {
+    // [#619] SQLite parses a `sql` cell stored as a BLOB like text, so this
+    // CHECK is enforced either way; stored as text it is refused, and a BLOB
+    // must not hide it. A `tbl_name` stored as a BLOB is refused too.
+    let check = "CREATE TABLE c (x CHECK (length(hex(zeroblob(4000000))) > 0));";
+    for sql in [
+        check.to_string(),
+        format!(
+            "{check}
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET sql = CAST(sql AS BLOB) WHERE name = 'c';"
+        ),
+        "PRAGMA writable_schema = ON;
+         UPDATE sqlite_master SET tbl_name = CAST(tbl_name AS BLOB) WHERE name = 'shots';"
+            .to_string(),
+    ] {
+        let result = read_file(&with_schema_sql(&sql));
+        assert_eq!(
+            result.as_ref().err().and_then(invalid_kind),
+            Some(InvalidKind::RefusedSchemaObject),
+            "{sql}: {:?}",
+            result.map(|survey| survey.sections.len())
+        );
+    }
+}
+
+#[test]
 fn the_apps_own_check_and_literal_defaults_are_allowed() {
     // The app's schema has `CHECK (id = 1)` singletons; plain literal defaults and
     // identifiers containing "check" are not expressions.

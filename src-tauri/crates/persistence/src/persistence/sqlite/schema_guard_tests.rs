@@ -95,6 +95,16 @@ fn project_at(path: &Path, sql: &str) {
     Connection::open(path).unwrap().execute_batch(sql).unwrap();
 }
 
+/// [#619] A table with a CHECK the guard refuses when its `sql` cell is text,
+/// with that cell rewritten as a BLOB of the same bytes.
+const CHECK_STORED_AS_BLOB: &str = "CREATE TABLE c (x CHECK (x > 0));
+     PRAGMA writable_schema = ON;
+     UPDATE sqlite_master SET sql = CAST(sql AS BLOB) WHERE name = 'c';";
+
+/// [#619] How the guard refuses a schema row whose `tbl_name` is not text or
+/// whose `sql` is neither text nor NULL.
+const NOT_STORED_AS_TEXT: &str = "a schema object whose table name or SQL is not stored as text";
+
 #[test]
 fn every_open_of_an_existing_file_refuses_a_hostile_schema() {
     for (sql, what) in [
@@ -161,6 +171,27 @@ fn every_open_of_an_existing_file_refuses_a_hostile_schema() {
              WHERE name = 'project';",
             "a schema object whose name or SQL is not valid UTF-8",
         ),
+        // [#619] SQLite parses a `sql` cell stored as a BLOB like text, so a
+        // CHECK so stored is enforced, but the guard saw no SQL in it. Each of
+        // these opened before.
+        (CHECK_STORED_AS_BLOB, NOT_STORED_AS_TEXT),
+        (
+            "CREATE INDEX zzb ON shots (length);
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET sql = CAST(sql AS BLOB) WHERE name = 'zzb';",
+            NOT_STORED_AS_TEXT,
+        ),
+        (
+            "PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET tbl_name = CAST(tbl_name AS BLOB) WHERE name = 'shots';",
+            NOT_STORED_AS_TEXT,
+        ),
+        // A type cell stored as a BLOB was refused already.
+        (
+            "PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = CAST(type AS BLOB) WHERE name = 'shots';",
+            "a schema object of an unexpected type",
+        ),
     ] {
         let dir = TempDir::new().unwrap();
         let path = project_file_with(&dir, sql);
@@ -217,6 +248,55 @@ fn a_legacy_is_virtual_column_still_opens() {
     let path = project_file_with(&dir, "ALTER TABLE shots ADD COLUMN is_virtual INTEGER;");
 
     Database::open_existing(&path).unwrap();
+}
+
+/// [#619] SQLite builds its schema from a `sql` cell's bytes whatever the
+/// cell's storage class, so a CHECK stored as a BLOB is parsed and enforced
+/// exactly like one stored as text. The guard read only a text cell as SQL,
+/// so it saw none in the BLOB, and the file passed. Stored as text, the same
+/// table is refused.
+#[test]
+fn a_check_whose_sql_is_stored_as_a_blob_is_still_enforced_and_now_refused() {
+    let dir = TempDir::new().unwrap();
+    let path = project_file_with(&dir, CHECK_STORED_AS_BLOB);
+    let conn = Connection::open(&path).unwrap();
+    let stored: String = conn
+        .query_row(
+            "SELECT typeof(sql) FROM sqlite_master WHERE name = 'c'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let violating = conn
+        .execute("INSERT INTO c VALUES (0)", [])
+        .map_err(|e| e.to_string());
+    let passing = conn
+        .execute("INSERT INTO c VALUES (1)", [])
+        .map_err(|e| e.to_string());
+    let refused = refused_schema_object(&conn).unwrap().map(|r| r.what);
+    println!(
+        "sql cell stored as {stored}; INSERT 0 -> {violating:?}; INSERT 1 -> {passing:?}; \
+         refused_schema_object -> {refused:?}"
+    );
+    assert_eq!(stored, "blob");
+    assert_eq!(
+        violating,
+        Err("CHECK constraint failed: x > 0".to_string()),
+        "SQLite enforces the CHECK it parsed from the BLOB"
+    );
+    assert_eq!(passing, Ok(1));
+    assert_eq!(refused, Some(NOT_STORED_AS_TEXT));
+
+    let dir = TempDir::new().unwrap();
+    let as_text = project_file_with(&dir, "CREATE TABLE c (x CHECK (x > 0));");
+    let refused = refused_schema_object(&Connection::open(&as_text).unwrap())
+        .unwrap()
+        .map(|r| r.what);
+    assert_eq!(
+        refused,
+        Some("a table with a CHECK constraint the app never writes"),
+        "the same table stored as text"
+    );
 }
 
 // === Salvage reads a type cell that lost its case (#576 RV19a-12) ===

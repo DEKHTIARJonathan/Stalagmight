@@ -70,6 +70,10 @@ impl std::error::Error for RefusedSchemaObject {}
 /// module code. It refuses, in order:
 /// - any row whose `name` or `sql` is not valid UTF-8 (#619): SQLite would hand
 ///   such an identifier to the authorizer, whose rusqlite wrapper panics on it;
+/// - any row whose `type`, `name` or `tbl_name` is not stored as text, or whose
+///   `sql` is neither text nor NULL (#619): SQLite parses a `sql` cell stored as
+///   a BLOB like text, so a CHECK in one is enforced, but the checks below read
+///   only text and would see no SQL there;
 /// - any object named `pragma_*` (any case): the file's own table or view of
 ///   that name would be read in place of SQLite's table-valued pragma by every
 ///   later probe, and could lie to all of them;
@@ -269,7 +273,7 @@ fn refused_by_master(
         ValueRef::Text(b) | ValueRef::Blob(b) => std::str::from_utf8(b).is_ok(),
         _ => true,
     };
-    let mut stmt = conn.prepare("SELECT type, name, rootpage, sql FROM sqlite_master")?;
+    let mut stmt = conn.prepare("SELECT type, name, rootpage, sql, tbl_name FROM sqlite_master")?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
         if !(utf8(row.get_ref(1)?) && utf8(row.get_ref(3)?)) {
@@ -286,6 +290,18 @@ fn refused_by_master(
                 name: String::new(),
             }));
         };
+        // [#619] SQLite builds the schema from the `sql` cell's bytes whatever
+        // its storage class, so a CHECK stored as a BLOB is parsed and enforced
+        // like one stored as text, but `text` reads that cell as no SQL at all
+        // and every check below would pass it. `tbl_name` is held to text too.
+        if !matches!(row.get_ref(4)?, ValueRef::Text(_))
+            || !matches!(row.get_ref(3)?, ValueRef::Text(_) | ValueRef::Null)
+        {
+            return Ok(Some(RefusedSchemaObject {
+                what: "a schema object whose table name or SQL is not stored as text",
+                name,
+            }));
+        }
         let rootpage = match row.get_ref(2)? {
             ValueRef::Integer(page) => Some(page),
             _ => None,
