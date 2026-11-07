@@ -1641,8 +1641,7 @@ impl Database {
         // Written under a name the backup listing does not offer, then renamed,
         // so a half-written copy never shows up as a backup.
         let partial = sibling(&format!(".pre-v{from_version}.partial"));
-        let written = std::fs::copy(path, &partial)
-            .and_then(|_| std::fs::File::open(&partial)?.sync_all())
+        let written = write_synced_copy(path, &partial, std::fs::File::sync_all)
             .and_then(|()| std::fs::rename(&partial, &copy));
         if let Err(e) = written {
             let _ = std::fs::remove_file(&partial);
@@ -1894,4 +1893,32 @@ impl Database {
 
         Ok(())
     }
+}
+
+/// [#576 RVF-d-1] Copy `from` to `to` with `std::fs::copy`, then hand `flush` a
+/// handle on the copy opened for WRITING, so the copy reaches the device before
+/// it is renamed into place. The upgrade copy passes `File::sync_all`.
+///
+/// The flush used to go through `File::open(to)`, which is read-only: on
+/// Windows a GENERIC_READ handle, and `sync_all` there is FlushFileBuffers,
+/// which needs GENERIC_WRITE. That flush was refused, so opening any
+/// older-format project with data failed on Windows with "Could not keep a
+/// copy of this project before upgrading it". Linux and macOS fsync a
+/// read-only descriptor, which is why only Windows saw it.
+///
+/// `std::fs::copy` stays for the copy itself: it clones on APFS, uses
+/// CopyFileEx on Windows and copy_file_range on Linux, and keeps the file's
+/// permissions. So the copy of a read-only project file is read-only and
+/// cannot be opened for writing: its upgrade is refused here and leaves no
+/// copy. Such a file was never upgradable - before, the copy was kept and the
+/// upgrade then failed on its first write ("attempt to write a readonly
+/// database").
+pub(super) fn write_synced_copy(
+    from: &Path,
+    to: &Path,
+    flush: impl FnOnce(&std::fs::File) -> std::io::Result<()>,
+) -> std::io::Result<()> {
+    std::fs::copy(from, to)?;
+    let copy = std::fs::OpenOptions::new().write(true).open(to)?;
+    flush(&copy)
 }

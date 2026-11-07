@@ -427,6 +427,9 @@ impl<'a> Dump<'a> {
         // Best-effort: makes the rename itself durable. A failure here means the
         // content is on the device but the directory entry may not be, which is the
         // pre-existing behaviour and not worth failing an otherwise-complete replace.
+        // On Windows opening a directory as a file fails, so this is skipped there
+        // (its filesystem journals the rename anyway); a read-only handle is all a
+        // directory fsync takes on Unix (#576 RVF-d-1).
         if let Some(parent) = dest.parent() {
             if let Ok(dir) = std::fs::File::open(parent) {
                 let _ = dir.sync_all();
