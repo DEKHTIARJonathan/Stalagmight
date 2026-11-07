@@ -1065,7 +1065,12 @@ locations:
   Q10, `lib/stepLabels.ts`): the words of the label templates, the
   generators' tables and the test ids the fuzzers drive. Any other label - a
   forged trace's, or one that would quote the app's text - prints as its
-  length, `a string of <n> character(s)`.
+  length, `a string of <n> character(s)`. The other fields `readTrace` checks
+  only as text print shaped too (#576 W58 NF2): a test id as a test id prints
+  (`shareableTestId`), a path folded, a file dialog's trigger, an export format
+  or an oracle name only when it is one the harness defines
+  (`lib/traceStepFields.ts`), and a corpus id only in its 5-hex form; any
+  other value prints as its length.
 - A scenario's progress lines (`   . <line>`) print in the headline form
   (`shareableProgressLine`): folded, and the app's text after a `<what>
   failed:` prefix replaced by its length. A scenario reports the app's text in

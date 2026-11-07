@@ -108,11 +108,13 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 import { shortId } from './crc32';
 import { fixtureTag, isTrackedFixture, noteFixtureName, shareableFixtureName } from './privateFixtures';
 import { knobValueShaped } from './traceKnobs';
 import { foldLocalPaths, shareableFailureText, valueShape } from './shareableFailure';
 import { shareableStepLabel } from './stepLabels';
+import { TRACE_EXPORT_FORMATS, TRACE_ORACLE_NAMES, TRACE_TRIGGERS, shareableTraceWord } from './traceStepFields';
 
 /** Current trace schema. Bumped when a step shape changes incompatibly. */
 export const TRACE_VERSION = 4;
@@ -1247,7 +1249,11 @@ export function tracePrivateFixtures(trace: { fixture: unknown; steps: readonly 
  * A label prints through `shareableStepLabel` (#576 W58 Q10): `readTrace` checks
  * it only as text, so one with a word no harness or app source wrote prints as
  * its length. A reload's fixture prints by name only when the repo tracks it,
- * else as its tag (`shareableFixtureName`, #576 W58 NF1).
+ * else as its tag (`shareableFixtureName`, #576 W58 NF1). The other fields it
+ * checks only as text print shaped too (#576 W58 NF2): a test id through
+ * `shareableTestId`, a path folded, a trigger, an export format or an oracle
+ * name only when it is one the harness defines (`traceStepFields.ts`), and a
+ * corpus id only in its 5-hex form; any other value as its length.
  */
 function describeStep(step: TraceStep): string {
   const label = 'label' in step ? shareableStepLabel(step.label) : '';
@@ -1258,34 +1264,37 @@ function describeStep(step: TraceStep): string {
     case 'redoTo':
       return `${step.kind}(${step.steps} step(s))`;
     case 'ui':
-      return `${step.double === true ? 'dblclick' : 'click'} ${step.testid} - ${label}`;
+      return `${step.double === true ? 'dblclick' : 'click'} ${shareableTestId(step.testid)} - ${label}`;
     case 'input':
-      return `${step.mode} ${step.testid} - ${label}`;
+      return `${step.mode} ${shareableTestId(step.testid)} - ${label}`;
     case 'fileDialog': {
       const answer =
-        step.rel === null ? 'cancel' : Array.isArray(step.rel) ? `${step.rel.length} file(s)` : step.rel;
-      return `${step.dialog}-dialog via ${step.trigger} -> ${answer} - ${label}`;
+        step.rel === null ? 'cancel' : Array.isArray(step.rel) ? `${step.rel.length} file(s)` : foldLocalPaths(step.rel);
+      return `${step.dialog}-dialog via ${shareableTraceWord(step.trigger, TRACE_TRIGGERS)} -> ${answer} - ${label}`;
     }
     case 'episode':
       return `episode ${step.index}${step.headless ? ' (no project)' : ''}`;
     case 'flow':
       return `flow ${step.index}`;
     case 'genFile':
-      return `genFile ${step.rel} - ${label}`;
-    case 'corpusFile':
+      return `genFile ${foldLocalPaths(step.rel)} - ${label}`;
+    case 'corpusFile': {
       // Printed, not folded: since v3 the step already holds the id, and folding
       // it again would print a tag that matched no metric key in the run beside
       // it. `asCorpusId` is what guarantees that, on both the record and the
-      // read path.
-      return `corpusFile #${step.corpusId} -> ${step.rel} - ${label}`;
+      // read path; a step built another way prints an id of another shape as
+      // its length.
+      const id = CORPUS_ID.test(step.corpusId) ? `#${step.corpusId}` : valueShape(step.corpusId);
+      return `corpusFile ${id} -> ${foldLocalPaths(step.rel)} - ${label}`;
+    }
     case 'route':
-      return `route ${step.rel} - ${label}`;
+      return `route ${foldLocalPaths(step.rel)} - ${label}`;
     case 'mapClick':
       return `mapClick ${step.lngLat[0]},${step.lngLat[1]} - ${label}`;
     case 'export':
-      return `export ${step.format} -> ${step.rel} - ${label}`;
+      return `export ${shareableTraceWord(step.format, TRACE_EXPORT_FORMATS)} -> ${foldLocalPaths(step.rel)} - ${label}`;
     case 'oracle':
-      return `oracle ${step.oracle} - ${label}`;
+      return `oracle ${shareableTraceWord(step.oracle, TRACE_ORACLE_NAMES)} - ${label}`;
     case 'reload':
       return `reload ${shareableFixtureName(step.fixture)}`;
     default:

@@ -118,6 +118,25 @@ export const GROUP: SiteGroup = {
       'requireSessionRelative: field': "a literal field name at every call ('rel', 'args[0]'), or `rel[<index>]` (fuzzTrace.ts:987)",
       'requireCorpusId: field': "the literal field name 'corpusId' at its one call (fuzzTrace.ts:1019)",
       'requireCorpusHash: field': "the literal field name 'corpusHash' at its one call (fuzzTrace.ts:1020)",
+      // describeStep, a builder: fuzz-shrink prints it for the steps of a trace readTrace read, so validateStep checked
+      // each field below; the fields it checks only as text print through a shaping helper (#576 W58 NF2).
+      'describeStep: shareableStepLabel(step.label)':
+        "a step's label: itself only when every word in it is one the harness's or the app's sources wrote, else valueShape (lib/stepLabels.ts, #576 W58 Q10)",
+      'describeStep: step.kind': "a step kind: validateStep refuses any kind STEP_KINDS does not list (fuzzTrace.ts validateStep)",
+      'describeStep: step.steps': 'how many steps an undoTo or redoTo jumps: validateStep refuses anything but a positive safe integer',
+      'describeStep: step.mode': "an input step's mode: validateStep refuses any but INPUT_MODES' 'type', 'select' and 'check'",
+      'describeStep: step.dialog': "a file dialog step's dialog: validateStep refuses any but 'open' and 'save'",
+      'describeStep: step.index': "an episode's or a flow's index: validateStep refuses anything but a non-negative integer",
+      'describeStep: step.lngLat[0]': "a map click's longitude: validateStep refuses lngLat unless it is two finite numbers",
+      'describeStep: step.lngLat[1]': "a map click's latitude: validateStep refuses lngLat unless it is two finite numbers",
+      'describeStep: step.rel': R.FOLDED,
+      'describeStep: step.corpusId': "a corpus id, printed only where CORPUS_ID (/^[0-9a-f]{5}$/) matches it on the same line, else valueShape",
+      'describeStep: shareableTraceWord(step.trigger, TRACE_TRIGGERS)':
+        "a file dialog's trigger: itself only when TRACE_TRIGGERS lists it (the import-dialog fuzzer's, lib/traceStepFields.ts), else valueShape",
+      'describeStep: shareableTraceWord(step.format, TRACE_EXPORT_FORMATS)':
+        'an export format: itself only when TRACE_EXPORT_FORMATS lists it (every ExportFormat, lib/traceStepFields.ts), else valueShape',
+      'describeStep: shareableTraceWord(step.oracle, TRACE_ORACLE_NAMES)':
+        "an oracle name: itself only when TRACE_ORACLE_NAMES lists it (export-roundtrip-fuzz's ORACLE_NAMES, lib/traceStepFields.ts), else valueShape",
     },
     'e2e/agent/lib/importFlowOracles.ts': {
       'fail: headline': R.FORWARD,
@@ -299,7 +318,10 @@ export const GROUP: SiteGroup = {
     // `progressLogger`'s print: the runner's stdout.
     'e2e/agent/lib/shareableFailure.ts': { print: 'stream' },
   },
-  builders: {},
+  builders: {
+    // fuzz-shrink's minimal action list, one line per step (#576 W58 NF2): every field it prints is checked.
+    'e2e/agent/lib/fuzzTrace.ts': ['describeStep'],
+  },
   fileHelpers: {
     'e2e/agent/lib/fuzzMatrixArgs.ts': {
       typed: 'a value the user typed: quoted when shareableFailure.cliShaped (a flag or a number), else its length (fuzzMatrixArgs.ts typed, #576 W58 Q4)',
