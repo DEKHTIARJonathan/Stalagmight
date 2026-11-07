@@ -341,6 +341,27 @@ jobs:
             cargo package --list --manifest-path src-tauri/Cargo.toml -p "$c" | grep -qx LICENSE \
               || { echo "::error::$c does not package a LICENSE"; exit 1; }
           done
+      # [#619] The crates packaged above are built on crates.io without the
+      # repo-root .cargo/config.toml, so their bundled SQLite has FTS3/4/5,
+      # R-tree, DBSTAT and extension loading compiled in. There, the SQLite
+      # authorizer stalagmight-persistence installs on every untrusted
+      # connection is what keeps a hostile .stalx away from them, so run its
+      # test on such a build: --config empties LIBSQLITE3_FLAGS (a command-line
+      # value wins over the file's `force = true`), and
+      # STALAGMIGHT_EXPECT_UNSTRIPPED_SQLITE makes the test fail unless the
+      # modules really are there. Its own target dir, so this SQLite does not
+      # replace the one the steps above built; and only this one test, which
+      # also bounds the compile: the flag-pinning test in
+      # persistence::sqlite::tests must fail on this build.
+      - name: SQLite authorizer on a build without the repo's flags (#619)
+        if: ${{ !cancelled() }}
+        run: >-
+          cargo --config 'env.LIBSQLITE3_FLAGS.value=""' --config 'env.LIBSQLITE3_FLAGS.force=true'
+          test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence --lib --
+          --exact persistence::sqlite::untrusted_sql_tests::every_untrusted_open_refuses_what_the_build_flags_strip
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/target-unstripped-sqlite
+          STALAGMIGHT_EXPECT_UNSTRIPPED_SQLITE: "1"
       # sccache health on the self-hosted path (the cache that replaces rust-cache
       # on the ephemeral runner). Skipped on hosted. !cancelled() (not always()):
       # still report on cargo FAILURE, but skip on a superseded/cancelled run.
