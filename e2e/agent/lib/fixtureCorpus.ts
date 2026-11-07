@@ -798,8 +798,21 @@ function redactionFor(text: string, say: string): Redaction {
   const anchor = runs.reduce((longest, run) => (run.length > longest.length ? run : longest), '');
   const chars = Array.from(text);
   const at = (i: number): CharAt => (i === 0 ? 'first' : chars[i - 1] === '\\' ? 'afterBackslash' : 'inside');
-  return { text, say, anchor, pattern: new RegExp(chars.map((c, i) => charPattern(c, at(i))).join(''), 'g') };
+  return { text, say, anchor, pattern: new RegExp(chars.map((c, i) => charPattern(c, at(i))).join('')) };
 }
+
+/**
+ * Every tag the fold writes (`Redaction.say`), and the longest one's length.
+ * The fold leaves each of these as it finds it (#576 W33-NF4): a line is folded
+ * more than once on its way out (a tool result folded, cut, and folded again
+ * into the action log), and a corpus name that occurs inside a tag - `corpus`,
+ * `file`, the id - turned `<corpus #id>/file` into `<<corpus #id>/file #id>/...`
+ * on the second fold, and on the first when an earlier name's tag held it.
+ */
+const FOLD_TAGS = new Set<string>();
+let longestFoldTag = 0;
+const TAG_OPEN = '<corpus #';
+const TAG_FILE = '/file';
 
 /**
  * Register one materialized entry: its copy directory, and every file and
@@ -808,7 +821,7 @@ function redactionFor(text: string, say: string): Redaction {
  * same tag.
  */
 export function registerCorpusRedactions(id: string, destination: string, names: readonly string[]): void {
-  const tag = `<corpus #${id}>`;
+  const tag = `${TAG_OPEN}${id}>`;
   // Each in both Unicode normal forms too (#576 RV18-W23-5): a macOS file name
   // comes decomposed (`e` then U+0301), and a layer that normalizes it on the
   // way writes it composed (U+00E9) - or the other way round.
@@ -816,11 +829,13 @@ export function registerCorpusRedactions(id: string, destination: string, names:
     for (const form of new Set([text, text.normalize('NFC'), text.normalize('NFD')])) {
       if (!list.some((entry) => entry.text === form)) list.push(redactionFor(form, say));
     }
+    FOLD_TAGS.add(say);
+    longestFoldTag = Math.max(longestFoldTag, say.length);
   };
   if (destination !== '') add(REDACTED_DIRS, destination, tag);
   for (const name of names) {
     if (name.length < MIN_REDACTED_NAME) continue;
-    add(REDACTED_NAMES, name, `${tag}/file`);
+    add(REDACTED_NAMES, name, `${tag}${TAG_FILE}`);
   }
   // Longest first, so a name that is a prefix of another cannot leave the
   // other's tail behind (`cave` before `cave-north.srv` would print `-north.srv`,
@@ -830,19 +845,80 @@ export function registerCorpusRedactions(id: string, destination: string, names:
 }
 
 /**
+ * `text` cut at every tag the fold writes (`FOLD_TAGS`), as `[raw, tag, raw,
+ * ..., raw]` - raw text at every even index. A tag reads from `<corpus #` to the
+ * first `>`, and on through `/file` when that is a tag too; any other text that
+ * starts `<corpus #` is raw, so a name in it still folds. Linear in `text`: no
+ * stretch is searched for `>` twice, and a candidate longer than every tag is
+ * not looked up.
+ */
+function splitAtTags(text: string): string[] {
+  const parts: string[] = [];
+  let from = 0;
+  let close = -1;
+  for (let at = text.indexOf(TAG_OPEN); at !== -1; ) {
+    if (close < at) close = text.indexOf('>', at + TAG_OPEN.length);
+    if (close === -1) break;
+    let tag: string | null = null;
+    if (close + 1 - at <= longestFoldTag) {
+      const head = text.slice(at, close + 1);
+      if (text.startsWith(TAG_FILE, close + 1) && FOLD_TAGS.has(head + TAG_FILE)) tag = head + TAG_FILE;
+      else if (FOLD_TAGS.has(head)) tag = head;
+    }
+    if (tag === null) {
+      at = text.indexOf(TAG_OPEN, at + 1);
+      continue;
+    }
+    parts.push(text.slice(from, at), tag);
+    from = at + tag.length;
+    at = text.indexOf(TAG_OPEN, from);
+  }
+  parts.push(text.slice(from));
+  return parts;
+}
+
+/**
+ * `run` (raw text) with every match of `entry` replaced by its tag, pushed onto
+ * `parts` as `raw, tag, raw, ..., raw`. Each search runs on what follows the
+ * last match as a string of its own, so a match is an edge exactly as the tag
+ * that replaces it is to the next fold (#576 W33-NF4). Searched in place, a
+ * name that ends in a backslash and was written twice in a row folded once:
+ * its backslash read as an escape of the second one's opening quote
+ * (`(?<!\\)` in `charPattern`), so the second one printed - until a second
+ * fold, which saw a tag there instead, folded it.
+ */
+function foldRun(run: string, entry: Redaction, parts: string[]): void {
+  let rest = run;
+  for (let match = entry.pattern.exec(rest); match !== null; match = entry.pattern.exec(rest)) {
+    parts.push(rest.slice(0, match.index), entry.say);
+    rest = rest.slice(match.index + match[0].length);
+  }
+  parts.push(rest);
+}
+
+/**
  * `text` with every registered copy directory and corpus name replaced by the
  * entry's publishable tag. Directories go first, so a full path is folded whole
  * rather than leaving `<corpus #id>/<basename>` behind.
+ *
+ * A tag is never folded again, whether this call wrote it or `text` already
+ * held it (#576 W33-NF4): each name is looked for only in the raw text between
+ * tags, so folding a folded line changes nothing.
  */
 export function redactCorpusText(text: string): string {
-  let out = text;
+  let parts = splitAtTags(text);
   for (const list of [REDACTED_DIRS, REDACTED_NAMES]) {
     for (const entry of list) {
-      if (entry.anchor !== '' && !out.includes(entry.anchor)) continue;
-      out = out.replace(entry.pattern, () => entry.say);
+      if (entry.anchor !== '' && !parts.some((part, i) => i % 2 === 0 && part.includes(entry.anchor))) continue;
+      const next: string[] = [];
+      for (let i = 0; i < parts.length; i++) {
+        if (i % 2 === 0) foldRun(parts[i]!, entry, next);
+        else next.push(parts[i]!);
+      }
+      parts = next;
     }
   }
-  return out;
+  return parts.join('');
 }
 
 /**
