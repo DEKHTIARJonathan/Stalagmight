@@ -1050,7 +1050,9 @@ session's `actions.jsonl` (each `finding` event with its detail, each
 `scenario-progress` event with the whole progress line), the screenshots
 (`screenshots/`, `findings/<n>/screenshot.png`), the crash-marker copies in
 `findings/<n>/`, the `state/` snapshots, `tauri-driver.log`, and the app's own
-log files.
+log files. `report.md`'s Evidence list still names `actions.jsonl` and
+`tauri-driver.log` for whoever triages the run, labelled local triage only, not
+for sharing (#576 RV18-W23-7).
 
 **`corpusId` labels; `corpusHash` resolves.** The 5-hex crc20 is 20 bits, which
 is ample for telling two files apart in one run's output and far too little to

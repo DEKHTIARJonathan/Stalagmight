@@ -336,6 +336,20 @@ describe('generate-repro-report.mjs', () => {
     expect(md).toContain('[OS-level]');
   });
 
+  // docs/agent-harness.md marks actions.jsonl and tauri-driver.log "not for
+  // sharing": they hold the full text the report withholds. The Evidence list
+  // still points at them for whoever triages the run, and says so (#576 RV18-W23-7).
+  it('labels the action log and the driver log as local triage only, not for sharing', () => {
+    execFileSync(process.execPath, [reportGen, sessionDir], { encoding: 'utf8' });
+    const evidence = fs
+      .readFileSync(path.join(sessionDir, 'report.md'), 'utf8')
+      .split('## Evidence')[1]
+      .split('## Notes')[0];
+
+    expect(evidence).toContain('- Action log: `actions.jsonl` (local triage only, not for sharing:');
+    expect(evidence).toContain('- Driver log: `tauri-driver.log` (local triage only, not for sharing)');
+  });
+
   // The bug this replaced: the step list came from a hand-maintained name list
   // that nobody updated as tools were added, so a repro whose decisive step was
   // a drag or a native-dialog answer rendered WITHOUT that step. The recorder

@@ -257,12 +257,15 @@ if (allFindings.length) {
 P('');
 P('## Evidence');
 P('');
-P('- Action log: `actions.jsonl`');
+// The two logs hold the full text this report withholds (docs/agent-harness.md
+// "Not for sharing"); the withheld findings above point at actions.jsonl, so
+// they stay listed for whoever triages the run, labelled (#576 RV18-W23-7).
+P('- Action log: `actions.jsonl` (local triage only, not for sharing: it holds the full text this report withholds)');
 P('- Screenshots: `screenshots/`');
 if (capturedFindings.length) {
   P('- Findings: `findings/` (each `finding.json` is shareable; the screenshot and crash-marker copies beside it are not)');
 }
-P('- Driver log: `tauri-driver.log`');
+P('- Driver log: `tauri-driver.log` (local triage only, not for sharing)');
 P('');
 P('## Notes');
 P('');
