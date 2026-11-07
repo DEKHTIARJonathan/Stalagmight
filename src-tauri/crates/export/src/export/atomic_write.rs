@@ -11,10 +11,6 @@ use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
 use std::io::BufWriter;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
-
-/// Distinguishes concurrent exports in the same process.
-static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Write `path` through a temp file in the same directory, renamed over `path`
 /// only once `write` has filled it and it is synced to disk.
@@ -78,10 +74,11 @@ fn temp_path_for(path: &Path) -> Result<PathBuf> {
         .with_context(|| format!("Export path has no file name: {}", path.display()))?;
     let mut temp_name = OsString::from(".");
     temp_name.push(name);
+    // A random nonce, so neither concurrent exports nor another user with
+    // write access to the folder can predict (and pre-create) the name.
     temp_name.push(format!(
-        ".{}-{}.stalagmight-export.tmp",
-        std::process::id(),
-        TEMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ".{}.stalagmight-export.tmp",
+        uuid::Uuid::new_v4().simple()
     ));
     Ok(path.with_file_name(temp_name))
 }
