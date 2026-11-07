@@ -132,10 +132,26 @@ fn sanitized_download_path(dest: &Path) -> std::path::PathBuf {
 /// became the new cache. Removing the file alone left the journal behind.
 fn remove_staged_with_sidecars(staged: &Path) {
     let _ = std::fs::remove_file(staged);
+    remove_sidecars(staged);
+}
+
+/// Remove the SQLite sidecars (`-journal`, `-wal`, `-shm`) beside `path`. One
+/// that is not there is the common case; any other failure is logged, as the
+/// sidecar then stays beside the file.
+fn remove_sidecars(path: &Path) {
     for suffix in ["-journal", "-wal", "-shm"] {
-        let mut sidecar = staged.as_os_str().to_os_string();
+        let mut sidecar = path.as_os_str().to_os_string();
         sidecar.push(suffix);
-        let _ = std::fs::remove_file(std::path::PathBuf::from(sidecar));
+        let sidecar = std::path::PathBuf::from(sidecar);
+        match std::fs::remove_file(&sidecar) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => tracing::warn!(
+                path = %sidecar.display(),
+                error = %e,
+                purpose = "remove a stale SQLite sidecar",
+                "speleodb: could not remove a sidecar beside the cache file"
+            ),
+            _ => {}
+        }
     }
 }
 
@@ -469,6 +485,14 @@ impl AppState {
                         dest.display()
                     )));
                 }
+                // [#576 W52-2] Sidecars beside `dest` are the OLD cache's - a crash
+                // while it was open leaves a hot `-journal` (or a `-wal`/`-shm`) -
+                // and the rename keeps them beside the new file, whose next
+                // read-write open would play the old file's pages back into it.
+                // Removed only now: before the rename they still belong to the file
+                // the failure paths above re-open, and a hot journal is what rolls
+                // that file back to a consistent state.
+                remove_sidecars(dest);
                 Ok(preserved_view)
             }
             Err(e) => {
@@ -904,5 +928,89 @@ mod tests {
             "the cache is the download, not the stale journal's file"
         );
         assert!(!staged_journal.exists(), "the stale journal is gone");
+    }
+
+    /// `path` with an SQLite sidecar suffix (`-journal`, `-wal`, `-shm`).
+    fn sidecar_of(path: &Path, suffix: &str) -> std::path::PathBuf {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(suffix);
+        std::path::PathBuf::from(name)
+    }
+
+    /// [#576 W52-2] The sidecars a crash left beside the CACHE file are removed
+    /// with the file the replace renames over. They belong to the old cache:
+    /// the replace renamed the download over it and left them, so the next
+    /// read-write open played the stale `-journal` back into the new cache (the
+    /// same playback RV19a-3 closed for the staged download), and a stale
+    /// `-wal`/`-shm` waited beside it for the first open in WAL mode. The
+    /// guarded replace refuses a cache whose link it cannot read past such a
+    /// journal (as un-pushed edits), so the replace that installs the download
+    /// is the user's "take remote and discard local" (`Discard`).
+    #[test]
+    fn the_old_caches_sidecars_never_reach_the_new_cache() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let dest = temp.path().join("project.stalx");
+        seed_linked_stalx(&dest, false);
+
+        // A hot journal of a different `.stalx`, caught mid-write after a cache
+        // spill (header synced), as a crash leaves it, beside the cache file.
+        let old = temp.path().join("old.stalx");
+        {
+            let mut db = Database::open(&old).expect("open old");
+            db.save_project(&Project::new("Old Copy".to_owned(), None))
+                .expect("save old");
+        }
+        let conn = rusqlite::Connection::open(&old).expect("raw open old");
+        conn.execute_batch(
+            "PRAGMA journal_mode = DELETE; CREATE TABLE junk(x);
+             PRAGMA cache_size = 1; BEGIN;
+             INSERT INTO junk SELECT hex(randomblob(2000)) FROM
+               (WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200)
+                SELECT i FROM n);",
+        )
+        .expect("write mid-transaction");
+        std::fs::copy(sidecar_of(&old, "-journal"), sidecar_of(&dest, "-journal"))
+            .expect("plant the stale journal");
+        conn.execute_batch("ROLLBACK").expect("rollback");
+        drop(conn);
+        for suffix in ["-wal", "-shm"] {
+            std::fs::write(sidecar_of(&dest, suffix), b"stale").expect("plant a stale sidecar");
+        }
+
+        let state = AppState::new().expect("state");
+        let zip = server_dump();
+        let replaced = state.replace_cache_stalx_with(
+            &TestReplace,
+            &mut Dump::open(&zip).expect("open dump"),
+            ENTRY,
+            &dest,
+            ID,
+            LocalEditsPolicy::Discard,
+            InheritedUndo::Drop,
+        );
+        let left: Vec<&str> = ["-journal", "-wal", "-shm"]
+            .into_iter()
+            .filter(|suffix| sidecar_of(&dest, suffix).exists())
+            .collect();
+        let name = Database::open_existing(&dest)
+            .and_then(|db| db.load_project())
+            .map(|project| project.name);
+        println!(
+            "stale sidecars beside the cache: replace -> {:?}; sidecars left beside it: {left:?}; \
+             the cache then holds {:?}",
+            replaced.as_ref().map_err(ToString::to_string),
+            name.as_ref().map_err(|e| format!("{e:#}")),
+        );
+
+        replaced.expect("the download replaces the cache");
+        assert!(
+            left.is_empty(),
+            "no stale sidecar is left beside the cache: {left:?}"
+        );
+        assert_eq!(
+            name.expect("the cache opens"),
+            "Server Copy",
+            "the cache is the download, not the stale journal's file"
+        );
     }
 }
