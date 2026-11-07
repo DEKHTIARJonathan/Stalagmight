@@ -202,6 +202,110 @@ fn a_legacy_is_virtual_column_still_opens() {
     Database::open_existing(&path).unwrap();
 }
 
+// === Salvage reads a type cell that lost its case (#576 RV19a-12) ===
+
+/// The schema refusal behind a salvage's error, if that is why it failed.
+fn salvage_refused(path: &Path) -> (Result<SalvagedData>, Option<&'static str>) {
+    let salvaged = Database::export_salvageable(path);
+    let refused = salvaged.as_ref().err().and_then(|err| {
+        err.chain()
+            .find_map(|c| c.downcast_ref::<RefusedSchemaObject>())
+            .map(|refused| refused.what)
+    });
+    (salvaged, refused)
+}
+
+/// [#576 RV19a-12] Salvage is for damaged files, so one flipped bit in a type
+/// cell - 'table' -> 'Table', which SQLite still reads and `quick_check`
+/// passes - must not refuse it. The schema guard RV18-1 put on the salvage
+/// compared the type exactly, so the in-app recovery route was gone for that
+/// damage. Every other open keeps the exact spelling.
+#[test]
+fn salvage_reads_a_file_whose_table_type_lost_its_case() {
+    let dir = TempDir::new().unwrap();
+    let path = project_file_with(
+        &dir,
+        "PRAGMA writable_schema = ON;
+         UPDATE sqlite_master SET type = 'Table' WHERE name = 'project';",
+    );
+    let (salvaged, refused) = salvage_refused(&path);
+    let opened = refused_what(Database::open_existing(&path));
+    println!(
+        "type cell 'Table' on the project table: salvage -> {:?} (refused as {refused:?}); \
+         open_existing refused as {opened:?}",
+        salvaged
+            .as_ref()
+            .map(|s| (
+                s.project_name.clone(),
+                s.full_project_json
+                    .as_ref()
+                    .map(|json| json.contains("\"Crafted\"")),
+                s.errors.clone()
+            ))
+            .map_err(|e| format!("{e:#}"))
+    );
+
+    let salvaged = salvaged.unwrap();
+    assert_eq!(
+        salvaged
+            .full_project_json
+            .as_ref()
+            .map(|json| json.contains("\"Crafted\"")),
+        Some(true),
+        "the salvage reads the damaged file's project"
+    );
+    assert_eq!(
+        opened,
+        Some("a schema object of an unexpected type"),
+        "every other open still refuses it"
+    );
+}
+
+/// [#576 RV19a-12] The salvage's leniency is about spelling only: a table or
+/// index typed in another case is checked as one, so it cannot hide what the
+/// guard refuses, and a view or trigger is refused in any case.
+#[test]
+fn salvage_still_refuses_a_hostile_object_whatever_case_its_type_is_in() {
+    for (sql, what) in [
+        (
+            "CREATE TABLE g (a, b AS (zeroblob(10)));
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = 'Table' WHERE name = 'g';",
+            "a table with a generated column",
+        ),
+        (
+            "CREATE TABLE d (x TEXT DEFAULT (hex(zeroblob(10))));
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = 'TABLE' WHERE name = 'd';",
+            "a table with an expression default",
+        ),
+        (
+            "CREATE INDEX e ON shots (length(hex(zeroblob(10))) + length);
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = 'Index' WHERE name = 'e';",
+            "an expression or partial index",
+        ),
+        (
+            "CREATE VIEW w AS SELECT 1;
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = 'View' WHERE name = 'w';",
+            "a view",
+        ),
+        (
+            "CREATE TRIGGER t AFTER UPDATE ON project BEGIN SELECT 1; END;
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = 'TRIGGER' WHERE name = 't';",
+            "a trigger",
+        ),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let path = project_file_with(&dir, sql);
+        let (_, refused) = salvage_refused(&path);
+        println!("salvage of {what} behind a case-variant type: refused as {refused:?}");
+        assert_eq!(refused, Some(what), "{sql}");
+    }
+}
+
 // === The second open of an open sequence keeps its own guard (#576 RV18-2) ===
 
 /// Stamps a saved project as an older format, so `open_existing_to_read` reads

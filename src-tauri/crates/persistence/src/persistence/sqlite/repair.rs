@@ -594,7 +594,8 @@ impl Database {
     /// [#576 RV18-1] The schema guard (#608) is not skipped: it reads only the
     /// schema, which SQLite has to parse before it can read any table of a
     /// damaged file anyway, and the salvage that follows must not run SQL the
-    /// file chose.
+    /// file chose. It is the salvage's lenient form (#576 RV19a-12): a type
+    /// cell that lost its case ('Table') is checked, not refused.
     pub fn open_for_recovery(path: &Path) -> Result<Self> {
         tracing::info!("Opening database for recovery at: {:?}", path);
 
@@ -605,7 +606,7 @@ impl Database {
         // Read-only, leaving nothing beside a WAL-mode file (#576 W35-NF-1).
         let conn = super::open::connect_for_reading(path)
             .context("Failed to open database for recovery")?;
-        super::check_schema(&conn)?;
+        super::schema_guard::check_schema_for_salvage(&conn)?;
 
         let db = Self { conn };
         // Skip integrity check intentionally - we know the file may be corrupt
