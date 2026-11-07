@@ -434,9 +434,17 @@ download carrying the new public key.
 | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | Only if the key above has a password | Passed through empty otherwise |
 | `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID` | Real Developer ID signing + notarization of the macOS leg | Absent (or `APPLE_SIGNING_IDENTITY` empty) leaves the macOS leg exactly as it was before #579: ad-hoc signed via the checked-in `signingIdentity: "-"`, not notarized |
 
-The six `APPLE_*` secrets do not exist yet - they land once a paid Apple
-Developer account is provisioned ([#226](https://github.com/Stalagmight/Stalagmight/issues/226)).
-Until then the macOS leg's graceful-degradation conditional keeps today's
+**These are `release` environment secrets, not repository secrets.** Any
+workflow pushed on any branch can read a repository secret, and these sign
+builds under the maintainer's identity. The `build` job declares
+`environment: release`, and the environment has a required reviewer with
+admin bypass off, so every run that reaches `build` (a tag push or a
+dispatch rehearsal) waits for that reviewer's approval in the Actions UI
+before any signing secret is exposed. Set them with
+`gh secret set <NAME> --env release`, never at repo level.
+`TELEMETRY_ENDPOINT` is not signing material and stays a repository secret.
+
+If the `APPLE_*` secrets are absent the macOS leg's graceful-degradation conditional keeps today's
 ad-hoc-signing behavior byte-identical: the `build` job only appends a
 `signingIdentity` override to the Tauri build config when
 `APPLE_SIGNING_IDENTITY` is non-empty, and `scripts/verify-macos-signature.sh`

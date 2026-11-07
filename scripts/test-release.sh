@@ -682,6 +682,21 @@ assert "footer says macOS is ad-hoc signed" \
 assert "footer gives the version-independent quarantine command" \
   bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "xattr -dr com.apple.quarantine"' _ "$FIXTURE" "$NOTES"
 
+# A Developer ID signed + notarized macOS build (release.yml passes the build's
+# MACOS-SIGNED marker as MACOS_SIGNING) gets the plain install text: no
+# quarantine-stripping advice, which would be needless for a notarized app.
+assert "a notarized macOS build says so" \
+  bash -c 'MACOS_SIGNING=developer-id CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "notarized by Apple"' _ "$FIXTURE" "$NOTES"
+refute "a notarized macOS build drops the quarantine command" \
+  bash -c 'MACOS_SIGNING=developer-id CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "xattr -dr com.apple.quarantine"' _ "$FIXTURE" "$NOTES"
+refute "a notarized macOS build drops the ad-hoc claim" \
+  bash -c 'MACOS_SIGNING=developer-id CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "ad-hoc signed"' _ "$FIXTURE" "$NOTES"
+assert "a notarized macOS build keeps the Windows steps and checksums" \
+  bash -c 'MACOS_SIGNING=developer-id CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "Run anyway" && MACOS_SIGNING=developer-id CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "SHA256SUMS"' _ "$FIXTURE" "$NOTES"
+# The ad-hoc marker, as the release job also exports it, is the old text.
+assert "an ad-hoc marker keeps the quarantine command" \
+  bash -c 'MACOS_SIGNING=adhoc CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "xattr -dr com.apple.quarantine"' _ "$FIXTURE" "$NOTES"
+
 # --- Entries left under [Unreleased] after the section exists ---
 # Between rc1 and rc2, four fixes sat under [Unreleased] while the tag read
 # `## [0.5.0]`, so they shipped in the binary and appeared nowhere in the notes.
