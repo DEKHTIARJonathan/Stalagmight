@@ -65,8 +65,8 @@ pub(crate) fn strip_bom_owned(mut bytes: Vec<u8>) -> Result<Vec<u8>> {
 pub(crate) enum FileFamily {
     /// Ariane `.tmlu` and GPX: XML, the largest real files on record (a 57 MB
     /// Ariane `Data.xml`; multi-day GPS logs reach hundreds of MB). The
-    /// zipped `.tml`'s `Data.xml` has the same ceiling on what it decompresses
-    /// to (`tml::decode`).
+    /// zipped `.tml` archive is capped at it too, and so is what its `Data.xml`
+    /// decompresses to (`tml::decode`).
     Xml,
     /// Compass `.DAT` and `.MAK` (and every `.DAT` a `.MAK` links), Walls
     /// `.SRV` and `.WPJ`: survey text, typically a few MB, which decodes to up
@@ -91,7 +91,7 @@ impl FileFamily {
     /// The family as the refusal names it.
     fn description(self) -> &'static str {
         match self {
-            Self::Xml => "XML survey files (.tmlu, .gpx)",
+            Self::Xml => "XML survey files (.tml, .tmlu, .gpx)",
             Self::SurveyText => "survey text files (.DAT, .MAK, .SRV, .WPJ)",
             Self::Dmp => "mNemo .dmp files",
         }
@@ -114,7 +114,7 @@ impl FileFamily {
 }
 
 /// The refusal for a file over `limit`, in the words every capped reader uses.
-fn too_large(path: &Path, family: FileFamily, limit: u64) -> anyhow::Error {
+pub(crate) fn too_large(path: &Path, family: FileFamily, limit: u64) -> anyhow::Error {
     anyhow!(
         "'{}' is larger than the {} limit for {}; it was not read.",
         path.display(),
