@@ -693,9 +693,24 @@ const REDACTED_DIRS: Redaction[] = [];
 const REDACTED_NAMES: Redaction[] = [];
 /**
  * A path segment this short identifies nothing, and replacing it everywhere
- * would garble every line it occurs in (a Walls `.PATH` folder named `1`).
+ * would garble every line it occurs in (a Walls `.PATH` folder named `1`, a
+ * Compass folder `A2`). Counted in characters (code points of the composed
+ * form), so one letter macOS writes decomposed is one.
  */
 export const MIN_REDACTED_NAME = 3;
+/**
+ * The minimum for a name with a character outside ASCII (#576 RV19b-P4). The
+ * garbling reason is ASCII's: the harness writes ASCII, so a name in another
+ * script occurs only where the app's text quotes it - and two CJK characters
+ * are a whole cave name.
+ */
+const MIN_REDACTED_NON_ASCII_NAME = 2;
+
+/** Is `name` long enough to fold (`MIN_REDACTED_NAME`, `MIN_REDACTED_NON_ASCII_NAME`)? */
+function foldsName(name: string): boolean {
+  const chars = Array.from(name.normalize('NFC')).length;
+  return chars >= MIN_REDACTED_NAME || (chars >= MIN_REDACTED_NON_ASCII_NAME && /[^\x00-\x7f]/.test(name));
+}
 
 /** One registered name (or copy directory), and what it folds to. */
 interface Redaction {
@@ -834,7 +849,7 @@ export function registerCorpusRedactions(id: string, destination: string, names:
   };
   if (destination !== '') add(REDACTED_DIRS, destination, tag);
   for (const name of names) {
-    if (name.length < MIN_REDACTED_NAME) continue;
+    if (!foldsName(name)) continue;
     add(REDACTED_NAMES, name, `${tag}${TAG_FILE}`);
   }
   // Longest first, so a name that is a prefix of another cannot leave the
