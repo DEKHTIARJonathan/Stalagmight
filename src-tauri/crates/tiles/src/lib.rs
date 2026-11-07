@@ -1210,9 +1210,17 @@ fn refetch_left_it_unknown(result: &Result<TileFetchResponse, TileFetchError>) -
 /// while a header claiming more is refused before anything is allocated.
 const TILE_DECODE_MAX_SIDE: u32 = 4096;
 
-/// Most bytes decoding one tile may allocate (#576 W30-7b): the 8-bit RGBA
+/// Most bytes a tile's decoded image may take (#576 W30-7b): the 8-bit RGBA
 /// buffer of a tile at the side cap (4096 * 4096 * 4 bytes = 64 MiB). A 512 px
 /// RGBA tile needs 1 MiB; the image crate's own default would allow 512 MiB.
+///
+/// It bounds the output buffer, which `ImageReader::decode` reserves against
+/// it, and a PNG decoder's working memory (the image crate hands it to `png`
+/// as its byte limit). It does NOT bound a JPEG decoder's working memory: the
+/// image crate passes zune-jpeg only the side cap, so buffers such as a
+/// progressive image's coefficients (two bytes per sample of each component:
+/// 96 MiB for a 4096 px image with three full-resolution components) sit
+/// outside it, bounded by [`TILE_DECODE_MAX_SIDE`] alone.
 const TILE_DECODE_MAX_ALLOC: u64 = 64 * 1024 * 1024;
 
 /// Decode tile bytes under [`TILE_DECODE_MAX_SIDE`] and
