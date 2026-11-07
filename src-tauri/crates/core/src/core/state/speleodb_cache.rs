@@ -284,6 +284,10 @@ impl AppState {
         // recovered work that reading the silence as "clean" would have overwritten.
         // Refusing is recoverable in a way overwriting is not: the frontend's prompt
         // offers keep-local (nothing is touched) or an explicit take-remote.
+        //
+        // [#576 W53] Refused as `state_unknown`, not as un-pushed edits: the same
+        // routing, but the user is told the copy could not be read rather than about
+        // edits that its link row, could it be read, may well say were never made.
         let Some(local) = self.local_copy_state(project_id, dest) else {
             tracing::warn!(
                 project_id = %project_id,
@@ -295,6 +299,7 @@ impl AppState {
                 project_id: project_id.to_owned(),
                 local_path: dest.to_string_lossy().into_owned(),
                 last_edit_at: None,
+                state_unknown: true,
             });
         };
         if !local.has_unpushed_edits {
@@ -311,6 +316,7 @@ impl AppState {
             project_id: project_id.to_owned(),
             local_path: dest.to_string_lossy().into_owned(),
             last_edit_at: local.last_edit_at,
+            state_unknown: false,
         })
     }
 
@@ -1012,5 +1018,122 @@ mod tests {
             "Server Copy",
             "the cache is the download, not the stale journal's file"
         );
+    }
+
+    /// A clean `.stalx` linked to [`ID`] at `dest`, with a hot rollback journal
+    /// beside it as a kill or power loss mid-save leaves one: the file caught
+    /// mid-transaction after a cache spill (header synced), copied together with
+    /// its OWN `-journal`, so a read-write open rolls it back to the last save.
+    fn seed_behind_its_own_hot_journal(dir: &Path, dest: &Path) {
+        let live = dir.join("live.stalx");
+        seed_linked_stalx(&live, false);
+        let conn = rusqlite::Connection::open(&live).expect("raw open live");
+        conn.execute_batch(
+            "PRAGMA journal_mode = DELETE; CREATE TABLE junk(x);
+             PRAGMA cache_size = 1; BEGIN;
+             INSERT INTO junk SELECT hex(randomblob(2000)) FROM
+               (WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200)
+                SELECT i FROM n);",
+        )
+        .expect("write mid-transaction");
+        std::fs::copy(&live, dest).expect("snapshot the file mid-save");
+        std::fs::copy(sidecar_of(&live, "-journal"), sidecar_of(dest, "-journal"))
+            .expect("snapshot its journal");
+        conn.execute_batch("ROLLBACK").expect("rollback");
+    }
+
+    /// [#576 W53 (W52-NF1)] A cache copy the guard cannot read past a hot journal
+    /// is refused as UNREADABLE, not as un-pushed edits. The guard fails closed on
+    /// it (right: a read-write open may recover work), but it said "this project
+    /// has local edits that were never pushed" about a copy whose link row says it
+    /// is clean, so the user was told about edits they never made.
+    #[test]
+    fn a_cache_copy_behind_a_hot_journal_is_refused_as_unreadable_not_as_unpushed() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let dest = temp.path().join("project.stalx");
+        seed_behind_its_own_hot_journal(temp.path(), &dest);
+        let before = std::fs::read(&dest).expect("read dest");
+
+        let state = AppState::new().expect("state");
+        let zip = server_dump();
+        let err = state
+            .replace_cache_stalx(
+                &mut Dump::open(&zip).expect("open dump"),
+                ENTRY,
+                &dest,
+                ID,
+                InheritedUndo::Drop,
+            )
+            .expect_err("a copy that cannot be read must not be replaced");
+        let message = err.to_string();
+        println!(
+            "clean cache copy behind a hot journal: replace -> Err({message:?}); \
+             journal still beside it: {}",
+            sidecar_of(&dest, "-journal").exists()
+        );
+
+        assert!(
+            matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }),
+            "still the routing signal that offers keep-local or take-remote, got {err:?}"
+        );
+        assert!(
+            !message.contains("never pushed"),
+            "the copy's link says it is clean, so the refusal must not claim un-pushed \
+             edits: {message:?}"
+        );
+        assert!(
+            message.contains("could not be read"),
+            "the refusal names what went wrong: {message:?}"
+        );
+        assert_eq!(
+            std::fs::read(&dest).expect("read dest"),
+            before,
+            "a refusal leaves the local copy byte-identical"
+        );
+        assert!(
+            sidecar_of(&dest, "-journal").exists(),
+            "and its journal in place"
+        );
+    }
+
+    /// [#576 W53 (W52-NF1)] The recovery the unreadable refusal names holds: opening
+    /// the local copy (the read-write open behind "keep the local copy") rolls its
+    /// own hot journal back, and the guard then reads the copy as what it is.
+    #[test]
+    fn opening_a_cache_copy_behind_its_own_hot_journal_recovers_it() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let dest = temp.path().join("project.stalx");
+        seed_behind_its_own_hot_journal(temp.path(), &dest);
+        let state = AppState::new().expect("state");
+
+        let refused = state
+            .guard_local_edits(ID, &dest)
+            .expect_err("behind its journal the copy cannot be read")
+            .to_string();
+        assert!(
+            refused.contains("could not be read"),
+            "refused as unreadable: {refused:?}"
+        );
+
+        let name = Database::open_existing(&dest)
+            .and_then(|db| db.load_project())
+            .map(|project| project.name);
+        let after = state.guard_local_edits(ID, &dest);
+        println!(
+            "open the local copy -> {:?}; journal left: {}; guard then -> {:?}",
+            name.as_ref().map_err(|e| format!("{e:#}")),
+            sidecar_of(&dest, "-journal").exists(),
+            after.as_ref().map_err(ToString::to_string),
+        );
+        assert_eq!(
+            name.expect("the read-write open recovers the copy"),
+            "Local",
+            "the copy as last saved"
+        );
+        assert!(
+            !sidecar_of(&dest, "-journal").exists(),
+            "the journal is rolled back"
+        );
+        after.expect("the recovered copy is clean, so the replace may go ahead");
     }
 }

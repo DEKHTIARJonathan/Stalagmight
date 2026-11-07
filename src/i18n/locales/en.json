@@ -4225,7 +4225,13 @@
       "keepLocal": "Keep the local copy & open it",
       "takeRemote": "Take the server copy & discard my changes",
       "discardWarning": "Taking the server copy permanently deletes the changes made to \"{{name}}\" on this computer. They are not on SpeleoDB, so there is no other copy and this cannot be undone.",
-      "takeRemoteConfirm": "Yes, discard my changes"
+      "takeRemoteConfirm": "Yes, discard my changes",
+      "unreadable": {
+        "title": "The copy on this computer could not be read",
+        "message": "\"{{name}}\" has already been opened on this computer, but that local copy could not be read, so we cannot tell whether it has changes SpeleoDB has never seen. A save may have been interrupted, or another program may be using it. Nothing has been downloaded yet.",
+        "keepHint": "Keeping the local copy downloads nothing and overwrites nothing. Opening it lets an interrupted save roll back to the last one that finished; if another program is using the file, close it first.",
+        "discardWarning": "Taking the server copy permanently replaces the copy of \"{{name}}\" on this computer. It could not be read, so any changes in it that are not on SpeleoDB would be lost, and this cannot be undone."
+      }
     },
     "transport": {
       "refused": "Could not reach SpeleoDB at {{endpoint}} - the server refused the connection. Check that it is running and that the address is right.",

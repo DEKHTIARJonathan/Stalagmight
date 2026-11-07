@@ -202,11 +202,19 @@ pub enum SpeleoDbError {
     /// edits) instead of scraping the message. `local_path` is the copy that holds
     /// the edits - the "keep local" branch opens exactly that path through the
     /// normal open flow, no download.
-    #[error("this project has local edits that were never pushed to SpeleoDB")]
+    ///
+    /// [#576 W53] `state_unknown` is the guard's OTHER refusal: the copy is there
+    /// but could not be read (a hot journal a read-only open cannot roll back, a
+    /// lock another writer holds, damage), so un-pushed edits cannot be ruled out.
+    /// It routes exactly like the dirty one - the same choice, the same lock
+    /// retention - but its message says what is actually known instead of claiming
+    /// edits nobody made.
+    #[error("{}", would_discard_local_edits_message(*.state_unknown))]
     WouldDiscardLocalEdits {
         project_id: String,
         local_path: String,
         last_edit_at: Option<String>,
+        state_unknown: bool,
     },
 }
 
@@ -223,6 +231,21 @@ impl SpeleoDbError {
             code,
             message: message.into(),
         }
+    }
+}
+
+/// The user-facing line for [`SpeleoDbError::WouldDiscardLocalEdits`]: the copy
+/// read as dirty, or (`state_unknown`) it could not be read at all, which the line
+/// names together with how the two branches the refusal offers get past it.
+fn would_discard_local_edits_message(state_unknown: bool) -> &'static str {
+    if state_unknown {
+        "the copy of this project on this computer could not be read, so it was not \
+         replaced: a save may have been interrupted, or another program may be using it. \
+         Open the local copy to let an interrupted save roll back to the last one that \
+         finished (close any other program using it first), or take the server copy, \
+         which discards the local one"
+    } else {
+        "this project has local edits that were never pushed to SpeleoDB"
     }
 }
 
