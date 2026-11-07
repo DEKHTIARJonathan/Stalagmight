@@ -734,7 +734,13 @@ export default class SurveyLayer {
     };
 
     this.map.on('mousemove', this.boundMouseMove);
-    this.map.getCanvas().addEventListener('mouseleave', this.boundMapLeave);
+    // `mouseout`, not `mouseleave`: the canvas has no children, so both fire on
+    // the same moves. But React enters a panel row (onMouseEnter) from this
+    // mouseout as it bubbles to the root, and mouseleave comes after that:
+    // cleared there, the hover the row had just put in the store went too (#576
+    // W39-NF4). This target listener and its microtask run before the root's
+    // listener, so the row's hover lands last.
+    this.map.getCanvas().addEventListener('mouseout', this.boundMapLeave);
 
     // UNIFIED context menu handler - gates candidates via the visible layers
     this.map.on('contextmenu', this.handleContextMenu);
@@ -2391,7 +2397,7 @@ export default class SurveyLayer {
         this.map.off('mousemove', this.boundMouseMove);
       }
       if (this.boundMapLeave) {
-        this.map.getCanvas().removeEventListener('mouseleave', this.boundMapLeave);
+        this.map.getCanvas().removeEventListener('mouseout', this.boundMapLeave);
       }
       this.map.off('zoomend', this.handleZoomEndTelemetry);
       this.map.off('moveend', this.handleMoveEndTelemetry);

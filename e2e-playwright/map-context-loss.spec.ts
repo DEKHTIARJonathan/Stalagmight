@@ -574,9 +574,8 @@ test.describe('A WebGL context that does not come back (#576 D38-LOST)', () => {
           return (src?.data?.features ?? []).filter((f) => f.properties?.kind === kind).length;
         }, kind);
 
-      // Leave the map canvas first: in one move from the canvas onto the row,
-      // React enters the row on the canvas's mouseout, and the canvas's own
-      // mouseleave, which comes after, clears the hover the row just set.
+      // Enter the row from the table, not straight from the map: that one-move
+      // case is covered on its own below (#576 W39-NF4).
       await page.getByTestId('data-table-title').hover();
       await page.getByTestId(rowId).hover();
       await expect.poll(storeHover).toEqual(expected);
@@ -629,4 +628,105 @@ test.describe('A WebGL context that does not come back (#576 D38-LOST)', () => {
     await expect.poll(() => globalInk(page), { timeout: 10000 }).toBeGreaterThan(0);
     expect(errors).toEqual([]);
   });
+});
+
+// [#576 W39-NF4] One pointer move from a shot on the map straight onto a
+// data-table shot row lost the row's hover. React enters the row on the canvas's
+// mouseout (whose relatedTarget is the row), the row puts its shot in the store
+// and MapHoverSync hands it to the layer; the canvas's own mouseleave comes after
+// that, and SurveyLayer cleared the hover there, the row's shot included, and
+// nulled the store. The grid reports only a change of row, so nothing set it
+// again. A real pointer move with `steps: 1` crosses no table header on the way,
+// like a fast flick. The table title is the control: leaving the map for it still
+// clears the map's hover.
+test.describe('Pointer from the map straight onto a data-table row (#576 W39-NF4)', () => {
+  for (const target of ['another shot', 'the same shot', 'the table title'] as const) {
+    const title =
+      target === 'the table title'
+        ? 'one move from a hovered map shot onto the table title clears the hover'
+        : `one move from a hovered map shot onto the row of ${target} keeps that row hovered`;
+    test(title, async ({ page }) => {
+      await openSeededAndZoom(page, `Map To Row ${target}`);
+      await page.keyboard.press('Control+3');
+      await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
+      const storeHover = (): Promise<unknown> =>
+        page.evaluate(
+          () =>
+            (window as unknown as {
+              __E2E_TEST__: { uiStore: { getState: () => { hoveredShot: unknown } } };
+            }).__E2E_TEST__.uiStore.getState().hoveredShot,
+        );
+      // The hovered shots the layer paints, as `[from, to]` lng/lat pairs.
+      const overlayShots = (): Promise<number[][][]> =>
+        page.evaluate(() => {
+          const map = (window as unknown as {
+            __stalagmight_map__?: { getStyle: () => { sources: Record<string, unknown> } };
+          }).__stalagmight_map__;
+          const src = map?.getStyle().sources['survey-interact'] as
+            | {
+                data?: {
+                  features?: Array<{ properties?: { kind?: string } | null; geometry: { coordinates: number[][] } }>;
+                };
+              }
+            | undefined;
+          return (src?.data?.features ?? [])
+            .filter((f) => f.properties?.kind === 'shot')
+            .map((f) => f.geometry.coordinates);
+        });
+      // The table slides open and shrinks the map: wait until the drawn shots stop moving.
+      let previous = '';
+      await expect
+        .poll(async () => {
+          const now = JSON.stringify((await getDrawnGeometry(page)).shots.map((s) => s.mid));
+          const settled = now === previous;
+          previous = now;
+          return settled;
+        })
+        .toBe(true);
+      const shots = (await getDrawnGeometry(page)).shots;
+      const lngLats = await page.evaluate(() =>
+        (window as unknown as {
+          __stalagmight_geometry__: () => {
+            shots: Array<{ shotId: number; from: [number, number]; to: [number, number] }>;
+          };
+        }).__stalagmight_geometry__().shots,
+      );
+      const mapShot = shots[0]!;
+      const rowShot = target === 'another shot' ? shots[1]! : mapShot;
+      const canvas = (await page.getByTestId('map-canvas').boundingBox())!;
+
+      await page.mouse.move(canvas.x + mapShot.mid.x, canvas.y + mapShot.mid.y);
+      await expect.poll(storeHover).toEqual({ sectionId: mapShot.sectionId, shotId: mapShot.shotId });
+      await expect.poll(async () => (await overlayShots()).length).toBe(1);
+
+      const dest = page.getByTestId(
+        target === 'the table title' ? 'data-table-title' : `shot-row-${rowShot.sectionId}-${rowShot.shotId}`,
+      );
+      const box = (await dest.boundingBox())!;
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2, { steps: 1 });
+      // Let the deferred leave callbacks and a few frames run before reading.
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+          ),
+      );
+
+      if (target === 'the table title') {
+        await expect.poll(storeHover).toBeNull();
+        await expect.poll(async () => (await overlayShots()).length).toBe(0);
+        return;
+      }
+      const expected = { sectionId: rowShot.sectionId, shotId: rowShot.shotId };
+      const drawn = lngLats.find((s) => s.shotId === rowShot.shotId)!;
+      expect(await storeHover()).toEqual(expected);
+      await expect.poll(overlayShots).toEqual([[drawn.from, drawn.to]]);
+      await expect(dest.locator('xpath=ancestor::div[@role="row"]')).toHaveClass(/sg-row-hover/);
+      // And it holds: nothing clears it a moment later.
+      // settle: proves the hover is NOT cleared after the leave callbacks have run
+      await page.waitForTimeout(300);
+      expect(await storeHover()).toEqual(expected);
+      expect(await overlayShots()).toEqual([[drawn.from, drawn.to]]);
+    });
+  }
 });
