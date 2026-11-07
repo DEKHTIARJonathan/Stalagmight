@@ -538,6 +538,7 @@ fn deleting_a_station_deletes_a_comment_held_under_a_legacy_key() {
             (Some("comment past the end".to_string()), None),
             "fixture: the legacy key names station 3, station 4 has no comment"
         );
+        let before = stored_rows(&state);
 
         // Shot 2 runs from station 2 to station 3; deleting it removes station
         // 3 and rewires shot 3 to start from station 2, so station 4 becomes 3.
@@ -555,9 +556,10 @@ fn deleting_a_station_deletes_a_comment_held_under_a_legacy_key() {
         let rows = stored_rows(&state);
         undo(&state);
         let after_undo = shown_comment(&state, station);
+        let rows_after_undo = stored_rows(&state);
         println!("{how}: station 3 removed -> index 3 now shows {after_delete:?}");
         println!("{how}: stored rows after the delete: {rows:?}");
-        println!("{how}: undo -> station 3 shows {after_undo:?}");
+        println!("{how}: undo -> station 3 shows {after_undo:?}, rows {rows_after_undo:?}");
 
         assert_eq!(
             after_delete, None,
@@ -571,6 +573,12 @@ fn deleting_a_station_deletes_a_comment_held_under_a_legacy_key() {
             after_undo.as_deref(),
             Some("comment past the end"),
             "{how}: undo brings the station and its comment back"
+        );
+        // [#576 RV20-18] Under the key it was stored under, not only shown: a
+        // comment the undo moved to the station's canonical key shows the same.
+        assert_eq!(
+            rows_after_undo, before,
+            "{how}: undo restores the rows the delete removed, keys included"
         );
     }
 }
