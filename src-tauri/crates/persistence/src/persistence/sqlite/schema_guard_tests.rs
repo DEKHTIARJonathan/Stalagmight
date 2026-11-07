@@ -458,6 +458,102 @@ fn salvage_still_refuses_a_hostile_object_whatever_case_its_type_is_in() {
     }
 }
 
+/// [#619] One flipped bit in a record header's serial type turns a TEXT cell
+/// into a BLOB of the same bytes (2n+13 -> 2n+12), which SQLite still parses
+/// and `quick_check` passes, like the type cell's 'table' -> 'Table'
+/// (RV19a-12). The guard holds `sql` and `tbl_name` to text, so the salvage
+/// refused that damage too; it now reads such a BLOB of valid UTF-8 as the
+/// text it was. Every other open still refuses it.
+#[test]
+fn salvage_reads_a_file_whose_sql_or_table_name_lost_its_text_type() {
+    for cell in ["sql", "tbl_name"] {
+        let dir = TempDir::new().unwrap();
+        let path = project_file_with(
+            &dir,
+            &format!(
+                "PRAGMA writable_schema = ON;
+                 UPDATE sqlite_master SET {cell} = CAST({cell} AS BLOB) WHERE name = 'project';"
+            ),
+        );
+        let conn = Connection::open(&path).unwrap();
+        let stored: String = conn
+            .query_row(
+                &format!("SELECT typeof({cell}) FROM sqlite_master WHERE name = 'project'"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let quick_check: String = conn
+            .query_row("PRAGMA quick_check", [], |r| r.get(0))
+            .unwrap();
+        drop(conn);
+        let (salvaged, refused) = salvage_refused(&path);
+        let read_back = salvaged.as_ref().ok().map(|s| {
+            (
+                s.full_project_json
+                    .as_ref()
+                    .map(|json| json.contains("\"Crafted\"")),
+                s.errors.clone(),
+            )
+        });
+        let opened = refused_what(Database::open_existing(&path));
+        println!(
+            "{cell} cell of the project table stored as {stored}: quick_check -> {quick_check:?}; \
+             salvage -> {read_back:?} (refused as {refused:?}); open_existing refused as {opened:?}"
+        );
+
+        assert_eq!(
+            (stored.as_str(), quick_check.as_str()),
+            ("blob", "ok"),
+            "premise: a BLOB SQLite reads"
+        );
+        assert_eq!(
+            read_back,
+            Some((Some(true), Vec::new())),
+            "{cell}: the salvage reads the damaged file's project"
+        );
+        assert_eq!(
+            opened,
+            Some(NOT_STORED_AS_TEXT),
+            "{cell}: every other open still refuses it"
+        );
+    }
+}
+
+/// [#619] What the salvage reads from such a BLOB goes through every check text
+/// gets, so a CHECK stored in one is refused as that CHECK, and a BLOB whose
+/// bytes are not UTF-8 is still refused.
+#[test]
+fn salvage_still_refuses_what_a_blob_sql_or_table_name_holds() {
+    for (sql, what) in [
+        (
+            CHECK_STORED_AS_BLOB,
+            "a table with a CHECK constraint the app never writes",
+        ),
+        (
+            "PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET sql = CAST(replace(sql, 'name TEXT NOT NULL',
+               'name TEXT NOT NULL, \"c' || CAST(x'ff' AS TEXT) || '\" TEXT') AS BLOB)
+             WHERE name = 'project';",
+            NOT_UTF8,
+        ),
+        // On an autoindex row: SQLite never reads its `tbl_name`.
+        (
+            "CREATE TABLE extra (tag TEXT UNIQUE);
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET tbl_name = CAST('extra' || CAST(x'ff' AS TEXT) AS BLOB)
+             WHERE name = 'sqlite_autoindex_extra_1';",
+            NOT_UTF8,
+        ),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let path = project_file_with(&dir, sql);
+        let (_, refused) = salvage_refused(&path);
+        println!("salvage of a file with a BLOB cell, expecting {what:?}: refused as {refused:?}");
+        assert_eq!(refused, Some(what), "{sql}");
+    }
+}
+
 // === The second open of an open sequence keeps its own guard (#576 RV18-2) ===
 
 /// Stamps a saved project as an older format, so `open_existing_to_read` reads
