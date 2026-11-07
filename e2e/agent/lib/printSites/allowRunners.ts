@@ -373,11 +373,11 @@ export const GROUP: SiteGroup = {
     // Validators the scan cannot see through: each prints its argument only when
     // it passes the check in the same expression, and valueShape (HELPERS) otherwise.
     'e2e/agent/fuzz-shrink.ts': {
-      shownFlag: "a CLI token: itself only when it is one of the runner's literal FLAGS, else valueShape",
+      shownFlag: "a CLI token: itself only when it is one of the runner's literal FLAGS, else cliValueShape",
       gitRev: 'a trace revision: its first 12 characters only when /^(?:[0-9a-f]{7,40}|unknown)$/ holds, else valueShape',
     },
     'e2e/agent/ipc-payload-probe.ts': {
-      shownFlag: "a CLI token: itself only when it is one of the probe's literal FLAGS, else valueShape",
+      shownFlag: "a CLI token: itself only when it is one of the probe's literal FLAGS, else cliValueShape",
       shownChar: "--char: the quoted default 'x', a label of the literal SUSPECTS table when the text is one, else valueShape",
       // #576 RV20-13: the probe reads and prints a call's error through lib/ipcPayloadProbe.ts (ipcPayloadProbe.test.ts).
       probeVerdict: "'arrived', 'truncated' or 'other': a ProbeVerdict word, from the class of the error",

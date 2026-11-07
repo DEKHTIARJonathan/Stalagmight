@@ -35,7 +35,14 @@
 import * as path from 'path';
 import { readTrace, restoreTraceEnv, type FuzzTrace } from './lib/fuzzTrace';
 import { parseScenarioArgs, scenarioRunOptions } from './lib/scenarioRunArgs';
-import { foldLocalPaths, progressLogger, scenarioFailOutput, shareableErrorText, valueShape } from './lib/shareableFailure';
+import {
+  cliValueShape,
+  foldLocalPaths,
+  progressLogger,
+  scenarioFailOutput,
+  shareableErrorText,
+  valueShape,
+} from './lib/shareableFailure';
 
 /**
  * Values from outside as printed before the registry is loaded (#576 W51) - the
@@ -122,7 +129,7 @@ async function main(): Promise<void> {
   const { findingsSummary, runSweep, newOracleState } = await import('./lib/oracles');
   if (!getScenario(args.name)) {
     // Not a registry name, so its shape (#576 W51): it is the user's text.
-    throw new Error(`unknown scenario, ${valueShape(args.name)}; known: ${listScenarios().join(', ')}`);
+    throw new Error(`unknown scenario, ${cliValueShape(args.name)}; known: ${listScenarios().join(', ')}`);
   }
 
   const session = createSession();

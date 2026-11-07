@@ -302,7 +302,7 @@ export const GROUP: SiteGroup = {
   builders: {},
   fileHelpers: {
     'e2e/agent/lib/fuzzMatrixArgs.ts': {
-      typed: 'a value the user typed, as its length (fuzzMatrixArgs.ts typed)',
+      typed: 'a value the user typed: quoted when shareableFailure.cliShaped (a flag or a number), else its length (fuzzMatrixArgs.ts typed, #576 W58 Q4)',
     },
   },
 };

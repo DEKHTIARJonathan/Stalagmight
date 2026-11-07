@@ -28,7 +28,7 @@ import { AppSession } from './session';
 import { probeVerdict, shownProbeError, type ProbeVerdict } from './lib/ipcPayloadProbe';
 import { evalInApp } from './lib/page';
 import { appendProbeError } from './lib/privateErrors';
-import { shareableErrorText, valueShape } from './lib/shareableFailure';
+import { cliValueShape, shareableErrorText, valueShape } from './lib/shareableFailure';
 
 interface Probe {
   /** serde's message, or null when the call unexpectedly succeeded. */
@@ -72,9 +72,12 @@ const SUSPECTS: readonly { label: string; text: string }[] = [
   { label: 'quote and backslash', text: '"\\' },
 ];
 
-/** The flags this probe takes. An error names one of them, and anything else by its shape (#576 W51). */
+/**
+ * The flags this probe takes. An error names one of them, a token shaped like a
+ * flag or a number as itself, and anything else by its shape (#576 W51, W58 Q4).
+ */
 const FLAGS: ReadonlySet<string> = new Set(['--classes', '--shapes', '--char', '--max']);
-const shownFlag = (flag: string | undefined): string => (flag !== undefined && FLAGS.has(flag) ? flag : valueShape(flag));
+const shownFlag = (flag: string | undefined): string => (flag !== undefined && FLAGS.has(flag) ? flag : cliValueShape(flag));
 
 const DEFAULT_CHAR = 'x';
 /**
@@ -106,7 +109,7 @@ function parseArgs(argv: string[]): { char: string; max: number; classes: boolea
     i += 1;
     if (flag === '--char') char = value;
     else if (flag === '--max') max = Number(value);
-    else throw new Error(`unknown flag, ${valueShape(flag)}`);
+    else throw new Error(`unknown flag, ${cliValueShape(flag)}`);
   }
   if (!Number.isInteger(max) || max < 1) throw new Error('--max needs a positive integer');
   return { char, max, classes, shapes };

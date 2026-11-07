@@ -60,6 +60,7 @@ export const HELPERS: Readonly<Record<string, string>> = {
   shareableTail: "the last lines of a child's output, fail-closed",
   withheldAppText: "the app's text as its length",
   valueShape: 'a value read back from a file as a number, a boolean, null, or its type and size, never its text',
+  cliValueShape: 'a refused command-line token: itself only when shaped like a flag or a number, else valueShape (#576 W58 Q4)',
   findingsSummary: 'findings as counts per severity, kind and code',
   failureDetail: "a matrix cell's failure: the child's FAIL block, or its tail fail-closed",
   matrixSummary: "the matrix's summary: counts and durations",

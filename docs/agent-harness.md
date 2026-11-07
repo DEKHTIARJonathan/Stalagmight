@@ -1132,7 +1132,10 @@ locations:
   unknown scenario or journey name, a bad `STALAGMIGHT_AGENT_PLATFORM`,
   `STALAGMIGHT_AGENT_WINDOW_RECT` or `STALAGMIGHT_AGENT_DISPLAYS` entry, and
   what a trace file holds when it is refused or printed back (its header's
-  scenario, seed and iterations, a refused step value). A trace's knob name
+  scenario, seed and iterations, a refused step value). A refused command-line
+  value shaped like a flag (`--sed`) or a number (`1.5`) prints as itself,
+  quoted, since neither shape can spell a path or a name (#576 W58 Q4,
+  `cliValueShape`). A trace's knob name
   prints when it reads `STALAGMIGHT_[A-Z0-9_]+`, its values, the fixture and
   every path folded. A store value a scenario reports on the first line of an
   error - an open dialog, an undo entry's command type - keeps only the words

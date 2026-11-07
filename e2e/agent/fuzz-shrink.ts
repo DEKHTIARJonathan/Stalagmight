@@ -51,7 +51,7 @@ import {
   type TraceStep,
 } from './lib/fuzzTrace';
 import { ddmin, type ShrinkVerdict } from './lib/fuzzShrink';
-import { foldLocalPaths, shareableErrorText, valueShape } from './lib/shareableFailure';
+import { cliValueShape, foldLocalPaths, shareableErrorText, valueShape } from './lib/shareableFailure';
 // Safe to import statically, unlike the scenarios below: this module freezes
 // nothing at import and reads `STALAGMIGHT_FUZZ_CORPUS_DIR` at call time, which
 // its own tests pin.
@@ -64,9 +64,12 @@ interface Args {
   out: string | null;
 }
 
-/** The flags this runner takes. An error names one of them, and anything else by its shape (#576 W51). */
+/**
+ * The flags this runner takes. An error names one of them, a token shaped like
+ * a flag or a number as itself, and anything else by its shape (#576 W51, W58 Q4).
+ */
 const FLAGS: ReadonlySet<string> = new Set(['--release', '--max-tests', '--out']);
-const shownFlag = (flag: string | undefined): string => (flag !== undefined && FLAGS.has(flag) ? flag : valueShape(flag));
+const shownFlag = (flag: string | undefined): string => (flag !== undefined && FLAGS.has(flag) ? flag : cliValueShape(flag));
 
 /**
  * A trace's header fields as printed (#576 W51). A trace is a file from wherever
@@ -95,7 +98,7 @@ function parseArgs(argv: string[]): Args {
     i += 1;
     if (flag === '--max-tests') args.maxTests = Number(value);
     else if (flag === '--out') args.out = path.resolve(value);
-    else throw new Error(`unknown flag, ${valueShape(flag)}`);
+    else throw new Error(`unknown flag, ${cliValueShape(flag)}`);
   }
   return args;
 }

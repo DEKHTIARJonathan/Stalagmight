@@ -123,6 +123,26 @@ export function valueShape(value: unknown): string {
   return typeof value === 'object' ? 'an object' : `a ${typeof value}`;
 }
 
+/** A token shaped like a flag the runners take: `--seed`, `-h`, lower-case words and dashes. */
+const FLAG_SHAPED = /^--?[a-z][a-z0-9-]{0,40}$/;
+/** A token shaped like a number as typed: an optional sign, digits, a decimal point, an exponent. */
+const NUMBER_SHAPED = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?$/i;
+
+/** Is `value` a command-line token shaped like a flag or like a number (#576 W58 Q4)? */
+export function cliShaped(value: unknown): boolean {
+  return typeof value === 'string' && (FLAG_SHAPED.test(value) || (value.length <= 24 && NUMBER_SHAPED.test(value)));
+}
+
+/**
+ * A value a runner refuses on its command line, as the refusal prints it (#576
+ * W58 Q4): a token shaped like a flag (`--sed`) or like a number (`1.5`, `-3`)
+ * as itself, quoted, and anything else - a stray path, a name - by its shape
+ * (`valueShape`: its length). Neither shape can spell a path or a sentence.
+ */
+export function cliValueShape(value: unknown): string {
+  return cliShaped(value) ? JSON.stringify(value) : valueShape(value);
+}
+
 /** `headline` with the app's text after an `APP_ERROR_HEADLINES` prefix replaced by its length. */
 function shareableHeadline(headline: string): string {
   for (const shape of APP_ERROR_HEADLINES) {
