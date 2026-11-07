@@ -84,6 +84,40 @@ const mdInline = (s, max = 80) => {
   return clipped.replace(/[`<>|]/g, (c) => ({ '`': "'", '<': '&lt;', '>': '&gt;', '|': '\\|' })[c]);
 };
 
+/**
+ * An argument's SHAPE, never its value (#576 RV18-W23-3). The arguments of an
+ * `ipc` / `store_action` call are the project's own data - a station, section
+ * or project name - and this report goes to public issues, which keep only
+ * codes, counts and code locations (docs/agent-harness.md). A string is its
+ * length. A number is its type: it spells no text, but a coordinate, depth or
+ * length is survey data all the same. A boolean or null stays - one bit picked
+ * by the caller cannot name anything. An object keeps the keys that read as
+ * field names (a lowercase-led identifier, the camelCase / snake_case of a
+ * command parameter or struct field); any other key - a map keyed by station
+ * names - is only counted. An array is its length and element types. Bounded:
+ * two levels of keys, at most 12 per object.
+ */
+const FIELD_NAME = /^[a-z][A-Za-z0-9_]{0,63}$/;
+const MAX_KEYS = 12;
+const kindOf = (v) => (v === null ? 'null' : Array.isArray(v) ? 'array' : typeof v);
+const argShape = (value, depth = 0) => {
+  const kind = kindOf(value);
+  if (kind === 'null' || kind === 'boolean') return String(value);
+  if (kind === 'string') return `string(${value.length})`;
+  if (kind === 'array') {
+    const kinds = [...new Set(value.map(kindOf))];
+    return value.length ? `array(${value.length}) of ${kinds.join('|')}` : 'array(0)';
+  }
+  if (kind !== 'object') return kind;
+  const keys = Object.keys(value);
+  if (depth >= 2) return `object(${keys.length} keys)`;
+  const named = keys.filter((k) => FIELD_NAME.test(k));
+  const parts = named.slice(0, MAX_KEYS).map((k) => `${k}: ${argShape(value[k], depth + 1)}`);
+  if (named.length > MAX_KEYS) parts.push(`+${named.length - MAX_KEYS} more`);
+  if (keys.length > named.length) parts.push(`${keys.length - named.length} key(s) withheld`);
+  return `{${parts.join(', ')}}`;
+};
+
 const records = fs
   .readFileSync(jsonlPath, 'utf8')
   .split('\n')
@@ -253,7 +287,8 @@ function describeAction(a) {
       return `${which} in section ${p.sectionId}${p.button === 'right' ? ' (right)' : ''}`;
     }
     case 'type_text':
-      return `"${mdInline(p.text ?? '', 40)}"${p.testid ? ` into ${mdInline(p.testid)}` : ''}`;
+      // The typed text is data the user would enter: its length only - see argShape.
+      return `${argShape(String(p.text ?? ''))}${p.testid ? ` into ${mdInline(p.testid)}` : ''}`;
     case 'hover':
       return p.testid ? `testid=${mdInline(p.testid)}` : `selector=${mdInline(p.selector)}`;
     case 'drag': {
@@ -296,10 +331,13 @@ function describeAction(a) {
         : `open ${p.mode === 'fractal' ? 'fractal ' : ''}fixture ${p.name ?? '(default)'}`;
     case 'run_scenario':
       return `${p.name} (seed=${p.seed ?? 1}${p.iterations != null ? `, iterations=${p.iterations}` : ''})`;
+    // Argument shapes, not values - see argShape. store_action args are positional.
     case 'ipc':
-      return `${p.command}(${JSON.stringify(p.args ?? {})})`;
-    case 'store_action':
-      return `${p.store}.${p.action}(${JSON.stringify(p.args ?? [])})`;
+      return `${p.command}(${argShape(p.args ?? {})})`;
+    case 'store_action': {
+      const list = p.args ?? [];
+      return `${p.store}.${p.action}(${Array.isArray(list) ? list.map((v) => argShape(v)).join(', ') : argShape(list)})`;
+    }
     case 'map_view':
       return p.set ? JSON.stringify(p.set) : 'read';
     case 'os_grant':

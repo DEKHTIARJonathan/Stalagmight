@@ -1037,6 +1037,12 @@ locations:
   and thread but only its message's length, the error boundary's text length,
   the number of integrity messages, leftover temp files counted by suffix, a
   log finding named by its target.
+- `report.md`'s steps give an `ipc` / `store_action` call's argument shapes,
+  not its values (`rename_station({oldName: string(9), newName: string(9)})`:
+  field-name keys, string lengths, value types, array lengths; only a boolean
+  or null keeps its value, and a key that is not a lowercase-led identifier is
+  only counted), and a `type_text` step the length of its text (#576
+  RV18-W23-3).
 
 **Not for sharing** - the full text, for triage where the run happened: the
 session's `actions.jsonl` (each `finding` event with its detail, each

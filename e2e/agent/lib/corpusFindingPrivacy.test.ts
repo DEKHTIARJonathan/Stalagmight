@@ -432,8 +432,8 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
           event: 'finding',
           detail: { severity: 'error', kind: 'log-error', message: `ERROR import failed path="${quoted}" reason="x"` },
         },
-        // No finding's text reaches the report (#576 HFI2-F2, W21-NF2), so the
-        // path fold is exercised by a step the report still quotes.
+        // No finding's text reaches the report (#576 HFI2-F2, W21-NF2), and no
+        // step's argument values (RV18-W23-3): the path may appear nowhere.
         {
           type: 'event',
           v: 1,
@@ -458,7 +458,9 @@ describe('a corpus file that fails to import names nothing a run leaves behind (
     );
     const out = execFileSync('node', [path.join(REPO, 'scripts', 'generate-repro-report.mjs'), session], { encoding: 'utf8' });
     const report = fs.readFileSync(path.join(session, 'report.md'), 'utf8');
-    expect(report).toContain('corpus-7/<corpus file>');
+    // The step gives its arguments as shapes (#576 RV18-W23-3): the path is not
+    // printed at all, folded or not.
+    expect(report).toContain('`ipc` import_file({path: string(');
     expect(report + out).not.toContain(MARK);
   });
 });
