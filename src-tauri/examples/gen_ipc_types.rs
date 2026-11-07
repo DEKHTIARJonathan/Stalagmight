@@ -38,7 +38,8 @@ use stalagmight_lib::core::loading::{
 };
 use stalagmight_lib::core::outcome::{
     BatchOutcome, DeleteProjectOutcome, EditOutcome, HistoryOutcome, ImportOutcome,
-    ProjectFileOutcome, RemoteLinkBits, ReverseOutcome, SaveOutcome, SectionCreated, ShotCreated,
+    MergeProjectsOutcome, MergeSourceRepairs, ProjectFileOutcome, RemoteLinkBits, ReverseOutcome,
+    SaveOutcome, SectionCreated, ShotCreated,
 };
 use stalagmight_lib::core::state::{DisplaySettingTarget, VirtualShotMode};
 use stalagmight_lib::core::WorkspaceMode;
@@ -72,7 +73,8 @@ use stalagmight_lib::parsers::tml::{
 };
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{
-    BackupInfo, BackupKind, RawTableData, RepairResult, SalvageWriteResult, SalvagedData,
+    BackupInfo, BackupKind, LoadRepairs, RawTableData, RepairResult, SalvageWriteResult,
+    SalvagedData,
 };
 use stalagmight_lib::speleodb::{
     AdoptUpload, DoneResult, DumpCandidateKind, KeychainReport, Permission, PushResult,
@@ -184,6 +186,10 @@ fn main() {
     export::<SaveOutcome>(&out_dir);
     export::<DeleteProjectOutcome>(&out_dir);
     export::<ProjectFileOutcome>(&out_dir);
+    // [#576 W57-NF2] merge_projects names what reading each source reset
+    export::<MergeProjectsOutcome>(&out_dir);
+    export::<MergeSourceRepairs>(&out_dir);
+    export::<LoadRepairs>(&out_dir);
     // Core command/result types
     export::<ReversedSection>(&out_dir);
     export::<ImportReceipt>(&out_dir);
@@ -494,6 +500,9 @@ fn main() {
         "SaveOutcome",
         "DeleteProjectOutcome",
         "ProjectFileOutcome",
+        "MergeProjectsOutcome",
+        "MergeSourceRepairs",
+        "LoadRepairs",
         "ReversedSection",
         "ImportReceipt",
         "CommentHolder",

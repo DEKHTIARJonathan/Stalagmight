@@ -306,6 +306,8 @@ stalagmight-parsers = { path = "crates/parsers", features = ["test-support"] }
 stalagmight-persistence = { path = "crates/persistence", features = ["test-support"] }
 stalagmight-speleodb = { path = "crates/speleodb", features = ["test-support"] }
 tempfile = { workspace = true }
+# [#576 W57-NF2] A command test writes a damaged row into a source file with SQL.
+rusqlite = { workspace = true }
 # The config round-trip assertions in tests/integration_tests.rs parse the
 # saved file themselves; the config I/O itself lives in stalagmight-core now.
 toml = { workspace = true }

@@ -188,7 +188,7 @@ fn create_section_with_shots(app: &tauri::App<MockRuntime>, shots: Vec<ShotData>
     result.expect("section id").section_id
 }
 
-fn project_with_section(shots: Vec<ShotData>) -> Project {
+pub(super) fn project_with_section(shots: Vec<ShotData>) -> Project {
     let mut project = Project::new("Test Cave".to_string(), None);
     project.add_section(SectionData {
         name: Some("Section A".to_string()),

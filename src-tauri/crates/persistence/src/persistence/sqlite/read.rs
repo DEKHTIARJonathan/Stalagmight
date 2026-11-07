@@ -1493,7 +1493,10 @@ pub struct ProjectLoadReport {
 /// not use them (non-finite numbers, or rows naming no station, from a damaged or
 /// hand-edited file), per kind. The next save writes the reset values, so the
 /// open reports them to the user once instead of only logging them.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+///
+/// [#576 W57-NF2] Also on a merge's answer, per source (`MergeSourceRepairs`), so
+/// the frontend lists what the merge's read of each source reset or dropped.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize, ts_rs::TS)]
 pub struct LoadRepairs {
     /// Shots with a non-finite measurement, reset to finite defaults.
     pub shots: usize,

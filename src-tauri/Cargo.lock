@@ -4443,6 +4443,7 @@ dependencies = [
  "chrono",
  "directories",
  "http",
+ "rusqlite",
  "serde",
  "serde_json",
  "sha2",

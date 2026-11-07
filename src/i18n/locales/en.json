@@ -3147,6 +3147,8 @@
     "loadRepairs": {
       "lead": "Some stored values could not be used and were changed when this project opened: {{items}}.",
       "detail": "Saving makes the change permanent. Details are in the log.",
+      "mergeLead": "Some stored values in {{name}} ({{file}}) could not be used and were changed in the merged project: {{items}}.",
+      "mergeDetail": "The source files are unchanged. Details are in the log.",
       "dismiss": "Dismiss",
       "items": {
         "shots_one": "{{count}} shot with an invalid value reset",

@@ -2259,7 +2259,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'merge_projects':
             console.log('[Mock IPC] merge_projects called with:', args);
-            return { warnings: [] } satisfies MockReply<'merge_projects'>;
+            return { warnings: [], source_repairs: [] } satisfies MockReply<'merge_projects'>;
 
           case 'set_shot_kind': {
             console.log('[Mock IPC] set_shot_kind called with:', args);

@@ -45,7 +45,7 @@ import type {
 } from '../types/project';
 import type { ExistingShotUpdate } from '../types/ipc/ExistingShotUpdate';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
-import type { BatchOutcome, DeleteProjectOutcome, EditOutcome, HistoryOutcome, ImportOutcome, ProjectFileOutcome, ReverseOutcome, SaveOutcome, SectionCreated, ShotCreated, ValidationWarning } from '../types/ipc.generated';
+import type { BatchOutcome, DeleteProjectOutcome, EditOutcome, HistoryOutcome, ImportOutcome, MergeProjectsOutcome, ProjectFileOutcome, ReverseOutcome, SaveOutcome, SectionCreated, ShotCreated, ValidationWarning } from '../types/ipc.generated';
 import type { Config } from '../types/config';
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, TmlRootPlacement, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion } from '../types/commands';
@@ -349,7 +349,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   loadRecentProjects: () => Promise<void>;
   removeFromRecentProjects: (path: string) => Promise<CommandOutcome<ProjectFileOutcome>>;
   deleteProject: (path: string) => Promise<CommandOutcome<DeleteProjectOutcome>>;
-  mergeProjects: (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => Promise<CommandOutcome<ProjectFileOutcome>>;
+  mergeProjects: (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => Promise<CommandOutcome<MergeProjectsOutcome>>;
 
   createSection: (data: SectionData) => Promise<CommandOutcome<SectionCreated>>;
   createSectionAndMerge: (

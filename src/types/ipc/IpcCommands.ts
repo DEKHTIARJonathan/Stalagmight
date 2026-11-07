@@ -46,6 +46,7 @@ import type { InternalErrorNotice } from "./InternalErrorNotice";
 import type { LoadProjectFullResult } from "./LoadProjectFullResult";
 import type { LogsSince } from "./LogsSince";
 import type { MemoryStats } from "./MemoryStats";
+import type { MergeProjectsOutcome } from "./MergeProjectsOutcome";
 import type { OpenFileFlags } from "./OpenFileFlags";
 import type { OrphanPlacementSuggestion } from "./OrphanPlacementSuggestion";
 import type { Permission } from "./Permission";
@@ -194,7 +195,7 @@ export interface IpcCommands {
   load_dive_plan: { args: { id: number }; result: DivePlan; error: CommandError };
   load_project_full: { args: { path: string }; result: LoadProjectFullResult; error: CommandError };
   load_project_full_binary: { args: { path: string }; result: ArrayBuffer; error: CommandError };
-  merge_projects: { args: { sourcePaths: Array<string>; outputPath: string; outputName: string; archiveOriginals: boolean }; result: ProjectFileOutcome; error: CommandError };
+  merge_projects: { args: { sourcePaths: Array<string>; outputPath: string; outputName: string; archiveOriginals: boolean }; result: MergeProjectsOutcome; error: CommandError };
   merge_stations: { args: { stationA: StationRef; stationB: StationRef }; result: EditOutcome; error: CommandError };
   move_comment: { args: { source: CommentHolder; target: CommentHolder; swap: boolean }; result: EditOutcome; error: CommandError };
   move_section: { args: { sectionId: number; offset: Coordinates }; result: EditOutcome; error: CommandError };

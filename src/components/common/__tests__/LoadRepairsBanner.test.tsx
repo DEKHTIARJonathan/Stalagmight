@@ -21,7 +21,7 @@ function openWith(loadRepairs: ReturnType<typeof useProjectStore.getState>['load
 }
 
 afterEach(() => {
-  useProjectStore.setState({ project: null, loadRepairs: null, loadRepairsDismissed: false });
+  useProjectStore.setState({ project: null, loadRepairs: null, mergeSourceRepairs: [], loadRepairsDismissed: false });
 });
 
 describe('LoadRepairsBanner (#576 B35(h))', () => {
@@ -62,6 +62,41 @@ describe('LoadRepairsBanner (#576 B35(h))', () => {
     expect(screen.getByTestId('load-repairs-banner')).toHaveTextContent(
       '2 station comments past the end of their sections dropped.',
     );
+  });
+
+  // [#576 W57-NF2] A merge reads each source as an open does; what that read reset
+  // or dropped is not in the merged file, so the notice names the source - over the
+  // project list too, where a merge that did not open its result leaves the user.
+  it('lists what a merge read of each source changed, named by source', () => {
+    useProjectStore.setState({ project: null, loadRepairs: null, loadRepairsDismissed: false });
+    act(() => {
+      useProjectStore.getState().showMergeSourceRepairs([
+        {
+          path: '/caves/B.stalx',
+          name: 'Cave B',
+          repairs: { shots: 1, section_offsets: 0, station_offsets: 0, gps_points: 0, station_comments: 2 },
+        },
+        {
+          path: 'C:\\caves\\clean.stalx',
+          name: 'Clean',
+          repairs: { shots: 0, section_offsets: 0, station_offsets: 0, gps_points: 0, station_comments: 0 },
+        },
+      ]);
+    });
+    render(<LoadRepairsBanner />);
+    const lines = screen.getAllByTestId(/^load-repairs-merge-source-/);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toHaveAttribute('data-testid', 'load-repairs-merge-source-B.stalx');
+    expect(lines[0]).toHaveTextContent(
+      'Some stored values in Cave B (B.stalx) could not be used and were changed in the merged project: ' +
+        '1 shot with an invalid value reset, 2 station comments past the end of their sections dropped.',
+    );
+    expect(screen.getByTestId('load-repairs-banner')).toHaveTextContent('The source files are unchanged.');
+    expect(screen.getByTestId('load-repairs-banner')).not.toHaveTextContent('when this project opened');
+    act(() => {
+      fireEvent.click(screen.getByTestId('load-repairs-dismiss-button'));
+    });
+    expect(screen.queryByTestId('load-repairs-banner')).not.toBeInTheDocument();
   });
 
   it('shows nothing when the load reset nothing', () => {

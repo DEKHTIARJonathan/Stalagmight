@@ -7,7 +7,7 @@ use crate::commands::write_path::{check_write_path, load_upgrade_refusal, WriteT
 use crate::core::loading::{CreateProjectFullResult, LoadError, LoadProjectFullResult};
 use crate::core::{
     AppState, Command, CommandError, CommandResult, DeleteProjectOutcome, EditOutcome,
-    ProjectFileOutcome, SaveOutcome,
+    MergeProjectsOutcome, ProjectFileOutcome, SaveOutcome,
 };
 use crate::models::{
     AlongLineResult, DistanceField, FrozenShotRef, Project, ProjectMetadata, ProjectStats,
@@ -364,7 +364,7 @@ pub async fn merge_projects<R: Runtime>(
     output_path: PathBuf,
     output_name: String,
     archive_originals: bool,
-) -> Result<ProjectFileOutcome, CommandError> {
+) -> Result<MergeProjectsOutcome, CommandError> {
     pool::run(app, move |state| {
         // The new file, and - when they are to be moved into the archive - the sources.
         let moved: &[PathBuf] = if archive_originals {
@@ -386,7 +386,7 @@ pub async fn merge_projects<R: Runtime>(
                 output_name,
                 archive_originals,
             })
-            .into_outcome::<ProjectFileOutcome>()
+            .into_outcome::<MergeProjectsOutcome>()
     })
     .await
 }

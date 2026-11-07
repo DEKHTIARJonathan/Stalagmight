@@ -2082,8 +2082,8 @@
         }
       ],
       "result": {
-        "rust": "ProjectFileOutcome",
-        "ts": "ProjectFileOutcome"
+        "rust": "MergeProjectsOutcome",
+        "ts": "MergeProjectsOutcome"
       },
       "error": {
         "rust": "CommandError",
