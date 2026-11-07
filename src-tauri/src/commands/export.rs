@@ -10,8 +10,8 @@ use crate::export::{ExportImageOptions, ProfileFormat};
 use crate::models::{Cylinder, Diver, PlanSegment, Project, StationRef};
 
 /// True when `target` resolves to the same file on disk as the open project's
-/// `.stalx` at `existing`. Image export writes raw bytes (`std::fs::write` /
-/// `pixmap.save_png`), so exporting over the live project database would corrupt
+/// `.stalx` at `existing`. Every export replaces its target wholesale
+/// (`write_atomic`), so exporting over the live project database would destroy
 /// it. `existing` always exists (it is the open DB); `target` may not exist yet
 /// (a fresh export destination), so when it can't be canonicalized directly,
 /// compare its canonicalized parent directory + file name against the
@@ -462,9 +462,13 @@ pub async fn export_dive_profile(
         if is_project_owned_file(&path, &project) {
             return Err(refuse(&path));
         }
-        std::fs::write(&path, rendered).map_err(|e| {
+        crate::export::write_atomic(&path, |w| {
+            std::io::Write::write_all(w, rendered.as_bytes())?;
+            Ok(())
+        })
+        .map_err(|e| {
             tracing::error!(path = ?path, reason = %e, "Dive profile export failed");
-            e.to_string()
+            format!("{e:#}")
         })?;
         tracing::info!(
             path = ?path,
