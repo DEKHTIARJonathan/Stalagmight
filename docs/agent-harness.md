@@ -1018,7 +1018,18 @@ locations:
   agent:...` or `run_scenario("...")`, a `trace:` line is one path to a
   `.json` trace, and a diff path is lower-case field names and indices. An
   `ipc <command>:` / `eval:` / `javascript error:` headline keeps
-  the prefix and the length of the app's text. Every line it keeps has the
+  the prefix and the length of the app's text. The headline itself is kept
+  only when the harness wrote it (#576 W58 Q3, `harnessBuilt`): an error built
+  in the checkout's own sources, outside node_modules, that Node did not mark
+  as its own (`code`, `errno`, `syscall`) and the engine did not word
+  (`TypeError`, `SyntaxError`, ...). Any other first line - webdriverio's
+  (`element ("<selector>") still not displayed`), Node's (an `fs` message
+  naming a path), one with no stack frame of ours or a stack webdriverio
+  spliced - prints as `a third-party <Name>: (<n> characters withheld)`, here,
+  in a crash line, a fuzz failure and a journey's abort reason. A failure's
+  full line is in the session's `actions.jsonl` (`uat/run.jsonl` for a
+  journey's abort); a crash keeps no copy, as for its other lines. Every
+  line it keeps has the
   checkout folded to `<repo>` and the home directory to `~`
   (`foldLocalPaths`), so a `reproduce:` line's fixture path or a session
   directory in a headline does not name the user. A fixture prints by name

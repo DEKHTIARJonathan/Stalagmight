@@ -144,8 +144,91 @@ export function cliValueShape(value: unknown): string {
   return cliShaped(value) ? JSON.stringify(value) : valueShape(value);
 }
 
-/** `headline` with the app's text after an `APP_ERROR_HEADLINES` prefix replaced by its length. */
+/**
+ * Error classes whose message the engine or Node words: a `TypeError` can quote
+ * a value (`Cannot create property 'x' on string '<text>'`), a `SyntaxError`
+ * from `JSON.parse` quotes the text it could not parse.
+ */
+const ENGINE_ERRORS = [TypeError, RangeError, SyntaxError, ReferenceError, EvalError, URIError];
+
+/** The file a stack frame (`at fn (file:line:col)`, `at file:line:col`) names, or null. */
+function frameFile(frame: string): string | null {
+  const location = /\(([^()]*)\)\s*$/.exec(frame)?.[1] ?? frame.trim().replace(/^at (?:async )?/, '');
+  const file = location.replace(/(?::\d+){1,2}$/, '');
+  if (file.startsWith('file://')) {
+    try {
+      return fileURLToPath(file);
+    } catch {
+      return null;
+    }
+  }
+  return path.isAbsolute(file) ? file : null;
+}
+
+/**
+ * Did the harness build `err` (#576 W58 Q3)? Its message is then one the
+ * print-site guard checked where it was built (`printSites/`), and its first
+ * line prints as a headline. An error is the harness's when it is a plain
+ * `Error` (or a harness subclass) built in a source file of the checkout
+ * outside node_modules - the first frame of its stack - with nothing that
+ * says Node made it: no `code`, `errno` or `syscall`.
+ *
+ * Fail-closed: an error with no frame (a WebDriver error carries the driver's
+ * stack instead of ours), one an engine class words, one built in node_modules
+ * or Node's internals (webdriverio, undici, `fs`), and one whose stack
+ * webdriverio spliced (`waitUntil` joins two stacks with a `---` line and drops
+ * its own frames) is third-party.
+ */
+export function harnessBuilt(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (ENGINE_ERRORS.some((cls) => err instanceof cls)) return false;
+  if (['code', 'errno', 'syscall'].some((key) => Object.prototype.hasOwnProperty.call(err, key))) return false;
+  // The stack opens with `<name>: <message>`, as many lines as the message has:
+  // a message line that reads like a frame (`  at project.sections[3]`) is not one.
+  const lines = typeof err.stack === 'string' ? err.stack.split('\n').slice(err.message.split('\n').length) : [];
+  if (lines.some((line) => /^\s*---\s*$/.test(line))) return false;
+  const frame = lines.find((line) => /^\s+at /.test(line));
+  const file = frame === undefined ? null : frameFile(frame);
+  if (file === null) return false;
+  const rel = path.relative(REPO_ROOT, file);
+  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel) && !rel.split(/[\\/]/).includes('node_modules');
+}
+
+/** A third-party error's first line as the projections see it: `a third-party <Name>: <its text>`. */
+const THIRD_PARTY_HEADLINE = /^(a third-party \w+): (.*)$/;
+/** What `shareableFailureText` leaves of a third-party error's first line. */
+const WITHHELD_THIRD_PARTY = /^\(\d+ characters withheld\)$/;
+
+/**
+ * An error's message as the shareable projections take it (#576 W58 Q3). One
+ * the harness built (`harnessBuilt`) is its message. Any other - webdriverio's,
+ * Node's, a thrown non-Error - gets `a third-party <Name>: ` in front of its
+ * first line, which every projection prints as that prefix and the line's
+ * length: the line is not a shape the harness writes, and it can quote a
+ * selector, a path or the page. WebDriver's `javascript error: <the page's
+ * message>` is one the harness knows, and keeps its prefix the same way
+ * (`APP_ERROR_HEADLINES`). The full text is what a runner records in the
+ * session's actions.jsonl.
+ */
+export function errorMessageOf(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  if (harnessBuilt(err)) return message;
+  const [first = '', ...rest] = message.split('\n');
+  if (APP_ERROR_HEADLINES[0]?.test(first)) return message;
+  const name = err instanceof Error && /^\w+$/.test(err.name) ? err.name : 'error';
+  return [`a third-party ${name}: ${first}`, ...rest].join('\n');
+}
+
+/**
+ * `headline` with a third-party error's first line, or the app's text after an
+ * `APP_ERROR_HEADLINES` prefix, replaced by its length.
+ */
 function shareableHeadline(headline: string): string {
+  const thirdParty = THIRD_PARTY_HEADLINE.exec(headline);
+  if (thirdParty) {
+    const [, prefix = '', text = ''] = thirdParty;
+    return `${prefix}: ${WITHHELD_THIRD_PARTY.test(text) ? text : `(${text.length} characters withheld)`}`;
+  }
   for (const shape of APP_ERROR_HEADLINES) {
     const app = shape.exec(headline);
     if (!app) continue;
@@ -205,10 +288,11 @@ export function shareableFailureText(
 /**
  * What `agent:scenario` / `agent:scenarios` print for a scenario that threw:
  * the `FAIL: <name> threw:` line `fuzz-matrix` anchors on, then the shareable
- * failure, whose first line is the headline the matrix reports.
+ * failure, whose first line is the headline the matrix reports. A third-party
+ * error's first line prints as its length (`errorMessageOf`, #576 W58 Q3).
  */
 export function scenarioFailOutput(name: string, err: unknown): string {
-  return `FAIL: ${name} threw:\n${shareableFailureText(err instanceof Error ? err.message : String(err))}\n`;
+  return `FAIL: ${name} threw:\n${shareableFailureText(errorMessageOf(err))}\n`;
 }
 
 /**
@@ -232,8 +316,13 @@ const CRASH_WITHHELD = 'the rest of the error is not printed';
  * script's error - so the raw stack is not for sharing either.
  */
 export function shareableErrorText(err: unknown): string {
-  if (!(err instanceof Error)) return shareableFailureText(String(err), [], CRASH_WITHHELD);
+  if (!(err instanceof Error)) return shareableFailureText(errorMessageOf(err), [], CRASH_WITHHELD);
   const frames = (err.stack ?? '').split('\n').filter((line) => STACK_FRAME.test(line));
+  // A third-party error's message carries its name in front (`a third-party
+  // TypeError: <its length>`, #576 W58 Q3), so it is not named twice.
+  if (!harnessBuilt(err)) {
+    return shareableFailureText([errorMessageOf(err), ...frames].join('\n'), [STACK_FRAME], CRASH_WITHHELD);
+  }
   const name = /^\w+$/.test(err.name) ? err.name : 'Error';
   return `${name}: ${shareableFailureText([err.message, ...frames].join('\n'), [STACK_FRAME], CRASH_WITHHELD)}`;
 }
