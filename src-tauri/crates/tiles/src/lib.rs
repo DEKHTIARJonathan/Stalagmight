@@ -434,6 +434,25 @@ struct TilemapResponse {
     data: Vec<u8>,
 }
 
+/// Why [`fetch_tilemap`] produced no tilemap.
+#[derive(Debug)]
+enum TilemapFetchError {
+    /// The provider answered with a body over [`TILEMAP_BODY_MAX_BYTES`]:
+    /// more than any tilemap can be, so asking again would only be refused
+    /// again (#576 RV19a-10).
+    TooLarge(String),
+    /// Anything else - network, status, a body that did not parse.
+    Failed(String),
+}
+
+impl std::fmt::Display for TilemapFetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLarge(message) | Self::Failed(message) => f.write_str(message),
+        }
+    }
+}
+
 /// Fetch tilemap data from the provider's tilemap API.
 ///
 /// Returns a Vec<bool> where true = tile available, false = no data.
@@ -443,9 +462,10 @@ fn fetch_tilemap(
     z: u32,
     base_y: u32,
     base_x: u32,
-) -> Result<Vec<bool>, String> {
-    let url = tile_providers::expand_tilemap_url(provider, z, base_y, base_x)
-        .ok_or_else(|| "Provider has no tilemap URL configured".to_string())?;
+) -> Result<Vec<bool>, TilemapFetchError> {
+    let url = tile_providers::expand_tilemap_url(provider, z, base_y, base_x).ok_or_else(|| {
+        TilemapFetchError::Failed("Provider has no tilemap URL configured".to_string())
+    })?;
 
     tracing::debug!(url = %url, provider = %provider.name, z = z, base_y = base_y, base_x = base_x, "Fetching tilemap");
 
@@ -457,19 +477,19 @@ fn fetch_tilemap(
     let response = agent
         .get(&url)
         .call()
-        .map_err(|e| format!("Tilemap network error: {e}"))?;
+        .map_err(|e| TilemapFetchError::Failed(format!("Tilemap network error: {e}")))?;
 
     let body =
         read_body_capped(response.into_body(), TILEMAP_BODY_MAX_BYTES).map_err(|e| match e {
-            ureq::Error::BodyExceedsLimit(_) => format!(
+            ureq::Error::BodyExceedsLimit(_) => TilemapFetchError::TooLarge(format!(
                 "Tilemap refused: the response body is larger than the {} limit for a tilemap",
                 describe_body_limit(TILEMAP_BODY_MAX_BYTES)
-            ),
-            _ => format!("Failed to read tilemap response: {e}"),
+            )),
+            _ => TilemapFetchError::Failed(format!("Failed to read tilemap response: {e}")),
         })?;
 
-    let tilemap_response: TilemapResponse =
-        serde_json::from_slice(&body).map_err(|e| format!("Failed to parse tilemap JSON: {e}"))?;
+    let tilemap_response: TilemapResponse = serde_json::from_slice(&body)
+        .map_err(|e| TilemapFetchError::Failed(format!("Failed to parse tilemap JSON: {e}")))?;
 
     // Convert u8 (0/1) to bool
     let data: Vec<bool> = tilemap_response.data.into_iter().map(|v| v != 0).collect();
@@ -477,11 +497,11 @@ fn fetch_tilemap(
     let expected_len =
         (tilemap_cache::TILEMAP_GRID_SIZE * tilemap_cache::TILEMAP_GRID_SIZE) as usize;
     if data.len() != expected_len {
-        return Err(format!(
+        return Err(TilemapFetchError::Failed(format!(
             "Unexpected tilemap data length: got {}, expected {}",
             data.len(),
             expected_len
-        ));
+        )));
     }
 
     Ok(data)
@@ -517,6 +537,19 @@ fn check_tile_availability(
             );
             return Some(available);
         }
+        // A region whose tilemap was refused for its size stays unknown until
+        // that verdict expires, instead of being downloaded again for every
+        // tile in it (#576 RV19a-10).
+        if cache.is_refused(&provider.name, z, y, x) {
+            tracing::trace!(
+                provider = %provider.name,
+                z = z,
+                y = y,
+                x = x,
+                "Tilemap refused earlier for this region, availability unknown"
+            );
+            return None;
+        }
     }
 
     // Cache miss - fetch tilemap for this region
@@ -549,6 +582,13 @@ fn check_tile_availability(
             Some(available)
         }
         Err(e) => {
+            // Only the size refusal is remembered: a network or parse failure
+            // may clear up, so the region is asked again next time.
+            if matches!(e, TilemapFetchError::TooLarge(_)) {
+                tilemap_cache
+                    .lock()
+                    .insert_refused(&provider.name, z, base_y, base_x);
+            }
             tracing::warn!(
                 provider = %provider.name,
                 z = z,
