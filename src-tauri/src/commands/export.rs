@@ -130,10 +130,10 @@ fn export_format_with_notes(
                 path = ?path,
                 purpose = "export project for sharing",
                 format = format,
-                reason = %e,
+                reason = %format_args!("{e:#}"),
                 "{} export failed", format.to_uppercase()
             );
-            Err(e.to_string())
+            Err(format!("{e:#}"))
         }
     }
 }
@@ -199,8 +199,8 @@ pub async fn export_image(
         "No project open".to_string()
     })?;
 
-    // Never let an image export clobber a file the open project owns: the raw
-    // file write in `export/image.rs` would overwrite the live database, or the
+    // Never let an image export clobber a file the open project owns: the export
+    // renamed into place by `export/image.rs` would replace the live database, or the
     // `.plnx` sibling holding every saved dive plan.
     //
     // `is_project_owned_file`, not `is_open_project_file`: this arm used the
@@ -275,12 +275,12 @@ pub async fn export_image(
                 path = ?path,
                 purpose = "export map image for sharing",
                 format = ?options.format,
-                reason = %e,
+                reason = %format_args!("{e:#}"),
                 "Image export failed"
             );
         }
 
-        result.map_err(|e| e.to_string())
+        result.map_err(|e| format!("{e:#}"))
     })
     .await
     .map_err(|e| {
@@ -339,10 +339,10 @@ pub(crate) fn export_image_impl(
                 path = ?path,
                 purpose = "export map image for sharing",
                 format = ?options.format,
-                reason = %e,
+                reason = %format_args!("{e:#}"),
                 "Map image export failed"
             );
-            Err(e.to_string())
+            Err(format!("{e:#}"))
         }
     }
 }

@@ -2417,9 +2417,9 @@ mod tests {
 
     #[test]
     fn re_export_replaces_the_target_and_leaves_no_temp() {
-        // #570: both writers (the `.tml` zip and the plain `.tmlu`) build the file
-        // beside the target and rename it over, so a re-export leaves exactly one
-        // entry - the new, parseable export.
+        // #570: a re-export leaves exactly one entry - the new, parseable export -
+        // and no temp. This alone cannot tell an atomic write from a direct one;
+        // the symlinked-target test below is what pins both writers to the rename.
         let project = simple_project();
         for name in ["cave.tml", "cave.tmlu"] {
             let dir = tempfile::TempDir::new().unwrap();

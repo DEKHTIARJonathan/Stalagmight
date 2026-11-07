@@ -38,6 +38,10 @@ pub fn write_atomic(
                 path.display()
             )
         })?;
+    // Before any content is written, so the export never exists at a wider mode
+    // than the file it replaces.
+    #[cfg(unix)]
+    inherit_destination_mode(&file, path);
     // The file handle is closed by the time `fill_and_sync` returns, which
     // Windows requires before the temp can be renamed or removed.
     let result = fill_and_sync(file, write).and_then(|()| {
@@ -66,8 +70,34 @@ fn fill_and_sync(file: File, write: impl FnOnce(&mut BufWriter<File>) -> Result<
     file.sync_all().context("Failed to sync the export to disk")
 }
 
-/// `<dir>/.<name>.<pid>-<n>.stalagmight-export.tmp`: hidden, unique per process
-/// and per call, and never a prefix match for the project's own backup scan.
+/// Give the temp the mode of the file it will replace. A truncating write kept
+/// the existing inode and so its mode; a freshly created temp is
+/// `0o666 & ~umask`, and the rename would carry that onto the target, so an
+/// export the user had `chmod 600`'d would come back world-readable. A NEW
+/// export (no target yet) keeps the umask default, as before.
+///
+/// Unix-only: on Windows the governing ACL is inherited from the directory by
+/// both files. Best-effort, as in the config writer
+/// (`crates/core/src/config/atomic_write.rs`): an export must not fail over the
+/// mode. Setuid/setgid/sticky are dropped.
+#[cfg(unix)]
+fn inherit_destination_mode(temp: &File, dest: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let Ok(metadata) = std::fs::metadata(dest) else {
+        return;
+    };
+    let mode = metadata.permissions().mode() & 0o777;
+    if let Err(e) = temp.set_permissions(std::fs::Permissions::from_mode(mode)) {
+        tracing::warn!(
+            error = %e,
+            "Could not carry the export target's permissions onto its replacement"
+        );
+    }
+}
+
+/// `<dir>/.<name>.<uuid>.stalagmight-export.tmp`: hidden on Unix, unpredictable,
+/// and (unless the project file itself starts with a dot) never a prefix match
+/// for the project's own backup scan.
 fn temp_path_for(path: &Path) -> Result<PathBuf> {
     let name = path
         .file_name()
@@ -170,5 +200,21 @@ mod tests {
             .file_type()
             .is_symlink());
         assert_eq!(std::fs::read(&target).unwrap(), b"export");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn re_export_keeps_the_target_mode() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("cave.csv");
+        std::fs::write(&target, b"old").unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+        write_atomic(&target, |w| Ok(w.write_all(b"new")?)).unwrap();
+
+        let mode = std::fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert_eq!(std::fs::read(&target).unwrap(), b"new");
     }
 }
