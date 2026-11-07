@@ -1029,10 +1029,13 @@ locations:
   in a crash line, a fuzz failure and a journey's abort reason. A failure's
   full line is in the session's `actions.jsonl` (`uat/run.jsonl` for a
   journey's abort); a crash keeps no copy, as for its other lines. Every
-  line it keeps has the
-  checkout folded to `<repo>` and the home directory to `~`
-  (`foldLocalPaths`), so a `reproduce:` line's fixture path or a session
-  directory in a headline does not name the user. A fixture prints by name
+  line it keeps has the checkout folded to `<repo>`, the home directory to
+  `~`, `CARGO_TARGET_DIR` to `<target>` and the temp directory
+  (`os.tmpdir()`, and its real path) to `<tmp>` (`foldLocalPaths`, the
+  longest root first; #576 W58), so a `reproduce:` line's fixture path, a
+  session directory in a headline, a build's output path or a save under the
+  temp directory does not name the user. A path outside those roots prints
+  as it is. A fixture prints by name
   only when the repo tracks it (`git ls-files e2e/fixtures`); any other - a
   `.stalx` dropped into `e2e/fixtures/` for a local run, or one a trace or the
   knob names - prints as a tag, `<private-fixture#xxxxx>` (`crc32.shortId` of
@@ -1086,14 +1089,16 @@ locations:
   that return those record their full results in the session's
   `actions.jsonl`. The server's stderr - an `app_start` build's output, whose
   cargo `Compiling` and Tauri `Built application at:` lines name the checkout -
-  is passed through a line at a time with the checkout folded to `<repo>` and
-  the home directory to `~` (#576 RV19b-P8, `lib/foldedLines.ts`), and so is
+  is passed through a line at a time, folded by `foldLocalPaths` (the checkout
+  to `<repo>`, the home directory to `~`, `CARGO_TARGET_DIR` to `<target>`,
+  the temp directory to `<tmp>`; #576 RV19b-P8, `lib/foldedLines.ts`), and so is
   it by `agent:bridge`, which inherited it before (#576 W51).
 - A session that builds - `agent:scenario`, `agent:journeys`, `agent:smoke`
   and the MCP server's `app_start`, and the Tier 2 OS helper's `cargo build
   --release` (`os/helper.ts`, #576 W51) - passes `pnpm tauri build`'s stdout and
-  stderr to its own stderr the same way, a line at a time with the checkout
-  folded to `<repo>` and the home directory to `~`, and folds its `Rebuilding:`
+  stderr to its own stderr the same way, a line at a time folded by
+  `foldLocalPaths` (so a `CARGO_TARGET_DIR` outside the checkout and the home
+  directory prints as `<target>`), and folds its `Rebuilding:`
   reasons and build log lines too (#576 W47-NF3, `lib/build.ts`
   `runBuildCommand`, `buildOutput.test.ts`).
 - `fuzz-matrix` prints a failed cell's FAIL block as the child wrote it. For

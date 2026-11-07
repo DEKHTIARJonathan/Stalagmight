@@ -14,7 +14,7 @@ import { fileURLToPath } from 'url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { describeRunError } from './fuzzHarness';
-import { scenarioFailOutput, shareableErrorText, shareableFailureText, shareableTail } from './shareableFailure';
+import { foldLocalPaths, scenarioFailOutput, shareableErrorText, shareableFailureText, shareableTail } from './shareableFailure';
 
 const NAME = 'qzCaveA';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -74,8 +74,9 @@ describe("a third-party error's first line prints as its length (#576 W58 Q3)", 
       expect(out, err.message).not.toContain(NAME);
       expect(out.split('\n')[1], err.message).toMatch(/^a third-party \w+: \(\d+ characters withheld\)$/);
     }
+    // The count is of the line as the path folds left it (`<tmp>` for the temp dir).
     expect(scenarioFailOutput('x', nodeError()).split('\n')[1]).toBe(
-      `a third-party Error: (${nodeError().message.length} characters withheld)`,
+      `a third-party Error: (${foldLocalPaths(nodeError().message).length} characters withheld)`,
     );
     expect(scenarioFailOutput('x', syntaxError()).split('\n')[1]).toMatch(/^a third-party SyntaxError: /);
   });
@@ -93,7 +94,7 @@ describe("a third-party error's first line prints as its length (#576 W58 Q3)", 
     const err = nodeError();
     const crash = shareableErrorText(err);
     expect(crash).not.toContain(NAME);
-    expect(crash.split('\n')[0]).toBe(`a third-party Error: (${err.message.length} characters withheld)`);
+    expect(crash.split('\n')[0]).toBe(`a third-party Error: (${foldLocalPaths(err.message).length} characters withheld)`);
     expect(crash.split('\n').slice(1).every((line) => /^\s+at |^ {2}\(\d+ line/.test(line))).toBe(true);
     expect(shareableTail([`fatal: ${crash.split('\n')[0]}`])).toBe(`fatal: ${crash.split('\n')[0]}`);
     expect(shareableFailureText(crash)).toBe(shareableFailureText(shareableFailureText(crash)));

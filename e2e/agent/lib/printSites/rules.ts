@@ -29,7 +29,7 @@ export const R = {
   REPO: 'a repo-relative path, a line number or a rule of the public tree (repo tooling; never the app or its data)',
   REPO_TEXT: 'text of a tracked file of the public tree, or of a lint rule (repo tooling; never the app or its data)',
   DEV_TOOL: 'output of a developer tool run on the public tree (git, cargo, tsc, eslint, pnpm); no app data',
-  FOLDED: 'a path the harness made or was given, printed through foldLocalPaths (the checkout as <repo>, the home directory as ~)',
+  FOLDED: 'a path the harness made or was given, printed through foldLocalPaths (the checkout as <repo>, the home directory as ~, CARGO_TARGET_DIR as <target>, the temp dir as <tmp>)',
   FORWARD: 'the parameter of a wrapper whose calls are sinks of their own (`WRAPPERS`), checked there',
   SHAPED: 'a value already in the shareable form, made by an approved helper earlier in the same function',
 } as const;
@@ -81,7 +81,7 @@ export const HELPERS: Readonly<Record<string, string>> = {
  * and `R.FOLDED` holds for them only.
  */
 export const FOLDS: Readonly<Record<string, string>> = {
-  foldLocalPaths: 'the checkout folded to <repo> and the home directory to ~',
+  foldLocalPaths: 'the checkout folded to <repo>, the home directory to ~, CARGO_TARGET_DIR to <target> and the temp dir to <tmp>',
   redactCorpusText: "a private corpus entry's path and names folded to its corpus id",
   foldPrivateFixtures: 'a fixture name the repo does not track folded to its <private-fixture#xxxxx> tag (#576 W58 Q1)',
 };
