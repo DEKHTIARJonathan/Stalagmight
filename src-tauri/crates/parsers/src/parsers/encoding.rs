@@ -181,7 +181,23 @@ pub(crate) fn open_regular_file(path: &Path) -> Result<(std::fs::File, std::fs::
     if !metadata.is_file() {
         return Err(not_a_regular_file(path));
     }
+    #[cfg(test)]
+    {
+        if let Some(hook) = AFTER_THE_CHECK.take() {
+            hook(path);
+        }
+    }
     Ok((file, metadata))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Run by [`open_regular_file`] on the path it has just checked, right
+    /// before it hands the handle back, on the thread that armed it: the
+    /// caller-level FIFO swap tests put a FIFO there, as a racing process
+    /// could (#576 RV19a-6).
+    static AFTER_THE_CHECK: std::cell::Cell<Option<Box<dyn FnOnce(&Path)>>> =
+        const { std::cell::Cell::new(None) };
 }
 
 /// How long [`open_regular_file`] waits out a lease that holds its open up: a
@@ -626,6 +642,45 @@ mod tests {
         );
     }
 
+    /// #576 RV19a-6: the test above pins `open_regular_file`; this pins its
+    /// callers. A FIFO is swapped in at the checked path the moment the check
+    /// passes, so a caller that opened the path again would block on it, and
+    /// one that stopped calling `open_regular_file` would not swap at all:
+    /// each must hand back the bytes of the file that was checked.
+    #[cfg(unix)]
+    #[test]
+    fn every_caller_reads_the_checked_handle_not_a_fifo_swapped_in_after() {
+        let callers: [(&str, fn(&Path) -> Result<Vec<u8>>); 2] = [
+            ("read_capped", |path| {
+                read_capped(path, FileFamily::SurveyText)
+            }),
+            ("stream_import_file", |path| {
+                let mut bytes = Vec::new();
+                stream_import_file(path, |chunk| bytes.extend_from_slice(chunk))?;
+                Ok(bytes)
+            }),
+        ];
+        let mut outcomes = Vec::new();
+        for (name, caller) in callers {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("cave.dat");
+            std::fs::write(&path, b"#UNITS").unwrap();
+            let checked = path.clone();
+            let outcome = fifo_test_support::within_five_seconds(&path, move || {
+                let swapped = fifo_test_support::swap_in_a_fifo_after_the_check();
+                let read = caller(&checked)
+                    .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                    .map_err(|e| format!("{e:#}"));
+                (swapped.get(), read)
+            });
+            println!("{name}: (FIFO swapped in, read) = {outcome:?}");
+            outcomes.push((name, outcome));
+        }
+        for (name, outcome) in outcomes {
+            assert_eq!(outcome, Some((true, Ok("#UNITS".to_string()))), "{name}");
+        }
+    }
+
     /// Each import extension streams under its own family's ceiling.
     #[test]
     fn an_import_file_takes_its_familys_ceiling_by_extension() {
@@ -651,7 +706,9 @@ mod tests {
 #[cfg(all(test, unix))]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 pub(crate) mod fifo_test_support {
+    use std::cell::Cell;
     use std::path::Path;
+    use std::rc::Rc;
 
     /// A named pipe at `path`, made with the system's `mkfifo`.
     pub(crate) fn make_fifo(path: &Path) {
@@ -660,6 +717,21 @@ pub(crate) mod fifo_test_support {
             .status()
             .unwrap();
         assert!(status.success(), "premise: mkfifo made {}", path.display());
+    }
+
+    /// Arm [`super::open_regular_file`], on the calling thread only, to swap
+    /// the path it has just checked for a FIFO - what a racing process could
+    /// do before a caller opens that path again - and return a flag that says
+    /// whether it did.
+    pub(crate) fn swap_in_a_fifo_after_the_check() -> Rc<Cell<bool>> {
+        let swapped = Rc::new(Cell::new(false));
+        let flag = Rc::clone(&swapped);
+        super::AFTER_THE_CHECK.set(Some(Box::new(move |path: &Path| {
+            std::fs::remove_file(path).unwrap();
+            make_fifo(path);
+            flag.set(true);
+        })));
+        swapped
     }
 
     /// Run `f` on its own thread and give it five seconds. On a timeout the

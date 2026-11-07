@@ -873,6 +873,39 @@ mod tests {
         }
     }
 
+    /// #576 RV19a-6: the zipped reader reads the archive through the handle
+    /// `open_regular_file` checked. A FIFO is swapped in at the path the
+    /// moment the check passes, so a reader that opened the path again would
+    /// block on it, and one that stopped calling `open_regular_file` would not
+    /// swap at all: the archive that was checked must be the one read.
+    #[cfg(unix)]
+    #[test]
+    fn the_tml_reader_reads_the_checked_handle_not_a_fifo_swapped_in_after() {
+        use crate::parsers::encoding::fifo_test_support::{
+            swap_in_a_fifo_after_the_check, within_five_seconds,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("synthetic.tml");
+        let xml = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        write_tml_archive(&path, "Data.xml", xml.as_bytes());
+
+        let checked = path.clone();
+        let outcome = within_five_seconds(&path, move || {
+            let swapped = swap_in_a_fifo_after_the_check();
+            let read = load_xml(&checked)
+                .map(|loaded| loaded.xml)
+                .map_err(|e| format!("{e:#}"));
+            (swapped.get(), read)
+        });
+        println!(
+            "load_xml(.tml): (FIFO swapped in, XML bytes read) = {:?}",
+            outcome
+                .as_ref()
+                .map(|(swapped, read)| (swapped, read.as_ref().map(String::len)))
+        );
+        assert_eq!(outcome, Some((true, Ok(xml))));
+    }
+
     /// What a zipped load produced, in words for the test log.
     fn describe(outcome: Result<LoadedXml>) -> String {
         match outcome {
