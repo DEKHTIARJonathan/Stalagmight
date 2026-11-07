@@ -59,14 +59,24 @@ pub fn with_stalx_extension(path: PathBuf) -> PathBuf {
 /// with neither a `-wal` nor a `-journal` beside it. A read-only connection to
 /// that creates the `-wal` and `-shm` and cannot remove them when it closes
 /// (#576 RV8a-3, RV18-3), so it is opened READ_WRITE without CREATE instead,
-/// with `query_only` on: no statement can write through it, and with no `-wal`
-/// nothing is committed outside the file, so its last close has nothing to
-/// checkpoint into the file and removes the sidecars the open made. Every
-/// other file keeps the read-only open: a rollback-journal file's creates
-/// nothing, a hot journal still fails it with `SQLITE_READONLY_ROLLBACK`
-/// (which callers of [`Database::open_for_metadata`] rely on), and a WAL-mode
-/// file whose `-wal` is there - a live writer's, or one a crash left - is read
-/// as it was, never checkpointed by a reader.
+/// with `query_only` on: it refuses INSERT, UPDATE, DELETE and schema changes,
+/// so no statement the openers run writes through it (`query_only` does not
+/// stop `PRAGMA journal_mode`, which rewrites the header; no caller runs one,
+/// #576 RV19a-7). With no `-wal` nothing is committed outside the file, so
+/// its last close has nothing to checkpoint into the file and removes the
+/// sidecars the open made. Every other file keeps the read-only open: a
+/// rollback-journal file's creates nothing, a hot journal still fails it with
+/// `SQLITE_READONLY_ROLLBACK` (which callers of
+/// [`Database::open_for_metadata`] rely on), and a WAL-mode file whose `-wal`
+/// is there - a live writer's, or one a crash left - is read as it was, not
+/// checkpointed by a reader. The `-wal` is looked for beside the file a
+/// symlink points at, where SQLite keeps it (#576 RV19a-7).
+///
+/// One window stays open (#576 RV19a-7): a writer that starts on the file
+/// between the check and this connection's close commits into a `-wal`, and
+/// this connection, closing last, checkpoints those frames into the file. That
+/// is the writer's committed data, written where it would have gone anyway -
+/// not a corruption - but it is a write made by a reader's close.
 pub(super) fn connect_for_reading(path: &Path) -> rusqlite::Result<Connection> {
     use rusqlite::OpenFlags;
     if !wal_mode_with_nothing_beside(path) {
@@ -80,6 +90,10 @@ pub(super) fn connect_for_reading(path: &Path) -> rusqlite::Result<Connection> {
 /// Whether `path` is a SQLite database in WAL journal mode - the header's
 /// write and read format bytes (offsets 18 and 19) are 2 - with no `-wal` and
 /// no `-journal` beside it. Unreadable or not a database: no.
+///
+/// On unix "beside it" means beside the file a symlink resolves to: SQLite's
+/// unix VFS resolves the database path before it names the `-wal`, so looking
+/// beside the link missed a writer's `-wal` (#576 RV19a-7).
 fn wal_mode_with_nothing_beside(path: &Path) -> bool {
     use std::io::Read as _;
     let mut head = [0u8; 20];
@@ -87,9 +101,13 @@ fn wal_mode_with_nothing_beside(path: &Path) -> bool {
     let wal_mode = read.is_ok()
         && head.starts_with(b"SQLite format 3\0")
         && head.get(18..20) == Some(&[2u8, 2][..]);
+    #[cfg(unix)]
+    let resolved = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    #[cfg(not(unix))]
+    let resolved = path.to_path_buf();
     wal_mode
-        && !super::repair::sibling(path, "-wal").exists()
-        && !super::repair::sibling(path, "-journal").exists()
+        && !super::repair::sibling(&resolved, "-wal").exists()
+        && !super::repair::sibling(&resolved, "-journal").exists()
 }
 
 impl Database {
@@ -574,8 +592,10 @@ impl Database {
             anyhow::bail!("Not a Stalagmight project file: {}", path.display());
         }
 
-        // Open in read-only mode - no writes possible - leaving nothing beside a
-        // WAL-mode file (#576 W35-NF-1).
+        // Open for reading - read-only, or `query_only` for a WAL-mode file
+        // with nothing beside it, which this path runs nothing past - leaving
+        // nothing beside a WAL-mode file (#576 W35-NF-1; the limits are on
+        // `connect_for_reading`, #576 RV19a-7).
         let conn = connect_for_reading(path).context("Failed to open database read-only")?;
         super::check_schema(&conn)?;
 
