@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 const setTitle = vi.fn();
 vi.mock('@tauri-apps/api/window', () => ({
@@ -32,5 +34,17 @@ describe('applyWindowTitle', () => {
     await applyWindowTitle('two');
     expect(document.title).toBe('two');
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The mocks above and the e2e IPC mock both accept set_title unconditionally,
+// so neither can see the ACL. core:default grants only the window getters
+// (#618): without this explicit grant the real app rejects every setTitle.
+describe('capability grant', () => {
+  it('default.json grants core:window:allow-set-title to the main window', () => {
+    const path = resolve(__dirname, '../../../src-tauri/capabilities/default.json');
+    const cap = JSON.parse(readFileSync(path, 'utf8')) as { windows: string[]; permissions: unknown[] };
+    expect(cap.windows).toContain('main');
+    expect(cap.permissions).toContain('core:window:allow-set-title');
   });
 });
