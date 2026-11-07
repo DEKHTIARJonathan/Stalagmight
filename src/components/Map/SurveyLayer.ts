@@ -1937,9 +1937,9 @@ export default class SurveyLayer {
     const stations = this.stationsVisible ? 'visible' : 'none';
     const shots = this.shotsVisible ? 'visible' : 'none';
     this.map.setLayoutProperty(AUX_IDS.loopClosuresLayerId, 'visibility', stations);
-    this.map.setLayoutProperty(AUX_IDS.interactStationsLayerId, 'visibility', stations);
-    this.map.setLayoutProperty(AUX_IDS.interactShotsLayerId, 'visibility', shots);
-    this.map.setLayoutProperty(AUX_IDS.interactShotsMeasuredLayerId, 'visibility', shots);
+    this.interactHide.setLayerVisibility(AUX_IDS.interactStationsLayerId, stations);
+    this.interactHide.setLayerVisibility(AUX_IDS.interactShotsLayerId, shots);
+    this.interactHide.setLayerVisibility(AUX_IDS.interactShotsMeasuredLayerId, shots);
   }
 
   /**

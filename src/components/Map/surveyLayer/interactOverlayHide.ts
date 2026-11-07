@@ -93,7 +93,9 @@ export const INTERACT_HIDE_FALLBACK_MS = 2000;
  * setData) is the mechanism.
  *
  * Each hidden layer's prior visibility is captured and restored, so a layer the
- * user had hidden (stations / shots visibility toggle) is never forced back on.
+ * user had hidden (stations / shots visibility toggle) is never forced back on;
+ * a toggle flipped while the hide is pending goes through
+ * {@link setLayerVisibility}, which updates what the restore puts back.
  */
 export class InteractOverlayHideController {
   private active = false;
@@ -161,6 +163,17 @@ export class InteractOverlayHideController {
     for (const [id, vis] of saved) {
       if (this.map.getLayer(id)) this.map.setLayoutProperty(id, 'visibility', vis ?? 'visible');
     }
+  }
+
+  /**
+   * Set an overlay layer's visibility as the user's toggles now want it (the
+   * Stations / Shots toggles own three of the layers). A hide holding the layer
+   * restores this value rather than the one it captured, so a toggle flipped
+   * during the hide is not undone when the hide ends.
+   */
+  setLayerVisibility(id: string, vis: maplibregl.VisibilitySpecification): void {
+    if (this.active && this.saved.has(id)) this.saved.set(id, vis);
+    this.map.setLayoutProperty(id, 'visibility', vis);
   }
 
   /** Teardown: restore any hidden layers and drop the timer/listener. */
