@@ -107,7 +107,8 @@ export class InteractOverlayHideController {
   /**
    * `isLive` reports whether the map still has a style to restore into: false
    * once the map is removed, and while a lost WebGL context has it torn down.
-   * There, `getLayer` would throw, and there is nothing to restore anyway.
+   * There a restore writes nothing - `setLayoutProperty` reads the style
+   * without `?.` and would throw - and there is nothing to restore into anyway.
    */
   constructor(
     private readonly map: InteractHideMap,
@@ -149,7 +150,11 @@ export class InteractOverlayHideController {
     // with these layers hidden. A restore landing in that frame (the fallback
     // timer) finds none of them: keep the capture, still listening, for the
     // restore that follows the load (SurveyLayer's `beforeLoss`).
-    // `isLive` first: `getLayer` throws on a torn-down style.
+    // `isLive` first: on a torn-down style (the map removed, a lost context)
+    // `getLayer` finds none of the layers either (it returns undefined without
+    // a style), but that is not the loading frame: fall through and drop the
+    // capture. The write below needs the style - `setLayoutProperty` reads it
+    // without `?.` - and there is nothing to restore into anyway.
     if (
       this.isLive() &&
       this.saved.size > 0 &&
