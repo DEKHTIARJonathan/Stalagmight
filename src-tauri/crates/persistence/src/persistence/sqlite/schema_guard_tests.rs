@@ -144,6 +144,23 @@ fn every_open_of_an_existing_file_refuses_a_hostile_schema() {
              UPDATE sqlite_master SET name = CAST('project' AS BLOB) WHERE name = 'project';",
             "a schema object of an unexpected type",
         ),
+        // [#619] Names that are not UTF-8 would reach the authorizer, whose
+        // rusqlite wrapper panics on them. An index so named opened before.
+        (
+            "CREATE INDEX zzi ON shots (length);
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET name = 'zz' || CAST(x'ff' AS TEXT),
+               sql = 'CREATE INDEX \"zz' || CAST(x'ff' AS TEXT) || '\" ON shots (length)'
+             WHERE name = 'zzi';",
+            "a schema object whose name or SQL is not valid UTF-8",
+        ),
+        (
+            "PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET sql = CAST(replace(sql, 'name TEXT NOT NULL',
+               'name TEXT NOT NULL, \"c' || CAST(x'ff' AS TEXT) || '\" TEXT') AS BLOB)
+             WHERE name = 'project';",
+            "a schema object whose name or SQL is not valid UTF-8",
+        ),
     ] {
         let dir = TempDir::new().unwrap();
         let path = project_file_with(&dir, sql);

@@ -68,6 +68,8 @@ impl std::error::Error for RefusedSchemaObject {}
 /// call only innocuous functions. Then one pass over `sqlite_master`, which a
 /// file cannot shadow (`sqlite_` names are reserved) and whose reading runs no
 /// module code. It refuses, in order:
+/// - any row whose `name` or `sql` is not valid UTF-8 (#619): SQLite would hand
+///   such an identifier to the authorizer, whose rusqlite wrapper panics on it;
 /// - any object named `pragma_*` (any case): the file's own table or view of
 ///   that name would be read in place of SQLite's table-valued pragma by every
 ///   later probe, and could lie to all of them;
@@ -249,9 +251,24 @@ fn refused_by_master(
         ValueRef::Text(t) => Some(String::from_utf8_lossy(t).into_owned()),
         _ => None,
     };
+    // [#619] Every identifier SQLite keeps for the file comes from the `name`
+    // and `sql` cells, and SQLite hands identifiers to the authorizer
+    // ([`deny_stripped_sqlite_features`]), whose safe rusqlite wrapper panics
+    // on one that is not UTF-8. So a row whose bytes are not UTF-8, as text or
+    // as a blob, is refused here, before a statement can pass one on.
+    let utf8 = |v: ValueRef<'_>| match v {
+        ValueRef::Text(b) | ValueRef::Blob(b) => std::str::from_utf8(b).is_ok(),
+        _ => true,
+    };
     let mut stmt = conn.prepare("SELECT type, name, rootpage, sql FROM sqlite_master")?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
+        if !(utf8(row.get_ref(1)?) && utf8(row.get_ref(3)?)) {
+            return Ok(Some(RefusedSchemaObject {
+                what: "a schema object whose name or SQL is not valid UTF-8",
+                name: text(row.get_ref(1)?).unwrap_or_default(),
+            }));
+        }
         // Read loosely: a crafted row may store any column as any type, and that
         // must come back as this refusal, not as a conversion error.
         let (Some(kind), Some(name)) = (text(row.get_ref(0)?), text(row.get_ref(1)?)) else {
