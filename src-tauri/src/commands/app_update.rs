@@ -42,6 +42,7 @@ use std::task::Poll;
 use std::time::Duration;
 
 use serde::Serialize;
+use tauri::utils::config::BundleType;
 use tauri::{AppHandle, Emitter, State, Url};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use ts_rs::TS;
@@ -243,6 +244,44 @@ fn pubkey_present(conf_json: &str) -> bool {
 /// The error every command answers with while the updater has no public key.
 fn updater_not_configured() -> String {
     "This build has no update signing key, so it cannot check for updates".to_owned()
+}
+
+/// Why THIS install cannot replace itself with what the manifest offers, or
+/// `None` when it can.
+///
+/// A manifest carries one entry per OS/arch - the AppImage for Linux, the NSIS
+/// `-setup.exe` for Windows (`scripts/gen-updater-manifest.mjs`) - and
+/// tauri-plugin-updater 2.9 looks entries up by `{os}-{arch}` alone, never by
+/// how the running copy was installed. Without this gate a `.deb` install would
+/// download an AppImage its `install_deb` path rejects, an `.rpm` install would
+/// try to overwrite its package-owned binary with an AppImage, and an `.msi`
+/// install would run the NSIS installer and end up with a second, separately
+/// registered copy. Those installs update through their package instead.
+///
+/// `bundle` comes from the marker the bundler patches into each packaged
+/// binary. An unmarked binary (a bare `cargo build`, or a packaging step that
+/// stopped patching) is refused in a release build - fail closed, the updater
+/// goes quiet - but allowed in a debug build so the dev recipe
+/// (`STALAGMIGHT_UPDATE_URL`) keeps working.
+fn self_update_refusal(bundle: Option<BundleType>, release_build: bool) -> Option<String> {
+    let package = match bundle {
+        Some(BundleType::AppImage | BundleType::Nsis | BundleType::App | BundleType::Dmg) => {
+            return None
+        }
+        None if !release_build => return None,
+        None => {
+            return Some(
+                "This copy of Stalagmight was not installed from a release package, so it cannot update itself"
+                    .to_owned(),
+            )
+        }
+        Some(BundleType::Deb) => ".deb",
+        Some(BundleType::Rpm) => ".rpm",
+        Some(BundleType::Msi) => ".msi",
+    };
+    Some(format!(
+        "Stalagmight was installed from a {package} package, which the in-app updater cannot replace; install the new version the same way"
+    ))
 }
 
 /// Is this a manifest URL a release build may fetch?
@@ -477,6 +516,15 @@ pub async fn check_for_app_update(
     // load-bearing, not defensive.
     if !updater_configured() {
         return Err(updater_not_configured());
+    }
+    // Before any state is touched, for the same reason as the transport-failure
+    // arm below. Gating the check is enough: download and install refuse
+    // without the `Update` only a successful check parks.
+    if let Some(refusal) = self_update_refusal(
+        tauri::utils::platform::bundle_type(),
+        !cfg!(debug_assertions),
+    ) {
+        return Err(refusal);
     }
     let current_version = app.package_info().version.to_string();
     let track = state.get_config().general.update_track;
@@ -967,6 +1015,42 @@ mod tests {
             pubkey_present(conf),
             "the cached gate disagrees with tauri.conf.json"
         );
+    }
+
+    /// Only the installs the manifest's artifacts can replace may check; every
+    /// package-managed install is refused by name, and an unmarked binary only
+    /// in a release build.
+    #[test]
+    fn only_self_replaceable_installs_may_check() {
+        for allowed in [
+            BundleType::AppImage,
+            BundleType::Nsis,
+            BundleType::App,
+            BundleType::Dmg,
+        ] {
+            assert_eq!(
+                self_update_refusal(Some(allowed.clone()), true),
+                None,
+                "{allowed:?}"
+            );
+        }
+        for (refused, package) in [
+            (BundleType::Deb, ".deb"),
+            (BundleType::Rpm, ".rpm"),
+            (BundleType::Msi, ".msi"),
+        ] {
+            for release_build in [true, false] {
+                // An allowed install yields "", which names no package.
+                let message =
+                    self_update_refusal(Some(refused.clone()), release_build).unwrap_or_default();
+                assert!(
+                    message.contains(package),
+                    "{refused:?} must be refused naming {package}, got {message:?}"
+                );
+            }
+        }
+        assert!(self_update_refusal(None, true).is_some());
+        assert_eq!(self_update_refusal(None, false), None);
     }
 
     // ── State machine ────────────────────────────────────────────────────────
