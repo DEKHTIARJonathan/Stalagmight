@@ -427,9 +427,12 @@ fn an_upgrade_replaces_a_partial_copy_left_by_an_earlier_attempt() {
 
 /// [#576 RVF-d-1] A read-only older file was never upgradable: the copy was
 /// kept and the upgrade then failed on its first write ("attempt to write a
-/// readonly database"). Its copy is read-only too, so now the flush cannot open
-/// it for writing: the open is still refused, with the copy's reason, and no
-/// copy is left behind. Skipped where file modes do not bind (running as root).
+/// readonly database"). Its copy is read-only too, so the flush cannot open it
+/// for writing, and the open was refused with the COPY's reason ("Could not keep
+/// a copy ...: Permission denied"), which points at the copy, not at the file.
+/// [#576 RV20-22] Refused before the copy is attempted, saying that the project
+/// file is read-only; still no copy is left behind. Skipped where file modes do
+/// not bind (running as root).
 #[cfg(unix)]
 #[test]
 fn a_read_only_older_file_is_refused_and_leaves_no_copy() {
@@ -454,8 +457,12 @@ fn a_read_only_older_file_is_refused_and_leaves_no_copy() {
     );
     let message = format!("{:#}", opened.unwrap_err());
     assert!(
-        message.contains("Could not keep a copy of this project before upgrading it"),
-        "{message}"
+        message.contains("This project file is read-only, so it was not upgraded"),
+        "the refusal names the read-only file, got {message:?}"
+    );
+    assert!(
+        !message.contains("Could not keep a copy"),
+        "and not the copy, which was never attempted, got {message:?}"
     );
     assert!(std::fs::read(&path).unwrap() == original, "left as it was");
     assert_eq!(b6_dir_listing(temp.path()), ["CaveA.stalx"], "no copy kept");

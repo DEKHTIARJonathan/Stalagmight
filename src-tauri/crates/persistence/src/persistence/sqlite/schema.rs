@@ -1620,6 +1620,28 @@ impl Database {
         if !self.has_project_data()? {
             return Ok(());
         }
+        // [#576 RV20-22] A file SQLite could only open read-only (its mode, a
+        // read-only volume) can never be upgraded: refused here, before a copy is
+        // attempted, and named for what it is. Left to the copy, it failed with the
+        // copy's "Permission denied" (the copy keeps the file's read-only mode, so
+        // the flush cannot open it), which points at the copy rather than the file.
+        // Still a permission denial underneath, so the load path keeps routing it
+        // as one.
+        if self.conn.is_readonly(MAIN_DB)? {
+            tracing::warn!(
+                path = %path,
+                purpose = "keep one copy per upgrade",
+                "The project file is read-only, so it cannot be upgraded; not upgrading"
+            );
+            return Err(anyhow::Error::new(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the file cannot be written to",
+            ))
+            .context(
+                "This project file is read-only, so it was not upgraded to the current file \
+                 format and was left as it was",
+            ));
+        }
         let path = Path::new(path);
         let Some(file_name) = path.file_name() else {
             return Ok(());
