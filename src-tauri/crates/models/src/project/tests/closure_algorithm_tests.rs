@@ -986,3 +986,90 @@ fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
         }
     }
 }
+
+// Group F: the metrics `adjust_loop_closures` restamps on the closures it adjusted
+
+/// The adjustment re-measures every closure on the adjusted geometry. It used to
+/// walk each loop WITH the closure's own zero-cost edge still in the graph, so
+/// the walk rode that edge between exactly the two stations being measured and
+/// restamped `path_length = 0` - a loop of four shots reported as zero metres
+/// long - and, through the zero-path guard, `error_percentage = 0` (#576 W36-NF1).
+/// The restamp now measures the loop the way creation does: without the
+/// closure's own edge.
+#[test]
+fn adjust_loop_closures_restamps_the_loop_length_not_zero() {
+    let mut project = Project::new("CaveA".to_string(), None);
+    // A:0=(0,0) north to A:1, east to A:2, south to A:3=(10,0).
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(90.0, 90.0, 10.0, 0.0, 0.0),
+                shot(180.0, 180.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    // B:0 merged onto A:3, one shot back west that falls 0.35 m short of A:0.
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(271.0, 271.0, 10.3, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(a, 3), StationRef::new(b, 0))
+        .unwrap();
+    let created = project
+        .create_loop_closure(
+            StationRef::new(b, 1),
+            StationRef::new(a, 0),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
+    assert!(
+        (created.path_length - 40.3).abs() < 1e-9,
+        "creation measures the four-shot loop: {}",
+        created.path_length
+    );
+
+    project
+        .adjust_loop_closures(
+            StationRef::new(a, 0),
+            ClosureStrategy::LeastSquaresWeighted,
+            &ClosureAdjustmentConfig::default(),
+        )
+        .unwrap();
+
+    // The only route between the endpoints other than the closure itself is the
+    // four (now adjusted) shots, so that is the loop length the restamp owes.
+    let loop_length: f64 = project
+        .sections
+        .iter()
+        .flat_map(|s| s.shots.iter())
+        .map(|s| s.length)
+        .sum();
+    let closure = &project.loop_closures[0];
+    println!(
+        "after adjust: path_length={} (adjusted loop {loop_length}), misclosure={}, error%={}",
+        closure.path_length, closure.misclosure_distance, closure.error_percentage
+    );
+    assert!(
+        (closure.path_length - loop_length).abs() < 1e-9,
+        "restamped path_length {} must be the adjusted loop length {loop_length}",
+        closure.path_length
+    );
+    assert!(
+        (closure.error_percentage - closure.misclosure_distance / closure.path_length * 100.0)
+            .abs()
+            < 1e-12,
+        "error_percentage {} must be misclosure / path_length * 100",
+        closure.error_percentage
+    );
+}

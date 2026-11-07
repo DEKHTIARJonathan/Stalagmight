@@ -175,7 +175,19 @@ impl Project {
         Ok(())
     }
 
+    /// Re-measure every closure in `component` on the adjusted geometry.
+    ///
+    /// Each loop is walked WITHOUT the closure's own edge. A closure is a
+    /// zero-cost pathfinding edge between exactly the two stations it measures,
+    /// so walking with it in rides that edge and restamps `path_length = 0` (and,
+    /// through the zero-path guard, `error_percentage = 0`) on every adjusted
+    /// closure (#576 W36-NF1). Other closures still shorten the walk: creation
+    /// measures before the new closure exists, and the merge demotion in
+    /// `integrity.rs` lifts out only the direct closures for the same reason.
     fn recompute_closure_metrics_for_component(&mut self, component: &HashSet<SectionId>) {
+        // Built once for the whole sweep rather than once per closure.
+        let merge_adj = self.build_station_merge_adjacency();
+        let mut closure_adj = self.build_station_closure_adjacency();
         let mut updates = Vec::new();
         for (idx, closure) in self.loop_closures.iter().enumerate() {
             if component.contains(&closure.station_a.section_id)
@@ -185,7 +197,9 @@ impl Project {
                     self.resolve_key(&closure.station_a),
                     self.resolve_key(&closure.station_b),
                 ) {
-                    if let Ok(metrics) = self.compute_closure_metrics(a, b) {
+                    let walk =
+                        || self.loop_length_without_own_edge(a, b, &merge_adj, &mut closure_adj);
+                    if let Ok(metrics) = self.compute_closure_metrics_with(a, b, walk) {
                         updates.push((idx, metrics));
                     }
                 }
@@ -201,6 +215,34 @@ impl Project {
                 closure.vertical_misclosure = metrics.vertical_misclosure;
             }
         }
+    }
+
+    /// Survey distance between `a` and `b` with every closure edge directly
+    /// between them (each closure on the pair, either orientation) left out of
+    /// `closure_adj`. The two neighbour lists are put back exactly as found, so
+    /// every closure of a sweep walks the same graph in the same order.
+    fn loop_length_without_own_edge(
+        &self,
+        a: StationRef,
+        b: StationRef,
+        merge_adj: &HashMap<StationRef, Vec<StationRef>>,
+        closure_adj: &mut HashMap<StationRef, Vec<StationRef>>,
+    ) -> f64 {
+        let saved_a = closure_adj.get(&a).cloned();
+        let saved_b = closure_adj.get(&b).cloned();
+        if let Some(neighbours) = closure_adj.get_mut(&a) {
+            neighbours.retain(|s| *s != b);
+        }
+        if let Some(neighbours) = closure_adj.get_mut(&b) {
+            neighbours.retain(|s| *s != a);
+        }
+        let length = self.path_length_dijkstra(a, b, merge_adj, Some(closure_adj));
+        for (station, saved) in [(a, saved_a), (b, saved_b)] {
+            if let Some(saved) = saved {
+                closure_adj.insert(station, saved);
+            }
+        }
+        length
     }
 
     fn apply_station_move_internal(

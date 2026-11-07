@@ -48,23 +48,25 @@ impl Project {
         // lookup would contain every section).
         let merge_adj = self.build_station_merge_adjacency();
 
-        let closure_adj = if include_closures {
-            let mut adj: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
-            for closure in &self.loop_closures {
-                let (Some(a), Some(b)) = (
-                    self.resolve_key(&closure.station_a),
-                    self.resolve_key(&closure.station_b),
-                ) else {
-                    continue;
-                };
-                adj.entry(a).or_default().push(b);
-                adj.entry(b).or_default().push(a);
-            }
-            Some(adj)
-        } else {
-            None
-        };
+        let closure_adj = include_closures.then(|| self.build_station_closure_adjacency());
         self.path_length_dijkstra(station_a, station_b, &merge_adj, closure_adj.as_ref())
+    }
+
+    /// Every loop closure as a zero-cost edge both ways, in `loop_closures`
+    /// order: the closure half of the graph [`Self::path_length_dijkstra`] walks.
+    pub(super) fn build_station_closure_adjacency(&self) -> HashMap<StationRef, Vec<StationRef>> {
+        let mut adj: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
+        for closure in &self.loop_closures {
+            let (Some(a), Some(b)) = (
+                self.resolve_key(&closure.station_a),
+                self.resolve_key(&closure.station_b),
+            ) else {
+                continue;
+            };
+            adj.entry(a).or_default().push(b);
+            adj.entry(b).or_default().push(a);
+        }
+        adj
     }
 
     /// Shortest survey-distance from `station_a` to `station_b`: shots are
