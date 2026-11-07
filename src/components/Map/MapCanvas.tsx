@@ -1236,6 +1236,12 @@ function MapCanvas({ onReloadMap, initialCenter }: MapCanvasProps) {
   useEffect(() => {
     if (surveyLayerRef.current) {
       surveyLayerRef.current.setActiveTool(activeTool);
+      // Under Pan/Zoom setActiveTool drops the layer's section hover. A switch TO
+      // Pan/Zoom clears the store's in the same update, so this re-applies null;
+      // but on map load this runs after MapHoverSync (a child, so its effects run
+      // first) pushed in the hover of a panel row still under the pointer, which
+      // must stay painted (#576 W26-NF2).
+      surveyLayerRef.current.setHoveredSection(useUIStore.getState().hoveredSectionId);
     }
   }, [activeTool, mapLoaded]);
 
