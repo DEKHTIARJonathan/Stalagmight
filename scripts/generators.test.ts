@@ -337,6 +337,19 @@ describe('shareable test ids and selectors', () => {
     expect(shareableSelector('span=section row', words)).toBe('span=<11 characters>');
     expect(shareableSelector("//span[normalize-space()='row']", words)).toContain("='<3 characters>'");
   });
+
+  // #576 RV20-14: `gas-readout-stage${i + 1}-reset` glues a counter to a source
+  // word. A lowercase source word of three letters or more with digits after it
+  // is kept; a short or capitalised one (a station name such as `A1`) is still
+  // counted, and so is an unknown word with digits.
+  it('keeps a source word with a counter glued on, and counts a station-like name', () => {
+    const words = new Set(['gas', 'readout', 'stage', 'reset', 'section', 'row', 'A', 'st']);
+    expect(shareableTestId('gas-readout-stage3-reset', words)).toBe('gas-readout-stage3-reset');
+    expect(shareableTestId('gas-readout-stage12-drop', new Set([...words, 'drop']))).toBe('gas-readout-stage12-drop');
+    expect(shareableTestId('section-row-A1', words)).toBe('section-row-<2 characters>');
+    expect(shareableTestId('section-row-st4', words)).toBe('section-row-<3 characters>');
+    expect(shareableTestId('section-row-qzcave3', words)).toBe('section-row-<7 characters>');
+  });
 });
 
 describe('generate-repro-report.mjs', () => {
