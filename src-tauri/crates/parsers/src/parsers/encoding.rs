@@ -17,6 +17,7 @@
 
 use std::io::Read;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 
@@ -144,6 +145,18 @@ pub(crate) fn describe_byte_limit(bytes: u64) -> String {
 /// waiting for a writer; the flag has no effect on reads of a regular file,
 /// the only kind handed back. A reader that streams instead of reading whole
 /// (the zipped `.tml`) refuses the same paths [`read_capped`] does.
+///
+/// A regular file under another process's lease (Linux `F_SETLEASE`, which
+/// Samba's kernel oplocks take) makes the non-blocking open fail at once with
+/// EWOULDBLOCK where a blocking one waited for the lease break, so that open
+/// is retried, backing off from 10 ms to 100 ms, for up to
+/// [`LEASE_BREAK_WAIT`] (#576 RV19a-5). Retrying works because the failed open
+/// still starts the break - the kernel signals the holder - so a later attempt
+/// succeeds once the holder lets go or the kernel revokes the lease. Opening
+/// without `O_NONBLOCK` after a look at the path would wait too, but reopen
+/// the window W30-7d closed: a FIFO swapped in after that look blocks it. Per
+/// open(2), EWOULDBLOCK under `O_NONBLOCK` means only that lease on Linux, and
+/// on macOS needs `O_SHLOCK`/`O_EXLOCK`, which are never passed here.
 pub(crate) fn open_regular_file(path: &Path) -> Result<(std::fs::File, std::fs::Metadata)> {
     let mut options = std::fs::OpenOptions::new();
     options.read(true);
@@ -152,7 +165,7 @@ pub(crate) fn open_regular_file(path: &Path) -> Result<(std::fs::File, std::fs::
         use std::os::unix::fs::OpenOptionsExt as _;
         options.custom_flags(libc::O_NONBLOCK);
     }
-    let file = match options.open(path) {
+    let file = match open_waiting_out_a_lease(&options, path, LEASE_BREAK_WAIT) {
         Ok(file) => file,
         // Windows will not open a folder at all, nor unix a socket: name either
         // the way the check below does rather than as an access error. Only the
@@ -169,6 +182,36 @@ pub(crate) fn open_regular_file(path: &Path) -> Result<(std::fs::File, std::fs::
         return Err(not_a_regular_file(path));
     }
     Ok((file, metadata))
+}
+
+/// How long [`open_regular_file`] waits out a lease that holds its open up: a
+/// little over Linux's default `/proc/sys/fs/lease-break-time` of 45 s, after
+/// which the kernel revokes the lease itself.
+const LEASE_BREAK_WAIT: Duration = Duration::from_secs(60);
+
+/// `options.open(path)`, retried while a lease holds it up (on unix, where
+/// [`open_regular_file`] opens without blocking) until `wait` has passed;
+/// after that the last attempt's error, the same EWOULDBLOCK, is returned.
+fn open_waiting_out_a_lease(
+    options: &std::fs::OpenOptions,
+    path: &Path,
+    wait: Duration,
+) -> std::io::Result<std::fs::File> {
+    let deadline = Instant::now() + wait;
+    let mut pause = Duration::from_millis(10);
+    loop {
+        match options.open(path) {
+            Err(e)
+                if cfg!(unix)
+                    && e.kind() == std::io::ErrorKind::WouldBlock
+                    && Instant::now() < deadline =>
+            {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(Duration::from_millis(100));
+            }
+            outcome => return outcome,
+        }
+    }
 }
 
 /// The refusal for a path that is not a regular file.
@@ -649,5 +692,121 @@ pub(crate) mod fifo_test_support {
         }
         let _ = worker.join();
         outcome
+    }
+}
+
+/// Opening a file somebody holds a lease on (#576 RV19a-5). Linux only:
+/// leases (`F_SETLEASE`, what Samba's kernel oplocks take) are a Linux
+/// interface, and taking one needs `unsafe` `fcntl` calls.
+#[cfg(all(test, target_os = "linux"))]
+#[expect(unsafe_code, clippy::unwrap_used, clippy::print_stdout)]
+mod lease_tests {
+    use std::io::Read as _;
+    use std::os::fd::AsRawFd as _;
+    use std::path::Path;
+    use std::time::{Duration, Instant};
+
+    use super::{open_regular_file, open_waiting_out_a_lease};
+
+    /// `F_SETSIG` from `<asm-generic/fcntl.h>` (x86-64 and arm64 use it), which
+    /// the libc crate does not export.
+    const F_SETSIG: libc::c_int = 10;
+
+    /// Hold a write lease on `path` from a read-only handle, or `None` (and
+    /// why) when the filesystem or kernel grants none. The lease-break signal
+    /// is set to SIGURG first: its default action is to ignore it, so the
+    /// break cannot kill the test process, and no signal disposition of the
+    /// process is changed.
+    fn hold_write_lease(path: &Path) -> Option<std::fs::File> {
+        let holder = std::fs::File::open(path).unwrap();
+        let fd = holder.as_raw_fd();
+        // SAFETY: fcntl on a descriptor `holder` owns, with integer arguments.
+        let signal = unsafe { libc::fcntl(fd, F_SETSIG, libc::SIGURG) };
+        assert_eq!(signal, 0, "F_SETSIG: {}", std::io::Error::last_os_error());
+        // SAFETY: as above.
+        let lease = unsafe { libc::fcntl(fd, libc::F_SETLEASE, libc::F_WRLCK) };
+        if lease == -1 {
+            println!(
+                "no write lease on {}: {}; nothing to test here",
+                path.display(),
+                std::io::Error::last_os_error()
+            );
+            return None;
+        }
+        println!("holding a write lease on {}", path.display());
+        Some(holder)
+    }
+
+    /// Give the lease up `after` from now, on another thread.
+    fn release_after(holder: std::fs::File, after: Duration) -> std::thread::JoinHandle<()> {
+        std::thread::spawn(move || {
+            std::thread::sleep(after);
+            // SAFETY: fcntl on a descriptor `holder` owns until it drops below.
+            let released =
+                unsafe { libc::fcntl(holder.as_raw_fd(), libc::F_SETLEASE, libc::F_UNLCK) };
+            assert_eq!(released, 0, "F_SETLEASE F_UNLCK");
+            drop(holder);
+        })
+    }
+
+    /// A blocking open waits for the lease holder to let go; the non-blocking
+    /// one `open_regular_file` makes failed at once with EWOULDBLOCK ("Resource
+    /// temporarily unavailable"), refusing a file that was readable a moment
+    /// later. It now waits the lease break out: this lease is released after
+    /// 300 ms and the open returns the file.
+    #[test]
+    fn an_open_held_up_by_a_lease_waits_for_the_lease_to_break() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cave.dat");
+        std::fs::write(&path, b"#UNITS").unwrap();
+        let Some(holder) = hold_write_lease(&path) else {
+            return;
+        };
+        let releaser = release_after(holder, Duration::from_millis(300));
+
+        let started = Instant::now();
+        let opened = open_regular_file(&path);
+        let waited = started.elapsed().as_secs_f64();
+        releaser.join().unwrap();
+        let read = opened.map_err(|e| format!("{e:#}")).map(|(mut file, _)| {
+            let mut text = String::new();
+            file.read_to_string(&mut text).unwrap();
+            text
+        });
+        println!("open under a lease released after 0.3 s: {read:?} after {waited:.3} s");
+        assert_eq!(read, Ok("#UNITS".to_string()));
+    }
+
+    /// The wait is bounded: a lease still held when it runs out leaves the
+    /// open failing with the EWOULDBLOCK it met rather than hanging the
+    /// import - here a 200 ms wait against a lease held for 1.5 s.
+    #[test]
+    fn an_open_gives_up_on_a_lease_that_outlasts_the_wait() {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cave.dat");
+        std::fs::write(&path, b"#UNITS").unwrap();
+        let Some(holder) = hold_write_lease(&path) else {
+            return;
+        };
+        let releaser = release_after(holder, Duration::from_millis(1500));
+        let mut options = std::fs::OpenOptions::new();
+        options.read(true).custom_flags(libc::O_NONBLOCK);
+
+        let started = Instant::now();
+        let opened = open_waiting_out_a_lease(&options, &path, Duration::from_millis(200))
+            .map(|_| ())
+            .map_err(|e| e.kind());
+        let waited = started.elapsed();
+        releaser.join().unwrap();
+        println!(
+            "200 ms wait under a lease held 1.5 s: {opened:?} after {:.3} s",
+            waited.as_secs_f64()
+        );
+        assert_eq!(opened, Err(std::io::ErrorKind::WouldBlock));
+        assert!(
+            waited >= Duration::from_millis(200) && waited < Duration::from_millis(1500),
+            "gave up after {waited:?}"
+        );
     }
 }
