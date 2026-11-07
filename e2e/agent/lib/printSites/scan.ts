@@ -27,9 +27,10 @@
  *   (its stderr is ours), a `.pipe(process.stdout)`, and a sink handed on as a
  *   value (`log = console.log`, `const out = process.stderr`).
  *
- * A value is followed through a `const` to what it was made from, and through
+ * A value is followed through a `const` to what it was made from, through
  * a call of a local arrow function to what it returns, each parameter standing
- * for its argument. `.length`, arithmetic, comparisons and `Math.*` are numbers
+ * for its argument, and through the `join` of a `const` array to what was
+ * pushed into it (report.md's `md`), while nothing else can add to it. `.length`, arithmetic, comparisons and `Math.*` are numbers
  * and need no reason. A value is marked folded inside a `FOLDS` call, in a line
  * the runner projects (it folds every line), or as the parameter of a function a
  * `FOLDING_CALLBACKS` helper calls.
@@ -223,6 +224,45 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     return undefined;
   };
 
+  /**
+   * An accumulator (`const md = []; md.push(..); md.join('\n')`): its elements,
+   * then each argument a `push` on it adds, in source order, so a line pushed
+   * past the helper that should print it (`P`) is a value of the join's site.
+   * Only while every other use of it only reads it: one handed to a function,
+   * assigned, or reordered (`unshift`, `sort`, `x[i] = ..`) can hold anything,
+   * so its join stays one value that needs a reason of its own.
+   */
+  const pushedTo = new Map<ts.Node, readonly ts.Expression[] | null>();
+  const READS = new Set(['join', 'length', 'slice', 'map', 'filter', 'forEach', 'some', 'every', 'includes', 'indexOf', 'find', 'at']);
+  const accumulated = (receiver: ts.Expression): readonly ts.Expression[] | undefined => {
+    const init = ts.isIdentifier(receiver) ? constInit(receiver) : undefined;
+    if (!init || !ts.isArrayLiteralExpression(init)) return undefined;
+    if (!pushedTo.has(init)) {
+      const found: ts.Expression[] = [];
+      let closed = true;
+      source.forEachChild(function uses(node: ts.Node): void {
+        if (ts.isIdentifier(node) && node.text === (receiver as ts.Identifier).text && constInit(node) === init) {
+          const parent = node.parent;
+          const member = ts.isPropertyAccessExpression(parent) && parent.expression === node ? parent.name.text : undefined;
+          if (member === 'push' && ts.isCallExpression(parent.parent) && parent.parent.expression === parent) {
+            found.push(...parent.parent.arguments);
+          } else if (
+            (ts.isVariableDeclaration(parent) || ts.isPropertyAccessExpression(parent) || ts.isPropertyAssignment(parent)) &&
+            parent.name === node
+          ) {
+            // Its own declaration, or a property of the same name.
+          } else if (!(member !== undefined && READS.has(member)) && !ts.isSpreadElement(parent) && !(ts.isForOfStatement(parent) && parent.expression === node)) {
+            closed = false;
+          }
+        }
+        node.forEachChild(uses);
+      });
+      pushedTo.set(init, closed ? found : null);
+    }
+    const pushed = pushedTo.get(init);
+    return pushed ? [...init.elements, ...pushed] : undefined;
+  };
+
   /** One printed part: literal text, or a value. */
   type Part = { lit: string } | { expr: ts.Expression };
   const flatten = (node: ts.Expression): Part[] => {
@@ -236,17 +276,18 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.PlusToken) {
       return [...flatten(node.left), ...flatten(node.right)];
     }
-    // `[a, b].join(sep)`: the elements, the separator between them.
-    if (
-      ts.isCallExpression(node) &&
-      ts.isPropertyAccessExpression(node.expression) &&
-      node.expression.name.text === 'join' &&
-      ts.isArrayLiteralExpression(node.expression.expression)
-    ) {
+    // `[a, b].join(sep)`, or an accumulator's: the elements, the separator between them.
+    const joined =
+      ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'join'
+        ? ts.isArrayLiteralExpression(node.expression.expression)
+          ? node.expression.expression.elements
+          : accumulated(node.expression.expression)
+        : undefined;
+    if (joined && ts.isCallExpression(node)) {
       const sepArg = node.arguments[0];
       const sep = sepArg && ts.isStringLiteralLike(sepArg) ? sepArg.text : ',';
       const parts: Part[] = [];
-      node.expression.expression.elements.forEach((el, i) => {
+      joined.forEach((el, i) => {
         if (i > 0) parts.push({ lit: sep });
         if (!ts.isSpreadElement(el) && !ts.isOmittedExpression(el)) parts.push(...flatten(el));
         else parts.push({ expr: el as ts.Expression });
@@ -361,8 +402,11 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
           return;
         }
       }
-      if ([...flatten(node)].length > 1) {
-        for (const part of flatten(node)) if ('expr' in part) valuesOf(part.expr, withheld, out, seen, folded);
+      // A join of several parts, or an accumulator's (however few it holds), is its parts.
+      const parts = flatten(node);
+      const ofAccumulator = ts.isPropertyAccessExpression(node.expression) && last === 'join' && !!accumulated(node.expression.expression);
+      if (parts.length > 1 || ofAccumulator) {
+        for (const part of parts) if ('expr' in part) valuesOf(part.expr, withheld, out, seen, folded);
         return;
       }
       return add(node, last);

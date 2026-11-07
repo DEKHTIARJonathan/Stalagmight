@@ -129,7 +129,6 @@ export const GROUP: SiteGroup = {
         "a DOM node count: the harness's own in-page script returns `.length`",
     },
     'e2e/agent/scenarios/exportFuzzActions.ts': {
-      "ALL_FORMATS.join(',')": "the scenario's own format table (exportFuzzActions.ts ALL_FORMATS)",
     },
     'e2e/agent/scenarios/exportRoundtripFuzz.ts': {
       'fail: message': R.FORWARD,
@@ -146,7 +145,6 @@ export const GROUP: SiteGroup = {
         'enabledFormats keeps only entries of ALL_FORMATS and refuses any other (exportFuzzActions.ts:60-79)',
       'readImageOptions: name': 'an OracleName: runOracle dispatches on ORACLE_NAMES members only (oracleFromStep checks a trace\'s)',
       'readExtension: name': 'an OracleName: runOracle dispatches on ORACLE_NAMES members only (oracleFromStep checks a trace\'s)',
-      "ORACLE_NAMES.join(', ')": "the scenario's own oracle table (exportRoundtripFuzz.ts ORACLE_NAMES)",
       'run: replayPath': TRACE_PATH,
       'dumpTrace: replayPath': TRACE_PATH,
       [EXPORT_TRACE]: TRACE_PATH,
@@ -237,8 +235,6 @@ export const GROUP: SiteGroup = {
       'before.screen': SCREEN_ID,
       'escapeFrom: ESCAPE_BUDGET': 'the number 6 (importDialogModel.ts:507 ESCAPE_BUDGET)',
       'err.message': ORACLE_ERROR,
-      "gatesAtDispatch.join(' + ')":
-        "the gates pushed at importDialogFuzz.ts EXPORT CHORD: literals and `activeDialog=\"<shareableTestId>\"`",
       'move.testid':
         'a test id from a fixed set: orphanMove is move.testid only when ORPHAN_ACCEPTS / ORPHAN_DECLINES has it ' +
         '(importDialogFuzz.ts:654-655), and wizardCommit requires INCOMPLETE_GUARDED_MOVES to have it (:631)',

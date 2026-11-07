@@ -111,7 +111,8 @@ export const GROUP: SiteGroup = {
       "scrub(JSON.stringify(f.detail, null, 2)).split('\\n').join('\\n ')":
         "shareableFinding's detail (counts, code locations, harness labels) as indented JSON in a ```json fence; JSON.stringify escapes every newline inside a value",
       'process.platform': "Node's platform word (linux, darwin, win32, ...): a fixed set",
-      "md.join('\\n')": 'the lines P(...) pushed, each one a checked stream site of its own (P is a declared wrapper)',
+      // What P(...) pushes into md, which report.md is written from: each P call is a checked stream site of its own.
+      'P: s': R.FORWARD,
     },
     // The lint gates: repo-relative paths, line numbers, rule text, counts.
     [NO_SLEEP]: {
@@ -330,7 +331,7 @@ export const GROUP: SiteGroup = {
       '<module> -> outPath': {
         class: 'shareable',
         what: 'report.md',
-        reason: 'pasted into public issues: every line is pushed by P(...), a declared stream wrapper whose values are checked here',
+        reason: 'pasted into public issues: md.join of the lines pushed into md, each push a value of this write (P(...) checked at its calls)',
       },
     },
     [REPLAY]: {

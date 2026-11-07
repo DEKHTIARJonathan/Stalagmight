@@ -137,7 +137,6 @@ export const GROUP: SiteGroup = {
       'started.buildAction': STARTED_BUILD,
       'probeCase.label': "a label of the probe's own literal `cases` table",
       'suspect.label': "a label of the probe's own literal SUSPECTS table",
-      "broken.join(', ')": "labels of the probe's own literal SUSPECTS table",
       'baseline.arrived': "a boolean the probe's own in-page script computes from indexOf",
       'ceiling.arrived': "a boolean the probe's own in-page script computes from indexOf",
       'main: max': 'the --max length: parseArgs refuses anything but a positive integer',
@@ -238,7 +237,9 @@ export const GROUP: SiteGroup = {
       'process.versions.node': "Node's own version string (process.versions.node)",
       'process.versions.undici': "Node's bundled undici version string (process.versions.undici)",
       'browser.sessionId': "the session id webdriverio parsed from this probe's own loopback stub's reply (STUB_SESSION_ID)",
-      "seen.join(', ')": "`METHOD /path` of each request webdriverio made to this probe's own loopback stub",
+      // seen.push(`${req.method} ${req.url}`): each request webdriverio made to the stub.
+      'req.method': "the HTTP method of a request webdriverio made to this probe's own loopback stub",
+      'req.url': "the path of a request webdriverio made to this probe's own loopback stub (its WebDriver endpoints, /session...)",
     },
     'e2e/agent/session.ts': {
       "freshness.reasons.join('; ')": R.FOLDED,

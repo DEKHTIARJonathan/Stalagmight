@@ -48,8 +48,6 @@ export const GROUP: SiteGroup = {
       'args.extension':
         "'tml' or 'tmlu': drawn by ctx.pick(['tml', 'tmlu']), or on replay refused otherwise by readExtension (exportRoundtripFuzz.ts)",
       'firstDifference(c1, c2)': R.COUNT,
-      "lines.join('\\n')":
-        "checkShotMultiset's message: line 1 is the literal `X6 the shot set changed across an export + re-import`, every pushed line is a later line",
       'args.during.appMode':
         "printed only when APP_MODES (AppMode's words, src/store/uiStore.ts) has it, checked on the line before; else its length",
       'args.during.geometryMode':

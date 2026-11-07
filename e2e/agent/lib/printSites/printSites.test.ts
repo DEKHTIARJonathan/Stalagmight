@@ -297,4 +297,26 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
       'a.ts:1 [stream] <module>: n',
     ]);
   });
+
+  it('checks a line pushed straight into an accumulator a sink writes (#576 RV20-5: report.md)', () => {
+    const report = {
+      wrappers: { 'r.mjs': { P: 'stream' as const } },
+      fileHelpers: { 'r.mjs': { code: 'a string of its shape as itself, else its argShape' } },
+      fileSinks: { 'r.mjs': { '<module> -> outPath': { class: 'shareable' as const, what: 'report.md', reason: 'pasted into public issues' } } },
+      // The entry report.md had: the join, as if only P pushed.
+      allow: { 'r.mjs': { "md.join('\\n')": 'the lines P(...) pushed, each one a checked stream site', 'P: s': R.FORWARD } },
+    };
+    const pushed = check(
+      {
+        'r.mjs':
+          "const md = [];\nconst P = (s = '') => md.push(s);\nP(`# ${code(title)}`);\n" +
+          "md.push(`- Profile: ${start.profileDir}`);\nfs.writeFileSync(outPath, md.join('\\n'));\n",
+      },
+      report,
+    );
+    expect(pushed.unchecked).toEqual(['r.mjs:4 [file] start.profileDir']);
+    // Handed to a function, it can hold anything: its join stays one value that needs a reason of its own.
+    const handed = check({ 'r.mjs': "const md = [];\naddLines(md);\nfs.writeFileSync(outPath, md.join('\\n'));\n" }, { ...report, allow: {} });
+    expect(handed.unchecked).toEqual(["r.mjs:3 [file] md.join('\\n')"]);
+  });
 });
