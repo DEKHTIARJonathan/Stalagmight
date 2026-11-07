@@ -1144,11 +1144,15 @@ locations:
 - Every print and write site is checked in the source, not one at a time
   (#576 W51, `e2e/agent/lib/printSites/`). `printSites.test.ts` scans every
   non-test file of `e2e/agent`, `e2e/lib` and `scripts/` for what prints or
-  writes - `console.*`, `process.stdout`/`stderr.write`, `ctx.log`, a
-  `ctx.metric` key (the PASS/FAIL line prints the metrics), an error's
-  message (a runner prints its first line), a `report.md` step, a
-  file write or copy, a child process whose output is ours (`stdio:
-  'inherit'`, `execSync`'s default stderr), a sink handed on as a value - and
+  writes - every `console` method, `process.stdout`/`stderr.write`,
+  `process.emitWarning`, a context's `log` under any name (`ctx.log`,
+  `context.log`), a context's `metric` key (the PASS/FAIL line prints the
+  metrics), an error's message (`new Error(..)` or `Error(..)`; a runner
+  prints its first line), a line pushed into what `report.md` is joined
+  from, a file write or copy (`fs.writeSync` too), a child process whose
+  output is ours (`stdio: 'inherit'`, `execSync`'s default stderr), a sink
+  handed on as a value (`log = console.log`, `const c = console`, `import {
+  stdout } from 'node:process'`) - and
   fails on any value that reaches a shareable one unless it goes through a
   helper above, sits where the runner withholds it (after the first
   ` failed: ` of a first line, or on a later line), or has an entry in its

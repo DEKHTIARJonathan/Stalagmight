@@ -360,4 +360,39 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
     );
     expect(found.unchecked).toEqual(['b.ts:5 [stream] other: err.message']);
   });
+
+  it('finds every console method, a warning, Error() without new, an fd write, any context name, a stream under another name (#576 RV20-11)', () => {
+    const app = 'm.ts:1 [stream] <module>: station.name';
+    // Each probe: a label, its source, and what the guard reports.
+    const probes: [string, string, string[]][] = [
+      ['console.group', 'console.group(station.name);\n', [app]],
+      ['console.assert', 'console.assert(false, station.name);\n', [app]],
+      ['console.timeLog', 'console.timeLog(station.name);\n', [app]],
+      ['console.count', 'console.count(station.name);\n', [app]],
+      ["console['log']", "console['log'](station.name);\n", [app]],
+      ['process.emitWarning', 'process.emitWarning(station.name);\n', [app]],
+      ['const { error } = console', 'const { error } = console;\nerror(station.name);\n', ['m.ts:1 <module> -> console']],
+      // `c.log` reads as a progress line too; the console handed on is the finding.
+      ['const c = console', 'const c = console;\nc.log(station.name);\n', ['m.ts:2 [progress] <module>: station.name', 'm.ts:1 <module> -> console']],
+      ["import { stdout } from 'node:process'", "import { stdout } from 'node:process';\nstdout.write(station.name);\n", ['m.ts:1 <module> -> process.stdout']],
+      ["import { stderr } from 'process'", "import { stderr } from 'process';\nstderr.write(station.name);\n", ['m.ts:1 <module> -> process.stderr']],
+      ['const { stdout: out } = process', 'const { stdout: out } = process;\nout.write(station.name);\n', ['m.ts:1 <module> -> process.stdout']],
+      ['throw Error(x)', 'throw Error(station.name);\n', ['m.ts:1 [error] <module>: station.name']],
+      ['fs.writeSync(2, x)', 'fs.writeSync(2, station.name);\n', [app]],
+      ['fs.writeSync(fd, x)', 'fs.writeSync(fd, station.name);\n', ['m.ts:1 <module> -> fd']],
+      ['fs.writevSync(fd, [x])', 'fs.writevSync(fd, [station.name]);\n', ['m.ts:1 <module> -> fd']],
+      ['fs.openSync + writeSync', "const fd = fs.openSync(p, 'w');\nfs.writeSync(fd, station.name);\n", ['m.ts:2 <module> -> fd']],
+      ['context.log', 'export async function run(context) { context.log(`renamed ${station.name}`); }\n', ['m.ts:1 [progress] run: station.name']],
+    ];
+    const found = Object.fromEntries(
+      probes.map(([label, source]) => {
+        const result = check({ 'm.ts': source });
+        return [label, [...result.unchecked, ...result.unlisted]];
+      }),
+    );
+    expect(found).toEqual(Object.fromEntries(probes.map(([label, , expected]) => [label, expected])));
+    // Not a sink: a type, a patched method (mcp/hygiene.ts), a property of that name, an `isError` check.
+    const quiet = check({ 'm.ts': "type C = typeof console;\nconsole[m] = (...a) => w(a);\nconst o = { console: 1 };\nisError(station.name);\n" });
+    expect([...quiet.unchecked, ...quiet.unlisted]).toEqual([]);
+  });
 });

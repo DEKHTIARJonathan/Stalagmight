@@ -7,31 +7,38 @@
  * and the values.
  *
  * A site is a sink call:
- * - `stream`: `console.*`, `process.stdout.write` / `process.stderr.write`, or a
- *   call of a function a file declares as a wrapper of one (`smoke.ts`' `log`,
- *   the repro report's `P`);
- * - `progress`: `ctx.log`, printed through `shareableProgressLine`;
- * - `stream` too: the key of `ctx.metric` / `ctx.setMetric`, which the runner's
+ * - `stream`: every `console` method (`console['log']` too; `console.assert`'s
+ *   data, not its condition), `process.stdout.write` / `process.stderr.write`,
+ *   `process.emitWarning`, `fs.writeSync` / `writevSync` to descriptor 1 or 2,
+ *   or a call of a function a file declares as a wrapper of one (`smoke.ts`'
+ *   `log`, the repro report's `P`);
+ * - `progress`: `<context>.log` under any name (`ctx.log`, `context.log`),
+ *   printed through `shareableProgressLine`;
+ * - `stream` too: the key of `<context>.metric` / `setMetric`, which the runner's
  *   PASS/FAIL line prints (`JSON.stringify(metrics.metrics)`);
- * - `error`: `new <Name>Error(message)`, whose message a runner prints through
+ * - `error`: `new <Name>Error(message)` or `<Name>Error(message)` without `new`,
+ *   whose message a runner prints through
  *   `shareableErrorText` / `scenarioFailOutput`, which keep its first line
  *   (under `unprojected` prefixes - `scripts/` - the whole message prints);
  * - `return`: a `return` of a function a file declares as a builder of shared
  *   text (the repro report's `describeAction`);
  * - `file`: `writeFileSync`, `writeFile`, `appendFileSync`, `appendFile`,
- *   `createWriteStream`, a `.write` / `.end` on a stream one opened, and the
+ *   `createWriteStream`, `writeSync` / `writevSync` to another descriptor, a
+ *   `.write` / `.end` on a stream one opened, and the
  *   copies `copyFileSync`, `copyFile`, `cpSync`;
  * - `passthrough`: a child process's `stdio` (or `stdout` / `stderr` option)
  *   that hands it this process's stdout or stderr (`'inherit'`, `1`, `2`,
  *   `process.stdout`), an `execSync` / `execFileSync` that sets no `stdio`
  *   (its stderr is ours), a `.pipe(process.stdout)`, and a sink handed on as a
- *   value (`log = console.log`, `const out = process.stderr`).
+ *   value (`log = console.log`, `const out = process.stderr`, `const c =
+ *   console`, `const { error } = console`, `const { stdout } = process`,
+ *   `import { stdout } from 'node:process'`, anything imported from `console`).
  *
  * A value is followed through a `const` to what it was made from, through
  * a call of a local arrow function to what it returns, each parameter standing
  * for its argument, and through the `join` of a `const` array to what was
- * pushed into it (report.md's `md`), while nothing else can add to it. `.length`, arithmetic, comparisons and `Math.*` are numbers
- * and need no reason. A value is marked folded inside a `FOLDS` call, in a line
+ * pushed into it (report.md's `md`), while nothing else can add to it.
+ * `.length`, arithmetic, comparisons and `Math.*` are numbers and need no reason. A value is marked folded inside a `FOLDS` call, in a line
  * the runner projects (it folds every line), or as the parameter of a function a
  * `FOLDING_CALLBACKS` helper calls.
  *
@@ -100,10 +107,22 @@ export interface ScanOptions {
   unprojected: readonly string[];
 }
 
-const STREAM = /^(?:console\.(?:log|error|warn|info|debug|trace|table|dir)|process\.(?:stdout|stderr)\.write)$/;
-const FILE_WRITE = new Set(['writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream']);
-/** A scenario's metric: its key prints in the runner's PASS/FAIL line. */
-const METRIC = /^ctx\.(?:metric|setMetric)$/;
+/** Every console method prints (`group`, `assert`, `count`, `timeLog` too), and so does a process warning. */
+const STREAM = /^(?:console\.\w+|process\.(?:stdout|stderr)\.write|process\.emitWarning)$/;
+const FILE_WRITE = new Set(['writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream', 'writeSync', 'writevSync']);
+/** `fs.writeSync` / `writevSync` to one of these descriptors is stdout or stderr. */
+const STD_FD = /^(?:1|2|process\.(?:stdout|stderr)\.fd)$/;
+const FD_WRITE = new Set(['writeSync', 'writevSync']);
+/** A scenario's progress line, under whatever name its context has (`ctx.log`, `context.log`, `base.log`). */
+const PROGRESS = /^(?!console\.|Math\.)[\w$]+(?:\.[\w$]+)*\.log$/;
+/** A scenario's metric, under whatever name its context has: its key prints in the runner's PASS/FAIL line. */
+const METRIC = /^[\w$]+(?:\.[\w$]+)*\.(?:metric|setMetric)$/;
+/** `Error(message)` without `new` makes the same error: a constructor's name, capitalised. */
+const ERROR_CALL = /(?:^|\.)(?:[A-Z]\w*)?Error$/;
+/** Modules that hand out this process's streams or console under another name. */
+const STD_MODULE = /^(?:node:)?(?:process|console)$/;
+/** What a destructure or a named import of `process` takes that prints. */
+const PROCESS_SINKS = new Set(['stdout', 'stderr', 'emitWarning']);
 /** Copies: the target is the second argument, the content another file. */
 const FILE_COPY = new Set(['copyFileSync', 'copyFile', 'cpSync']);
 /** Child processes whose stderr is this process's unless `stdio` says otherwise. */
@@ -498,26 +517,35 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     if (ts.isCallExpression(node)) {
       const callee = text(node.expression);
       const last = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text : callee;
+      // The callee's name without whitespace or arguments (`context\n  .log` is `context.log`).
+      const named = calleeName(node.expression);
       const wrapper = Object.hasOwn(wrappers, callee) ? wrappers[callee] : undefined;
       const wrapped = typeof wrapper === 'object' ? wrapper.kind : wrapper;
       const printed = (args: readonly ts.Expression[]): readonly ts.Expression[] =>
-        typeof wrapper === 'object' ? args.filter((_, i) => wrapper.args.includes(i)) : args;
-      if (METRIC.test(callee)) {
+        typeof wrapper === 'object'
+          ? args.filter((_, i) => wrapper.args.includes(i))
+          : named === 'console.assert'
+            ? args.slice(1) // console.assert(condition, ...data) prints data, not the condition
+            : args;
+      const [first, ...rest] = node.arguments;
+      if (METRIC.test(named)) {
         // A metric's key prints in the PASS/FAIL line (`JSON.stringify(metrics.metrics)`); its value is a number.
         site(node, 'stream', callee, node.arguments.slice(0, 1).flatMap((arg) => messageValues(arg, false)));
-      } else if (STREAM.test(callee) || wrapped === 'stream') {
+      } else if (FD_WRITE.has(last) && first && STD_FD.test(text(first))) {
+        // fs.writeSync(1, text): stdout, and what it writes is the second argument.
+        site(node, 'stream', callee, rest.slice(0, 1).flatMap((arg) => messageValues(arg, false)));
+      } else if (STREAM.test(named) || wrapped === 'stream') {
         const values = printed(node.arguments).flatMap((arg) => messageValues(arg, false));
         site(node, inPage(node) ? 'page' : 'stream', callee, values);
-      } else if (callee === 'ctx.log' || wrapped === 'progress') {
+      } else if (PROGRESS.test(named) || wrapped === 'progress') {
         site(node, 'progress', callee, printed(node.arguments).flatMap((arg) => messageValues(arg, true)));
       } else if (wrapped === 'error') {
         // An error wrapper prints its first argument, unless it names others.
         const message = typeof wrapper === 'object' ? printed(node.arguments) : node.arguments.slice(0, 1);
         site(node, 'error', callee, message.flatMap((arg) => messageValues(arg, errorsProjected)));
       } else if (FILE_WRITE.has(last)) {
-        const [target, ...rest] = node.arguments;
         const values = rest.slice(0, 1).flatMap((arg) => messageValues(arg, false));
-        site(node, 'file', callee, values, target ? text(target) : '');
+        site(node, 'file', callee, values, first ? text(first) : '');
       } else if (FILE_COPY.has(last)) {
         const target = node.arguments[1];
         site(node, 'file', callee, [], target ? text(target) : '');
@@ -554,6 +582,50 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     }
     if (ts.isNewExpression(node) && /(?:^|\.)\w*Error$/.test(text(node.expression)) && node.arguments?.[0]) {
       site(node, 'error', `new ${text(node.expression)}`, messageValues(node.arguments[0], errorsProjected));
+    }
+    // `throw Error(message)`: the same error without `new`.
+    if (ts.isCallExpression(node) && ERROR_CALL.test(calleeName(node.expression)) && node.arguments[0]) {
+      site(node, 'error', text(node.expression), messageValues(node.arguments[0], errorsProjected));
+    }
+    // The console itself handed on (`const c = console`, `const { error } = console`, `run(console)`).
+    if (ts.isIdentifier(node) && node.text === 'console' && !inPage(node)) {
+      const parent = node.parent;
+      const ownName =
+        (ts.isPropertyAccessExpression(parent) && (parent.expression === node || parent.name === node)) ||
+        ((ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isBindingElement(parent) || ts.isPropertyAssignment(parent)) &&
+          parent.name === node) ||
+        ts.isTypeOfExpression(parent) ||
+        ts.isTypeQueryNode(parent);
+      const element = ts.isElementAccessExpression(parent) && parent.expression === node ? parent : undefined;
+      const call = element && ts.isCallExpression(element.parent) && element.parent.expression === element ? element.parent : undefined;
+      // `console[method] = ..` (mcp/hygiene.ts) replaces a method: whatever replaces it prints and is checked there.
+      const patched =
+        element && ts.isBinaryExpression(element.parent) && element.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && element.parent.left === element;
+      if (call) site(call, 'stream', text(call.expression), call.arguments.flatMap((arg) => messageValues(arg, false)));
+      else if (!ownName && !patched) site(node, 'passthrough', 'reference', [], 'console');
+    }
+    // `const { stdout } = process`: the stream (or `emitWarning`) under its own name.
+    if (ts.isVariableDeclaration(node) && node.initializer && text(node.initializer) === 'process' && ts.isObjectBindingPattern(node.name)) {
+      for (const element of node.name.elements) {
+        const taken = text(element.propertyName ?? element.name);
+        if (PROCESS_SINKS.has(taken)) site(element, 'passthrough', 'reference', [], `process.${taken}`);
+      }
+    }
+    // `import { stdout } from 'node:process'`, `import * as proc from 'process'`, anything from 'console'.
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && STD_MODULE.test(node.moduleSpecifier.text)) {
+      const module = node.moduleSpecifier.text.replace(/^node:/, '');
+      const clause = node.importClause;
+      const bindings = clause?.namedBindings;
+      if (clause?.name && (module === 'console' || clause.name.text !== 'process')) {
+        site(clause, 'passthrough', 'reference', [], `import ${clause.name.text} from '${module}'`);
+      }
+      if (bindings && ts.isNamespaceImport(bindings)) site(bindings, 'passthrough', 'reference', [], `import * from '${module}'`);
+      if (bindings && ts.isNamedImports(bindings)) {
+        for (const element of bindings.elements) {
+          const taken = (element.propertyName ?? element.name).text;
+          if (module === 'console' || PROCESS_SINKS.has(taken)) site(element, 'passthrough', 'reference', [], `${module}.${taken}`);
+        }
+      }
     }
     if (ts.isPropertyAssignment(node) && text(node.name) === 'stdio') {
       const init = text(node.initializer);
