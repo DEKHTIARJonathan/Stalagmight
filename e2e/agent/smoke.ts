@@ -12,6 +12,7 @@ import { readStore } from './lib/stores';
 import { LogCursor } from './lib/logs';
 import { invokeInApp } from './lib/page';
 import { isPortFree } from './lib/procs';
+import { shareableErrorText } from './lib/shareableFailure';
 
 function log(msg: string): void {
   process.stderr.write(`[smoke] ${msg}\n`);
@@ -95,6 +96,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`[smoke] fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+  // The shareable crash form (#576 W33-NF6): a crash in session setup can quote
+  // the app (an IPC rejection, a page script's error).
+  process.stderr.write(`[smoke] fatal: ${shareableErrorText(err)}\n`);
   process.exit(1);
 });

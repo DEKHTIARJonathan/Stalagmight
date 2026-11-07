@@ -21,6 +21,7 @@
  */
 import { AppSession } from './session';
 import { evalInApp } from './lib/page';
+import { shareableErrorText } from './lib/shareableFailure';
 
 interface Probe {
   /** serde's message, or null when the call unexpectedly succeeded. */
@@ -232,7 +233,9 @@ async function main(): Promise<number> {
     );
   } catch (err) {
     failed = true;
-    process.stdout.write(`probe failed: ${err instanceof Error ? err.stack : String(err)}\n`);
+    // The shareable crash form (#576 W33-NF6): a crash in session setup can quote
+    // the app (an IPC rejection, a page script's error).
+    process.stdout.write(`probe failed: ${shareableErrorText(err)}\n`);
   } finally {
     await session.stop('ipc-payload-probe');
   }
@@ -242,7 +245,9 @@ async function main(): Promise<number> {
 main().then(
   (code) => process.exit(code),
   (err: unknown) => {
-    process.stderr.write(`fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+    // The shareable crash form (#576 W33-NF6): a crash in session setup can quote
+    // the app (an IPC rejection, a page script's error).
+    process.stderr.write(`fatal: ${shareableErrorText(err)}\n`);
     process.exit(1);
   },
 );

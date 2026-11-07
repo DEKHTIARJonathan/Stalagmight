@@ -429,3 +429,25 @@ describe('agent:journeys prints its progress lines and abort reason shareable (#
     expect(named.filter((what) => what !== 'literal')).toEqual([]);
   });
 });
+
+describe('the other harness entry points print a crash in the shareable form (#576 W33-NF6)', () => {
+  it('prints shareableErrorText after `fatal: ` and `probe failed: `', () => {
+    // They call `main()` at module scope too, so their crash lines are checked in the source.
+    for (const entry of ['smoke.ts', 'ipc-payload-probe.ts', 'mcp/bridge.ts', 'mcp/smoke-client.ts', 'mcp/server.ts']) {
+      const source = fs.readFileSync(path.join(REPO, 'e2e/agent', entry), 'utf8');
+      const crashLines = source.split('\n').filter((line) => /`(?:\[[\w-]+\] )?(?:fatal|probe failed): /.test(line));
+      expect(crashLines.length, entry).toBeGreaterThan(0);
+      for (const line of crashLines) expect(line, entry).toContain('${shareableErrorText(err)}');
+    }
+  });
+
+  it('leaves the raw stack to shareableErrorText alone, in every file of the harness', () => {
+    const dir = path.join(REPO, 'e2e/agent');
+    const files = fs
+      .readdirSync(dir, { recursive: true, encoding: 'utf8' })
+      .filter((rel) => rel.endsWith('.ts') && !rel.endsWith('.test.ts') && !rel.startsWith('replays'));
+    expect(files.length).toBeGreaterThan(50);
+    const raw = files.filter((rel) => /\.stack\b/.test(fs.readFileSync(path.join(dir, rel), 'utf8')));
+    expect(raw).toEqual([path.join('lib', 'shareableFailure.ts')]);
+  });
+});

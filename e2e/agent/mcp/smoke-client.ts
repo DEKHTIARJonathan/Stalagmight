@@ -16,6 +16,8 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
+import { shareableErrorText } from '../lib/shareableFailure';
+
 const serverPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'server.ts');
 const withLifecycle = process.env.AGENT_MCP_SMOKE_LIFECYCLE !== '0';
 
@@ -274,6 +276,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  process.stderr.write(`fatal: ${err instanceof Error ? err.stack : String(err)}\n`);
+  // The shareable crash form (#576 W33-NF6): a crash in session setup can quote
+  // the app (an IPC rejection, a page script's error).
+  process.stderr.write(`fatal: ${shareableErrorText(err)}\n`);
   process.exit(1);
 });

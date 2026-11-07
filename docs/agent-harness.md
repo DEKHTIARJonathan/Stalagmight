@@ -1032,10 +1032,14 @@ locations:
   `actions.jsonl`; the full checks and reason are in the session's
   `uat/run.jsonl`.
 - A harness crash - a runner's `fatal:` line, `fuzz-shrink`'s `shrink
-  failed:` - prints the error's name, its headline in the same form, and its
-  stack frames, folded; the other lines of its message are counted
-  (`shareableErrorText`). A crash in session setup can carry an IPC rejection
-  or a page script's error, so the raw stack is not printed.
+  failed:`, and the `fatal:` line of `agent:smoke`, `agent:mcp`,
+  `agent:bridge`, `agent:mcp:smoke` and `ipc-payload-probe.ts` (whose
+  `probe failed:` too, #576 W33-NF6) - prints the error's name, its headline
+  in the same form, and its stack frames, folded; the other lines of its
+  message are counted (`shareableErrorText`). A crash in session setup can
+  carry an IPC rejection or a page script's error, so the raw stack is not
+  printed, by these or any other file of the harness
+  (`shareableRunnerOutput.test.ts`).
 - `fuzz-matrix` prints a failed cell's FAIL block as the child wrote it. For
   a cell that died without one, it prints the last lines of the child's output
   fail-closed (`shareableTail`): the session and verdict lines, progress lines
