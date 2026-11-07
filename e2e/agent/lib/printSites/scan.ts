@@ -287,7 +287,10 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     if (!pushedTo.has(init)) {
       const found: ts.Expression[] = [];
       let closed = true;
-      source.forEachChild(function uses(node: ts.Node): void {
+      // Its uses are in the block that declares it.
+      let scope: ts.Node = init;
+      while (!(ts.isBlock(scope) || ts.isSourceFile(scope) || ts.isCaseClause(scope) || ts.isModuleBlock(scope))) scope = scope.parent;
+      scope.forEachChild(function uses(node: ts.Node): void {
         if (ts.isIdentifier(node) && node.text === (receiver as ts.Identifier).text && constInit(node) === init) {
           const parent = node.parent;
           const member = ts.isPropertyAccessExpression(parent) && parent.expression === node ? parent.name.text : undefined;
@@ -562,6 +565,8 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
             ? args.slice(1) // console.assert(condition, ...data) prints data, not the condition
             : args;
       const [first, ...rest] = node.arguments;
+      // `throw Error(message)`: the same error without `new`.
+      if (ERROR_CALL.test(named) && first) site(node, 'error', callee, messageValues(first, errorsProjected));
       if (METRIC.test(named)) {
         // A metric's key prints in the PASS/FAIL line (`JSON.stringify(metrics.metrics)`); its value is a number.
         site(node, 'stream', callee, node.arguments.slice(0, 1).flatMap((arg) => messageValues(arg, false)));
@@ -617,13 +622,11 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     if (ts.isNewExpression(node) && /(?:^|\.)\w*Error$/.test(text(node.expression)) && node.arguments?.[0]) {
       site(node, 'error', `new ${text(node.expression)}`, messageValues(node.arguments[0], errorsProjected));
     }
-    // `throw Error(message)`: the same error without `new`.
-    if (ts.isCallExpression(node) && ERROR_CALL.test(calleeName(node.expression)) && node.arguments[0]) {
-      site(node, 'error', text(node.expression), messageValues(node.arguments[0], errorsProjected));
-    }
     // The console itself handed on (`const c = console`, `const { error } = console`, `run(console)`).
-    if (ts.isIdentifier(node) && node.text === 'console' && !inPage(node)) {
-      const parent = node.parent;
+    const consoleOf = ts.isIdentifier(node) && node.text === 'console' ? node.parent : undefined;
+    // `console.x` is a call or a member reference, found above; the rest is the console itself.
+    if (consoleOf && !(ts.isPropertyAccessExpression(consoleOf) && consoleOf.expression === node) && !inPage(node)) {
+      const parent = consoleOf;
       const ownName =
         (ts.isPropertyAccessExpression(parent) && (parent.expression === node || parent.name === node)) ||
         ((ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isBindingElement(parent) || ts.isPropertyAssignment(parent)) &&
@@ -683,7 +686,7 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
   const exported = new Map<string, ts.Node>();
   const isExported = (node: ts.Node): boolean =>
     ts.canHaveModifiers(node) && (ts.getModifiers(node) ?? []).some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
-  source.forEachChild(function exports(node: ts.Node): void {
+  if (Object.keys(wrappers).length > 0) source.forEachChild(function exports(node: ts.Node): void {
     if ((ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) && node.name && isExported(node)) exported.set(node.name.text, node);
     if (ts.isVariableStatement(node) && isExported(node)) {
       for (const decl of node.declarationList.declarations) if (ts.isIdentifier(decl.name)) exported.set(decl.name.text, decl);
