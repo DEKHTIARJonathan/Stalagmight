@@ -109,6 +109,7 @@ import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 
 import { shortId } from './crc32';
+import { noteFixtureName } from './privateFixtures';
 import { foldLocalPaths, shareableFailureText, valueShape } from './shareableFailure';
 
 /** Current trace schema. Bumped when a step shape changes incompatibly. */
@@ -1069,6 +1070,10 @@ export function readTrace(filePath: string): FuzzTrace {
   }
   if (!Array.isArray(parsed.steps)) throw new Error(`trace ${foldLocalPaths(filePath)} has no steps array`);
   parsed.steps.forEach((step, index) => validateStep(step, index, filePath));
+  // The fixtures it names fold to their tag in shareable output when the repo
+  // does not track them (#576 W58 Q1), wherever the run prints them next.
+  if (typeof parsed.fixture === 'string') noteFixtureName(parsed.fixture);
+  for (const step of parsed.steps) if (step.kind === 'reload') noteFixtureName(step.fixture);
   // Same non-quoting rule as `requireCorpusId`: the value is a survey's name.
   const leak = corpusNameLeakAt(parsed.steps);
   if (leak >= 0) {

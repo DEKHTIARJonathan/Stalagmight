@@ -8,16 +8,17 @@ import { R, type SiteGroup } from './rules';
 /**
  * The fuzz fixture (`lib/fuzzKnobs.ts` `fuzzFixture()`, `STALAGMIGHT_FUZZ_FIXTURE`).
  * It is the knob as the user wrote it, so an error or progress line prints it
- * folded (scenarioFailOutput / shareableProgressLine -> shareableFailureText ->
- * foldLocalPaths) and a metric key folds it in place (`foldLocalPaths(fixture)`).
- * The documented reproduce-line policy keeps it (#576 RV18-W23-4,
- * docs/agent-harness.md "What a run shares"). Whether a private fixture's name
- * should print at all is an open question in the W51 report.
+ * through the runner's projection (scenarioFailOutput / shareableProgressLine
+ * -> shareableFailureText), which folds paths and prints a fixture the repo
+ * does not track as its `<private-fixture#xxxxx>` tag (`foldPrivateFixtures`,
+ * #576 W58 Q1); a metric key prints it through `shareableFixtureName`. The
+ * documented reproduce-line policy keeps a tracked fixture's name (#576
+ * RV18-W23-4, docs/agent-harness.md "What a run shares").
  */
 const FIXTURE =
-  'the fixture as the user named it (default fractal_plant_iter3.stalx), folded by the runner (shareableFailureText -> ' +
-  'foldLocalPaths) or by foldLocalPaths at a metric key; the documented reproduce-line policy keeps it (RV18-W23-4); ' +
-  'see the W51 open question on private fixture names';
+  'the fixture as the user named it (default fractal_plant_iter3.stalx), printed through the runner\'s projection ' +
+  '(shareableFailureText -> foldLocalPaths and foldPrivateFixtures): a fixture the repo does not track prints as its ' +
+  'tag (#576 W58 Q1); the documented reproduce-line policy keeps a tracked one (RV18-W23-4)';
 
 /** A trace path: `writeRunTrace` / `openReplay`'s path, printed in a progress or error line, folded by the runner. */
 const TRACE_PATH =

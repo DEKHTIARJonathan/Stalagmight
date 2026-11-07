@@ -69,6 +69,7 @@ export const HELPERS: Readonly<Record<string, string>> = {
   shareableFinding: "a finding's shareable projection (scripts/lib/shareable-finding.mjs)",
   shareableSelector: 'a selector: its structure and the words of the production source, other text as its length',
   shareableTestId: 'a test id: the words of the production source, other text as its length',
+  shareableFixtureName: 'a fixture name: itself when the repo tracks it, else its <private-fixture#xxxxx> tag (#576 W58 Q1)',
   shareableSignature: 'the signature of the shareable failure text',
   describeSignature: "a signature's fields, each from shareableSignature",
 };
@@ -81,6 +82,7 @@ export const HELPERS: Readonly<Record<string, string>> = {
 export const FOLDS: Readonly<Record<string, string>> = {
   foldLocalPaths: 'the checkout folded to <repo> and the home directory to ~',
   redactCorpusText: "a private corpus entry's path and names folded to its corpus id",
+  foldPrivateFixtures: 'a fixture name the repo does not track folded to its <private-fixture#xxxxx> tag (#576 W58 Q1)',
 };
 
 /** Helpers that hand the function they are given only folded text, each with why. */

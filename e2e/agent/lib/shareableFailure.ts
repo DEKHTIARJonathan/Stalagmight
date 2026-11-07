@@ -22,6 +22,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 
 import { redactCorpusText } from './fixtureCorpus';
+import { foldPrivateFixtures } from './privateFixtures';
 
 /** The checkout: the session directories live in it (`.agent-artifacts/sessions/<id>`). */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
@@ -164,7 +165,8 @@ function withheldLine(count: number, where = "the full failure is in the session
 }
 
 /**
- * `message` with the corpus and path folds applied and every line the harness did not
+ * `message` with the corpus, path and private-fixture folds applied (a fixture
+ * the repo does not track prints as its tag, #576 W58 Q1) and every line the harness did not
  * word itself withheld, a run of them replaced by one count line. The headline
  * (line 1) stays - a scenario writes it from harness words, numbers and names
  * (scenario, fixture, move, screen) - except the app's text an
@@ -175,7 +177,7 @@ export function shareableFailureText(
   alsoKept: readonly RegExp[] = [],
   withheldWhere?: string,
 ): string {
-  const [first = '', ...rest] = foldLocalPaths(redactCorpusText(message)).split('\n');
+  const [first = '', ...rest] = foldPrivateFixtures(foldLocalPaths(redactCorpusText(message))).split('\n');
   const out = [shareableHeadline(first)];
   let withheld = 0;
   const flush = (): void => {
@@ -295,7 +297,7 @@ export function shareableTail(lines: readonly string[]): string {
     withheld = 0;
   };
   for (const raw of lines) {
-    const line = foldLocalPaths(redactCorpusText(raw));
+    const line = foldPrivateFixtures(foldLocalPaths(redactCorpusText(raw)));
     const progress = /^(\s+\S )(.*)$/.exec(line);
     const crash = /^(fatal|shrink failed): (?:(\w*Error): )?(.*)$/.exec(line);
     let kept: string | null = null;

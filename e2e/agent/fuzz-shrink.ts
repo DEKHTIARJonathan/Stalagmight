@@ -51,6 +51,7 @@ import {
   type TraceStep,
 } from './lib/fuzzTrace';
 import { ddmin, type ShrinkVerdict } from './lib/fuzzShrink';
+import { shareableFixtureName } from './lib/privateFixtures';
 import { cliValueShape, foldLocalPaths, shareableErrorText, valueShape } from './lib/shareableFailure';
 // Safe to import statically, unlike the scenarios below: this module freezes
 // nothing at import and reads `STALAGMIGHT_FUZZ_CORPUS_DIR` at call time, which
@@ -78,6 +79,9 @@ const shownFlag = (flag: string | undefined): string => (flag !== undefined && F
  * else by its shape (`valueShape`: a number as itself).
  */
 const envKey = (key: string): string => (/^STALAGMIGHT_[A-Z0-9_]{1,64}$/.test(key) ? key : valueShape(key));
+/** A knob's value as printed: the fixture knob by `shareableFixtureName` (#576 W58 Q1), any other folded. */
+const knobValue = (key: string, value: unknown): string =>
+  key === 'STALAGMIGHT_FUZZ_FIXTURE' ? shareableFixtureName(value) : foldLocalPaths(String(value));
 const gitRev = (rev: unknown): string =>
   typeof rev === 'string' && /^(?:[0-9a-f]{7,40}|unknown)$/.test(rev) ? rev.slice(0, 12) : valueShape(rev);
 
@@ -165,9 +169,9 @@ async function main(): Promise<number> {
   process.stdout.write(
     `session ${started.state} (${started.buildMode} build ${started.buildAction})\n` +
       `trace ${foldLocalPaths(args.trace)}\n` +
-      `  scenario=${trace.scenario} seed=${valueShape(trace.seed)} fixture=${foldLocalPaths(String(trace.fixture))} ` +
+      `  scenario=${trace.scenario} seed=${valueShape(trace.seed)} fixture=${shareableFixtureName(trace.fixture)} ` +
       `steps=${trace.steps.length} rev=${gitRev(trace.gitRev)}\n` +
-      `  env=${Object.entries(trace.env).map(([key, value]) => `${envKey(key)}=${foldLocalPaths(String(value))}`).join(' ')}\n`,
+      `  env=${Object.entries(trace.env).map(([key, value]) => `${envKey(key)}=${knobValue(key, value)}`).join(' ')}\n`,
   );
 
   // Said BEFORE the baseline replay, not after it, and it RESOLVES the ids

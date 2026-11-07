@@ -1021,7 +1021,15 @@ locations:
   the prefix and the length of the app's text. Every line it keeps has the
   checkout folded to `<repo>` and the home directory to `~`
   (`foldLocalPaths`), so a `reproduce:` line's fixture path or a session
-  directory in a headline does not name the user.
+  directory in a headline does not name the user. A fixture prints by name
+  only when the repo tracks it (`git ls-files e2e/fixtures`); any other - a
+  `.stalx` dropped into `e2e/fixtures/` for a local run, or one a trace or the
+  knob names - prints as a tag, `<private-fixture#xxxxx>` (`crc32.shortId` of
+  its name), in every line of the runners' output, a metric key, `fuzz-matrix`'s
+  table and repro commands, and the trace header `fuzz-shrink` and
+  `agent:scenario --trace` print (#576 W58 Q1, `lib/privateFixtures.ts`). Its
+  full name stays in the session's `actions.jsonl`: the first time a scenario
+  opens it, a progress line names it with its tag.
 - A fuzz trace's `failure` is that form, with the signature of that form.
   `fuzz-shrink` prints that shareable signature and checks it against the
   trace header; ddmin still compares full signatures, in memory.
@@ -1136,8 +1144,8 @@ locations:
   value shaped like a flag (`--sed`) or a number (`1.5`) prints as itself,
   quoted, since neither shape can spell a path or a name (#576 W58 Q4,
   `cliValueShape`). A trace's knob name
-  prints when it reads `STALAGMIGHT_[A-Z0-9_]+`, its values, the fixture and
-  every path folded. A store value a scenario reports on the first line of an
+  prints when it reads `STALAGMIGHT_[A-Z0-9_]+`, its values and every path
+  folded, and its fixture by name only when the repo tracks it. A store value a scenario reports on the first line of an
   error, in a progress line or in a metric key - an open dialog, an undo
   entry's command type, the active tool, the app mode, the view, the import
   context (#576 W58 Q11) - keeps only the words of the app's source, as a test

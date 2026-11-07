@@ -66,9 +66,6 @@ export const GROUP: SiteGroup = {
       // The cell counter and the cell's coordinates.
       'runOne: label': 'the cell counter `[i/n]` main builds from two counts and passes to runOne/printDone',
       'printDone: label': 'the cell counter `[i/n]` main builds from two counts and passes to runOne/printDone',
-      'runOne: fixture': R.FOLDED,
-      'printDone: result.fixture': R.FOLDED,
-      'printReport: failure.fixture': R.FOLDED,
       'runOne: seed': 'a seed: Options.seeds, integers parseSeeds checked against /^-?\\d+$/ (lib/fuzzMatrixArgs.ts)',
       'printDone: result.seed': 'a seed: Options.seeds, integers parseSeeds checked against /^-?\\d+$/ (lib/fuzzMatrixArgs.ts)',
       'printReport: failure.seed': 'a seed: Options.seeds, integers parseSeeds checked against /^-?\\d+$/ (lib/fuzzMatrixArgs.ts)',
@@ -113,9 +110,8 @@ export const GROUP: SiteGroup = {
       'main: started.buildAction': STARTED_BUILD,
       'main: args.trace': R.FOLDED,
       'main: trace.scenario': 'a registry name: main throws unless getScenario(trace.scenario) found it, just above the print',
-      'main: trace.fixture': R.FOLDED,
-      "main: Object.entries(trace.env).map(([key, value]) => `${envKey(key)}=${foldLocalPaths(String(value))}`).join(' ')":
-        "the trace's knobs as KEY=value: the key through envKey (knob shape, else valueShape), the value folded; see the W51 open question on knob values",
+      "main: Object.entries(trace.env).map(([key, value]) => `${envKey(key)}=${knobValue(key, value)}`).join(' ')":
+        "the trace's knobs as KEY=value: the key through envKey (knob shape, else valueShape), the value through knobValue (the fixture knob by shareableFixtureName, any other through foldLocalPaths); see the W51 open question on knob values",
       'main: CORPUS_DIR_ENV': "CORPUS_DIR_ENV, the constant 'STALAGMIGHT_FUZZ_CORPUS_DIR' (lib/fixtureCorpus.ts)",
       'main: replayTimesMs[0]': R.COUNT,
       'onProgress: info.stats.tests': R.COUNT,
@@ -203,12 +199,11 @@ export const GROUP: SiteGroup = {
     'e2e/agent/scenario-run.ts': {
       'main: path.resolve(args.trace)': R.FOLDED,
       'main: args.trace': R.FOLDED,
-      'main: trace.fixture': R.FOLDED,
       'main: runAt.seed': 'scenarioRunOptions: --seed through integerFlag, or the trace seed it refuses unless Number.isInteger',
       'main: runAt.iterations':
         'scenarioRunOptions: --iterations through positiveIntFlag, or the trace count it refuses unless a positive integer',
-      "main: restored.map(([key, value]) => `${envKey(key)}=${foldLocalPaths(String(value))}`).join(' ')":
-        "the knobs restored from the trace as KEY=value: the key through envKey (knob shape, else valueShape), the value folded; see the W51 open question on knob values",
+      "main: restored.map(([key, value]) => `${envKey(key)}=${knobValue(key, value)}`).join(' ')":
+        "the knobs restored from the trace as KEY=value: the key through envKey (knob shape, else valueShape), the value through knobValue (the fixture knob by shareableFixtureName, any other through foldLocalPaths); see the W51 open question on knob values",
       "main: cleared.map(envKey).join(', ')":
         'env keys through envKey: a knob name of the ^STALAGMIGHT_[A-Z0-9_]{1,64}$ shape, anything else by its shape',
       "main: refused.map(envKey).join(', ')":

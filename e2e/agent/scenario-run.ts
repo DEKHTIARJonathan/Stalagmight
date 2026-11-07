@@ -43,6 +43,7 @@ import {
   shareableErrorText,
   valueShape,
 } from './lib/shareableFailure';
+import { shareableFixtureName } from './lib/privateFixtures';
 
 /**
  * Values from outside as printed before the registry is loaded (#576 W51) - the
@@ -54,6 +55,9 @@ import {
  */
 const scenarioName = (name: string): string => (/^[a-z][a-z0-9-]{1,63}$/.test(name) ? name : valueShape(name));
 const envKey = (key: string): string => (/^STALAGMIGHT_[A-Z0-9_]{1,64}$/.test(key) ? key : valueShape(key));
+/** A knob's value as printed: the fixture knob by `shareableFixtureName` (#576 W58 Q1), any other folded. */
+const knobValue = (key: string, value: unknown): string =>
+  key === 'STALAGMIGHT_FUZZ_FIXTURE' ? shareableFixtureName(value) : foldLocalPaths(String(value));
 const gitRev = (rev: unknown): string =>
   typeof rev === 'string' && /^(?:[0-9a-f]{7,40}|unknown)$/.test(rev) ? rev.slice(0, 12) : valueShape(rev);
 
@@ -97,11 +101,11 @@ async function main(): Promise<void> {
     const restored = applied.filter(([key]) => changed.has(key));
     const runAt = scenarioRunOptions(args, trace);
     process.stdout.write(
-      `replaying ${trace.steps.length} step(s) recorded by ${scenarioName(trace.scenario)} on ${foldLocalPaths(String(trace.fixture))} ` +
+      `replaying ${trace.steps.length} step(s) recorded by ${scenarioName(trace.scenario)} on ${shareableFixtureName(trace.fixture)} ` +
         `(seed ${valueShape(trace.seed)}, ${valueShape(trace.iterations)} iteration(s), rev ${gitRev(trace.gitRev)}); ` +
         `running at seed ${String(runAt.seed)}, ${String(runAt.iterations)} iteration(s)\n` +
         (restored.length > 0
-          ? `  restored from the trace: ${restored.map(([key, value]) => `${envKey(key)}=${foldLocalPaths(String(value))}`).join(' ')}\n`
+          ? `  restored from the trace: ${restored.map(([key, value]) => `${envKey(key)}=${knobValue(key, value)}`).join(' ')}\n`
           : '') +
         // Printed for the same reason `restored` is: a knob the shell set and
         // the recording did not is a difference between this run and that one,

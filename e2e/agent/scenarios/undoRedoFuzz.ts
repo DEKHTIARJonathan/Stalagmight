@@ -634,7 +634,8 @@ import {
 import { mustBeRejected } from './undoRedoFuzzImportActions';
 import { materializeSurveyFile, type GeneratedFileSpec } from '../lib/surveyFileSpecs';
 import { FILE_ARG_ACTIONS, TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
-import { foldLocalPaths, valueShape } from '../lib/shareableFailure';
+import { shareableFixtureName } from '../lib/privateFixtures';
+import { valueShape } from '../lib/shareableFailure';
 import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 import { initModel, injectOracle, type StepResponse } from './undoRedoFuzzBridge';
 
@@ -775,7 +776,7 @@ async function runFuzz(
   const strippedRows = Object.values(stripped.cleared).reduce((sum, n) => sum + n, 0);
   // Folded (#576 W51): a metric key prints in the runner's PASS line
   // unfolded, and the fixture is the knob as the user wrote it.
-  ctx.setMetric(`fixture:${foldLocalPaths(fixture)}`, 1);
+  ctx.setMetric(`fixture:${shareableFixtureName(fixture)}`, 1);
   ctx.setMetric('strippedUndoRows', strippedRows);
 
   await requireAutoSaveOff(ctx);
