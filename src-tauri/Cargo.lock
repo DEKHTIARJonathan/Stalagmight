@@ -4567,6 +4567,7 @@ dependencies = [
  "serde_json",
  "stalagmight-models",
  "stalagmight-parsers",
+ "stalagmight-persistence",
  "tempfile",
  "tracing",
  "ts-rs",
