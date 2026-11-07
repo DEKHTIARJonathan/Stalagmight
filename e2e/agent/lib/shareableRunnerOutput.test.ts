@@ -139,7 +139,7 @@ describe('a harness crash prints codes, counts and code locations (#576 W23-NF2)
 const HARNESS_VALUES = new Set([
   'counts.sections',
   'counts.stations',
-  'counts.view',
+  'shareableTestId(counts.view)',
   "Object.entries(UNREACHABLE_VARIANTS) .map(([name, why]) => `${name} (${why})`) .join('; ')",
   'ctx.seed',
   "[...seen.entries()].map(([v, c]) => `${v}=${c}`).sort().join(' ')",

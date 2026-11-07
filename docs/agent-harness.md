@@ -1138,8 +1138,10 @@ locations:
   `cliValueShape`). A trace's knob name
   prints when it reads `STALAGMIGHT_[A-Z0-9_]+`, its values, the fixture and
   every path folded. A store value a scenario reports on the first line of an
-  error - an open dialog, an undo entry's command type - keeps only the words
-  of the app's source, as a test id does; a section name or a leftover temp
+  error, in a progress line or in a metric key - an open dialog, an undo
+  entry's command type, the active tool, the app mode, the view, the import
+  context (#576 W58 Q11) - keeps only the words of the app's source, as a test
+  id does, so every real value prints as itself; a section name or a leftover temp
   file prints as its length or a count, and a metric key holds codes only
   (`mapSkip:<code>`). `agent:smoke`'s `started:` line is folded, its X
   display prints only as `:N` (any other `DISPLAY`, such as `localhost:10.0`

@@ -81,9 +81,6 @@ const SESSION_DIR =
 const UNANCHORED_PROBE =
   "ctx.eval<number>(` const core = window.__TAURI__ && window.__TAURI__.core; if (!core || typeof core.invoke !== 'function') return -1; const state = await core.invoke('get_project_state'); const project = (state && state.project) || null; if (!project || !Array.isArray(project.sections)) return -1; const parent = new Map(); const find = (x) => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x))); x = parent.get(x); } return x; }; for (const section of project.sections) parent.set(section.id, section.id); const union = (a, b) => { if (!parent.has(a) || !parent.has(b)) return; const ra = find(a); const rb = find(b); if (ra !== rb) parent.set(ra, rb); }; for (const merge of (project.station_merges || [])) { union(merge.station_a && merge.station_a.section_id, merge.station_b && merge.station_b.section_id); } // \\`ZeroDatumWire.station_ref\\` - the field name matters, and getting it // wrong is silent: every component then reads as unanchored. const anchored = new Set(); for (const datum of (project.zero_datums || [])) { const ref = datum && datum.station_ref; const id = ref && ref.section_id; if (id !== undefined && parent.has(id)) anchored.add(find(id)); } if (anchored.size === 0 && (project.zero_datums || []).length > 0) return -2; const roots = new Set(); for (const section of project.sections) roots.add(find(section.id)); let count = 0; for (const root of roots) if (!anchored.has(root)) count += 1; return count; `)";
 
-const ACTIVE_TOOL_PROBE =
-  'ctx.eval<string>( ` const ui = window.__E2E_TEST__.uiStore.getState(); ui.setActiveTool(args[0]); return window.__E2E_TEST__.uiStore.getState().activeTool; `, [tool], )';
-
 const EXPORT_TRACE =
   "writeRunTrace( ctx, recorder, { scenario: SCENARIO, iterations, fixture, stream: 'export-v1' }, failure, traceOut, )";
 const IMPORT_TRACE =
@@ -137,9 +134,6 @@ export const GROUP: SiteGroup = {
       'assertIntegrity: after':
         'an integrity-check label: every caller passes a literal or `round-trip import pass ${pass}` with a loop ' +
         'number (exportRoundtripFuzz.ts assertIntegrity callers)',
-      'runPrePlanLeak: afterLoad.appMode':
-        "uiStore.appMode, typed AppMode = 'survey' | 'plan' | 'export' (src/store/uiStore.ts:56), read by " +
-        "readModeSnapshot (exportFuzzActions.ts:460-485, 'survey' when null)",
       'teardown: JSON.stringify(options)': JSON_AFTER_COLON,
       'teardown: JSON.stringify(leftover.slice(0, 8))': JSON_AFTER_COLON,
       "run: enabledFormats().join(',')":
@@ -266,7 +260,6 @@ export const GROUP: SiteGroup = {
       'drawMove: generator.name': "a generator's literal name from importDialogGenerators.ts's table (`start:picker`, ...)",
       'runMove: outcome.skip': "execute's skip word (see `execute: skip`), or the literal 'unknown'",
       'runEpisodes: step.kind': STEP_KIND,
-      'runEpisodes: digest.ctx': "uiStore.importContext as the digest reads it: 'new-project' | 'existing-project' (importScreenDigest.ts:144)",
       [`countUnanchoredComponents: ${UNANCHORED_PROBE}`]:
         "a number: countUnanchoredComponents' in-page script returns a component count, -1 or -2 (importDialogFuzz.ts)",
       'guarded: what()':
@@ -305,11 +298,9 @@ export const GROUP: SiteGroup = {
     'e2e/agent/scenarios/seedLargeProject.ts': {
       'run: counts.sections': "an array length the harness's in-page script returns (seedLargeProject.ts:19-24)",
       'run: counts.stations': "an array length the harness's in-page script returns (seedLargeProject.ts:19-24)",
-      'run: counts.view': "uiStore.view, typed ViewType = 'global' | 'single' (src/store/uiStore.ts:36)",
     },
     'e2e/agent/scenarios/toolSwitchSpam.ts': {
       'run: TOOLS[i % TOOLS.length]': "a tool id from the scenario's own TOOLS table (toolSwitchSpam.ts:10-21)",
-      [`run: ${ACTIVE_TOOL_PROBE}`]: 'uiStore.activeTool, typed ToolType, a union of tool-id literals (src/store/uiStore.ts:202, 485)',
       'run: iterations': ITERATIONS,
     },
     'e2e/agent/scenarios/undoPersistenceFuzz.ts': {
@@ -348,8 +339,6 @@ export const GROUP: SiteGroup = {
       'run: created': LOOP_COUNT,
     },
     'e2e/agent/scenarios/undoRedoFuzz.ts': {
-      'runFuzz: JSON.stringify(importContext.value)':
-        "uiStore.importContext, typed 'new-project' | 'existing-project' | null (src/store/uiStore.ts:807)",
       'runFuzz: fuzzFixture()': FIXTURE,
       'runFuzz: Object.values(stripped.cleared).reduce((sum, n) => sum + n, 0)':
         'a sum of the row counts stripUndoHistory deleted (lib/fixtures.ts stripUndoHistory, Number(before.count))',
