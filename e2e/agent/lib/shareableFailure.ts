@@ -17,63 +17,27 @@
  * its own vocabulary, and everything else is withheld and counted - so a new
  * oracle that quotes the app is covered without anyone remembering to mark it.
  */
-import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+
+import { foldLocalPaths } from '../../../scripts/lib/fold-local-paths.mjs';
 
 import { redactCorpusText } from './fixtureCorpus';
 import { foldPrivateFixtures } from './privateFixtures';
 
-/** The checkout: the session directories live in it (`.agent-artifacts/sessions/<id>`). */
+/** The checkout: `harnessBuilt` keeps an error built in its sources (#576 W58 Q3). */
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-
-/**
- * The temp directory as `os.tmpdir()` gives it, and its real path when that
- * differs (macOS hands out `/var/folders/...`, which is `/private/var/...`).
- */
-function tempRoots(): string[] {
-  const tmp = os.tmpdir();
-  try {
-    const real = fs.realpathSync(tmp);
-    return real === tmp ? [tmp] : [tmp, real];
-  } catch {
-    return [tmp];
-  }
-}
 
 /**
  * `text` with the checkout folded to `<repo>`, the home directory to `~`,
  * `CARGO_TARGET_DIR` to `<target>` and the temp directory to `<tmp>` (#576
- * RV18-W23-4, W58 Q2). A kept line can carry a path - a `reproduce:` line's
- * fixture or `REPLAY of <trace>`, a headline naming the session directory, a
- * build's `Built application at:` line, a save under the temp directory - and a
- * path under any of these roots names the user or their machine. What follows
- * the folded root is the harness's own layout, or a corpus id the corpus fold
- * already put there. Read at call time, so a changed `HOME`, `CARGO_TARGET_DIR`
- * or `TMPDIR` is honoured; the longest root folds first, and a root of `/` or a
- * relative `CARGO_TARGET_DIR` folds nothing.
+ * RV18-W23-4, W58). A kept line can carry a path - a `reproduce:` line's
+ * fixture or `REPLAY of <trace>`, a headline naming the session directory - and
+ * a path under any of these roots names the user or their machine. One
+ * implementation, `scripts/lib/fold-local-paths.mjs`, so the repo's Node tools
+ * under `scripts/` fold the paths they echo the same way.
  */
-export function foldLocalPaths(text: string): string {
-  const target = process.env.CARGO_TARGET_DIR;
-  const roots = [
-    { root: REPO_ROOT, say: '<repo>' },
-    { root: os.homedir(), say: '~' },
-    ...(target ? [{ root: target, say: '<target>' }] : []),
-    ...tempRoots().map((root) => ({ root, say: '<tmp>' })),
-  ]
-    .filter(({ root }) => path.isAbsolute(root) && path.resolve(root) !== path.parse(root).root)
-    .map(({ root, say }) => ({ root: path.resolve(root), say }))
-    .sort((a, b) => b.root.length - a.root.length);
-  let out = text;
-  for (const { root, say } of roots) {
-    if (!out.includes(root)) continue;
-    const literal = root.replace(/[.*+?^$()|[\]{}\\]/g, '\\$&');
-    // Not inside a longer name: `/home/bob` must leave `/home/bobby` alone.
-    out = out.replace(new RegExp(`${literal}(?![\\w.-])`, 'g'), say);
-  }
-  return out;
-}
+export { foldLocalPaths };
 
 /**
  * Lines the harness writes from its own vocabulary, kept whole. Each shape is

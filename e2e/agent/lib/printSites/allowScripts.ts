@@ -50,9 +50,9 @@ const CONSOLE_PARAMS =
 const REL = 'a repo-relative path of the checkout, from walkFiles / listSrcFiles / git ls-files (scripts/lib)';
 const LINE = 'a line or column number in a file of the checkout, counted by the gate';
 const SYMLINK =
-  "symlinkProblem: the link's repo-relative path and its target as written when it stays in the checkout, else `<outside the checkout>` (scripts/lib/src-files.mjs walkFiles)";
+  "symlinkProblem: the link's repo-relative path and its target as written when it stays in the checkout, else resolved and passed through foldLocalPaths by scripts/lib/src-files.mjs walkFiles";
 const LINK_TARGET =
-  'a symlink target from walkFiles: as written when it resolves inside the checkout, else `<outside the checkout>` (scripts/lib/src-files.mjs)';
+  'a symlink target from walkFiles: as written when it resolves inside the checkout, else resolved and passed through foldLocalPaths (scripts/lib/src-files.mjs)';
 const RULE_WHY = "a rule's id or its why: fixed text of the gate's own rule table";
 const SCANNED = 'the number of tracked text files the gate scanned';
 const GIT_FIRST_LINE =
@@ -99,6 +99,8 @@ export const GROUP: SiteGroup = {
     [REPORT]: {
       "describeAction: list.map((v) => argShape(v)).join(', ')": "store_action's positional arguments, each as its argShape",
       'getFlag: args[i + 1]': "the --title / --summary flag: the reporter's own words for the issue they are filing",
+      '<module>: args[0]': 'the session dir the caller gave, folded by foldLocalPaths (`no actions.jsonl in ...`)',
+      "<module>: path.join(sessionDir, 'report.md')": 'the report.md path in the session dir the caller gave, folded by foldLocalPaths (`wrote ...`)',
       '<module>: f.severity': "shareableFinding's label(): identifier characters only, any other replaced by ?, at most 120",
       '<module>: f.kind': "shareableFinding's label(): identifier characters only, any other replaced by ?, at most 120",
       '<module>: f.code': "shareableFinding's label(): identifier characters only, any other replaced by ?, at most 120",
@@ -114,6 +116,13 @@ export const GROUP: SiteGroup = {
       // What P(...) pushes into md, which report.md is written from: each P call is a checked stream site of its own.
       'P: s': R.FORWARD,
     },
+    // The replay generator names its input and output by the caller's paths, folded (#576 W58).
+    [REPLAY]: {
+      '<module>: args[0]': 'the session dir or actions.jsonl the caller gave, folded by foldLocalPaths (`no actions.jsonl at ...`)',
+      "<module>: path.join(input, 'actions.jsonl')": 'the actions.jsonl path in the session dir the caller gave, folded by foldLocalPaths',
+      'getFlag: args[i + 1]': 'the --out path the caller gave, folded by foldLocalPaths (`wrote ...`)',
+      "<module>: path.join(sessionDir, 'replay.spec.ts')": 'the default replay.spec.ts beside the actions.jsonl the caller gave, folded by foldLocalPaths (`wrote ...`)',
+    },
     // The lint gates: repo-relative paths, line numbers, rule text, counts.
     [NO_SLEEP]: {
       'main: settles': R.COUNT,
@@ -128,7 +137,7 @@ export const GROUP: SiteGroup = {
       'main: v.ruleId': RULE_WHY,
       'main: v.why': RULE_WHY,
       'main: v.snippet':
-        'the trimmed source line of e2e-playwright/ the rule matched (test code of the checkout), or `-> <symlink target>` from walkFiles (inside the checkout, or `<outside the checkout>`)',
+        'the trimmed source line of e2e-playwright/ the rule matched (test code of the checkout), or `-> <symlink target>` from walkFiles (inside the checkout as written, else resolved and passed through foldLocalPaths)',
     },
     [ESLINT]: {
       'main: JSON.stringify(baselinePayload(warnings), null, 2)':
@@ -271,8 +280,9 @@ export const GROUP: SiteGroup = {
       'reportSnapshot: fmtBytes(-r.dBytes)': 'a byte count formatted by fmtBytes (B/K/M/G)',
       'reportSnapshot: r.k.padEnd(38).slice(0, 38)':
         "a heap class key aggregate() builds: the node type and the constructor or closure name the engine records (class and function names of the code), never a string's value ('string' nodes share one key)",
-      'main: i': 'the index of a --file snapshot (`i + 1` reads as text to the scan; it is arithmetic)',
-      'reportSnapshot: label': "the snapshot label snapAndReport or the --file loop passes (see `snapAndReport: label`, `--file N of M`)",
+      'main: p': 'a --file snapshot path the caller gave, folded by foldLocalPaths (`parsing ...`)',
+      'reportSnapshot: label':
+        "the snapshot label snapAndReport or the --file loop passes (see `snapAndReport: label`, and `main: p` for the --file path the loop passes through foldLocalPaths)",
       'snapAndReport: label':
         "the tool's own words (`initial`, `auto +Ns`, `manual`) or a label the developer typed at this tool's prompt to name their own checkpoint",
       'snapAndReport: new Date().toISOString().slice(11, 19)': 'the wall-clock time HH:MM:SS of a snapshot',
@@ -291,6 +301,7 @@ export const GROUP: SiteGroup = {
       'takeSnapshot: e2.message': "the Web Inspector protocol's error for HeapProfiler.takeHeapSnapshot (WebKit's text about the command, not the page's)",
     },
     [SLICE_TS]: {
+      '<module>: args[0]': 'the source file path the developer gave, folded by foldLocalPaths (`File not found: ...`)',
       '<module>: args[1]': 'the mode flag the developer typed, echoed by `Unknown mode:`',
       '<module>: args[2]': 'the declaration name or line range the developer asked this slicer for, echoed by `... not found:`',
       '<module>: path.basename(filePath)': 'the name of the source file the developer asked this slicer to print (scripts/slice.sh), in its --toc heading',
@@ -309,6 +320,8 @@ export const GROUP: SiteGroup = {
       'onStepEnd: JSON.stringify(step.title)': "a top-level hook step title Playwright names (Before Hooks, After Hooks, Worker Cleanup, ...): the test runner's own words",
       'onEnd: JSON.stringify(out, null, 2)':
         'the timing rows: spec paths relative to the cwd (the repo root, where Playwright runs), test titles of the public e2e suite, durations, attempts, statuses',
+      'onEnd: process.env.PW_TIMING_OUTPUT':
+        'the timing.json path the caller set in $PW_TIMING_OUTPUT, folded by foldLocalPaths (unset, it is the repo-relative playwright-report/timing.json)',
     },
     // Regenerated tracked files: their whole content is the public tree's.
     [THIRD_PARTY_GEN]: {

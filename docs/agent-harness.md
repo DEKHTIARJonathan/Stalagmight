@@ -1035,7 +1035,12 @@ locations:
   longest root first; #576 W58), so a `reproduce:` line's fixture path, a
   session directory in a headline, a build's output path or a save under the
   temp directory does not name the user. A path outside those roots prints
-  as it is. A fixture prints by name
+  as it is. The repo's Node tools
+  under `scripts/` fold the paths they echo with the same function
+  (`scripts/lib/fold-local-paths.mjs`, which `lib/shareableFailure.ts`
+  re-exports): the generators' session dir and `--out`, `heap-profile.mjs`'s
+  `--file`, `slice-ts.mjs`'s file, `$PW_TIMING_OUTPUT`'s path, and a source
+  gate's symlink target that leaves the checkout (#576 W58). A fixture prints by name
   only when the repo tracks it (`git ls-files e2e/fixtures`); any other - a
   `.stalx` dropped into `e2e/fixtures/` for a local run, or one a trace or the
   knob names - prints as a tag, `<private-fixture#xxxxx>` (`crc32.shortId` of

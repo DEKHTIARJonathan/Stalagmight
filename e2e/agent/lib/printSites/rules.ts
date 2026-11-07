@@ -81,7 +81,9 @@ export const HELPERS: Readonly<Record<string, string>> = {
  * and `R.FOLDED` holds for them only.
  */
 export const FOLDS: Readonly<Record<string, string>> = {
-  foldLocalPaths: 'the checkout folded to <repo>, the home directory to ~, CARGO_TARGET_DIR to <target> and the temp dir to <tmp>',
+  foldLocalPaths:
+    'the checkout folded to <repo>, the home directory to ~, CARGO_TARGET_DIR to <target> and the temp dir to <tmp> ' +
+    '(scripts/lib/fold-local-paths.mjs: the harness imports it through lib/shareableFailure.ts, the scripts/*.mjs tools directly)',
   redactCorpusText: "a private corpus entry's path and names folded to its corpus id",
   foldPrivateFixtures: 'a fixture name the repo does not track folded to its <private-fixture#xxxxx> tag (#576 W58 Q1)',
 };

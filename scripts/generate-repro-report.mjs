@@ -13,6 +13,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { foldLocalPaths } from './lib/fold-local-paths.mjs';
 import { shareableFinding } from './lib/shareable-finding.mjs';
 import { shareableSelector, shareableTestId } from './lib/shareable-selector.mjs';
 
@@ -28,9 +29,9 @@ const getFlag = (name) => {
 };
 const jsonlPath = path.join(sessionDir, 'actions.jsonl');
 if (!fs.existsSync(jsonlPath)) {
-  // Not the path itself: it is the one the caller gave, which can sit outside
-  // the checkout and name the user's own directories (#576 W51).
-  process.stderr.write('no actions.jsonl in <sessionDir>\n');
+  // Folded: it is the path the caller gave, which can name the user's own
+  // directories (#576 W51, W58).
+  process.stderr.write(`no actions.jsonl in ${foldLocalPaths(sessionDir)}\n`);
   process.exit(1);
 }
 
@@ -367,7 +368,8 @@ P('');
 
 const outPath = path.join(sessionDir, 'report.md');
 fs.writeFileSync(outPath, md.join('\n'));
-process.stdout.write('wrote <sessionDir>/report.md\n');
+// Folded: the session dir is the caller's path (#576 W51, W58).
+process.stdout.write(`wrote ${foldLocalPaths(outPath)}\n`);
 
 function describeAction(a) {
   const p = a.params ?? {};

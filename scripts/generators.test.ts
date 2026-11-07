@@ -23,6 +23,29 @@ let sessionDir: string;
 
 const record = (obj: object): string => JSON.stringify(obj);
 
+/**
+ * A copy of `from`'s actions.jsonl at `<home>/qzsessions/s1`, under a synthetic
+ * home dir, and the env that makes a child see that dir as HOME: a path the
+ * caller gives prints folded to `~` (#576 W58).
+ */
+const underHome = (from: string): { home: string; dir: string; env: NodeJS.ProcessEnv } => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-home-'));
+  const dir = path.join(home, 'qzsessions', 's1');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.copyFileSync(path.join(from, 'actions.jsonl'), path.join(dir, 'actions.jsonl'));
+  return { home, dir, env: { ...process.env, HOME: home } };
+};
+
+/** The stderr of a child that exits non-zero. */
+const failingStderr = (args: string[], env: NodeJS.ProcessEnv): string => {
+  try {
+    execFileSync(process.execPath, args, { encoding: 'utf8', stdio: 'pipe', env });
+  } catch (e) {
+    return String((e as { stderr?: string }).stderr);
+  }
+  throw new Error('the generator was expected to fail');
+};
+
 beforeAll(() => {
   sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-test-'));
   const ts = (s: number) => new Date(1751970000000 + s * 1000).toISOString();
@@ -293,17 +316,25 @@ describe('generate-replay.mjs', () => {
     expect(spec).not.toContain('browser.keys(["cmd+s"])');
   });
 
-  // stdout is shareable: the session dir and --out are the caller's paths,
-  // which can sit outside the checkout and name their own directories (#576 W51).
-  it('names what it wrote on stdout by its placeholder, never its path', () => {
-    const withOut = execFileSync(process.execPath, [replayGen, sessionDir, '--out', path.join(sessionDir, 'qz-out.spec.ts')], {
-      encoding: 'utf8',
-    });
-    const inDir = execFileSync(process.execPath, [replayGen, sessionDir], { encoding: 'utf8' });
-    expect(withOut.split('\n')[0]).toBe('wrote the --out file (18 actions)');
-    expect(inDir.split('\n')[0]).toBe('wrote <sessionDir>/replay.spec.ts (18 actions)');
-    expect(withOut + inDir).not.toContain(sessionDir);
-    expect(fs.existsSync(path.join(sessionDir, 'replay.spec.ts'))).toBe(true);
+  // stdout and stderr are shareable: the session dir and --out are the caller's
+  // paths, which can name their own directories, so they print folded (#576 W51, W58).
+  it('names what it read and wrote by its folded path, never the raw one', () => {
+    const { home, dir, env } = underHome(sessionDir);
+    try {
+      const withOut = execFileSync(process.execPath, [replayGen, dir, '--out', path.join(dir, 'qz-out.spec.ts')], {
+        encoding: 'utf8',
+        env,
+      });
+      const inDir = execFileSync(process.execPath, [replayGen, dir], { encoding: 'utf8', env });
+      const missing = failingStderr([replayGen, path.join(home, 'qzsessions', 'qz-missing')], env);
+      expect(withOut.split('\n')[0]).toBe('wrote ~/qzsessions/s1/qz-out.spec.ts (18 actions)');
+      expect(inDir.split('\n')[0]).toBe('wrote ~/qzsessions/s1/replay.spec.ts (18 actions)');
+      expect(missing).toBe('no actions.jsonl at ~/qzsessions/qz-missing\n');
+      expect(withOut + inDir + missing).not.toContain(home);
+      expect(fs.existsSync(path.join(dir, 'replay.spec.ts'))).toBe(true);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
   });
 });
 
@@ -999,7 +1030,6 @@ describe('generate-repro-report.mjs', () => {
     const F = '\n## forged';
     let forgedDir: string;
     let validDir: string;
-    let stdout: string;
 
     beforeAll(() => {
       forgedDir = write(
@@ -1038,7 +1068,7 @@ describe('generate-repro-report.mjs', () => {
         [{ severity: 'error', kind: 'unresponsive', message: 'IPC did not return within 5s; possible command-lock deadlock', dir: '0001-unresponsive' }],
       );
       execFileSync(process.execPath, [reportGen, forgedDir], { encoding: 'utf8' });
-      stdout = execFileSync(process.execPath, [reportGen, validDir], { encoding: 'utf8' });
+      execFileSync(process.execPath, [reportGen, validDir], { encoding: 'utf8' });
     });
 
     afterAll(() => {
@@ -1100,17 +1130,18 @@ describe('generate-repro-report.mjs', () => {
     });
 
     // stdout is shareable too: the session dir is the caller's path, which can
-    // sit outside the checkout and name their own directories (#576 W51).
-    it('names the session dir on stdout and stderr by its placeholder, never its path', () => {
-      expect(stdout).toBe('wrote <sessionDir>/report.md\n');
-      const missing = path.join(validDir, 'qz-missing');
-      let stderr = '';
+    // name their own directories, so it prints folded (#576 W51, W58).
+    it('names the session dir on stdout and stderr by its folded path, never the raw one', () => {
+      const { home, dir, env } = underHome(validDir);
       try {
-        execFileSync(process.execPath, [reportGen, missing], { encoding: 'utf8', stdio: 'pipe' });
-      } catch (e) {
-        stderr = String((e as { stderr?: string }).stderr);
+        const stdout = execFileSync(process.execPath, [reportGen, dir], { encoding: 'utf8', env });
+        const stderr = failingStderr([reportGen, path.join(home, 'qzsessions', 'qz-missing')], env);
+        expect(stdout).toBe('wrote ~/qzsessions/s1/report.md\n');
+        expect(stderr).toBe('no actions.jsonl in ~/qzsessions/qz-missing\n');
+        expect(stdout + stderr).not.toContain(home);
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
       }
-      expect(stderr).toBe('no actions.jsonl in <sessionDir>\n');
     });
   });
 });
