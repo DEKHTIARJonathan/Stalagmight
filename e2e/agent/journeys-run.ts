@@ -21,7 +21,7 @@ import { listJourneys, getJourney } from './journeys';
 import { journeyVerdictLine, runJourney } from './journeys/framework';
 import { ledgerRecord, type JourneyRecord, type RunRecord } from './journeys/ledger';
 import { findingsSummary, runSweep, newOracleState } from './lib/oracles';
-import { progressLogger, shareableErrorText } from './lib/shareableFailure';
+import { foldLocalPaths, progressLogger, shareableErrorText, valueShape } from './lib/shareableFailure';
 import { callStoreAction } from './lib/stores';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -30,6 +30,9 @@ function gitSha(): string {
   try {
     return execFileSync('git', ['-C', repoRoot, 'rev-parse', '--short', 'HEAD'], {
       encoding: 'utf8',
+      // Not passed through (#576 W51): git's refusal ("dubious ownership in
+      // repository at '<path>'") names the checkout; the sha is 'unknown' then.
+      stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
   } catch {
     return 'unknown';
@@ -69,7 +72,7 @@ function writeLedger(record: RunRecord): void {
     `${failed.length ? `, failed: ${failed.join(', ')}` : ''} ` +
     `([record](runs/${path.basename(runFile)}))\n`;
   fs.appendFileSync(ledgerFile, line);
-  process.stdout.write(`ledger: ${runFile}\n`);
+  process.stdout.write(`ledger: ${foldLocalPaths(runFile)}\n`);
 }
 
 async function main(): Promise<void> {
@@ -81,7 +84,8 @@ async function main(): Promise<void> {
   const names = only ? [only] : listJourneys();
   for (const name of names) {
     if (!getJourney(name)) {
-      process.stderr.write(`unknown journey "${name}"; known: ${listJourneys().join(', ')}\n`);
+      // Not a registry name, so its shape (#576 W51): `--only` is the user's text.
+      process.stderr.write(`unknown journey, ${valueShape(name)}; known: ${listJourneys().join(', ')}\n`);
       process.exit(2);
     }
   }

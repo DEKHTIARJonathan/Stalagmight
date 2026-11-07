@@ -26,7 +26,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
-import { shareableErrorText } from '../lib/shareableFailure';
+import { passLinesFolded } from '../lib/foldedLines';
+import { foldLocalPaths, shareableErrorText } from '../lib/shareableFailure';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 const serverPath = path.join(repoRoot, 'e2e', 'agent', 'mcp', 'server.ts');
@@ -77,11 +78,17 @@ async function main(): Promise<void> {
     args: ['--import', 'tsx', serverPath],
     cwd: repoRoot,
     env: { ...process.env } as Record<string, string>,
-    stderr: 'inherit',
+    // Piped, not inherited (#576 W51), as `agent:mcp:smoke` pipes it (RV19b-P8):
+    // a build's output on the server's stderr names the checkout under the home
+    // directory. It prints here a line at a time, folded.
+    stderr: 'pipe',
   });
+  const serverOutput = transport.stderr;
+  if (serverOutput) void passLinesFolded(serverOutput, (text) => process.stderr.write(text));
   const client = new Client({ name: 'stalagmight-bridge', version: '0.1.0' });
   await client.connect(transport);
-  process.stderr.write(`[bridge] connected; node ${process.versions.node}; watching ${reqPath}\n`);
+  // Folded (#576 W51): the bridge directory is the user's path.
+  process.stderr.write(`[bridge] connected; node ${process.versions.node}; watching ${foldLocalPaths(reqPath)}\n`);
   fs.writeFileSync(path.join(bridgeDir, 'ready'), String(process.pid));
 
   const respond = (obj: object): void => {
