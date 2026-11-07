@@ -1608,10 +1608,16 @@ impl Database {
             // overwrite the very claim the next open reads to pick its arms - a
             // row of 7 clobbered to 18 stops the v12..v17 arms running ever
             // again, on a file we just said we could not vouch for.
-            let _ = self.conn.execute(
+            //
+            // Its error is propagated, not dropped: inside the chain's one
+            // transaction, an UPDATE that fails (interrupted by a deadline, out of
+            // disk) has already rolled the whole chain back, and a dropped error
+            // came back from the commit below as "cannot commit - no transaction
+            // is active" instead of the real cause.
+            self.conn.execute(
                 "UPDATE project SET schema_version = ?1",
                 params![SCHEMA_VERSION],
-            );
+            )?;
         }
 
         chain.commit()?;

@@ -467,3 +467,70 @@ fn a_read_only_older_file_is_refused_and_leaves_no_copy() {
     assert!(std::fs::read(&path).unwrap() == original, "left as it was");
     assert_eq!(b6_dir_listing(temp.path()), ["CaveA.stalx"], "no copy kept");
 }
+
+/// The chain's last statement, the `project.schema_version` sync, dropped its own
+/// error. Inside the chain's one transaction an interrupted UPDATE rolls the
+/// whole transaction back, so a swallowed interrupt came back at the commit as
+/// "cannot commit - no transaction is active", which carries no interrupt code:
+/// `stalx-reader`, whose read deadline is a progress handler that interrupts,
+/// reported such a read as `Other` instead of `Deadline`. Interrupted here at
+/// exactly that statement: an authorizer notes it being prepared, and the
+/// progress handler then interrupts it, once. The deadline's handler runs every
+/// 1,000 VM steps, which the short COMMIT after it never reaches, so that COMMIT
+/// runs and is not interrupted in its turn.
+#[test]
+fn an_interrupt_at_the_last_step_of_an_upgrade_is_reported_as_an_interrupt() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let temp = TempDir::new().unwrap();
+    let path = b6_build_file(
+        temp.path(),
+        "CaveA.stalx",
+        "UPDATE project SET schema_version = 17; PRAGMA user_version = 17;",
+    );
+    let mut conn = Connection::open(&path).unwrap();
+    let reached = Arc::new(AtomicBool::new(false));
+    let seen = Arc::clone(&reached);
+    conn.authorizer(Some(move |ctx: AuthContext<'_>| {
+        if let AuthAction::Update {
+            table_name: "project",
+            column_name: "schema_version",
+        } = ctx.action
+        {
+            seen.store(true, Ordering::SeqCst);
+        }
+        Authorization::Allow
+    }))
+    .unwrap();
+    let (interrupt, fired) = (Arc::clone(&reached), AtomicBool::new(false));
+    conn.progress_handler(
+        1,
+        Some(move || interrupt.load(Ordering::SeqCst) && !fired.swap(true, Ordering::SeqCst)),
+    )
+    .unwrap();
+    let db = Database { conn };
+
+    let err = db.ensure_schema_version().unwrap_err();
+    println!("ensure_schema_version -> {err:#}");
+    assert!(
+        reached.load(Ordering::SeqCst),
+        "premise: the sync was reached"
+    );
+    let code = err
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<rusqlite::Error>())
+        .and_then(rusqlite::Error::sqlite_error_code);
+    assert_eq!(
+        code,
+        Some(rusqlite::ErrorCode::OperationInterrupted),
+        "the open must fail with the interrupt itself, got {err:#}"
+    );
+    drop(db);
+    assert_eq!(
+        b6_user_version(&path),
+        17,
+        "and the chain rolled back whole"
+    );
+}
