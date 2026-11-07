@@ -204,6 +204,12 @@ fn the_adjusted_view_does_not_remeasure_closures() {
     assert_eq!(in_live, 20);
 }
 
+/// A GUARD, not the pin of the skip (#576 RV19a-15): the skip may change
+/// nothing but the re-measure, so the view's coordinates must equal those of
+/// the re-measuring solve to the bit. With the skip reverted both sides run
+/// that solve and this passes by construction;
+/// `the_adjusted_view_does_not_remeasure_closures` is the test that fails
+/// then. This one fails if a change to the skip moves a station.
 #[test]
 fn adjusted_view_coordinates_are_bit_identical_to_the_remeasuring_solve() {
     let config = ClosureAdjustmentConfig::default();
@@ -237,6 +243,10 @@ fn adjusted_view_coordinates_are_bit_identical_to_the_remeasuring_solve() {
     }
 }
 
+/// A GUARD, like the test above (#576 RV19a-15): the view solves a copy, so
+/// the live project's closures keep their stored values whether or not the
+/// copy re-measures - a revert of the skip passes it too. It fails if the view
+/// ever writes through to the live closures.
 #[test]
 fn the_adjusted_view_leaves_the_live_closures_unchanged() {
     let project = ladders(2, 20, 4);
