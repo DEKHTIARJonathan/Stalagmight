@@ -150,6 +150,7 @@ export * from './ipc/BackupInfo';
 export * from './ipc/BackupKind';
 export * from './ipc/RepairResult';
 export * from './ipc/SalvagedData';
+export * from './ipc/SalvageWriteResult';
 export * from './ipc/RawTableData';
 export * from './ipc/Config';
 export * from './ipc/GeneralConfig';

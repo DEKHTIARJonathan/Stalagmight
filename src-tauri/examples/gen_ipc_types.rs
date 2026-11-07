@@ -72,7 +72,7 @@ use stalagmight_lib::parsers::tml::{
 };
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{
-    BackupInfo, BackupKind, RawTableData, RepairResult, SalvagedData,
+    BackupInfo, BackupKind, RawTableData, RepairResult, SalvageWriteResult, SalvagedData,
 };
 use stalagmight_lib::speleodb::{
     AdoptUpload, DoneResult, DumpCandidateKind, KeychainReport, Permission, PushResult,
@@ -362,6 +362,7 @@ fn main() {
     export::<BackupKind>(&out_dir);
     export::<RepairResult>(&out_dir);
     export::<SalvagedData>(&out_dir);
+    export::<SalvageWriteResult>(&out_dir);
 
     // Raw table browsing (data table fullscreen)
     export::<RawTableData>(&out_dir);
@@ -630,6 +631,7 @@ fn main() {
         "BackupKind",
         "RepairResult",
         "SalvagedData",
+        "SalvageWriteResult",
         "RawTableData",
         "Config",
         "GeneralConfig",

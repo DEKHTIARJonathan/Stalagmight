@@ -728,6 +728,21 @@ pub struct SalvagedData {
     pub errors: Vec<String>,
 }
 
+/// What the salvage export wrote (#576 W30-5): the counts and warnings of the
+/// one salvage read whose JSON went into the file. The recovery dialog reports
+/// these, not those of an earlier read: a damaged file can read differently
+/// twice.
+#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../bindings/")]
+#[serde(rename_all = "camelCase")]
+pub struct SalvageWriteResult {
+    pub section_count: usize,
+    pub shot_count: usize,
+    pub merge_count: usize,
+    /// Errors encountered while reading individual tables
+    pub errors: Vec<String>,
+}
+
 /// Minimal section info for salvage display.
 #[derive(Debug, Clone, serde::Serialize)]
 struct SalvagedSection {
