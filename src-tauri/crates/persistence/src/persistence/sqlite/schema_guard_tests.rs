@@ -324,3 +324,73 @@ fn check_schema_at_leaves_nothing_beside_a_wal_mode_file() {
     );
     assert_eq!(refused, Some("a view"));
 }
+
+/// The bytes of a HOT rollback journal for a database other than the one it
+/// will be put beside: `old(x)`, caught mid-transaction after a cache spill
+/// (so the journal header is synced and SQLite would play it back), as a
+/// crash in the middle of a write leaves it.
+fn a_stale_hot_journal(dir: &Path) -> Vec<u8> {
+    let old = dir.join("old.db");
+    let conn = Connection::open(&old).unwrap();
+    conn.execute_batch(
+        "PRAGMA page_size = 1024; PRAGMA journal_mode = DELETE;
+         CREATE TABLE old(x); INSERT INTO old VALUES ('OLD-FILE');
+         PRAGMA cache_size = 1; BEGIN;
+         INSERT INTO old SELECT hex(randomblob(500)) FROM
+           (WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50)
+            SELECT i FROM n);",
+    )
+    .unwrap();
+    let journal = std::fs::read(repair::sibling(&old, "-journal")).unwrap();
+    conn.execute_batch("ROLLBACK").unwrap();
+    journal
+}
+
+/// [#576 RV19a-3] `check_schema_at` never rolls a journal it finds beside the
+/// file into it. Its one caller checks a SpeleoDB download it has just
+/// extracted, so a journal there can only be a stale one (left by a crash
+/// while an earlier download was being written); a read-write open treated it
+/// as hot and played the OLD file's pages back into the fresh bytes, so the
+/// check passed and the old file became the cache. The check now opens
+/// read-only, where a hot journal makes the read fail instead.
+#[test]
+fn check_schema_at_never_rolls_a_stale_journal_into_the_file() {
+    let dir = TempDir::new().unwrap();
+    let journal = a_stale_hot_journal(dir.path());
+    let path = dir.path().join("download.stalx");
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "PRAGMA page_size = 1024; CREATE TABLE fresh(y);
+             INSERT INTO fresh VALUES ('NEW-DOWNLOAD');",
+        )
+        .unwrap();
+    }
+    let fresh = std::fs::read(&path).unwrap();
+    std::fs::write(repair::sibling(&path, "-journal"), &journal).unwrap();
+
+    let checked = Database::check_schema_at(&path);
+    let changed = std::fs::read(&path).unwrap() != fresh;
+    let tables: Vec<String> =
+        Connection::open_with_flags(&path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .and_then(|conn| {
+                conn.prepare("SELECT name FROM sqlite_master")?
+                    .query_map([], |row| row.get(0))?
+                    .collect()
+            })
+            .unwrap_or_default();
+    println!(
+        "fresh file beside a stale hot journal: check_schema_at -> {:?}; \
+         file changed: {changed}; tables read back: {tables:?}",
+        checked.as_ref().map_err(|e| format!("{e:#}"))
+    );
+
+    assert!(
+        !changed,
+        "the check must not write the stale journal's pages into the file"
+    );
+    assert!(
+        checked.is_err(),
+        "a file with a hot journal beside it is refused, not read as if clean"
+    );
+}

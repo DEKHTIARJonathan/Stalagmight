@@ -415,16 +415,18 @@ impl Database {
     /// that arrive from elsewhere before anything else touches them, e.g. a
     /// SpeleoDB download about to replace the local cache.
     ///
-    /// [#576 RV18-3] READ_WRITE without CREATE, though it writes nothing, for
-    /// the reason [`Self::upgraded_copy_in_memory`] gives (#576 RV8a-3): a
-    /// read-only connection to a file in WAL journal mode creates the `-wal` /
-    /// `-shm` beside it and cannot remove them when it closes, and no open may
-    /// follow this check to remove them. A read-write one removes them on its
-    /// last close, and without CREATE a missing file is an error, not a new empty
-    /// one. The one write it can make is the one every open makes: rolling back
-    /// a hot journal, which any read of the file would do first.
+    /// Opened through `connect_for_reading` (#576 RV19a-3), so the check
+    /// leaves nothing beside the file (#576 RV18-3: no open may follow it to
+    /// remove a `-wal` / `-shm` a read-only connection to a WAL-mode file
+    /// would make) and does not replay anything into it. A missing file is an
+    /// error, not a new empty one. A journal found beside the file is NOT
+    /// rolled back into
+    /// it: the file was just written by the caller, so such a journal can only
+    /// be a stale one left by a crash under the same name, and replaying it put
+    /// the old file's pages into the new one. The read-only open fails on it
+    /// (`SQLITE_READONLY_ROLLBACK`) and the file is refused instead.
     pub fn check_schema_at(path: &Path) -> Result<()> {
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+        let conn = connect_for_reading(path)
             .with_context(|| format!("open {} to check its schema", path.display()))?;
         super::check_schema(&conn)
     }

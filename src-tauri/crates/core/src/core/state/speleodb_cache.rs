@@ -124,6 +124,21 @@ fn sanitized_download_path(dest: &Path) -> std::path::PathBuf {
     dest.with_file_name(name)
 }
 
+/// [#576 RV19a-3] Remove the staged download and every SQLite sidecar beside
+/// it. The history cleanup writes into the staged file (`drop_inherited_undo`),
+/// so a crash there leaves a hot `-journal` under the staged name; the next
+/// download is extracted under the same name, and any open that may write
+/// would play that journal back into the fresh bytes - the old file's pages
+/// became the new cache. Removing the file alone left the journal behind.
+fn remove_staged_with_sidecars(staged: &Path) {
+    let _ = std::fs::remove_file(staged);
+    for suffix in ["-journal", "-wal", "-shm"] {
+        let mut sidecar = staged.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        let _ = std::fs::remove_file(std::path::PathBuf::from(sidecar));
+    }
+}
+
 /// Re-apply preserved local `display_settings` into a freshly-downloaded cache file
 /// (companion to [`preserved_display_settings`]). Best-effort per key - a failed
 /// restore only means that one view toggle falls back to its default.
@@ -407,14 +422,14 @@ impl AppState {
         // `dest` is still the file we just closed and re-opening restores the
         // pre-call state (bar the undo history, which the close spent either way).
         let staged = sanitized_download_path(dest);
-        let _ = std::fs::remove_file(&staged);
+        remove_staged_with_sidecars(&staged);
         match dump.extract_entry_to(entry, &staged) {
             Ok(()) => {
                 // A server `.stalx` is input from outside: refuse a hostile schema
                 // before the history cleanup below fires a trigger it carries, and
                 // before it can replace the cache (#608).
                 if let Err(e) = crate::persistence::Database::check_schema_at(&staged) {
-                    let _ = std::fs::remove_file(&staged);
+                    remove_staged_with_sidecars(&staged);
                     if closed {
                         let _ = self.open_project(dest.to_path_buf());
                     }
@@ -437,7 +452,7 @@ impl AppState {
                 // from a newer file (`do_load_project_full`).
                 if matches!(undo, InheritedUndo::Drop) && !saved_by_a_newer_build(&staged) {
                     if let Err(e) = drop_inherited_undo(&staged) {
-                        let _ = std::fs::remove_file(&staged);
+                        remove_staged_with_sidecars(&staged);
                         if closed {
                             let _ = self.open_project(dest.to_path_buf());
                         }
@@ -445,7 +460,7 @@ impl AppState {
                     }
                 }
                 if let Err(e) = std::fs::rename(&staged, dest) {
-                    let _ = std::fs::remove_file(&staged);
+                    remove_staged_with_sidecars(&staged);
                     if closed {
                         let _ = self.open_project(dest.to_path_buf());
                     }
@@ -485,7 +500,9 @@ impl AppState {
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
-    reason = "unit test fixtures fail loudly on setup errors"
+    clippy::print_stdout,
+    reason = "unit test fixtures fail loudly on setup errors, and the printed outcome is the \
+              evidence a run captures"
 )]
 mod tests {
     use super::*;
@@ -818,5 +835,74 @@ mod tests {
             "Server Copy",
             "the server copy landed"
         );
+    }
+
+    /// [#576 RV19a-3] A journal a crash left beside the staged download is
+    /// removed before the next download is extracted there. The replace removed
+    /// only the staged file, so the stale `-journal` (from a crash while the
+    /// history cleanup wrote into the previous download) sat beside the fresh
+    /// bytes; the read-write schema check then played it back, and the OLD
+    /// file's pages became the new cache.
+    #[test]
+    fn a_stale_journal_beside_the_staged_download_never_reaches_the_cache() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let dest = temp.path().join("project.stalx");
+        seed_linked_stalx(&dest, false);
+        let staged = sanitized_download_path(&dest);
+        let mut journal_name = staged.into_os_string();
+        journal_name.push("-journal");
+        let staged_journal = std::path::PathBuf::from(journal_name);
+
+        // A hot journal of a different `.stalx`, caught mid-write after a cache
+        // spill (header synced), as a crash leaves it.
+        let old = temp.path().join("old.stalx");
+        {
+            let mut db = Database::open(&old).expect("open old");
+            db.save_project(&Project::new("Old Copy".to_owned(), None))
+                .expect("save old");
+        }
+        let conn = rusqlite::Connection::open(&old).expect("raw open old");
+        conn.execute_batch(
+            "PRAGMA journal_mode = DELETE; CREATE TABLE junk(x);
+             PRAGMA cache_size = 1; BEGIN;
+             INSERT INTO junk SELECT hex(randomblob(2000)) FROM
+               (WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200)
+                SELECT i FROM n);",
+        )
+        .expect("write mid-transaction");
+        let mut old_journal = old.into_os_string();
+        old_journal.push("-journal");
+        std::fs::copy(std::path::PathBuf::from(old_journal), &staged_journal)
+            .expect("plant the stale journal");
+        conn.execute_batch("ROLLBACK").expect("rollback");
+        drop(conn);
+
+        let state = AppState::new().expect("state");
+        let zip = server_dump();
+        let replaced = state.replace_cache_stalx(
+            &mut Dump::open(&zip).expect("open dump"),
+            ENTRY,
+            &dest,
+            ID,
+            InheritedUndo::Drop,
+        );
+        let name = Database::open_existing(&dest)
+            .and_then(|db| db.load_project())
+            .map(|project| project.name);
+        println!(
+            "stale journal beside the staged download: replace -> {:?}; the cache holds {:?}; \
+             journal left: {}",
+            replaced.as_ref().map_err(ToString::to_string),
+            name.as_ref().map_err(|e| format!("{e:#}")),
+            staged_journal.exists()
+        );
+
+        replaced.expect("the download replaces the cache");
+        assert_eq!(
+            name.expect("the cache opens"),
+            "Server Copy",
+            "the cache is the download, not the stale journal's file"
+        );
+        assert!(!staged_journal.exists(), "the stale journal is gone");
     }
 }
