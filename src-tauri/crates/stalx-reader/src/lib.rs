@@ -42,6 +42,10 @@
 //! Files written by a newer schema than this crate knows are refused with
 //! [`ReadError::NewerSchema`]; upgrade the crate to read them.
 //!
+//! A file with a section of more than 99,999 shots, the most the app's shot ids
+//! can number in one section, is refused with [`InvalidKind::Other`], whatever
+//! [`CountLimits`] allows.
+//!
 //! ```no_run
 //! let survey = stalx_reader::read_file(std::path::Path::new("project.stalx"))?;
 //! for section in &survey.sections {
