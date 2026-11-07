@@ -1166,10 +1166,12 @@ impl AppState {
                 // (`Project::map_station_refs`).
                 //
                 // CRITICALLY, gate this on the snapshot being PRE-ANCHOR, not on an
-                // `Index` anchor alone (#576 W52-1). A snapshot this build wrote can
+                // `Index` anchor alone (#576 W52-1). An anchor-shape snapshot can
                 // hold one too: a key that did not resolve at the open (a comment row
-                // past the end of its section) stays `Index` in the live project, and
-                // every snapshot taken while it is there records it. Re-anchoring that
+                // past the end of its section) stayed `Index` in the live project
+                // until #576 Q-W30-3-D1 made the open drop it, and every snapshot
+                // taken while it was there recorded it - history an older build
+                // persisted still holds such snapshots. Re-anchoring that
                 // snapshot moved the key onto whatever shot then sat at its position -
                 // one an append had added, so undoing the append deleted the comment
                 // with the shot. And ensure_unique would RE-MINT intentional duplicate

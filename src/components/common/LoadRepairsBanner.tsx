@@ -3,12 +3,13 @@ import { useProjectStore } from '../../store/projectStore';
 import type { LoadRepairs } from '../../utils/loadProjectBinary';
 
 /** Item keys under `banners.loadRepairs.items`, in the order the notice lists them. */
-const KINDS: ReadonlyArray<keyof LoadRepairs> = ['shots', 'sectionOffsets', 'stationOffsets', 'gpsPoints'];
+const KINDS: ReadonlyArray<keyof LoadRepairs> = ['shots', 'sectionOffsets', 'stationOffsets', 'gpsPoints', 'stationComments'];
 
 /**
  * [#576 B35(h)] One notice after an open that reset or dropped stored values it could
- * not use (non-finite shot measurements, section and station moves, GPS tie points),
- * with a count per kind.
+ * not use (non-finite shot measurements, section and station moves, GPS tie points,
+ * and - #576 Q-W30-3-D1 - station comments past the end of their section), with a
+ * count per kind.
  *
  * The backend already neutralized these at the load boundary - the right call, the
  * values would poison every coordinate - but it did so silently, and the next save

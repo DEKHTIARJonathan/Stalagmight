@@ -3156,7 +3156,9 @@
         "stationOffsets_one": "{{count}} station move reset",
         "stationOffsets_other": "{{count}} station moves reset",
         "gpsPoints_one": "{{count}} GPS tie point dropped",
-        "gpsPoints_other": "{{count}} GPS tie points dropped"
+        "gpsPoints_other": "{{count}} GPS tie points dropped",
+        "stationComments_one": "{{count}} station comment past the end of its section dropped",
+        "stationComments_other": "{{count}} station comments past the end of their sections dropped"
       }
     },
     "newerFile": {

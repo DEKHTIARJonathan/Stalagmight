@@ -26,7 +26,7 @@ afterEach(() => {
 
 describe('LoadRepairsBanner (#576 B35(h))', () => {
   it('lists what the open reset or dropped, per kind, with plural forms', () => {
-    openWith({ shots: 1, sectionOffsets: 0, stationOffsets: 2, gpsPoints: 1 });
+    openWith({ shots: 1, sectionOffsets: 0, stationOffsets: 2, gpsPoints: 1, stationComments: 0 });
     render(<LoadRepairsBanner />);
     const banner = screen.getByTestId('load-repairs-banner');
     expect(banner).toHaveTextContent(
@@ -38,13 +38,30 @@ describe('LoadRepairsBanner (#576 B35(h))', () => {
   });
 
   it('can be dismissed for the open project', () => {
-    openWith({ shots: 0, sectionOffsets: 3, stationOffsets: 0, gpsPoints: 0 });
+    openWith({ shots: 0, sectionOffsets: 3, stationOffsets: 0, gpsPoints: 0, stationComments: 0 });
     render(<LoadRepairsBanner />);
     expect(screen.getByTestId('load-repairs-banner')).toHaveTextContent('3 section moves reset');
     act(() => {
       fireEvent.click(screen.getByTestId('load-repairs-dismiss-button'));
     });
     expect(screen.queryByTestId('load-repairs-banner')).not.toBeInTheDocument();
+  });
+
+  // [#576 Q-W30-3-D1] A comment row past the end of its section is dropped on load
+  // and listed here, so the user knows it is gone before a save makes that final.
+  it('lists the station comments the open dropped as orphans', () => {
+    openWith({ shots: 0, sectionOffsets: 0, stationOffsets: 0, gpsPoints: 0, stationComments: 1 });
+    render(<LoadRepairsBanner />);
+    expect(screen.getByTestId('load-repairs-banner')).toHaveTextContent(
+      'Some stored values could not be used and were changed when this project opened: ' +
+        '1 station comment past the end of its section dropped.',
+    );
+    act(() => {
+      openWith({ shots: 0, sectionOffsets: 0, stationOffsets: 0, gpsPoints: 0, stationComments: 2 });
+    });
+    expect(screen.getByTestId('load-repairs-banner')).toHaveTextContent(
+      '2 station comments past the end of their sections dropped.',
+    );
   });
 
   it('shows nothing when the load reset nothing', () => {

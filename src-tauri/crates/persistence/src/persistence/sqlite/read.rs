@@ -796,7 +796,7 @@ impl Database {
         // Through the loader constructor (#576 A10): the lookup caches are
         // private to `Project`, which builds both of them up front so callers
         // get O(1) `get_section` / `resolve_key` right after load.
-        let project = Project::from_loaded(LoadedProject {
+        let mut project = Project::from_loaded(LoadedProject {
             name,
             location,
             created_at,
@@ -816,6 +816,19 @@ impl Database {
             surface_elevation,
             default_azimuth_reference,
         });
+        // [#576 Q-W30-3-D1] A comment row past the end of its section names no
+        // station: it is dropped here and counted for the open's notice, so it
+        // can never attach to a station a later edit puts at that position.
+        // Logged by position only - the text is the user's.
+        for orphan in project.drop_orphan_station_comments() {
+            tracing::warn!(
+                section_id = orphan.section_id,
+                anchor = ?orphan.anchor,
+                purpose = "block corruption at the source",
+                "Dropped a station comment past the end of its section on load"
+            );
+            report.repairs.station_comments += 1;
+        }
         Ok((project, report))
     }
 
@@ -1477,9 +1490,9 @@ pub struct ProjectLoadReport {
 }
 
 /// [#576 B35(h)] How many stored values a load reset or dropped because it could
-/// not use them (non-finite numbers from a damaged or hand-edited file), per
-/// kind. The next save writes the reset values, so the open reports them to the
-/// user once instead of only logging them.
+/// not use them (non-finite numbers, or rows naming no station, from a damaged or
+/// hand-edited file), per kind. The next save writes the reset values, so the
+/// open reports them to the user once instead of only logging them.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct LoadRepairs {
     /// Shots with a non-finite measurement, reset to finite defaults.
@@ -1490,6 +1503,9 @@ pub struct LoadRepairs {
     pub station_offsets: usize,
     /// GPS tie points (zero datums) with a non-finite coordinate, dropped.
     pub gps_points: usize,
+    /// [#576 Q-W30-3-D1] Station comments whose row points past the end of its
+    /// section (an orphan, which names no station), dropped.
+    pub station_comments: usize,
 }
 
 impl LoadRepairs {

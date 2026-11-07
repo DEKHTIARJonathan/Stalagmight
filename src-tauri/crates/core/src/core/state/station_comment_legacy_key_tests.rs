@@ -12,6 +12,12 @@
 //! text beside the old instead of replacing it, and moving it failed with
 //! "Source has no comment to move".
 //!
+//! [#576 Q-W30-3-D1] An open now drops a row past the end of its section, so
+//! the legacy key is built in memory right after the open
+//! (`station_comment_display_tests::seed_legacy_comment_rows`), exactly as
+//! the open used to leave it; it can still come from undo history an older
+//! build persisted.
+//!
 //! All data is synthetic: a file this build saved, then rows added with plain
 //! SQL (`station_comment_display_tests::file_with_comment_rows`). No fixture is
 //! read or written.
@@ -19,7 +25,7 @@
 use tempfile::TempDir;
 
 use super::station_comment_display_tests::{
-    file_with_comment_rows, save_and_reopen, shot_ids, shown_comment,
+    file_with_comment_rows, save_and_reopen, seed_legacy_comment_rows, shot_ids, shown_comment,
 };
 use super::AppState;
 use crate::core::{Command, CommentHolder};
@@ -78,9 +84,10 @@ pub(super) fn station_holder(sr: StationRef) -> CommentHolder {
 fn clearing_a_comment_held_under_a_legacy_key_clears_it() {
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
-    let (path, sid) = file_with_comment_rows(temp.path(), &[(3, "comment past the end")]);
+    let (path, sid) = file_with_comment_rows(temp.path(), &[]);
     let state = state_with_null_sink();
     state.do_load_project_full(path).unwrap();
+    seed_legacy_comment_rows(&state, sid, &[(3, "comment past the end")]);
     append_shot(&state, sid);
     let station = StationRef::new(sid, 3);
     assert_eq!(
@@ -126,9 +133,10 @@ fn clearing_a_comment_held_under_a_legacy_key_clears_it() {
 fn setting_a_comment_where_a_legacy_key_names_the_station_replaces_it() {
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
-    let (path, sid) = file_with_comment_rows(temp.path(), &[(3, "comment past the end")]);
+    let (path, sid) = file_with_comment_rows(temp.path(), &[]);
     let state = state_with_null_sink();
     state.do_load_project_full(path).unwrap();
+    seed_legacy_comment_rows(&state, sid, &[(3, "comment past the end")]);
     append_shot(&state, sid);
     let station = StationRef::new(sid, 3);
 
@@ -170,9 +178,10 @@ fn setting_a_comment_where_a_legacy_key_names_the_station_replaces_it() {
 fn moving_a_comment_held_under_a_legacy_key_moves_it() {
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
-    let (path, sid) = file_with_comment_rows(temp.path(), &[(3, "comment past the end")]);
+    let (path, sid) = file_with_comment_rows(temp.path(), &[]);
     let state = state_with_null_sink();
     state.do_load_project_full(path).unwrap();
+    seed_legacy_comment_rows(&state, sid, &[(3, "comment past the end")]);
     append_shot(&state, sid);
     let source = StationRef::new(sid, 3);
     let target = StationRef::new(sid, 1);
@@ -229,14 +238,11 @@ fn swapping_a_comment_held_under_two_keys_swaps_the_joined_text() {
     let temp = TempDir::new().unwrap();
     let (path, sid) = file_with_comment_rows(
         temp.path(),
-        &[
-            (1, "comment on station 1"),
-            (2, "comment at the end"),
-            (3, "comment past the end"),
-        ],
+        &[(1, "comment on station 1"), (2, "comment at the end")],
     );
     let state = state_with_null_sink();
     state.do_load_project_full(path).unwrap();
+    seed_legacy_comment_rows(&state, sid, &[(3, "comment past the end")]);
     prepend_shot(&state, sid);
     let source = StationRef::new(sid, 3);
     let target = StationRef::new(sid, 2);
@@ -306,13 +312,14 @@ pub(super) fn stored_rows(state: &AppState) -> Vec<String> {
 fn undoing_a_comment_change_restores_the_legacy_key_it_replaced() {
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
-    let (path, sid) = file_with_comment_rows(temp.path(), &[(3, "comment past the end")]);
+    let (path, sid) = file_with_comment_rows(temp.path(), &[]);
     for (label, comment) in [
         ("clear", None),
         ("set", Some("comment set in the app".to_string())),
     ] {
         let state = state_with_null_sink();
         state.do_load_project_full(path.clone()).unwrap();
+        seed_legacy_comment_rows(&state, sid, &[(3, "comment past the end")]);
         let loaded = stored_rows(&state);
         append_shot(&state, sid);
         let station = StationRef::new(sid, 3);
@@ -525,10 +532,11 @@ fn the_rows_a_create_records_survive_the_persisted_undo_history() {
 fn deleting_a_station_deletes_a_comment_held_under_a_legacy_key() {
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
-    let (path, sid) = file_with_comment_rows(temp.path(), &[(3, "comment past the end")]);
+    let (path, sid) = file_with_comment_rows(temp.path(), &[]);
     for how in ["delete shot", "delete range"] {
         let state = state_with_null_sink();
         state.do_load_project_full(path.clone()).unwrap();
+        seed_legacy_comment_rows(&state, sid, &[(3, "comment past the end")]);
         append_shot(&state, sid);
         append_shot(&state, sid);
         let station = StationRef::new(sid, 3);

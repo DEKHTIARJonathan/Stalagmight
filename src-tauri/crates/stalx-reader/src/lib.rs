@@ -402,12 +402,18 @@ fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
         project.classify_virtual_shots(&ClassifyScope::WholeProject);
     }
     remaining(expires)?;
-    Ok(Survey::from_project(
+    let mut survey = Survey::from_project(
         &project,
         schema_version,
         options.with_stations,
         &derived_uuids,
-    ))
+    );
+    // [#576 Q-W30-3-D1] The loader now drops a comment row past the end of its
+    // section itself (and counts it) instead of leaving it for `from_project`
+    // to find unresolved. It is the same dangling cross-reference, so it is
+    // counted here exactly as before: a reader sees what it always saw.
+    survey.unresolved_references += report.repairs.station_comments;
+    Ok(survey)
 }
 
 /// Time left before `expires`, or [`InvalidKind::Deadline`] once it has passed.

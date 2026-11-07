@@ -11,6 +11,12 @@
 //! re-anchored the key onto the appended shot, so undoing the append then
 //! deleted the comment together with the shot.
 //!
+//! [#576 Q-W30-3-D1] An open now drops a row past the end of its section, so
+//! the legacy key is built in memory right after the open
+//! (`station_comment_display_tests::seed_legacy_comment_rows`), exactly as
+//! the open used to leave it; it can still come from undo history an older
+//! build persisted.
+//!
 //! All data is synthetic: a file this build saved, then rows added with plain
 //! SQL (`station_comment_display_tests::file_with_comment_rows`). No fixture is
 //! read or written.
@@ -18,7 +24,7 @@
 use tempfile::TempDir;
 
 use super::station_comment_display_tests::{
-    file_with_comment_rows, save_and_reopen, shot_ids, shown_comment,
+    file_with_comment_rows, save_and_reopen, seed_legacy_comment_rows, shot_ids, shown_comment,
 };
 use super::station_comment_legacy_key_tests::{
     append_shot, redo, station_holder, stored_rows, undo,
@@ -73,7 +79,7 @@ fn apply(state: &AppState, sid: u32, edit: Edit) {
 fn a_snapshot_restore_keeps_the_comment_keys_it_recorded() {
     let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
-    let (path, sid) = file_with_comment_rows(temp.path(), &[(3, "comment past the end")]);
+    let (path, sid) = file_with_comment_rows(temp.path(), &[]);
     for edit in [
         Edit::MoveComment,
         Edit::SetStationComment,
@@ -82,6 +88,7 @@ fn a_snapshot_restore_keeps_the_comment_keys_it_recorded() {
     ] {
         let state = state_with_null_sink();
         state.do_load_project_full(path.clone()).unwrap();
+        seed_legacy_comment_rows(&state, sid, &[(3, "comment past the end")]);
         let loaded = stored_rows(&state);
         let loaded_blocked = state.integrity_check().save_blocked;
         append_shot(&state, sid);

@@ -392,6 +392,29 @@ fn a_dangling_cross_reference_is_dropped_and_counted() {
     assert_eq!(survey.unresolved_references, 1);
 }
 
+/// [#576 Q-W30-3-D1] The loader now drops a comment row past the end of its
+/// section itself (and lists it on the app's load receipt). A reader still
+/// sees exactly what it saw: the orphan is left out of `station_comments` and
+/// counted in `unresolved_references`, beside the comment that is kept.
+#[test]
+fn an_orphaned_comment_is_still_left_out_and_counted() {
+    let path = with_schema_sql(
+        "INSERT INTO station_comments (section_id, station_index, comment)
+         SELECT section_id, 999, 'past the end' FROM station_comments;",
+    );
+
+    let survey = read_file(&path).unwrap();
+
+    assert_eq!(
+        survey.station_comments.len(),
+        1,
+        "{:?}",
+        survey.station_comments
+    );
+    assert_eq!(survey.station_comments[0].text, "lead");
+    assert_eq!(survey.unresolved_references, 1);
+}
+
 #[test]
 fn generated_columns_are_refused() {
     // 2 MiB per row from a tiny file; allowed with trusted_schema off.
