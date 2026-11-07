@@ -187,6 +187,21 @@ shed the link and both undo-chain markers: an unlinked file that kept them would
 once linked again, have its first push cut the user's history as "inherited"
 (#303). Every other mode carries every side table.
 
+### Known limit: an ignored warning after a reverse that is not saved (pre-v6 files)
+
+An ignored warning is written to the open file at once, not at the next save, and
+a section reverse moves the file's position-keyed `resolved_warnings` rows to their
+shots' new positions (`pin_position_keyed_warnings_after_reverse` in
+`core/state/warnings.rs`, through `Database::rekey_position_resolved_warnings`).
+A shot in a file from before schema v6 has no stored UUID - one is minted in
+memory on every open - so its position is the only name the file has for it.
+Reverse such a section and close without saving, and the reopened file has the
+shots back in their old order while the ignore stays at the mirrored position: it
+now hides that shot's warning of the same kind, and the shot it was made for shows
+its warning again. Saving after the reverse is not affected, and neither is a file
+from v6 on, whose ignores are keyed by the shot's UUID. Left as a known limit
+(decision Q-W56-1-D1); re-ignore the warning after reopening.
+
 ### Stored project settings that could not be read
 
 The validation thresholds, the entrance elevation and the default north reference
