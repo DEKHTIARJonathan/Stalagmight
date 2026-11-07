@@ -1155,8 +1155,10 @@ locations:
   value shaped like a flag (`--sed`) or a number (`1.5`) prints as itself,
   quoted, since neither shape can spell a path or a name (#576 W58 Q4,
   `cliValueShape`). A trace's knob name
-  prints when it reads `STALAGMIGHT_[A-Z0-9_]+`, its values and every path
-  folded, and its fixture by name only when the repo tracks it. A store value a scenario reports on the first line of an
+  prints when it reads `STALAGMIGHT_[A-Z0-9_]+`, a knob's value only when the
+  knob is registered and the value has its shape (`lib/traceKnobs.ts`, #576
+  W58 Q9) and otherwise as its length, every path folded, and its fixture by
+  name only when the repo tracks it. A store value a scenario reports on the first line of an
   error, in a progress line or in a metric key - an open dialog, an undo
   entry's command type, the active tool, the app mode, the view, the import
   context (#576 W58 Q11) - keeps only the words of the app's source, as a test
@@ -1531,7 +1533,16 @@ is the same failure rather than a lookalike. A replayed run says so in its
 
 The recording's ENVIRONMENT is part of the repro, so `--trace` restores the
 header's `STALAGMIGHT_*` knobs (fixture, tolerance, stream, the persistence
-ones) and prints what it restored. Every knob is read at call time
+ones) and prints what it restored. The knobs a trace carries are a declared
+registry, each with the shape of its value (`lib/traceKnobs.ts`, #576 W58 Q9):
+a switch, a number, a stream name, a format list, a fixture name. A run
+records a knob's value only when it has that shape; any other value, and any
+knob the registry does not know, is recorded by its length in the header's
+`envWithheld`, and a replay leaves those as its own shell has them and says
+so. A replay restores, and a runner prints, only a registered knob's value of
+its shape; anything else in a trace is refused and printed as its length. A
+new knob is added to the registry with its shape (`traceKnobs.test.ts` fails
+on one the harness reads that is missing). Every knob is read at call time
 (`lib/fuzzKnobs.ts`), so the restore only has to precede the run; both
 `agent:scenario` and `agent:fuzz-shrink` still do it before importing the
 registry (dynamically), so a knob some module read at import time would not

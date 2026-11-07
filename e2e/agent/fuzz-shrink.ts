@@ -52,6 +52,7 @@ import {
 } from './lib/fuzzTrace';
 import { ddmin, type ShrinkVerdict } from './lib/fuzzShrink';
 import { shareableFixtureName } from './lib/privateFixtures';
+import { shareableKnobValue } from './lib/traceKnobs';
 import { cliValueShape, foldLocalPaths, shareableErrorText, valueShape } from './lib/shareableFailure';
 // Safe to import statically, unlike the scenarios below: this module freezes
 // nothing at import and reads `STALAGMIGHT_FUZZ_CORPUS_DIR` at call time, which
@@ -79,9 +80,6 @@ const shownFlag = (flag: string | undefined): string => (flag !== undefined && F
  * else by its shape (`valueShape`: a number as itself).
  */
 const envKey = (key: string): string => (/^STALAGMIGHT_[A-Z0-9_]{1,64}$/.test(key) ? key : valueShape(key));
-/** A knob's value as printed: the fixture knob by `shareableFixtureName` (#576 W58 Q1), any other folded. */
-const knobValue = (key: string, value: unknown): string =>
-  key === 'STALAGMIGHT_FUZZ_FIXTURE' ? shareableFixtureName(value) : foldLocalPaths(String(value));
 const gitRev = (rev: unknown): string =>
   typeof rev === 'string' && /^(?:[0-9a-f]{7,40}|unknown)$/.test(rev) ? rev.slice(0, 12) : valueShape(rev);
 
@@ -127,10 +125,17 @@ async function main(): Promise<number> {
   // rather than inheriting whatever shell the shrink was started from - through
   // the recorder's own prefix filter, because a trace is a file from wherever
   // the user got it and this process goes on to invoke cargo and launch the app.
-  const { refused, cleared } = restoreTraceEnv(trace.env);
+  const { refused, cleared, withheld } = restoreTraceEnv(trace.env, trace.envWithheld);
   if (refused.length > 0) {
     process.stdout.write(
       `REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.map(envKey).join(', ')}\n`,
+    );
+  }
+  if (withheld.length > 0) {
+    // Set in the recording to a value its trace does not carry (#576 W58 Q9).
+    process.stdout.write(
+      `WITHHELD ${withheld.length} knob(s) the recording set to a value the trace does not carry, ` +
+        `left as this shell has them: ${withheld.map(envKey).join(', ')}\n`,
     );
   }
   if (cleared.length > 0) {
@@ -171,7 +176,7 @@ async function main(): Promise<number> {
       `trace ${foldLocalPaths(args.trace)}\n` +
       `  scenario=${trace.scenario} seed=${valueShape(trace.seed)} fixture=${shareableFixtureName(trace.fixture)} ` +
       `steps=${trace.steps.length} rev=${gitRev(trace.gitRev)}\n` +
-      `  env=${Object.entries(trace.env).map(([key, value]) => `${envKey(key)}=${knobValue(key, value)}`).join(' ')}\n`,
+      `  env=${Object.entries(trace.env).map(([key, value]) => `${envKey(key)}=${shareableKnobValue(key, value)}`).join(' ')}\n`,
   );
 
   // Said BEFORE the baseline replay, not after it, and it RESOLVES the ids

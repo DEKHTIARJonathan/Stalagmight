@@ -70,6 +70,7 @@ export const HELPERS: Readonly<Record<string, string>> = {
   shareableSelector: 'a selector: its structure and the words of the production source, other text as its length',
   shareableTestId: 'a test id: the words of the production source, other text as its length',
   shareableFixtureName: 'a fixture name: itself when the repo tracks it, else its <private-fixture#xxxxx> tag (#576 W58 Q1)',
+  shareableKnobValue: "a trace knob's value: itself only when traceKnobs.ts registers the knob and the value has its shape, else valueShape (#576 W58 Q9)",
   shareableSignature: 'the signature of the shareable failure text',
   describeSignature: "a signature's fields, each from shareableSignature",
 };

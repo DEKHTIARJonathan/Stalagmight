@@ -110,6 +110,7 @@ import { createHash } from 'crypto';
 
 import { shortId } from './crc32';
 import { noteFixtureName } from './privateFixtures';
+import { knobValueShaped } from './traceKnobs';
 import { foldLocalPaths, shareableFailureText, valueShape } from './shareableFailure';
 
 /** Current trace schema. Bumped when a step shape changes incompatibly. */
@@ -271,8 +272,18 @@ export interface FuzzTrace {
   fixture: string;
   /** Generator stream the recording ran on (`v1` / `v2`), for the header only. */
   stream: string;
-  /** The `STALAGMIGHT_FUZZ_*` / `STALAGMIGHT_PERSIST_FUZZ_*` knobs that were set. */
+  /**
+   * The `STALAGMIGHT_FUZZ_*` / `STALAGMIGHT_PERSIST_FUZZ_*` knobs that were set,
+   * each with a value of its knob's shape (`traceKnobs.ts`, #576 W58 Q9).
+   */
   env: Record<string, string>;
+  /**
+   * The knobs that were set to a value that is not their knob's shape, or that
+   * the registry does not know, by the value's length (#576 W58 Q9). Not
+   * restorable, so a replay leaves them as its shell has them and says so.
+   * OPTIONAL: omitted when there were none, and absent in older traces.
+   */
+  envWithheld?: Record<string, number>;
   gitRev: string;
   recordedAt: string;
   /** Null when the run passed and the trace was written because of the env var. */
@@ -486,7 +497,7 @@ const RECORDED_ENV_PREFIXES = ['STALAGMIGHT_FUZZ_', 'STALAGMIGHT_PERSIST_FUZZ_']
  * corpus ids against the corpus the REPLAYER configured, which is the only one
  * it can read anyway.
  */
-const NEVER_RESTORED = [
+export const NEVER_RESTORED: readonly string[] = [
   'STALAGMIGHT_FUZZ_TRACE',
   'STALAGMIGHT_FUZZ_REPLAY',
   'STALAGMIGHT_FUZZ_CORPUS_DIR',
@@ -507,10 +518,14 @@ const NEVER_RESTORED = [
  * Returns what it applied and what it refused, so the caller can print both:
  * a silently dropped knob would be a replay that quietly is not the recording.
  */
-export function restoreTraceEnv(recorded: Readonly<Record<string, string>>): {
+export function restoreTraceEnv(
+  recorded: Readonly<Record<string, string>>,
+  withheldByRecorder: Readonly<Record<string, number>> = {},
+): {
   applied: [string, string][];
   refused: string[];
   cleared: string[];
+  withheld: string[];
 } {
   const applied: [string, string][] = [];
   const refused: string[] = [];
@@ -519,13 +534,19 @@ export function restoreTraceEnv(recorded: Readonly<Record<string, string>>): {
       refused.push(key);
       continue;
     }
-    if (RECORDED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+    // Only a registered knob, and only a value of its shape (#576 W58 Q9): the
+    // recorder writes nothing else, so anything else is a forged or older file.
+    if (RECORDED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix)) && knobValueShaped(key, value)) {
       process.env[key] = value;
       applied.push([key, value]);
     } else {
       refused.push(key);
     }
   }
+  // A knob the recording had set to a value its trace does not carry: its
+  // value is unknown here, so neither restored nor cleared - this shell's
+  // stands, and the caller says so.
+  const withheld = Object.keys(withheldByRecorder).filter((key) => !NEVER_RESTORED.includes(key));
   // The recorded env is the WHOLE truth about restorable knobs, so a knob the
   // recording did not have is unset here rather than inherited.
   //
@@ -546,24 +567,33 @@ export function restoreTraceEnv(recorded: Readonly<Record<string, string>>): {
   // take them away.
   const cleared: string[] = [];
   for (const key of Object.keys(process.env)) {
-    if (key in recorded || NEVER_RESTORED.includes(key)) continue;
+    if (key in recorded || NEVER_RESTORED.includes(key) || withheld.includes(key)) continue;
     if (!RECORDED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) continue;
     delete process.env[key];
     cleared.push(key);
   }
-  return { applied, refused, cleared };
+  return { applied, refused, cleared, withheld };
 }
 
-function recordedEnv(): Record<string, string> {
-  const out: Record<string, string> = {};
+/**
+ * The knobs this run was set to, split by `traceKnobs.ts`'s registry (#576 W58
+ * Q9): a value of its knob's shape is recorded, and any other - an
+ * unregistered knob's, or text the shell held - only by its length, since a
+ * trace is attached to issues.
+ */
+function recordedEnv(): { env: Record<string, string>; withheld: Record<string, number> } {
+  const env: Record<string, string> = {};
+  const withheld: Record<string, number> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
     // The trace's own path is not part of what the run DOES, and carrying it
     // would make a replayed trace overwrite the file it came from.
     if (NEVER_RESTORED.includes(key)) continue;
-    if (RECORDED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) out[key] = value;
+    if (!RECORDED_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))) continue;
+    if (knobValueShaped(key, value)) env[key] = value;
+    else withheld[key] = value.length;
   }
-  return out;
+  return { env, withheld };
 }
 
 function gitRev(): string {
@@ -745,6 +775,7 @@ export class TraceRecorder {
     /** Episode indices that ran with no project open; omitted when none did. */
     noProjectEpisodes?: readonly number[] | undefined;
   }): FuzzTrace {
+    const { env, withheld } = recordedEnv();
     return {
       v: TRACE_VERSION,
       scenario: meta.scenario,
@@ -752,7 +783,9 @@ export class TraceRecorder {
       iterations: meta.iterations,
       fixture: meta.fixture,
       stream: meta.stream,
-      env: recordedEnv(),
+      env,
+      // Omitted when empty, as `noProjectEpisodes` is.
+      ...(Object.keys(withheld).length > 0 ? { envWithheld: withheld } : {}),
       gitRev: gitRev(),
       recordedAt: new Date().toISOString(),
       failure: meta.failure
@@ -1069,6 +1102,16 @@ export function readTrace(filePath: string): FuzzTrace {
     throw new Error(`trace ${foldLocalPaths(filePath)} is schema v${valueShape(parsed.v)}; this build reads v${TRACE_VERSION}`);
   }
   if (!Array.isArray(parsed.steps)) throw new Error(`trace ${foldLocalPaths(filePath)} has no steps array`);
+  const withheld: unknown = parsed.envWithheld;
+  if (
+    withheld !== undefined &&
+    (typeof withheld !== 'object' ||
+      withheld === null ||
+      Array.isArray(withheld) ||
+      !Object.values(withheld).every((n) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0))
+  ) {
+    throw new Error(`trace ${foldLocalPaths(filePath)} has envWithheld ${valueShape(withheld)}; must map knob names to lengths`);
+  }
   parsed.steps.forEach((step, index) => validateStep(step, index, filePath));
   // The fixtures it names fold to their tag in shareable output when the repo
   // does not track them (#576 W58 Q1), wherever the run prints them next.

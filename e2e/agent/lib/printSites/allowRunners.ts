@@ -105,13 +105,15 @@ export const GROUP: SiteGroup = {
         'env keys through envKey: a knob name of the ^STALAGMIGHT_[A-Z0-9_]{1,64}$ shape, anything else (the trace is a file) by its shape',
       "main: cleared.map(envKey).join(', ')":
         'env keys through envKey: a knob name of the ^STALAGMIGHT_[A-Z0-9_]{1,64}$ shape, anything else by its shape',
+      "main: withheld.map(envKey).join(', ')":
+        "the trace's envWithheld keys through envKey: a knob name of the ^STALAGMIGHT_[A-Z0-9_]{1,64}$ shape, anything else (the trace is a file) by its shape (#576 W58 Q9)",
       'main: started.state': STARTED_STATE,
       'main: started.buildMode': STARTED_BUILD,
       'main: started.buildAction': STARTED_BUILD,
       'main: args.trace': R.FOLDED,
       'main: trace.scenario': 'a registry name: main throws unless getScenario(trace.scenario) found it, just above the print',
-      "main: Object.entries(trace.env).map(([key, value]) => `${envKey(key)}=${knobValue(key, value)}`).join(' ')":
-        "the trace's knobs as KEY=value: the key through envKey (knob shape, else valueShape), the value through knobValue (the fixture knob by shareableFixtureName, any other through foldLocalPaths); see the W51 open question on knob values",
+      "main: Object.entries(trace.env).map(([key, value]) => `${envKey(key)}=${shareableKnobValue(key, value)}`).join(' ')":
+        "the trace's knobs as KEY=value: the key through envKey (knob shape, else valueShape), the value through shareableKnobValue (traceKnobs.ts: a registered knob's value of its shape, the fixture by shareableFixtureName, else valueShape; #576 W58 Q9)",
       'main: CORPUS_DIR_ENV': "CORPUS_DIR_ENV, the constant 'STALAGMIGHT_FUZZ_CORPUS_DIR' (lib/fixtureCorpus.ts)",
       'main: replayTimesMs[0]': R.COUNT,
       'onProgress: info.stats.tests': R.COUNT,
@@ -202,10 +204,12 @@ export const GROUP: SiteGroup = {
       'main: runAt.seed': 'scenarioRunOptions: --seed through integerFlag, or the trace seed it refuses unless Number.isInteger',
       'main: runAt.iterations':
         'scenarioRunOptions: --iterations through positiveIntFlag, or the trace count it refuses unless a positive integer',
-      "main: restored.map(([key, value]) => `${envKey(key)}=${knobValue(key, value)}`).join(' ')":
-        "the knobs restored from the trace as KEY=value: the key through envKey (knob shape, else valueShape), the value through knobValue (the fixture knob by shareableFixtureName, any other through foldLocalPaths); see the W51 open question on knob values",
+      "main: restored.map(([key, value]) => `${envKey(key)}=${shareableKnobValue(key, value)}`).join(' ')":
+        "the knobs restored from the trace as KEY=value: the key through envKey (knob shape, else valueShape), the value through shareableKnobValue (traceKnobs.ts: a registered knob's value of its shape, the fixture by shareableFixtureName, else valueShape; #576 W58 Q9)",
       "main: cleared.map(envKey).join(', ')":
         'env keys through envKey: a knob name of the ^STALAGMIGHT_[A-Z0-9_]{1,64}$ shape, anything else by its shape',
+      "main: withheld.map(envKey).join(', ')":
+        "the trace's envWithheld keys through envKey: a knob name of the ^STALAGMIGHT_[A-Z0-9_]{1,64}$ shape, anything else (the trace is a file) by its shape (#576 W58 Q9)",
       "main: refused.map(envKey).join(', ')":
         'env keys through envKey: a knob name of the ^STALAGMIGHT_[A-Z0-9_]{1,64}$ shape, anything else (the trace is a file) by its shape',
       "main: listScenarios().join(', ')": 'scenario names from the registry (scenarios/index.ts listScenarios)',

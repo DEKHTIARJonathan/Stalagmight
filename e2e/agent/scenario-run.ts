@@ -44,6 +44,7 @@ import {
   valueShape,
 } from './lib/shareableFailure';
 import { shareableFixtureName } from './lib/privateFixtures';
+import { shareableKnobValue } from './lib/traceKnobs';
 
 /**
  * Values from outside as printed before the registry is loaded (#576 W51) - the
@@ -55,9 +56,6 @@ import { shareableFixtureName } from './lib/privateFixtures';
  */
 const scenarioName = (name: string): string => (/^[a-z][a-z0-9-]{1,63}$/.test(name) ? name : valueShape(name));
 const envKey = (key: string): string => (/^STALAGMIGHT_[A-Z0-9_]{1,64}$/.test(key) ? key : valueShape(key));
-/** A knob's value as printed: the fixture knob by `shareableFixtureName` (#576 W58 Q1), any other folded. */
-const knobValue = (key: string, value: unknown): string =>
-  key === 'STALAGMIGHT_FUZZ_FIXTURE' ? shareableFixtureName(value) : foldLocalPaths(String(value));
 const gitRev = (rev: unknown): string =>
   typeof rev === 'string' && /^(?:[0-9a-f]{7,40}|unknown)$/.test(rev) ? rev.slice(0, 12) : valueShape(rev);
 
@@ -96,7 +94,7 @@ async function main(): Promise<void> {
         .filter(([key, value]) => process.env[key] !== value)
         .map(([key]) => key),
     );
-    const { applied, refused, cleared } = restoreTraceEnv(trace.env);
+    const { applied, refused, cleared, withheld } = restoreTraceEnv(trace.env, trace.envWithheld);
     process.env.STALAGMIGHT_FUZZ_REPLAY = tracePath;
     const restored = applied.filter(([key]) => changed.has(key));
     const runAt = scenarioRunOptions(args, trace);
@@ -105,7 +103,7 @@ async function main(): Promise<void> {
         `(seed ${valueShape(trace.seed)}, ${valueShape(trace.iterations)} iteration(s), rev ${gitRev(trace.gitRev)}); ` +
         `running at seed ${String(runAt.seed)}, ${String(runAt.iterations)} iteration(s)\n` +
         (restored.length > 0
-          ? `  restored from the trace: ${restored.map(([key, value]) => `${envKey(key)}=${knobValue(key, value)}`).join(' ')}\n`
+          ? `  restored from the trace: ${restored.map(([key, value]) => `${envKey(key)}=${shareableKnobValue(key, value)}`).join(' ')}\n`
           : '') +
         // Printed for the same reason `restored` is: a knob the shell set and
         // the recording did not is a difference between this run and that one,
@@ -117,6 +115,12 @@ async function main(): Promise<void> {
           : '') +
         (refused.length > 0
           ? `  REFUSED ${refused.length} env key(s) the recorder would never write: ${refused.map(envKey).join(', ')}\n`
+          : '') +
+        // The recording had these set to a value its trace does not carry (not
+        // one its knob takes, #576 W58 Q9): this shell's value stands.
+        (withheld.length > 0
+          ? `  the recording set ${withheld.length} knob(s) to a value the trace does not carry; ` +
+            `left as this shell has them: ${withheld.map(envKey).join(', ')}\n`
           : ''),
     );
   }

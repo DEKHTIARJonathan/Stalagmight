@@ -783,7 +783,14 @@ describe('a written trace never names a corpus file', () => {
 });
 
 describe('restoreTraceEnv', () => {
-  const OWNED = ['STALAGMIGHT_FUZZ_TEST_KNOB', 'STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB', 'STALAGMIGHT_OTHER_TEST'];
+  const OWNED = [
+    'STALAGMIGHT_FUZZ_TEST_KNOB',
+    'STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB',
+    'STALAGMIGHT_OTHER_TEST',
+    // Registered knobs (lib/traceKnobs.ts): only these restore (#576 W58 Q9).
+    'STALAGMIGHT_FUZZ_STREAM',
+    'STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET',
+  ];
   const saved = new Map<string, string | undefined>();
 
   beforeEach(() => {
@@ -802,12 +809,12 @@ describe('restoreTraceEnv', () => {
 
   it('applies the knobs the recorder writes', () => {
     const { applied, refused } = restoreTraceEnv({
-      STALAGMIGHT_FUZZ_TEST_KNOB: 'a',
-      STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB: 'b',
+      STALAGMIGHT_FUZZ_STREAM: 'v3',
+      STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET: '1',
     });
 
-    expect(process.env.STALAGMIGHT_FUZZ_TEST_KNOB).toBe('a');
-    expect(process.env.STALAGMIGHT_PERSIST_FUZZ_TEST_KNOB).toBe('b');
+    expect(process.env.STALAGMIGHT_FUZZ_STREAM).toBe('v3');
+    expect(process.env.STALAGMIGHT_PERSIST_FUZZ_DELETE_IN_TARGET).toBe('1');
     expect(applied).toHaveLength(2);
     expect(refused).toEqual([]);
   });
@@ -824,12 +831,12 @@ describe('restoreTraceEnv', () => {
     const { applied, refused } = restoreTraceEnv({
       STALAGMIGHT_FUZZ_TRACE: '/tmp/pwn/out.json',
       STALAGMIGHT_FUZZ_REPLAY: '/tmp/pwn/in.json',
-      STALAGMIGHT_FUZZ_TEST_KNOB: 'kept',
+      STALAGMIGHT_FUZZ_STREAM: 'v2',
     });
 
     expect(process.env.STALAGMIGHT_FUZZ_TRACE).toBe(before.trace);
     expect(process.env.STALAGMIGHT_FUZZ_REPLAY).toBe(before.replay);
-    expect(applied.map(([key]) => key)).toEqual(['STALAGMIGHT_FUZZ_TEST_KNOB']);
+    expect(applied.map(([key]) => key)).toEqual(['STALAGMIGHT_FUZZ_STREAM']);
     expect(refused).toEqual(['STALAGMIGHT_FUZZ_TRACE', 'STALAGMIGHT_FUZZ_REPLAY']);
   });
 
@@ -845,15 +852,15 @@ describe('restoreTraceEnv', () => {
       LD_PRELOAD: '/tmp/pwn.so',
       STALAGMIGHT_AGENT_RELEASE: '1',
       STALAGMIGHT_OTHER_TEST: 'x',
-      STALAGMIGHT_FUZZ_TEST_KNOB: 'kept',
+      STALAGMIGHT_FUZZ_STREAM: 'v2',
     });
 
     expect(process.env.PATH).toBe(before.PATH);
     expect(process.env.NODE_OPTIONS).toBe(before.NODE_OPTIONS);
     expect(process.env.LD_PRELOAD).toBeUndefined();
     expect(process.env.STALAGMIGHT_OTHER_TEST).toBeUndefined();
-    expect(process.env.STALAGMIGHT_FUZZ_TEST_KNOB).toBe('kept');
-    expect(applied.map(([key]) => key)).toEqual(['STALAGMIGHT_FUZZ_TEST_KNOB']);
+    expect(process.env.STALAGMIGHT_FUZZ_STREAM).toBe('v2');
+    expect(applied.map(([key]) => key)).toEqual(['STALAGMIGHT_FUZZ_STREAM']);
     expect(refused).toEqual([
       'PATH',
       'NODE_OPTIONS',
@@ -887,13 +894,13 @@ describe('restoreTraceEnv', () => {
   });
 
   it('leaves a knob the recording DID have at the recorded value, not cleared', () => {
-    process.env.STALAGMIGHT_FUZZ_TEST_KNOB = 'from the shell';
+    process.env.STALAGMIGHT_FUZZ_STREAM = 'v1';
 
-    const { applied, cleared } = restoreTraceEnv({ STALAGMIGHT_FUZZ_TEST_KNOB: 'from the trace' });
+    const { applied, cleared } = restoreTraceEnv({ STALAGMIGHT_FUZZ_STREAM: 'v3' });
 
-    expect(process.env.STALAGMIGHT_FUZZ_TEST_KNOB).toBe('from the trace');
-    expect(applied).toEqual([['STALAGMIGHT_FUZZ_TEST_KNOB', 'from the trace']]);
-    expect(cleared).not.toContain('STALAGMIGHT_FUZZ_TEST_KNOB');
+    expect(process.env.STALAGMIGHT_FUZZ_STREAM).toBe('v3');
+    expect(applied).toEqual([['STALAGMIGHT_FUZZ_STREAM', 'v3']]);
+    expect(cleared).not.toContain('STALAGMIGHT_FUZZ_STREAM');
   });
 
   it('never clears a NEVER_RESTORED path knob, which the CALLER owns', () => {
