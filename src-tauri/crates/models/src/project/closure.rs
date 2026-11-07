@@ -207,9 +207,12 @@ impl Project {
     /// zero-cost pathfinding edge between exactly the two stations it measures,
     /// so walking with it in rides that edge and restamps `path_length = 0` (and,
     /// through the zero-path guard, `error_percentage = 0`) on every adjusted
-    /// closure (#576 W36-NF1). Other closures still shorten the walk: creation
-    /// measures before the new closure exists, and the merge demotion in
-    /// `integrity.rs` lifts out only the direct closures for the same reason.
+    /// closure (#576 W36-NF1). The walk's no-route fallback leaves the edge out
+    /// too (#576 RV19a-9). Other closures still shorten the walk - the merge
+    /// demotion in `integrity.rs` lifts out only the direct closures for the
+    /// same reason - including closures created AFTER this one, which its
+    /// creation never saw: a restamp is the loop length on the closure graph of
+    /// the moment, and can come out shorter than the length creation stored.
     fn recompute_closure_metrics_for_component(&mut self, component: &HashSet<SectionId>) {
         // Built once for the whole sweep rather than once per closure.
         let merge_adj = self.build_station_merge_adjacency();

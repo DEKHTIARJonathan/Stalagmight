@@ -1073,3 +1073,108 @@ fn adjust_loop_closures_restamps_the_loop_length_not_zero() {
         closure.error_percentage
     );
 }
+
+/// [#576 RV19a-9] The restamp walks each loop without the closure's own edge,
+/// and its no-route fallback - the summed length of every section the walk
+/// could reach - must leave that edge out too. It summed the sections
+/// connected THROUGH the closure being measured, so a closure joining two
+/// otherwise unconnected zero-datum sections was restamped with both sides'
+/// length where creation (measured before the closure existed) stored one.
+#[test]
+fn the_restamp_fallback_does_not_count_the_far_side_through_the_closure_itself() {
+    let mut project = Project::new("CaveA".to_string(), None);
+    // The loop of `adjust_loop_closures_restamps_the_loop_length_not_zero`.
+    let a = project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(90.0, 90.0, 10.0, 0.0, 0.0),
+                shot(180.0, 180.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let b = project
+        .add_section(SectionData {
+            shots: vec![shot(271.0, 271.0, 10.3, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    // A separate entrance, tied to the loop by nothing but one closure.
+    let z = project
+        .add_section(SectionData {
+            shots: vec![shot(45.0, 45.0, 7.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .set_zero_datum(
+            StationRef::new(a, 0),
+            GpsCoordinates::new(0.0, 0.0, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .set_zero_datum(
+            StationRef::new(z, 0),
+            GpsCoordinates::new(0.0005, 0.0005, 0.0).unwrap(),
+        )
+        .unwrap();
+    project
+        .merge_stations(StationRef::new(a, 3), StationRef::new(b, 0))
+        .unwrap();
+    project
+        .create_loop_closure(
+            StationRef::new(b, 1),
+            StationRef::new(a, 0),
+            ClosureStrategy::Batch,
+        )
+        .unwrap();
+    // Not a strategy the adjustment below solves, so only its metrics move.
+    let bridge = project
+        .create_loop_closure(
+            StationRef::new(a, 2),
+            StationRef::new(z, 1),
+            ClosureStrategy::Move,
+        )
+        .unwrap();
+    let length_of = |p: &Project, ids: &[SectionId]| -> f64 {
+        p.sections
+            .iter()
+            .filter(|s| ids.contains(&s.id))
+            .flat_map(|s| s.shots.iter())
+            .map(|s| s.length)
+            .sum()
+    };
+    println!(
+        "bridge closure at creation: path_length={} (loop sections {}, far side {})",
+        bridge.path_length,
+        length_of(&project, &[a, b]),
+        length_of(&project, &[z])
+    );
+
+    project
+        .adjust_loop_closures(
+            StationRef::new(a, 0),
+            ClosureStrategy::LeastSquaresWeighted,
+            &ClosureAdjustmentConfig::default(),
+        )
+        .unwrap();
+
+    let restamped = project
+        .loop_closures
+        .iter()
+        .find(|c| c.id == bridge.id)
+        .unwrap()
+        .path_length;
+    let near_side = length_of(&project, &[a, b]);
+    println!(
+        "bridge closure after the restamp: path_length={restamped} (loop sections now \
+         {near_side}, far side {})",
+        length_of(&project, &[z])
+    );
+    assert!(
+        (restamped - near_side).abs() < 1e-9,
+        "with no route but the closure itself, the restamp sums the sections reachable \
+         without it ({near_side}), as creation did - not the far side too: got {restamped}"
+    );
+}

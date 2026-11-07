@@ -175,8 +175,16 @@ impl Project {
 
         // No path found (shouldn't happen if sections are connected)
         // Fall back to sum of all reachable section lengths.
+        //
+        // [#576 RV19a-9] Not through a closure joining exactly these two
+        // stations: a walk that found no route had none in its graph (the
+        // restamp lifts the measured closure's own edge out; creation measures
+        // before the closure exists), so counting the sections behind one
+        // summed the far side too - a restamp came out longer than creation.
+        // Any other caller would have walked such an edge at zero cost and
+        // never got here, so for them nothing changes.
         let fallback_sections = if closure_adj.is_some() {
-            self.get_connected_section_ids(station_a.section_id)
+            self.connected_section_ids_without_pair(station_a, station_b)
         } else {
             self.get_merged_section_ids(station_a.section_id)
         };
