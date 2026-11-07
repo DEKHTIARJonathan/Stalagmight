@@ -13,8 +13,9 @@ import type { Map as MaplibreMap } from 'maplibre-gl';
  * in which the restored style is in place but still loading: it refuses every
  * write. Effects that skip in either window (`canWriteStyle`) list this counter
  * as a dependency to run again once the restored style has loaded. (The custom
- * layers are re-added before it moves: surveyLayer/glContextRecovery.ts registers
- * its `style.load` listener first.)
+ * layers are back before any of those effects runs:
+ * surveyLayer/customRender/styleRestore.ts re-adds them synchronously in its own
+ * `style.load` listener, while this counter only schedules a re-render.)
  */
 export function useStyleEpoch(map: RefObject<MaplibreMap | null>, mapLoaded: boolean): number {
   const [epoch, setEpoch] = useState(0);

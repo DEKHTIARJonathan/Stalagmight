@@ -1060,7 +1060,7 @@ export class SurveyLabelController {
     this.fatal = true;
     // The style is gone when the map was removed or lost its WebGL context before
     // this deferred teardown ran: MapLibre took the layer with it (its onRemove
-    // ran), and getLayer reads the missing style and throws (#576 NF-MAP-3).
+    // ran), so there is nothing left to remove (#576 NF-MAP-3).
     if (hasLiveStyle(this.map)) removeCustomLayer(this.map, this.layer);
     this.layer = null;
     this.active = false; // set directly: onActiveChange must NOT fire (no republish).
