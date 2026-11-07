@@ -142,6 +142,19 @@ export class InteractOverlayHideController {
    *  when inactive (no-op). */
   restore(): void {
     if (!this.active) return;
+    // A worker restart or context restore puts a rebuilt style in place that is
+    // empty until its `style.load` one frame later, and that copy was serialized
+    // with these layers hidden. A restore landing in that frame (the fallback
+    // timer) finds none of them: keep the capture, still listening, for the
+    // restore that follows the load (SurveyLayer's `beforeLoss`).
+    // `isLive` first: `getLayer` throws on a torn-down style.
+    if (
+      this.isLive() &&
+      this.saved.size > 0 &&
+      [...this.saved.keys()].every((id) => !this.map.getLayer(id))
+    ) {
+      return;
+    }
     const saved = [...this.saved];
     this.drop();
     if (!this.isLive()) return;
