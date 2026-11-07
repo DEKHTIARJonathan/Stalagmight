@@ -645,6 +645,8 @@ pub use schema_guard::{
 };
 pub use warnings::MAX_CARRIED_RESOLVED_WARNINGS;
 
+pub(crate) use schema_guard::deny_stripped_sqlite_features;
+
 /// A stringified page of rows from a raw sqlite table.
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../../bindings/")]

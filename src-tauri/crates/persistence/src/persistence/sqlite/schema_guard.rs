@@ -8,6 +8,7 @@
 //! check on server uploads.
 
 use rusqlite::config::DbConfig;
+use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 use rusqlite::Connection;
 
 /// A schema object the app never creates, found in a file it was asked to open.
@@ -106,6 +107,109 @@ fn guard(conn: &Connection, spelling: TypeSpelling) -> anyhow::Result<()> {
     match refused_object(conn, spelling)? {
         Some(refused) => Err(anyhow::Error::new(refused)),
         None => Ok(()),
+    }
+}
+
+/// [#619] Install SQLite's authorizer on `conn`, a connection to a file from
+/// outside the app, before its first statement. It refuses creating or dropping
+/// any virtual table, reading an eponymous virtual table of a module the repo's
+/// build leaves out ([`DENIED_TABLES`]), and calling a function that extension
+/// loading or one of those modules registers ([`DENIED_FUNCTIONS`]); everything
+/// else is allowed. A refused statement fails to prepare with `SQLITE_AUTH`.
+///
+/// The repo-root `.cargo/config.toml` builds the bundled SQLite without
+/// FTS3/4/5, R-tree, DBSTAT and extension loading (#608), but cargo reads that
+/// file only inside the clone, so the crates.io build of this crate and of
+/// `stalx-reader` has them all. The authorizer holds in either build: it is what
+/// the published crates rely on, and the build flags stay as defence in depth.
+/// The app creates no virtual table and calls none of these functions.
+pub(crate) fn deny_stripped_sqlite_features(conn: &mut Connection) -> rusqlite::Result<()> {
+    conn.authorizer(Some(authorize_untrusted))
+}
+
+/// The eponymous virtual tables of the modules the repo's build leaves out: a
+/// module whose `xCreate` is its `xConnect` can be read by name, with no
+/// `CREATE VIRTUAL TABLE`. From the SQLite 3.54.1 amalgamation bundled in
+/// libsqlite3-sys 0.39.1 (`sqlite3/sqlite3.c`): `dbstat_module` (dbstat.c),
+/// `fts3tok_module` (fts3_tokenize_vtab.c), `fts3aux_module` (fts3_aux.c) and
+/// `fts5structure_module` (fts5_index.c, only with SQLITE_TEST or
+/// SQLITE_FTS5_DEBUG). Matched in any letter case and in any schema.
+const DENIED_TABLES: &[&str] = &["dbstat", "fts3tokenize", "fts4aux", "fts5_structure"];
+
+/// The SQL functions extension loading and the left-out modules register, from
+/// the same amalgamation, matched in any letter case. DBSTAT registers none.
+/// - func.c `aBuiltinFunc`, unless SQLITE_OMIT_LOAD_EXTENSION: `load_extension`.
+/// - fts3.c `sqlite3Fts3Init` and fts3_tokenizer.c `sqlite3Fts3InitHashTable`:
+///   `fts3_tokenizer` and the overloads `snippet`, `offsets`, `matchinfo`,
+///   `optimize`; with SQLITE_TEST also `fts3_tokenizer_test`,
+///   `fts3_tokenizer_internal_test`, and `fts3_exprtest` and
+///   `fts3_exprtest_rebalance` (fts3_expr.c).
+/// - fts5.c `fts5Init`: `fts5`, `fts5_source_id`, `fts5_locale`,
+///   `fts5_insttoken`, and through `sqlite3Fts5AuxInit` the overloads `snippet`,
+///   `highlight`, `bm25`, `fts5_get_locale`; with SQLITE_TEST or
+///   SQLITE_FTS5_DEBUG also `fts5_expr`, `fts5_expr_tcl`, `fts5_isalnum`,
+///   `fts5_fold` (`sqlite3Fts5ExprInit`) and `fts5_decode`, `fts5_decode_none`,
+///   `fts5_rowid` (`sqlite3Fts5IndexInit`).
+/// - rtree.c `sqlite3RtreeInit`: `rtreenode`, `rtreedepth`, `rtreecheck`; with
+///   SQLITE_DEBUG also `rtree_round`; with SQLITE_ENABLE_GEOPOLY the `geopoly_*`
+///   functions of geopoly.c `sqlite3_geopoly_init`.
+const DENIED_FUNCTIONS: &[&str] = &[
+    "load_extension",
+    "fts3_tokenizer",
+    "snippet",
+    "offsets",
+    "matchinfo",
+    "optimize",
+    "fts3_tokenizer_test",
+    "fts3_tokenizer_internal_test",
+    "fts3_exprtest",
+    "fts3_exprtest_rebalance",
+    "fts5",
+    "fts5_source_id",
+    "fts5_locale",
+    "fts5_insttoken",
+    "highlight",
+    "bm25",
+    "fts5_get_locale",
+    "fts5_expr",
+    "fts5_expr_tcl",
+    "fts5_isalnum",
+    "fts5_fold",
+    "fts5_decode",
+    "fts5_decode_none",
+    "fts5_rowid",
+    "rtreenode",
+    "rtreedepth",
+    "rtreecheck",
+    "rtree_round",
+    "geopoly_area",
+    "geopoly_blob",
+    "geopoly_json",
+    "geopoly_svg",
+    "geopoly_within",
+    "geopoly_contains_point",
+    "geopoly_overlap",
+    "geopoly_debug",
+    "geopoly_bbox",
+    "geopoly_xform",
+    "geopoly_regular",
+    "geopoly_ccw",
+    "geopoly_group_bbox",
+];
+
+/// The authorizer [`deny_stripped_sqlite_features`] installs.
+fn authorize_untrusted(ctx: AuthContext<'_>) -> Authorization {
+    let listed = |names: &[&str], name: &str| names.iter().any(|n| n.eq_ignore_ascii_case(name));
+    let denied = match ctx.action {
+        AuthAction::CreateVtable { .. } | AuthAction::DropVtable { .. } => true,
+        AuthAction::Read { table_name, .. } => listed(DENIED_TABLES, table_name),
+        AuthAction::Function { function_name } => listed(DENIED_FUNCTIONS, function_name),
+        _ => false,
+    };
+    if denied {
+        Authorization::Deny
+    } else {
+        Authorization::Allow
     }
 }
 

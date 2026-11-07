@@ -154,9 +154,10 @@ impl Database {
     /// schema guard (#608) runs here, before quick_check evaluates the file's
     /// CHECKs or anything else reads it: a file every open would refuse is never
     /// offered as usable, nor installed over the project.
-    pub(super) fn for_candidate_check(conn: Connection) -> Result<Self> {
+    pub(super) fn for_candidate_check(mut conn: Connection) -> Result<Self> {
         conn.busy_timeout(CANDIDATE_BUSY_TIMEOUT)
             .context("Failed to set the busy timeout on a restore candidate")?;
+        super::deny_stripped_sqlite_features(&mut conn)?;
         super::check_schema(&conn)?;
         Ok(Self { conn })
     }
@@ -631,7 +632,8 @@ impl Database {
         // schema guard still runs (#608), before REINDEX evaluates an expression
         // index or the final quick_check a CHECK: a file every open refuses is
         // left as it is, beside the plain copy step 1 took of it.
-        let conn = Connection::open(path).context("Failed to open database for repair")?;
+        let mut conn = Connection::open(path).context("Failed to open database for repair")?;
+        super::deny_stripped_sqlite_features(&mut conn)?;
         super::check_schema(&conn)?;
 
         // 3. Rebuild indexes
@@ -664,8 +666,9 @@ impl Database {
         // 5. Verify result
         #[cfg(test)]
         super::open::between_opens::run(path);
-        let conn = Connection::open(path).context("Failed to reopen the repaired database")?;
+        let mut conn = Connection::open(path).context("Failed to reopen the repaired database")?;
         // Another open of the file: guarded like the first (#608, #576 RV19a-8).
+        super::deny_stripped_sqlite_features(&mut conn)?;
         super::check_schema(&conn)?;
         let check: String = conn
             .query_row("PRAGMA quick_check", [], |row| row.get(0))
