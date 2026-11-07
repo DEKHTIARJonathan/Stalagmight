@@ -1012,21 +1012,25 @@ impl Database {
         anyhow::bail!("Too many earlier pre-restore copies beside the project")
     }
 
-    /// Create a numbered backup: file.stalx.backup, .backup.1, .backup.2, etc.
-    ///
-    /// [#576 NF-W3-3] With the project's rollback journal, when it has one: a
-    /// project frozen mid-write holds pages its journal undoes, so the main
-    /// file copied alone is torn, while the pair opens as the last committed
-    /// state (the restore list never offers the journal on its own).
+    /// [`Self::create_numbered_backup_of`] a file under its own name (the tests'
+    /// form; Repair names the copy after the path as opened).
+    #[cfg(test)]
     pub(super) fn create_numbered_backup(path: &Path) -> Result<std::path::PathBuf> {
         Self::create_numbered_backup_of(path, path)
     }
 
-    /// [`Self::create_numbered_backup`] of the file `source`, named after (and
-    /// placed beside) `named_after`. [#576 Q-W42-1-D1] Repair through a symlink
-    /// backs up the link's target - whose rollback journal sits beside the
-    /// target, not the link - under the link's name, where the recovery dialog
-    /// lists backups.
+    /// Create a numbered backup of the file `source`, named after (and placed
+    /// beside) `named_after`: `<named_after>.stalx.backup`, `.backup.1`,
+    /// `.backup.2`, etc.
+    ///
+    /// [#576 NF-W3-3] With the file's rollback journal, when it has one: a
+    /// project frozen mid-write holds pages its journal undoes, so the main
+    /// file copied alone is torn, while the pair opens as the last committed
+    /// state (the restore list never offers the journal on its own).
+    ///
+    /// [#576 Q-W42-1-D1] Repair through a symlink backs up the link's target -
+    /// whose rollback journal sits beside the target, not the link - under the
+    /// link's name, where the recovery dialog lists backups.
     fn create_numbered_backup_of(source: &Path, named_after: &Path) -> Result<std::path::PathBuf> {
         let base = named_after.with_extension("stalx.backup");
         if !base.exists() {
