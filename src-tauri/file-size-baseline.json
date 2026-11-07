@@ -482,6 +482,7 @@
     "src-tauri/crates/tiles/src/crop_storage_rv4_tests.rs": 105,
     "src-tauri/crates/tiles/src/decode_limits_tests.rs": 111,
     "src-tauri/crates/tiles/src/tests.rs": 1917,
+    "src-tauri/crates/tiles/src/tilemap_body_limit_tests.rs": 66,
     "src-tauri/src/commands/app_contract_tests.rs": 89,
     "src-tauri/src/commands/command_tests.rs": 4782,
     "src-tauri/src/commands/compass_import_tests.rs": 103,

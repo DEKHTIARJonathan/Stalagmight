@@ -115,6 +115,13 @@ const DEFAULT_CONTENT_TYPE: &str = "image/jpeg";
 /// is cut off there instead of at ureq's silent 10 MiB default.
 const TILE_BODY_MAX_BYTES: u64 = 4 * 1024 * 1024;
 
+/// Most bytes a tilemap response body may hold (#576 W30-NF4), for the reason
+/// [`TILE_BODY_MAX_BYTES`] gives. A tilemap is 128 x 128 availability flags as
+/// compact JSON - `{"data":[1,0,...]}` and a few small fields, about 33 KB -
+/// so 1 MiB is some thirty times that, while a body streaming far more is cut
+/// off here instead of at ureq's silent 10 MiB default.
+const TILEMAP_BODY_MAX_BYTES: u64 = 1024 * 1024;
+
 /// Maximum retry attempts for transient network errors (total attempts = 1 + TILE_FETCH_MAX_RETRIES).
 const TILE_FETCH_MAX_RETRIES: u32 = 2;
 /// Backoff delays between retries.
@@ -430,8 +437,16 @@ fn fetch_tilemap(
 
     let body = response
         .into_body()
+        .with_config()
+        .limit(TILEMAP_BODY_MAX_BYTES)
         .read_to_vec()
-        .map_err(|e| format!("Failed to read tilemap response: {e}"))?;
+        .map_err(|e| match e {
+            ureq::Error::BodyExceedsLimit(_) => format!(
+                "Tilemap refused: the response body is larger than the {} limit for a tilemap",
+                describe_body_limit(TILEMAP_BODY_MAX_BYTES)
+            ),
+            _ => format!("Failed to read tilemap response: {e}"),
+        })?;
 
     let tilemap_response: TilemapResponse =
         serde_json::from_slice(&body).map_err(|e| format!("Failed to parse tilemap JSON: {e}"))?;
@@ -1614,6 +1629,10 @@ mod crop_storage_rv4_tests;
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
 mod body_limit_tests;
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used, clippy::print_stdout)]
+mod tilemap_body_limit_tests;
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::print_stdout)]
