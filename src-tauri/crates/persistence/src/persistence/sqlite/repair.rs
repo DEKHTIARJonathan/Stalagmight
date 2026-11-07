@@ -1053,10 +1053,13 @@ impl Database {
     /// (`check_schema_for_salvage`, RV19a-12), and SQLite reads it, so the
     /// summary below reads it too: under [`Self::table_exists`]'s exact match a
     /// 'Table' project table was reported as "Project table is empty", beside
-    /// the full project the salvage read back from it.
+    /// the full project the salvage read back from it. [#619] So too a `type`
+    /// or `name` cell one flipped bit left stored as a BLOB of the same bytes,
+    /// which the guard reads as text: `lower` and the CAST read it as text too.
     fn salvage_table_exists(&self, name: &str) -> Result<bool> {
         let exists: i64 = self.conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE lower(type) = 'table' AND name = ?1",
+            "SELECT COUNT(*) FROM sqlite_master \
+             WHERE lower(type) = 'table' AND CAST(name AS TEXT) = ?1",
             params![name],
             |row| row.get(0),
         )?;

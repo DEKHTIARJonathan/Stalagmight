@@ -94,25 +94,28 @@ pub fn check_schema(conn: &Connection) -> anyhow::Result<()> {
 /// builds the schema from the `sql` text) - is checked as that type instead of
 /// refused. Every expression check still runs on it, so a case-variant row
 /// cannot hide a generated column or an expression index; a view or a trigger
-/// in any case is still refused. Likewise (#619) a `sql` or `tbl_name` cell
-/// stored as a BLOB of valid UTF-8 - one flipped bit in the record's serial
-/// type turns TEXT into a BLOB of the same bytes, which SQLite still parses -
-/// is read as that text and checked as text is, instead of refused. Every
-/// other open keeps the exact spelling and holds both cells to text.
+/// in any case is still refused. Likewise (#619) a `type`, `name`, `tbl_name`
+/// or `sql` cell stored as a BLOB of valid UTF-8 - one flipped bit in the
+/// record's serial type turns TEXT into a BLOB of the same bytes, which SQLite
+/// still reads as that text - is read as that text and checked as text is
+/// (a type in any case), instead of refused. Only in a UTF-8 file: SQLite
+/// reads a BLOB cell as text in the file's own encoding, so in a UTF-16 file
+/// it would read other text than the guard. Every other open keeps the exact
+/// spelling and holds all four cells to text.
 pub(super) fn check_schema_for_salvage(conn: &Connection) -> anyhow::Result<()> {
     guard(conn, TypeSpelling::AnyCase)
 }
 
-/// How [`refused_by_master`] reads a row's `type`, and its `sql` and
-/// `tbl_name` cells.
+/// How [`refused_by_master`] reads a row's `type`, and whether it reads its
+/// `type`, `name`, `tbl_name` and `sql` cells stored as a BLOB.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TypeSpelling {
-    /// Only exactly `table` or `index` is accepted, and `sql` and `tbl_name`
-    /// only stored as text.
+    /// Only exactly `table` or `index` is accepted, and all four cells only
+    /// stored as text (`sql` may be NULL).
     Exact,
-    /// `table` or `index` in any ASCII case is accepted as that type, and a
-    /// `sql` or `tbl_name` stored as a BLOB of valid UTF-8 is read as text: the
-    /// salvage's [`check_schema_for_salvage`].
+    /// `table` or `index` in any ASCII case is accepted as that type, and, in
+    /// a UTF-8 file, any of the four cells stored as a BLOB of valid UTF-8 is
+    /// read as text: the salvage's [`check_schema_for_salvage`].
     AnyCase,
 }
 
@@ -273,12 +276,15 @@ fn refused_by_master(
         ValueRef::Text(t) => Some(String::from_utf8_lossy(t).into_owned()),
         _ => None,
     };
-    // [#619] The text of a `sql` or `tbl_name` cell. The salvage also reads a
-    // BLOB of valid UTF-8 as text (see [`check_schema_for_salvage`]).
+    // [#619] The text of a `type`, `name`, `tbl_name` or `sql` cell. The
+    // salvage also reads a BLOB of valid UTF-8 as text, in a UTF-8 file only
+    // (see [`check_schema_for_salvage`]): SQLite reads a BLOB cell as text in
+    // the file's encoding. `PRAGMA encoding` loads the schema first, which
+    // sets the encoding it reports.
+    let blob_as_text = spelling == TypeSpelling::AnyCase
+        && conn.query_row("PRAGMA encoding", [], |r| r.get::<_, String>(0))? == "UTF-8";
     let stored_text = |v: ValueRef<'_>| match v {
-        ValueRef::Blob(b) if spelling == TypeSpelling::AnyCase => {
-            std::str::from_utf8(b).ok().map(str::to_owned)
-        }
+        ValueRef::Blob(b) if blob_as_text => std::str::from_utf8(b).ok().map(str::to_owned),
         v => text(v),
     };
     // [#619] Every identifier SQLite keeps for the file comes from the `name`
@@ -304,7 +310,8 @@ fn refused_by_master(
         }
         // Read loosely: a crafted row may store any column as any type, and that
         // must come back as this refusal, not as a conversion error.
-        let (Some(kind), Some(name)) = (text(row.get_ref(0)?), text(row.get_ref(1)?)) else {
+        let (Some(kind), Some(name)) = (stored_text(row.get_ref(0)?), stored_text(row.get_ref(1)?))
+        else {
             return Ok(Some(RefusedSchemaObject {
                 what: "a schema object of an unexpected type",
                 name: String::new(),
@@ -359,9 +366,12 @@ fn refused_by_master(
 /// The type tests read `lower(m.type)`: under [`TypeSpelling::Exact`] the
 /// first pass has already refused any other spelling, and under
 /// [`TypeSpelling::AnyCase`] a 'Table' row must be checked like a 'table' one.
+/// Likewise `CAST(m.name AS TEXT)` (#619): the salvage's first pass lets a
+/// `type` or `name` stored as a BLOB of UTF-8 through, which `lower` and the
+/// pragmas read as text too.
 fn refused_by_expression(conn: &Connection) -> rusqlite::Result<Option<RefusedSchemaObject>> {
     let mut stmt = conn.prepare(
-        "SELECT m.name, c.hidden, c.dflt_value \
+        "SELECT CAST(m.name AS TEXT), c.hidden, c.dflt_value \
          FROM sqlite_master AS m, pragma_table_xinfo(m.name) AS c WHERE lower(m.type) = 'table'",
     )?;
     let mut rows = stmt.query([])?;
@@ -386,7 +396,7 @@ fn refused_by_expression(conn: &Connection) -> rusqlite::Result<Option<RefusedSc
         "SELECT i.name FROM sqlite_master AS m, pragma_index_list(m.name) AS i \
          WHERE lower(m.type) = 'table' AND i.partial = 1 \
          UNION ALL \
-         SELECT m.name FROM sqlite_master AS m, pragma_index_xinfo(m.name) AS x \
+         SELECT CAST(m.name AS TEXT) FROM sqlite_master AS m, pragma_index_xinfo(m.name) AS x \
          WHERE lower(m.type) = 'index' AND x.cid = -2",
     )?;
     let mut rows = stmt.query([])?;

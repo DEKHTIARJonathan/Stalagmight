@@ -554,6 +554,296 @@ fn salvage_still_refuses_what_a_blob_sql_or_table_name_holds() {
     }
 }
 
+/// [#619] How the guard refuses a schema row whose `type` or `name` is not text.
+const UNEXPECTED_TYPE: &str = "a schema object of an unexpected type";
+
+/// [#619] A saved project with one bit flipped in the file itself: the serial
+/// type of the `type` or `name` cell in the project table's schema record,
+/// TEXT of n bytes (2n+13) -> a BLOB of the same bytes (2n+12).
+fn project_with_one_schema_bit_flipped(dir: &TempDir, cell: &str) -> std::path::PathBuf {
+    // VACUUM leaves no free page, but a page split can leave a stale copy of a
+    // record in a page's free space: the live one is where a cell pointer of a
+    // table leaf page (type 13) leads, past the cell's payload-size and rowid
+    // varints.
+    let path = project_file_with(dir, "VACUUM;");
+    let mut bytes = std::fs::read(&path).unwrap();
+    let be16 = |at: usize| usize::from(u16::from_be_bytes([bytes[at], bytes[at + 1]]));
+    let varint_len = |at: usize| (0..9).find(|k| bytes[at + k] < 0x80).map_or(9, |k| k + 1);
+    let page_size = be16(16);
+    let in_a_cell = |record: usize| {
+        let page = record / page_size * page_size;
+        let head = page + if page == 0 { 100 } else { 0 };
+        bytes[head] == 13
+            && (0..be16(head + 3)).any(|c| {
+                let cell = page + be16(head + 8 + 2 * c);
+                let rowid = cell + varint_len(cell);
+                rowid + varint_len(rowid) == record
+            })
+    };
+    // The record's header is 7 bytes (checked below), and its body opens with
+    // its type, name and tbl_name cells.
+    let body = b"tableprojectproject";
+    let found: Vec<usize> = bytes
+        .windows(body.len())
+        .enumerate()
+        .filter(|&(i, w)| w == body && in_a_cell(i - 7))
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        found.len(),
+        1,
+        "premise: one schema record of the project table"
+    );
+    // Its header: its own size, 7, then the serial types of 'table' (23),
+    // 'project' twice (27), the rootpage (an 8-bit int, 1) and the 2-byte sql.
+    let header = found[0] - 7;
+    assert_eq!(
+        bytes[header..header + 5],
+        [7, 23, 27, 27, 1],
+        "premise: the project table's schema record header"
+    );
+    let at = header + if cell == "type" { 1 } else { 2 };
+    bytes[at] ^= 1;
+    std::fs::write(&path, &bytes).unwrap();
+    path
+}
+
+/// [#619] The salvage's tolerance of a `sql` or `tbl_name` BLOB, for the same
+/// one-bit damage in the `type` or `name` cell, here flipped in the file:
+/// SQLite still builds the schema (it compares those cells with the SQL as
+/// text, in any case) and `quick_check` passes, but the salvage refused the
+/// file as a schema object of an unexpected type. It now reads such a BLOB of
+/// valid UTF-8 as the text it was. Every other open still refuses it.
+#[test]
+fn salvage_reads_a_file_whose_type_or_name_lost_its_text_type() {
+    for (cell, was) in [("type", "table"), ("name", "project")] {
+        let dir = TempDir::new().unwrap();
+        let path = project_with_one_schema_bit_flipped(&dir, cell);
+        let conn = Connection::open(&path).unwrap();
+        let (stored, bytes): (String, Vec<u8>) = conn
+            .query_row(
+                &format!(
+                    "SELECT typeof({cell}), CAST({cell} AS BLOB) FROM sqlite_master
+                     WHERE CAST(name AS TEXT) = 'project'"
+                ),
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let quick_check: String = conn
+            .query_row("PRAGMA quick_check", [], |r| r.get(0))
+            .unwrap();
+        let strict = refused_schema_object(&conn).unwrap().map(|r| r.what);
+        drop(conn);
+        let (salvaged, refused) = salvage_refused(&path);
+        let read_back = salvaged.as_ref().ok().map(|s| {
+            (
+                s.project_name.clone(),
+                s.full_project_json
+                    .as_ref()
+                    .map(|json| json.contains("\"Crafted\"")),
+                s.errors.clone(),
+            )
+        });
+        let openers: [(&str, fn(&Path) -> Result<Database>); 6] = [
+            ("open", Database::open),
+            ("open_existing", Database::open_existing),
+            ("open_existing_to_read", Database::open_existing_to_read),
+            ("open_readonly", Database::open_readonly),
+            ("open_for_metadata", Database::open_for_metadata),
+            (
+                "open_for_metadata_recovering",
+                Database::open_for_metadata_recovering,
+            ),
+        ];
+        let opened: Vec<_> = openers
+            .iter()
+            .map(|(name, open)| (*name, refused_what(open(&path))))
+            .collect();
+        println!(
+            "{cell} cell of the project table flipped to {stored} {:?}: quick_check -> \
+             {quick_check:?}; salvage -> {read_back:?} (refused as {refused:?}); \
+             refused_schema_object -> {strict:?}; openers refused as {opened:?}",
+            String::from_utf8_lossy(&bytes)
+        );
+
+        assert_eq!(
+            (stored.as_str(), bytes.as_slice(), quick_check.as_str()),
+            ("blob", was.as_bytes(), "ok"),
+            "premise: a BLOB of the same bytes, which SQLite reads"
+        );
+        assert_eq!(
+            read_back,
+            Some((Some("Crafted".to_string()), Some(true), Vec::new())),
+            "{cell}: the salvage reads the damaged file's project"
+        );
+        assert_eq!(
+            strict,
+            Some(UNEXPECTED_TYPE),
+            "{cell}: refused_schema_object"
+        );
+        for (name, refused) in opened {
+            assert_eq!(
+                refused,
+                Some(UNEXPECTED_TYPE),
+                "{cell}: {name} still refuses it"
+            );
+        }
+    }
+}
+
+/// [#619] What the salvage reads from a `type` or `name` BLOB goes through
+/// every check text gets, the type in any case: a view or a pragma-named
+/// table so stored is refused as what it is, and a table or an index so
+/// stored cannot hide a generated column or an expression index. A BLOB that
+/// is not UTF-8 is still refused.
+#[test]
+fn salvage_still_refuses_what_a_blob_type_or_name_holds() {
+    for (sql, what) in [
+        (
+            "CREATE VIEW w AS SELECT 1;
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = CAST('View' AS BLOB) WHERE name = 'w';",
+            "a view",
+        ),
+        (
+            "CREATE TABLE g (a, b AS (zeroblob(10)));
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = CAST('Table' AS BLOB) WHERE name = 'g';",
+            "a table with a generated column",
+        ),
+        (
+            "CREATE INDEX e ON shots (length(hex(zeroblob(10))) + length);
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = CAST(type AS BLOB) WHERE name = 'e';",
+            "an expression or partial index",
+        ),
+        (
+            "CREATE TABLE pragma_table_info (cid, name, type);
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET name = CAST(name AS BLOB)
+             WHERE name = 'pragma_table_info';",
+            "an object named like a SQLite pragma",
+        ),
+        (
+            "CREATE TABLE g (a, b AS (zeroblob(10)));
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET name = CAST(name AS BLOB) WHERE name = 'g';",
+            "a table with a generated column",
+        ),
+        (
+            "CREATE INDEX e ON shots (length(hex(zeroblob(10))) + length);
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET name = CAST(name AS BLOB) WHERE name = 'e';",
+            "an expression or partial index",
+        ),
+        // Not UTF-8, on an autoindex row: SQLite never reads its type.
+        (
+            "CREATE TABLE extra (tag TEXT UNIQUE);
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET type = CAST('index' || CAST(x'ff' AS TEXT) AS BLOB)
+             WHERE name = 'sqlite_autoindex_extra_1';",
+            UNEXPECTED_TYPE,
+        ),
+        (
+            "CREATE INDEX zzi ON shots (length);
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET name = CAST('zz' || CAST(x'ff' AS TEXT) AS BLOB),
+               sql = 'CREATE INDEX \"zz' || CAST(x'ff' AS TEXT) || '\" ON shots (length)'
+             WHERE name = 'zzi';",
+            NOT_UTF8,
+        ),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let path = project_file_with(&dir, sql);
+        let (salvaged, refused) = salvage_refused(&path);
+        println!(
+            "salvage of a file with a BLOB type or name, expecting {what:?}: refused as \
+             {refused:?} ({:?})",
+            salvaged.as_ref().err().map(|e| format!("{e:#}"))
+        );
+        assert_eq!(refused, Some(what), "{sql}");
+    }
+}
+
+/// [#619] SQLite reads a BLOB schema cell as text in the file's encoding, the
+/// salvage as UTF-8, so in a UTF-16 file the two read different text. The
+/// BLOB of a CHECK's UTF-16 text is valid UTF-8 in which the guard finds no
+/// CHECK, while SQLite parses and enforces it; the BLOB of a pragma-named
+/// table's UTF-16 name does not start with `pragma_` to the guard, while
+/// SQLite reads that name. The salvage reads a BLOB as text only in a UTF-8
+/// file, the only kind the app writes.
+#[test]
+fn salvage_reads_a_blob_schema_cell_as_text_only_in_a_utf8_file() {
+    for (cell, sql, what) in [
+        (
+            "sql",
+            "CREATE TABLE c (x CHECK (x > 0));
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET sql = CAST(sql AS BLOB) WHERE name = 'c';",
+            NOT_STORED_AS_TEXT,
+        ),
+        (
+            "name",
+            "CREATE TABLE pragma_table_info (cid, name, type);
+             PRAGMA writable_schema = ON;
+             UPDATE sqlite_master SET name = CAST(name AS BLOB)
+             WHERE name = 'pragma_table_info';",
+            UNEXPECTED_TYPE,
+        ),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("utf16.stalx");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch(&format!("PRAGMA encoding = 'UTF-16le'; {sql}"))
+            .unwrap();
+        let conn = Connection::open(&path).unwrap();
+        let encoding: String = conn.query_row("PRAGMA encoding", [], |r| r.get(0)).unwrap();
+        let (stored, as_sqlite_reads_it, bytes): (String, String, Vec<u8>) = conn
+            .query_row(
+                &format!(
+                    "SELECT typeof({cell}), CAST({cell} AS TEXT), {cell} FROM sqlite_master
+                     WHERE tbl_name IN ('c', 'pragma_table_info')"
+                ),
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        let as_utf8 = std::str::from_utf8(&bytes).map(str::to_owned);
+        let enforced = conn
+            .execute("INSERT INTO c VALUES (0)", [])
+            .map_err(|e| e.to_string());
+        drop(conn);
+        let refused = refused_what(Database::open_for_recovery(&path));
+        println!(
+            "{encoding} file, {cell} cell stored as {stored}: SQLite reads {as_sqlite_reads_it:?}, \
+             as UTF-8 {as_utf8:?}; INSERT INTO c VALUES (0) -> {enforced:?}; \
+             open_for_recovery refused as {refused:?}"
+        );
+
+        assert_eq!(
+            (encoding.as_str(), stored.as_str()),
+            ("UTF-16le", "blob"),
+            "premise"
+        );
+        let as_utf8 =
+            as_utf8.unwrap_or_else(|e| unreachable!("premise: the BLOB is valid UTF-8: {e}"));
+        if cell == "sql" {
+            assert_eq!(
+                enforced,
+                Err("CHECK constraint failed: x > 0".to_string()),
+                "premise: SQLite parses and enforces the CHECK"
+            );
+            assert!(!as_utf8.contains("CHECK"), "premise: {as_utf8:?}");
+        } else {
+            assert_eq!(as_sqlite_reads_it, "pragma_table_info", "premise");
+            assert!(!as_utf8.starts_with("pragma_"), "premise: {as_utf8:?}");
+        }
+        assert_eq!(refused, Some(what), "{cell}: the salvage refuses it");
+    }
+}
+
 // === The second open of an open sequence keeps its own guard (#576 RV18-2) ===
 
 /// Stamps a saved project as an older format, so `open_existing_to_read` reads
