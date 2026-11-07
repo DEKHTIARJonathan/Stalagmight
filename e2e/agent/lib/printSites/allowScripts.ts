@@ -39,7 +39,7 @@ const MERGE_COVERAGE = 'scripts/merge-coverage.mjs';
 const PW_REPORTER = 'scripts/pw-timing-reporter.mjs';
 const PW_SUMMARY = 'scripts/pw-timing-summary.mjs';
 const SLICE_TS = 'scripts/lib/slice-ts.mjs';
-const TRACKED = 'scripts/lib/tracked-files.mjs';
+const FOLD = 'scripts/lib/fold-local-paths.mjs';
 const BRIDGE = 'scripts/lib/vite-agent-bridge.mjs';
 
 /** A gate's own `log`/`err` parameters, defaulting to console.log/console.error. */
@@ -56,7 +56,7 @@ const LINK_TARGET =
 const RULE_WHY = "a rule's id or its why: fixed text of the gate's own rule table";
 const SCANNED = 'the number of tracked text files the gate scanned';
 const GIT_FIRST_LINE =
-  "the first line of execFileSync's error: `Command failed: git ls-files -s -z` or `spawnSync git ENOENT`; the child's stderr after it is not printed again";
+  "the first line of listTracked's error (execFileSyncFolded, shaped as execFileSync's): `Command failed: git ls-files -s -z` or `spawnSync git ENOENT`; the child's stderr after it is not printed again";
 const SKIP_REASON =
   "a skip reason from scripts/lib/tracked-files.mjs toScanText (fixed words and a size in MB) or `unreadable (<fs error code>)`";
 const BASELINE_JSON =
@@ -325,8 +325,8 @@ export const GROUP: SiteGroup = {
     },
     // Regenerated tracked files: their whole content is the public tree's.
     [THIRD_PARTY_GEN]: {
-      'collectRust: String(e.stderr || e.message).slice(0, 4000)':
-        "cargo about's stderr (or spawn error) when it fails: a developer tool's text about Cargo.lock and the crates' license data, uncaught so Node prints it whole",
+      'collectRust: foldLocalPaths(String(e.stderr || e.message)).slice(0, 4000)':
+        "cargo about's stderr (or spawn error) when it fails, folded by foldLocalPaths: a developer tool's text about Cargo.lock and the crates' license data, uncaught so Node prints it whole",
       'collectJs: parsed.error.message': "pnpm licenses' own error text about the lockfile's packages (a developer tool's output)",
       "collectJs: unvetted.map((u) => ` - ${u}`).join('\\n')":
         'the names and versions of npm packages that ship no license file (public registry data from the lockfile)',
@@ -341,6 +341,14 @@ export const GROUP: SiteGroup = {
     [PW_SUMMARY]: {
       "<module>: render(JSON.parse(readFileSync(file, 'utf8')), { top })":
         'the markdown timing table render() builds from a timing.json pw-timing-reporter wrote: spec paths and test titles of the public e2e suite, durations, attempts and statuses',
+    },
+    // execFileSyncFolded: a developer tool's stderr, captured and folded (#576 W58).
+    [FOLD]: {
+      'execFileSyncFolded: ret.stderr':
+        "the stderr of git ls-files (listTracked) or cargo about / pnpm licenses (gen-third-party-licenses run()) over the public tree, folded by foldLocalPaths: written to our stderr, and after `Command failed:` in the error's message",
+      'execFileSyncFolded: file': 'the program a caller runs (git, cargo, pnpm or pnpm.cmd), folded by foldLocalPaths in `Command failed: <file> <args>`',
+      'execFileSyncFolded: ...args':
+        "the caller's arguments (static flags, and gen-third-party's --manifest-path under the checkout), folded by foldLocalPaths in `Command failed: <file> <args>`",
     },
   },
   fileSinks: {
@@ -439,14 +447,6 @@ export const GROUP: SiteGroup = {
     },
   },
   passthrough: {
-    [THIRD_PARTY_GEN]: {
-      'run -> <stderr by default>':
-        "cargo about / pnpm licenses over the repo's lockfiles: the developer tools' own diagnostics (license and crate warnings, a missing cargo-about), no app data",
-    },
-    [TRACKED]: {
-      'listTracked -> <stderr by default>':
-        "git ls-files in the checkout: git's own diagnostic when it fails (not a git repository, dubious ownership), no app data",
-    },
     [MERGE_COVERAGE]: {
       "runNyc -> 'inherit'":
         "pnpm exec nyc merge / report: the coverage tool's own output, a table of the public source's file names and percentages",

@@ -1040,7 +1040,11 @@ locations:
   (`scripts/lib/fold-local-paths.mjs`, which `lib/shareableFailure.ts`
   re-exports): the generators' session dir and `--out`, `heap-profile.mjs`'s
   `--file`, `slice-ts.mjs`'s file, `$PW_TIMING_OUTPUT`'s path, and a source
-  gate's symlink target that leaves the checkout (#576 W58). A fixture prints by name
+  gate's symlink target that leaves the checkout (#576 W58). The whole-tree
+  gates' `git ls-files` and `gen-third-party-licenses.mjs`' cargo and pnpm
+  calls write the tool's stderr through it too (`execFileSyncFolded`), where
+  they used to pass it through, so git's dubious-ownership text names the
+  checkout as `<repo>`. A fixture prints by name
   only when the repo tracks it (`git ls-files e2e/fixtures`); any other - a
   `.stalx` dropped into `e2e/fixtures/` for a local run, or one a trace or the
   knob names - prints as a tag, `<private-fixture#xxxxx>` (`crc32.shortId` of

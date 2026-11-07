@@ -2,8 +2,10 @@
 // harness imports it through e2e/agent/lib/shareableFailure.ts, and the repo's
 // Node tools under scripts/ import it here, so a CLI or env path they echo
 // prints folded instead of as a placeholder. The print-site guard knows the
-// name as a fold (e2e/agent/lib/printSites/rules.ts FOLDS).
+// name as a fold (e2e/agent/lib/printSites/rules.ts FOLDS). execFileSyncFolded
+// runs a developer tool (git, cargo, pnpm) with its stderr folded the same way.
 
+import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -61,4 +63,38 @@ export function foldLocalPaths(text) {
     out = out.replace(new RegExp(`${literal}(?![\\w.-])`, 'g'), say);
   }
   return out;
+}
+
+/**
+ * `execFileSync(file, args, options)` with the child's stderr captured and
+ * written to this process's stderr through foldLocalPaths (#576 W58 Q6). A
+ * gate's `git ls-files` or the license generator's cargo / pnpm call can name
+ * the checkout in its diagnostics (git's `detected dubious ownership in
+ * repository at '<path>'`, cargo's `failed to parse manifest at <path>`), which
+ * execFileSync's default stderr passes through as it is.
+ *
+ * Otherwise it is execFileSync: it returns the child's stdout (a Buffer, or a
+ * string with `encoding`), writes the stderr before it returns or throws, and
+ * throws what execFileSync throws - the spawn error (`spawnSync git ENOENT`,
+ * ENOBUFS past `maxBuffer`) with the result's fields on it, or for a non-zero
+ * exit or a signal an Error whose first line is `Command failed: <file>
+ * <args>`, followed by the stderr, with `status`, `signal`, `stdout` and
+ * `stderr` on it. Only its message is folded too; `stderr` stays the child's
+ * own output.
+ *
+ * @param {string} file
+ * @param {readonly string[]} [args]
+ * @param {import('child_process').SpawnSyncOptions} [options] any `stdio` is replaced by pipes
+ * @returns {string | Buffer}
+ */
+export function execFileSyncFolded(file, args = [], options = {}) {
+  const ret = spawnSync(file, args, { ...options, stdio: 'pipe' });
+  const stderr = ret.stderr == null ? '' : String(ret.stderr);
+  if (stderr.length > 0) process.stderr.write(foldLocalPaths(stderr));
+  if (ret.error) throw Object.assign(ret.error, ret);
+  if (ret.status !== 0) {
+    const message = foldLocalPaths(`Command failed: ${[file, ...args].join(' ')}${stderr.length > 0 ? `\n${stderr}` : ''}`);
+    throw Object.assign(new Error(message), ret);
+  }
+  return ret.stdout;
 }
