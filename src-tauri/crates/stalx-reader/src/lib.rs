@@ -45,7 +45,30 @@
 //! }
 //! # Ok::<(), stalx_reader::ReadError>(())
 //! ```
+//!
+//! # JSON
+//!
+//! The off-by-default `serde` feature derives `serde::Serialize` on [`Survey`]
+//! and everything in it, so `serde_json::to_string(&survey)` hands the survey
+//! to a consumer outside Rust. The JSON is the Rust types, field for field:
+//!
+//! - Field names are the Rust field names. Renaming or removing one is a
+//!   breaking change and ships only in a breaking release; a new field can
+//!   appear in a minor release, so a consumer should ignore unknown keys.
+//! - An absent `Option` is `null`, never a missing key.
+//! - [`ShotKind`], [`Direction`] and [`North`] are snake_case strings
+//!   (`"normal"`, `"in"`, `"magnetic"`).
+//! - [`CorrectionSource`] is an object tagged on `"kind"`:
+//!   `{"kind": "not_recorded"}`, `{"kind": "model", "epoch_year": 2025}`.
+//! - A non-finite float would serialize as `null`. The reader refuses
+//!   non-finite datum coordinates and the app's loader zeroes non-finite shot
+//!   measurements, so only a computed value could hit this.
+//!
+//! The feature is serialize-only: this crate reads `.stalx` files and never
+//! builds a [`Survey`] from JSON.
 
+#[cfg(all(test, feature = "serde"))]
+mod json_tests;
 mod survey;
 
 use std::io::{Read, Write};
