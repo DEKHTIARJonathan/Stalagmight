@@ -642,7 +642,7 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
       else if (!ownName && !patched) reference(node, 'console');
     }
     // `const { stdout } = process`: the stream (or `emitWarning`) under its own name.
-    if (ts.isVariableDeclaration(node) && node.initializer && text(node.initializer) === 'process' && ts.isObjectBindingPattern(node.name)) {
+    if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.initializer) && node.initializer.text === 'process' && ts.isObjectBindingPattern(node.name)) {
       for (const element of node.name.elements) {
         const taken = text(element.propertyName ?? element.name);
         if (PROCESS_SINKS.has(taken)) reference(element, `process.${taken}`);
