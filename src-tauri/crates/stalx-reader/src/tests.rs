@@ -723,6 +723,27 @@ fn impossible_datum_coordinates_are_invalid_values() {
 }
 
 #[test]
+fn a_datum_with_finite_coordinates_and_an_infinite_depth_is_refused_naming_depth() {
+    // The loader drops a datum with ANY non-finite coordinate, depth included,
+    // so the refusal must not blame the latitude/longitude alone.
+    let err = read_file(&with_schema_sql(
+        "UPDATE zero_datums SET depth_reference = 9e999;",
+    ))
+    .unwrap_err();
+
+    assert!(
+        matches!(
+            &err,
+            ReadError::Invalid {
+                kind: InvalidKind::InvalidValue,
+                detail,
+            } if detail == "zero datum: non-finite latitude, longitude or depth"
+        ),
+        "{err:?}"
+    );
+}
+
+#[test]
 fn missing_and_repeated_uuids_are_derived_the_same_way_every_read() {
     // Main's first shot loses its UUID, and its third repeats its second, which
     // makes the third (the later of the two) the repeat.

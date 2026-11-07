@@ -269,7 +269,8 @@ pub enum InvalidKind {
     /// SQLite, but not a Stalagmight project (no project data).
     NoProjectData,
     /// A stored value no survey can have: a zero datum with a non-finite
-    /// latitude/longitude or one outside [-90, 90] / [-180, 180].
+    /// latitude, longitude or depth, or a latitude/longitude outside
+    /// [-90, 90] / [-180, 180].
     InvalidValue,
     /// Anything else the load path rejected.
     Other,
@@ -374,13 +375,13 @@ fn read_copy(copy: &Path, options: &ReadOptions) -> Result<Survey, ReadError> {
     #[cfg(test)]
     tests::AFTER_LOAD.with(|hook| hook.borrow()());
     check_counts(&project, options.count_limits)?;
-    // The loader drops a zero datum with a non-finite coordinate (and counts
-    // it) rather than handing it on; it is just as impossible as one out of
-    // range, so it is refused the same way.
+    // The loader drops a zero datum with a non-finite latitude, longitude or
+    // depth (and counts it) rather than handing it on; it is just as impossible
+    // as one out of range, so it is refused the same way.
     if report.repairs.gps_points > 0 {
         return Err(ReadError::invalid(
             InvalidKind::InvalidValue,
-            "zero datum: non-finite latitude/longitude",
+            "zero datum: non-finite latitude, longitude or depth",
         ));
     }
     validate_values(&project)?;
