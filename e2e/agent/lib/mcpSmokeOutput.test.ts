@@ -11,12 +11,15 @@
  * wherever the app's text or data would be, and checks neither reaches the
  * smoke's output, while the flags and counts it computed still print.
  */
+import * as path from 'path';
+import type { PassThrough } from 'stream';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 /** Stands in for the app's text: a station, project or fixture name, a panic message. */
 const APP = 'QzAppText';
 /** Stands in for survey data: a station's longitude / latitude. */
 const COORD = 12.3456789;
+const REPO = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..');
 
 type ToolResult = { content: Array<{ type: string; text?: string; data?: string }>; isError?: boolean };
 type Responder = (name: string, args: Record<string, unknown>) => ToolResult;
@@ -26,6 +29,8 @@ const stub = vi.hoisted(() => ({
   respond: (() => {
     throw new Error('no responder');
   }) as (name: string, args: Record<string, unknown>) => unknown,
+  /** The transport the smoke made: its options, and the server's stderr. */
+  transport: undefined as { options: { stderr?: unknown }; stderr: PassThrough } | undefined,
 }));
 
 vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
@@ -40,11 +45,24 @@ vi.mock('@modelcontextprotocol/sdk/client/index.js', () => ({
       return Promise.resolve(stub.respond(req.name, req.arguments));
     }
     close(): Promise<void> {
+      // The server exits: its stderr ends.
+      stub.transport?.stderr.end();
       return Promise.resolve();
     }
   },
 }));
-vi.mock('@modelcontextprotocol/sdk/client/stdio.js', () => ({ StdioClientTransport: class {} }));
+vi.mock('@modelcontextprotocol/sdk/client/stdio.js', async () => {
+  const { PassThrough } = await import('stream');
+  return {
+    StdioClientTransport: class {
+      /** The server's stderr, as the SDK hands it over when asked to pipe it. */
+      readonly stderr = new PassThrough();
+      constructor(readonly options: { stderr?: unknown }) {
+        stub.transport = this;
+      }
+    },
+  };
+});
 
 const ALL_TOOLS = [
   'app_start', 'app_stop', 'app_restart', 'app_status',
@@ -211,5 +229,59 @@ describe('agent:mcp:smoke check lines (#576 W41-NF1)', () => {
     expect(out).toMatch(/: unexpected exception "Error: app_start failed: \(\d+ characters of the app's text withheld\)\\n {4}at /);
     // A missing tool's name is one of the smoke's own expected names.
     expect(out).toContain('"missing":["run_scenario"]');
+  });
+});
+
+describe("agent:mcp:smoke passes the server's stderr through folded (#576 RV19b-P8)", () => {
+  /** A synthetic home directory: the user a leak would name. */
+  const HOME = `/home/${APP}`;
+
+  it("folds the checkout and the home directory out of an app_start build's output", async () => {
+    vi.stubEnv('HOME', HOME);
+    const app = passingApp();
+    const { code, out } = await runSmoke(ALL_TOOLS, (name, args) => {
+      const server = stub.transport?.stderr;
+      // What `pnpm tauri build` writes to the server's stderr: the home
+      // directory split across two chunks, then Tauri's last line.
+      if (name === 'app_start') {
+        server?.write(`   Compiling stalagmight v1.0.0 (${HOME.slice(0, 7)}`);
+        server?.write(`${HOME.slice(7)}/src/x)\n    Built application at: ${REPO}/src-tauri/target/debug/stalagmight\n`);
+      }
+      // A last line with no newline, written as the server stops.
+      if (name === 'app_stop') server?.write(`[agent-mcp] stopped in ${HOME}/x`);
+      return app(name, args);
+    });
+
+    // Piped, not inherited: inherited, the server writes to the terminal past the fold.
+    expect(stub.transport?.options.stderr).toBe('pipe');
+    expect(code).toBe(0);
+    expect(out).toContain('   Compiling stalagmight v1.0.0 (~/src/x)\n');
+    expect(out).toContain('    Built application at: <repo>/src-tauri/target/debug/stalagmight\n');
+    // The trailing partial line is flushed when the stream ends, before the verdict.
+    expect(out).toContain('[agent-mcp] stopped in ~/x');
+    expect(out.indexOf('[agent-mcp] stopped in ~/x')).toBeLessThan(out.indexOf('MCP SMOKE PASSED'));
+    expect(out).not.toContain(APP);
+    expect(out).not.toContain(REPO);
+  });
+
+  it('passes each line on once it is whole, without waiting for the stream to end', async () => {
+    vi.stubEnv('HOME', HOME);
+    const { PassThrough } = await import('stream');
+    const { passLinesFolded } = await import('./foldedLines');
+    const input = new PassThrough();
+    const written: string[] = [];
+    const done = passLinesFolded(input, (text) => written.push(text));
+    const tick = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+    // The home directory split across two chunks: folded once its line is whole.
+    input.write(`a ${HOME}/1\nb ${HOME.slice(0, 7)}`);
+    await tick();
+    expect(written).toEqual(['a ~/1\n']);
+    input.write(`${HOME.slice(7)}/2\nc ${HOME}`);
+    await tick();
+    expect(written).toEqual(['a ~/1\n', 'b ~/2\n']);
+    input.end();
+    await done;
+    expect(written).toEqual(['a ~/1\n', 'b ~/2\n', 'c ~']);
   });
 });

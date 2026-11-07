@@ -1060,7 +1060,10 @@ locations:
   crash headline, and any other value a tool returned (a store value, the seed
   result, a map position) as its length (`mcpSmokeOutput.test.ts`). The tools
   that return those record their full results in the session's
-  `actions.jsonl`.
+  `actions.jsonl`. The server's stderr - an `app_start` build's output, whose
+  cargo `Compiling` and Tauri `Built application at:` lines name the checkout -
+  is passed through a line at a time with the checkout folded to `<repo>` and
+  the home directory to `~` (#576 RV19b-P8, `lib/foldedLines.ts`).
 - `fuzz-matrix` prints a failed cell's FAIL block as the child wrote it. For
   a cell that died without one, it prints the last lines of the child's output
   fail-closed (`shareableTail`): the session and verdict lines, progress lines

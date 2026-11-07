@@ -17,10 +17,21 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 
 import { shareableFinding } from '../../../scripts/lib/shareable-finding.mjs';
+import { passLinesFolded } from '../lib/foldedLines';
 import { shareableErrorText, shareableFailureText, withheldAppText } from '../lib/shareableFailure';
 
 const serverPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'server.ts');
 const withLifecycle = process.env.AGENT_MCP_SMOKE_LIFECYCLE !== '0';
+
+/** The server's stderr on its way through (`passLinesFolded`): settles after its last line. */
+let serverStderr: Promise<void> = Promise.resolve();
+
+/** Lets the server's last stderr lines out before the smoke exits, waiting a second at most. */
+async function serverStderrDrained(): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([serverStderr, new Promise<void>((resolve) => (timer = setTimeout(resolve, 1000)))]);
+  clearTimeout(timer);
+}
 
 interface ToolText {
   content: Array<{ type: string; text?: string; data?: string }>;
@@ -79,8 +90,13 @@ async function main(): Promise<void> {
     command: process.execPath,
     args: ['--import', 'tsx', serverPath],
     env: { ...process.env } as Record<string, string>,
-    stderr: 'inherit',
+    // Piped, not inherited (#576 RV19b-P8): an `app_start` build writes its
+    // output there, and cargo's and Tauri's lines name the checkout under the
+    // home directory. They print beside the check lines, folded.
+    stderr: 'pipe',
   });
+  const serverOutput = transport.stderr;
+  if (serverOutput) serverStderr = passLinesFolded(serverOutput, (text) => process.stderr.write(text));
   const client = new Client({ name: 'stalagmight-mcp-smoke', version: '0.1.0' });
   await client.connect(transport);
 
@@ -107,6 +123,7 @@ async function main(): Promise<void> {
     if (!withLifecycle) {
       check('lifecycle skipped (AGENT_MCP_SMOKE_LIFECYCLE=0)', true);
       await client.close();
+      await serverStderrDrained();
       process.exit(failed ? 1 : 0);
     }
 
@@ -313,13 +330,15 @@ async function main(): Promise<void> {
     check('unexpected exception', false, shareable(shareableErrorText(err)));
   } finally {
     await client.close().catch(() => undefined);
+    await serverStderrDrained();
   }
 
   process.stdout.write(failed ? '\nMCP SMOKE FAILED\n' : '\nMCP SMOKE PASSED\n');
   process.exit(failed ? 1 : 0);
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
+  await serverStderrDrained();
   // The shareable crash form (#576 W33-NF6): a crash in session setup can quote
   // the app (an IPC rejection, a page script's error).
   process.stderr.write(`fatal: ${shareableErrorText(err)}\n`);
