@@ -261,7 +261,9 @@ P('');
 // "Not for sharing"); the withheld findings above point at actions.jsonl, so
 // they stay listed for whoever triages the run, labelled (#576 RV18-W23-7).
 P('- Action log: `actions.jsonl` (local triage only, not for sharing: it holds the full text this report withholds)');
-P('- Screenshots: `screenshots/`');
+// Images of the app: they show its text and corpus file names, and nothing can
+// fold an image (#576 W33-NF5).
+P('- Screenshots: `screenshots/` (local triage only, not for sharing: they show the app\'s text)');
 if (capturedFindings.length) {
   P('- Findings: `findings/` (each `finding.json` is shareable; the screenshot and crash-marker copies beside it are not)');
 }
@@ -269,7 +271,7 @@ P('- Driver log: `tauri-driver.log` (local triage only, not for sharing)');
 P('');
 P('## Notes');
 P('');
-P('_Paths above are relative to the session artifact directory. Attach this report and the specific files you checked; do not attach the whole directory, which can hold corpus copies, screenshots and logs that name private files._');
+P('_Paths above are relative to the session artifact directory. Attach this report and only files docs/agent-harness.md lists as shareable (a `finding.json`, a fuzz trace); not a file marked local triage only, and not the whole directory, which holds corpus copies, screenshots and logs that name private files._');
 P('');
 
 const outPath = path.join(sessionDir, 'report.md');

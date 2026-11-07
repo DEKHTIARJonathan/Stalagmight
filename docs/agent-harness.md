@@ -982,12 +982,15 @@ cutting it, RV18-W23-6) and every MCP tool result and error all pass through
 `state/` snapshot the recorder writes (`Recorder.writeState`; a store snapshot
 taken after a corpus import carries the copy's path). Not covered, because they
 are not published: the copies themselves and the app's own log files.
-Screenshots (`screenshots/`, and the one in each `findings/` entry) are images
-of the app, so nothing can fold them: they may show a corpus file name wherever
-the UI prints one. No report or trace embeds them - `report.md` names the
-`screenshots/` folder and the `findings/` entries by path only, and a fuzz
-trace carries no image - so look at one before you publish it. Attach the
-trace and the printed failure, not the session directory.
+Screenshots (`screenshots/`, the one in each `findings/` entry, and a
+journey's checkpoints in `journeys/<journey>/`) are images of the app, so
+nothing can fold them: they show a corpus file name wherever the UI prints one,
+and the app's own text - station, section and project names - wherever the UI
+shows it. They are not for sharing (see the list below, #576 W33-NF5). No
+report or trace embeds them - `report.md` lists `screenshots/` and the
+`findings/` entries by path only, labelled not for sharing, and a fuzz trace
+carries no image. Attach the trace and the printed failure, not the session
+directory.
 
 **What a run shares carries codes, counts and code locations (#576 HFI2-F2,
 W21-NF1, W21-NF2).** The app's text names the data it is about - a section, a
@@ -1071,11 +1074,12 @@ session's `actions.jsonl` (each `finding` event with its detail, each
 `scenario-failure` event with the whole failure message, each
 `scenario-progress` event with the whole progress line), `agent:journeys`'
 `uat/run.jsonl` (each check's detail, each abort reason), the screenshots
-(`screenshots/`, `findings/<n>/screenshot.png`), the crash-marker copies in
+(`screenshots/`, `findings/<n>/screenshot.png`, the journey checkpoints in
+`journeys/<journey>/`), the crash-marker copies in
 `findings/<n>/`, the `state/` snapshots, `tauri-driver.log`, and the app's own
-log files. `report.md`'s Evidence list still names `actions.jsonl` and
-`tauri-driver.log` for whoever triages the run, labelled local triage only, not
-for sharing (#576 RV18-W23-7).
+log files. `report.md`'s Evidence list still names `actions.jsonl`,
+`tauri-driver.log` and `screenshots/` for whoever triages the run, labelled
+local triage only, not for sharing (#576 RV18-W23-7, W33-NF5).
 
 **`corpusId` labels; `corpusHash` resolves.** The 5-hex crc20 is 20 bits, which
 is ample for telling two files apart in one run's output and far too little to

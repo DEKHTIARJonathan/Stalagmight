@@ -350,6 +350,22 @@ describe('generate-repro-report.mjs', () => {
     expect(evidence).toContain('- Driver log: `tauri-driver.log` (local triage only, not for sharing)');
   });
 
+  // A screenshot is an image of the app: its text and corpus file names, which
+  // nothing can fold. docs/agent-harness.md lists screenshots as not for
+  // sharing, and the report says the same of every file it points at, bar the
+  // findings' shareable JSON (#576 W33-NF5).
+  it('labels the screenshots local triage only too, and tells the reader to attach only shareable files', () => {
+    execFileSync(process.execPath, [reportGen, sessionDir], { encoding: 'utf8' });
+    const md = fs.readFileSync(path.join(sessionDir, 'report.md'), 'utf8');
+    const evidence = md.split('## Evidence')[1].split('## Notes')[0];
+    const listed = evidence.split('\n').filter((line) => line.startsWith('- ') && !line.startsWith('- Findings:'));
+    expect(listed.map((line) => line.split(':')[0])).toEqual(['- Action log', '- Screenshots', '- Driver log']);
+    for (const line of listed) expect(line).toContain('(local triage only, not for sharing');
+    const notes = md.split('## Notes')[1];
+    expect(notes).not.toContain('the specific files you checked');
+    expect(notes).toContain('only files docs/agent-harness.md lists as shareable');
+  });
+
   // The bug this replaced: the step list came from a hand-maintained name list
   // that nobody updated as tools were added, so a repro whose decisive step was
   // a drag or a native-dialog answer rendered WITHOUT that step. The recorder
