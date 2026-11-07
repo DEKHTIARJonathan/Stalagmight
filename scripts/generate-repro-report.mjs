@@ -28,7 +28,9 @@ const getFlag = (name) => {
 };
 const jsonlPath = path.join(sessionDir, 'actions.jsonl');
 if (!fs.existsSync(jsonlPath)) {
-  process.stderr.write(`no actions.jsonl at ${jsonlPath}\n`);
+  // Not the path itself: it is the one the caller gave, which can sit outside
+  // the checkout and name the user's own directories (#576 W51).
+  process.stderr.write('no actions.jsonl in <sessionDir>\n');
   process.exit(1);
 }
 
@@ -74,18 +76,6 @@ const redactPath = (value) => {
 };
 
 /**
- * Neutralize a caller-supplied string for a markdown list item. Tool params are
- * bare strings, and a newline or a backtick in a testid or selector escapes the
- * step and injects arbitrary markdown into a report headed for a public issue.
- * Also capped: nothing here is worth unbounded width.
- */
-const mdInline = (s, max = 80) => {
-  const flat = String(s).replace(/[\r\n]+/g, ' ');
-  const clipped = flat.length > max ? `${flat.slice(0, max)}...` : flat;
-  return clipped.replace(/[`<>|]/g, (c) => ({ '`': "'", '<': '&lt;', '>': '&gt;', '|': '\\|' })[c]);
-};
-
-/**
  * An argument's SHAPE, never its value (#576 RV18-W23-3). The arguments of an
  * `ipc` / `store_action` call are the project's own data - a station, section
  * or project name - and this report goes to public issues, which keep only
@@ -118,6 +108,33 @@ const argShape = (value, depth = 0) => {
   if (keys.length > named.length) parts.push(`${keys.length - named.length} key(s) withheld`);
   return `{${parts.join(', ')}}`;
 };
+
+/**
+ * A value this report reads back from actions.jsonl or a finding.json, printed
+ * only in the form the harness writes it (#576 W49-NF1). The tool's schema or
+ * the recorder gives it a number, an integer, a word of a fixed set or a name,
+ * but a forged or hand-edited copy can put any string there - a newline and a
+ * `## heading` start a markdown line of their own, as a map_feature_click id
+ * did (#576 W47-NF2) - or a name of the user's data. Any other value is given
+ * as its shape (see argShape). A real session's values print as they always did.
+ */
+const id = (v) => (Number.isInteger(v) ? String(v) : argShape(v));
+const num = (v) => (typeof v === 'number' && Number.isFinite(v) ? String(v) : argShape(v));
+const word = (words, v) => (words.has(v) ? v : argShape(v));
+/**
+ * A name the harness writes: a tool, an IPC command, a store or its action, a
+ * scenario, a session id, a screenshot label (`os_screenshot`'s schema allows
+ * `[\w.-]{1,64}`). Identifier characters only, as `logFindingCode` keeps a code.
+ */
+const NAME = /^[\w.:-]{1,80}$/;
+const code = (v, shape = NAME) => (typeof v === 'string' && shape.test(v) ? v : argShape(v));
+/** `git rev-parse --short HEAD`, or `unknown` (e2e/agent/lib/build.ts `gitHeadFor`). */
+const GIT_HEAD = /^(?:[0-9a-f]{4,64}|unknown)$/;
+/** An X display (`:89`, `:0.0`) or macOS's `aqua`; a host-prefixed DISPLAY is the user's env. */
+const DISPLAY = /^(?::\d{1,5}(?:\.\d{1,3})?|aqua)?$/;
+const VERSION = /^(?:\d+\.\d+\.\d+[\w.+-]*|\?)$/;
+const BUTTONS = new Set(['left', 'right', 'middle']);
+const DIALOG_KINDS = new Set(['open', 'save']);
 
 /**
  * A `press_keys` step's keys (#576 W39-NF2). `browser.keys` presses a WebDriver
@@ -235,7 +252,7 @@ try {
   // Best-effort.
 }
 
-const title = getFlag('--title') || `Agent-found issue in session ${start.sessionId ?? path.basename(sessionDir)}`;
+const title = getFlag('--title') || `Agent-found issue in session ${code(start.sessionId ?? path.basename(sessionDir))}`;
 const summary = getFlag('--summary') || '_Describe the bug in one or two sentences._';
 
 // Compact step list: mutating actions only.
@@ -260,7 +277,7 @@ const steps = actions
   .map((a) => {
     const detail = describeAction(a);
     const flag = a.outcome?.ok === false ? ' **(failed)**' : '';
-    return `${a.seq}. \`${a.tool}\` ${detail}${flag}`;
+    return `${id(a.seq)}. \`${code(a.tool)}\` ${detail}${flag}`;
   });
 
 const md = [];
@@ -272,12 +289,12 @@ P(summary);
 P('');
 P('## Environment');
 P('');
-P(`- Commit: \`${start.gitHead ?? '?'}\``);
-P(`- App version: \`${version}\``);
+P(`- Commit: \`${start.gitHead == null ? '?' : code(start.gitHead, GIT_HEAD)}\``);
+P(`- App version: \`${code(version, VERSION)}\``);
 P(`- Platform: \`${process.platform}\``);
-P(`- Display: \`${start.display ?? '?'}\`  headed: \`${Boolean(start.headed)}\``);
+P(`- Display: \`${start.display == null ? '?' : code(start.display, DISPLAY)}\`  headed: \`${Boolean(start.headed)}\``);
 P(`- Fresh profile: \`${Boolean(start.freshProfile)}\``);
-P(`- Session: \`${start.sessionId ?? path.basename(sessionDir)}\`  actions: \`${end?.actions ?? actions.length}\``);
+P(`- Session: \`${code(start.sessionId ?? path.basename(sessionDir))}\`  actions: \`${id(end?.actions ?? actions.length)}\``);
 P('');
 P('## Steps to reproduce');
 P('');
@@ -322,7 +339,8 @@ if (allFindings.length) {
       P('  ' + scrub(JSON.stringify(f.detail, null, 2)).split('\n').join('\n  '));
       P('  ```');
     }
-    if (raw.dir) P(`  evidence: \`findings/${raw.dir}/\``);
+    // The directory's name, or a `dir` a finding.json or a forged log carries.
+    if (raw.dir) P(`  evidence: \`findings/${code(raw.dir)}/\``);
   }
 } else {
   P('_No findings recorded (add the failure detail manually)._');
@@ -349,7 +367,7 @@ P('');
 
 const outPath = path.join(sessionDir, 'report.md');
 fs.writeFileSync(outPath, md.join('\n'));
-process.stdout.write(`wrote ${outPath}\n`);
+process.stdout.write('wrote <sessionDir>/report.md\n');
 
 function describeAction(a) {
   const p = a.params ?? {};
@@ -358,12 +376,11 @@ function describeAction(a) {
     case 'map_click':
       // A geographic point is where the cave is: its shape only (#576 W33-NF2).
       // Screen coordinates stay - they place a pointer, not a cave.
-      return p.testid ? `testid=${shareableTestId(p.testid)}` : p.selector ? `selector=${shareableSelector(p.selector)}` : p.lngLat ? `lngLat=${argShape(p.lngLat)}` : `coords=(${p.x},${p.y})`;
+      return p.testid ? `testid=${shareableTestId(p.testid)}` : p.selector ? `selector=${shareableSelector(p.selector)}` : p.lngLat ? `lngLat=${argShape(p.lngLat)}` : `coords=(${num(p.x)},${num(p.y)})`;
     case 'map_feature_click': {
       // The ids are integers in the tool's schema, but this reads whatever
       // actions.jsonl holds: anything else - a forged or hand-edited log - is
       // given as its shape, so a newline cannot start a heading (#576 W47-NF2).
-      const id = (v) => (Number.isInteger(v) ? String(v) : argShape(v));
       const which =
         p.featureType === 'station'
           ? `station index=${id(p.stationIndex)}`
@@ -381,10 +398,10 @@ function describeAction(a) {
           ? `testid=${shareableTestId(kindTestid)}`
           : kindSelector
             ? `selector=${shareableSelector(kindSelector)}`
-            : `(${x},${y})`;
+            : `(${num(x)},${num(y)})`;
       const from = end(p.fromTestid, p.fromSelector, p.fromX, p.fromY);
       const to = end(p.toTestid, p.toSelector, p.toX, p.toY);
-      return `${from} -> ${to}${p.button && p.button !== 'left' ? ` (${p.button})` : ''}`;
+      return `${from} -> ${to}${p.button && p.button !== 'left' ? ` (${word(BUTTONS, p.button)})` : ''}`;
     }
     case 'scroll': {
       const target = p.testid
@@ -394,7 +411,7 @@ function describeAction(a) {
           : 'window';
       // Two modes on one tool: a pixel delta, or scroll-into-view.
       return p.deltaX != null || p.deltaY != null
-        ? `${target} by (${p.deltaX ?? 0},${p.deltaY ?? 0})`
+        ? `${target} by (${num(p.deltaX ?? 0)},${num(p.deltaY ?? 0)})`
         : `${target} into view`;
     }
     case 'select_option':
@@ -403,8 +420,8 @@ function describeAction(a) {
     case 'file_dialog_answer':
       // The chosen path is redacted to its extension - see redactPath.
       return p.cancel
-        ? `${p.kind} dialog cancelled (trigger ${shareableTestId(p.triggerTestid)})`
-        : `${p.kind} dialog answered ${redactPath(p.paths ?? p.path)} (trigger ${shareableTestId(p.triggerTestid)})`;
+        ? `${word(DIALOG_KINDS, p.kind)} dialog cancelled (trigger ${shareableTestId(p.triggerTestid)})`
+        : `${word(DIALOG_KINDS, p.kind)} dialog answered ${redactPath(p.paths ?? p.path)} (trigger ${shareableTestId(p.triggerTestid)})`;
     case 'press_keys':
       // Named keys stay, typed text is counted - see describeKeys (#576 W39-NF2).
       return describeKeys(p.keys);
@@ -419,13 +436,13 @@ function describeAction(a) {
         ? `basic project ${p.projectName == null ? '(default name)' : `named ${argShape(String(p.projectName))}`}`
         : `open ${p.mode === 'fractal' ? 'fractal ' : ''}fixture ${p.name == null ? '(default)' : redactPath(p.name)}`;
     case 'run_scenario':
-      return `${mdInline(p.name)} (seed=${p.seed ?? 1}${p.iterations != null ? `, iterations=${p.iterations}` : ''})`;
+      return `${code(p.name)} (seed=${num(p.seed ?? 1)}${p.iterations != null ? `, iterations=${num(p.iterations)}` : ''})`;
     // Argument shapes, not values - see argShape. store_action args are positional.
     case 'ipc':
-      return `${mdInline(p.command)}(${argShape(p.args ?? {})})`;
+      return `${code(p.command)}(${argShape(p.args ?? {})})`;
     case 'store_action': {
       const list = p.args ?? [];
-      return `${mdInline(p.store)}.${mdInline(p.action)}(${Array.isArray(list) ? list.map((v) => argShape(v)).join(', ') : argShape(list)})`;
+      return `${code(p.store)}.${code(p.action)}(${Array.isArray(list) ? list.map((v) => argShape(v)).join(', ') : argShape(list)})`;
     }
     case 'map_view':
       // The camera's center is where the cave is: the shape only (#576 W33-NF2).
@@ -433,12 +450,12 @@ function describeAction(a) {
     case 'os_grant':
       return 'OS input granted for this session';
     case 'os_click':
-      return `${p.testid ? `testid=${shareableTestId(p.testid)}` : `screen ${p.x},${p.y}`}${p.button === 'right' ? ' (right)' : ''}${p.double ? ' (double)' : ''}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
+      return `${p.testid ? `testid=${shareableTestId(p.testid)}` : `screen ${num(p.x)},${num(p.y)}`}${p.button === 'right' ? ' (right)' : ''}${p.double ? ' (double)' : ''}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
     case 'os_keys':
       // Named keys stay, a typed key is counted - see describeChord (#576 RV19b-P6).
       return `${describeChord(p.spec)}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
     case 'os_screenshot':
-      return `${mdInline(p.name ?? 'os-shot')} [OS-level, real pixels]`;
+      return `${code(p.name ?? 'os-shot')} [OS-level, real pixels]`;
     default:
       return '';
   }

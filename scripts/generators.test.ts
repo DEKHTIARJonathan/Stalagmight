@@ -292,6 +292,19 @@ describe('generate-replay.mjs', () => {
     expect(spec).not.toContain('toolbar-save-button"]');
     expect(spec).not.toContain('browser.keys(["cmd+s"])');
   });
+
+  // stdout is shareable: the session dir and --out are the caller's paths,
+  // which can sit outside the checkout and name their own directories (#576 W51).
+  it('names what it wrote on stdout by its placeholder, never its path', () => {
+    const withOut = execFileSync(process.execPath, [replayGen, sessionDir, '--out', path.join(sessionDir, 'qz-out.spec.ts')], {
+      encoding: 'utf8',
+    });
+    const inDir = execFileSync(process.execPath, [replayGen, sessionDir], { encoding: 'utf8' });
+    expect(withOut.split('\n')[0]).toBe('wrote the --out file (18 actions)');
+    expect(inDir.split('\n')[0]).toBe('wrote <sessionDir>/replay.spec.ts (18 actions)');
+    expect(withOut + inDir).not.toContain(sessionDir);
+    expect(fs.existsSync(path.join(sessionDir, 'replay.spec.ts'))).toBe(true);
+  });
 });
 
 describe('testIdSelector', () => {
@@ -649,8 +662,9 @@ describe('generate-repro-report.mjs', () => {
 
   // A script, a project or fixture name, an option value and a map position
   // are the user's data too: a script can name a station, a select can pick a
-  // section, a coordinate is a cave's location (#576 W33-NF2). And every name
-  // a step prints is neutralised for markdown, the command's too.
+  // section, a coordinate is a cave's location (#576 W33-NF2). And a name a
+  // step prints - the command's too - is given as its shape unless it is a name
+  // of identifier characters (#576 W49-NF1).
   describe('steps quote no script, project or fixture name, option value or map position', () => {
     let quotesDir: string;
 
@@ -703,8 +717,8 @@ describe('generate-repro-report.mjs', () => {
         '6. `select_option` testid=section-select = string(10)',
         '7. `map_click` lngLat=array(2) of number',
         '8. `map_view` set {center: array(2) of number, zoom: number, bearing: number}',
-        "9. `ipc` save_project' ## forged({})",
-        "10. `store_action` project.undo'\\|x()",
+        '9. `ipc` string(23)({})',
+        '10. `store_action` project.string(7)()',
         '11. `os_click` testid=<18 characters> [OS-level]',
         '12. `os_keys` ["cmd", 11 characters] [OS-level]',
       ]);
@@ -915,6 +929,144 @@ describe('generate-repro-report.mjs', () => {
         '7. `os_keys` ["shift", "equal"] [OS-level]',
         '8. `os_keys` ["ctrl", 2 characters] [OS-level]',
       ]);
+    });
+  });
+
+  // Every value report.md reads back from actions.jsonl - a step's number,
+  // coordinate, delta, button or dialog kind, a scenario's seed, a name, the
+  // session's commit, display and id, a finding's message and directory - is
+  // printed only in the form the harness writes it. A forged or hand-edited log
+  // put a newline and a `## heading` there and started a markdown line of its
+  // own (#576 W49-NF1, as map_feature_click's ids did in W47-NF2); now any other
+  // value is given as its shape. A real session prints exactly as before.
+  describe('values read back from the log print only in the form the harness writes them', () => {
+    const write = (prefix: string, start: object, actions: object[], end: object, findings: object[] = []): string => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+      const ts = (s: number) => new Date(1751970000000 + s * 1000).toISOString();
+      const lines = [
+        record({ type: 'session-start', v: 1, startedAt: ts(0), ...start }),
+        ...actions.map((a, i) => record({ type: 'action', v: 1, ts: ts(i + 1), outcome: { ok: true, durationMs: 1 }, ...a })),
+        ...findings.map((detail, i) => record({ type: 'event', v: 1, seq: i, ts: ts(90), event: 'finding', detail })),
+        record({ type: 'session-end', v: 1, ts: ts(99), reason: 'app_stop', ...end }),
+      ];
+      fs.writeFileSync(path.join(dir, 'actions.jsonl'), `${lines.join('\n')}\n`);
+      return dir;
+    };
+    const F = '\n## forged';
+    let forgedDir: string;
+    let validDir: string;
+    let stdout: string;
+
+    beforeAll(() => {
+      forgedDir = write(
+        'stalagmight-gen-forged-',
+        { sessionId: `qzsession${F}`, gitHead: `abc1234${F}`, display: `:0${F}` },
+        [
+          // No `mutating` field: a legacy record, so the os_* steps are steps too.
+          { seq: 1, tool: 'click', params: { x: `10${F}`, y: 20 } },
+          { seq: 2, tool: 'drag', mutating: true, params: { fromX: 1, fromY: `2${F}`, toX: 3, toY: 4, button: `middle${F}` } },
+          { seq: 3, tool: 'scroll', mutating: true, params: { deltaX: `0${F}`, deltaY: 5 } },
+          { seq: 4, tool: 'file_dialog_answer', mutating: true, params: { kind: `open${F}`, cancel: true, triggerTestid: 'import-button' } },
+          { seq: 5, tool: 'run_scenario', params: { name: `mapStorm${F}`, seed: `7${F}`, iterations: `3${F}` } },
+          { seq: 6, tool: 'os_click', params: { x: `1${F}`, y: 2 } },
+          { seq: 7, tool: 'os_screenshot', params: { name: `shot${F}` } },
+          { seq: `8${F}`, tool: 'click', mutating: true, params: { testid: 'save-button' } },
+          { seq: 9, tool: `qz_tool${F}`, mutating: true, params: {} },
+        ],
+        { actions: `9${F}` },
+        [{ severity: 'error', kind: 'unresponsive', message: `IPC did not return within 5s${F}`, dir: `0001${F}` }],
+      );
+      validDir = write(
+        'stalagmight-gen-valid-',
+        { sessionId: 'valid-fixture', gitHead: 'abc1234', display: ':89' },
+        [
+          { seq: 1, tool: 'click', params: { x: 10, y: 20 } },
+          { seq: 2, tool: 'drag', mutating: true, params: { fromX: 1.5, fromY: 2, toX: 3, toY: 4, button: 'right' } },
+          { seq: 3, tool: 'scroll', mutating: true, params: { deltaY: 400 } },
+          { seq: 4, tool: 'file_dialog_answer', mutating: true, params: { kind: 'save', cancel: true, triggerTestid: 'import-button' } },
+          { seq: 5, tool: 'run_scenario', params: { name: 'mapStorm', seed: 7, iterations: 3 } },
+          { seq: 6, tool: 'os_click', params: { x: 100, y: 200 } },
+          { seq: 7, tool: 'os_screenshot', params: { name: 'after-drag' } },
+          { seq: 8, tool: 'ipc', mutating: true, params: { command: 'save_project', args: {} } },
+          { seq: 9, tool: 'store_action', mutating: true, params: { store: 'project', action: 'undo', args: [] } },
+        ],
+        { actions: 9 },
+        [{ severity: 'error', kind: 'unresponsive', message: 'IPC did not return within 5s; possible command-lock deadlock', dir: '0001-unresponsive' }],
+      );
+      execFileSync(process.execPath, [reportGen, forgedDir], { encoding: 'utf8' });
+      stdout = execFileSync(process.execPath, [reportGen, validDir], { encoding: 'utf8' });
+    });
+
+    afterAll(() => {
+      fs.rmSync(forgedDir, { recursive: true, force: true });
+      fs.rmSync(validDir, { recursive: true, force: true });
+    });
+
+    const report = (dir: string): string => fs.readFileSync(path.join(dir, 'report.md'), 'utf8');
+    const steps = (dir: string): string[] =>
+      report(dir).split('## Steps to reproduce')[1].split('Automated replay')[0].trim().split('\n');
+
+    it('lets no forged value start a markdown line, or print at all', () => {
+      const md = report(forgedDir);
+      expect(md.split('\n').filter((line) => line.startsWith('## forged'))).toEqual([]);
+      expect(md).not.toContain('forged');
+      expect(md).not.toContain('qz');
+    });
+
+    it('gives each forged value as its shape', () => {
+      expect(steps(forgedDir)).toEqual([
+        '1. `click` coords=(string(12),20)',
+        '2. `drag` (1,string(11)) -> (3,4) (string(16))',
+        '3. `scroll` window by (string(11),5)',
+        '4. `file_dialog_answer` string(14) dialog cancelled (trigger import-button)',
+        '5. `run_scenario` string(18) (seed=string(11), iterations=string(11))',
+        '6. `os_click` screen string(11),2 [OS-level]',
+        '7. `os_screenshot` string(14) [OS-level, real pixels]',
+        'string(11). `click` testid=save-button',
+        '9. `string(17)`',
+      ]);
+      const md = report(forgedDir);
+      expect(md).toContain('# Agent-found issue in session string(19)');
+      expect(md).toContain('- Commit: `string(17)`');
+      expect(md).toContain('- Display: `string(12)`');
+      expect(md).toContain('- Session: `string(19)`  actions: `string(11)`');
+      expect(md).toContain("- **[error] unresponsive** message withheld: it can quote the app's text");
+      expect(md).toContain('  evidence: `findings/string(14)/`');
+    });
+
+    it('prints a real session exactly as before', () => {
+      expect(steps(validDir)).toEqual([
+        '1. `click` coords=(10,20)',
+        '2. `drag` (1.5,2) -> (3,4) (right)',
+        '3. `scroll` window by (0,400)',
+        '4. `file_dialog_answer` save dialog cancelled (trigger import-button)',
+        '5. `run_scenario` mapStorm (seed=7, iterations=3)',
+        '6. `os_click` screen 100,200 [OS-level]',
+        '7. `os_screenshot` after-drag [OS-level, real pixels]',
+        '8. `ipc` save_project({})',
+        '9. `store_action` project.undo()',
+      ]);
+      const md = report(validDir);
+      expect(md).toContain('# Agent-found issue in session valid-fixture');
+      expect(md).toContain('- Commit: `abc1234`');
+      expect(md).toContain('- Display: `:89`  headed: `false`');
+      expect(md).toContain('- Session: `valid-fixture`  actions: `9`');
+      expect(md).toContain('- **[error] unresponsive** IPC did not return within 5s; possible command-lock deadlock');
+      expect(md).toContain('  evidence: `findings/0001-unresponsive/`');
+    });
+
+    // stdout is shareable too: the session dir is the caller's path, which can
+    // sit outside the checkout and name their own directories (#576 W51).
+    it('names the session dir on stdout and stderr by its placeholder, never its path', () => {
+      expect(stdout).toBe('wrote <sessionDir>/report.md\n');
+      const missing = path.join(validDir, 'qz-missing');
+      let stderr = '';
+      try {
+        execFileSync(process.execPath, [reportGen, missing], { encoding: 'utf8', stdio: 'pipe' });
+      } catch (e) {
+        stderr = String((e as { stderr?: string }).stderr);
+      }
+      expect(stderr).toBe('no actions.jsonl in <sessionDir>\n');
     });
   });
 });

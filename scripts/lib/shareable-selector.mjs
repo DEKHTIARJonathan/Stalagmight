@@ -205,7 +205,7 @@ const MARKDOWN = { '`': "'", '<': '&lt;', '>': '&gt;', '|': '\\|' };
 
 /**
  * `parts` as one markdown-inline string: kept text flattened to one line with
- * markdown neutralised (as `mdInline` does), a count as `<N characters>`, cut
+ * markdown neutralised (backticks, `<`, `>` and `|`), a count as `<N characters>`, cut
  * at `max` characters of output with `...`.
  */
 export function renderParts(parts, max = 80) {
