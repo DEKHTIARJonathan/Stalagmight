@@ -29,7 +29,7 @@ use crate::test_fixtures::state_with_null_sink;
 /// `rows` (`(station_index, comment)`) then written into its `station_comments`
 /// table, as a file from another build can hold them. Returns the path and the
 /// section's id.
-fn file_with_comment_rows(dir: &Path, rows: &[(u32, &str)]) -> (PathBuf, u32) {
+pub(super) fn file_with_comment_rows(dir: &Path, rows: &[(u32, &str)]) -> (PathBuf, u32) {
     let mut project = Project::new("CaveA".to_string(), None);
     project.add_section(SectionData {
         name: Some("SectionA".to_string()),
@@ -69,7 +69,7 @@ fn file_with_comment_rows(dir: &Path, rows: &[(u32, &str)]) -> (PathBuf, u32) {
 /// payload carries to the map and the station panel). `None` with no project
 /// open too: each test also asserts the save wrote a comment, so that cannot
 /// pass as an agreement.
-fn shown_comment(state: &AppState, sr: StationRef) -> Option<String> {
+pub(super) fn shown_comment(state: &AppState, sr: StationRef) -> Option<String> {
     state
         .get_project_state()?
         .compute_station_coordinates()
@@ -79,7 +79,7 @@ fn shown_comment(state: &AppState, sr: StationRef) -> Option<String> {
 }
 
 /// The comment the file at `path` holds for `sr`.
-fn written_comment(path: &Path, sr: StationRef) -> Option<String> {
+pub(super) fn written_comment(path: &Path, sr: StationRef) -> Option<String> {
     let conn = rusqlite::Connection::open(path).unwrap();
     conn.query_row(
         "SELECT comment FROM station_comments WHERE section_id = ?1 AND station_index = ?2",
@@ -90,7 +90,7 @@ fn written_comment(path: &Path, sr: StationRef) -> Option<String> {
     .unwrap()
 }
 
-fn shot_ids(state: &AppState) -> Vec<ShotId> {
+pub(super) fn shot_ids(state: &AppState) -> Vec<ShotId> {
     let project = state.get_project_state().unwrap();
     project
         .sections
@@ -104,7 +104,7 @@ fn shot_ids(state: &AppState) -> Vec<ShotId> {
 
 /// Save the open project to `path`, then open it again in a new state: what the
 /// save wrote for `sr`, and what the reopen shows there.
-fn save_and_reopen(
+pub(super) fn save_and_reopen(
     state: &AppState,
     path: &Path,
     sr: StationRef,

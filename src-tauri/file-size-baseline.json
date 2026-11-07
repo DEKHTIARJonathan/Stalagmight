@@ -333,6 +333,7 @@
     "src-tauri/crates/core/src/core/state/side_table_write_during_save_tests.rs": 140,
     "src-tauri/crates/core/src/core/state/sidecar_key_coverage_tests.rs": 61,
     "src-tauri/crates/core/src/core/state/station_comment_display_tests.rs": 174,
+    "src-tauri/crates/core/src/core/state/station_comment_legacy_key_tests.rs": 231,
     "src-tauri/crates/core/src/core/state/take_remote_success_tests.rs": 312,
     "src-tauri/crates/core/src/core/state/tests.rs": 374,
     "src-tauri/crates/core/src/core/state/tests/closure_and_station_tests.rs": 674,
