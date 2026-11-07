@@ -277,6 +277,14 @@ export const GROUP: SiteGroup = {
         reason: 'synthetic survey files a scenario feeds the importers; a spec can come back from a trace',
       },
     },
+    'e2e/agent/lib/privateErrors.ts': {
+      'appendProbeError -> path.join(sessionDir, PROBE_ERRORS_FILE)': {
+        class: 'private',
+        what: 'ipc-probe-errors.jsonl',
+        reason:
+          "the whole error of each ipc-payload-probe call, in the session directory, written only with STALAGMIGHT_AGENT_PRIVATE_ERRORS=1 (#576 RV20-13)",
+      },
+    },
   },
   passthrough: {},
   wrappers: {

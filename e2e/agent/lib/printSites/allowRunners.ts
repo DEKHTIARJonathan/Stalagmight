@@ -138,8 +138,6 @@ export const GROUP: SiteGroup = {
       'main: started.buildAction': STARTED_BUILD,
       'main: probeCase.label': "a label of the probe's own literal `cases` table",
       'main: suspect.label': "a label of the probe's own literal SUSPECTS table",
-      'main: baseline.arrived': "a boolean the probe's own in-page script computes from indexOf",
-      'main: ceiling.arrived': "a boolean the probe's own in-page script computes from indexOf",
       'main: max': 'the --max length: parseArgs refuses anything but a positive integer',
       'main: good': R.COUNT,
       'main: bad': R.COUNT,
@@ -383,6 +381,10 @@ export const GROUP: SiteGroup = {
     'e2e/agent/ipc-payload-probe.ts': {
       shownFlag: "a CLI token: itself only when it is one of the probe's literal FLAGS, else valueShape",
       shownChar: "--char: the quoted default 'x', a label of the literal SUSPECTS table when the text is one, else valueShape",
+      // #576 RV20-13: the probe reads and prints a call's error through lib/ipcPayloadProbe.ts (ipcPayloadProbe.test.ts).
+      probeVerdict: "'arrived', 'truncated' or 'other': a ProbeVerdict word, from the class of the error",
+      shownProbeError:
+        "a call's error as a label of the literal PROBE_ERROR_CLASSES (or `not a known rejection`) and its length, never its text",
     },
     'e2e/agent/scenario-run.ts': {
       scenarioName:

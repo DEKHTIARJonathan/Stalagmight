@@ -1140,7 +1140,17 @@ locations:
   file prints as its length or a count, and a metric key holds codes only
   (`mapSkip:<code>`). `agent:smoke`'s `started:` line is folded and its
   integrity check gives `<n> message(s), save_blocked=<bool>`;
-  `ipc-payload-probe.ts` gives serde's rejection as its length.
+  `ipc-payload-probe.ts` gives serde's rejection as its class from a fixed
+  set (`missing field`, `premature end of input`, ...; `lib/ipcPayloadProbe.ts`)
+  and its length, and reads an error that is none of them as `OTHER`, never
+  as an arrived body (#576 RV20-13).
+- To see what is withheld, locally: `STALAGMIGHT_AGENT_PRIVATE_ERRORS=1`
+  (#576 RV20-13, `lib/privateErrors.ts`) also keeps the whole text in a
+  private file - a session attach failure as an `attach-failed` event in the
+  session's `actions.jsonl`, each `ipc-payload-probe.ts` call's error in
+  `ipc-probe-errors.jsonl` in its session directory. Nothing more reaches
+  stdout, stderr or `report.md`: what a run prints is the same with it set or
+  not. Unset (the default), neither is written.
 - Every print and write site is checked in the source, not one at a time
   (#576 W51, `e2e/agent/lib/printSites/`). `printSites.test.ts` scans every
   non-test file of `e2e/agent`, `e2e/lib` and `scripts/` for what prints or
@@ -1174,7 +1184,10 @@ locations:
 **Not for sharing** - the full text, for triage where the run happened: the
 session's `actions.jsonl` (each `finding` event with its detail, each
 `scenario-failure` event with the whole failure message, each
-`scenario-progress` event with the whole progress line), `agent:journeys`'
+`scenario-progress` event with the whole progress line, an `attach-failed`
+event with the whole error under `STALAGMIGHT_AGENT_PRIVATE_ERRORS=1`),
+`ipc-probe-errors.jsonl` (`ipc-payload-probe.ts`'s whole error per call, under
+the same opt-in), `agent:journeys`'
 `uat/run.jsonl` (each check's detail, each abort reason), the screenshots
 (`screenshots/`, `findings/<n>/screenshot.png`, the journey checkpoints in
 `journeys/<journey>/`), the crash-marker copies in
