@@ -1068,6 +1068,12 @@ locations:
   cargo `Compiling` and Tauri `Built application at:` lines name the checkout -
   is passed through a line at a time with the checkout folded to `<repo>` and
   the home directory to `~` (#576 RV19b-P8, `lib/foldedLines.ts`).
+- A session that builds - `agent:scenario`, `agent:journeys`, `agent:smoke`
+  and the MCP server's `app_start` - passes `pnpm tauri build`'s stdout and
+  stderr to its own stderr the same way, a line at a time with the checkout
+  folded to `<repo>` and the home directory to `~`, and folds its `Rebuilding:`
+  reasons and build log lines too (#576 W47-NF3, `lib/build.ts`
+  `runBuildCommand`, `buildOutput.test.ts`).
 - `fuzz-matrix` prints a failed cell's FAIL block as the child wrote it. For
   a cell that died without one, it prints the last lines of the child's output
   fail-closed (`shareableTail`): the session and verdict lines, progress lines
