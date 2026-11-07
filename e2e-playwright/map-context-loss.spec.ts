@@ -523,6 +523,82 @@ test.describe('A WebGL context that does not come back (#576 D38-LOST)', () => {
     expect(await settledDiscInk()).toBeGreaterThan((baseInk + hoverInk) / 2);
   });
 
+  // [#576 W33-NF8] The shot/station twin of the test above. The same load-time
+  // setActiveTool clear also fires onShotHover/onStationHover(null), which wipes
+  // the store's hover as well, so the data-table row under the pointer lost its
+  // map highlight and the grid (which reports only a change of row) never set it
+  // again. The oracle is the interact overlay, the exact collection the layer
+  // paints its shot/station hover from.
+  for (const kind of ['shot', 'station'] as const) {
+    test(`survey map: under Pan, Reload map keeps the hovered data-table ${kind} row highlighted`, async ({ page }) => {
+      await seedNavigationTools(page);
+      await openSeededAndZoom(page, `Context Lost Pan ${kind} Row Hover`);
+      await page.keyboard.press('p');
+      await waitForActiveTool(page, 'pan');
+      await page.keyboard.press('Control+3');
+      await expect(page.getByTestId('data-table')).toBeVisible({ timeout: 3000 });
+      if (kind === 'station') await page.getByTestId('data-table-view-stations').click();
+      const ids = await page.evaluate(() => {
+        const section = (window as unknown as {
+          __E2E_TEST__: {
+            projectStore: { getState: () => { project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> } } };
+          };
+        }).__E2E_TEST__.projectStore.getState().project.sections[0]!;
+        return { sectionId: section.id, shotId: section.shots[1]!.id };
+      });
+      const expected =
+        kind === 'shot'
+          ? { sectionId: ids.sectionId, shotId: ids.shotId }
+          : { section_id: ids.sectionId, station_index: 1 };
+      const rowId =
+        kind === 'shot' ? `shot-row-${ids.sectionId}-${ids.shotId}` : `station-row-${ids.sectionId}-1`;
+      const storeHover = (): Promise<unknown> =>
+        page.evaluate(
+          (kind) => {
+            const s = (window as unknown as {
+              __E2E_TEST__: { uiStore: { getState: () => { hoveredShot: unknown; hoveredStation: unknown } } };
+            }).__E2E_TEST__.uiStore.getState();
+            return kind === 'shot' ? s.hoveredShot : s.hoveredStation;
+          },
+          kind,
+        );
+      // getStyle(), not getSource(): the latter hands back a MapLibre class instance.
+      const overlayCount = (): Promise<number> =>
+        page.evaluate((kind) => {
+          const map = (window as unknown as {
+            __stalagmight_map__?: { getStyle: () => { sources: Record<string, unknown> } };
+          }).__stalagmight_map__;
+          const src = map?.getStyle().sources['survey-interact'] as
+            | { data?: { features?: Array<{ properties?: { kind?: string } | null }> } }
+            | undefined;
+          return (src?.data?.features ?? []).filter((f) => f.properties?.kind === kind).length;
+        }, kind);
+
+      // Leave the map canvas first: in one move from the canvas onto the row,
+      // React enters the row on the canvas's mouseout, and the canvas's own
+      // mouseleave, which comes after, clears the hover the row just set.
+      await page.getByTestId('data-table-title').hover();
+      await page.getByTestId(rowId).hover();
+      await expect.poll(storeHover).toEqual(expected);
+      await expect.poll(overlayCount).toBe(1);
+
+      await tagMap(page, '__stalagmight_map__');
+      await loseContext(page);
+      const toast = page.locator(LOST_TOAST);
+      await expect(toast).toBeVisible({ timeout: 10000 });
+      await toast.getByTestId('map-context-lost-reload').focus();
+      await page.keyboard.press('Enter');
+      await expect.poll(() => mapIsRebuilt(page, '__stalagmight_map__'), { timeout: 10000 }).toBe(true);
+      await waitForDrawnShots(page, 3);
+      await waitForActiveTool(page, 'pan');
+
+      // The pointer never left the row: the store keeps its hover and the rebuilt
+      // map paints it.
+      await expect.poll(overlayCount, { timeout: 5000 }).toBe(1);
+      expect(await storeHover()).toEqual(expected);
+    });
+  }
+
   test('survey map: the toast clears itself when the context comes back after all', async ({ page }) => {
     const errors = collectErrors(page);
     await openSeededAndZoom(page, 'Context Back Late');
