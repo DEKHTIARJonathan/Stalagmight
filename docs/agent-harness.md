@@ -1021,6 +1021,16 @@ locations:
   checks every value a `ctx.log` call interpolates against the list of harness
   values (counts, seeds, ids, paths) or that rule. The full line is a
   `scenario-progress` event in `actions.jsonl`.
+- `agent:journeys` prints its progress lines (`   · <line>`) the same way
+  (#576 W33-NF1): a failed check's observed detail ends a `- failed:` line and
+  a failed checkpoint's error a `(non-gating) failed:` line, so both print as
+  their length. Its PASS/FAIL line gives an `aborted:` reason in the headline
+  form, its further lines counted (`journeys/framework.ts`
+  `journeyVerdictLine`). `shareableRunnerOutput.test.ts` checks every value the
+  framework's lines interpolate, and that every check label and checkpoint
+  name is a literal. The full lines are `scenario-progress` events in
+  `actions.jsonl`; the full checks and reason are in the session's
+  `uat/run.jsonl`.
 - A harness crash - a runner's `fatal:` line, `fuzz-shrink`'s `shrink
   failed:` - prints the error's name, its headline in the same form, and its
   stack frames, folded; the other lines of its message are counted
@@ -1047,7 +1057,8 @@ locations:
 **Not for sharing** - the full text, for triage where the run happened: the
 session's `actions.jsonl` (each `finding` event with its detail, each
 `scenario-failure` event with the whole failure message, each
-`scenario-progress` event with the whole progress line), the screenshots
+`scenario-progress` event with the whole progress line), `agent:journeys`'
+`uat/run.jsonl` (each check's detail, each abort reason), the screenshots
 (`screenshots/`, `findings/<n>/screenshot.png`), the crash-marker copies in
 `findings/<n>/`, the `state/` snapshots, `tauri-driver.log`, and the app's own
 log files. `report.md`'s Evidence list still names `actions.jsonl` and

@@ -18,9 +18,9 @@ import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { createSession } from './createSession';
 import { listJourneys, getJourney } from './journeys';
-import { runJourney, type JourneyResult } from './journeys/framework';
+import { journeyVerdictLine, runJourney, type JourneyResult } from './journeys/framework';
 import { findingsSummary, runSweep, newOracleState, type Finding } from './lib/oracles';
-import { shareableErrorText } from './lib/shareableFailure';
+import { progressLogger, shareableErrorText } from './lib/shareableFailure';
 import { callStoreAction } from './lib/stores';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -140,18 +140,20 @@ async function main(): Promise<void> {
       const journey = getJourney(name);
       if (!journey) continue;
       process.stdout.write(`\n== ${name} ==\n`);
-      const result = await runJourney(journey, session, (m) => process.stdout.write(`   · ${m}\n`));
+      // Shareable progress lines (#576 W33-NF1); the full text goes to actions.jsonl.
+      const log = progressLogger(
+        (line) => process.stdout.write(`   · ${line}\n`),
+        session.hasRecorder ? session.recorder : undefined,
+      );
+      const result = await runJourney(journey, session, log);
       const sweep = await runSweep(session, oracle, { full: true, recorder: session.recorder });
       const breaches = sweep.findings.filter((f) => f.severity === 'fatal' || f.severity === 'error');
       const verdict: 'pass' | 'fail' = result.verdict === 'fail' || breaches.length > 0 ? 'fail' : 'pass';
       records.push({ ...result, verdict, sweepFindings: sweep.findings });
-      const failedChecks = result.checks.filter((c) => !c.ok);
+      // The abort reason in the shareable form, the sweep as counts (#576 W33-NF1, HFI2-F2).
       process.stdout.write(
-        `${verdict.toUpperCase()}: ${name} (${result.durationMs}ms, ` +
-          `${result.checks.length - failedChecks.length}/${result.checks.length} checks)` +
-          `${result.aborted ? ` aborted: ${result.aborted}` : ''}` +
-          // Counts only (#576 HFI2-F2); the text is in the session's run.jsonl.
-          `${breaches.length ? ` sweep=${findingsSummary(breaches)}` : ''}\n`,
+        // Counts only (#576 HFI2-F2); the text is in the session's run.jsonl.
+        journeyVerdictLine(verdict, result, breaches.length ? ` sweep=${findingsSummary(breaches)}` : ''),
       );
     }
   } finally {

@@ -8,6 +8,7 @@
  * station and a project.
  */
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -190,8 +191,8 @@ interface Interpolation {
   afterFailed: boolean;
 }
 
-/** Every value a `ctx.log(...)` call in `file` interpolates, nested templates included. */
-function logInterpolations(file: string): Interpolation[] {
+/** Every value a `ctx.log(...)` (or other `callees`) call in `file` interpolates, nested templates included. */
+function logInterpolations(file: string, callees: readonly string[] = ['ctx.log']): Interpolation[] {
   const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
   const found: Interpolation[] = [];
   const where = (node: ts.Node): string =>
@@ -224,7 +225,7 @@ function logInterpolations(file: string): Interpolation[] {
     nested(node);
   };
   const visit = (node: ts.Node): void => {
-    if (ts.isCallExpression(node) && text(node.expression) === 'ctx.log') node.arguments.forEach(collect);
+    if (ts.isCallExpression(node) && callees.includes(text(node.expression))) node.arguments.forEach(collect);
     node.forEachChild(visit);
   };
   visit(source);
@@ -317,5 +318,114 @@ describe('a matrix cell that died without a FAIL line shares no app text (#576 W
     const { scenarioFailOutput } = await import('./shareableFailure');
     const block = scenarioFailOutput('s', new Error('ipc save_project: qzproject')).trimEnd().split('\n');
     expect(failureDetail({ outLines: block, allLines: block })).toBe(block.join('\n'));
+  });
+});
+
+describe('agent:journeys prints its progress lines and abort reason shareable (#576 W33-NF1)', () => {
+  let sessionDir = '';
+  beforeEach(() => {
+    sessionDir = fs.mkdtempSync(path.join(os.tmpdir(), 'w33-nf1-'));
+  });
+  afterEach(() => fs.rmSync(sessionDir, { recursive: true, force: true }));
+  /** A session whose screenshot fails with the page's text, as a WebDriver error can. */
+  const target = () => ({
+    browser: {
+      saveScreenshot: async (): Promise<never> => {
+        throw new Error('no screenshot of qzproject');
+      },
+    } as never,
+    sessionDir,
+    exclusive: <T>(fn: () => Promise<T>): Promise<T> => fn(),
+  });
+
+  it("withholds a failed check's observed detail and a failed checkpoint's error, and records them whole", async () => {
+    const { runJourney } = await import('../journeys/framework');
+    const { progressLogger } = await import('./shareableFailure');
+    const printed: string[] = [];
+    const events: unknown[] = [];
+    const log = progressLogger((line) => printed.push(line), { event: (event, detail) => events.push({ event, detail }) });
+    const observed = 'error=Station "qzstation" of qzproject vanished';
+    const result = await runJourney(
+      {
+        name: 'demo-journey',
+        description: '',
+        async run(ctx) {
+          ctx.expect('save reported success', false, observed);
+          ctx.expect('project closed', true);
+          await ctx.checkpoint('saved');
+        },
+      },
+      target(),
+      log,
+    );
+    expect(names(printed.join('\n'))).toEqual([]);
+    expect(printed).toEqual([
+      `FAIL: save reported success - failed: (${observed.length} characters of the app's text withheld)`,
+      'ok: project closed',
+      `checkpoint saved (non-gating) failed: (${'no screenshot of qzproject'.length} characters of the app's text withheld)`,
+    ]);
+    // The full lines go to actions.jsonl, the full detail to the run record.
+    expect(names(JSON.stringify(events))).toEqual(['qzproject', 'qzstation']);
+    expect(result.checks[0]?.detail).toBe(observed);
+  });
+
+  it('prints the abort reason in the headline form and counts its further lines', async () => {
+    const { journeyVerdictLine } = await import('../journeys/framework');
+    const result = { journey: 'demo-journey', verdict: 'fail' as const, durationMs: 12, checks: [{ label: 'a', ok: true }] };
+    const appError = 'qzsection has no shots';
+    const line = journeyVerdictLine('fail', { ...result, aborted: `parseTml failed: ${appError}\nin qzproject` }, ' sweep=error=1');
+    expect(names(line)).toEqual([]);
+    expect(line.split('\n')).toEqual([
+      `FAIL: demo-journey (12ms, 1/1 checks) aborted: parseTml failed: (${appError.length} characters of the app's text withheld) sweep=error=1`,
+      "  (1 line(s) withheld: they can quote the app's text - the full reason is in the session's uat/run.jsonl)",
+      '',
+    ]);
+    expect(names(journeyVerdictLine('fail', { ...result, aborted: 'ipc load_project: qzproject is locked' }))).toEqual([]);
+    // A reason the harness words itself stays whole.
+    const harness = 'journey recorded zero checks - a journey must assert something';
+    expect(journeyVerdictLine('fail', { ...result, checks: [], aborted: harness })).toBe(
+      `FAIL: demo-journey (12ms, 0/0 checks) aborted: ${harness}\n`,
+    );
+    expect(journeyVerdictLine('pass', result)).toBe('PASS: demo-journey (12ms, 1/1 checks)\n');
+  });
+
+  it('is what the runner prints', () => {
+    const source = fs.readFileSync(path.join(REPO, 'e2e/agent/journeys-run.ts'), 'utf8');
+    expect(source).toMatch(/log = progressLogger\(/);
+    expect(source).toMatch(/journeyVerdictLine\(/);
+    expect(source).not.toMatch(/result\.aborted\b/);
+  });
+
+  it('every journey progress value is a harness value, or the app text at the end of a `failed:` line', () => {
+    const dir = path.join(REPO, 'e2e/agent/journeys');
+    const files = fs
+      .readdirSync(dir)
+      .filter((name) => name.endsWith('.ts') && !name.endsWith('.test.ts'))
+      .map((name) => path.join(dir, name));
+    // The framework's own lines: the verdict word, a check label and a
+    // checkpoint name (literals, checked below), a checkpoint's path (folded).
+    const journeyValues = new Set(["ok ? 'ok' : 'FAIL'", 'label', "!ok && detail ? ` - failed: ${detail}` : ''", 'file']);
+    const all = files.flatMap((file) => logInterpolations(file, ['ctx.log', 'base.log']));
+    expect(all.length).toBeGreaterThan(4);
+    const unchecked = all.filter(
+      (value) => !HARNESS_VALUES.has(value.text) && !journeyValues.has(value.text) && !value.afterFailed,
+    );
+    expect(unchecked.map((value) => `${value.where} \${${value.text}}`)).toEqual([]);
+    // Every check label and checkpoint name a journey passes is a literal.
+    const named: string[] = [];
+    for (const file of files) {
+      const source = ts.createSourceFile(file, fs.readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true);
+      const visit = (node: ts.Node): void => {
+        if (ts.isCallExpression(node) && ['ctx.expect', 'ctx.checkpoint'].includes(node.expression.getText(source))) {
+          const first = node.arguments[0];
+          const literal = first !== undefined && (ts.isStringLiteral(first) || ts.isNoSubstitutionTemplateLiteral(first));
+          named.push(literal ? 'literal' : `${path.basename(file)}: ${node.getText(source).slice(0, 60)}`);
+        }
+        node.forEachChild(visit);
+      };
+      visit(source);
+    }
+    expect(named.length).toBeGreaterThan(20);
+    expect(named.filter((what) => what !== 'literal')).toEqual([]);
   });
 });
