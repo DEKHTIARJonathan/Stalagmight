@@ -23,7 +23,9 @@
 //! virtual tables, DBSTAT, and the functions of FTS, R-tree and extension
 //! loading, which this crate's bundled SQLite has compiled in; a
 //! file whose schema names or SQL are not valid UTF-8, which the authorizer
-//! cannot be handed, is refused before that.
+//! cannot be handed, is refused before that, and so is one whose schema names
+//! or SQL are not stored as text: SQLite still parses SQL stored as a blob, so
+//! a CHECK there would otherwise go unseen.
 //!
 //! **Bounds.** One deadline covers the read from the first SQLite statement to
 //! the result, at two granularities: inside SQLite a statement is interrupted
@@ -268,7 +270,8 @@ pub enum InvalidKind {
     /// an impossible schema version).
     Corrupt,
     /// The file defines a schema object that evaluates file-chosen SQL (see the
-    /// crate docs).
+    /// crate docs). A schema whose names or SQL are not valid UTF-8 or not
+    /// stored as text is refused this way too.
     RefusedSchemaObject,
     /// A statement was still running at the deadline.
     Deadline,
