@@ -32,6 +32,7 @@
  * impossible there. That is what keeps a ddmin-cut trace RUNNABLE.
  */
 import type { ScenarioContext } from './framework';
+import { foldThenCut } from '../lib/fixtureCorpus';
 import {
   DATA_FORMATS,
   IMAGE_FORMATS,
@@ -905,7 +906,7 @@ export interface PreviewState {
  * something the container could not render.
  */
 export async function readPreview(ctx: ScenarioContext): Promise<PreviewState> {
-  return ctx.eval<PreviewState>(
+  const state = await ctx.eval<PreviewState>(
     `
     ${HELPERS}
     const host = q('export-preview') || q('export-mode-preview');
@@ -916,11 +917,14 @@ export async function readPreview(ctx: ScenarioContext): Promise<PreviewState> {
     return {
       mounted: true,
       loading: !!loadingNode,
-      error: errorNode ? (errorNode.textContent || '').slice(0, 300) : null,
+      error: errorNode ? errorNode.textContent || '' : null,
       svgBytes: svg ? svg.outerHTML.length : 0,
     };
   `,
   );
+  // The page sends the whole message: folded, THEN cut, so a cut cannot split a
+  // corpus name the fold then cannot match (#576 RV19b-P3).
+  return state.error === null ? state : { ...state, error: foldThenCut(state.error, 300) };
 }
 
 /** Does the gas plan currently have a route a dive profile could be built from? */

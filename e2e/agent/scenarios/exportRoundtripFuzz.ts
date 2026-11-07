@@ -438,6 +438,7 @@ import { HOSTILE_COMMENTS } from '../lib/surveyFileSpecs';
 import { shotSetDelta, describeShotSetDelta } from '../lib/projectSnapshot';
 import { TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
 import { fuzzFixture } from '../lib/fuzzKnobs';
+import { foldThenCut } from '../lib/fixtureCorpus';
 import { MoveLog, openReplay, RERUN_WITH, writeRunTrace } from '../lib/fuzzHarness';
 import {
   asExportedToTml,
@@ -1081,7 +1082,7 @@ export const exportRoundtripFuzz: Scenario = {
         ctx.metric(`preview:${preview.mounted ? (preview.error ? 'error' : preview.svgBytes > 0 ? 'rendered' : 'blank') : 'absent'}`);
         if (preview.mounted && preview.error !== null) {
           ctx.metric('previewError');
-          note(`preview error: ${preview.error.slice(0, 120)}`);
+          note(`preview error: ${foldThenCut(preview.error, 120)}`);
         }
         rmrf(moveDir);
         return;
@@ -1569,7 +1570,7 @@ export const exportRoundtripFuzz: Scenario = {
                 .join('\n') +
               (result.missing.length > 0
                 ? `\n    ${result.missing.length} seeded comment(s) did not survive at all: ` +
-                  `${JSON.stringify(result.missing.map((c) => c.slice(0, 40)))}`
+                  `${JSON.stringify(result.missing.map((c) => foldThenCut(c, 40)))}`
                 : '') +
               `\n    escape_csv (src-tauri/src/export/csv.rs:66-79) neutralises a leading\n` +
               `    = + - @ TAB or CR with an apostrophe and then RFC-4180-quotes anything\n` +
@@ -1639,7 +1640,7 @@ export const exportRoundtripFuzz: Scenario = {
       if (lost.length > 0) {
         fail(
           `X7 ${lost.length} hostile comment(s) did not survive a .tmlu write + parse_tml read\n` +
-            `    ${JSON.stringify(lost.map((c) => c.slice(0, 40)))}\n` +
+            `    ${JSON.stringify(lost.map((c) => foldThenCut(c, 40)))}\n` +
             `    Leading/trailing whitespace is already excused (the reader trims every text\n` +
             `    field by design - see docs/ariane-import.md), so this is CONTENT loss:\n` +
             `    escaping that dropped or mangled a character the document may legally carry.\n` +
