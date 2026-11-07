@@ -1006,8 +1006,24 @@ impl Database {
         anyhow::bail!("Too many existing backups (max 100)")
     }
 
+    /// Whether the salvage can read the table `name`: a `sqlite_master` row of
+    /// type `table` in any ASCII case. [#576 W52-6] The salvage's schema guard
+    /// checks a type cell that lost its case ('Table') as the table it is
+    /// (`check_schema_for_salvage`, RV19a-12), and SQLite reads it, so the
+    /// summary below reads it too: under [`Self::table_exists`]'s exact match a
+    /// 'Table' project table was reported as "Project table is empty", beside
+    /// the full project the salvage read back from it.
+    fn salvage_table_exists(&self, name: &str) -> Result<bool> {
+        let exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE lower(type) = 'table' AND name = ?1",
+            params![name],
+            |row| row.get(0),
+        )?;
+        Ok(exists > 0)
+    }
+
     pub(super) fn try_read_project_metadata(&self) -> Result<Option<(String, Option<String>)>> {
-        if !self.table_exists("project")? {
+        if !self.salvage_table_exists("project")? {
             return Ok(None);
         }
         let count: i64 = self
@@ -1025,7 +1041,7 @@ impl Database {
     }
 
     pub(super) fn try_read_sections(&self) -> Result<Vec<SalvagedSection>> {
-        if !self.table_exists("sections")? {
+        if !self.salvage_table_exists("sections")? {
             return Ok(Vec::new());
         }
         let mut stmt = self
@@ -1048,7 +1064,7 @@ impl Database {
     }
 
     pub(super) fn try_read_shot_count(&self) -> Result<usize> {
-        if !self.table_exists("shots")? {
+        if !self.salvage_table_exists("shots")? {
             return Ok(0);
         }
         let count: i64 = self
@@ -1058,7 +1074,7 @@ impl Database {
     }
 
     pub(super) fn try_read_merge_count(&self) -> Result<usize> {
-        if !self.table_exists("station_merges")? {
+        if !self.salvage_table_exists("station_merges")? {
             return Ok(0);
         }
         let count: i64 = self

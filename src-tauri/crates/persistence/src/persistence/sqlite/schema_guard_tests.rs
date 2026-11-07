@@ -531,3 +531,69 @@ fn check_schema_at_never_rolls_a_stale_journal_into_the_file() {
         "a file with a hot journal beside it is refused, not read as if clean"
     );
 }
+
+/// [#576 W52-6] The salvage's summary reads a table whose type cell lost its
+/// case, as the salvage itself does. Its existence probe matched the type
+/// exactly, so a 'Table' project table was reported as "Project table is
+/// empty" with no name - beside the full project read back from that very
+/// table - and a 'Table' sections or shots table was counted as 0.
+#[test]
+fn the_salvage_summary_reads_a_table_whose_type_lost_its_case() {
+    let dir = TempDir::new().unwrap();
+    let surveyed_at = |name: &str, sql: &str| {
+        let path = dir.path().join(name);
+        let mut project = Project::new("Crafted".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("SectionA".to_string()),
+            shots: vec![
+                crate::models::ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                },
+                crate::models::ShotData {
+                    length: 7.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        project.ensure_shot_uuids();
+        Database::open(&path)
+            .unwrap()
+            .save_project(&project)
+            .unwrap();
+        Connection::open(&path).unwrap().execute_batch(sql).unwrap();
+        path
+    };
+    let summary = |path: &Path| {
+        let salvaged = Database::export_salvageable(path).unwrap();
+        (
+            salvaged.project_name,
+            salvaged.section_count,
+            salvaged.shot_count,
+            salvaged.errors,
+        )
+    };
+    let clean = summary(&surveyed_at("clean.stalx", ""));
+    println!("clean file: salvage summary (name, sections, shots, errors) = {clean:?}");
+    assert_eq!(
+        clean,
+        (Some("Crafted".to_string()), 1, 2, Vec::<String>::new()),
+        "premise: the clean file's summary"
+    );
+    for table in ["project", "sections", "shots"] {
+        let path = surveyed_at(
+            &format!("{table}.stalx"),
+            &format!(
+                "PRAGMA writable_schema = ON;
+                 UPDATE sqlite_master SET type = 'Table' WHERE name = '{table}';"
+            ),
+        );
+        let damaged = summary(&path);
+        println!("type cell 'Table' on {table}: salvage summary = {damaged:?}");
+        assert_eq!(
+            damaged, clean,
+            "{table}: the summary of what the salvage read"
+        );
+    }
+}
