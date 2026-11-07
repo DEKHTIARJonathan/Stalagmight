@@ -55,7 +55,9 @@ upgrade from the same version keeps the first copy. The Restore list of the
 recovery dialog offers it with the other backups. No copy is taken of a file that
 is already current, of an empty file becoming a new project, or of an unstamped
 file whose project row claims the current version (nothing is stamped there, so it
-is not an upgrade). If the copy cannot be written, the file is not upgraded and the
+is not an upgrade). Nor by `Database::open_existing_untrusted`, the open the
+`stalx-reader` crate uses: its file is already a private copy that is thrown away
+after the read, and a second one beside it doubled the temp space a read needs. If the copy cannot be written, the file is not upgraded and the
 open fails with a message saying so. A file inside the app's own folders or a
 system folder is not upgraded at all: the open is refused before the chain starts
 (load error `UPGRADE_REFUSED`), the file is left as it was, and the message says to

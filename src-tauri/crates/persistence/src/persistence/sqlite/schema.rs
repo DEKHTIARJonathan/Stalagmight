@@ -41,6 +41,19 @@ pub(super) const PRESERVED_SPELEOLINK_COLUMNS: &[(&str, &str, bool)] = &[
     ("undo_mode", "TEXT", false),    // v16; nullable only for legacy initialization (#303)
 ];
 
+/// Whether an upgrade keeps a `.pre-v<N>.backup` copy of the file as it was,
+/// beside it ([`Database::ensure_schema_version_with`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PreUpgradeCopy {
+    /// Every open of a file that is the user's own (#576 B6-D2): the upgrade is
+    /// one-way, and the copy is the only way back.
+    Keep,
+    /// An open of a private copy the caller made and throws away after the
+    /// read (`Database::open_existing_untrusted`): the original is never
+    /// written, so there is nothing to keep a way back to.
+    Skip,
+}
+
 impl Database {
     /// Run lightweight schema migrations for tables added after initial release
     fn migrate_schema(&self) -> Result<()> {
@@ -1259,17 +1272,19 @@ impl Database {
 
     /// Ensure schema migrations are applied and user_version is current.
     pub(super) fn ensure_schema_version(&self) -> Result<()> {
-        self.ensure_schema_version_with(None)
+        self.ensure_schema_version_with(None, PreUpgradeCopy::Keep)
     }
 
     /// [`Self::ensure_schema_version`], refusing the upgrade with `refuse_upgrade`
     /// (an [`UpgradeRefused`] carrying the message that fits the file) when it would
     /// write - the migration chain and the pre-upgrade copy alike (#576
     /// RV4-R-M3-OPEN). A file it would not write to (current, newer, unstamped on
-    /// read-only media) passes as before.
+    /// read-only media) passes as before. `pre_upgrade_copy` says whether an
+    /// upgrade keeps its `.pre-v<N>.backup` copy beside the file.
     pub(super) fn ensure_schema_version_with(
         &self,
         refuse_upgrade: Option<&UpgradeRefusal>,
+        pre_upgrade_copy: PreUpgradeCopy,
     ) -> Result<()> {
         // Two different claims, and only one of them is evidence that migrations
         // RAN. `PRAGMA user_version` is written by this app in exactly two places:
@@ -1426,8 +1441,11 @@ impl Database {
         // [#576 B6-D2] Keep one copy of the file as it was before this upgrade,
         // before the first change. Not for an unstamped file whose row claims the
         // current version or a newer one: nothing is stamped there (see the end
-        // of this function), so it is not an upgrade.
-        if !(claimed_only && current >= SCHEMA_VERSION) {
+        // of this function), so it is not an upgrade. Nor for a caller's private
+        // throwaway copy (`PreUpgradeCopy::Skip`): its original is untouched, and
+        // a second full copy beside it would double the space the read needs.
+        if pre_upgrade_copy == PreUpgradeCopy::Keep && !(claimed_only && current >= SCHEMA_VERSION)
+        {
             self.keep_pre_upgrade_copy(current)?;
         }
 

@@ -657,6 +657,34 @@ fn the_private_copy_goes_in_the_given_temp_dir_and_is_removed() {
 }
 
 #[test]
+fn an_older_file_is_upgraded_without_a_second_copy_in_the_private_dir() {
+    // The app keeps a `.pre-v<N>.backup` beside a file it upgrades; the private
+    // copy is thrown away after the read, so one there would only double the
+    // temp space and time a read needs. Listed while the read is under way.
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &full_project());
+    set_user_version(&path, 17);
+    let scratch = TempDir::new().unwrap();
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (root, names) = (scratch.path().to_path_buf(), std::rc::Rc::clone(&seen));
+    after_load(move || {
+        for private in std::fs::read_dir(&root).unwrap() {
+            for entry in std::fs::read_dir(private.unwrap().path()).unwrap() {
+                let name = entry.unwrap().file_name();
+                names.borrow_mut().push(name.to_string_lossy().into_owned());
+            }
+        }
+    });
+
+    let survey = read_file_with(&path, &ReadOptions::default().temp_dir(scratch.path())).unwrap();
+
+    assert_eq!(survey.schema_version, 17, "the upgrade ran on the copy");
+    let seen = seen.borrow();
+    assert!(seen.iter().any(|name| name == "project.stalx"), "{seen:?}");
+    assert!(!seen.iter().any(|name| name.contains(".pre-v")), "{seen:?}");
+}
+
+#[test]
 fn the_correction_source_tells_a_recorded_zero_from_nothing_recorded() {
     use stalagmight_models::{AzimuthReference, CorrectionSource as Source};
 

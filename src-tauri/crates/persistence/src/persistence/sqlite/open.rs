@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
+use super::schema::PreUpgradeCopy;
 use super::{Database, UpgradeRefusal, SCHEMA_VERSION};
 
 /// Whether `path` names a `.stalx` project file, in any letter case.
@@ -324,7 +325,8 @@ impl Database {
 
     /// [`Self::open_existing`] for a file from an untrusted source, e.g. a server
     /// upload. Callers must pass a private COPY: this runs the same forward
-    /// migrations, which write to the file.
+    /// migrations, which write to the file. Because it is a copy, an upgrade keeps
+    /// no `.pre-v<N>.backup` beside it, unlike every other open.
     ///
     /// The file can carry its own schema, so before anything reads it the
     /// connection is put in defensive mode with `trusted_schema` off (no
@@ -367,7 +369,8 @@ impl Database {
 
     /// The checks and migrations every existing-file open runs on `conn`.
     /// `untrusted` keeps the caller's hardened pragmas instead of the app's
-    /// performance ones; `refuse_upgrade` is [`Self::open_existing_with`]'s.
+    /// performance ones, and skips the pre-upgrade copy; `refuse_upgrade` is
+    /// [`Self::open_existing_with`]'s.
     fn finish_open_existing(
         conn: Connection,
         untrusted: bool,
@@ -380,7 +383,15 @@ impl Database {
         if !untrusted {
             db.apply_load_performance_pragmas();
         }
-        db.run_existing_open_checks(refuse_upgrade)
+        // An untrusted open is always of a private copy the caller throws away
+        // after the read (`open_existing_untrusted`), so an upgrade keeps no
+        // pre-upgrade copy beside it.
+        let pre_upgrade_copy = if untrusted {
+            PreUpgradeCopy::Skip
+        } else {
+            PreUpgradeCopy::Keep
+        };
+        db.run_existing_open_checks(refuse_upgrade, pre_upgrade_copy)
     }
 
     fn apply_load_performance_pragmas(&self) {
@@ -403,7 +414,11 @@ impl Database {
         let _ = self.conn.pragma_update(None, "temp_store", "MEMORY");
     }
 
-    fn run_existing_open_checks(self, refuse_upgrade: Option<&UpgradeRefusal>) -> Result<Self> {
+    fn run_existing_open_checks(
+        self,
+        refuse_upgrade: Option<&UpgradeRefusal>,
+        pre_upgrade_copy: PreUpgradeCopy,
+    ) -> Result<Self> {
         let db = &self;
         // Run quick integrity check before reading any data (SPEC 14.4)
         let t = std::time::Instant::now();
@@ -429,7 +444,7 @@ impl Database {
 
         // Run lightweight migrations to ensure newer tables exist in legacy projects
         let t = std::time::Instant::now();
-        db.ensure_schema_version_with(refuse_upgrade)?;
+        db.ensure_schema_version_with(refuse_upgrade, pre_upgrade_copy)?;
         tracing::debug!(
             ms = t.elapsed().as_millis() as u64,
             "open_existing: ensure_schema_version"
