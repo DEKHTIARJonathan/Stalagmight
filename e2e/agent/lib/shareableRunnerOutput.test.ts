@@ -441,6 +441,15 @@ describe('the other harness entry points print a crash in the shareable form (#5
     }
   });
 
+  it("prints agent:mcp:smoke's unexpected exception in the shareable form (#576 W39-NF3)", () => {
+    // The smoke's check line for a throw mid-run; the error can quote the app as a crash can.
+    const source = fs.readFileSync(path.join(REPO, 'e2e/agent/mcp/smoke-client.ts'), 'utf8');
+    const lines = source.split('\n').filter((line) => line.includes("'unexpected exception'"));
+    expect(lines.length).toBe(1);
+    expect(lines[0]).toContain('shareableErrorText(err)');
+    expect(source).not.toMatch(/err\.message/);
+  });
+
   it('leaves the raw stack to shareableErrorText alone, in every file of the harness', () => {
     const dir = path.join(REPO, 'e2e/agent');
     const files = fs

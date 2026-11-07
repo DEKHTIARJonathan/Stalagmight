@@ -266,7 +266,9 @@ async function main(): Promise<void> {
     const stopped = parseText(await call('app_stop')) as { stopped?: boolean };
     check('app_stop', stopped?.stopped === true);
   } catch (err) {
-    check('unexpected exception', false, err instanceof Error ? err.message : String(err));
+    // The shareable crash form (#576 W39-NF3), as the `fatal:` line below: a
+    // tool call's error can quote the app (an IPC rejection, a page script's error).
+    check('unexpected exception', false, shareableErrorText(err));
   } finally {
     await client.close().catch(() => undefined);
   }

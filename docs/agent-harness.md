@@ -1042,8 +1042,9 @@ locations:
   in `uat/run.jsonl` until it is added there.
 - A harness crash - a runner's `fatal:` line, `fuzz-shrink`'s `shrink
   failed:`, and the `fatal:` line of `agent:smoke`, `agent:mcp`,
-  `agent:bridge`, `agent:mcp:smoke` and `ipc-payload-probe.ts` (whose
-  `probe failed:` too, #576 W33-NF6) - prints the error's name, its headline
+  `agent:bridge`, `agent:mcp:smoke` (whose `unexpected exception` check too,
+  #576 W39-NF3) and `ipc-payload-probe.ts` (whose `probe failed:` too, #576
+  W33-NF6) - prints the error's name, its headline
   in the same form, and its stack frames, folded; the other lines of its
   message are counted (`shareableErrorText`). A crash in session setup can
   carry an IPC rejection or a page script's error, so the raw stack is not
