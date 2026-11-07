@@ -970,8 +970,12 @@ import error quoting the path it was handed - is folded by one per-process list
 matched in every form JSON and Rust's `{:?}` write it in, at any depth: a
 quote or backslash escaped, any control or non-ASCII character as itself,
 `\u{hex}` or `\uXXXX`, #576 RV16-1, RV17-1; percent-encoded as a `file://`
-URL writes it, and in both Unicode normal forms, NFC and NFD, RV18-W23-5 - but
-not a change of case, an HTML entity, base64 or a part of a name) that the
+URL writes it, and in both Unicode normal forms, NFC and NFD, RV18-W23-5; a
+space as a form encoder's `+`, and any character but a letter, a digit and
+`-._~` as an HTML character reference, `&#233;`, `&#xE9;` or `&amp;`,
+RV19b-P5 - but not a change of case, another named HTML entity, base64 or a
+part of a name; a name folds from three characters, or from two with one
+outside ASCII, RV19b-P4) that the
 scenario's failure message, `agent:scenario`'s FAIL/findings lines,
 `fuzz-shrink`'s output, the sweep's findings (`findings/` JSON included), every
 line of the session's `actions.jsonl` (a tool's params and result, its error,

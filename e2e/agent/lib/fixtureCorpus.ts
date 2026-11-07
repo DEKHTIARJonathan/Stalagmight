@@ -767,6 +767,20 @@ function percentPattern(c: string): string {
   return Array.from(Buffer.from(c, 'utf8'), (byte) => `%${hexPattern(byte, 2)}`).join('');
 }
 
+/** The named references an HTML writer uses for markup characters. */
+const HTML_NAMED: Readonly<Record<string, string>> = { '&': 'amp', '<': 'lt', '>': 'gt', '"': 'quot', "'": 'apos' };
+
+/**
+ * `c` as an HTML writer may write it (#576 RV19b-P5): a numeric character
+ * reference, decimal or hex in either case with any leading zeros, and for a
+ * markup character its named one (`&amp;`).
+ */
+function htmlPattern(c: string): string {
+  const code = c.codePointAt(0) ?? 0;
+  const named = HTML_NAMED[c];
+  return [`&#0*${code};`, `&#[xX]0*${hexPattern(code, 1)};`, ...(named === undefined ? [] : [`&${named};`])].join('|');
+}
+
 /**
  * What one character of a name can look like in text the app wrote and the
  * harness read back (#576 RV17-1). Printable ASCII is itself - `"` and `\` with
@@ -780,25 +794,29 @@ function percentPattern(c: string): string {
  * U+FFFD also stands for bytes that are not UTF-8: Node reads such a file name
  * with U+FFFD in their place, and Rust's `{:?}` of the path writes them `\xHH`.
  * Any character but a letter, a digit and `-._~` is also its percent-encoding,
- * as a `file://` URL writes it (`Caf%C3%A9%20Nord.srv`, #576 RV18-W23-5).
+ * as a `file://` URL writes it (`Caf%C3%A9%20Nord.srv`, #576 RV18-W23-5), and
+ * its HTML character reference (`htmlPattern`); a space is also the `+` a form
+ * encoder writes (#576 RV19b-P5).
  * `at` is where `c` sits in the name (`CharAt`).
  */
 function charPattern(c: string, at: CharAt): string {
   const lead = at === 'afterBackslash' ? '\\\\' : at === 'first' ? `(?<!\\\\)${BACKSLASHES}` : BACKSLASHES;
-  const percent = percentPattern(c);
+  // Its percent-encoding and its HTML references.
+  const encoded = `${percentPattern(c)}|${htmlPattern(c)}`;
   if (c === '"') {
     const quote = at === 'afterBackslash' ? '"' : at === 'first' ? '(?<!\\\\)\\\\*"' : '\\\\*"';
-    return `(?:${quote}|${percent})`;
+    return `(?:${quote}|${encoded})`;
   }
-  if (c === '\\') return `(?:${lead}|${percent})`;
+  if (c === '\\') return `(?:${lead}|${encoded})`;
   const code = c.codePointAt(0) ?? 0;
   if (code >= 0x20 && code < 0x7f) {
     const literal = c.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&');
-    return UNRESERVED.test(c) ? literal : `(?:${literal}|${percent})`;
+    if (UNRESERVED.test(c)) return literal;
+    return `(?:${literal}|${encoded}${c === ' ' ? '|\\+' : ''})`;
   }
   let json = '';
   for (let i = 0; i < c.length; i++) json += `${i === 0 ? lead : BACKSLASHES}u${hexPattern(c.charCodeAt(i), 4)}`;
-  const forms = [c, `${lead}u\\{0*${hexPattern(code, 1)}\\}`, json, percent];
+  const forms = [c, `${lead}u\\{0*${hexPattern(code, 1)}\\}`, json, encoded];
   const named = NAMED_ESCAPES[c];
   if (named !== undefined) forms.push(`${lead}${named}`);
   if (code === 0xfffd) {
