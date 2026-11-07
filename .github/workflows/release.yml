@@ -87,6 +87,13 @@ jobs:
           - os: windows-latest
             name: windows
     runs-on: ${{ matrix.os }}
+    # The signing secrets (Apple Developer ID, updater key) live in the
+    # `release` environment, not at repo level: a workflow pushed on any
+    # branch can read repo secrets, and these sign builds under the
+    # maintainer's identity. The environment's required reviewer must approve
+    # every run that reaches this job, a tag push and a dispatch rehearsal
+    # alike. See docs/releasing.md, "Secrets".
+    environment: release
     env:
       BUNDLE_DIR: src-tauri/target/release/bundle
     # macOS and Windows runners bill at a multiple of the Linux rate, and the
