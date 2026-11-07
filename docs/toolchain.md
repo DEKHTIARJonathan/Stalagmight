@@ -133,7 +133,8 @@ run in every `cargo test --workspace`, and the CI `check` job runs them once mor
 on a build with `LIBSQLITE3_FLAGS` emptied by `--config` (a command-line value
 wins over `force = true`), in its own target dir, with
 `STALAGMIGHT_EXPECT_UNSTRIPPED_SQLITE=1` so they fail unless the modules really
-are there.
+are there. That step also fails unless both tests ran and passed: an `--exact`
+name that matches nothing runs no test and passes, which a rename would do.
 
 Per-machine cargo settings (a target dir on another disk, a linker) do not
 belong in the committed file. Use `$CARGO_HOME/config.toml`, the

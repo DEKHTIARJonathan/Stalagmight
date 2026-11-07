@@ -353,14 +353,26 @@ jobs:
       # replace the one the steps above built; and only this test and its
       # stalx-reader twin, which covers the connection the reader opens itself
       # to inspect a file. That also bounds the compile: the flag-pinning test in
-      # persistence::sqlite::tests must fail on this build.
+      # persistence::sqlite::tests must fail on this build. A name --exact
+      # matches nothing runs 0 tests and passes, so a renamed test would leave
+      # the step green without running it: the step reads the output back and
+      # fails unless each named test ran and passed.
       - name: SQLite authorizer on a build without the repo's flags (#619)
         if: ${{ !cancelled() }}
-        run: >-
-          cargo --config 'env.LIBSQLITE3_FLAGS.value=""' --config 'env.LIBSQLITE3_FLAGS.force=true'
-          test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence -p stalx-reader --lib --
-          --exact persistence::sqlite::untrusted_sql_tests::every_untrusted_open_refuses_what_the_build_flags_strip
-          tests::the_inspect_connection_refuses_what_the_build_flags_strip
+        run: |
+          set -o pipefail
+          tests=(
+            persistence::sqlite::untrusted_sql_tests::every_untrusted_open_refuses_what_the_build_flags_strip
+            tests::the_inspect_connection_refuses_what_the_build_flags_strip
+          )
+          log="$RUNNER_TEMP/unstripped-sqlite-tests.log"
+          cargo --config 'env.LIBSQLITE3_FLAGS.value=""' --config 'env.LIBSQLITE3_FLAGS.force=true' \
+            test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence -p stalx-reader --lib -- \
+            --exact "${tests[@]}" | tee "$log"
+          for t in "${tests[@]}"; do
+            grep -qxF "test $t ... ok" "$log" \
+              || { echo "::error::$t did not run, or did not pass"; exit 1; }
+          done
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/target-unstripped-sqlite
           STALAGMIGHT_EXPECT_UNSTRIPPED_SQLITE: "1"
