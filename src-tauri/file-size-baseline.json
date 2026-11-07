@@ -373,6 +373,7 @@
     "src-tauri/crates/core/src/core/undo/inverse_target_tests.rs": 69,
     "src-tauri/crates/core/src/core/undo/window_tests.rs": 190,
     "src-tauri/crates/core/src/test_helpers.rs": 317,
+    "src-tauri/crates/export/src/export/tml_comment_order_tests.rs": 75,
     "src-tauri/crates/export/src/export/tml_golden_tests.rs": 1081,
     "src-tauri/crates/models/src/azimuth_reference_tests.rs": 136,
     "src-tauri/crates/models/src/placement_suggest/differential_tests.rs": 1586,
