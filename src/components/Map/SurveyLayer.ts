@@ -417,7 +417,8 @@ export default class SurveyLayer {
         : null);
     this.updateWhileStyleless = null;
     if (args) this.flushUpdateSync(...args);
-    // The closure filter a carry cancelled during the loss could not put back.
+    // The closure filter a carry cancelled during the loss could not put back, and
+    // the closure exclusion of a carry picked up meanwhile could not write.
     this.drag.replayAfterContextRestore();
     // Closure dimming is a paint property the lost window could not write.
     this.updateClosureOpacity();
