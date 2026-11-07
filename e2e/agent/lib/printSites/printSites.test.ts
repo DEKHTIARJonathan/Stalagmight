@@ -412,6 +412,64 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
     expect([...quiet.unchecked, ...quiet.unlisted]).toEqual([]);
   });
 
+  it('finds the console under the global object, a required process or console, an async fd write and a FileHandle write (#576 W56-T1-NF1)', () => {
+    const app = 'm.ts:1 [stream] <module>: station.name';
+    const shareable = { class: 'shareable' as const, what: 'report.md', reason: 'pasted into public issues' };
+    const open = "const fh = await fs.promises.open(p, 'w');\n";
+    // Each probe: a label, its source, what the guard reports, and the lists it is checked against.
+    const probes: [string, string, string[], Partial<SiteGroup>?][] = [
+      ['globalThis.console.error', 'globalThis.console.error(station.name);\n', [app]],
+      ['global.console.warn', 'global.console.warn(station.name);\n', [app]],
+      ['window.console.info', 'window.console.info(station.name);\n', [app]],
+      ["globalThis.console['error']", "globalThis.console['error'](station.name);\n", [app]],
+      ['globalThis.process.stderr.write', 'globalThis.process.stderr.write(station.name);\n', [app]],
+      ['const c = globalThis.console', 'const c = globalThis.console;\nc.error(station.name);\n', ['m.ts:1 <module> -> globalThis.console']],
+      ['const { error } = global.console', 'const { error } = global.console;\nerror(station.name);\n', ['m.ts:1 <module> -> global.console']],
+      ['const out = globalThis.process.stderr', 'const out = globalThis.process.stderr;\nout.write(station.name);\n', ['m.ts:1 <module> -> globalThis.process.stderr']],
+      ["const proc = require('process')", "const proc = require('process');\nproc.stdout.write(station.name);\n", ["m.ts:1 <module> -> require('process')"]],
+      ["const { stdout } = require('node:process')", "const { stdout } = require('node:process');\nstdout.write(station.name);\n", ['m.ts:1 <module> -> process.stdout']],
+      ["require('process').stderr.write", "require('process').stderr.write(station.name);\n", ['m.ts:1 <module> -> process.stderr']],
+      ["const c = require('console')", "const c = require('console');\nc.error(station.name);\n", ["m.ts:1 <module> -> require('console')"]],
+      ["const { error: e } = require('console')", "const { error: e } = require('console');\ne(station.name);\n", ['m.ts:1 <module> -> console.error']],
+      ['fs.write(2, x, cb)', 'fs.write(2, station.name, () => {});\n', [app]],
+      ['fs.write(fd, x, cb)', 'fs.write(fd, station.name, () => {});\n', ['m.ts:1 <module> -> fd']],
+      ['fs.writev(fd, [x], cb)', 'fs.writev(fd, [station.name], () => {});\n', ['m.ts:1 <module> -> fd']],
+      ["import { write } from 'node:fs'", "import { write } from 'node:fs';\nwrite(fd, station.name, () => {});\n", ['m.ts:2 <module> -> fd']],
+      ['promisify(fs.write)', 'const write = promisify(fs.write);\nawait write(fd, station.name);\n', ['m.ts:1 <module> -> fs.write']],
+      ['FileHandle.write', `${open}await fh.write(station.name);\n`, ['m.ts:2 <module> -> <handle fh>']],
+      ['FileHandle.writev', `${open}await fh.writev([station.name]);\n`, ['m.ts:2 <module> -> <handle fh>']],
+      [
+        'fsp.open, then FileHandle.write',
+        "import * as fsp from 'node:fs/promises';\nconst fh = await fsp.open(p, 'w');\nawait fh.write(station.name);\n",
+        ['m.ts:3 <module> -> <handle fh>'],
+      ],
+      // Listed as the guard read it before: its data argument taken for the file it writes.
+      [
+        'FileHandle.writeFile',
+        `${open}const report = \`\${station.name}\\n\`;\nawait fh.writeFile(report);\n`,
+        ['m.ts:3 <module> -> <handle fh>'],
+        { fileSinks: { 'm.ts': { '<module> -> report': shareable } } },
+      ],
+      // Listed under the handle, what it writes is checked.
+      ['FileHandle.writeFile, listed', `${open}await fh.writeFile(station.name);\n`, ['m.ts:2 [file] <module>: station.name'], { fileSinks: { 'm.ts': { '<module> -> <handle fh>': shareable } } }],
+    ];
+    const found = Object.fromEntries(
+      probes.map(([label, source, , group]) => {
+        const result = check({ 'm.ts': source }, group);
+        return [label, [...result.unchecked, ...result.unlisted]];
+      }),
+    );
+    expect(found).toEqual(Object.fromEntries(probes.map(([label, , expected]) => [label, expected])));
+    // Not a sink: its type, a patched method, what else process hands out, another stream's write, a handle's read.
+    const quiet = check({
+      'm.ts':
+        "const t = typeof globalThis.console;\nglobalThis.console[m] = (...a) => w(a);\nconst { argv } = require('process');\n" +
+        "const home = require('node:process').env.HOME;\nconst proc = require('process').exitCode;\nchild.stdin.write(station.name);\n" +
+        `${open.replace('\n', '')}\nawait fh.read(buffer);\n`,
+    });
+    expect([...quiet.unchecked, ...quiet.unlisted]).toEqual([]);
+  });
+
   it('holds a listed sink handed on to a declared wrapper, and a wrapper to its own file (#576 RV20-12)', () => {
     // A logger handed on and listed: its calls are sites only if the name it is held in is a declared wrapper.
     const alias = { 'a.ts': 'const a1 = console.log;\na1(station.name);\n' };

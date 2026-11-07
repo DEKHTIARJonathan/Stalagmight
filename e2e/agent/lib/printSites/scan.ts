@@ -9,9 +9,10 @@
  * A site is a sink call:
  * - `stream`: every `console` method (`console['log']` too; `console.assert`'s
  *   data, not its condition), `process.stdout.write` / `process.stderr.write`,
- *   `process.emitWarning`, `fs.writeSync` / `writevSync` to descriptor 1 or 2,
- *   or a call of a function a file declares as a wrapper of one (`smoke.ts`'
- *   `log`, the repro report's `P`);
+ *   `process.emitWarning`, each under the global object too
+ *   (`globalThis.console.error`), `fs.writeSync` / `writevSync` / `write` /
+ *   `writev` to descriptor 1 or 2, or a call of a function a file declares as a
+ *   wrapper of one (`smoke.ts`' `log`, the repro report's `P`);
  * - `progress`: `<context>.log` under any name (`ctx.log`, `context.log`),
  *   printed through `shareableProgressLine`;
  * - `stream` too: the key of `<context>.metric` / `setMetric`, which the runner's
@@ -23,16 +24,19 @@
  * - `return`: a `return` of a function a file declares as a builder of shared
  *   text (the repro report's `describeAction`);
  * - `file`: `writeFileSync`, `writeFile`, `appendFileSync`, `appendFile`,
- *   `createWriteStream`, `writeSync` / `writevSync` to another descriptor, a
- *   `.write` / `.end` on a stream one opened, and the
- *   copies `copyFileSync`, `copyFile`, `cpSync`;
+ *   `createWriteStream`, `writeSync` / `writevSync` / `fs.write` / `fs.writev`
+ *   to another descriptor, a `.write` / `.end` on a stream one opened, a
+ *   `.write` / `.writev` / `.writeFile` / `.appendFile` on a FileHandle one
+ *   opened (`fs.promises.open`), and the copies `copyFileSync`, `copyFile`,
+ *   `cpSync`;
  * - `passthrough`: a child process's `stdio` (or `stdout` / `stderr` option)
  *   that hands it this process's stdout or stderr (`'inherit'`, `1`, `2`,
  *   `process.stdout`), an `execSync` / `execFileSync` that sets no `stdio`
  *   (its stderr is ours), a `.pipe(process.stdout)`, and a sink handed on as a
  *   value (`log = console.log`, `const out = process.stderr`, `const c =
  *   console`, `const { error } = console`, `const { stdout } = process`,
- *   `import { stdout } from 'node:process'`, anything imported from `console`).
+ *   `import { stdout } from 'node:process'`, anything imported from `console`,
+ *   the same taken with `require`, `globalThis.console`, `promisify(fs.write)`).
  *
  * A value is followed through a `const` to what it was made from, through
  * a call of a local arrow function to what it returns, each parameter standing
@@ -114,12 +118,23 @@ export interface ScanOptions {
   unprojected: readonly string[];
 }
 
-/** Every console method prints (`group`, `assert`, `count`, `timeLog` too), and so does a process warning. */
-const STREAM = /^(?:console\.\w+|process\.(?:stdout|stderr)\.write|process\.emitWarning)$/;
+/**
+ * Every console method prints (`group`, `assert`, `count`, `timeLog` too), and so does a process warning,
+ * under the global object too (`globalThis.console.error`, #576 W56-T1-NF1).
+ */
+const STREAM = /^(?:(?:globalThis|global|window)\.)?(?:console\.\w+|process\.(?:stdout|stderr)\.write|process\.emitWarning)$/;
+/** The console under the global object (`const c = globalThis.console`): the console itself. */
+const GLOBAL_CONSOLE = /^(?:globalThis|global|window)\.console$/;
+/** This process's stdout or stderr, under the global object too. */
+const STD_STREAM = /^(?:(?:globalThis|global|window)\.)?process\.(?:stdout|stderr)$/;
 const FILE_WRITE = new Set(['writeFileSync', 'writeFile', 'appendFileSync', 'appendFile', 'createWriteStream', 'writeSync', 'writevSync']);
 /** `fs.writeSync` / `writevSync` to one of these descriptors is stdout or stderr. */
 const STD_FD = /^(?:1|2|process\.(?:stdout|stderr)\.fd)$/;
 const FD_WRITE = new Set(['writeSync', 'writevSync']);
+/** `fs.write` / `fs.writev`, the same writes with a callback: named only on the fs module, as `write` alone is any stream's. */
+const FS_ASYNC_WRITE = new Set(['write', 'writev']);
+/** What a FileHandle (`fs.promises.open`) writes with: the data is its first argument. */
+const HANDLE_WRITE = new Set(['write', 'writev', 'writeFile', 'appendFile']);
 /** A scenario's progress line, under whatever name its context has (`ctx.log`, `context.log`, `base.log`). */
 const PROGRESS = /^(?!console\.|Math\.)[\w$]+(?:\.[\w$]+)*\.log$/;
 /** A scenario's metric, under whatever name its context has: its key prints in the runner's PASS/FAIL line. */
@@ -518,9 +533,70 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     sites.push({ file, line: lineOf(node), fn: fnName(node), kind: 'passthrough', sink: 'reference', values: [], target, holders, held });
   };
 
+  // The fs module and fs/promises under the names the file gives them (`fs` itself, `import * as
+  // nodeFs from 'node:fs'`, `const fsp = require('fs/promises')`, `const fsp = fs.promises`), and
+  // `write` / `writev` / `open` taken from them by name (#576 W56-T1-NF1).
+  const fsModules = new Set(['fs']);
+  const fsPromisesModules = new Set<string>();
+  const fsWrites = new Set<string>();
+  const fsOpens = new Set<string>();
+  /** The module an expression is: `require('<module>')` (without `node:`), or a name or `.promises` of fs. */
+  const moduleOf = (expr: ts.Expression): string | undefined => {
+    if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression) && expr.expression.text === 'require') {
+      const spec = expr.arguments[0];
+      return spec && ts.isStringLiteralLike(spec) ? spec.text.replace(/^node:/, '') : undefined;
+    }
+    if (ts.isIdentifier(expr)) return fsModules.has(expr.text) ? 'fs' : fsPromisesModules.has(expr.text) ? 'fs/promises' : undefined;
+    if (ts.isPropertyAccessExpression(expr) && expr.name.text === 'promises' && moduleOf(expr.expression) === 'fs') return 'fs/promises';
+    return undefined;
+  };
+  /** Note `local` as a name for `module`, or for what it takes from it (`taken`). */
+  const bindModule = (module: string, local: string, taken?: string): void => {
+    const name = module.replace(/^node:/, '');
+    if (name === 'fs' && taken === undefined) fsModules.add(local);
+    else if ((name === 'fs' && taken === 'promises') || (name === 'fs/promises' && taken === undefined)) fsPromisesModules.add(local);
+    else if (name === 'fs' && taken !== undefined && FS_ASYNC_WRITE.has(taken)) fsWrites.add(local);
+    else if (name === 'fs/promises' && taken === 'open') fsOpens.add(local);
+  };
+  source.forEachChild(function modules(node: ts.Node): void {
+    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && node.importClause) {
+      const specifier = node.moduleSpecifier.text;
+      const { name, namedBindings } = node.importClause;
+      if (name) bindModule(specifier, name.text);
+      if (namedBindings && ts.isNamespaceImport(namedBindings)) bindModule(specifier, namedBindings.name.text);
+      if (namedBindings && ts.isNamedImports(namedBindings)) {
+        for (const element of namedBindings.elements) bindModule(specifier, element.name.text, (element.propertyName ?? element.name).text);
+      }
+    }
+    const held = ts.isVariableDeclaration(node) && node.initializer ? moduleOf(node.initializer) : undefined;
+    if (held !== undefined && ts.isVariableDeclaration(node)) {
+      if (ts.isIdentifier(node.name)) bindModule(held, node.name.text);
+      if (ts.isObjectBindingPattern(node.name)) {
+        for (const element of node.name.elements) bindModule(held, element.name.getText(source), text(element.propertyName ?? element.name));
+      }
+    }
+    node.forEachChild(modules);
+  });
+  /** `fs.write(fd, ..)` / `fs.writev(fd, ..)` under any name the file gives fs, or taken from it (`write(fd, ..)`). */
+  const asyncFdWrite = (callee: ts.Expression): boolean =>
+    ts.isPropertyAccessExpression(callee)
+      ? FS_ASYNC_WRITE.has(callee.name.text) && moduleOf(callee.expression) === 'fs'
+      : ts.isIdentifier(callee) && fsWrites.has(callee.text);
+  /** `await fs.promises.open(..)`, `fsp.open(..)`, `open(..)` taken from fs/promises: a FileHandle. */
+  const opensHandle = (expr: ts.Expression): boolean => {
+    let at = expr;
+    while (ts.isAwaitExpression(at) || ts.isParenthesizedExpression(at)) at = at.expression;
+    if (!ts.isCallExpression(at)) return false;
+    const callee = at.expression;
+    if (ts.isPropertyAccessExpression(callee)) return callee.name.text === 'open' && moduleOf(callee.expression) === 'fs/promises';
+    return ts.isIdentifier(callee) && fsOpens.has(callee.text);
+  };
+
   // What a file stream is held in (`const log = fs.createWriteStream(..)`, `this.driverLog = ..`):
-  // its `.write(..)` calls are writes to that file.
+  // its `.write(..)` calls are writes to that file. And what a FileHandle is held in
+  // (`const fh = await fs.promises.open(..)`): its `.write(..)`, `.writeFile(..)` too.
   const fileStreams = new Set<string>();
+  const fileHandles = new Set<string>();
   source.forEachChild(function holders(node: ts.Node): void {
     const init = ts.isVariableDeclaration(node)
       ? node.initializer
@@ -531,6 +607,7 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     const opens = init && ts.isCallExpression(init) && /(?:^|\.)createWriteStream$/.test(text(init.expression));
     // Or another name for one (`const driverLog = this.driverLog`), declared after it.
     if (holder && init && (opens || fileStreams.has(text(init)))) fileStreams.add(text(holder));
+    if (holder && init && (opensHandle(init) || fileHandles.has(text(init)))) fileHandles.add(text(holder));
     node.forEachChild(holders);
   });
 
@@ -565,13 +642,18 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
             ? args.slice(1) // console.assert(condition, ...data) prints data, not the condition
             : args;
       const [first, ...rest] = node.arguments;
+      const fdWrite = FD_WRITE.has(last) || asyncFdWrite(node.expression);
+      const handleWrite =
+        ts.isPropertyAccessExpression(node.expression) &&
+        HANDLE_WRITE.has(node.expression.name.text) &&
+        fileHandles.has(text(node.expression.expression));
       // `throw Error(message)`: the same error without `new`.
       if (ERROR_CALL.test(named) && first) site(node, 'error', callee, messageValues(first, errorsProjected));
       if (METRIC.test(named)) {
         // A metric's key prints in the PASS/FAIL line (`JSON.stringify(metrics.metrics)`); its value is a number.
         site(node, 'stream', callee, node.arguments.slice(0, 1).flatMap((arg) => messageValues(arg, false)));
-      } else if (FD_WRITE.has(last) && first && STD_FD.test(text(first))) {
-        // fs.writeSync(1, text): stdout, and what it writes is the second argument.
+      } else if (fdWrite && first && STD_FD.test(text(first))) {
+        // fs.writeSync(1, text), fs.write(1, text, cb): stdout, and what it writes is the second argument.
         site(node, 'stream', callee, rest.slice(0, 1).flatMap((arg) => messageValues(arg, false)));
       } else if (STREAM.test(named) || wrapped === 'stream') {
         const values = printed(node.arguments).flatMap((arg) => messageValues(arg, false));
@@ -582,7 +664,11 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
         // An error wrapper prints its first argument, unless it names others.
         const message = typeof wrapper === 'object' ? printed(node.arguments) : node.arguments.slice(0, 1);
         site(node, 'error', callee, message.flatMap((arg) => messageValues(arg, errorsProjected)));
-      } else if (FILE_WRITE.has(last)) {
+      } else if (handleWrite && ts.isPropertyAccessExpression(node.expression)) {
+        // fh.write(data), fh.writeFile(data): the file the handle was opened on, and the data first.
+        const values = node.arguments.slice(0, 1).flatMap((arg) => messageValues(arg, false));
+        site(node, 'file', callee, values, `<handle ${text(node.expression.expression)}>`);
+      } else if (FILE_WRITE.has(last) || fdWrite) {
         const values = rest.slice(0, 1).flatMap((arg) => messageValues(arg, false));
         site(node, 'file', callee, values, first ? text(first) : '');
       } else if (FILE_COPY.has(last)) {
@@ -609,10 +695,14 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     ) {
       reference(node, text(node));
     }
+    // An fd write handed on (`promisify(fs.write)`): whatever it is later called with is written.
+    if (ts.isPropertyAccessExpression(node) && asyncFdWrite(node) && !(ts.isCallExpression(node.parent) && node.parent.expression === node)) {
+      reference(node, text(node));
+    }
     // The stream itself handed on (`const out = process.stderr`, `stdio: [.., process.stderr]`).
     if (
       ts.isPropertyAccessExpression(node) &&
-      /^process\.(?:stdout|stderr)$/.test(text(node)) &&
+      STD_STREAM.test(text(node)) &&
       !ts.isPropertyAccessExpression(node.parent) &&
       !(ts.isCallExpression(node.parent) && /\.pipe$/.test(text(node.parent.expression))) &&
       !(ts.isArrayLiteralExpression(node.parent) && ts.isPropertyAssignment(node.parent.parent) && text(node.parent.parent.name) === 'stdio')
@@ -622,8 +712,12 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     if (ts.isNewExpression(node) && /(?:^|\.)\w*Error$/.test(text(node.expression)) && node.arguments?.[0]) {
       site(node, 'error', `new ${text(node.expression)}`, messageValues(node.arguments[0], errorsProjected));
     }
-    // The console itself handed on (`const c = console`, `const { error } = console`, `run(console)`).
-    const consoleOf = ts.isIdentifier(node) && node.text === 'console' ? node.parent : undefined;
+    // The console itself handed on (`const c = console`, `const { error } = console`, `run(console)`),
+    // under the global object too (`const c = globalThis.console`).
+    const consoleOf =
+      (ts.isIdentifier(node) && node.text === 'console') || (ts.isPropertyAccessExpression(node) && GLOBAL_CONSOLE.test(text(node)))
+        ? node.parent
+        : undefined;
     // `console.x` is a call or a member reference, found above; the rest is the console itself.
     if (consoleOf && !(ts.isPropertyAccessExpression(consoleOf) && consoleOf.expression === node) && !inPage(node)) {
       const parent = consoleOf;
@@ -639,7 +733,7 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
       const patched =
         element && ts.isBinaryExpression(element.parent) && element.parent.operatorToken.kind === ts.SyntaxKind.EqualsToken && element.parent.left === element;
       if (call) site(call, 'stream', text(call.expression), call.arguments.flatMap((arg) => messageValues(arg, false)));
-      else if (!ownName && !patched) reference(node, 'console');
+      else if (!ownName && !patched) reference(node, text(node));
     }
     // `const { stdout } = process`: the stream (or `emitWarning`) under its own name.
     if (ts.isVariableDeclaration(node) && node.initializer && ts.isIdentifier(node.initializer) && node.initializer.text === 'process' && ts.isObjectBindingPattern(node.name)) {
@@ -662,6 +756,23 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
           const taken = (element.propertyName ?? element.name).text;
           if (module === 'console' || PROCESS_SINKS.has(taken)) reference(element, `${module}.${taken}`);
         }
+      }
+    }
+    // The same taken with `require` (#576 W56-T1-NF1): `const proc = require('process')`,
+    // `const { stdout } = require('node:process')`, `require('process').stderr`, anything from `require('console')`.
+    const required = ts.isCallExpression(node) ? moduleOf(node) : undefined;
+    if (required === 'process' || required === 'console') {
+      const holder = node.parent;
+      if (ts.isVariableDeclaration(holder) && holder.initializer === node && ts.isObjectBindingPattern(holder.name)) {
+        for (const element of holder.name.elements) {
+          const taken = text(element.propertyName ?? element.name);
+          if (required === 'console' || PROCESS_SINKS.has(taken)) reference(element, `${required}.${taken}`);
+        }
+      } else if (ts.isPropertyAccessExpression(holder) && holder.expression === node) {
+        if (required === 'console' || PROCESS_SINKS.has(holder.name.text)) reference(holder, `${required}.${holder.name.text}`);
+      } else if (!(required === 'process' && ts.isVariableDeclaration(holder) && ts.isIdentifier(holder.name) && holder.name.text === 'process')) {
+        // `const process = require('process')`: its `process.stdout.write` is a stream site by name.
+        reference(node, `require('${required}')`);
       }
     }
     if (ts.isPropertyAssignment(node) && text(node.name) === 'stdio') {
