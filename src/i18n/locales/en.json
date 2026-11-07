@@ -1337,6 +1337,7 @@
         "merges": "{{count}} merge(s)",
         "noData": "no recoverable data",
         "savedTo": "Saved to {{path}}\n\nRecovered: {{summary}}",
+        "projectNotIncluded": "Shots and merges are not included: the project itself could not be read, so only what could be read of its sections was saved.",
         "warnings": "Warnings:\n{{list}}"
       },
       "busy": {

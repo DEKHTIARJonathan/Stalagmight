@@ -519,6 +519,76 @@ fn repair_never_runs_a_plain_vacuum() {
     );
 }
 
+/// [#576 Q-W30-2-D1] A project that cannot be read as a whole is salvaged as
+/// its sections only, and the export says so (`project_included: false`), for
+/// the recovery dialog to say plainly that shots and merges are not in the
+/// file - although the counts still name the merges the file holds. An intact
+/// project is exported whole.
+#[test]
+fn a_project_that_cannot_load_is_exported_as_its_sections_only_and_says_so() {
+    let temp = TempDir::new().unwrap();
+    let intact = temp.path().join("CaveA.stalx");
+    project_with_two_sections_and_a_merge(&intact);
+    let damaged = temp.path().join("CaveB.stalx");
+    project_with_two_sections_and_a_merge(&damaged);
+    // The shots table is gone: the project no longer loads, while its
+    // sections and merges still read.
+    Connection::open(&damaged)
+        .unwrap()
+        .execute_batch("ALTER TABLE shots RENAME TO shots_gone;")
+        .unwrap();
+
+    let (whole_file, whole) = Database::export_salvageable(&intact).unwrap().into_export();
+    let (file, partial) = Database::export_salvageable(&damaged)
+        .unwrap()
+        .into_export();
+    println!("intact:  {whole:?}");
+    println!("damaged: {partial:?}");
+    println!("the damaged project's file holds: {file}");
+
+    assert!(whole.project_included);
+    assert!(whole_file.contains("\"station_merges\""));
+    assert!(!partial.project_included);
+    let sections: serde_json::Value = serde_json::from_str(&file).unwrap();
+    let sections = sections.as_array().unwrap();
+    assert_eq!(sections.len(), 2, "the two sections are in the file");
+    assert!(sections
+        .iter()
+        .all(|section| section.get("shots").is_none()));
+    assert!(!file.contains("station_merges"));
+    assert_eq!(partial.merge_count, 1, "the merge is counted, not included");
+}
+
+/// Two sections (two shots each) joined by one station merge, saved to `path`.
+fn project_with_two_sections_and_a_merge(path: &Path) {
+    use crate::models::{SectionData, ShotData, StationRef};
+    let shot = |azimuth: f64| ShotData {
+        length: 4.0,
+        azimuth_in: azimuth,
+        azimuth_out: (azimuth + 180.0) % 360.0,
+        depth_in: 2.0,
+        depth_out: 2.0,
+        ..Default::default()
+    };
+    let mut project = Project::new("CaveA".to_string(), None);
+    let mut add = |azimuth: f64| {
+        project
+            .add_section(SectionData {
+                shots: vec![shot(azimuth), shot(azimuth)],
+                ..Default::default()
+            })
+            .id
+    };
+    let (trunk, branch) = (add(0.0), add(90.0));
+    project
+        .merge_stations(StationRef::new(trunk, 2), StationRef::new(branch, 0))
+        .unwrap();
+    Database::open(path)
+        .unwrap()
+        .save_project(&project)
+        .unwrap();
+}
+
 // === A hostile schema is refused on the recovery paths too (#608) ===
 
 /// Schemas every open of an existing file refuses (#608), as SQL run on a saved

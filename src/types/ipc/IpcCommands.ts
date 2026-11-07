@@ -60,7 +60,6 @@ import type { RepairResult } from "./RepairResult";
 import type { ReverseOutcome } from "./ReverseOutcome";
 import type { RulerEndpoint } from "./RulerEndpoint";
 import type { SalvageWriteResult } from "./SalvageWriteResult";
-import type { SalvagedData } from "./SalvagedData";
 import type { SaveOutcome } from "./SaveOutcome";
 import type { SectionCreated } from "./SectionCreated";
 import type { SectionRelationships } from "./SectionRelationships";
@@ -127,6 +126,7 @@ export interface IpcCommands {
   check_duplicate_import: { args: { hash: string }; result: boolean; error: CommandError };
   check_merge_connectivity: { args: { stationA: StationRef; stationB: StationRef }; result: ConnectivityResult; error: CommandError };
   check_project_integrity: { args: Record<string, never>; result: IntegrityCheckResult; error: CommandError };
+  check_salvage_source: { args: { path: string }; result: null; error: CommandError };
   check_section_hashes: { args: { hashes: Array<string> }; result: Array<boolean>; error: CommandError };
   clear_tile_cache: { args: { provider?: string | null }; result: null; error: CommandError };
   close_project: { args: { releaseLock?: boolean | null }; result: ProjectFileOutcome; error: CommandError };
@@ -155,7 +155,6 @@ export interface IpcCommands {
   export_dive_profile: { args: { path: string; format: string; request: DiveProfileRequest }; result: null; error: CommandError };
   export_image: { args: { path: string; options: ExportImageOptions }; result: null; error: CommandError };
   export_json: { args: { path: string }; result: null; error: CommandError };
-  export_salvageable_data: { args: { path: string }; result: SalvagedData; error: CommandError };
   export_tml: { args: { path: string }; result: Array<string>; error: CommandError };
   fetch_tile: { args: { provider: string; z: number; y: number; x: number }; result: Array<number>; error: CommandError };
   flush_telemetry: { args: Record<string, never>; result: null; error: CommandError };
@@ -316,6 +315,7 @@ export const IPC_COMMAND_NAMES = [
   "check_duplicate_import",
   "check_merge_connectivity",
   "check_project_integrity",
+  "check_salvage_source",
   "check_section_hashes",
   "clear_tile_cache",
   "close_project",
@@ -344,7 +344,6 @@ export const IPC_COMMAND_NAMES = [
   "export_dive_profile",
   "export_image",
   "export_json",
-  "export_salvageable_data",
   "export_tml",
   "fetch_tile",
   "flush_telemetry",

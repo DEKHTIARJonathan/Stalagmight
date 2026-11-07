@@ -189,6 +189,28 @@
       }
     },
     {
+      "name": "check_salvage_source",
+      "module": "recovery",
+      "async": true,
+      "args": [
+        {
+          "name": "path",
+          "key": "path",
+          "rust": "PathBuf",
+          "ts": "string",
+          "optional": false
+        }
+      ],
+      "result": {
+        "rust": "()",
+        "ts": "null"
+      },
+      "error": {
+        "rust": "CommandError",
+        "ts": "CommandError"
+      }
+    },
+    {
       "name": "check_section_hashes",
       "module": "import",
       "async": true,
@@ -1239,28 +1261,6 @@
       "result": {
         "rust": "()",
         "ts": "null"
-      },
-      "error": {
-        "rust": "CommandError",
-        "ts": "CommandError"
-      }
-    },
-    {
-      "name": "export_salvageable_data",
-      "module": "recovery",
-      "async": true,
-      "args": [
-        {
-          "name": "path",
-          "key": "path",
-          "rust": "PathBuf",
-          "ts": "string",
-          "optional": false
-        }
-      ],
-      "result": {
-        "rust": "SalvagedData",
-        "ts": "SalvagedData"
       },
       "error": {
         "rust": "CommandError",

@@ -745,6 +745,32 @@ pub struct SalvageWriteResult {
     pub merge_count: usize,
     /// Errors encountered while reading individual tables
     pub errors: Vec<String>,
+    /// [#576 Q-W30-2-D1] Whether the file holds the whole project. `false` when
+    /// the project could not be read as a whole: the file then holds only what
+    /// could be read of the sections (their names, surveyors, dates and
+    /// colours), or nothing - never the shots or merges the counts above found.
+    pub project_included: bool,
+}
+
+impl SalvagedData {
+    /// What the salvage export writes, and what it answers about it (#576
+    /// HFI-3, W30-5): the whole project's JSON when the project could be read,
+    /// else the sections' JSON, else `{}` - and the counts and warnings of this
+    /// read, with [`SalvageWriteResult::project_included`] saying which.
+    pub fn into_export(self) -> (String, SalvageWriteResult) {
+        let written = SalvageWriteResult {
+            section_count: self.section_count,
+            shot_count: self.shot_count,
+            merge_count: self.merge_count,
+            errors: self.errors,
+            project_included: self.full_project_json.is_some(),
+        };
+        let content = self
+            .full_project_json
+            .or(self.sections_json)
+            .unwrap_or_else(|| "{}".to_owned());
+        (content, written)
+    }
 }
 
 /// Minimal section info for salvage display.
