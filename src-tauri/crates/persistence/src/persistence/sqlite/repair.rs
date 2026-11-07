@@ -29,6 +29,19 @@ pub(super) fn sibling(path: &Path, suffix: &str) -> std::path::PathBuf {
     path.with_file_name(name)
 }
 
+/// [#576 Q-W42-1-D1] The file Repair rewrites: where `path` points when `path`
+/// itself is a symlink (through a chain of links), else `path` as given. A link
+/// that does not resolve is returned as given, to fail at the backup copy as it
+/// always did.
+fn repair_target(path: &Path) -> std::path::PathBuf {
+    let is_link = std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink());
+    if is_link {
+        std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+    } else {
+        path.to_path_buf()
+    }
+}
+
 /// SQLite's rollback journal for `path`.
 fn journal_of(path: &Path) -> std::path::PathBuf {
     sibling(path, "-journal")
@@ -618,14 +631,26 @@ impl Database {
     /// readable page.
     ///
     /// Always creates a backup first (`path.stalx.backup`, with numeric
-    /// suffixes to avoid overwriting existing backups).
+    /// suffixes to avoid overwriting existing backups), beside `path` as given,
+    /// where the recovery dialog lists backups.
+    ///
+    /// [#576 Q-W42-1-D1] A `path` that is a symlink is repaired where it points
+    /// ([`repair_target`]): the rewrite is renamed over the link's target and
+    /// the link stays a link, as a save through the link writes the target.
+    /// Renaming it over `path` itself replaced the link with the repaired copy
+    /// and left the target unrepaired.
     ///
     /// Returns `(backup_path, integrity_ok)`.
     pub fn attempt_repair(path: &Path) -> Result<(std::path::PathBuf, bool)> {
         tracing::info!("Attempting repair of: {:?}", path);
+        let opened = path;
+        let target = repair_target(opened);
+        // Every step below reads and rewrites the file itself; only the backup
+        // is named after (and kept beside) the path as opened.
+        let path = target.as_path();
 
         // 1. Create backup (never overwrite existing backups)
-        let backup_path = Self::create_numbered_backup(path)?;
+        let backup_path = Self::create_numbered_backup_of(path, opened)?;
         tracing::info!("Created backup at: {:?}", backup_path);
 
         // 2. Open read-write (skip our integrity check wrapper). [#576 RV18-1] The
@@ -994,15 +1019,24 @@ impl Database {
     /// file copied alone is torn, while the pair opens as the last committed
     /// state (the restore list never offers the journal on its own).
     pub(super) fn create_numbered_backup(path: &Path) -> Result<std::path::PathBuf> {
-        let base = path.with_extension("stalx.backup");
+        Self::create_numbered_backup_of(path, path)
+    }
+
+    /// [`Self::create_numbered_backup`] of the file `source`, named after (and
+    /// placed beside) `named_after`. [#576 Q-W42-1-D1] Repair through a symlink
+    /// backs up the link's target - whose rollback journal sits beside the
+    /// target, not the link - under the link's name, where the recovery dialog
+    /// lists backups.
+    fn create_numbered_backup_of(source: &Path, named_after: &Path) -> Result<std::path::PathBuf> {
+        let base = named_after.with_extension("stalx.backup");
         if !base.exists() {
-            copy_with_journal(path, &base)?;
+            copy_with_journal(source, &base)?;
             return Ok(base);
         }
         for i in 1..100 {
-            let numbered = path.with_extension(format!("stalx.backup.{i}"));
+            let numbered = named_after.with_extension(format!("stalx.backup.{i}"));
             if !numbered.exists() {
-                copy_with_journal(path, &numbered)?;
+                copy_with_journal(source, &numbered)?;
                 return Ok(numbered);
             }
         }

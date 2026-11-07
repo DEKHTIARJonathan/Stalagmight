@@ -416,6 +416,95 @@ fn repair_replaces_the_file_rather_than_vacuuming_it_in_place() {
     assert_eq!(project_name(&project), "Original");
 }
 
+/// [#576 Q-W42-1-D1] A project opened through a symlink is repaired where the
+/// link points: the rewrite is renamed over the link's TARGET (a new inode
+/// there), and the link stays a link to it. Renaming the rewrite over the path
+/// as opened replaced the link with the repaired copy and left the target as
+/// it was. The numbered backup stays beside the path as opened, where the
+/// recovery dialog lists backups.
+#[cfg(unix)]
+#[test]
+fn repair_through_a_symlink_repairs_the_target_and_keeps_the_link() {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let temp = TempDir::new().unwrap();
+    let store = temp.path().join("store");
+    std::fs::create_dir(&store).unwrap();
+    let target = store.join("CaveA.stalx");
+    project_file(&target, "Original");
+    let link = temp.path().join("CaveA-link.stalx");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+    let target_inode_before = std::fs::metadata(&target).unwrap().ino();
+
+    let (backup, ok) = Database::attempt_repair(&link).unwrap();
+    let link_is_a_link = std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink();
+    let target_inode_after = std::fs::metadata(&target).unwrap().ino();
+    println!(
+        "repair ok={ok}; link still a link: {link_is_a_link}, pointing at {:?}; target inode \
+         {target_inode_before} -> {target_inode_after}; target holds: {}; backup {:?}",
+        std::fs::read_link(&link).ok(),
+        project_name(&target),
+        backup.strip_prefix(temp.path()).unwrap_or(&backup),
+    );
+    assert!(ok);
+    assert!(link_is_a_link, "the link must stay a link");
+    assert_eq!(std::fs::read_link(&link).unwrap(), target);
+    assert_ne!(
+        target_inode_before, target_inode_after,
+        "the link's target must be the repaired rewrite"
+    );
+    assert_eq!(project_name(&link), "Original");
+    assert_eq!(backup.parent(), Some(temp.path()));
+    assert_eq!(project_name(&backup), "Original");
+    for dir in [temp.path(), store.as_path()] {
+        let left: Vec<String> = files_in(dir)
+            .into_iter()
+            .filter(|name| name.contains("repair-staging"))
+            .collect();
+        assert!(left.is_empty(), "staging left in {dir:?}: {left:?}");
+    }
+}
+
+/// [#576 Q-W42-1-D1, NF-W3-3] Through a symlink the hot rollback journal sits
+/// beside the TARGET (SQLite resolves the link before naming it), so the
+/// backup Repair keeps beside the link must be the target's file with the
+/// target's journal: copied alone, the backup held the torn pages.
+#[cfg(unix)]
+#[test]
+fn repair_through_a_symlink_backs_up_the_target_with_its_journal() {
+    let temp = TempDir::new().unwrap();
+    let source = temp.path().join("old.stalx");
+    project_file(&source, "Original");
+    let store = temp.path().join("store");
+    std::fs::create_dir(&store).unwrap();
+    let target = store.join("CaveA.stalx");
+    torn_copy(&source, &target);
+    let journal_before = std::fs::read(journal_of(&target)).unwrap();
+    let link = temp.path().join("CaveA-link.stalx");
+    std::os::unix::fs::symlink(&target, &link).unwrap();
+
+    let (backup, ok) = Database::attempt_repair(&link).unwrap();
+    let backup_journal = std::fs::read(journal_of(&backup)).ok();
+    println!(
+        "repair ok={ok}; backup {:?} journal kept: {}; backup reads: {}; target reads: {}",
+        backup.strip_prefix(temp.path()).unwrap_or(&backup),
+        backup_journal.as_deref() == Some(journal_before.as_slice()),
+        project_name(&backup),
+        project_name(&target)
+    );
+    assert!(
+        backup_journal
+            .as_deref()
+            .is_some_and(|journal| journal == journal_before.as_slice()),
+        "the backup keeps the target's journal, unchanged"
+    );
+    assert_eq!(project_name(&backup), "Original");
+    assert_eq!(project_name(&target), "Original");
+}
+
 /// [#576 B27(f)] A source-level tripwire, like the push snapshot's: Repair must
 /// never fall back to a plain `VACUUM`.
 #[test]
