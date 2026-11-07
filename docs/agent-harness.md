@@ -1072,8 +1072,11 @@ locations:
   of the chosen value, and a map position - `map_click`'s `lngLat`,
   `map_view`'s `set` - its shape, since a coordinate is where the cave is.
   Screen coordinates, test ids, selectors, command, store and action names
-  stay, each neutralised for markdown. A `press_keys` step still lists its
-  keys.
+  stay, each neutralised for markdown. A `press_keys` step lists its named
+  keys (`["Control", 1 character]`, `[5 characters, "Enter"]`): `browser.keys`
+  types any key that is not a WebDriver key name, so a run of single
+  characters can spell a name, and each such run is a count of characters
+  (#576 W39-NF2).
 
 **Not for sharing** - the full text, for triage where the run happened: the
 session's `actions.jsonl` (each `finding` event with its detail, each

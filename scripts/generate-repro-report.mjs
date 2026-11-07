@@ -118,6 +118,51 @@ const argShape = (value, depth = 0) => {
   return `{${parts.join(', ')}}`;
 };
 
+/**
+ * A `press_keys` step's keys (#576 W39-NF2). `browser.keys` presses a WebDriver
+ * key NAME as that key and types any other string grapheme by grapheme, so a
+ * run of single characters - or one longer string - spells text, a station or
+ * project name, as surely as `type_text` does. A key name is a code and stays;
+ * a WebDriver key code point (U+E000..U+E05D) stays as its code point; every
+ * run of other keys is only counted, in characters, as `type_text`'s text is.
+ * The names are `UNICODE_CHARACTERS` of @wdio/utils, less `" "`, which types a
+ * space between words.
+ */
+const WEBDRIVER_KEY_NAMES = new Set([
+  'NULL', 'Unidentified', 'Cancel', 'Help', 'Backspace', 'Back space', 'Tab', 'Clear', 'Return', 'Enter',
+  'Shift', 'Control', 'Control Left', 'Control Right', 'Alt', 'Pause', 'Escape', 'Space',
+  'PageUp', 'Pageup', 'Page_Up', 'PageDown', 'Pagedown', 'Page_Down', 'End', 'Home',
+  'ArrowLeft', 'Left arrow', 'Arrow_Left', 'ArrowUp', 'Up arrow', 'Arrow_Up',
+  'ArrowRight', 'Right arrow', 'Arrow_Right', 'ArrowDown', 'Down arrow', 'Arrow_Down',
+  'Insert', 'Delete', 'Semicolon', 'Equals',
+  'Numpad 0', 'Numpad 1', 'Numpad 2', 'Numpad 3', 'Numpad 4', 'Numpad 5', 'Numpad 6', 'Numpad 7', 'Numpad 8', 'Numpad 9',
+  'Multiply', 'Add', 'Separator', 'Subtract', 'Decimal', 'Divide',
+  'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+  'Command', 'Meta', 'ZenkakuHankaku', 'Zenkaku_Hankaku',
+]);
+const WEBDRIVER_KEY_CODE = /^[\uE000-\uE05D]$/;
+const describeKeys = (keys) => {
+  const parts = [];
+  let typed = 0;
+  const flush = () => {
+    if (typed > 0) parts.push(`${typed} character${typed === 1 ? '' : 's'}`);
+    typed = 0;
+  };
+  for (const key of Array.isArray(keys) ? keys : keys == null ? [] : [keys]) {
+    if (typeof key === 'string' && WEBDRIVER_KEY_NAMES.has(key)) {
+      flush();
+      parts.push(JSON.stringify(key));
+    } else if (typeof key === 'string' && WEBDRIVER_KEY_CODE.test(key)) {
+      flush();
+      parts.push(`U+${key.charCodeAt(0).toString(16).toUpperCase()}`);
+    } else {
+      typed += String(key).length;
+    }
+  }
+  flush();
+  return `[${parts.join(', ')}]`;
+};
+
 const records = fs
   .readFileSync(jsonlPath, 'utf8')
   .split('\n')
@@ -329,7 +374,8 @@ function describeAction(a) {
         ? `${p.kind} dialog cancelled (trigger ${mdInline(p.triggerTestid)})`
         : `${p.kind} dialog answered ${redactPath(p.paths ?? p.path)} (trigger ${mdInline(p.triggerTestid)})`;
     case 'press_keys':
-      return JSON.stringify(p.keys ?? []);
+      // Named keys stay, typed text is counted - see describeKeys (#576 W39-NF2).
+      return describeKeys(p.keys);
     case 'eval':
     case 'driver_script':
       // A script can name what it acts on - a station, a section: its length only (#576 W33-NF2).

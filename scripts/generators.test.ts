@@ -677,4 +677,62 @@ describe('generate-repro-report.mjs', () => {
       ]);
     });
   });
+
+  // A `press_keys` step types every key that is not a WebDriver key name, one
+  // character at a time: a run of single characters - or one longer string -
+  // spells a name as surely as `type_text` does (#576 W39-NF2). Named keys stay.
+  describe('press_keys steps list the named keys and count the typed ones', () => {
+    let keysDir: string;
+
+    beforeAll(() => {
+      keysDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-keys-'));
+      const ts = (s: number) => new Date(1751970000000 + s * 1000).toISOString();
+      const action = (seq: number, keys: unknown[]) =>
+        record({
+          type: 'action',
+          v: 1,
+          seq,
+          ts: ts(seq),
+          tool: 'press_keys',
+          mutating: true,
+          params: { keys },
+          outcome: { ok: true, durationMs: 1 },
+        });
+      const lines = [
+        record({ type: 'session-start', v: 1, sessionId: 'keys-fixture', startedAt: ts(0) }),
+        action(1, ['Control', 'z']),
+        action(2, ['C', 'a', 'v', 'e', 'A', 'Enter']),
+        action(3, ['StationA1']),
+        action(4, ['Shift', 'Tab', 'Escape', 'F2', 'ArrowDown']),
+        action(5, ['S', ' ', 'A', '', '1']),
+        action(6, ['Page_Up', '`\n## forged', 7]),
+      ];
+      fs.writeFileSync(path.join(keysDir, 'actions.jsonl'), `${lines.join('\n')}\n`);
+      execFileSync(process.execPath, [reportGen, keysDir], { encoding: 'utf8' });
+    });
+
+    afterAll(() => fs.rmSync(keysDir, { recursive: true, force: true }));
+
+    const steps = (): string =>
+      fs
+        .readFileSync(path.join(keysDir, 'report.md'), 'utf8')
+        .split('## Steps to reproduce')[1]
+        .split('Automated replay')[0];
+
+    it('prints no typed text', () => {
+      const md = fs.readFileSync(path.join(keysDir, 'report.md'), 'utf8');
+      for (const value of ['CaveA', 'StationA1', '"C"', '"S"', '"1"', 'forged']) expect(md).not.toContain(value);
+    });
+
+    it('keeps each named key and gives each run of typed keys as a count of characters', () => {
+      expect(steps().trim().split('\n')).toEqual([
+        '1. `press_keys` ["Control", 1 character]',
+        '2. `press_keys` [5 characters, "Enter"]',
+        '3. `press_keys` [9 characters]',
+        '4. `press_keys` ["Shift", "Tab", "Escape", "F2", "ArrowDown"]',
+        '5. `press_keys` [3 characters, U+E007, 1 character]',
+        '6. `press_keys` ["Page_Up", 12 characters]',
+      ]);
+    });
+  });
 });
