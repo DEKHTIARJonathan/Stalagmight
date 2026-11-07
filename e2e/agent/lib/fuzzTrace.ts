@@ -109,7 +109,7 @@ import { execFileSync } from 'child_process';
 import { createHash } from 'crypto';
 
 import { shortId } from './crc32';
-import { noteFixtureName } from './privateFixtures';
+import { fixtureTag, isTrackedFixture, noteFixtureName, shareableFixtureName } from './privateFixtures';
 import { knobValueShaped } from './traceKnobs';
 import { foldLocalPaths, shareableFailureText, valueShape } from './shareableFailure';
 import { shareableStepLabel } from './stepLabels';
@@ -1221,6 +1221,20 @@ export function describeSteps(steps: readonly TraceStep[]): string {
 }
 
 /**
+ * The fixtures a trace names that the repo does not track - its header's and
+ * its reload steps' - each once, with the tag shareable output prints for it
+ * (#576 W58 Q1, NF1). `fuzz-shrink` records these in the session's
+ * actions.jsonl, which is not for sharing, so a tag in its output can be traced
+ * back where the shrink ran.
+ */
+export function tracePrivateFixtures(trace: { fixture: unknown; steps: readonly TraceStep[] }): { fixture: string; tag: string }[] {
+  const named = [trace.fixture, ...trace.steps.flatMap((step) => (step.kind === 'reload' ? [step.fixture] : []))];
+  const found = new Set<string>();
+  for (const name of named) if (typeof name === 'string' && name !== '' && !isTrackedFixture(name)) found.add(name);
+  return [...found].map((fixture) => ({ fixture, tag: fixtureTag(fixture) }));
+}
+
+/**
  * One step, as a line.
  *
  * The v2 kinds print their own `label` plus the ONE fact the label cannot carry
@@ -1232,7 +1246,8 @@ export function describeSteps(steps: readonly TraceStep[]): string {
  *
  * A label prints through `shareableStepLabel` (#576 W58 Q10): `readTrace` checks
  * it only as text, so one with a word no harness or app source wrote prints as
- * its length.
+ * its length. A reload's fixture prints by name only when the repo tracks it,
+ * else as its tag (`shareableFixtureName`, #576 W58 NF1).
  */
 function describeStep(step: TraceStep): string {
   const label = 'label' in step ? shareableStepLabel(step.label) : '';
@@ -1272,7 +1287,7 @@ function describeStep(step: TraceStep): string {
     case 'oracle':
       return `oracle ${step.oracle} - ${label}`;
     case 'reload':
-      return `reload ${step.fixture}`;
+      return `reload ${shareableFixtureName(step.fixture)}`;
     default:
       return step.kind;
   }

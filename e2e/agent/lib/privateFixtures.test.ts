@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { DEFAULT_FIXTURE } from './fixtures';
 import { fuzzFixture } from './fuzzKnobs';
+import { describeSteps, tracePrivateFixtures, type TraceStep } from './fuzzTrace';
 import { foldPrivateFixtures, fixtureTag, isTrackedFixture, noteFixtureName, shareableFixtureName } from './privateFixtures';
 import { scenarioFailOutput, shareableProgressLine, shareableTail } from './shareableFailure';
 
@@ -72,5 +73,30 @@ describe('a fixture name in shareable output (#576 W58 Q1)', () => {
     expect(fuzzFixture()).toBe('qzCaveF.stalx');
     delete process.env.STALAGMIGHT_FUZZ_FIXTURE;
     expect(fuzzFixture()).toBe(DEFAULT_FIXTURE);
+  });
+});
+
+describe("fuzz-shrink's reload step (#576 W58 NF1)", () => {
+  it('prints a tracked fixture by name and a private one as its tag', () => {
+    const out = describeSteps([
+      { kind: 'reload', fixture: DEFAULT_FIXTURE },
+      { kind: 'reload', fixture: 'qzCaveG.stalx' },
+    ]);
+    expect(out).not.toContain('qzCaveG');
+    expect(out.split('\n')).toEqual([`  1. reload ${DEFAULT_FIXTURE}`, `  2. reload ${fixtureTag('qzCaveG.stalx')}`]);
+  });
+
+  it("names each private fixture a trace holds once, for the session's private log", () => {
+    const steps: TraceStep[] = [
+      { kind: 'save' },
+      { kind: 'reload', fixture: DEFAULT_FIXTURE },
+      { kind: 'reload', fixture: 'qzCaveG.stalx' },
+      { kind: 'reload', fixture: 'qzCaveH.stalx' },
+    ];
+    expect(tracePrivateFixtures({ fixture: 'qzCaveH.stalx', steps })).toEqual([
+      { fixture: 'qzCaveH.stalx', tag: fixtureTag('qzCaveH.stalx') },
+      { fixture: 'qzCaveG.stalx', tag: fixtureTag('qzCaveG.stalx') },
+    ]);
+    expect(tracePrivateFixtures({ fixture: DEFAULT_FIXTURE, steps: [{ kind: 'reload', fixture: DEFAULT_FIXTURE }] })).toEqual([]);
   });
 });

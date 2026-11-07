@@ -45,6 +45,7 @@ import {
   sameSignature,
   shareableSignature,
   shrinkableSteps,
+  tracePrivateFixtures,
   writeTrace,
   type FailureSignature,
   type FuzzTrace,
@@ -171,6 +172,12 @@ async function main(): Promise<number> {
 
   const session = new AppSession();
   const started = await session.start({ build: 'auto' });
+  // A fixture the repo does not track prints as its tag below - the header's and
+  // every reload step's (#576 W58 Q1, NF1). Its full name goes to the session's
+  // actions.jsonl, which is not for sharing, so the tag can be traced back.
+  if (session.hasRecorder) {
+    for (const named of tracePrivateFixtures(trace)) session.recorder.event('private-fixture', named);
+  }
   process.stdout.write(
     `session ${started.state} (${started.buildMode} build ${started.buildAction})\n` +
       `trace ${foldLocalPaths(args.trace)}\n` +
@@ -309,7 +316,8 @@ async function main(): Promise<number> {
         `  wall clock: ${(wallMs / 1000).toFixed(1)} s, ${Math.round(perReplay)} ms per replay ` +
           `(${replayTimesMs.length} replays incl. the baseline)`,
         // Folded (#576 W51): the minimal trace sits beside the one the user gave,
-        // and a step's `rel` or label can carry a path.
+        // and a step's `rel` or label can carry a path. A reload step's private
+        // fixture prints as its tag (#576 W58 NF1).
         `  minimal trace: ${foldLocalPaths(outPath)}`,
         '',
         'minimal action list:',

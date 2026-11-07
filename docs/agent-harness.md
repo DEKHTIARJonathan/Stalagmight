@@ -1049,10 +1049,13 @@ locations:
   `.stalx` dropped into `e2e/fixtures/` for a local run, or one a trace or the
   knob names - prints as a tag, `<private-fixture#xxxxx>` (`crc32.shortId` of
   its name), in every line of the runners' output, a metric key, `fuzz-matrix`'s
-  table and repro commands, and the trace header `fuzz-shrink` and
-  `agent:scenario --trace` print (#576 W58 Q1, `lib/privateFixtures.ts`). Its
-  full name stays in the session's `actions.jsonl`: the first time a scenario
-  opens it, a progress line names it with its tag.
+  table and repro commands, the trace header `fuzz-shrink` and
+  `agent:scenario --trace` print, and a reload step in `fuzz-shrink`'s minimal
+  action list (#576 W58 Q1, NF1, `lib/privateFixtures.ts`). Its full name stays
+  in the session's `actions.jsonl`: the first time a scenario opens it, a
+  progress line names it with its tag, and `fuzz-shrink` records a
+  `private-fixture` event with the name and the tag of each one its trace
+  names.
 - A fuzz trace's `failure` is that form, with the signature of that form.
   `fuzz-shrink` prints that shareable signature and checks it against the
   trace header; ddmin still compares full signatures, in memory.
@@ -1236,7 +1239,8 @@ locations:
 **Not for sharing** - the full text, for triage where the run happened: the
 session's `actions.jsonl` (each `finding` event with its detail, each
 `scenario-failure` event with the whole failure message, each
-`scenario-progress` event with the whole progress line, an `attach-failed`
+`scenario-progress` event with the whole progress line, each `private-fixture`
+event with the name of a fixture the repo does not track, an `attach-failed`
 event with the whole error under `STALAGMIGHT_AGENT_PRIVATE_ERRORS=1`),
 `ipc-probe-errors.jsonl` (`ipc-payload-probe.ts`'s whole error per call, under
 the same opt-in), `agent:journeys`'
