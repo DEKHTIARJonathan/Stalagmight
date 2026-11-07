@@ -23,6 +23,8 @@ import { AUX_IDS } from '../surveyLayer/auxiliaryLayers';
 import { INTERACT_HIDE_FALLBACK_MS } from '../surveyLayer/interactOverlayHide';
 import type { SurveyGeometryIndex } from '../surveyLayer/geometryIndex';
 import { makeFakeSurveyMap, type FakeSurveyMap } from './surveyLayerFakeMap';
+import { makeSection, makeShot, makeStation } from '../../../test/factories/survey';
+import type { Section, Station } from '../../../types/project';
 
 let fake: FakeSurveyMap;
 let layer: SurveyLayer;
@@ -126,5 +128,73 @@ describe('a Stations / Shots toggle during an interact-overlay hide (#576 W38-NF
     armHide();
     retileDone();
     for (const id of OVERLAY_LAYERS) expect(visibility(id), id).toBe('visible');
+  });
+});
+
+/**
+ * A context restore replays the flush the loss swallowed. When that flush removes
+ * the section of the selected station (a delete or undo during the loss), the
+ * flush itself hides the overlay across the interact source's re-tile; the rest
+ * of the replay re-applies the Stations / Shots visibility and must not end that
+ * hide early.
+ */
+describe("a hide armed by the context-restore replay's own flush (#576 W38-NF-2)", () => {
+  /** Section `id` with one shot, its two stations `x` metres east of the origin. */
+  function sectionAt(id: number, x: number): { section: Section; stations: Station[] } {
+    return {
+      section: makeSection({ id, name: `SectionA${id}`, shots: [makeShot({ id: 1, azimuth_in: 90, length: 5 })] }),
+      stations: [0, 1].map((i) =>
+        makeStation({ station_ref: { section_id: id, station_index: i }, coordinates: { x: x + i * 5, y: 0, z: 0 } }),
+      ),
+    };
+  }
+
+  /** `update()` and its coalesced microtask flush. */
+  async function publish(parts: { section: Section; stations: Station[] }[]): Promise<void> {
+    layer.update(parts.map((p) => p.section), parts.flatMap((p) => p.stations));
+    for (let i = 0; i < 4; i += 1) await Promise.resolve();
+  }
+
+  beforeEach(() => {
+    // No WebGL under node: the custom geometry and label builds are not run.
+    const targets = layer as unknown as { customRender: { sync: () => void }; customLabels: { sync: () => void } };
+    vi.spyOn(targets.customRender, 'sync').mockImplementation(() => {});
+    vi.spyOn(targets.customLabels, 'sync').mockImplementation(() => {});
+  });
+
+  afterEach(() => layer.release());
+
+  it('the overlay stays hidden after the restore until the re-tile, then comes back', async () => {
+    const a = sectionAt(7, 0);
+    const b = sectionAt(8, 20);
+    await publish([a, b]);
+    layer.setSelectedStation({ section_id: 7, station_index: 0 });
+    for (const id of OVERLAY_LAYERS) expect(visibility(id), id).toBe('visible');
+
+    // The loss as MapLibre delivers it, then section 7 deleted while it lasts.
+    fake.container.dispatchEvent(new Event('webglcontextlost'));
+    fake.loseStyle();
+    fake.fire('webglcontextlost');
+    await publish([b]);
+    // The restore: the serialized style comes back and loads; the replay flush
+    // drops section 7, whose station the overlay was highlighting.
+    fake.restoreStyle();
+    fake.fire('webglcontextrestored');
+    fake.fire('style.load');
+
+    report('after restore', OVERLAY_LAYERS, 'none');
+    for (const id of OVERLAY_LAYERS) expect(visibility(id), id).toBe('none');
+
+    retileDone();
+    report('after re-tile', OVERLAY_LAYERS, 'visible');
+    for (const id of OVERLAY_LAYERS) expect(visibility(id), id).toBe('visible');
+  });
+
+  it('a toggle re-applied during a hide does not end it early for the other layers', () => {
+    armHide();
+    layer.setShowStations(false);
+
+    report('stations toggled during the hide', OVERLAY_LAYERS, 'none');
+    for (const id of OVERLAY_LAYERS) expect(visibility(id), id).toBe('none');
   });
 });

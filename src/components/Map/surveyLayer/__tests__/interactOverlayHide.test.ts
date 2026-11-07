@@ -119,6 +119,8 @@ describe('InteractOverlayHideController', () => {
     c.hideUntilRetile();
     c.setLayerVisibility('survey-interact-shots', 'none');
     c.setLayerVisibility('survey-interact-stations', 'visible');
+    // #576 W38-NF-2: the hide still holds both until the re-tile.
+    expect(f.visibility['survey-interact-stations']).toBe('none');
     f.emit('sourcedata', { sourceId: SOURCE, isSourceLoaded: true });
     expect(f.visibility['survey-interact-shots']).toBe('none');
     expect(f.visibility['survey-interact-stations']).toBe('visible');

@@ -169,10 +169,16 @@ export class InteractOverlayHideController {
    * Set an overlay layer's visibility as the user's toggles now want it (the
    * Stations / Shots toggles own three of the layers). A hide holding the layer
    * restores this value rather than the one it captured, so a toggle flipped
-   * during the hide is not undone when the hide ends.
+   * during the hide is not undone when the hide ends, and the layer stays hidden
+   * until then: writing it now would end the hide early for this layer (a
+   * context restore's replay re-applies the toggles right after its own flush
+   * may have started a hide).
    */
   setLayerVisibility(id: string, vis: maplibregl.VisibilitySpecification): void {
-    if (this.active && this.saved.has(id)) this.saved.set(id, vis);
+    if (this.active && this.saved.has(id)) {
+      this.saved.set(id, vis);
+      return;
+    }
     this.map.setLayoutProperty(id, 'visibility', vis);
   }
 
