@@ -388,3 +388,62 @@ fn the_recorded_comment_rows_survive_the_persisted_undo_history() {
     assert_eq!(station_ref, StationRef::new(4, 3));
     assert_eq!(restored, previous);
 }
+
+/// [#576 RV19a-19] Deleting a station deletes its comment under every key that
+/// names it. The delete removed only the station's canonical key, so a comment
+/// held under a legacy `Index` key stayed behind and, once the shot was gone,
+/// named the next station along - a comment the user never put there. Both
+/// the single delete and the range delete.
+#[test]
+fn deleting_a_station_deletes_a_comment_held_under_a_legacy_key() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let (path, sid) = file_with_comment_rows(temp.path(), &[(3, "comment past the end")]);
+    for how in ["delete shot", "delete range"] {
+        let state = state_with_null_sink();
+        state.do_load_project_full(path.clone()).unwrap();
+        append_shot(&state, sid);
+        append_shot(&state, sid);
+        let station = StationRef::new(sid, 3);
+        let next = StationRef::new(sid, 4);
+        assert_eq!(
+            (shown_comment(&state, station), shown_comment(&state, next)),
+            (Some("comment past the end".to_string()), None),
+            "fixture: the legacy key names station 3, station 4 has no comment"
+        );
+
+        // Shot 2 runs from station 2 to station 3; deleting it removes station
+        // 3 and rewires shot 3 to start from station 2, so station 4 becomes 3.
+        let doomed = shot_ids(&state)[2];
+        let deleted = if how == "delete shot" {
+            state.execute(Command::DeleteShot {
+                section_id: sid,
+                shot_id: doomed,
+            })
+        } else {
+            state.execute_delete_shot_range_shift(sid, doomed, doomed)
+        };
+        assert!(deleted.success, "{how}: {:?}", deleted.error);
+        let after_delete = shown_comment(&state, station);
+        let rows = stored_rows(&state);
+        undo(&state);
+        let after_undo = shown_comment(&state, station);
+        println!("{how}: station 3 removed -> index 3 now shows {after_delete:?}");
+        println!("{how}: stored rows after the delete: {rows:?}");
+        println!("{how}: undo -> station 3 shows {after_undo:?}");
+
+        assert_eq!(
+            after_delete, None,
+            "{how}: the comment of the deleted station must not move to the next one"
+        );
+        assert!(
+            rows.is_empty(),
+            "{how}: no row of the deleted station is left: {rows:?}"
+        );
+        assert_eq!(
+            after_undo.as_deref(),
+            Some("comment past the end"),
+            "{how}: undo brings the station and its comment back"
+        );
+    }
+}
