@@ -362,6 +362,97 @@ fn undoing_a_comment_change_restores_the_legacy_key_it_replaced() {
     }
 }
 
+/// The comment rows a file holds, as `(section_id, station_index, comment)`.
+fn file_rows(path: &std::path::Path) -> Vec<(u32, u32, String)> {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    let mut stmt = conn
+        .prepare("SELECT section_id, station_index, comment FROM station_comments ORDER BY 1, 2")
+        .unwrap();
+    stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect()
+}
+
+/// [#576 RV20-6, Q-W30-3-D1] RV20-6's own file, read under the orphan rule. The
+/// file holds one section of two shots - stations 0 to 2 - and a comment row at
+/// station 3. RV20-6 pinned that the open keeps the row as a legacy `Index` key,
+/// the append gives it the new station 3, the save writes it there, and an undo
+/// after the reopen puts it back. But station 3 is past the end of the section
+/// when the FILE IS OPENED: the row is an orphan, which the open drops and lists
+/// on its receipt, and it must never attach to a station later (Q-W30-3-D1). So
+/// no step holds it: the append gives station 3 no comment, the save writes no
+/// row, the reopen lists nothing to drop, and the undo and redo of the append, in
+/// session and after the reopen, leave it out. (The legacy key the old open left
+/// still comes from older undo history; `orphan_comment_restore_tests` covers it.)
+#[test]
+fn rv20_6s_row_past_the_end_is_dropped_at_the_open_and_never_comes_back() {
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let (path, sid) = file_with_comment_rows(temp.path(), &[(3, "comment past the end")]);
+    let in_file = file_rows(&path);
+    let state = state_with_null_sink();
+    let opened = state.do_load_project_full(path).unwrap();
+    let stations_at_open = shot_ids(&state).len() + 1;
+    let dropped_at_open = opened.load_repairs.station_comments;
+    let at_open = stored_rows(&state);
+    append_shot(&state, sid);
+    let station = StationRef::new(sid, 3);
+    let appended = shown_comment(&state, station);
+    let saved = temp.path().join("saved.stalx");
+    let save = state.save_project(Some(saved.clone()));
+    assert!(save.success, "{:?}", save.error);
+    let saved_rows = file_rows(&saved);
+    undo(&state);
+    let in_session_undo = stored_rows(&state);
+    redo(&state);
+    let in_session_redo = shown_comment(&state, station);
+
+    let reopened = state_with_null_sink();
+    let dropped_at_reopen = reopened
+        .do_load_project_full(saved)
+        .unwrap()
+        .load_repairs
+        .station_comments;
+    undo(&reopened);
+    let reopened_undo = stored_rows(&reopened);
+    let reopened_blocked = reopened.integrity_check().save_blocked;
+    redo(&reopened);
+    let reopened_redo = shown_comment(&reopened, station);
+    println!("the file holds             {in_file:?} (stations 0 to {})", stations_at_open - 1);
+    println!("open: receipt drops {dropped_at_open}, the project holds {at_open:?}");
+    println!("append: station 3 shows    {appended:?}");
+    println!("the save writes            {saved_rows:?}");
+    println!("in session: undo {in_session_undo:?}, redo: station 3 shows {in_session_redo:?}");
+    println!("reopen: receipt drops {dropped_at_reopen}");
+    println!(
+        "reopened: undo {reopened_undo:?} (save refused: {reopened_blocked}), \
+         redo: station 3 shows {reopened_redo:?}"
+    );
+
+    assert_eq!(
+        (in_file, stations_at_open),
+        (vec![(sid, 3, "comment past the end".to_string())], 3),
+        "fixture: the row names station 3 of a section whose stations are 0 to 2"
+    );
+    assert_eq!(dropped_at_open, 1, "the open lists the orphan on its receipt");
+    assert_eq!(at_open, Vec::<String>::new(), "and the project does not hold it");
+    assert_eq!(appended, None, "the appended station 3 gets no comment");
+    assert_eq!(saved_rows, Vec::new(), "the save writes no comment row");
+    assert_eq!(dropped_at_reopen, 0, "so the reopen has nothing to drop");
+    assert_eq!(
+        (in_session_undo, reopened_undo),
+        (Vec::new(), Vec::new()),
+        "undoing the append brings no comment back, in session or after the reopen"
+    );
+    assert!(!reopened_blocked, "nothing blocks the save");
+    assert_eq!(
+        (in_session_redo, reopened_redo),
+        (None, None),
+        "redoing the append gives station 3 no comment either"
+    );
+}
+
 /// [#576 RV19a-2] The rows the undo records survive the persisted form the
 /// undo history is saved in, legacy `Index` key included.
 #[test]
