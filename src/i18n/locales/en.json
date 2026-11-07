@@ -4062,7 +4062,7 @@
       "forceEditActive": "You are force-editing without the write lock. Finish or discard those edits (reconnect or save a local copy) before you can view or restore a revision.",
       "unknownAuthor": "unknown author",
       "viewBlockedByUnpushed": "This copy has changes that are not on SpeleoDB. Viewing a revision replaces the working copy, so it would discard them - take the write lock and upload your changes first, or use Revert (that route asks before replacing them).",
-      "viewBlockedByUnreadable": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. Viewing a revision replaces that copy, so nothing was replaced - if another program is using the file, close it and try again, or use Revert (that route asks before replacing it)."
+      "viewBlockedByUnreadable": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. The file may also be damaged. Viewing a revision replaces that copy, so nothing was replaced - if another program is using the file, close it and try again, or use Revert (that route asks before replacing it)."
     },
     "restore": {
       "title": "Restore revision {{sha}}",
@@ -4071,7 +4071,7 @@
       "unsavedWarning": "You have unsaved changes that will be discarded.",
       "confirmButton": "Restore revision",
       "discardWarning": "The working copy has changes that are not on SpeleoDB - including any earlier restore you have not pushed. Restoring this revision replaces them, and they are not on the server, so this cannot be undone.",
-      "unreadableWarning": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. Restoring this revision replaces that copy, so any such changes would be lost, and this cannot be undone.",
+      "unreadableWarning": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. The file may also be damaged. Restoring this revision replaces that copy, so any such changes would be lost, and this cannot be undone.",
       "discardOffer": "Replace my changes & restore",
       "discardConfirm": "Yes, replace my changes & restore",
       "unreadableDiscardOffer": "Replace the local copy & restore",
@@ -4142,7 +4142,7 @@
       "consequence": "Your project history is not rewritten - the revert lands as a new revision on top of the current one. When it finishes the project is read-only again, exactly as it is now.",
       "unsavedWarning": "You have changes that are not saved to disk. Save or discard them first - a revert replaces the working copy, so it cannot keep them.",
       "unpushedWarning": "This copy has changes that are not on SpeleoDB. A revert replaces them, and they are not on the server, so this cannot be undone.",
-      "unreadableWarning": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. A revert replaces that copy, so any such changes would be lost, and this cannot be undone.",
+      "unreadableWarning": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. The file may also be damaged. A revert replaces that copy, so any such changes would be lost, and this cannot be undone.",
       "messageLabel": "Commit message",
       "commitMessage": "Revert to revision {{sha}}",
       "confirmButton": "Revert",
@@ -4236,7 +4236,7 @@
       "takeRemoteConfirm": "Yes, discard my changes",
       "unreadable": {
         "title": "The copy on this computer could not be read",
-        "message": "\"{{name}}\" has already been opened on this computer, but that local copy could not be read, so we cannot tell whether it has changes SpeleoDB has never seen. A save may have been interrupted, or another program may be using it. Nothing has been downloaded yet.",
+        "message": "\"{{name}}\" has already been opened on this computer, but that local copy could not be read, so we cannot tell whether it has changes SpeleoDB has never seen. A save may have been interrupted, or another program may be using it. The file may also be damaged. Nothing has been downloaded yet.",
         "keepHint": "Keeping the local copy downloads nothing and overwrites nothing. Opening it lets an interrupted save roll back to the last one that finished; if another program is using the file, close it first.",
         "discardWarning": "Taking the server copy permanently replaces the copy of \"{{name}}\" on this computer. It could not be read, so any changes in it that are not on SpeleoDB would be lost, and this cannot be undone.",
         "takeRemote": "Take the server copy & replace the local copy",
