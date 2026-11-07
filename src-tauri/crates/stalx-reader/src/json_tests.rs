@@ -165,37 +165,63 @@ fn a_survey_serializes_to_the_documented_json() {
     assert_eq!(serde_json::to_value(survey()).unwrap(), want);
 }
 
+/// The documented spelling of every variant. Each `match` names every variant
+/// with no wildcard arm, so adding a variant fails to compile here until its
+/// spelling is pinned (and the variant joins the lists in the test below).
+fn shot_kind_spelling(kind: ShotKind) -> serde_json::Value {
+    match kind {
+        ShotKind::Normal => json!("normal"),
+        ShotKind::Jump => json!("jump"),
+        ShotKind::Reference => json!("reference"),
+    }
+}
+
+fn direction_spelling(direction: Direction) -> serde_json::Value {
+    match direction {
+        Direction::In => json!("in"),
+        Direction::Out => json!("out"),
+    }
+}
+
+fn north_spelling(north: North) -> serde_json::Value {
+    match north {
+        North::Magnetic => json!("magnetic"),
+        North::True => json!("true"),
+        North::Grid => json!("grid"),
+    }
+}
+
+fn correction_source_spelling(source: CorrectionSource) -> serde_json::Value {
+    match source {
+        CorrectionSource::NotRecorded => json!({ "kind": "not_recorded" }),
+        CorrectionSource::Unknown => json!({ "kind": "unknown" }),
+        CorrectionSource::FileDeclared => json!({ "kind": "file_declared" }),
+        CorrectionSource::Model { epoch_year } => {
+            json!({ "kind": "model", "epoch_year": epoch_year })
+        }
+        CorrectionSource::Manual => json!({ "kind": "manual" }),
+    }
+}
+
 #[test]
 fn every_enum_variant_has_its_documented_spelling() {
-    let cases = [
-        (json!(ShotKind::Normal), json!("normal")),
-        (json!(ShotKind::Jump), json!("jump")),
-        (json!(ShotKind::Reference), json!("reference")),
-        (json!(Direction::In), json!("in")),
-        (json!(Direction::Out), json!("out")),
-        (json!(North::Magnetic), json!("magnetic")),
-        (json!(North::True), json!("true")),
-        (json!(North::Grid), json!("grid")),
-        (
-            json!(CorrectionSource::NotRecorded),
-            json!({ "kind": "not_recorded" }),
-        ),
-        (
-            json!(CorrectionSource::Unknown),
-            json!({ "kind": "unknown" }),
-        ),
-        (
-            json!(CorrectionSource::FileDeclared),
-            json!({ "kind": "file_declared" }),
-        ),
-        (
-            json!(CorrectionSource::Model { epoch_year: 2025 }),
-            json!({ "kind": "model", "epoch_year": 2025 }),
-        ),
-        (json!(CorrectionSource::Manual), json!({ "kind": "manual" })),
-    ];
-    for (got, want) in cases {
-        assert_eq!(got, want);
+    for kind in [ShotKind::Normal, ShotKind::Jump, ShotKind::Reference] {
+        assert_eq!(json!(kind), shot_kind_spelling(kind));
+    }
+    for direction in [Direction::In, Direction::Out] {
+        assert_eq!(json!(direction), direction_spelling(direction));
+    }
+    for north in [North::Magnetic, North::True, North::Grid] {
+        assert_eq!(json!(north), north_spelling(north));
+    }
+    for source in [
+        CorrectionSource::NotRecorded,
+        CorrectionSource::Unknown,
+        CorrectionSource::FileDeclared,
+        CorrectionSource::Model { epoch_year: 2025 },
+        CorrectionSource::Manual,
+    ] {
+        assert_eq!(json!(source), correction_source_spelling(source));
     }
 }
 
