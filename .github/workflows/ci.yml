@@ -350,15 +350,17 @@ jobs:
       # value wins over the file's `force = true`), and
       # STALAGMIGHT_EXPECT_UNSTRIPPED_SQLITE makes the test fail unless the
       # modules really are there. Its own target dir, so this SQLite does not
-      # replace the one the steps above built; and only this one test, which
-      # also bounds the compile: the flag-pinning test in
+      # replace the one the steps above built; and only this test and its
+      # stalx-reader twin, which covers the connection the reader opens itself
+      # to inspect a file. That also bounds the compile: the flag-pinning test in
       # persistence::sqlite::tests must fail on this build.
       - name: SQLite authorizer on a build without the repo's flags (#619)
         if: ${{ !cancelled() }}
         run: >-
           cargo --config 'env.LIBSQLITE3_FLAGS.value=""' --config 'env.LIBSQLITE3_FLAGS.force=true'
-          test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence --lib --
+          test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence -p stalx-reader --lib --
           --exact persistence::sqlite::untrusted_sql_tests::every_untrusted_open_refuses_what_the_build_flags_strip
+          tests::the_inspect_connection_refuses_what_the_build_flags_strip
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/target-unstripped-sqlite
           STALAGMIGHT_EXPECT_UNSTRIPPED_SQLITE: "1"

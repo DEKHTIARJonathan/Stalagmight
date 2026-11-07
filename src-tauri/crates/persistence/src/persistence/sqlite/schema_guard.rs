@@ -115,9 +115,12 @@ fn guard(conn: &Connection, spelling: TypeSpelling) -> anyhow::Result<()> {
 /// [#619] Install SQLite's authorizer on `conn`, a connection to a file from
 /// outside the app, before its first statement. It refuses creating or dropping
 /// any virtual table, reading an eponymous virtual table of a module the repo's
-/// build leaves out ([`DENIED_TABLES`]), and calling a function that extension
-/// loading or one of those modules registers ([`DENIED_FUNCTIONS`]); everything
-/// else is allowed. A refused statement fails to prepare with `SQLITE_AUTH`.
+/// build leaves out (`DENIED_TABLES` in this module), and calling a function
+/// that extension loading or one of those modules registers
+/// (`DENIED_FUNCTIONS`); everything else is allowed. A refused statement fails
+/// to prepare, with `SQLITE_AUTH`, or with `SQLITE_ERROR` for a refused function
+/// call, which is how SQLite reports that one. It replaces any authorizer
+/// `conn` already had.
 ///
 /// The repo-root `.cargo/config.toml` builds the bundled SQLite without
 /// FTS3/4/5, R-tree, DBSTAT and extension loading (#608), but cargo reads that
@@ -125,7 +128,13 @@ fn guard(conn: &Connection, spelling: TypeSpelling) -> anyhow::Result<()> {
 /// `stalx-reader` has them all. The authorizer holds in either build: it is what
 /// the published crates rely on, and the build flags stay as defence in depth.
 /// The app creates no virtual table and calls none of these functions.
-pub(crate) fn deny_stripped_sqlite_features(conn: &mut Connection) -> rusqlite::Result<()> {
+///
+/// Every opener in this crate that runs the schema guard installs it. It is
+/// public for a crate that opens its own connection to such a file:
+/// `stalx-reader` installs it on the connection it inspects an upload with,
+/// which parses the file's schema before the load does. Call it right after
+/// the open, before any statement is prepared.
+pub fn deny_stripped_sqlite_features(conn: &mut Connection) -> rusqlite::Result<()> {
     conn.authorizer(Some(authorize_untrusted))
 }
 

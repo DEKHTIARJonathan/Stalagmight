@@ -19,9 +19,9 @@
 //! counted before anything is loaded. Every connection to the copy runs in
 //! defensive mode with `trusted_schema` off, a cap on any value SQLite produces,
 //! no memory-mapping, cell-size checks, and a deadline that interrupts any
-//! statement still running past it. The load's connection also has SQLite's
-//! authorizer refuse virtual tables, DBSTAT, and the functions of FTS, R-tree
-//! and extension loading, which this crate's bundled SQLite has compiled in; a
+//! statement still running past it. Each also has SQLite's authorizer refuse
+//! virtual tables, DBSTAT, and the functions of FTS, R-tree and extension
+//! loading, which this crate's bundled SQLite has compiled in; a
 //! file whose schema names or SQL are not valid UTF-8, which the authorizer
 //! cannot be handed, is refused before that.
 //!
@@ -61,7 +61,9 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use stalagmight_models::ClassifyScope;
-use stalagmight_persistence::persistence::{refused_schema_object, Database, SCHEMA_VERSION};
+use stalagmight_persistence::persistence::{
+    deny_stripped_sqlite_features, refused_schema_object, Database, SCHEMA_VERSION,
+};
 
 pub use survey::{
     CorrectionSource, Direction, LoopClosure, North, Section, Shot, ShotKind, StationComment,
@@ -545,6 +547,8 @@ fn inspect(
         rusqlite::Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(sql_err)?;
     // Same hardening as the load connection: this one parses the file's schema too.
+    // The authorizer first, before any statement (#619).
+    deny_stripped_sqlite_features(&mut conn).map_err(sql_err)?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)
         .map_err(sql_err)?;
     conn.set_db_config(DbConfig::SQLITE_DBCONFIG_TRUSTED_SCHEMA, false)
@@ -556,6 +560,8 @@ fn inspect(
         .map_err(sql_err)?;
     conn.execute_batch("PRAGMA mmap_size = 0; PRAGMA cell_size_check = ON;")
         .map_err(sql_err)?;
+    #[cfg(test)]
+    tests::ON_INSPECT.with(|hook| hook.borrow()(&conn));
 
     // The app's own hostile-schema check (`persistence::refused_schema_object`):
     // pragma-shadowing names, unexpected types, virtual tables, and any schema

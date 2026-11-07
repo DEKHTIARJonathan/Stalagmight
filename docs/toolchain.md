@@ -121,15 +121,18 @@ a published crate, so a crates.io build of `stalagmight-persistence` or
 `stalx-reader` has every module compiled in, and libsqlite3-sys has no feature
 that leaves them out. What those builds rely on is a SQLite authorizer (#619):
 every connection persistence opens on an existing file installs it before its
-first statement (`deny_stripped_sqlite_features` in `schema_guard.rs`), and it
+first statement (`deny_stripped_sqlite_features` in `schema_guard.rs`), as does
+the connection `stalx-reader` opens itself to inspect a file, and it
 refuses creating or dropping a virtual table, reading DBSTAT and the other
 eponymous tables of those modules, and calling the functions FTS, R-tree and
-extension loading register, whatever the build. Its test,
-`persistence::sqlite::untrusted_sql_tests::every_untrusted_open_refuses_what_the_build_flags_strip`,
-runs in every `cargo test --workspace`, and the CI `check` job runs it once more
+extension loading register, whatever the build. Its tests,
+`persistence::sqlite::untrusted_sql_tests::every_untrusted_open_refuses_what_the_build_flags_strip`
+and stalx-reader's
+`tests::the_inspect_connection_refuses_what_the_build_flags_strip`,
+run in every `cargo test --workspace`, and the CI `check` job runs them once more
 on a build with `LIBSQLITE3_FLAGS` emptied by `--config` (a command-line value
 wins over `force = true`), in its own target dir, with
-`STALAGMIGHT_EXPECT_UNSTRIPPED_SQLITE=1` so it fails unless the modules really
+`STALAGMIGHT_EXPECT_UNSTRIPPED_SQLITE=1` so they fail unless the modules really
 are there.
 
 Per-machine cargo settings (a target dir on another disk, a linker) do not
