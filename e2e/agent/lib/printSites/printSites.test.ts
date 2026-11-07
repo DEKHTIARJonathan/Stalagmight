@@ -2,13 +2,25 @@
  * #576 W51: one guard over every print and write site of the harness
  * (e2e/agent, e2e/lib) and the repo's Node tooling (scripts/). Eight rounds of
  * review each found a few more outputs that printed the app's or the user's
- * text, or let a forged action log inject markdown; this closes the class
- * instead of the next instance. Every value a shareable sink prints goes
+ * text, or let a forged action log inject markdown; this checks the class
+ * rather than the next instance. Every value a shareable sink prints goes
  * through an approved helper (`rules.ts` `HELPERS`), sits where the runner
  * withholds it, or has an entry in its group's allow-list (`allow*.ts`) saying
  * why it is a code, a count, a length, an integer, a harness word or a folded
  * path. Every file write is listed with its class, and every private one is
  * named in docs/agent-harness.md's "Not for sharing".
+ *
+ * What it reads off the source is where each value goes. It trusts what it is
+ * told: a helper or a file helper by its name, a reason by its words, a wrapper
+ * as a sink in its own file (none may be exported, and a sink handed on is
+ * listed only where a declared wrapper holds it). That a helper returns the
+ * shareable form, and that a value comes from where its reason says, is
+ * guarded by behaviour tests, not here: scripts/generators.test.ts for
+ * report.md (a step's `code(a.tool)` reaches the file inside `scrub(...)`,
+ * which this guard takes on trust), and the helpers' own tests in
+ * e2e/agent/lib (shareableFailure, shareableRunnerOutput, mcpSmokeOutput, the
+ * *Privacy tests). A value the scan cannot follow (what a function declaration
+ * returns, an array handed to a function) is one value with a reason of its own.
  *
  * Synthetic sources only: token names (`qz...`) stand in for app data.
  */
@@ -68,6 +80,10 @@ describe('every print and write site carries only shareable values (#576 W51)', 
 
   it('every file write and child passthrough is listed with its class', () => {
     expect(result.unlisted).toEqual([]);
+  });
+
+  it('lists a sink handed on only where a declared wrapper holds it, and exports no wrapper (#576 RV20-12)', () => {
+    expect(result.unguarded).toEqual([]);
   });
 
   it('keeps no entry nothing uses, and gives every entry a reason', () => {
@@ -394,5 +410,31 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
     // Not a sink: a type, a patched method (mcp/hygiene.ts), a property of that name, an `isError` check.
     const quiet = check({ 'm.ts': "type C = typeof console;\nconsole[m] = (...a) => w(a);\nconst o = { console: 1 };\nisError(station.name);\n" });
     expect([...quiet.unchecked, ...quiet.unlisted]).toEqual([]);
+  });
+
+  it('holds a listed sink handed on to a declared wrapper, and a wrapper to its own file (#576 RV20-12)', () => {
+    // A logger handed on and listed: its calls are sites only if the name it is held in is a declared wrapper.
+    const alias = { 'a.ts': 'const a1 = console.log;\na1(station.name);\n' };
+    const listed = { passthrough: { 'a.ts': { '<module> -> console.log': 'a logger handed on' } } };
+    const unheld = check(alias, listed);
+    expect([...unheld.unchecked, ...unheld.unlisted, ...(unheld.unguarded ?? [])]).toEqual([
+      'a.ts:1 <module> -> console.log: held in a1, not a declared wrapper',
+    ]);
+    const held = check(alias, { ...listed, wrappers: { 'a.ts': { a1: 'stream' } } });
+    expect([...held.unchecked, ...(held.unguarded ?? [])]).toEqual(['a.ts:2 [stream] <module>: station.name']);
+    // The console itself in a wrapper: its methods are the wrapper's calls.
+    const inWrapper = check(
+      { 'c.ts': 'const c = console;\nc.error(station.name);\n' },
+      { passthrough: { 'c.ts': { '<module> -> console': 'the console handed on' } }, wrappers: { 'c.ts': { c: 'stream' } } },
+    );
+    expect([...inWrapper.unchecked, ...(inWrapper.unguarded ?? [])]).toEqual(['c.ts:2 [stream] <module>: station.name']);
+    // A wrapper exported and called from another file: there it is no sink at all.
+    const exported = check(
+      { 'say.ts': 'export function say(m) { console.log(m); }\n', 'b.ts': "import { say } from './say';\nsay(station.name);\n" },
+      { wrappers: { 'say.ts': { say: 'stream' } }, allow: { 'say.ts': { 'say: m': R.FORWARD } } },
+    );
+    expect([...exported.unchecked, ...exported.unlisted, ...(exported.unguarded ?? [])]).toEqual([
+      'say.ts:1 export say: a wrapper is a sink in its own file only',
+    ]);
   });
 });

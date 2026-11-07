@@ -176,6 +176,12 @@ export interface CheckResult {
   stale: string[];
   /** `<file>:<line> <key>`: a file write or passthrough nothing lists. */
   unlisted: string[];
+  /**
+   * `<file>:<line> ...`: a listed sink handed on whose holder is not a declared
+   * wrapper, or a wrapper its file exports - calls the scan cannot see as sites.
+   * No entry can allow one (#576 RV20-12).
+   */
+  unguarded: string[];
   /** How each site is made safe, for the audit table. */
   audit: AuditRow[];
 }
@@ -198,6 +204,7 @@ export function checkSites(
   const used = new Set<string>();
   const unchecked: string[] = [];
   const unlisted: string[] = [];
+  const unguarded: string[] = [];
   const audit: AuditRow[] = [];
   for (const site of sites) {
     const where = `${site.file}:${site.line}`;
@@ -205,11 +212,20 @@ export function checkSites(
       audit.push({ site: where, kind: site.kind, sink: site.sink, class: 'page', how: "runs in the app's webview: the app's console, read by the log oracle" });
       continue;
     }
+    if (site.kind === 'passthrough' && site.sink === 'export') {
+      unguarded.push(`${where} ${site.target ?? ''}: a wrapper is a sink in its own file only`);
+      audit.push({ site: where, kind: site.kind, sink: site.sink, class: 'shareable', how: 'UNGUARDED' });
+      continue;
+    }
     if (site.kind === 'passthrough') {
       const key = siteKey(site);
       const reason = passthrough[site.file]?.[key];
       if (reason === undefined) unlisted.push(`${where} ${key}`);
       else used.add(`${site.file}\u0000passthrough\u0000${key}`);
+      // Its listing holds only for one held in a declared wrapper, whose calls are checked sites (an unlisted one fails already).
+      if (reason !== undefined && site.sink === 'reference' && !site.held) {
+        unguarded.push(`${where} ${key}: held in ${site.holders?.join(', ') || 'nothing'}, not a declared wrapper`);
+      }
       audit.push({ site: where, kind: site.kind, sink: site.sink, class: 'shareable', how: reason ?? 'UNLISTED' });
       continue;
     }
@@ -261,5 +277,5 @@ export function checkSites(
   for (const [file, entries] of Object.entries(passthrough)) {
     for (const key of Object.keys(entries)) if (!used.has(`${file}\u0000passthrough\u0000${key}`)) stale.push(`${file} passthrough ${key}`);
   }
-  return { unchecked, stale, unlisted, audit };
+  return { unchecked, stale, unlisted, unguarded, audit };
 }

@@ -1164,7 +1164,12 @@ locations:
   file write is listed as shareable or private, every private one by a name
   in the list below, and every shell, Python, PowerShell and Rust program
   under those directories is classified too. A new site fails the test until
-  it is one of those.
+  it is one of those. A sink handed on is listed only where a declared
+  wrapper holds it (so its calls are checked sites), and no wrapper is
+  exported. The guard trusts a helper by its name and a reason by its words:
+  that a helper returns the shareable form, and that a value comes from where
+  its reason says, is held by behaviour tests (`scripts/generators.test.ts`
+  for `report.md`, the helpers' own tests in `e2e/agent/lib/`).
 
 **Not for sharing** - the full text, for triage where the run happened: the
 session's `actions.jsonl` (each `finding` event with its detail, each
