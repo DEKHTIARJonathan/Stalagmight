@@ -7,7 +7,7 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
-## [0.5.0] - 2026-08-13
+## [0.5.0] - 2026-11-07
 
 The first release with builds for all three platforms. The headline additions are
 **Plan mode**, a gas- and range-aware dive planner built on the survey graph, and
