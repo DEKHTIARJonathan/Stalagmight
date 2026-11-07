@@ -724,7 +724,13 @@ function schemasClean(): boolean {
 
 function schemaDiff(): string {
   try {
-    return execSync(`git diff -- ${SCHEMA_PATHSPEC}`, { cwd: repoRoot, encoding: 'utf8' });
+    // stderr discarded, as in `gitHeadFor`: a diff we could not read is '' below,
+    // and git's own error can name the checkout.
+    return execSync(`git diff -- ${SCHEMA_PATHSPEC}`, {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
   } catch {
     return '';
   }
@@ -900,7 +906,10 @@ export function writeBuildStamp(
     fs.mkdirSync(path.dirname(stampPath), { recursive: true });
     fs.writeFileSync(stampPath, `${JSON.stringify(stamp, null, 2)}\n`);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    onLog?.(`Warning: could not write E2E build stamp (${msg}); next start will rebuild.`);
+    // The errno code, never the message: an fs message quotes the stamp's path,
+    // and CARGO_TARGET_DIR can sit outside the checkout and the home directory,
+    // where the caller's fold does not reach (#576 W51).
+    const code = (err as NodeJS.ErrnoException).code ?? 'io';
+    onLog?.(`Warning: could not write E2E build stamp (${code}); next start will rebuild.`);
   }
 }

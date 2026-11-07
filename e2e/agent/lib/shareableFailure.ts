@@ -107,6 +107,22 @@ export function withheldAppText(text: string): string {
   return WITHHELD_TEXT.test(text) ? text : `(${text.length} characters of the app's text withheld)`;
 }
 
+/**
+ * A value read back from a file someone else may have written - a trace, a
+ * recorded call - as an error's headline prints it (#576 W51): a number, a
+ * boolean, `null` or `undefined` as itself, anything else as its type and size.
+ * Never its text: a forged copy chooses that, and the headline is pasted into
+ * issues.
+ */
+export function valueShape(value: unknown): string {
+  if (value === null || value === undefined || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  if (typeof value === 'string') return value === '' ? 'an empty string' : `a string of ${value.length} character(s)`;
+  if (Array.isArray(value)) return `an array of ${value.length} item(s)`;
+  return typeof value === 'object' ? 'an object' : `a ${typeof value}`;
+}
+
 /** `headline` with the app's text after an `APP_ERROR_HEADLINES` prefix replaced by its length. */
 function shareableHeadline(headline: string): string {
   for (const shape of APP_ERROR_HEADLINES) {

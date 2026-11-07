@@ -9,7 +9,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { shareableFailureText } from './shareableFailure';
+import { shareableFailureText, valueShape } from './shareableFailure';
 
 describe('kept line shapes take only the lines the harness writes (#576 RV19b-P2)', () => {
   it("withholds the app's text shaped like a trace, reproduce or diff-path line", () => {
@@ -46,5 +46,17 @@ describe('kept line shapes take only the lines the harness writes (#576 RV19b-P2
       '  at project.sections.length',
     ];
     expect(shareableFailureText(['headline', ...lines].join('\n')).split('\n')).toEqual(['headline', ...lines]);
+  });
+});
+
+describe('a value read back from a file prints as its shape (#576 W51)', () => {
+  it('keeps numbers, booleans, null and undefined, and gives text only as a size', () => {
+    expect([1.5, -5, 0, true, null, undefined].map(valueShape)).toEqual(['1.5', '-5', '0', 'true', 'null', 'undefined']);
+    expect(valueShape('')).toBe('an empty string');
+    expect(valueShape('qzCaveA')).toBe('a string of 7 character(s)');
+    expect(valueShape('qzCaveA\n  at project.sections[1]')).toBe('a string of 32 character(s)');
+    expect(valueShape(['qzCaveA', 'StationA1'])).toBe('an array of 2 item(s)');
+    expect(valueShape({ name: 'qzCaveA' })).toBe('an object');
+    for (const forged of ['qzCaveA', ['qzCaveA'], { qzCaveA: 1 }]) expect(valueShape(forged)).not.toContain('qzCaveA');
   });
 });

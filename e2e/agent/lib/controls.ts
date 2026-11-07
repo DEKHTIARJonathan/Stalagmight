@@ -372,7 +372,9 @@ export async function mapClick(
     [lngLat, button],
   );
   if (!outcome) throw new Error('map not available');
-  if ('error' in outcome) throw new Error(outcome.error);
+  // The page's refusal quotes the point, and a map position is where the cave
+  // is: it ends a `failed:` headline, which the runners print as its length.
+  if ('error' in outcome) throw new Error(`map click failed: ${outcome.error}`);
   const target = await dispatchMapPointer(browser, { x: outcome.x, y: outcome.y }, button);
   const interactionSequence = await evalInApp<number>(
     browser,
@@ -383,7 +385,9 @@ export async function mapClick(
     `,
   );
   if (interactionSequence <= outcome.interactionSequenceBefore) {
-    throw new Error(`map ${outcome.interaction} handler did not process the click dispatched to ${target}`);
+    // The target is the page's own description of the element - its test id and
+    // classes - so it goes on a later line, which the runners withhold.
+    throw new Error(`map ${outcome.interaction} handler did not process the click\n  dispatched to: ${target}`);
   }
   return { x: outcome.x, y: outcome.y, interaction: outcome.interaction, interactionSequence };
 }
