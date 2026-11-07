@@ -68,8 +68,9 @@ impl std::error::Error for RefusedSchemaObject {}
 /// call only innocuous functions. Then one pass over `sqlite_master`, which a
 /// file cannot shadow (`sqlite_` names are reserved) and whose reading runs no
 /// module code. It refuses, in order:
-/// - any row whose `name` or `sql` is not valid UTF-8 (#619): SQLite would hand
-///   such an identifier to the authorizer, whose rusqlite wrapper panics on it;
+/// - any row whose `name`, `tbl_name` or `sql` is not valid UTF-8 (#619): SQLite
+///   would hand such an identifier to the authorizer, whose rusqlite wrapper
+///   panics on it;
 /// - any row whose `type`, `name` or `tbl_name` is not stored as text, or whose
 ///   `sql` is neither text nor NULL (#619): SQLite parses a `sql` cell stored as
 ///   a BLOB like text, so a CHECK in one is enforced, but the checks below read
@@ -269,6 +270,9 @@ fn refused_by_master(
     // ([`deny_stripped_sqlite_features`]), whose safe rusqlite wrapper panics
     // on one that is not UTF-8. So a row whose bytes are not UTF-8, as text or
     // as a blob, is refused here, before a statement can pass one on.
+    // `tbl_name` is held to UTF-8 too: SQLite reports a row whose `tbl_name`
+    // differs from the table its SQL names as a malformed schema, but never
+    // reads that cell on an autoindex row, which has no SQL.
     let utf8 = |v: ValueRef<'_>| match v {
         ValueRef::Text(b) | ValueRef::Blob(b) => std::str::from_utf8(b).is_ok(),
         _ => true,
@@ -276,9 +280,9 @@ fn refused_by_master(
     let mut stmt = conn.prepare("SELECT type, name, rootpage, sql, tbl_name FROM sqlite_master")?;
     let mut rows = stmt.query([])?;
     while let Some(row) = rows.next()? {
-        if !(utf8(row.get_ref(1)?) && utf8(row.get_ref(3)?)) {
+        if !(utf8(row.get_ref(1)?) && utf8(row.get_ref(3)?) && utf8(row.get_ref(4)?)) {
             return Ok(Some(RefusedSchemaObject {
-                what: "a schema object whose name or SQL is not valid UTF-8",
+                what: "a schema object whose name, table name or SQL is not valid UTF-8",
                 name: text(row.get_ref(1)?).unwrap_or_default(),
             }));
         }

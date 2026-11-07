@@ -105,6 +105,17 @@ const CHECK_STORED_AS_BLOB: &str = "CREATE TABLE c (x CHECK (x > 0));
 /// whose `sql` is neither text nor NULL.
 const NOT_STORED_AS_TEXT: &str = "a schema object whose table name or SQL is not stored as text";
 
+/// [#619] How the guard refuses a schema row whose `name`, `tbl_name` or `sql`
+/// bytes are not UTF-8.
+const NOT_UTF8: &str = "a schema object whose name, table name or SQL is not valid UTF-8";
+
+/// [#619] An autoindex row (no SQL) whose `tbl_name` holds a byte that is not
+/// UTF-8.
+const AUTOINDEX_TABLE_NAME_NOT_UTF8: &str = "CREATE TABLE extra (tag TEXT UNIQUE);
+     PRAGMA writable_schema = ON;
+     UPDATE sqlite_master SET tbl_name = 'extra' || CAST(x'ff' AS TEXT)
+     WHERE name = 'sqlite_autoindex_extra_1';";
+
 #[test]
 fn every_open_of_an_existing_file_refuses_a_hostile_schema() {
     for (sql, what) in [
@@ -162,15 +173,17 @@ fn every_open_of_an_existing_file_refuses_a_hostile_schema() {
              UPDATE sqlite_master SET name = 'zz' || CAST(x'ff' AS TEXT),
                sql = 'CREATE INDEX \"zz' || CAST(x'ff' AS TEXT) || '\" ON shots (length)'
              WHERE name = 'zzi';",
-            "a schema object whose name or SQL is not valid UTF-8",
+            NOT_UTF8,
         ),
         (
             "PRAGMA writable_schema = ON;
              UPDATE sqlite_master SET sql = CAST(replace(sql, 'name TEXT NOT NULL',
                'name TEXT NOT NULL, \"c' || CAST(x'ff' AS TEXT) || '\" TEXT') AS BLOB)
              WHERE name = 'project';",
-            "a schema object whose name or SQL is not valid UTF-8",
+            NOT_UTF8,
         ),
+        // [#619] A `tbl_name` SQLite never reads: this opened before.
+        (AUTOINDEX_TABLE_NAME_NOT_UTF8, NOT_UTF8),
         // [#619] SQLite parses a `sql` cell stored as a BLOB like text, so a
         // CHECK so stored is enforced, but the guard saw no SQL in it. Each of
         // these opened before.
@@ -297,6 +310,48 @@ fn a_check_whose_sql_is_stored_as_a_blob_is_still_enforced_and_now_refused() {
         Some("a table with a CHECK constraint the app never writes"),
         "the same table stored as text"
     );
+}
+
+/// [#619] SQLite reports a malformed schema for a row whose `tbl_name` is not
+/// the table its SQL names, so a `tbl_name` that is not UTF-8 never got that
+/// far on a table or an index. On an autoindex row, which has no SQL, SQLite
+/// never reads the cell: the file loads, passes `quick_check`, and every open
+/// opened it, past the UTF-8 check that held only `name` and `sql`.
+#[test]
+fn a_table_name_that_is_not_utf8_is_refused_where_sqlite_never_reads_it() {
+    let quick_check = |path: &Path| {
+        Connection::open(path)
+            .unwrap()
+            .query_row("PRAGMA quick_check", [], |r| r.get::<_, String>(0))
+            .map_err(|e| e.to_string())
+    };
+    let dir = TempDir::new().unwrap();
+    let on_a_table = quick_check(&project_file_with(
+        &dir,
+        "PRAGMA writable_schema = ON;
+         UPDATE sqlite_master SET tbl_name = 'project' || CAST(x'ff' AS TEXT)
+         WHERE name = 'project';",
+    ));
+    let dir = TempDir::new().unwrap();
+    let path = project_file_with(&dir, AUTOINDEX_TABLE_NAME_NOT_UTF8);
+    let on_an_autoindex = quick_check(&path);
+    let refused = refused_schema_object(&Connection::open(&path).unwrap())
+        .unwrap()
+        .map(|r| r.what);
+    let opened = refused_what(Database::open_existing(&path));
+    println!(
+        "tbl_name not UTF-8: on the project table, quick_check -> {on_a_table:?}; on an \
+         autoindex, quick_check -> {on_an_autoindex:?}, refused_schema_object -> {refused:?}, \
+         open_existing refused as {opened:?}"
+    );
+
+    assert_eq!(
+        on_an_autoindex,
+        Ok("ok".to_string()),
+        "premise: SQLite loads the schema"
+    );
+    assert_eq!(refused, Some(NOT_UTF8));
+    assert_eq!(opened, Some(NOT_UTF8));
 }
 
 // === Salvage reads a type cell that lost its case (#576 RV19a-12) ===

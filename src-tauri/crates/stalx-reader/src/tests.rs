@@ -929,6 +929,24 @@ fn a_schema_cell_not_stored_as_text_is_refused() {
 }
 
 #[test]
+fn a_table_name_that_is_not_utf8_is_refused() {
+    // [#619] SQLite never reads the `tbl_name` of an autoindex row, which has
+    // no SQL, so this file loads and passes quick_check; it was read before.
+    let result = read_file(&with_schema_sql(
+        "CREATE TABLE extra (tag TEXT UNIQUE);
+         PRAGMA writable_schema = ON;
+         UPDATE sqlite_master SET tbl_name = 'extra' || CAST(x'ff' AS TEXT)
+         WHERE name = 'sqlite_autoindex_extra_1';",
+    ));
+    assert_eq!(
+        result.as_ref().err().and_then(invalid_kind),
+        Some(InvalidKind::RefusedSchemaObject),
+        "{:?}",
+        result.map(|survey| survey.sections.len())
+    );
+}
+
+#[test]
 fn the_apps_own_check_and_literal_defaults_are_allowed() {
     // The app's schema has `CHECK (id = 1)` singletons; plain literal defaults and
     // identifiers containing "check" are not expressions.
