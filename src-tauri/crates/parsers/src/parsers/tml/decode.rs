@@ -6,7 +6,7 @@
 //! decompression cap that protects against an untrusted archive.
 
 use std::fs;
-use std::io::Read as _;
+use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -62,10 +62,14 @@ const MAX_TML_ARCHIVE_BYTES: u64 = FileFamily::Xml.byte_limit();
 /// `Data.xml` and nothing else (docs/ariane-import.md); 10 000 is the ceiling
 /// the SpeleoDB dump reader puts on an archive of a handful of files
 /// (`speleodb::dump::MAX_ENTRIES`), orders of magnitude of headroom while
-/// still bounding the walk over the entry names. The check necessarily lands
-/// AFTER `ZipArchive::new`, which parses the whole central directory eagerly -
-/// the `zip` crate exposes no hook to bound that - so it caps what follows the
-/// parse; only [`MAX_TML_ARCHIVE_BYTES`] bounds the parse itself.
+/// still bounding the walk over the entry names.
+///
+/// `ZipArchive::new` builds a record for every entry the central directory
+/// declares before it returns - 575 MB and 4 s for a million entries, and the
+/// 512 MB archive cap leaves room for ten times that (#576 RV19a-4) - and the
+/// `zip` crate exposes no hook to bound it. So the limit is enforced on the
+/// archive's raw bytes BEFORE that parse, by [`refuse_too_many_entries`]; the
+/// count after it stays as defence in depth.
 const MAX_TML_ENTRIES: usize = 10_000;
 
 /// Extract `Data.xml` from a ZIP archive.
@@ -78,11 +82,15 @@ fn load_xml_from_zip(path: &Path) -> Result<LoadedXml> {
 fn load_xml_from_zip_capped(path: &Path, archive_limit: u64, cap: u64) -> Result<LoadedXml> {
     // Checked on the handle the archive is then read through, so a FIFO
     // swapped in after the check cannot block the read (#576 B27(g), W30-7d).
-    let (file, metadata) = open_regular_file(path)?;
+    let (mut file, metadata) = open_regular_file(path)?;
     if metadata.len() > archive_limit {
         return Err(too_large(path, FileFamily::Xml, archive_limit));
     }
+    refuse_too_many_entries(path, &mut file, metadata.len())?;
     let mut archive = zip::ZipArchive::new(file).context("Failed to read TML as ZIP archive")?;
+    // Defence in depth only: the checks above bounded the parse, and this
+    // counts unique names (the `zip` crate keys its entries by name, zip
+    // 2.4.2 read.rs:72-75), so duplicates would slip past it.
     let entries = archive.len();
     if entries > MAX_TML_ENTRIES {
         bail!(
@@ -114,6 +122,168 @@ fn load_xml_from_zip_capped(path: &Path, archive_limit: u64, cap: u64) -> Result
     }
 
     decode_xml_bytes(bytes)
+}
+
+/// Refuse an archive of more than [`MAX_TML_ENTRIES`] entries from its raw
+/// bytes, before the ZIP reader parses its directory (#576 RV19a-4), and
+/// leave `file` at its start for that reader. `len` is the archive's size.
+///
+/// Two checks. The count the last end record declares gives the refusal its
+/// plain words, but bounds nothing on its own: the `zip` crate searches the
+/// whole file backwards for end records and, whenever one fails, falls back on
+/// an earlier one (zip 2.4.2 spec.rs:605-820, read.rs:655-680), so a broken
+/// last record can hide any count behind it. The bound is the second check:
+/// every entry the reader parses starts with a central-directory signature at
+/// its own offset (read.rs:708-711 and 1242, spec.rs:180-189), whichever end
+/// record it went by, so the number of signatures in the file caps the entries
+/// any attempt can parse. A signature also turns up by chance in compressed
+/// data, with probability 2^-32 at each byte offset; a real `.tml` (one entry,
+/// megabytes) never comes near 10 000 of them.
+fn refuse_too_many_entries(path: &Path, file: &mut fs::File, len: u64) -> Result<()> {
+    let reading = || format!("reading {}", path.display());
+    let declared = declared_entry_count(file, len).with_context(reading)?;
+    if let Some(declared) = declared.filter(|&count| count > MAX_TML_ENTRIES as u64) {
+        bail!(
+            "'{}' is a ZIP archive that declares {declared} entries, over the \
+             {MAX_TML_ENTRIES}-entry limit for a TML file; it was not read.",
+            path.display()
+        );
+    }
+    let records = count_directory_records(file).with_context(reading)?;
+    if records > MAX_TML_ENTRIES as u64 {
+        bail!(
+            "'{}' is a ZIP archive with {records} central-directory records, over the \
+             {MAX_TML_ENTRIES}-entry limit for a TML file; it was not read.",
+            path.display()
+        );
+    }
+    file.rewind().with_context(reading)?;
+    Ok(())
+}
+
+/// `PK\x01\x02`, the signature every central-directory record starts with.
+const DIRECTORY_RECORD_SIGNATURE: [u8; 4] = *b"PK\x01\x02";
+
+/// How many central-directory signatures `file` holds, read once from its
+/// start in 64 KiB chunks.
+fn count_directory_records(file: &mut fs::File) -> std::io::Result<u64> {
+    const CHUNK: usize = 64 * 1024;
+    // The last three bytes of each chunk are carried into the next, so a
+    // signature across the seam is seen - and seen once, as three bytes
+    // cannot hold a whole one.
+    const CARRY: usize = DIRECTORY_RECORD_SIGNATURE.len() - 1;
+    file.rewind()?;
+    let mut buffer = vec![0u8; CARRY + CHUNK];
+    let mut carried = 0;
+    let mut count = 0u64;
+    loop {
+        let read = match file.read(&mut buffer[carried..]) {
+            Ok(0) => return Ok(count),
+            Ok(read) => read,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        let filled = carried + read;
+        count += buffer[..filled]
+            .windows(DIRECTORY_RECORD_SIGNATURE.len())
+            .filter(|window| *window == DIRECTORY_RECORD_SIGNATURE)
+            .count() as u64;
+        carried = filled.min(CARRY);
+        buffer.copy_within(filled - carried..filled, 0);
+    }
+}
+
+/// `PK\x05\x06`, the signature of the 22-byte end-of-central-directory record.
+const END_SIGNATURE: [u8; 4] = *b"PK\x05\x06";
+/// The end record's fixed part; a comment of up to 65 535 bytes follows it.
+const END_LEN: usize = 22;
+/// `PK\x06\x07`, the signature of the 20-byte ZIP64 locator that sits right
+/// before the end record and points at the ZIP64 end record.
+const ZIP64_LOCATOR_SIGNATURE: [u8; 4] = *b"PK\x06\x07";
+const ZIP64_LOCATOR_LEN: u64 = 20;
+/// `PK\x06\x06`, the signature of the ZIP64 end record (56 bytes before its
+/// extensible data), which carries the 64-bit entry counts.
+const ZIP64_END_SIGNATURE: [u8; 4] = *b"PK\x06\x06";
+const ZIP64_END_LEN: usize = 56;
+
+/// The entry count the archive's last end record declares - the record the
+/// ZIP reader tries first, found by searching back from the end over the
+/// longest comment it may carry - or, when that record defers to ZIP64 (a
+/// count, the directory size or its offset saturated), the count of the
+/// ZIP64 end record its locator points at. Of the two counts a record holds
+/// (on this disk, in all), the larger. `None` when no count can be read: a
+/// missing or garbled record is the ZIP reader's to refuse.
+fn declared_entry_count(file: &mut fs::File, len: u64) -> std::io::Result<Option<u64>> {
+    let tail_len = len.min((END_LEN + usize::from(u16::MAX)) as u64);
+    let tail_at = len - tail_len;
+    let tail = read_at(file, tail_at, tail_len as usize)?;
+    let Some(at) = tail
+        .windows(END_LEN)
+        .rposition(|record| record.starts_with(&END_SIGNATURE))
+    else {
+        return Ok(None);
+    };
+    let record = &tail[at..at + END_LEN];
+    let u16_at = |offset: usize| u16::from_le_bytes([record[offset], record[offset + 1]]);
+    let u32_at = |offset: usize| {
+        u32::from_le_bytes([
+            record[offset],
+            record[offset + 1],
+            record[offset + 2],
+            record[offset + 3],
+        ])
+    };
+    let counts = [u16_at(8), u16_at(10)];
+    let saturated = counts.contains(&u16::MAX) || u32_at(12) == u32::MAX || u32_at(16) == u32::MAX;
+    if saturated {
+        if let Some(count) = zip64_entry_count(file, tail_at + at as u64)? {
+            return Ok(Some(count));
+        }
+    }
+    Ok(counts
+        .into_iter()
+        .filter(|&count| count != u16::MAX)
+        .map(u64::from)
+        .max())
+}
+
+/// The larger entry count of the ZIP64 end record that the locator right
+/// before the end record at `end_at` points at, or `None` when there is no
+/// locator there or no ZIP64 end record where it points.
+fn zip64_entry_count(file: &mut fs::File, end_at: u64) -> std::io::Result<Option<u64>> {
+    let Some(locator_at) = end_at.checked_sub(ZIP64_LOCATOR_LEN) else {
+        return Ok(None);
+    };
+    let locator = read_at(file, locator_at, ZIP64_LOCATOR_LEN as usize)?;
+    if !locator.starts_with(&ZIP64_LOCATOR_SIGNATURE) {
+        return Ok(None);
+    }
+    let u64_at = |bytes: &[u8], offset: usize| {
+        let mut field = [0; 8];
+        field.copy_from_slice(&bytes[offset..offset + 8]);
+        u64::from_le_bytes(field)
+    };
+    let record_at = u64_at(&locator, 8);
+    // The record must end before the locator starts.
+    if record_at
+        .checked_add(ZIP64_END_LEN as u64)
+        .is_none_or(|record_end| record_end > locator_at)
+    {
+        return Ok(None);
+    }
+    let record = read_at(file, record_at, ZIP64_END_LEN)?;
+    if !record.starts_with(&ZIP64_END_SIGNATURE) {
+        return Ok(None);
+    }
+    Ok(Some(u64_at(&record, 24).max(u64_at(&record, 32))))
+}
+
+/// `len` bytes of `file` from `offset`.
+fn read_at(file: &mut fs::File, offset: u64, len: usize) -> std::io::Result<Vec<u8>> {
+    file.seek(SeekFrom::Start(offset))?;
+    let mut bytes = vec![0; len];
+    file.read_exact(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// Find the `Data.xml` entry, preferring the exact spelling and falling back on
@@ -762,5 +932,187 @@ mod tests {
             outcome.contains("10001 entries") && outcome.contains("10000-entry limit"),
             "the refusal must name the count and the limit, got {outcome:?}"
         );
+    }
+
+    // -------------------------------------------------------------------
+    // The entry limit holds before the ZIP reader parses (#576 RV19a-4)
+    // -------------------------------------------------------------------
+
+    /// A one-entry `Data.xml` archive as the `zip` crate writes it, cut into
+    /// what precedes its central directory (the entry's local header and
+    /// data) and the directory's one record, so a test can repeat the record
+    /// and end the archive with records of its own.
+    fn one_entry_archive_parts() -> (Vec<u8>, Vec<u8>) {
+        let xml = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        writer
+            .start_file("Data.xml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        std::io::Write::write_all(&mut writer, xml.as_bytes()).unwrap();
+        let bytes = writer.finish().unwrap().into_inner();
+        let end = bytes.len() - 22;
+        assert!(
+            bytes[end..].starts_with(b"PK\x05\x06"),
+            "premise: a plain 22-byte end record closes the archive"
+        );
+        let directory = u32::from_le_bytes(bytes[end + 16..end + 20].try_into().unwrap()) as usize;
+        (bytes[..directory].to_vec(), bytes[directory..end].to_vec())
+    }
+
+    /// A 22-byte end-of-central-directory record without a comment.
+    fn end_record(entries: u16, directory_len: u32, directory_at: u32) -> Vec<u8> {
+        let mut record = b"PK\x05\x06".to_vec();
+        record.extend_from_slice(&[0; 4]); // this disk, the directory's disk
+        record.extend_from_slice(&entries.to_le_bytes()); // on this disk
+        record.extend_from_slice(&entries.to_le_bytes()); // in all
+        record.extend_from_slice(&directory_len.to_le_bytes());
+        record.extend_from_slice(&directory_at.to_le_bytes());
+        record.extend_from_slice(&[0; 2]);
+        record
+    }
+
+    /// The ZIP64 end of an archive whose directory ends at `at`: the ZIP64
+    /// end record, the locator pointing at it, and a 32-bit end record whose
+    /// every field defers to it.
+    fn zip64_end(entries: u64, directory_len: u64, directory_at: u64, at: u64) -> Vec<u8> {
+        let mut end = b"PK\x06\x06".to_vec();
+        end.extend_from_slice(&44u64.to_le_bytes()); // the record's size after this field
+        end.extend_from_slice(&45u16.to_le_bytes()); // made by version 4.5
+        end.extend_from_slice(&45u16.to_le_bytes()); // needs version 4.5
+        end.extend_from_slice(&[0; 8]); // this disk, the directory's disk
+        end.extend_from_slice(&entries.to_le_bytes()); // on this disk
+        end.extend_from_slice(&entries.to_le_bytes()); // in all
+        end.extend_from_slice(&directory_len.to_le_bytes());
+        end.extend_from_slice(&directory_at.to_le_bytes());
+        end.extend_from_slice(b"PK\x06\x07");
+        end.extend_from_slice(&[0; 4]); // the ZIP64 record's disk
+        end.extend_from_slice(&at.to_le_bytes());
+        end.extend_from_slice(&1u32.to_le_bytes()); // disks in all
+        end.extend(end_record(u16::MAX, u32::MAX, u32::MAX));
+        end
+    }
+
+    /// A ZIP64 archive of `records` copies of the one `Data.xml` record whose
+    /// end record declares `entries`.
+    fn zip64_archive(entries: u64, records: usize) -> Vec<u8> {
+        let (mut archive, record) = one_entry_archive_parts();
+        let directory_at = archive.len() as u64;
+        archive.extend(record.repeat(records));
+        let at = archive.len() as u64;
+        archive.extend(zip64_end(entries, at - directory_at, directory_at, at));
+        archive
+    }
+
+    /// Write `bytes` as `synthetic.tml` in `dir`.
+    fn write_synthetic_tml(dir: &tempfile::TempDir, bytes: &[u8]) -> std::path::PathBuf {
+        let path = dir.path().join("synthetic.tml");
+        fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// An end record declaring 10 001 entries is refused on what it declares,
+    /// before `ZipArchive::new` builds a record per declared entry. This one
+    /// holds a single real entry, so the ZIP reader fails on its own; without
+    /// the fix that parse failure, not the limit, is what the user is told.
+    #[test]
+    fn an_end_record_declaring_more_entries_than_the_cap_is_refused_before_the_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut archive, record) = one_entry_archive_parts();
+        let directory_at = archive.len() as u32;
+        archive.extend_from_slice(&record);
+        archive.extend(end_record(10_001, record.len() as u32, directory_at));
+        let path = write_synthetic_tml(&dir, &archive);
+
+        let outcome = describe(load_xml_from_zip(&path));
+        println!("end record declaring 10001 entries, 1 real: {outcome}");
+        assert!(
+            outcome.contains("declares 10001 entries") && outcome.contains("10000-entry limit"),
+            "the refusal must name the declared count and the limit, got {outcome:?}"
+        );
+    }
+
+    /// The same through ZIP64, where the count is 64 bits wide: the 5.5
+    /// million entries a 493 MB archive held when it cost 3.2 GB and 25 s
+    /// before the old check refused it. Here the archive is a few hundred
+    /// bytes, so the ZIP reader rejects it as inconsistent; without the fix
+    /// the user is told that, not the limit.
+    #[test]
+    fn a_zip64_end_record_declaring_millions_of_entries_is_refused_before_the_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_synthetic_tml(&dir, &zip64_archive(5_500_001, 1));
+
+        let outcome = describe(load_xml_from_zip(&path));
+        println!("ZIP64 end record declaring 5500001 entries, 1 real: {outcome}");
+        assert!(
+            outcome.contains("declares 5500001 entries") && outcome.contains("10000-entry limit"),
+            "the refusal must name the declared count and the limit, got {outcome:?}"
+        );
+    }
+
+    /// The ZIP reader searches the whole file backwards for end records and
+    /// falls back on an earlier one whenever the last fails, so the last
+    /// record's count alone bounds nothing: here it declares one entry and
+    /// points its directory at itself, the reader rejects it and parses the
+    /// earlier record's 10 001 entries instead - all named `Data.xml`, so the
+    /// count of names it keeps is 1 and the old check let the archive
+    /// through. Counting the directory records in the file refuses it.
+    #[test]
+    fn entries_behind_an_earlier_end_record_are_counted_before_the_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut archive, record) = one_entry_archive_parts();
+        let records = MAX_TML_ENTRIES + 1;
+        let directory_at = archive.len() as u32;
+        archive.extend(record.repeat(records));
+        let directory_len = archive.len() as u32 - directory_at;
+        archive.extend(end_record(records as u16, directory_len, directory_at));
+        let last = archive.len() as u32;
+        archive.extend(end_record(1, record.len() as u32, last));
+        let path = write_synthetic_tml(&dir, &archive);
+
+        let parsed = zip::ZipArchive::new(fs::File::open(&path).unwrap()).unwrap();
+        println!(
+            "premise: the ZIP reader falls back on the earlier end record and keeps {} name(s)",
+            parsed.len()
+        );
+        assert_eq!(parsed.len(), 1);
+
+        let outcome = describe(load_xml_from_zip(&path));
+        println!("{records} records behind a last end record declaring 1: {outcome}");
+        assert!(
+            outcome.contains("10001 central-directory records")
+                && outcome.contains("10000-entry limit"),
+            "the refusal must name the record count and the limit, got {outcome:?}"
+        );
+    }
+
+    /// The checks refuse nothing a real archive holds: a plain one-entry
+    /// archive, the same entry under a ZIP64 end, and an archive at exactly
+    /// the limit all load.
+    #[test]
+    fn archives_within_the_entry_limit_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let xml = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        let load = |label: &str, path: &Path| {
+            let loaded = load_xml_from_zip(path)
+                .map(|loaded| loaded.xml)
+                .map_err(|e| format!("{e:#}"));
+            println!("{label}: {:?}", loaded.as_ref().map(String::len));
+            assert_eq!(loaded.as_ref(), Ok(&xml), "{label}");
+        };
+
+        let path = dir.path().join("synthetic.tml");
+        write_tml_archive(&path, "Data.xml", xml.as_bytes());
+        load("one entry", &path);
+
+        load(
+            "one entry under a ZIP64 end",
+            &write_synthetic_tml(&dir, &zip64_archive(1, 1)),
+        );
+
+        let names: Vec<String> = (1..MAX_TML_ENTRIES).map(|i| format!("pad/{i}")).collect();
+        let mut entries: Vec<(&str, &[u8])> = vec![("Data.xml", xml.as_bytes())];
+        entries.extend(names.iter().map(|name| (name.as_str(), &b""[..])));
+        write_tml_archive_entries(&path, &entries);
+        load(&format!("{} entries", entries.len()), &path);
     }
 }
