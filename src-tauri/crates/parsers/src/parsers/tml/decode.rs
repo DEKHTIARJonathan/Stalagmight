@@ -12,7 +12,7 @@ use std::path::Path;
 use anyhow::{anyhow, bail, Context, Result};
 
 use crate::parsers::encoding::{
-    cp1252_char, describe_byte_limit, describe_replaced_count, read_capped, regular_file_metadata,
+    cp1252_char, describe_byte_limit, describe_replaced_count, open_regular_file, read_capped,
     strip_bom_owned, too_large, FileFamily,
 };
 
@@ -76,12 +76,12 @@ fn load_xml_from_zip(path: &Path) -> Result<LoadedXml> {
 /// `load_xml_from_zip` with the archive-size cap and the decompression cap
 /// spelled out, so a test can exercise them without building half a gigabyte.
 fn load_xml_from_zip_capped(path: &Path, archive_limit: u64, cap: u64) -> Result<LoadedXml> {
-    // A FIFO would block the open itself (#576 B27(g)).
-    let metadata = regular_file_metadata(path)?;
+    // Checked on the handle the archive is then read through, so a FIFO
+    // swapped in after the check cannot block the read (#576 B27(g), W30-7d).
+    let (file, metadata) = open_regular_file(path)?;
     if metadata.len() > archive_limit {
         return Err(too_large(path, FileFamily::Xml, archive_limit));
     }
-    let file = fs::File::open(path).context("Failed to open TML file")?;
     let mut archive = zip::ZipArchive::new(file).context("Failed to read TML as ZIP archive")?;
     let entries = archive.len();
     if entries > MAX_TML_ENTRIES {

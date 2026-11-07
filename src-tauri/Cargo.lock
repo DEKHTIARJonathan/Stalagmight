@@ -4540,6 +4540,7 @@ dependencies = [
  "chrono",
  "compass_data",
  "igrf",
+ "libc",
  "proj4rs",
  "quick-xml 0.37.5",
  "serde",
