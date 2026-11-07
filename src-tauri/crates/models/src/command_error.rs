@@ -107,9 +107,12 @@ pub enum CommandErrorCode {
     /// The project file is corrupt; `details` carries its path.
     Corrupt,
     /// [#608] The open was refused because the file's database schema holds
-    /// something the app never creates (a view, trigger or virtual table, or an
-    /// object named like a SQLite pragma), so opening it could run SQL the file
-    /// chose; `details` carries its path.
+    /// something the app never creates, so opening it could run SQL the file
+    /// chose: anything the persistence schema guard's `check_schema` refuses -
+    /// a view, trigger or virtual table, an object named like a SQLite pragma,
+    /// a CHECK the app never writes, a generated column, an expression or
+    /// partial index, or a `DEFAULT (expr)` (#576 RV18-6). `details` carries
+    /// its path.
     UnsafeFile,
     /// The file is a non-canonical copy of a SpeleoDB project; the error carries
     /// `speleodb_managed`.
