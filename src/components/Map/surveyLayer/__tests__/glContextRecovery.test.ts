@@ -274,3 +274,41 @@ describe('watchGlContextLoss', () => {
     expect(fake.rejectedAdds()).toEqual([]);
   });
 });
+
+// #576 RV18-MAP-2: a second context loss in the frame before the rebuilt style
+// loads. That style is still empty (its layer order is `[]`) and refuses writes,
+// and MapLibre serializes it to nothing, so the restore that follows brings back
+// no style at all. The recovery must not trade the order it took from the last
+// loaded style for that empty one, nor put right a style that is not there.
+describe('a second loss before the rebuilt style has loaded (#576 RV18-MAP-2)', () => {
+  it('keeps the layer order of the last loaded style, and runs beforeLoss once', () => {
+    const { fake, calls, afterRestore, beforeLoss } = setUp();
+    const before = fake.layerOrder();
+
+    loseContext(fake);
+    fake.restoreStyleLoading();
+    fake.fire('webglcontextrestored');
+    // The second loss lands in the loading frame.
+    loseContext(fake);
+    fake.restoreStyleLoading();
+    fake.fire('webglcontextrestored');
+    // MapLibre had nothing to rebuild from: the map has no style at all.
+    expect(fake.layerOrder()).toEqual([]);
+    expect(fake.styleLoading()).toBe(false);
+    expect(calls).toEqual([]);
+    console.log('[RV18-MAP-2] beforeLoss calls after a second loss in the loading frame:', beforeLoss.mock.calls.length);
+    expect(beforeLoss).toHaveBeenCalledOnce();
+
+    // Should a style come back after all (its stock layers as they were), the
+    // custom layers go back where they were on the last loaded style.
+    fake.restoreStyle();
+    for (const id of ['background', 'survey-loop-closures', 'survey-interact-shots']) {
+      fake.map.addLayer({ id, type: 'line' } as never);
+    }
+    fake.fire('webglcontextrestored');
+    fake.fire('style.load');
+    console.log('[RV18-MAP-2] layer order after the style came back:', JSON.stringify(fake.layerOrder()));
+    expect(fake.layerOrder()).toEqual(before);
+    expect(afterRestore).toHaveBeenCalledOnce();
+  });
+});

@@ -259,13 +259,17 @@ recovers the same way (`GlobalSurveyLayer` runs the same watch over its one
 controller and applies systems that arrived during the loss after the restore).
 
 A context that is lost and **not** restored - WebKit may give up on it - would
-leave the map blank for good. `useContextLossToast` (both maps) gives the restore
-5 s (`CONTEXT_RESTORE_GRACE_MS`); after that an error toast says "Survey rendering
-unavailable (WebGL2/GPU)" and offers **Reload map**, which remounts the map on a
-new canvas and so a new context (transient state such as a measurement or a
-move carry does not survive it). The toast stays until the context comes back by
-itself (then it clears itself), the map is rebuilt or left, or the user
-dismisses it (#576 D38-LOST).
+leave the map blank for good. So would a second loss in the frame before the
+rebuilt style loads: that style serializes to nothing, so the next restore brings
+back no style at all (the recovery keeps the layer order of the last loaded style
+for it, #576 RV18-MAP-2). `useContextLossToast` (both maps) gives the restore
+5 s (`CONTEXT_RESTORE_GRACE_MS`) to end in a loaded style; after that an error
+toast says "Survey rendering unavailable (WebGL2/GPU)" and offers **Reload
+map**, which remounts the map on a new canvas and so a new context (transient
+state such as a measurement or a move carry does not survive it). The toast
+stays until the map comes back by itself (a restore whose style loads; then it
+clears itself), the map is rebuilt or left, or the user dismisses it (#576
+D38-LOST).
 
 ## Debug and dev hooks
 

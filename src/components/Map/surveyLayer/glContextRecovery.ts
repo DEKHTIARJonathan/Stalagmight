@@ -129,6 +129,11 @@ export function watchGlContextLoss(map: MaplibreMap, opts: GlContextRecoveryOpti
 
   // A context loss: the canvas event, before MapLibre serializes and destroys the style.
   const onCanvasLost = (): void => {
+    // A second loss before the rebuilt style loaded (#576 RV18-MAP-2): the style
+    // in place is still empty (its layer order is `[]`) and refuses writes, so
+    // keep the order and the put-right from the last loaded style for whatever
+    // brings a style back.
+    if (lost) return;
     order = takeOrder();
     snapshotTaken = true;
     opts.beforeLoss?.();
