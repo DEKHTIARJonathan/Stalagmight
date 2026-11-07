@@ -828,6 +828,49 @@ describe('generate-repro-report.mjs', () => {
     });
   });
 
+  // map_feature_click's ids are integers in the MCP schema, but the report reads
+  // whatever actions.jsonl holds: a forged or hand-edited log must not reach
+  // report.md raw (a newline in sectionId printed its own `## ...` heading).
+  // An id that is not an integer is given as its shape (#576 W47-NF2).
+  describe('map_feature_click steps print the ids only as integers', () => {
+    let mfcDir: string;
+
+    beforeAll(() => {
+      mfcDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-mfc-'));
+      const ts = (s: number) => new Date(1751970000000 + s * 1000).toISOString();
+      const step = (seq: number, params: object) =>
+        record({ type: 'action', v: 1, seq, ts: ts(seq), tool: 'map_feature_click', mutating: true, params, outcome: { ok: true, durationMs: 1 } });
+      const lines = [
+        record({ type: 'session-start', v: 1, sessionId: 'mfc-fixture', startedAt: ts(0) }),
+        step(1, { featureType: 'shot', sectionId: 2, shotId: 17 }),
+        step(2, { featureType: 'station', sectionId: 3, stationIndex: 0, button: 'right' }),
+        step(3, { featureType: 'station', sectionId: 'x\n## injected in section x', stationIndex: '`Qzcave`|<b>' }),
+        step(4, { featureType: 'shot', sectionId: 1.5, shotId: { name: 'Qzstation A1' } }),
+      ];
+      fs.writeFileSync(path.join(mfcDir, 'actions.jsonl'), `${lines.join('\n')}\n`);
+      execFileSync(process.execPath, [reportGen, mfcDir], { encoding: 'utf8' });
+    });
+
+    afterAll(() => fs.rmSync(mfcDir, { recursive: true, force: true }));
+
+    const steps = (): string =>
+      fs
+        .readFileSync(path.join(mfcDir, 'report.md'), 'utf8')
+        .split('## Steps to reproduce')[1]
+        .split('Automated replay')[0];
+
+    it('keeps integer ids and gives any other value as its shape', () => {
+      expect(steps().trim().split('\n')).toEqual([
+        '1. `map_feature_click` shot id=17 in section 2',
+        '2. `map_feature_click` station index=0 in section 3 (right)',
+        '3. `map_feature_click` station index=string(12) in section string(26)',
+        '4. `map_feature_click` shot id={name: string(12)} in section number',
+      ]);
+      expect(steps()).not.toContain('injected');
+      expect(steps()).not.toContain('Qz');
+    });
+  });
+
   // os_keys presses one chord per step, so a run of them spells text a key at a
   // time, as press_keys does (#576 RV19b-P6): the same rule, per chord.
   describe('os_keys steps keep the modifiers and named keys and count the typed ones', () => {

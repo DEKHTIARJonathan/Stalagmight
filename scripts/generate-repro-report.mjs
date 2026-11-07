@@ -360,11 +360,15 @@ function describeAction(a) {
       // Screen coordinates stay - they place a pointer, not a cave.
       return p.testid ? `testid=${shareableTestId(p.testid)}` : p.selector ? `selector=${shareableSelector(p.selector)}` : p.lngLat ? `lngLat=${argShape(p.lngLat)}` : `coords=(${p.x},${p.y})`;
     case 'map_feature_click': {
+      // The ids are integers in the tool's schema, but this reads whatever
+      // actions.jsonl holds: anything else - a forged or hand-edited log - is
+      // given as its shape, so a newline cannot start a heading (#576 W47-NF2).
+      const id = (v) => (Number.isInteger(v) ? String(v) : argShape(v));
       const which =
         p.featureType === 'station'
-          ? `station index=${p.stationIndex}`
-          : `shot id=${p.shotId}`;
-      return `${which} in section ${p.sectionId}${p.button === 'right' ? ' (right)' : ''}`;
+          ? `station index=${id(p.stationIndex)}`
+          : `shot id=${id(p.shotId)}`;
+      return `${which} in section ${id(p.sectionId)}${p.button === 'right' ? ' (right)' : ''}`;
     }
     case 'type_text':
       // The typed text is data the user would enter: its length only - see argShape.
