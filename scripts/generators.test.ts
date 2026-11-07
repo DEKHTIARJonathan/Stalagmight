@@ -943,6 +943,37 @@ describe('generate-repro-report.mjs', () => {
         '8. `os_keys` ["ctrl", 2 characters] [OS-level]',
       ]);
     });
+
+    // #576 RV20-15: every named key the helper's chord grammar accepts
+    // (keyspec.rs' `modifier` and `key_code` arms, `"fn" | "function"` among them)
+    // prints as its name; only a one-character key is typed text.
+    it('keeps every named key of the helper grammar, read from keyspec.rs', () => {
+      const keyspec = fs.readFileSync(path.join(repoRoot, 'e2e/agent/os/helper/src/keyspec.rs'), 'utf8');
+      const names = keyspec
+        .split('\n')
+        .filter((line) => /^\s*"[^"]+"(?:\s*\|\s*"[^"]+")*\s*=>/.test(line))
+        .flatMap((line) => [...line.split('=>')[0].matchAll(/"([^"]+)"/g)].map((m) => m[1] as string))
+        .filter((name) => name.length > 1);
+      expect(names).toContain('function');
+      expect(names.length).toBeGreaterThan(40);
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-osnames-'));
+      try {
+        const ts = (s: number) => new Date(1751970000000 + s * 1000).toISOString();
+        const lines = [
+          record({ type: 'session-start', v: 1, sessionId: 'osnames-fixture', startedAt: ts(0) }),
+          ...names.map((name, i) =>
+            record({ type: 'action', v: 1, seq: i + 1, ts: ts(i + 1), tool: 'os_keys', mutating: true, params: { spec: `${name}+f1` }, outcome: { ok: true, durationMs: 1 } }),
+          ),
+        ];
+        fs.writeFileSync(path.join(dir, 'actions.jsonl'), `${lines.join('\n')}\n`);
+        execFileSync(process.execPath, [reportGen, dir], { encoding: 'utf8' });
+        const md = fs.readFileSync(path.join(dir, 'report.md'), 'utf8');
+        const counted = names.filter((name, i) => !md.includes(`${i + 1}. \`os_keys\` [${JSON.stringify(name)}, "f1"] [OS-level]`));
+        expect(counted, 'named keys report.md counts as typed text').toEqual([]);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
   });
 
   // Every value report.md reads back from actions.jsonl - a step's number,

@@ -190,7 +190,7 @@ const describeKeys = (keys) => {
  * characters.
  */
 const OS_KEY_NAMES = new Set([
-  'cmd', 'command', 'meta', 'super', 'win', 'shift', 'alt', 'opt', 'option', 'ctrl', 'control', 'fn',
+  'cmd', 'command', 'meta', 'super', 'win', 'shift', 'alt', 'opt', 'option', 'ctrl', 'control', 'fn', 'function',
   'return', 'enter', 'escape', 'esc', 'tab', 'space', 'delete', 'backspace', 'forwarddelete',
   'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown', 'help', 'keypadenter',
   'minus', 'equal', 'comma', 'period', 'slash', 'backslash', 'semicolon', 'quote',
