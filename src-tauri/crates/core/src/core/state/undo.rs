@@ -240,6 +240,7 @@ impl AppState {
                 before_shot_id,
                 uuid,
                 previous_offsets,
+                legacy_comment_rows,
                 ..
             } => {
                 // Undo a CreateShot by removing the shot it created - resolved
@@ -270,6 +271,22 @@ impl AppState {
                             // recorded map instead of trusting that re-derivation
                             // (#413, finding 27's second arm).
                             self.restore_captured_section_offsets(previous_offsets);
+                            // [#576 RV20-6] A comment held under another key that
+                            // named the station goes back under that key. In
+                            // session the removal left it in place; after a save
+                            // and reopen it had the station's own key and went
+                            // with the shot.
+                            if !legacy_comment_rows.is_empty() {
+                                if let Some(project) = self.project.lock().as_mut() {
+                                    for (key, text) in legacy_comment_rows {
+                                        project
+                                            .station_comments
+                                            .entry(key.clone())
+                                            .or_insert_with(|| text.clone());
+                                    }
+                                    project.touch();
+                                }
+                            }
                         }
                         removed
                     }
