@@ -49,7 +49,7 @@ export interface PrintSite {
   /** Repo-relative, `/`-separated. */
   file: string;
   line: number;
-  /** The enclosing named function, or `<module>`. */
+  /** The function it is written in (`fnName`): the nearest named one or `<module>`, a callback as its call under it. */
   fn: string;
   kind: SinkKind;
   /** The callee as written (`process.stdout.write`), or `return` / `stdio`. */
@@ -148,17 +148,40 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
   const errorsProjected = !opts.unprojected.some((prefix) => file.startsWith(prefix));
   const sites: PrintSite[] = [];
 
+  /** A callee without its arguments (`actions.filter().map`): stable across edits of what it is called with. */
+  const calleeName = (callee: ts.Expression): string => {
+    if (ts.isIdentifier(callee) || callee.kind === ts.SyntaxKind.ThisKeyword) return callee.getText(source);
+    if (ts.isPropertyAccessExpression(callee)) return `${calleeName(callee.expression)}.${callee.name.text}`;
+    if (ts.isCallExpression(callee)) return `${calleeName(callee.expression)}()`;
+    if (ts.isElementAccessExpression(callee)) return `${calleeName(callee.expression)}[]`;
+    if (ts.isParenthesizedExpression(callee) || ts.isAwaitExpression(callee) || ts.isNonNullExpression(callee) || ts.isAsExpression(callee)) {
+      return calleeName(callee.expression);
+    }
+    return '<expression>';
+  };
+  /**
+   * The function a node is written in: the nearest named one (a declaration, a
+   * method, a function held in a variable or a property), or `<module>`. A
+   * function handed to a call as an argument is that call, under the function it
+   * is written in (`<module> > steps.forEach`, `main > files.map > rows.forEach`):
+   * a callback's names are its own, not its enclosing function's (#576 RV20-7).
+   */
   const fnName = (node: ts.Node): string => {
+    const calls: string[] = [];
+    const named = (name: string): string => [name, ...calls].join(' > ');
     for (let at: ts.Node | undefined = node.parent; at; at = at.parent) {
-      if ((ts.isFunctionDeclaration(at) || ts.isMethodDeclaration(at)) && at.name) return at.name.getText(source);
+      if ((ts.isFunctionDeclaration(at) || ts.isMethodDeclaration(at)) && at.name) return named(at.name.getText(source));
       if ((ts.isArrowFunction(at) || ts.isFunctionExpression(at)) && at.parent) {
-        const holder = at.parent;
+        const holder: ts.Node = at.parent;
         if ((ts.isVariableDeclaration(holder) || ts.isPropertyAssignment(holder)) && holder.name) {
-          return holder.name.getText(source);
+          return named(holder.name.getText(source));
+        }
+        if ((ts.isCallExpression(holder) || ts.isNewExpression(holder)) && holder.arguments?.includes(at)) {
+          calls.unshift(`${ts.isNewExpression(holder) ? 'new ' : ''}${calleeName(holder.expression)}`);
         }
       }
     }
-    return '<module>';
+    return named('<module>');
   };
   const inPage = (node: ts.Node): boolean => {
     for (let at: ts.Node | undefined = node.parent; at; at = at.parent) {
@@ -545,7 +568,7 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
       const init = text(node.initializer);
       if (/^(?:'inherit'|"inherit"|process\.std(?:out|err))$/.test(init)) site(node, 'passthrough', text(node.name), [], init);
     }
-    if (ts.isReturnStatement(node) && node.expression && builders.includes(fnName(node))) {
+    if (ts.isReturnStatement(node) && node.expression && builders.includes(fnName(node).split(' > ')[0] ?? '')) {
       site(node, 'return', 'return', messageValues(node.expression, false));
     }
     node.forEachChild(visit);

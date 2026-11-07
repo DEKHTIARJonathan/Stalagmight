@@ -149,7 +149,7 @@ export const GROUP: SiteGroup = {
       'started.state': STARTED_STATE,
       'started.buildAction': STARTED_BUILD,
       'main: name': 'a registry name: main exits unless getJourney(name) found every name it runs',
-      'main: line': PROGRESS_PRINT,
+      'main > progressLogger: line': PROGRESS_PRINT,
       'record.verdict': "the run verdict, 'pass' or 'fail' from a literal conditional in main",
       // The committed UAT ledger (docs/uat/).
       'JSON.stringify(ledgerRecord(record))': "ledgerRecord's projection (HELPERS) of the run record, serialised",
@@ -160,7 +160,7 @@ export const GROUP: SiteGroup = {
       'path.basename(runFile)': 'the run file name main makes: a timestamp and the git sha, `.jsonl`',
     },
     'e2e/agent/mcp/bridge.ts': {
-      'main: text': "a line of the MCP server's stderr as passLinesFolded hands it: the checkout and home folded (as agent:mcp:smoke prints it)",
+      'main > passLinesFolded: text': "a line of the MCP server's stderr as passLinesFolded hands it: the checkout and home folded (as agent:mcp:smoke prints it)",
       'process.versions.node': "Node's own version string (process.versions.node)",
       "path.join(bridgeDir, 'requests.jsonl')": R.FOLDED,
       'main: offset': 'a byte count: statSync(reqPath).size',
@@ -175,7 +175,7 @@ export const GROUP: SiteGroup = {
       'args.timeoutMs': "driver_script's timeoutMs: a zod z.number of the tool schema, and " + MCP_ONLY,
     },
     'e2e/agent/mcp/smoke-client.ts': {
-      'main: text': "a line of the MCP server's stderr as passLinesFolded hands it: the checkout and home folded (docs: RV19b-P8)",
+      'main > passLinesFolded: text': "a line of the MCP server's stderr as passLinesFolded hands it: the checkout and home folded (docs: RV19b-P8)",
       'check: label': R.FORWARD,
     },
     'e2e/agent/os/helper.ts': {
@@ -185,8 +185,8 @@ export const GROUP: SiteGroup = {
       'JSON.stringify(stamp, null, 2)': 'the helper build stamp: schema version 1, two mtimes in ms and an ISO timestamp',
     },
     'e2e/agent/os/input.ts': {
-      'activateApp: pid': 'swallowed by ensureAppFrontmost (its catch), and ' + OS_MCP_ONLY,
-      'activateApp: errOut': 'swallowed by ensureAppFrontmost (its catch), and ' + OS_MCP_ONLY,
+      'activateApp > new Promise > execFile: pid': 'swallowed by ensureAppFrontmost (its catch), and ' + OS_MCP_ONLY,
+      'activateApp > new Promise > execFile: errOut': 'swallowed by ensureAppFrontmost (its catch), and ' + OS_MCP_ONLY,
       'error.message': 'swallowed by ensureAppFrontmost (its catch), and ' + OS_MCP_ONLY,
       "permissionHelp('accessibility')": "permissionHelp's literal instructions (os/permissions.ts), and " + OS_MCP_ONLY,
       "permissionHelp('screenRecording')": "permissionHelp's literal instructions (os/permissions.ts), and " + OS_MCP_ONLY,
@@ -197,7 +197,7 @@ export const GROUP: SiteGroup = {
       'osKeys: spec': "the agent's key spec (the os_keys tool's argument), and " + OS_MCP_ONLY,
     },
     'e2e/agent/os/screenshot.ts': {
-      'screencaptureWindow: windowId': "the helper's window id, a number, and " + OS_MCP_ONLY,
+      'screencaptureWindow > new Promise > execFile: windowId': "the helper's window id, a number, and " + OS_MCP_ONLY,
       'osScreenshot: outPath': 'the PNG path os_screenshot builds under the session dir, and ' + OS_MCP_ONLY,
     },
     'e2e/agent/scenario-run.ts': {
@@ -217,7 +217,7 @@ export const GROUP: SiteGroup = {
       'started.state': STARTED_STATE,
       'started.buildMode': STARTED_BUILD,
       'started.buildAction': STARTED_BUILD,
-      'main: line': PROGRESS_PRINT,
+      'main > progressLogger: line': PROGRESS_PRINT,
       'args.name': 'a registry name: main throws unless getScenario(args.name) found it, before the session starts',
       'metrics.seed': "runScenario's seed: the integer it ran at (opts.seed ?? 1, from scenarioRunOptions)",
       'metrics.iterations': "runScenario's iteration count: scenarioRunOptions' integer or the scenario's defaultIterations",
@@ -228,7 +228,7 @@ export const GROUP: SiteGroup = {
       'started.state': STARTED_STATE,
       'started.buildAction': STARTED_BUILD,
       'main: name': 'a registry name: the loop runs over listScenarios()',
-      'main: m': PROGRESS_PRINT,
+      'main > progressLogger: m': PROGRESS_PRINT,
       'metrics.durationMs': R.COUNT,
       'JSON.stringify(metrics.metrics)': METRICS_JSON,
     },
@@ -243,13 +243,13 @@ export const GROUP: SiteGroup = {
     },
     'e2e/agent/session.ts': {
       "freshness.reasons.join('; ')": R.FOLDED,
-      'startInner: line': R.FOLDED,
+      'startInner > buildApp: line': R.FOLDED,
       "pool.join(', ')": 'Xvfb displays parseDisplayPool accepted, each /^:\\d+$/ (lib/displayPool.ts)',
       'this.driverPort': 'a TCP port findFreePort picked, a number',
     },
     'e2e/agent/sessionMac.ts': {
       "freshness.reasons.join('; ')": R.FOLDED,
-      'startInner: line': R.FOLDED,
+      'startInner > buildApp: line': R.FOLDED,
       'this.driverPort': 'a TCP port findFreePort picked, a number',
     },
     'e2e/agent/smoke.ts': {
@@ -315,7 +315,12 @@ export const GROUP: SiteGroup = {
         what: 'tauri-driver.log',
         reason: "tauri-driver's and WebKitWebDriver's raw output in the session directory",
       },
-      'startInner -> <stream driverLog>': {
+      'startInner > this.driver.stdout.on -> <stream driverLog>': {
+        class: 'private',
+        what: 'tauri-driver.log',
+        reason: "the driver's stdout and stderr chunks, written to its log as they arrive",
+      },
+      'startInner > this.driver.stderr.on -> <stream driverLog>': {
         class: 'private',
         what: 'tauri-driver.log',
         reason: "the driver's stdout and stderr chunks, written to its log as they arrive",
@@ -332,7 +337,17 @@ export const GROUP: SiteGroup = {
         what: 'tauri-wd.log',
         reason: "tauri-wd's raw output and its spawn error in the session directory (macOS)",
       },
-      'startInner -> <stream driverLog>': {
+      'startInner > this.driver.stdout.on -> <stream driverLog>': {
+        class: 'private',
+        what: 'tauri-wd.log',
+        reason: "tauri-wd's stdout and stderr chunks and its spawn error, written to its log as they arrive",
+      },
+      'startInner > this.driver.stderr.on -> <stream driverLog>': {
+        class: 'private',
+        what: 'tauri-wd.log',
+        reason: "tauri-wd's stdout and stderr chunks and its spawn error, written to its log as they arrive",
+      },
+      'startInner > this.driver.on -> <stream driverLog>': {
         class: 'private',
         what: 'tauri-wd.log',
         reason: "tauri-wd's stdout and stderr chunks and its spawn error, written to its log as they arrive",

@@ -102,7 +102,7 @@ export const GROUP: SiteGroup = {
       'f.severity': "shareableFinding's label(): identifier characters only, any other replaced by ?, at most 120",
       'f.kind': "shareableFinding's label(): identifier characters only, any other replaced by ?, at most 120",
       'f.code': "shareableFinding's label(): identifier characters only, any other replaced by ?, at most 120",
-      '<module>: s':
+      '<module> > steps.forEach: s':
         'a step line, at scrub(s) for each of `steps`: id(a.seq), code(a.tool), describeAction (a checked builder) and a fixed failed flag',
       'f.message':
         "shareableFinding's message, at scrub(f.message): the oracle's one-line wording, a crash marker name or fixed text (scripts/lib/shareable-finding.mjs)",
@@ -279,9 +279,11 @@ export const GROUP: SiteGroup = {
       'e.code': 'a system error code (ENOENT, ECONNREFUSED, ...): a fixed set',
       'e.name': "an error's class name (SyntaxError)",
       'e?.message': "the message of an error with no code that is not a SyntaxError: this tool's own (`/json returned 404`, `Heap.snapshot failed: ...`) or the inspector's protocol error",
-      'main: e':
+      'main > setInterval > snapAndReport().catch: e':
         "a snapshot's error at errText(e): an fs or network error as its code, a SyntaxError as its name, else the profiler's own message (`Heap.snapshot failed: ...`) or a WebSocket error event's `[object Event]`",
-      '<module>: e':
+      'main > rl.on > snapAndReport().catch: e':
+        "a snapshot's error at errText(e): an fs or network error as its code, a SyntaxError as its name, else the profiler's own message (`Heap.snapshot failed: ...`) or a WebSocket error event's `[object Event]`",
+      '<module> > main().catch: e':
         "the profiler's fatal error at errText(e): an fs or network error as its code, a SyntaxError as its name, else the profiler's own message (`/json returned N`, `no inspectable page`) or `[object Event]`",
       'e.message': "the Web Inspector protocol's error for Heap.snapshot (WebKit's text about the command, not the page's)",
       'e2.message': "the Web Inspector protocol's error for HeapProfiler.takeHeapSnapshot (WebKit's text about the command, not the page's)",

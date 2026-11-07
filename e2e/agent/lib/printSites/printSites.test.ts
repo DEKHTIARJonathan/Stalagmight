@@ -319,4 +319,30 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
     const handed = check({ 'r.mjs': "const md = [];\naddLines(md);\nfs.writeFileSync(outPath, md.join('\\n'));\n" }, { ...report, allow: {} });
     expect(handed.unchecked).toEqual(["r.mjs:3 [file] md.join('\\n')"]);
   });
+
+  it("keys a callback's names by its call, not by the function it is written in (#576 RV20-7)", () => {
+    const group = {
+      wrappers: { 'r.mjs': { P: 'stream' as const } },
+      fileHelpers: { 'r.mjs': { scrub: 'the step line with the session dir and the home directory folded' } },
+      allow: {
+        'r.mjs': {
+          // The entry report.md had for its steps callback, and the key that callback has now.
+          '<module>: s': 'a step line, at scrub(s) for each of `steps`',
+          '<module> > steps.forEach: s': 'a step line, at scrub(s) for each of `steps`',
+          'main > files.forEach: f': R.REPO,
+        },
+      },
+    };
+    const found = check(
+      {
+        'r.mjs':
+          'steps.forEach((s) => P(scrub(s)));\n' +
+          'actions.map((a) => a.params?.text).forEach((s) => P(`- typed: ${s}`));\n' +
+          'function main() { files.forEach((f) => P(f)); }\n' +
+          'function other() { files.forEach((f) => P(f)); }\n',
+      },
+      group,
+    );
+    expect(found.unchecked).toEqual(['r.mjs:2 [stream] <module> > actions.map().forEach: s', 'r.mjs:4 [stream] other > files.forEach: f']);
+  });
 });

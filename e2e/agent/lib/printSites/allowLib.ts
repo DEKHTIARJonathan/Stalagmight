@@ -93,8 +93,9 @@ export const GROUP: SiteGroup = {
         "the first 80 characters of a harness function's own source (Function.prototype.toString of code in this file): public tree code",
     },
     'e2e/agent/lib/fuzzTrace.ts': {
+      'writeTrace > trace.steps.forEach: filePath': R.FOLDED,
       'writeTrace: filePath': R.FOLDED,
-      'writeTrace: index': R.COUNT,
+      'writeTrace > trace.steps.forEach: index': R.COUNT,
       'corpusNameLeakAt(trace.steps)': 'the index of the first offending step, a number (the message prints it plus one)',
       'corpusNameLeakAt(parsed.steps)': 'the index of the first offending step, a number (the message prints it plus one)',
       'validateStep: filePath': R.FOLDED,
@@ -159,6 +160,8 @@ export const GROUP: SiteGroup = {
       'process.pid': "this process's id, a number, written to the session's owner marker",
     },
     'e2e/agent/lib/replayHelpers.ts': {
+      'driverScript > new Promise > setTimeout: timeoutMs':
+        "the replay's timeout in ms: 60000, or the number generate-replay.mjs emits from the recorded call (the MCP driver_script tool takes z.number(), mcp/server.ts)",
       'driverScript: timeoutMs':
         "the replay's timeout in ms: 60000, or the number generate-replay.mjs emits from the recorded call (the MCP driver_script tool takes z.number(), mcp/server.ts)",
     },

@@ -188,6 +188,7 @@ export const GROUP: SiteGroup = {
       'run: iterations': ITERATIONS,
       'sections.reduce((n, s) => n + s.shots.length, 0)': 'a sum of array lengths (the generated survey\'s shot count)',
       'run: index': LOOP_COUNT,
+      'run > backendSections.forEach: index': LOOP_COUNT,
       'section.name':
         "a section name the harness generated: e2e/lib/fractal.ts executeLSystem names them `S0`, `S<n>` " +
         '(fractal.ts:112, 158)',
