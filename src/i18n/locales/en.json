@@ -4074,6 +4074,8 @@
       "unreadableWarning": "The copy of this project on this computer could not be read, so we cannot tell whether it has changes that are not on SpeleoDB. A save may have been interrupted, or another program may be using it. Restoring this revision replaces that copy, so any such changes would be lost, and this cannot be undone.",
       "discardOffer": "Replace my changes & restore",
       "discardConfirm": "Yes, replace my changes & restore",
+      "unreadableDiscardOffer": "Replace the local copy & restore",
+      "unreadableDiscardConfirm": "Yes, replace the local copy & restore",
       "restoring": "Restoring…",
       "doneToast": "Restored to revision {{sha}}. Push to make it the latest.",
       "viewToast": "Viewing revision {{sha}}. Use Update to return to the latest.",
@@ -4147,6 +4149,8 @@
       "reverting": "Reverting…",
       "discardOffer": "Replace my changes & revert",
       "discardConfirm": "Yes, replace my changes & revert",
+      "unreadableDiscardOffer": "Replace the local copy & revert",
+      "unreadableDiscardConfirm": "Yes, replace the local copy & revert",
       "retryUpload": "Retry the upload",
       "steps": {
         "locking": "Taking the write lock…",
@@ -4234,7 +4238,9 @@
         "title": "The copy on this computer could not be read",
         "message": "\"{{name}}\" has already been opened on this computer, but that local copy could not be read, so we cannot tell whether it has changes SpeleoDB has never seen. A save may have been interrupted, or another program may be using it. Nothing has been downloaded yet.",
         "keepHint": "Keeping the local copy downloads nothing and overwrites nothing. Opening it lets an interrupted save roll back to the last one that finished; if another program is using the file, close it first.",
-        "discardWarning": "Taking the server copy permanently replaces the copy of \"{{name}}\" on this computer. It could not be read, so any changes in it that are not on SpeleoDB would be lost, and this cannot be undone."
+        "discardWarning": "Taking the server copy permanently replaces the copy of \"{{name}}\" on this computer. It could not be read, so any changes in it that are not on SpeleoDB would be lost, and this cannot be undone.",
+        "takeRemote": "Take the server copy & replace the local copy",
+        "takeRemoteConfirm": "Yes, replace the local copy"
       }
     },
     "transport": {
