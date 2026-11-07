@@ -18,8 +18,10 @@ workspace = true
 # in-memory/expiry/grant test hooks), plus the non-transactional per-stack
 # undo/redo writers that seed history fixtures: dependents' tests still call
 # them, and a dependency's `cfg(test)` items are invisible to a dependent's
-# test build. Enabled only via [dev-dependencies] entries (the root crate's and
-# stalagmight-core's), so production builds never compile them.
+# test build. Also the #619 authorizer probes (`sqlite::untrusted_sql_probes`)
+# stalx-reader's tests share. Enabled only via [dev-dependencies] entries (the
+# root crate's, stalagmight-core's, stalagmight-tiles' and stalx-reader's), so
+# production builds never compile them.
 test-support = []
 
 [dependencies]

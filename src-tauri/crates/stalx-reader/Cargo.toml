@@ -20,3 +20,10 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 uuid = { workspace = true, features = ["v5"] }
+
+[dev-dependencies]
+# `test-support` for the #619 authorizer probes the inspect-connection test
+# shares with persistence's own (`persistence::sqlite::untrusted_sql_probes`).
+# Test builds only: the dependency above, which the library builds with, does
+# not enable it.
+stalagmight-persistence = { path = "../persistence", features = ["test-support"] }

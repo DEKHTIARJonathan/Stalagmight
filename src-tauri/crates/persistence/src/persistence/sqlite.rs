@@ -658,6 +658,17 @@ pub use warnings::MAX_CARRIED_RESOLVED_WARNINGS;
 
 pub use schema_guard::deny_stripped_sqlite_features;
 
+/// [#619] The probes the authorizer tests run, shared with `stalx-reader`'s:
+/// see the module doc.
+#[cfg(any(test, feature = "test-support"))]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test support: panics on a failed assumption are the point, and the printed \
+              per-probe outcomes are the evidence a run captures"
+)]
+pub mod untrusted_sql_probes;
+
 /// A stringified page of rows from a raw sqlite table.
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../../bindings/")]
@@ -949,9 +960,7 @@ mod schema_guard_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
-    clippy::print_stdout,
-    reason = "test module: panics on a failed assumption are the point, and the printed \
-              values are the evidence a run captures"
+    reason = "test module: panics on a failed assumption are the point"
 )]
 mod untrusted_sql_tests;
 
