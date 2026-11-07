@@ -12,7 +12,7 @@ import type { RouteLeg } from '../../../types/ipc.generated';
 import { metersToMapCoords } from '../../../utils/coordinates';
 import { getErrorColor } from '../../../utils/colors';
 import { FEATURE_ID_STRIDE } from '../../../utils/ids';
-import { hasLiveStyle } from '../mapUtils';
+import { canWriteStyle, hasLiveStyle } from '../mapUtils';
 import { AUX_IDS } from './auxiliaryLayers';
 import type { GhostSectionData } from './displayColor';
 import type { SurveyGeometryIndex } from './geometryIndex';
@@ -32,8 +32,9 @@ export function applyClosureOpacity(
   anchoredSectionIds: ReadonlySet<number>,
   immovableStationFeatureIds: ReadonlySet<number>,
 ): void {
-  // No style during a lost WebGL context; replayAfterContextRestore re-applies.
-  if (!hasLiveStyle(map)) return;
+  // No style during a lost WebGL context, and a rebuilt one refuses writes until
+  // it has loaded; replayAfterContextRestore re-applies (#576 RV18-MAP-1).
+  if (!canWriteStyle(map)) return;
   const dimRules: maplibregl.ExpressionSpecification[] = [];
   if (anchoredSectionIds.size > 0) {
     const idsArray = [...anchoredSectionIds];

@@ -245,10 +245,14 @@ them back (#576 D38, #606):
 
 SurveyLayer replays the last flush afterwards, including one that arrived while
 the style was being rebuilt, and redraws the measure tint. While the style is gone
-nothing may read it (MapLibre's `getLayer`, `setPaintProperty` and friends throw,
-and a throw in an effect takes down the map panel), so the style-writing
-setters and effects skip their writes then: SurveyLayer's replay re-applies its
-stock-layer state (visibility, paint, ghost section), and MapCanvas's own
+nothing may write it (MapLibre 6 reads it with `?.` in `getLayer`, `getSource`,
+`setPaintProperty` and `setFilter`, but `addLayer`, `removeLayer`, `addSource` and
+`setLayoutProperty` throw, and a throw in an effect takes down the map panel), and
+in the frame before the rebuilt style loads that style is empty and refuses every
+write ("Style is not done loading."). So the style-writing setters and effects
+skip their writes in both windows (`canWriteStyle` in `mapUtils.ts`, #576
+RV18-MAP-1): SurveyLayer's replay re-applies its stock-layer state (visibility,
+paint, closure opacity and filter, ghost section), and MapCanvas's own
 style-writing effects (satellite, grid, background) re-run on `useStyleEpoch`,
 which moves once the restored style has loaded (#576 NF-MAP-5). The Global View layer
 recovers the same way (`GlobalSurveyLayer` runs the same watch over its one

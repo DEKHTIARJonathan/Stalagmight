@@ -9,7 +9,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { selectActiveSurveyData } from '../../store/geometrySelectors';
 import { surveyDataFromLegacy } from '../../types/survey-data';
-import { hasLiveStyle } from './mapUtils';
+import { canWriteStyle, hasLiveStyle } from './mapUtils';
 import { mapCursorFor } from './mapCursor';
 import {
   normalizeDepthRange,
@@ -1929,10 +1929,11 @@ export default class SurveyLayer {
    * closures and the interact overlay's station layer hide with the stations, the
    * interact overlay's shot layers with the shots - a hover/selection highlight
    * must not surface a hidden feature (#mem). Skipped while the WebGL context is
-   * lost (no style); replayAfterContextRestore re-applies it (#576 NF-MAP-5).
+   * lost (no style) and while a rebuilt style loads (it refuses the writes);
+   * replayAfterContextRestore re-applies it (#576 NF-MAP-5, RV18-MAP-1).
    */
   private applyStockVisibility(): void {
-    if (!hasLiveStyle(this.map)) return;
+    if (!canWriteStyle(this.map)) return;
     const stations = this.stationsVisible ? 'visible' : 'none';
     const shots = this.shotsVisible ? 'visible' : 'none';
     this.map.setLayoutProperty(AUX_IDS.loopClosuresLayerId, 'visibility', stations);

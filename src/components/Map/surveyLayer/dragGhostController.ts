@@ -24,7 +24,7 @@
 // controller only drives the ghost geometry.
 
 import type * as maplibregl from 'maplibre-gl';
-import { hasLiveStyle } from '../mapUtils';
+import { canWriteStyle, hasLiveStyle } from '../mapUtils';
 import { GhostFollow } from './dragGhostFollow';
 import {
   DRAG_PREVIEW_SOURCE,
@@ -242,11 +242,12 @@ export class DragGhostController {
       this.selfDisableScheduled = false;
       if (this.mode !== 'custom' || !this.set) return;
       // The WebGL context was lost before this deferred fallback ran: there is no
-      // style to drop the layer from or build the stock ghost in, and getLayer
-      // reads the missing style and throws (#576 RV4-FE-MF-6, the NF-MAP-3 race).
-      // Leave the dead custom ghost in place: the restore's reattach() re-adds it,
-      // finds it disabled and runs this fallback again on a live style.
-      if (!hasLiveStyle(this.map)) return;
+      // style to build the stock ghost in, and addSource / addLayer read the
+      // missing style and throw (#576 RV4-FE-MF-6, the NF-MAP-3 race); a rebuilt
+      // style that has not loaded yet refuses them (RV18-MAP-1). Leave the dead
+      // custom ghost in place: the restore's reattach() re-adds it, finds it
+      // disabled and runs this fallback again on a live style.
+      if (!canWriteStyle(this.map)) return;
       removeCustomLayer(this.map, this.layer);
       this.layer = null;
       this.mode = 'stock';

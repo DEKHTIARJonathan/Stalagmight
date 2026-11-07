@@ -40,7 +40,7 @@ import { createSurveyMap, SATELLITE_SOURCE_ID } from './createSurveyMap';
 import { pixelsPerMeterAt } from './placementScale';
 import { useContextLossToast } from './useContextLossToast';
 import { useStyleEpoch } from './useStyleEpoch';
-import { SATELLITE_BOTTOM_CANDIDATES, hasLiveStyle } from './mapUtils';
+import { SATELLITE_BOTTOM_CANDIDATES, canWriteStyle } from './mapUtils';
 import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
 import GridOverlay from './GridOverlay';
@@ -1275,9 +1275,10 @@ function MapCanvas({ onReloadMap, initialCenter }: MapCanvasProps) {
 
   // Handle satellite toggle
   useEffect(() => {
-    // No style while the WebGL context is lost (reading it throws); styleEpoch
-    // re-runs this once the restored style has loaded (#576 NF-MAP-5).
-    if (!map.current || !mapLoaded || !hasLiveStyle(map.current)) return;
+    // No style while the WebGL context is lost (reading it throws), and a rebuilt
+    // one refuses writes until it has loaded; styleEpoch re-runs this once the
+    // restored style has loaded (#576 NF-MAP-5, RV18-MAP-1).
+    if (!map.current || !mapLoaded || !canWriteStyle(map.current)) return;
 
     // Store reference for cleanup
     const currentMap = map.current;
