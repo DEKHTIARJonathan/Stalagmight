@@ -1034,6 +1034,12 @@ locations:
   name is a literal. The full lines are `scenario-progress` events in
   `actions.jsonl`; the full checks and reason are in the session's
   `uat/run.jsonl`.
+- `agent:journeys -- --ledger` commits its run record to `docs/uat/runs/` in
+  the same form (#576 W39-NF1, `journeys/ledger.ts` `ledgerRecord`): a failed
+  check's observed detail as its length, the abort reason as the verdict line
+  prints it, and each sweep finding as its severity, kind and code. It keeps
+  only the fields it names, so a field added to a journey result later stays
+  in `uat/run.jsonl` until it is added there.
 - A harness crash - a runner's `fatal:` line, `fuzz-shrink`'s `shrink
   failed:`, and the `fatal:` line of `agent:smoke`, `agent:mcp`,
   `agent:bridge`, `agent:mcp:smoke` and `ipc-payload-probe.ts` (whose

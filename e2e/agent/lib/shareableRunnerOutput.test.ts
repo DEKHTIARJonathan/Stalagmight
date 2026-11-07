@@ -451,3 +451,107 @@ describe('the other harness entry points print a crash in the shareable form (#5
     expect(raw).toEqual([path.join('lib', 'shareableFailure.ts')]);
   });
 });
+
+describe('the committed UAT ledger record carries codes, counts and code locations (#576 W39-NF1)', () => {
+  /** A failed run as `agent:journeys` collects it: the app's text in a check, the abort and the sweep. */
+  function failedRun() {
+    const observed = 'error=Station "qzstation" of qzproject vanished';
+    const appError = `qzsection has no shots in ${HOME}/caves/qzproject.stalx`;
+    return {
+      observed,
+      appError,
+      record: {
+        kind: 'uat-journeys' as const,
+        date: '2026-11-07T10:00:00.000Z',
+        gitSha: 'abc1234',
+        platform: 'linux-x64',
+        verdict: 'fail' as const,
+        journeys: [
+          {
+            journey: 'save-reopen-identity',
+            verdict: 'fail' as const,
+            durationMs: 12,
+            checks: [
+              { label: 'save reported success', ok: false, detail: observed },
+              { label: 'project closed', ok: true },
+            ],
+            aborted: `parseTml failed: ${appError}\nholder: qzbob`,
+            sweepFindings: [
+              {
+                severity: 'error' as const,
+                kind: 'log-error',
+                code: 'stalagmight_lib::commands::station',
+                message: 'Station "qzstation" gone',
+                detail: { holder: 'qzbob' },
+              },
+              { severity: 'warning' as const, kind: 'leftover-temp', message: `${HOME}/qzproject.stalx.tmp` },
+            ],
+          },
+        ],
+      },
+    };
+  }
+
+  it("keeps a check detail's length, the abort reason's headline form and the sweep's codes", async () => {
+    const { ledgerRecord } = await import('../journeys/ledger');
+    const { observed, appError, record } = failedRun();
+    const shared = ledgerRecord(record);
+    expect(names(JSON.stringify(shared))).toEqual([]);
+    expect(shared).toEqual({
+      kind: 'uat-journeys',
+      date: '2026-11-07T10:00:00.000Z',
+      gitSha: 'abc1234',
+      platform: 'linux-x64',
+      verdict: 'fail',
+      journeys: [
+        {
+          journey: 'save-reopen-identity',
+          verdict: 'fail',
+          durationMs: 12,
+          checks: [
+            { label: 'save reported success', ok: false, detail: `(${observed.length} characters of the app's text withheld)` },
+            { label: 'project closed', ok: true },
+          ],
+          // What the verdict line prints after `aborted:`, its further lines counted.
+          aborted:
+            // (The home directory is folded to `~` before the text is counted.)
+            `parseTml failed: (${appError.replace(HOME, '~').length} characters of the app's text withheld)\n` +
+            "  (1 line(s) withheld: they can quote the app's text - the full reason is in the session's uat/run.jsonl)",
+          sweepFindings: [
+            {
+              severity: 'error',
+              kind: 'log-error',
+              code: 'stalagmight_lib::commands::station',
+              message: '<scrubbed - see the session run.jsonl>',
+            },
+            { severity: 'warning', kind: 'leftover-temp', message: '<scrubbed - see the session run.jsonl>' },
+          ],
+        },
+      ],
+    });
+    // The verbatim record, for the session's uat/run.jsonl, is left as it was.
+    expect(record.journeys[0]?.checks[0]?.detail).toBe(observed);
+  });
+
+  it('keeps the fields it knows only, so a field added later does not reach the public tree', async () => {
+    const { ledgerRecord } = await import('../journeys/ledger');
+    const { record } = failedRun();
+    const extra = {
+      ...record,
+      note: 'qzbob',
+      journeys: record.journeys.map((j) => ({
+        ...j,
+        observedName: 'qzstation',
+        checks: j.checks.map((c) => ({ ...c, expected: 'qzproject' })),
+      })),
+    };
+    expect(names(JSON.stringify(ledgerRecord(extra)))).toEqual([]);
+  });
+
+  it('is what the runner writes to docs/uat/runs/', () => {
+    const source = fs.readFileSync(path.join(REPO, 'e2e/agent/journeys-run.ts'), 'utf8');
+    expect(source).toMatch(/JSON\.stringify\(ledgerRecord\(record\)\)/);
+    // No second, weaker scrub of its own beside it.
+    expect(source).not.toMatch(/scrubText|sanitizeForLedger|\(\?:Users\|home\)/);
+  });
+});

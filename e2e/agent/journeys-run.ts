@@ -18,25 +18,13 @@ import { execFileSync } from 'child_process';
 import { fileURLToPath } from 'url';
 import { createSession } from './createSession';
 import { listJourneys, getJourney } from './journeys';
-import { journeyVerdictLine, runJourney, type JourneyResult } from './journeys/framework';
-import { findingsSummary, runSweep, newOracleState, type Finding } from './lib/oracles';
+import { journeyVerdictLine, runJourney } from './journeys/framework';
+import { ledgerRecord, type JourneyRecord, type RunRecord } from './journeys/ledger';
+import { findingsSummary, runSweep, newOracleState } from './lib/oracles';
 import { progressLogger, shareableErrorText } from './lib/shareableFailure';
 import { callStoreAction } from './lib/stores';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-
-interface JourneyRecord extends JourneyResult {
-  sweepFindings: Finding[];
-}
-
-interface RunRecord {
-  kind: 'uat-journeys';
-  date: string;
-  gitSha: string;
-  platform: string;
-  verdict: 'pass' | 'fail';
-  journeys: JourneyRecord[];
-}
 
 function gitSha(): string {
   try {
@@ -60,37 +48,6 @@ function parseArgs(argv: string[]): { only: string | null; ledger: boolean; rele
   return { only, ledger, release };
 }
 
-/**
- * The docs/uat/runs/ record is COMMITTED to the public tree, and a failing
- * run's check details and sweep findings carry absolute session paths and raw
- * log lines - content the marker-based `lint:private-leaks` scanner cannot be
- * assumed to catch. Scrub before writing: absolute home paths collapse to
- * their basename, and sweep findings keep only kind + severity. The verbatim
- * record still lands in the session artifacts (`run.jsonl`) for triage.
- */
-function sanitizeForLedger(record: RunRecord): RunRecord {
-  const scrubText = (text: string): string =>
-    text.replace(/\/(?:Users|home)\/[^\s'")\]]+/g, (m) => `<path>/${path.basename(m)}`);
-  return {
-    ...record,
-    journeys: record.journeys.map((j) => ({
-      ...j,
-      ...(j.aborted !== undefined ? { aborted: scrubText(j.aborted) } : {}),
-      checks: j.checks.map((c) =>
-        c.detail !== undefined ? { ...c, detail: scrubText(c.detail) } : c,
-      ),
-      // ALLOWLIST, not a spread: Finding carries a free-form `detail` (crash
-      // marker text, error-boundary dumps, leftover-temp paths) that must
-      // never reach the committed record.
-      sweepFindings: j.sweepFindings.map((f) => ({
-        severity: f.severity,
-        kind: f.kind,
-        message: `<scrubbed - see the session run.jsonl>`,
-      })),
-    })),
-  };
-}
-
 function writeLedger(record: RunRecord): void {
   const uatDir = path.join(repoRoot, 'docs', 'uat');
   const runsDir = path.join(uatDir, 'runs');
@@ -99,7 +56,10 @@ function writeLedger(record: RunRecord): void {
   const runFile = path.join(runsDir, `${stamp}-${record.gitSha}.jsonl`);
   // 'wx' so a same-second rerun fails loudly instead of silently replacing the
   // evidence a previously appended ledger line points at (append-only ledger).
-  fs.writeFileSync(runFile, `${JSON.stringify(sanitizeForLedger(record))}\n`, { flag: 'wx' });
+  // The record is COMMITTED to the public tree: codes, counts and code locations
+  // only (#576 W39-NF1, journeys/ledger.ts). The verbatim record is the session's
+  // uat/run.jsonl.
+  fs.writeFileSync(runFile, `${JSON.stringify(ledgerRecord(record))}\n`, { flag: 'wx' });
 
   const ledgerFile = path.join(uatDir, 'ledger.md');
   const failed = record.journeys.filter((j) => j.verdict === 'fail').map((j) => j.journey);

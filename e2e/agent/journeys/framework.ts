@@ -123,6 +123,17 @@ export async function runJourney(
 const ABORT_WITHHELD = "the full reason is in the session's uat/run.jsonl";
 
 /**
+ * A journey's abort reason as what a run shares carries it (#576 W33-NF1,
+ * W39-NF1): the headline form (`<what> failed: <the app's error>` and `ipc
+ * <command>: ...` keep the prefix and the length of the app's text), then one
+ * count line for each run of further lines. The verdict line prints it, and the
+ * committed UAT record keeps it.
+ */
+export function shareableAbortReason(aborted: string): string {
+  return shareableFailureText(aborted, [], ABORT_WITHHELD);
+}
+
+/**
  * The PASS/FAIL line `agent:journeys` prints for one journey (#576 W33-NF1):
  * the check counts, the abort reason in the shareable headline form (`<what>
  * failed: <the app's error>` and `ipc <command>: ...` keep the prefix and the
@@ -137,7 +148,7 @@ export function journeyVerdictLine(
 ): string {
   const passed = result.checks.filter((c) => c.ok).length;
   const [reason = '', ...withheld] =
-    result.aborted !== undefined ? shareableFailureText(result.aborted, [], ABORT_WITHHELD).split('\n') : [];
+    result.aborted !== undefined ? shareableAbortReason(result.aborted).split('\n') : [];
   return (
     `${verdict.toUpperCase()}: ${result.journey} (${result.durationMs}ms, ${passed}/${result.checks.length} checks)` +
     `${result.aborted ? ` aborted: ${reason}` : ''}` +

@@ -89,13 +89,22 @@ const APP_ERROR_HEADLINES: readonly RegExp[] = [
 /** What `shareableFailureText` leaves of the app's text in a headline. */
 const WITHHELD_TEXT = /^\(\d+ characters of the app's text withheld\)$/;
 
+/**
+ * What a shareable artifact keeps of the app's own `text`: its length. A failed
+ * journey check's observed detail is all app text, so the committed UAT record
+ * keeps it this way (#576 W39-NF1). Projecting twice changes nothing.
+ */
+export function withheldAppText(text: string): string {
+  return WITHHELD_TEXT.test(text) ? text : `(${text.length} characters of the app's text withheld)`;
+}
+
 /** `headline` with the app's text after an `APP_ERROR_HEADLINES` prefix replaced by its length. */
 function shareableHeadline(headline: string): string {
   for (const shape of APP_ERROR_HEADLINES) {
     const app = shape.exec(headline);
     if (!app) continue;
     const [, prefix = '', text = ''] = app;
-    return WITHHELD_TEXT.test(text) ? headline : `${prefix}: (${text.length} characters of the app's text withheld)`;
+    return `${prefix}: ${withheldAppText(text)}`;
   }
   return headline;
 }
