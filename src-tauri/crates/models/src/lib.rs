@@ -46,6 +46,7 @@ pub mod test_support;
 mod test_support_probe_tests;
 pub mod undo_mode;
 pub mod warning;
+pub mod zip_entry_bound;
 
 pub use angle::*;
 pub use azimuth_reference::*;
