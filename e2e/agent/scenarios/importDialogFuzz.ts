@@ -403,6 +403,7 @@ import {
   corpusLookup,
   describeCorpus,
   discoverCorpus,
+  foldThenCut,
   materializeCorpusEntry,
   redactCorpusText,
   registerCorpusRedactions as registerProcessRedactions,
@@ -1261,7 +1262,9 @@ export const importDialogFuzz: Scenario = {
           // testid - because a shrunk trace reaches states with a different
           // camera and would otherwise die at the first recorded click.
           skip = 'map-unavailable';
-          ctx.metric(`mapSkip:${err instanceof Error ? err.message.slice(0, 32) : 'unknown'}`);
+          // Folded before the cut (#576 W33-NF3): a metric key reaches the
+          // runner's PASS line and the matrix report, and neither folds it.
+          ctx.metric(`mapSkip:${err instanceof Error ? foldThenCut(err.message, 32) : 'unknown'}`);
         }
         digest = await observeScreen(ctx);
       } else if (move.kind === 'undo' || move.kind === 'redo') {
@@ -1381,7 +1384,8 @@ export const importDialogFuzz: Scenario = {
         } else {
           fail(
             'S4 UNEXPECTED ERROR DIALOG: a move with no business failing raised one',
-            `  after: ${move.label}\n  error: ${digest.err ?? '(no text)'}\n` +
+            // The digest carries the whole text; folded, THEN cut (#576 W33-NF3).
+            `  after: ${move.label}\n  error: ${digest.err === null ? '(no text)' : foldThenCut(digest.err, 300)}\n` +
               `  started no fallible work: ${work.reason}`,
           );
         }

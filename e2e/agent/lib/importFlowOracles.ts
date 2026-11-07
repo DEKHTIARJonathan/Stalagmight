@@ -31,6 +31,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
+import { foldThenCut } from './fixtureCorpus';
 import type { ImportScreenDigest } from './importScreenDigest';
 import { describeDiffs, diffSnapshots } from './projectSnapshot';
 import { isLeftoverTempName } from './oracles';
@@ -262,7 +263,8 @@ export function receiptClaimFrom(digest: ImportScreenDigest): ReceiptClaim | nul
   if (!digest.receipt) return null;
   const parsed = parseReceiptSummary(digest.receipt.summary);
   return {
-    summary: digest.receipt.summary,
+    // A failure quotes it: folded, then cut to the 300 the page used to cut at (#576 W33-NF3).
+    summary: foldThenCut(digest.receipt.summary, 300),
     sections: parsed.sections,
     shots: parsed.shots,
     shown: digest.receipt.shown,

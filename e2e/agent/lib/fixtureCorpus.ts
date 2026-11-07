@@ -922,6 +922,16 @@ export function redactCorpusText(text: string): string {
 }
 
 /**
+ * `text` folded, THEN cut to its first `max` characters (#576 W33-NF3). The
+ * order is the point (RV18-W23-6): a cut through a corpus name leaves a stub
+ * that no fold matches, and its start prints. A cut through a tag leaves only
+ * a piece of the tag.
+ */
+export function foldThenCut(text: string, max: number): string {
+  return redactCorpusText(text).slice(0, max);
+}
+
+/**
  * `value` as it may be recorded: every string in it, keys included, through
  * `redactCorpusText` (#576 RV13-4). String by string rather than over the JSON
  * text, so a name that JSON would escape (a quote, a backslash) is still found,
