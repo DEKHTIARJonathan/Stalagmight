@@ -9,6 +9,18 @@ use crate::{
 
 use super::{PathEdge, Project, StationPath};
 
+/// Whether a closure adjustment re-measures the adjusted component's closures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ClosureRemeasure {
+    /// Restamp each closure's loop length and misclosures on the adjusted
+    /// geometry: the project keeps its closures.
+    Restamp,
+    /// Leave them: the caller keeps only the adjusted station coordinates, which
+    /// read no closure metric (the Closures Computed View's throwaway copy), so
+    /// the path search per closure would be wasted (#576 W38-NF-3).
+    Skip,
+}
+
 impl Project {
     fn coords_add(a: Coordinates, b: Coordinates) -> Coordinates {
         Coordinates::new(a.x + b.x, a.y + b.y, a.z + b.z)
@@ -84,6 +96,18 @@ impl Project {
         anchor_station: StationRef,
         method: ClosureStrategy,
         config: &ClosureAdjustmentConfig,
+    ) -> Result<(), String> {
+        self.adjust_loop_closures_with(anchor_station, method, config, ClosureRemeasure::Restamp)
+    }
+
+    /// [`Self::adjust_loop_closures`], with the re-measure of the component's
+    /// closures on the adjusted geometry left to `remeasure`.
+    pub(super) fn adjust_loop_closures_with(
+        &mut self,
+        anchor_station: StationRef,
+        method: ClosureStrategy,
+        config: &ClosureAdjustmentConfig,
+        remeasure: ClosureRemeasure,
     ) -> Result<(), String> {
         if !self.station_exists(anchor_station) {
             return Err("Anchor station does not exist".to_string());
@@ -162,7 +186,9 @@ impl Project {
         }
 
         // Recompute closure metrics for the affected component
-        self.recompute_closure_metrics_for_component(&component);
+        if remeasure == ClosureRemeasure::Restamp {
+            self.recompute_closure_metrics_for_component(&component);
+        }
 
         // Mark adjusted closures as aligned (locked for future moves)
         let adjusted_ids: HashSet<u64> = closures.iter().map(|lc| lc.id).collect();
@@ -197,6 +223,8 @@ impl Project {
                     self.resolve_key(&closure.station_a),
                     self.resolve_key(&closure.station_b),
                 ) {
+                    #[cfg(test)]
+                    remeasure_probe::record();
                     let walk =
                         || self.loop_length_without_own_edge(a, b, &merge_adj, &mut closure_adj);
                     if let Ok(metrics) = self.compute_closure_metrics_with(a, b, walk) {
@@ -880,5 +908,25 @@ impl Project {
         strategy: ClosureStrategy,
     ) -> Result<(), String> {
         self.distribute_closure_error_internal(station_a, station_b, strategy, None, false)
+    }
+}
+
+/// Test-only count of the closures `recompute_closure_metrics_for_component`
+/// re-measured on this thread, for tests pinning which paths run the re-measure.
+#[cfg(test)]
+pub(super) mod remeasure_probe {
+    use std::cell::Cell;
+
+    thread_local! {
+        static REMEASURED: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(in crate::project) fn record() {
+        REMEASURED.with(|n| n.set(n.get() + 1));
+    }
+
+    /// The count on this thread since the last `take`, which resets it.
+    pub(in crate::project) fn take() -> usize {
+        REMEASURED.with(|n| n.replace(0))
     }
 }

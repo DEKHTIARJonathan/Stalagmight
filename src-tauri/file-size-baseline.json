@@ -382,6 +382,7 @@
     "src-tauri/crates/models/src/project/cache_coherence_tests.rs": 213,
     "src-tauri/crates/models/src/project/closure_determinism_tests.rs": 291,
     "src-tauri/crates/models/src/project/component_pass_tests.rs": 483,
+    "src-tauri/crates/models/src/project/coordinates/view_remeasure_tests.rs": 250,
     "src-tauri/crates/models/src/project/gas/half_minus_gauge_tests.rs": 103,
     "src-tauri/crates/models/src/project/gas/pin_decides_route_tests.rs": 711,
     "src-tauri/crates/models/src/project/gas/pin_monotone_tests.rs": 280,
