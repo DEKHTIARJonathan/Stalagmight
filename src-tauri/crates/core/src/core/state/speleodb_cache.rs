@@ -142,28 +142,135 @@ fn remove_staged_with_sidecars(staged: &Path) {
 /// the two cannot drift (#576 RV20-2).
 ///
 /// [#576 W52-2] Sidecars beside `dest` are the OLD file's - a crash while it
-/// was open leaves a hot `-journal` (or a `-wal`/`-shm`) - and the rename keeps
+/// was open leaves a hot `-journal` (or a `-wal`/`-shm`) - and a rename keeps
 /// them beside the new file, whose next read-write open would play the old
-/// file's pages back into it. Removed only after the rename: before it they
-/// still belong to the file a failed install leaves in place (and the callers
-/// re-open), and a hot journal is what rolls that file back to a consistent
-/// state.
+/// file's pages back into it.
 ///
-/// A failed rename leaves `dest` and its sidecars as they were.
+/// [#576 RV20-3] So they are settled BEFORE the rename ([`settle_sidecars`]),
+/// and the install is refused, `dest` left as it was, when that cannot be done.
+/// Removing them only after the rename left two windows in which the old
+/// journal stayed beside the new file: a crash between the rename and the
+/// removal, and a removal that failed (a Windows sharing violation) and was
+/// only logged. The removal after the rename stays, as a backstop for a sidecar
+/// that appeared since (another process opening `dest`).
 pub(super) fn install_over(staged: &Path, dest: &Path) -> std::io::Result<()> {
+    settle_sidecars(dest)?;
     std::fs::rename(staged, dest)?;
+    #[cfg(test)]
+    if SKIP_REMOVAL_AFTER_RENAME.with(std::cell::Cell::get) {
+        return Ok(());
+    }
     remove_sidecars(dest);
     Ok(())
+}
+
+/// The SQLite sidecar suffixes, the rollback journal first.
+const SIDECAR_SUFFIXES: [&str; 3] = ["-journal", "-wal", "-shm"];
+
+/// `path` with an SQLite sidecar suffix.
+fn sidecar_path(path: &Path, suffix: &str) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    std::path::PathBuf::from(name)
+}
+
+/// Whether anything is at `path`: anything but "not found" counts, so a file
+/// another program still holds (a Windows delete-pending one) is there.
+fn is_present(path: &Path) -> bool {
+    !matches!(path.symlink_metadata(), Err(e) if e.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// Whether the rollback journal at `journal` still reads as hot to SQLite: there,
+/// and its first byte not zero. An empty or zeroed journal is one SQLite ignores.
+fn looks_hot(journal: &Path) -> std::io::Result<bool> {
+    use std::io::Read as _;
+    let mut file = match std::fs::File::open(journal) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        opened => opened?,
+    };
+    let mut first = [0u8; 1];
+    Ok(file.read(&mut first)? == 1 && first[0] != 0)
+}
+
+/// [#576 RV20-3] Make sure no SQLite sidecar is left beside `dest` before a rename
+/// puts another file there, without losing what one may still hold for `dest`.
+///
+/// 1. `dest` is opened read-write and read, once, then closed: what its next
+///    ordinary open would do, done now. SQLite rolls a hot `-journal` back into
+///    `dest` - the last save, intact - and folds a `-wal` into it, removing both;
+///    a stale `-wal`/`-shm` that is not `dest`'s goes too. This cannot lose
+///    anything the next open of `dest` would keep: it IS that open. What the read
+///    returns does not matter (a copy damaged under its journal is still the one
+///    being replaced); only what is left beside it does.
+/// 2. A `-journal` still hot after that is one SQLite could not roll back - an
+///    I/O error, a read-only file, a sharing violation, a writer elsewhere holding
+///    the file - and the only thing that can still restore `dest`. It refuses the
+///    install, `dest` and its journal left as they were.
+/// 3. Whatever is left (a journal SQLite ignores, a `-wal`/`-shm` nobody needs)
+///    is removed; a removal that fails, or a sidecar still there after it, refuses
+///    the install - the case the removal after the rename only logged.
+///
+/// A sidecar beside a `dest` that is not there belongs to no file and is
+/// removed. Nothing to do, and no open, when no sidecar is there - the common case.
+fn settle_sidecars(dest: &Path) -> std::io::Result<()> {
+    let sidecars = SIDECAR_SUFFIXES.map(|suffix| sidecar_path(dest, suffix));
+    if !sidecars.iter().any(|sidecar| is_present(sidecar)) {
+        return Ok(());
+    }
+    if is_present(dest) {
+        if let Ok(conn) =
+            rusqlite::Connection::open_with_flags(dest, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+        {
+            let _ = conn.query_row("SELECT count(*) FROM sqlite_master", [], |_| Ok(()));
+            drop(conn);
+        }
+        let [journal, ..] = &sidecars;
+        if looks_hot(journal)? {
+            tracing::warn!(
+                path = %dest.display(),
+                purpose = "never install a file beside a journal that belongs to the old one",
+                "speleodb: the old file's hot journal could not be rolled back; not replacing it"
+            );
+            return Err(std::io::Error::other(
+                "the journal of an interrupted save beside it could not be rolled back",
+            ));
+        }
+    }
+    for sidecar in &sidecars {
+        match std::fs::remove_file(sidecar) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                return Err(std::io::Error::new(
+                    e.kind(),
+                    format!("could not remove {}: {e}", sidecar.display()),
+                ));
+            }
+            _ => {}
+        }
+        if is_present(sidecar) {
+            return Err(std::io::Error::other(format!(
+                "{} is still there after its removal",
+                sidecar.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Test seam (#576 RV20-3): [`install_over`] stops right after its rename, on
+    /// the thread that set this, as a crash there - or a removal that failed and
+    /// was only logged - leaves the install.
+    static SKIP_REMOVAL_AFTER_RENAME: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
 }
 
 /// Remove the SQLite sidecars (`-journal`, `-wal`, `-shm`) beside `path`. One
 /// that is not there is the common case; any other failure is logged, as the
 /// sidecar then stays beside the file.
 fn remove_sidecars(path: &Path) {
-    for suffix in ["-journal", "-wal", "-shm"] {
-        let mut sidecar = path.as_os_str().to_os_string();
-        sidecar.push(suffix);
-        let sidecar = std::path::PathBuf::from(sidecar);
+    for suffix in SIDECAR_SUFFIXES {
+        let sidecar = sidecar_path(path, suffix);
         match std::fs::remove_file(&sidecar) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => tracing::warn!(
                 path = %sidecar.display(),
@@ -1150,5 +1257,133 @@ mod tests {
             "the journal is rolled back"
         );
         after.expect("the recovered copy is clean, so the replace may go ahead");
+    }
+
+    /// The replace a confirmed "take the server copy" runs: `Discard`, with the
+    /// downloaded history dropped.
+    fn discard_replace(
+        state: &AppState,
+        dest: &Path,
+    ) -> Result<HashMap<String, String>, SpeleoDbError> {
+        let zip = server_dump();
+        state.replace_cache_stalx_with(
+            &TestReplace,
+            &mut Dump::open(&zip)?,
+            ENTRY,
+            dest,
+            ID,
+            LocalEditsPolicy::Discard,
+            InheritedUndo::Drop,
+        )
+    }
+
+    /// The SQLite sidecars beside `path`.
+    fn sidecars_left(path: &Path) -> Vec<&'static str> {
+        ["-journal", "-wal", "-shm"]
+            .into_iter()
+            .filter(|suffix| sidecar_of(path, suffix).exists())
+            .collect()
+    }
+
+    /// [#576 RV20-3] Nothing of the old cache is left for the new one even when
+    /// the install stops right after its rename: a crash there (nothing after the
+    /// rename has run), or a removal that failed and was only logged (a Windows
+    /// sharing violation). The old cache's sidecars were removed only AFTER the
+    /// rename, so in either window its hot journal stayed beside the new file and
+    /// the next read-write open rolled it in. The seam stops the install right
+    /// after the rename, on this thread.
+    #[test]
+    fn the_old_caches_sidecars_are_settled_before_the_rename() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let dest = temp.path().join("project.stalx");
+        seed_behind_its_own_hot_journal(temp.path(), &dest);
+        for suffix in ["-wal", "-shm"] {
+            std::fs::write(sidecar_of(&dest, suffix), b"stale").expect("plant a stale sidecar");
+        }
+
+        let state = AppState::new().expect("state");
+        SKIP_REMOVAL_AFTER_RENAME.with(|skip| skip.set(true));
+        let replaced = discard_replace(&state, &dest);
+        SKIP_REMOVAL_AFTER_RENAME.with(|skip| skip.set(false));
+        let left = sidecars_left(&dest);
+        let name = Database::open_existing(&dest)
+            .and_then(|db| db.load_project())
+            .map(|project| project.name);
+        println!(
+            "install stopped right after its rename: replace -> {:?}; sidecars beside the new \
+             cache: {left:?}; the cache then holds {:?}",
+            replaced.as_ref().map_err(ToString::to_string),
+            name.as_ref().map_err(|e| format!("{e:#}")),
+        );
+
+        replaced.expect("the download replaces the cache");
+        assert!(
+            left.is_empty(),
+            "no sidecar of the old cache beside the new one: {left:?}"
+        );
+        assert_eq!(
+            name.expect("the cache opens"),
+            "Server Copy",
+            "the cache is the download, not the old copy's journal played into it"
+        );
+    }
+
+    /// [#576 RV20-3] A hot journal that SQLite cannot roll back refuses the
+    /// replace before the rename, and the copy and its journal stay as they were:
+    /// together they are still the last save. Here the copy is read-only, so the
+    /// read-write open falls back to read-only and cannot play the journal back.
+    /// The rename used to go ahead regardless, and a stop right after it left the
+    /// journal beside the new file.
+    #[cfg(unix)]
+    #[test]
+    fn a_journal_that_cannot_be_rolled_back_refuses_the_replace() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let temp = tempfile::TempDir::new().expect("temp");
+        let dest = temp.path().join("project.stalx");
+        seed_behind_its_own_hot_journal(temp.path(), &dest);
+        let journal = sidecar_of(&dest, "-journal");
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o444))
+            .expect("make the copy read-only");
+        if std::fs::OpenOptions::new().write(true).open(&dest).is_ok() {
+            println!("file modes do not bind for this user; nothing to check");
+            return;
+        }
+        let copy_before = std::fs::read(&dest).expect("read dest");
+        let journal_before = std::fs::read(&journal).expect("read journal");
+
+        let state = AppState::new().expect("state");
+        SKIP_REMOVAL_AFTER_RENAME.with(|skip| skip.set(true));
+        let replaced = discard_replace(&state, &dest);
+        SKIP_REMOVAL_AFTER_RENAME.with(|skip| skip.set(false));
+        let copy_kept = std::fs::read(&dest).is_ok_and(|bytes| bytes == copy_before);
+        let journal_kept = std::fs::read(&journal).is_ok_and(|bytes| bytes == journal_before);
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o644))
+            .expect("make the file writable again");
+        let name = Database::open_existing(&dest)
+            .and_then(|db| db.load_project())
+            .map(|project| project.name);
+        println!(
+            "read-only copy behind its hot journal: replace -> {:?}; copy kept: {copy_kept}; \
+             journal kept: {journal_kept}; the file then holds {:?}",
+            replaced.as_ref().map_err(ToString::to_string),
+            name.as_ref().map_err(|e| format!("{e:#}")),
+        );
+
+        let refused = replaced
+            .expect_err("a journal that cannot be rolled back refuses the replace")
+            .to_string();
+        assert!(
+            refused.contains("could not install"),
+            "refused as a failed install: {refused:?}"
+        );
+        assert!(
+            copy_kept && journal_kept,
+            "the copy and its journal stay as they were"
+        );
+        assert_eq!(
+            name.expect("once writable, the copy opens"),
+            "Local",
+            "its journal rolls it back to the last save"
+        );
     }
 }
