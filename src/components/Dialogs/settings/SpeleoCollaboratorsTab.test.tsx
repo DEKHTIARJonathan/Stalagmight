@@ -139,7 +139,7 @@ describe('SpeleoCollaboratorsTab', () => {
     render(<SpeleoCollaboratorsTab />);
     const input = await screen.findByTestId('speleodb-collaborators-add-email');
     await userEvent.type(input, 'ali');
-    const suggestion = await screen.findByTestId('speleodb-collaborators-suggestion-alice@x.com');
+    const suggestion = await screen.findByTestId('speleodb-collaborators-suggestion-0');
     expect(suggestion).toHaveTextContent('Alice Diver <alice@x.com>');
     await userEvent.click(suggestion);
     expect(input).toHaveValue('alice@x.com');
