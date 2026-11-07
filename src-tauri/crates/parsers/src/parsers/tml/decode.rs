@@ -128,7 +128,7 @@ fn load_xml_from_zip_capped(path: &Path, archive_limit: u64, cap: u64) -> Result
 /// bytes, before the ZIP reader parses its directory (#576 RV19a-4), and
 /// leave `file` at its start for that reader. `len` is the archive's size.
 ///
-/// Two checks. The count the last end record declares gives the refusal its
+/// Three checks. The count the last end record declares gives the refusal its
 /// plain words, but bounds nothing on its own: the `zip` crate searches the
 /// whole file backwards for end records and, whenever one fails, falls back on
 /// an earlier one (zip 2.4.2 spec.rs:605-820, read.rs:655-680), so a broken
@@ -139,21 +139,48 @@ fn load_xml_from_zip_capped(path: &Path, archive_limit: u64, cap: u64) -> Result
 /// any attempt can parse. A signature also turns up by chance in compressed
 /// data, with probability 2^-32 at each byte offset; a real `.tml` (one entry,
 /// megabytes) never comes near 10 000 of them.
+///
+/// The third covers what the second cannot (#576 RV19a-4b): before it reads
+/// one directory record, the reader reserves room for every entry a ZIP64 end
+/// record declares (read.rs:692-706, about 200 bytes an entry), so a record
+/// declaring 11 million reserves 2 GB with no directory record in the file.
+/// And it does not stop at the record the locator points at: it searches
+/// forward from there (spec.rs:762-790), so that record can sit anywhere
+/// before the locator. What it takes is fixed by structure instead: a locator
+/// right before an end record (spec.rs:621, 657), and a ZIP64 end record whose
+/// size field ends it exactly where that locator starts (spec.rs:752, 787).
+/// [`scan_directory_signatures`] refuses every ZIP64 end record of that shape
+/// that declares more than the limit. The exact end is what keeps a signature
+/// that turns up by chance in compressed data from refusing a real archive:
+/// its random counts are over the limit, but its size field would have to
+/// reach a locator to the byte.
 fn refuse_too_many_entries(path: &Path, file: &mut fs::File, len: u64) -> Result<()> {
     let reading = || format!("reading {}", path.display());
+    let limit = MAX_TML_ENTRIES as u64;
     let declared = declared_entry_count(file, len).with_context(reading)?;
-    if let Some(declared) = declared.filter(|&count| count > MAX_TML_ENTRIES as u64) {
+    let scan = scan_directory_signatures(file, limit).with_context(reading)?;
+    if let Some(declared) = declared
+        .filter(|&count| count > limit)
+        .or(scan.zip64_declared_over)
+    {
         bail!(
             "'{}' is a ZIP archive that declares {declared} entries, over the \
              {MAX_TML_ENTRIES}-entry limit for a TML file; it was not read.",
             path.display()
         );
     }
-    let records = count_directory_records(file).with_context(reading)?;
-    if records > MAX_TML_ENTRIES as u64 {
+    if scan.records > limit {
         bail!(
-            "'{}' is a ZIP archive with {records} central-directory records, over the \
+            "'{}' is a ZIP archive with {} central-directory records, over the \
              {MAX_TML_ENTRIES}-entry limit for a TML file; it was not read.",
+            path.display(),
+            scan.records
+        );
+    }
+    if scan.end_records_overflow {
+        bail!(
+            "'{}' is a ZIP archive with more than {MAX_END_CANDIDATES} ZIP64 end records \
+             or locators; it was not read.",
             path.display()
         );
     }
@@ -164,33 +191,103 @@ fn refuse_too_many_entries(path: &Path, file: &mut fs::File, len: u64) -> Result
 /// `PK\x01\x02`, the signature every central-directory record starts with.
 const DIRECTORY_RECORD_SIGNATURE: [u8; 4] = *b"PK\x01\x02";
 
-/// How many central-directory signatures `file` holds, read once from its
-/// start in 64 KiB chunks.
-fn count_directory_records(file: &mut fs::File) -> std::io::Result<u64> {
+/// How many ZIP64 end records over the limit, and how many locators, the scan
+/// keeps. A real archive holds one of each at most, and a signature turns up by
+/// chance about once in 4 GiB; more is a crafted archive, refused outright so
+/// the scan's own memory stays bounded.
+const MAX_END_CANDIDATES: usize = 1024;
+
+/// What [`scan_directory_signatures`] found.
+#[derive(Debug, Default)]
+struct DirectoryScan {
+    /// Central-directory signatures in the file.
+    records: u64,
+    /// The largest count over the limit that a ZIP64 end record the reader
+    /// could take declares, if any.
+    zip64_declared_over: Option<u64>,
+    /// More ZIP64 end records over the limit, or more locators, than
+    /// [`MAX_END_CANDIDATES`].
+    end_records_overflow: bool,
+}
+
+/// Read `file` once from its start in 64 KiB chunks: count its
+/// central-directory signatures, and find every ZIP64 end record declaring
+/// more than `limit` entries that ends exactly at a locator standing right
+/// before an end record - the shape the ZIP reader takes (see
+/// [`refuse_too_many_entries`]).
+fn scan_directory_signatures(file: &mut fs::File, limit: u64) -> std::io::Result<DirectoryScan> {
     const CHUNK: usize = 64 * 1024;
-    // The last three bytes of each chunk are carried into the next, so a
-    // signature across the seam is seen - and seen once, as three bytes
-    // cannot hold a whole one.
-    const CARRY: usize = DIRECTORY_RECORD_SIGNATURE.len() - 1;
+    // The longest field a signature is read with: a ZIP64 end record's counts
+    // end 40 bytes in. The bytes past the last offset whose whole window is in
+    // the buffer are carried into the next chunk, so every offset is looked at
+    // once, with its window whole wherever the file holds it.
+    const WINDOW: usize = 40;
     file.rewind()?;
-    let mut buffer = vec![0u8; CARRY + CHUNK];
+    let mut scan = DirectoryScan::default();
+    // (where the record ends, the larger count it declares)
+    let mut zip64_over: Vec<(u64, u64)> = Vec::new();
+    let mut locators: Vec<u64> = Vec::new();
+    let u64_at = |bytes: &[u8], offset: usize| {
+        let mut field = [0; 8];
+        field.copy_from_slice(&bytes[offset..offset + 8]);
+        u64::from_le_bytes(field)
+    };
+    let mut buffer = vec![0u8; WINDOW + CHUNK];
     let mut carried = 0;
-    let mut count = 0u64;
+    let mut base = 0u64;
     loop {
         let read = match file.read(&mut buffer[carried..]) {
-            Ok(0) => return Ok(count),
             Ok(read) => read,
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
             Err(e) => return Err(e),
         };
         let filled = carried + read;
-        count += buffer[..filled]
-            .windows(DIRECTORY_RECORD_SIGNATURE.len())
-            .filter(|window| *window == DIRECTORY_RECORD_SIGNATURE)
-            .count() as u64;
-        carried = filled.min(CARRY);
-        buffer.copy_within(filled - carried..filled, 0);
+        let at_end = read == 0;
+        let looked_at = if at_end {
+            filled
+        } else {
+            filled.saturating_sub(WINDOW - 1)
+        };
+        for at in 0..looked_at {
+            let window = &buffer[at..filled.min(at + WINDOW)];
+            if !window.starts_with(b"PK") {
+                continue;
+            }
+            let offset = base + at as u64;
+            if window.starts_with(&DIRECTORY_RECORD_SIGNATURE) {
+                scan.records += 1;
+            } else if window.starts_with(&ZIP64_END_SIGNATURE) && window.len() >= WINDOW {
+                let declared = u64_at(window, 24).max(u64_at(window, 32));
+                let ends_at = offset
+                    .checked_add(12)
+                    .and_then(|end| end.checked_add(u64_at(window, 4)));
+                if let Some(ends_at) = ends_at.filter(|_| declared > limit) {
+                    zip64_over.push((ends_at, declared));
+                }
+            } else if window.starts_with(&ZIP64_LOCATOR_SIGNATURE)
+                && window.get(20..24) == Some(&END_SIGNATURE[..])
+            {
+                locators.push(offset);
+            }
+            if zip64_over.len() > MAX_END_CANDIDATES || locators.len() > MAX_END_CANDIDATES {
+                scan.end_records_overflow = true;
+                return Ok(scan);
+            }
+        }
+        if at_end {
+            break;
+        }
+        buffer.copy_within(looked_at..filled, 0);
+        carried = filled - looked_at;
+        base += looked_at as u64;
     }
+    // `locators` is in file order, so sorted.
+    scan.zip64_declared_over = zip64_over
+        .into_iter()
+        .filter(|(ends_at, _)| locators.binary_search(ends_at).is_ok())
+        .map(|(_, declared)| declared)
+        .max();
+    Ok(scan)
 }
 
 /// `PK\x05\x06`, the signature of the 22-byte end-of-central-directory record.
@@ -1147,5 +1244,82 @@ mod tests {
         entries.extend(names.iter().map(|name| (name.as_str(), &b""[..])));
         write_tml_archive_entries(&path, &entries);
         load(&format!("{} entries", entries.len()), &path);
+    }
+
+    /// [#576 RV19a-4b] The ZIP reader does not take the ZIP64 end record the
+    /// locator points at: it searches forward from there for one that ends
+    /// where the locator starts, and reserves room for every entry that one
+    /// declares before it reads a directory record (11 million entries: 2 GB).
+    /// Here the locator points at the archive's first byte, the record sits
+    /// 460 100 bytes in - past what 10 001 directory records would fill, the
+    /// reader's one check of the count against the file - and the file holds
+    /// no directory record. The end-record check reads only where the locator
+    /// points and the record count is 0, so without the fix the ZIP reader
+    /// parsed it and the user was told that parse failed.
+    #[test]
+    fn a_zip64_end_record_away_from_where_the_locator_points_is_refused_before_the_parse() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut archive = vec![0u8; 460_100];
+        archive.extend(zip64_end(10_001, 0, 0, 0));
+        let path = write_synthetic_tml(&dir, &archive);
+
+        let outcome = describe(load_xml_from_zip(&path));
+        println!(
+            "ZIP64 end record declaring 10001 entries 460100 bytes in, locator pointing at 0: \
+             {outcome}"
+        );
+        assert!(
+            outcome.contains("declares 10001 entries") && outcome.contains("10000-entry limit"),
+            "the refusal must name the declared count and the limit, got {outcome:?}"
+        );
+    }
+
+    /// The file is read in chunks; a ZIP64 end record or its locator that
+    /// straddles the seam between two reads is seen all the same. The record
+    /// is moved across the first seam (65 537 bytes in) a byte at a time.
+    #[test]
+    fn a_zip64_end_record_across_a_read_seam_is_seen() {
+        let dir = tempfile::tempdir().unwrap();
+        let seam = 64 * 1024 + 1;
+        for pad in seam - 80..=seam + 2 {
+            let mut archive = vec![0u8; pad];
+            archive.extend(zip64_end(10_001, 0, 0, 0));
+            let path = write_synthetic_tml(&dir, &archive);
+            let outcome = describe(load_xml_from_zip(&path));
+            assert!(
+                outcome.contains("declares 10001 entries"),
+                "record {pad} bytes in: got {outcome:?}"
+            );
+        }
+    }
+
+    /// A ZIP64 end signature can turn up in an entry's data, with counts read
+    /// past it far over the limit. Its size field does not end it at a
+    /// locator, so the ZIP reader would never take it, and the archive loads.
+    #[test]
+    fn a_zip64_signature_inside_an_entrys_data_refuses_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let xml = wrap_xml(&tml_shot_xml(1, -1, "REAL", "A"));
+        let mut lookalike = b"PK\x06\x06".to_vec();
+        lookalike.extend_from_slice(&[0xFF; 60]);
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let stored = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer.start_file("Data.xml", stored).unwrap();
+        std::io::Write::write_all(&mut writer, xml.as_bytes()).unwrap();
+        writer.start_file("pad/blob", stored).unwrap();
+        std::io::Write::write_all(&mut writer, &lookalike).unwrap();
+        let archive = writer.finish().unwrap().into_inner();
+        assert!(
+            archive.windows(4).any(|w| w == b"PK\x06\x06"),
+            "premise: the signature is in the archive's bytes"
+        );
+        let path = write_synthetic_tml(&dir, &archive);
+
+        let loaded = load_xml_from_zip(&path)
+            .map(|loaded| loaded.xml)
+            .map_err(|e| format!("{e:#}"));
+        println!("ZIP64 end signature with saturated counts in a stored entry: {loaded:?}");
+        assert_eq!(loaded, Ok(xml));
     }
 }
