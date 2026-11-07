@@ -128,7 +128,7 @@ export const GROUP: SiteGroup = {
       'main: args.out': R.FOLDED,
       "main: args.trace.replace(/\\.json$/, '')": R.FOLDED,
       'main: describeSteps(minimal)':
-        "the minimal trace's steps (lib/fuzzTrace.ts describeSteps): step kinds, counts, test ids and the labels the scenarios wrote, folded; see the W51 open question on a trace's labels",
+        "the minimal trace's steps (lib/fuzzTrace.ts describeSteps): step kinds, counts, test ids and each label through shareableStepLabel (lib/stepLabels.ts: itself only when every word is one the harness's or the app's sources wrote, else valueShape; #576 W58 Q10), folded",
     },
     'e2e/agent/ipc-payload-probe.ts': {
       'main: started.state': STARTED_STATE,

@@ -112,6 +112,7 @@ import { shortId } from './crc32';
 import { noteFixtureName } from './privateFixtures';
 import { knobValueShaped } from './traceKnobs';
 import { foldLocalPaths, shareableFailureText, valueShape } from './shareableFailure';
+import { shareableStepLabel } from './stepLabels';
 
 /** Current trace schema. Bumped when a step shape changes incompatibly. */
 export const TRACE_VERSION = 4;
@@ -1228,43 +1229,48 @@ export function describeSteps(steps: readonly TraceStep[]): string {
  * publishable id, which since v3 is the only thing the step has: the rule
  * `fixtureCorpus.ts` states now holds for the trace FILE as well as for the text
  * rendered from it.
+ *
+ * A label prints through `shareableStepLabel` (#576 W58 Q10): `readTrace` checks
+ * it only as text, so one with a word no harness or app source wrote prints as
+ * its length.
  */
 function describeStep(step: TraceStep): string {
+  const label = 'label' in step ? shareableStepLabel(step.label) : '';
   switch (step.kind) {
     case 'mutate':
-      return step.label;
+      return label;
     case 'undoTo':
     case 'redoTo':
       return `${step.kind}(${step.steps} step(s))`;
     case 'ui':
-      return `${step.double === true ? 'dblclick' : 'click'} ${step.testid} - ${step.label}`;
+      return `${step.double === true ? 'dblclick' : 'click'} ${step.testid} - ${label}`;
     case 'input':
-      return `${step.mode} ${step.testid} - ${step.label}`;
+      return `${step.mode} ${step.testid} - ${label}`;
     case 'fileDialog': {
       const answer =
         step.rel === null ? 'cancel' : Array.isArray(step.rel) ? `${step.rel.length} file(s)` : step.rel;
-      return `${step.dialog}-dialog via ${step.trigger} -> ${answer} - ${step.label}`;
+      return `${step.dialog}-dialog via ${step.trigger} -> ${answer} - ${label}`;
     }
     case 'episode':
       return `episode ${step.index}${step.headless ? ' (no project)' : ''}`;
     case 'flow':
       return `flow ${step.index}`;
     case 'genFile':
-      return `genFile ${step.rel} - ${step.label}`;
+      return `genFile ${step.rel} - ${label}`;
     case 'corpusFile':
       // Printed, not folded: since v3 the step already holds the id, and folding
       // it again would print a tag that matched no metric key in the run beside
       // it. `asCorpusId` is what guarantees that, on both the record and the
       // read path.
-      return `corpusFile #${step.corpusId} -> ${step.rel} - ${step.label}`;
+      return `corpusFile #${step.corpusId} -> ${step.rel} - ${label}`;
     case 'route':
-      return `route ${step.rel} - ${step.label}`;
+      return `route ${step.rel} - ${label}`;
     case 'mapClick':
-      return `mapClick ${step.lngLat[0]},${step.lngLat[1]} - ${step.label}`;
+      return `mapClick ${step.lngLat[0]},${step.lngLat[1]} - ${label}`;
     case 'export':
-      return `export ${step.format} -> ${step.rel} - ${step.label}`;
+      return `export ${step.format} -> ${step.rel} - ${label}`;
     case 'oracle':
-      return `oracle ${step.oracle} - ${step.label}`;
+      return `oracle ${step.oracle} - ${label}`;
     case 'reload':
       return `reload ${step.fixture}`;
     default:
