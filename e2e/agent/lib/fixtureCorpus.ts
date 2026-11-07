@@ -886,14 +886,24 @@ function splitAtTags(text: string): string[] {
  * its backslash read as an escape of the second one's opening quote
  * (`(?<!\\)` in `charPattern`), so the second one printed - until a second
  * fold, which saw a tag there instead, folded it.
+ *
+ * The run of backslashes a match opens with - the escape of the name's first
+ * character, `\"` or `\u00e9` - is left as raw text before the tag, its length
+ * in `lent` at the tag's index (0 at a raw part's), for a shorter name that ends
+ * in a backslash to fold with (#576 W39-NF5): names fold longest first, and in
+ * `qzab\"qzlonger.dmp` the longer name took the backslash of `qzab\`, which
+ * then printed. `redactCorpusText` gives the tag back what no name took.
  */
-function foldRun(run: string, entry: Redaction, parts: string[]): void {
+function foldRun(run: string, entry: Redaction, parts: string[], lent: number[]): void {
   let rest = run;
   for (let match = entry.pattern.exec(rest); match !== null; match = entry.pattern.exec(rest)) {
-    parts.push(rest.slice(0, match.index), entry.say);
+    const opening = /^\\+/.exec(match[0])?.[0].length ?? 0;
+    parts.push(rest.slice(0, match.index + opening), entry.say);
+    lent.push(0, opening);
     rest = rest.slice(match.index + match[0].length);
   }
   parts.push(rest);
+  lent.push(0);
 }
 
 /**
@@ -907,16 +917,29 @@ function foldRun(run: string, entry: Redaction, parts: string[]): void {
  */
 export function redactCorpusText(text: string): string {
   let parts = splitAtTags(text);
+  let lent = parts.map(() => 0);
   for (const list of [REDACTED_DIRS, REDACTED_NAMES]) {
     for (const entry of list) {
       if (entry.anchor !== '' && !parts.some((part, i) => i % 2 === 0 && part.includes(entry.anchor))) continue;
       const next: string[] = [];
+      const nextLent: number[] = [];
       for (let i = 0; i < parts.length; i++) {
-        if (i % 2 === 0) foldRun(parts[i]!, entry, next);
-        else next.push(parts[i]!);
+        if (i % 2 === 0) foldRun(parts[i]!, entry, next, nextLent);
+        else {
+          next.push(parts[i]!);
+          nextLent.push(lent[i]!);
+        }
       }
       parts = next;
+      lent = nextLent;
     }
+  }
+  // What a match lent (`foldRun`) and no name ending in a backslash took is the
+  // escape of the match's first character: its tag takes it back, so the line
+  // reads as it did before W39-NF5.
+  for (let i = 1; i < parts.length; i += 2) {
+    const back = lent[i]!;
+    if (back > 0 && parts[i - 1]!.endsWith('\\'.repeat(back))) parts[i - 1] = parts[i - 1]!.slice(0, -back);
   }
   return parts.join('');
 }
