@@ -27,8 +27,9 @@
  *   `createWriteStream`, `writeSync` / `writevSync` / `fs.write` / `fs.writev`
  *   to another descriptor, a `.write` / `.end` on a stream one opened, a
  *   `.write` / `.writev` / `.writeFile` / `.appendFile` on a FileHandle one
- *   opened (`fs.promises.open`), and the copies `copyFileSync`, `copyFile`,
- *   `cpSync`;
+ *   opened (`fs.promises.open`, or handed to a `.then` callback), and the copies
+ *   `copyFileSync`, `copyFile`, `cpSync`; each taken from fs by another name too
+ *   (`const { writeFileSync: w } = fs`, `import { copyFile as c } from 'fs'`);
  * - `passthrough`: a child process's `stdio` (or `stdout` / `stderr` option)
  *   that hands it this process's stdout or stderr (`'inherit'`, `1`, `2`,
  *   `process.stdout`), an `execSync` / `execFileSync` that sets no `stdio`
@@ -36,7 +37,8 @@
  *   value (`log = console.log`, `const out = process.stderr`, `const c =
  *   console`, `const { error } = console`, `const { stdout } = process`,
  *   `import { stdout } from 'node:process'`, anything imported from `console`,
- *   the same taken with `require`, `globalThis.console`, `promisify(fs.write)`).
+ *   the same taken with `require` or a dynamic `import()`, `globalThis.console`,
+ *   `promisify(fs.write)`, a file write handed on: `const w = fs.writeFileSync`).
  *
  * A value is followed through a `const` to what it was made from, through
  * a call of a local arrow function to what it returns, each parameter standing
@@ -143,10 +145,15 @@ const METRIC = /^[\w$]+(?:\.[\w$]+)*\.(?:metric|setMetric)$/;
 const ERROR_CALL = /(?:^|\.)(?:[A-Z]\w*)?Error$/;
 /** Modules that hand out this process's streams or console under another name. */
 const STD_MODULE = /^(?:node:)?(?:process|console)$/;
-/** What a destructure or a named import of `process` takes that prints. */
-const PROCESS_SINKS = new Set(['stdout', 'stderr', 'emitWarning']);
+/**
+ * What a destructure or a named import of `process` takes that prints: `default` too, which a module
+ * namespace of it holds the whole process in (`const { default: p } = await import('process')`).
+ */
+const PROCESS_SINKS = new Set(['stdout', 'stderr', 'emitWarning', 'default']);
 /** Copies: the target is the second argument, the content another file. */
 const FILE_COPY = new Set(['copyFileSync', 'copyFile', 'cpSync']);
+/** What fs and fs/promises hand out that writes or copies a file: a site where it is called, a sink handed on anywhere else. */
+const FS_FILE_WRITE = new Set([...FILE_WRITE, ...FILE_COPY]);
 /** Child processes whose stderr is this process's unless `stdio` says otherwise. */
 const EXEC_INHERITS_STDERR = new Set(['execSync', 'execFileSync']);
 /** A call whose function argument runs in the page. */
@@ -534,18 +541,36 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
   };
 
   // The fs module and fs/promises under the names the file gives them (`fs` itself, `import * as
-  // nodeFs from 'node:fs'`, `const fsp = require('fs/promises')`, `const fsp = fs.promises`), and
-  // `write` / `writev` / `open` taken from them by name (#576 W56-T1-NF1).
+  // nodeFs from 'node:fs'`, `const fsp = require('fs/promises')`, `const fsp = fs.promises`, `const fsp =
+  // await import('fs/promises')`), and `write` / `writev` / `open` taken from them by name (#576
+  // W56-T1-NF1), and a file write or copy taken by name (`const { writeFileSync: w } = fs`, `import {
+  // copyFile as c } from 'node:fs/promises'`), each local name to what it was taken as (#576 W74-NF1).
   const fsModules = new Set(['fs']);
   const fsPromisesModules = new Set<string>();
-  const fsWrites = new Set<string>();
+  const fsWrites = new Map<string, string>();
   const fsOpens = new Set<string>();
-  /** The module an expression is: `require('<module>')` (without `node:`), or a name or `.promises` of fs. */
+  const fsFileWrites = new Map<string, string>();
+  /**
+   * The module a `require('<module>')` or a dynamic `import('<module>')` loads, without `node:`; and
+   * whether it is the import, whose call is a promise of the module (#576 W74-NF1).
+   */
+  const loaded = (expr: ts.Expression): { module: string; imported: boolean } | undefined => {
+    if (!ts.isCallExpression(expr)) return undefined;
+    const imported = expr.expression.kind === ts.SyntaxKind.ImportKeyword;
+    if (!imported && !(ts.isIdentifier(expr.expression) && expr.expression.text === 'require')) return undefined;
+    const spec = expr.arguments[0];
+    return spec && ts.isStringLiteralLike(spec) ? { module: spec.text.replace(/^node:/, ''), imported } : undefined;
+  };
+  /** The module an expression is: `require('<module>')` or `await import('<module>')` (without `node:`), or a name or `.promises` of fs. */
   const moduleOf = (expr: ts.Expression): string | undefined => {
-    if (ts.isCallExpression(expr) && ts.isIdentifier(expr.expression) && expr.expression.text === 'require') {
-      const spec = expr.arguments[0];
-      return spec && ts.isStringLiteralLike(spec) ? spec.text.replace(/^node:/, '') : undefined;
-    }
+    let inner = expr;
+    while (ts.isParenthesizedExpression(inner)) inner = inner.expression;
+    const awaited = ts.isAwaitExpression(inner);
+    if (ts.isAwaitExpression(inner)) inner = inner.expression;
+    while (ts.isParenthesizedExpression(inner)) inner = inner.expression;
+    const load = loaded(inner);
+    // A dynamic import is the module once awaited; un-awaited it is a promise of it.
+    if (load) return load.imported && !awaited ? undefined : load.module;
     if (ts.isIdentifier(expr)) return fsModules.has(expr.text) ? 'fs' : fsPromisesModules.has(expr.text) ? 'fs/promises' : undefined;
     if (ts.isPropertyAccessExpression(expr) && expr.name.text === 'promises' && moduleOf(expr.expression) === 'fs') return 'fs/promises';
     return undefined;
@@ -555,8 +580,17 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     const name = module.replace(/^node:/, '');
     if (name === 'fs' && taken === undefined) fsModules.add(local);
     else if ((name === 'fs' && taken === 'promises') || (name === 'fs/promises' && taken === undefined)) fsPromisesModules.add(local);
-    else if (name === 'fs' && taken !== undefined && FS_ASYNC_WRITE.has(taken)) fsWrites.add(local);
+    else if (name === 'fs' && taken !== undefined && FS_ASYNC_WRITE.has(taken)) fsWrites.set(local, taken);
     else if (name === 'fs/promises' && taken === 'open') fsOpens.add(local);
+    else if ((name === 'fs' || name === 'fs/promises') && taken !== undefined && FS_FILE_WRITE.has(taken)) fsFileWrites.set(local, taken);
+  };
+  /** A destructure of `module`: each name it takes, and fs's `promises` destructured in turn (`const { promises: { writeFile: w } } = fs`). */
+  const bindPattern = (module: string, pattern: ts.ObjectBindingPattern): void => {
+    for (const element of pattern.elements) {
+      const taken = text(element.propertyName ?? element.name);
+      if (!ts.isObjectBindingPattern(element.name)) bindModule(module, element.name.getText(source), taken);
+      else if (module === 'fs' && taken === 'promises') bindPattern('fs/promises', element.name);
+    }
   };
   source.forEachChild(function modules(node: ts.Node): void {
     if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier) && node.importClause) {
@@ -571,9 +605,7 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     const held = ts.isVariableDeclaration(node) && node.initializer ? moduleOf(node.initializer) : undefined;
     if (held !== undefined && ts.isVariableDeclaration(node)) {
       if (ts.isIdentifier(node.name)) bindModule(held, node.name.text);
-      if (ts.isObjectBindingPattern(node.name)) {
-        for (const element of node.name.elements) bindModule(held, element.name.getText(source), text(element.propertyName ?? element.name));
-      }
+      if (ts.isObjectBindingPattern(node.name)) bindPattern(held, node.name);
     }
     node.forEachChild(modules);
   });
@@ -582,6 +614,8 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     ts.isPropertyAccessExpression(callee)
       ? FS_ASYNC_WRITE.has(callee.name.text) && moduleOf(callee.expression) === 'fs'
       : ts.isIdentifier(callee) && fsWrites.has(callee.text);
+  /** fs or fs/promises, under any name the file gives it. */
+  const isFsModule = (expr: ts.Expression): boolean => ['fs', 'fs/promises'].includes(moduleOf(expr) ?? '');
   /** `await fs.promises.open(..)`, `fsp.open(..)`, `open(..)` taken from fs/promises: a FileHandle. */
   const opensHandle = (expr: ts.Expression): boolean => {
     let at = expr;
@@ -604,10 +638,20 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
         ? node.right
         : undefined;
     const holder = ts.isVariableDeclaration(node) ? node.name : ts.isBinaryExpression(node) ? node.left : undefined;
-    const opens = init && ts.isCallExpression(init) && /(?:^|\.)createWriteStream$/.test(text(init.expression));
+    const opens =
+      init &&
+      ts.isCallExpression(init) &&
+      (/(?:^|\.)createWriteStream$/.test(text(init.expression)) ||
+        (ts.isIdentifier(init.expression) && fsFileWrites.get(init.expression.text) === 'createWriteStream'));
     // Or another name for one (`const driverLog = this.driverLog`), declared after it.
     if (holder && init && (opens || fileStreams.has(text(init)))) fileStreams.add(text(holder));
     if (holder && init && (opensHandle(init) || fileHandles.has(text(init)))) fileHandles.add(text(holder));
+    // Or the handle a callback is given (`fsp.open(p).then((fh) => fh.write(..))`, #576 W74-NF1).
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'then' && opensHandle(node.expression.expression)) {
+      const callback = node.arguments[0];
+      const param = callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback)) ? callback.parameters[0] : undefined;
+      if (param && ts.isIdentifier(param.name)) fileHandles.add(param.name.text);
+    }
     node.forEachChild(holders);
   });
 
@@ -623,7 +667,9 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     }
     if (ts.isCallExpression(node)) {
       const callee = text(node.expression);
-      const last = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text : callee;
+      // A file write or copy taken from fs by another name (`const { writeFileSync: w } = fs`) is that write.
+      const taken = ts.isIdentifier(node.expression) ? fsFileWrites.get(node.expression.text) : undefined;
+      const last = ts.isPropertyAccessExpression(node.expression) ? node.expression.name.text : (taken ?? callee);
       // The callee's name without whitespace or arguments (`context\n  .log` is `context.log`).
       const named = calleeName(node.expression);
       // A stream wrapper that holds the console or a stream (`const c = console`): its methods print too.
@@ -643,10 +689,11 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
             : args;
       const [first, ...rest] = node.arguments;
       const fdWrite = FD_WRITE.has(last) || asyncFdWrite(node.expression);
+      // On a handle held in a name, or straight on the open (`(await fsp.open(p, 'w')).write(..)`, #576 W74-NF1).
       const handleWrite =
         ts.isPropertyAccessExpression(node.expression) &&
         HANDLE_WRITE.has(node.expression.name.text) &&
-        fileHandles.has(text(node.expression.expression));
+        (fileHandles.has(text(node.expression.expression)) || opensHandle(node.expression.expression));
       // `throw Error(message)`: the same error without `new`.
       if (ERROR_CALL.test(named) && first) site(node, 'error', callee, messageValues(first, errorsProjected));
       if (METRIC.test(named)) {
@@ -699,6 +746,32 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     if (ts.isPropertyAccessExpression(node) && asyncFdWrite(node) && !(ts.isCallExpression(node.parent) && node.parent.expression === node)) {
       reference(node, text(node));
     }
+    // A file write or copy handed on (`const w = fs.writeFileSync`, `promisify(fsp.writeFile)`), or one taken from
+    // fs by name and handed on under that name (`const w = writeFileSync`, `promisify(write)`): whatever it is
+    // later called with is written, and no call of it is a site (#576 W74-NF1).
+    const called = node.parent !== undefined && ts.isCallExpression(node.parent) && node.parent.expression === node;
+    if (!called && ts.isPropertyAccessExpression(node) && FS_FILE_WRITE.has(node.name.text) && isFsModule(node.expression)) {
+      reference(node, text(node));
+    }
+    const takenFromFs = ts.isIdentifier(node) ? (fsFileWrites.get(node.text) ?? fsWrites.get(node.text)) : undefined;
+    if (takenFromFs !== undefined && !called) {
+      const parent = node.parent;
+      // Its own declaration (`import { writeFileSync as w }`, `const { writeFileSync: w } = fs`), a property or a
+      // declaration of the same name, or its type.
+      const ownName =
+        ts.isImportSpecifier(parent) ||
+        (ts.isBindingElement(parent) && (parent.name === node || parent.propertyName === node)) ||
+        ((ts.isPropertyAccessExpression(parent) ||
+          ts.isPropertyAssignment(parent) ||
+          ts.isVariableDeclaration(parent) ||
+          ts.isParameter(parent) ||
+          ts.isFunctionDeclaration(parent) ||
+          ts.isMethodDeclaration(parent)) &&
+          parent.name === node) ||
+        ts.isTypeQueryNode(parent) ||
+        ts.isQualifiedName(parent);
+      if (!ownName) reference(node, `fs.${takenFromFs}`);
+    }
     // The stream itself handed on (`const out = process.stderr`, `stdio: [.., process.stderr]`).
     if (
       ts.isPropertyAccessExpression(node) &&
@@ -726,7 +799,9 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
         ((ts.isVariableDeclaration(parent) || ts.isParameter(parent) || ts.isBindingElement(parent) || ts.isPropertyAssignment(parent)) &&
           parent.name === node) ||
         ts.isTypeOfExpression(parent) ||
-        ts.isTypeQueryNode(parent);
+        ts.isTypeQueryNode(parent) ||
+        // A name in a type (`typeof globalThis.console`, `typeof console.log`): never a value (#576 W74-NF3).
+        ts.isQualifiedName(parent);
       const element = ts.isElementAccessExpression(parent) && parent.expression === node ? parent : undefined;
       const call = element && ts.isCallExpression(element.parent) && element.parent.expression === element ? element.parent : undefined;
       // `console[method] = ..` (mcp/hygiene.ts) replaces a method: whatever replaces it prints and is checked there.
@@ -760,19 +835,34 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     }
     // The same taken with `require` (#576 W56-T1-NF1): `const proc = require('process')`,
     // `const { stdout } = require('node:process')`, `require('process').stderr`, anything from `require('console')`.
-    const required = ts.isCallExpression(node) ? moduleOf(node) : undefined;
-    if (required === 'process' || required === 'console') {
-      const holder = node.parent;
-      if (ts.isVariableDeclaration(holder) && holder.initializer === node && ts.isObjectBindingPattern(holder.name)) {
+    // And with a dynamic import, awaited (`const { stdout } = await import('process')`, `(await
+    // import('process')).stderr`), or its promise handed on (`import('process').then(..)`, #576 W74-NF1).
+    const load = ts.isCallExpression(node) ? loaded(node) : undefined;
+    const required = load?.module;
+    if (load && (required === 'process' || required === 'console')) {
+      // What holds the module: the call, or for an import the `await` of it (in any parentheses).
+      let at: ts.Node = node;
+      let up = node.parent;
+      while (load.imported && ts.isParenthesizedExpression(up)) up = up.parent;
+      if (load.imported && ts.isAwaitExpression(up)) {
+        at = up;
+        while (ts.isParenthesizedExpression(at.parent)) at = at.parent;
+      }
+      const holder = at.parent;
+      if (load.imported && at === node) {
+        // The promise of the module handed on: whatever receives it holds the module.
+        reference(node, `import('${required}')`);
+      } else if (ts.isVariableDeclaration(holder) && holder.initializer === at && ts.isObjectBindingPattern(holder.name)) {
         for (const element of holder.name.elements) {
           const taken = text(element.propertyName ?? element.name);
           if (required === 'console' || PROCESS_SINKS.has(taken)) reference(element, `${required}.${taken}`);
         }
-      } else if (ts.isPropertyAccessExpression(holder) && holder.expression === node) {
+      } else if (ts.isPropertyAccessExpression(holder) && holder.expression === at) {
         if (required === 'console' || PROCESS_SINKS.has(holder.name.text)) reference(holder, `${required}.${holder.name.text}`);
-      } else if (!(required === 'process' && ts.isVariableDeclaration(holder) && ts.isIdentifier(holder.name) && holder.name.text === 'process')) {
-        // `const process = require('process')`: its `process.stdout.write` is a stream site by name.
-        reference(node, `require('${required}')`);
+      } else if (load.imported || !(required === 'process' && ts.isVariableDeclaration(holder) && ts.isIdentifier(holder.name) && holder.name.text === 'process')) {
+        // `const process = require('process')`: its `process.stdout.write` is a stream site by name. Not an
+        // import's namespace of it, whose `default` is the process again (`process.default.stdout`).
+        reference(node, `${load.imported ? 'import' : 'require'}('${required}')`);
       }
     }
     if (ts.isPropertyAssignment(node) && text(node.name) === 'stdio') {

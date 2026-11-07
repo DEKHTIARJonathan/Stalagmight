@@ -470,6 +470,90 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
     expect([...quiet.unchecked, ...quiet.unlisted]).toEqual([]);
   });
 
+  it('finds a file write handed on, a dynamic import of process or console, and a FileHandle in a callback (#576 W74-NF1)', () => {
+    const app = (line: number, fn = '<module>'): string => `m.ts:${line} [stream] ${fn}: station.name`;
+    const shareable = { class: 'shareable' as const, what: 'report.md', reason: 'pasted into public issues' };
+    const thenFn = '<module> > fs.promises.open().then';
+    // Each probe: a label, its source, what the guard reports, and the lists it is checked against.
+    const probes: [string, string, string[], Partial<SiteGroup>?][] = [
+      // A file write handed on through a variable: by property, the function handed on; taken by name, its calls are writes.
+      ['const w = fs.writeFileSync', 'const w = fs.writeFileSync;\nw(p, station.name);\n', ['m.ts:1 <module> -> fs.writeFileSync']],
+      ['const c = fs.copyFileSync', 'const c = fs.copyFileSync;\nc(source, p);\n', ['m.ts:1 <module> -> fs.copyFileSync']],
+      [
+        'promisify(fsp.writeFile)',
+        "import * as fsp from 'node:fs/promises';\nconst w = promisify(fsp.writeFile);\nawait w(p, station.name);\n",
+        ['m.ts:2 <module> -> fsp.writeFile'],
+      ],
+      ['const { writeFileSync: w } = fs', 'const { writeFileSync: w } = fs;\nw(p, station.name);\n', ['m.ts:2 <module> -> p']],
+      ["import { writeFileSync as w } from 'node:fs'", "import { writeFileSync as w } from 'node:fs';\nw(p, station.name);\n", ['m.ts:2 <module> -> p']],
+      ["const { appendFileSync: a } = require('fs')", "const { appendFileSync: a } = require('fs');\na(p, station.name);\n", ['m.ts:2 <module> -> p']],
+      ['const { copyFileSync: c } = fs', 'const { copyFileSync: c } = fs;\nc(source, p);\n', ['m.ts:2 <module> -> p']],
+      ['const { promises: { writeFile: w } } = fs', 'const { promises: { writeFile: w } } = fs;\nawait w(p, station.name);\n', ['m.ts:2 <module> -> p']],
+      ['const { writeSync: ws } = fs', 'const { writeSync: ws } = fs;\nws(2, station.name);\n', [app(2)]],
+      [
+        'const { createWriteStream: cws } = fs',
+        'const { createWriteStream: cws } = fs;\nconst out = cws(p);\nout.write(station.name);\n',
+        ['m.ts:2 <module> -> p', 'm.ts:3 <module> -> <stream out>'],
+      ],
+      [
+        "import { writeFileSync } from 'fs', handed on",
+        "import { writeFileSync } from 'fs';\nconst w = writeFileSync;\nw(p, station.name);\n",
+        ['m.ts:2 <module> -> fs.writeFileSync'],
+      ],
+      ["import { write } from 'fs', handed on", "import { write } from 'fs';\nconst w = promisify(write);\nawait w(fd, station.name);\n", ['m.ts:2 <module> -> fs.write']],
+      [
+        "const { writeFileSync: w } = await import('node:fs')",
+        "const { writeFileSync: w } = await import('node:fs');\nw(p, station.name);\n",
+        ['m.ts:2 <module> -> p'],
+      ],
+      // A dynamic import of process or console: what it takes that prints, or the module handed on.
+      ["const proc = await import('node:process')", "const proc = await import('node:process');\nproc.stdout.write(station.name);\n", ["m.ts:1 <module> -> import('process')"]],
+      ["const { stdout } = await import('process')", "const { stdout } = await import('process');\nstdout.write(station.name);\n", ['m.ts:1 <module> -> process.stdout']],
+      ["(await import('process')).stderr.write", "(await import('process')).stderr.write(station.name);\n", ['m.ts:1 <module> -> process.stderr']],
+      ["import('node:process').then", "import('node:process').then((p) => p.stdout.write(station.name));\n", ["m.ts:1 <module> -> import('process')"]],
+      ["const { default: p } = await import('process')", "const { default: p } = await import('process');\np.stdout.write(station.name);\n", ['m.ts:1 <module> -> process.default']],
+      ["const process = await import('process')", "const process = await import('process');\nprocess.default.stdout.write(station.name);\n", ["m.ts:1 <module> -> import('process')"]],
+      ["const { log } = await import('node:console')", "const { log } = await import('node:console');\nlog(station.name);\n", ['m.ts:1 <module> -> console.log']],
+      ["import { default as p } from 'process'", "import { default as p } from 'process';\np.stdout.write(station.name);\n", ['m.ts:1 <module> -> process.default']],
+      // A FileHandle handed to a callback: its writes are the file's, what it writes checked once listed.
+      ['open().then((fh) => fh.write(x))', "fs.promises.open(p, 'w').then((fh) => fh.write(station.name));\n", [`m.ts:1 ${thenFn} -> <handle fh>`]],
+      // Or written straight on the open, held in no name.
+      ['(await open()).write(x)', "(await fs.promises.open(p, 'w')).write(station.name);\n", ["m.ts:1 <module> -> <handle (await fs.promises.open(p, 'w'))>"]],
+      [
+        'fsp.open().then(function (h) { h.writeFile(x) })',
+        "import * as fsp from 'node:fs/promises';\nfsp.open(p, 'w').then(async function (h) {\n  await h.writeFile(station.name);\n});\n",
+        ['m.ts:3 <module> > fsp.open().then -> <handle h>'],
+      ],
+      [
+        'open().then((fh) => fh.write(x)), listed',
+        "fs.promises.open(p, 'w').then((fh) => fh.write(station.name));\n",
+        [`m.ts:1 [file] ${thenFn}: station.name`],
+        { fileSinks: { 'm.ts': { [`${thenFn} -> <handle fh>`]: shareable } } },
+      ],
+    ];
+    const found = Object.fromEntries(
+      probes.map(([label, source, , group]) => {
+        const result = check({ 'm.ts': source }, group);
+        return [label, [...result.unchecked, ...result.unlisted]];
+      }),
+    );
+    expect(found).toEqual(Object.fromEntries(probes.map(([label, , expected]) => [label, expected])));
+    // Not a sink: an fs read taken by name, a write taken and never used, what else an imported process
+    // hands out, a handle's read in a callback.
+    const quiet = check({
+      'm.ts':
+        "const { readFileSync: r } = fs;\nr(p);\nimport { writeFileSync as w } from 'node:fs';\n" +
+        "const { argv } = await import('node:process');\nconst home = (await import('process')).env.HOME;\n" +
+        "fs.promises.open(p).then((fh) => fh.read(buffer));\n",
+    });
+    expect([...quiet.unchecked, ...quiet.unlisted]).toEqual([]);
+  });
+
+  it("does not take the console's type under a qualified name for the console handed on (#576 W74-NF3)", () => {
+    const quiet = check({ 'm.ts': 'type C = typeof globalThis.console;\ntype D = typeof x.console;\ntype L = typeof console.log;\n' });
+    expect([...quiet.unchecked, ...quiet.unlisted]).toEqual([]);
+  });
+
   it('holds a listed sink handed on to a declared wrapper, and a wrapper to its own file (#576 RV20-12)', () => {
     // A logger handed on and listed: its calls are sites only if the name it is held in is a declared wrapper.
     const alias = { 'a.ts': 'const a1 = console.log;\na1(station.name);\n' };
