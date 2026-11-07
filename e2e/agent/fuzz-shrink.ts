@@ -317,7 +317,7 @@ async function main(): Promise<number> {
           `(${replayTimesMs.length} replays incl. the baseline)`,
         // Folded (#576 W51): the minimal trace sits beside the one the user gave,
         // and a step's `rel` or label can carry a path. A reload step's private
-        // fixture prints as its tag (#576 W58 NF1).
+        // fixture prints as its tag (#576 W58 NF1), and so does a step path the repo does not track (W74-NF2).
         `  minimal trace: ${foldLocalPaths(outPath)}`,
         '',
         'minimal action list:',

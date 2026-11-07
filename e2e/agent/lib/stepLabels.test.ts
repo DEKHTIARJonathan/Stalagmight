@@ -12,6 +12,7 @@ import { moveTraceStep, sourceTraceStep } from '../scenarios/importDialogTrace';
 import { ACTION_GENERATORS, type TargetingDigest } from '../scenarios/undoRedoFuzzActions';
 import { IMPORT_ACTION_GENERATORS } from '../scenarios/undoRedoFuzzImportActions';
 import { PATH_SHAPES, WRITING_FORMATS } from './exportOracles';
+import { shortId } from './crc32';
 import { describeSteps, type TraceStep } from './fuzzTrace';
 import { harnessWords, shareableStepLabel, stepLabelShaped } from './stepLabels';
 
@@ -164,7 +165,8 @@ describe("a fuzz trace step's label (#576 W58 Q10)", () => {
     expect(out).not.toMatch(/qz/);
     expect(out).toContain('createShot(s=1,after=100001)');
     expect(out).toContain('click continue-button - continue');
-    expect(out).toContain('genFile fuzz-files/a.dmp - malformed dmp');
+    // Its path, which the repo does not track, as its tag (#576 W74-NF2).
+    expect(out).toContain(`genFile <private-path#${shortId('fuzz-files/a.dmp')}> - malformed dmp`);
     expect(out).toContain('  2. a string of 19 character(s)');
     expect(out).toContain('type section-name-input - a string of 17 character(s)');
     expect(out).toContain('oracle x3-differential - a string of 7 character(s)');

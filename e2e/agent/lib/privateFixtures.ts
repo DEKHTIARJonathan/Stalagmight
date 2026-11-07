@@ -62,6 +62,27 @@ export function isTrackedFixture(name: string): boolean {
   return trackedFixtureNames().has(name);
 }
 
+let trackedAll: ReadonlySet<string> | null = null;
+
+/**
+ * Is `rel` a path git tracks in the checkout (repo-relative, `/`-separated)?
+ * Read once; when git cannot say, no path is tracked, the safe way round
+ * (#576 W74-NF2).
+ */
+export function isTrackedPath(rel: string): boolean {
+  if (trackedAll === null) {
+    let listed = '';
+    try {
+      // stderr discarded: git's own error can name the checkout.
+      listed = execFileSync('git', ['ls-files', '-z'], { cwd: REPO_ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 * 1024 * 1024 });
+    } catch {
+      listed = '';
+    }
+    trackedAll = new Set(listed.split('\0').filter((entry) => entry !== ''));
+  }
+  return trackedAll.has(rel);
+}
+
 /** The tag a private fixture prints as: no spaces, so a `KEY=<tag>` reproduce prefix keeps its shape. */
 export function fixtureTag(name: string): string {
   return `<private-fixture#${shortId(name)}>`;

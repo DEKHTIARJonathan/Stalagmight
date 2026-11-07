@@ -114,7 +114,7 @@ import { fixtureTag, isTrackedFixture, noteFixtureName, shareableFixtureName } f
 import { knobValueShaped } from './traceKnobs';
 import { foldLocalPaths, shareableFailureText, valueShape } from './shareableFailure';
 import { shareableStepLabel } from './stepLabels';
-import { TRACE_EXPORT_FORMATS, TRACE_ORACLE_NAMES, TRACE_TRIGGERS, shareableTraceWord } from './traceStepFields';
+import { TRACE_EXPORT_FORMATS, TRACE_ORACLE_NAMES, TRACE_TRIGGERS, shareableTracePath, shareableTraceWord } from './traceStepFields';
 
 /** Current trace schema. Bumped when a step shape changes incompatibly. */
 export const TRACE_VERSION = 4;
@@ -1251,7 +1251,8 @@ export function tracePrivateFixtures(trace: { fixture: unknown; steps: readonly 
  * its length. A reload's fixture prints by name only when the repo tracks it,
  * else as its tag (`shareableFixtureName`, #576 W58 NF1). The other fields it
  * checks only as text print shaped too (#576 W58 NF2): a test id through
- * `shareableTestId`, a path folded, a trigger, an export format or an oracle
+ * `shareableTestId`, a path by itself only when the repo tracks it, else as its
+ * tag (`shareableTracePath`, #576 W74-NF2), a trigger, an export format or an oracle
  * name only when it is one the harness defines (`traceStepFields.ts`), and a
  * corpus id only in its 5-hex form; any other value as its length.
  */
@@ -1269,7 +1270,7 @@ function describeStep(step: TraceStep): string {
       return `${step.mode} ${shareableTestId(step.testid)} - ${label}`;
     case 'fileDialog': {
       const answer =
-        step.rel === null ? 'cancel' : Array.isArray(step.rel) ? `${step.rel.length} file(s)` : foldLocalPaths(step.rel);
+        step.rel === null ? 'cancel' : Array.isArray(step.rel) ? `${step.rel.length} file(s)` : shareableTracePath(step.rel);
       return `${step.dialog}-dialog via ${shareableTraceWord(step.trigger, TRACE_TRIGGERS)} -> ${answer} - ${label}`;
     }
     case 'episode':
@@ -1277,7 +1278,7 @@ function describeStep(step: TraceStep): string {
     case 'flow':
       return `flow ${step.index}`;
     case 'genFile':
-      return `genFile ${foldLocalPaths(step.rel)} - ${label}`;
+      return `genFile ${shareableTracePath(step.rel)} - ${label}`;
     case 'corpusFile': {
       // Printed, not folded: since v3 the step already holds the id, and folding
       // it again would print a tag that matched no metric key in the run beside
@@ -1285,14 +1286,14 @@ function describeStep(step: TraceStep): string {
       // read path; a step built another way prints an id of another shape as
       // its length.
       const id = CORPUS_ID.test(step.corpusId) ? `#${step.corpusId}` : valueShape(step.corpusId);
-      return `corpusFile ${id} -> ${foldLocalPaths(step.rel)} - ${label}`;
+      return `corpusFile ${id} -> ${shareableTracePath(step.rel)} - ${label}`;
     }
     case 'route':
-      return `route ${foldLocalPaths(step.rel)} - ${label}`;
+      return `route ${shareableTracePath(step.rel)} - ${label}`;
     case 'mapClick':
       return `mapClick ${step.lngLat[0]},${step.lngLat[1]} - ${label}`;
     case 'export':
-      return `export ${shareableTraceWord(step.format, TRACE_EXPORT_FORMATS)} -> ${foldLocalPaths(step.rel)} - ${label}`;
+      return `export ${shareableTraceWord(step.format, TRACE_EXPORT_FORMATS)} -> ${shareableTracePath(step.rel)} - ${label}`;
     case 'oracle':
       return `oracle ${shareableTraceWord(step.oracle, TRACE_ORACLE_NAMES)} - ${label}`;
     case 'reload':

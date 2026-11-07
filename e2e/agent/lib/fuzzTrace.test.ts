@@ -588,6 +588,8 @@ describe('describeSteps', () => {
   });
 
   it('gives every v2 kind a line carrying what the label cannot', () => {
+    // A path the repo does not track prints as its tag (#576 W74-NF2).
+    const tag = (rel: string): string => `<private-path#${shortId(rel)}>`;
     const text = describeSteps([
       { kind: 'ui', testid: 'import-confirm', label: 'confirm import' },
       { kind: 'ui', testid: 'row-3', double: true, label: 'open row' },
@@ -607,14 +609,14 @@ describe('describeSteps', () => {
       '  1. click import-confirm - confirm import',
       '  2. dblclick row-3 - open row',
       '  3. type name - rename',
-      '  4. open-dialog via toolbar-import-button -> in/a.dmp - pick dmp',
+      `  4. open-dialog via toolbar-import-button -> ${tag('in/a.dmp')} - pick dmp`,
       '  5. open-dialog via key:Ctrl+O -> 2 file(s) - pick two',
       '  6. save-dialog via global-open-import-button -> cancel - cancel',
-      '  7. genFile in/a.dmp - v5 x2',
-      `  8. corpusFile #${corpusFileId('device/x.dmp')} -> in/x.dmp - corpus dmp`,
-      '  9. route in/a.tml - route',
+      `  7. genFile ${tag('in/a.dmp')} - v5 x2`,
+      `  8. corpusFile #${corpusFileId('device/x.dmp')} -> ${tag('in/x.dmp')} - corpus dmp`,
+      `  9. route ${tag('in/a.tml')} - route`,
       ' 10. mapClick -83.5,20.25 - pick station',
-      ' 11. export tml -> out/x.tml - roundtrip',
+      ` 11. export tml -> ${tag('out/x.tml')} - roundtrip`,
       ' 12. reload naharon.stalx',
     ]);
   });

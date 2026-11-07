@@ -1067,10 +1067,17 @@ locations:
   forged trace's, or one that would quote the app's text - prints as its
   length, `a string of <n> character(s)`. The other fields `readTrace` checks
   only as text print shaped too (#576 W58 NF2): a test id as a test id prints
-  (`shareableTestId`), a path folded, a file dialog's trigger, an export format
+  (`shareableTestId`), a file dialog's trigger, an export format
   or an oracle name only when it is one the harness defines
   (`lib/traceStepFields.ts`), and a corpus id only in its 5-hex form; any
-  other value prints as its length.
+  other value prints as its length. A step's relative path prints as itself
+  only when the repo tracks it, as a fixture name does: a path `git ls-files`
+  lists, or the session's copy of a tracked fixture (`fixtures/<name>`). Any
+  other - the session's own `fuzz-files/...` and `out/...` paths too - prints
+  as a tag, `<private-path#xxxxx>` (`crc32.shortId` of the path), so the steps
+  that name one file still agree (#576 W74-NF2, `shareableTracePath`): folding
+  replaces only the local roots, so a forged trace's `qzCave/x.dmp` printed
+  its names.
 - A scenario's progress lines (`   . <line>`) print in the headline form
   (`shareableProgressLine`): folded, and the app's text after a `<what>
   failed:` prefix replaced by its length. A scenario reports the app's text in

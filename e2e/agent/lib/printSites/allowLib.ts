@@ -129,7 +129,6 @@ export const GROUP: SiteGroup = {
       'describeStep: step.index': "an episode's or a flow's index: validateStep refuses anything but a non-negative integer",
       'describeStep: step.lngLat[0]': "a map click's longitude: validateStep refuses lngLat unless it is two finite numbers",
       'describeStep: step.lngLat[1]': "a map click's latitude: validateStep refuses lngLat unless it is two finite numbers",
-      'describeStep: step.rel': R.FOLDED,
       'describeStep: step.corpusId': "a corpus id, printed only where CORPUS_ID (/^[0-9a-f]{5}$/) matches it on the same line, else valueShape",
       'describeStep: shareableTraceWord(step.trigger, TRACE_TRIGGERS)':
         "a file dialog's trigger: itself only when TRACE_TRIGGERS lists it (the import-dialog fuzzer's, lib/traceStepFields.ts), else valueShape",
