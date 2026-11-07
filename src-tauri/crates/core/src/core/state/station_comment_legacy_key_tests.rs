@@ -28,7 +28,7 @@ use crate::test_fixtures::state_with_null_sink;
 
 /// Append a shot to the section, so a comment row at index 3 (past the end of
 /// the file's two shots) names the new end station.
-fn append_shot(state: &AppState, sid: u32) {
+pub(super) fn append_shot(state: &AppState, sid: u32) {
     let last = *shot_ids(state).last().unwrap();
     let appended = state.execute(Command::CreateShot {
         section_id: sid,
@@ -58,17 +58,17 @@ fn prepend_shot(state: &AppState, sid: u32) {
     assert!(prepended.success, "prepend: {:?}", prepended.error);
 }
 
-fn undo(state: &AppState) {
+pub(super) fn undo(state: &AppState) {
     let undone = state.undo();
     assert!(undone.success, "undo: {:?}", undone.error);
 }
 
-fn redo(state: &AppState) {
+pub(super) fn redo(state: &AppState) {
     let redone = state.redo();
     assert!(redone.success, "redo: {:?}", redone.error);
 }
 
-fn station_holder(sr: StationRef) -> CommentHolder {
+pub(super) fn station_holder(sr: StationRef) -> CommentHolder {
     CommentHolder::Station { station_ref: sr }
 }
 
@@ -284,7 +284,7 @@ fn swapping_a_comment_held_under_two_keys_swaps_the_joined_text() {
 
 /// Every stored comment row as `key=text`, sorted: the keys themselves, not
 /// what a station shows, so a comment that changed key is visible.
-fn stored_rows(state: &AppState) -> Vec<String> {
+pub(super) fn stored_rows(state: &AppState) -> Vec<String> {
     let mut rows: Vec<String> = state
         .get_project_state()
         .unwrap()
