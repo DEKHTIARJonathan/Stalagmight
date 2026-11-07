@@ -1097,7 +1097,10 @@ locations:
   keys (`["Control", 1 character]`, `[5 characters, "Enter"]`): `browser.keys`
   types any key that is not a WebDriver key name, so a run of single
   characters can spell a name, and each such run is a count of characters
-  (#576 W39-NF2).
+  (#576 W39-NF2). An `os_keys` step lists its chord the same way: its
+  modifiers and named keys, and any other key - a letter, a digit - as a count
+  of characters (`["cmd", 1 character]`), since a run of one-key chords spells
+  text too (#576 RV19b-P6).
 
 **Not for sharing** - the full text, for triage where the run happened: the
 session's `actions.jsonl` (each `finding` event with its detail, each

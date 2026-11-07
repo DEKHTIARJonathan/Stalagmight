@@ -164,6 +164,33 @@ const describeKeys = (keys) => {
   return `[${parts.join(', ')}]`;
 };
 
+/**
+ * An `os_keys` step's chord (#576 RV19b-P6), by `describeKeys`' rule. Each step
+ * presses one chord, so a run of them spells text a key at a time as a run of
+ * `press_keys` keys does. A modifier and a named key of the chord grammar
+ * (e2e/agent/os/README.md, `helper/src/keyspec.rs`) stay, lower-cased as the
+ * grammar reads them; any other key - a letter, a digit - is counted in
+ * characters.
+ */
+const OS_KEY_NAMES = new Set([
+  'cmd', 'command', 'meta', 'super', 'win', 'shift', 'alt', 'opt', 'option', 'ctrl', 'control', 'fn',
+  'return', 'enter', 'escape', 'esc', 'tab', 'space', 'delete', 'backspace', 'forwarddelete',
+  'up', 'down', 'left', 'right', 'home', 'end', 'pageup', 'pagedown', 'help', 'keypadenter',
+  'minus', 'equal', 'comma', 'period', 'slash', 'backslash', 'semicolon', 'quote',
+  'leftbracket', 'rightbracket', 'grave', 'backtick',
+  'f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9', 'f10', 'f11', 'f12',
+]);
+const describeChord = (spec) =>
+  `[${String(spec ?? '')
+    .split('+')
+    .map((part) => {
+      const key = part.trim().toLowerCase();
+      if (OS_KEY_NAMES.has(key)) return JSON.stringify(key);
+      const typed = part.trim().length;
+      return `${typed} character${typed === 1 ? '' : 's'}`;
+    })
+    .join(', ')}]`;
+
 const records = fs
   .readFileSync(jsonlPath, 'utf8')
   .split('\n')
@@ -404,7 +431,8 @@ function describeAction(a) {
     case 'os_click':
       return `${p.testid ? `testid=${shareableTestId(p.testid)}` : `screen ${p.x},${p.y}`}${p.button === 'right' ? ' (right)' : ''}${p.double ? ' (double)' : ''}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
     case 'os_keys':
-      return `${mdInline(p.spec)}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
+      // Named keys stay, a typed key is counted - see describeChord (#576 RV19b-P6).
+      return `${describeChord(p.spec)}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
     case 'os_screenshot':
       return `${mdInline(p.name ?? 'os-shot')} [OS-level, real pixels]`;
     default:

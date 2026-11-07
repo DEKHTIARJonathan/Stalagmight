@@ -355,7 +355,8 @@ describe('generate-repro-report.mjs', () => {
     expect(md).toContain('os_click');
     expect(md).toContain('testid=toolbar-save-button');
     expect(md).toContain('os_keys');
-    expect(md).toContain('cmd+s');
+    // The chord's modifier, its typed key counted (#576 RV19b-P6).
+    expect(md).toContain('`os_keys` ["cmd", 1 character] [OS-level]');
     expect(md).toContain('[OS-level]');
   });
 
@@ -705,7 +706,7 @@ describe('generate-repro-report.mjs', () => {
         "9. `ipc` save_project' ## forged({})",
         "10. `store_action` project.undo'\\|x()",
         '11. `os_click` testid=<18 characters> [OS-level]',
-        '12. `os_keys` cmd+s ## forged [OS-level]',
+        '12. `os_keys` ["cmd", 11 characters] [OS-level]',
       ]);
     });
   });
@@ -823,6 +824,53 @@ describe('generate-repro-report.mjs', () => {
         '9. `os_click` testid=save-button [OS-level]',
         '10. `click` selector=[data-testid="toolbar-undo-button"] &gt; svg',
         '11. `click` selector=//*[@data-testid="section-row-12"]',
+      ]);
+    });
+  });
+
+  // os_keys presses one chord per step, so a run of them spells text a key at a
+  // time, as press_keys does (#576 RV19b-P6): the same rule, per chord.
+  describe('os_keys steps keep the modifiers and named keys and count the typed ones', () => {
+    let osDir: string;
+
+    beforeAll(() => {
+      osDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-oskeys-'));
+      const ts = (s: number) => new Date(1751970000000 + s * 1000).toISOString();
+      const chord = (seq: number, spec: string) =>
+        record({ type: 'action', v: 1, seq, ts: ts(seq), tool: 'os_keys', mutating: true, params: { spec }, outcome: { ok: true, durationMs: 1 } });
+      const lines = [
+        record({ type: 'session-start', v: 1, sessionId: 'oskeys-fixture', startedAt: ts(0) }),
+        chord(1, 'q'),
+        chord(2, 'z'),
+        chord(3, 'cmd+s'),
+        chord(4, 'Cmd+Shift+Z'),
+        chord(5, 'escape'),
+        chord(6, 'F5'),
+        chord(7, 'shift+equal'),
+        chord(8, 'ctrl+qz'),
+      ];
+      fs.writeFileSync(path.join(osDir, 'actions.jsonl'), `${lines.join('\n')}\n`);
+      execFileSync(process.execPath, [reportGen, osDir], { encoding: 'utf8' });
+    });
+
+    afterAll(() => fs.rmSync(osDir, { recursive: true, force: true }));
+
+    const steps = (): string =>
+      fs
+        .readFileSync(path.join(osDir, 'report.md'), 'utf8')
+        .split('## Steps to reproduce')[1]
+        .split('Automated replay')[0];
+
+    it('keeps each modifier and named key and gives a typed key as a count of characters', () => {
+      expect(steps().trim().split('\n')).toEqual([
+        '1. `os_keys` [1 character] [OS-level]',
+        '2. `os_keys` [1 character] [OS-level]',
+        '3. `os_keys` ["cmd", 1 character] [OS-level]',
+        '4. `os_keys` ["cmd", "shift", 1 character] [OS-level]',
+        '5. `os_keys` ["escape"] [OS-level]',
+        '6. `os_keys` ["f5"] [OS-level]',
+        '7. `os_keys` ["shift", "equal"] [OS-level]',
+        '8. `os_keys` ["ctrl", 2 characters] [OS-level]',
       ]);
     });
   });
