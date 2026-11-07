@@ -25,9 +25,10 @@
  *
  * This module is the one place that follows those events: a per-map tracker with
  * one set of map listeners, shared by every subscriber ({@link onStyleRestored})
- * and dropped with the last one. The survey map and the Global View subscribe
- * through `surveyLayer/glContextRecovery.ts` (`watchGlContextLoss`), which takes
- * the layer-order snapshot and re-adds the layers in that order (#576 D38).
+ * and dropped with the last one (once a restore under way has finished). The
+ * survey map and the Global View subscribe through
+ * `surveyLayer/glContextRecovery.ts` (`watchGlContextLoss`), which takes the
+ * layer-order snapshot and re-adds the layers in that order (#576 D38).
  */
 import type { CustomLayerInterface, Map as MaplibreMap } from 'maplibre-gl';
 
@@ -52,6 +53,12 @@ interface RestoreTracker {
 
 const trackers = new WeakMap<MaplibreMap, RestoreTracker>();
 
+/** Remove the map listeners and forget the tracker (no subscriber is left). */
+function dropTracker(map: MaplibreMap, tracker: RestoreTracker): void {
+  tracker.detach();
+  if (trackers.get(map) === tracker) trackers.delete(map);
+}
+
 function trackerFor(map: MaplibreMap): RestoreTracker {
   const existing = trackers.get(map);
   if (existing) return existing;
@@ -59,6 +66,8 @@ function trackerFor(map: MaplibreMap): RestoreTracker {
     tracker.awaitingLoad = false;
     tracker.restoring = false;
     for (const s of [...tracker.subscribers]) s.reattach();
+    // The last subscriber left during the restore: the tracker stayed for it.
+    if (tracker.subscribers.size === 0) dropTracker(map, tracker);
   };
   const onLost = (): void => {
     tracker.restoring = true;
@@ -90,7 +99,9 @@ function trackerFor(map: MaplibreMap): RestoreTracker {
  * Run `reattach` once the style rebuilt by a context restore or a worker restart
  * has loaded, and `onLoss` on MapLibre's `webglcontextlost` (both paths fire it;
  * on a worker restart the old style is still in place then). Returns an
- * unsubscribe; the last one removes the map listeners.
+ * unsubscribe; the last one removes the map listeners - once the rebuilt style
+ * has loaded, when it leaves during a restore: until then `isStyleRestoring`
+ * must stay true, and a later subscriber still gets its reattach (#576 RV18-MAP-3).
  */
 export function onStyleRestored(map: MaplibreMap, reattach: () => void, onLoss?: () => void): () => void {
   const tracker = trackerFor(map);
@@ -98,8 +109,7 @@ export function onStyleRestored(map: MaplibreMap, reattach: () => void, onLoss?:
   tracker.subscribers.add(subscriber);
   return () => {
     if (!tracker.subscribers.delete(subscriber) || tracker.subscribers.size > 0) return;
-    tracker.detach();
-    if (trackers.get(map) === tracker) trackers.delete(map);
+    if (!tracker.restoring) dropTracker(map, tracker);
   };
 }
 
