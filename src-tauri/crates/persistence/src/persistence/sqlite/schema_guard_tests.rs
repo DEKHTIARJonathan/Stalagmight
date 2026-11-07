@@ -561,12 +561,22 @@ const UNEXPECTED_TYPE: &str = "a schema object of an unexpected type";
 /// type of the `type` or `name` cell in the project table's schema record,
 /// TEXT of n bytes (2n+13) -> a BLOB of the same bytes (2n+12).
 fn project_with_one_schema_bit_flipped(dir: &TempDir, cell: &str) -> std::path::PathBuf {
+    let path = project_file_with(dir, "VACUUM;");
+    flip_one_schema_bit(&path, "project", cell);
+    path
+}
+
+/// [#619] One bit flipped in `table`'s schema record in the file at `path`,
+/// which VACUUM has just compacted: with `cell` "type" or "name", the serial
+/// type of that cell, TEXT of n bytes (2n+13) -> a BLOB of the same bytes
+/// (2n+12); with "type case", bit 5 of the type's first byte, 'table' ->
+/// 'Table' (0x74 -> 0x54).
+fn flip_one_schema_bit(path: &Path, table: &str, cell: &str) {
     // VACUUM leaves no free page, but a page split can leave a stale copy of a
     // record in a page's free space: the live one is where a cell pointer of a
     // table leaf page (type 13) leads, past the cell's payload-size and rowid
     // varints.
-    let path = project_file_with(dir, "VACUUM;");
-    let mut bytes = std::fs::read(&path).unwrap();
+    let mut bytes = std::fs::read(path).unwrap();
     let be16 = |at: usize| usize::from(u16::from_be_bytes([bytes[at], bytes[at + 1]]));
     let varint_len = |at: usize| (0..9).find(|k| bytes[at + k] < 0x80).map_or(9, |k| k + 1);
     let page_size = be16(16);
@@ -582,7 +592,8 @@ fn project_with_one_schema_bit_flipped(dir: &TempDir, cell: &str) -> std::path::
     };
     // The record's header is 7 bytes (checked below), and its body opens with
     // its type, name and tbl_name cells.
-    let body = b"tableprojectproject";
+    let body = format!("table{table}{table}");
+    let body = body.as_bytes();
     let found: Vec<usize> = bytes
         .windows(body.len())
         .enumerate()
@@ -592,20 +603,26 @@ fn project_with_one_schema_bit_flipped(dir: &TempDir, cell: &str) -> std::path::
     assert_eq!(
         found.len(),
         1,
-        "premise: one schema record of the project table"
+        "premise: one schema record of the {table} table"
     );
-    // Its header: its own size, 7, then the serial types of 'table' (23),
-    // 'project' twice (27), the rootpage (an 8-bit int, 1) and the 2-byte sql.
+    // Its header: its own size, 7, then the serial types of 'table' (23), the
+    // name twice (27 for 'project'), the rootpage (an 8-bit int, 1) and the
+    // 2-byte sql.
     let header = found[0] - 7;
+    let name = u8::try_from(2 * table.len() + 13).unwrap();
     assert_eq!(
         bytes[header..header + 5],
-        [7, 23, 27, 27, 1],
-        "premise: the project table's schema record header"
+        [7, 23, name, name, 1],
+        "premise: the {table} table's schema record header"
     );
-    let at = header + if cell == "type" { 1 } else { 2 };
-    bytes[at] ^= 1;
-    std::fs::write(&path, &bytes).unwrap();
-    path
+    let (at, bit) = match cell {
+        "type" => (header + 1, 1),
+        "name" => (header + 2, 1),
+        "type case" => (found[0], 0x20),
+        other => unreachable!("no such damage: {other}"),
+    };
+    bytes[at] ^= bit;
+    std::fs::write(path, &bytes).unwrap();
 }
 
 /// [#619] The salvage's tolerance of a `sql` or `tbl_name` BLOB, for the same
@@ -690,6 +707,198 @@ fn salvage_reads_a_file_whose_type_or_name_lost_its_text_type() {
             );
         }
     }
+}
+
+/// [#619] `load_project` first looks up each optional table (one a file written
+/// before it existed lacks) with an exact `type='table' AND name='..'` match.
+/// The salvage's whole-project load used it too, so a table whose schema row
+/// one flipped bit left typed 'Table', or with its `type` or `name` cell a BLOB
+/// of the same bytes, was taken for absent and its rows were silently left out
+/// of the salvaged project, although the salvage's guard accepts such a row and
+/// SQLite still reads the table. The salvage now finds those tables as its
+/// guard reads them. Every other open still refuses such a file.
+#[test]
+fn salvage_keeps_the_rows_of_an_optional_table_whose_schema_row_lost_its_text_type_or_case() {
+    use crate::models::{ShotData, StationRef};
+    // Each optional table `load_project` reads, and the project field its
+    // rows land in.
+    let tables = [
+        ("station_offsets", "station_offsets"),
+        ("station_comments", "station_comments"),
+        ("loop_closures", "loop_closures"),
+        ("imported_file_hashes", "imported_file_hashes"),
+        ("imported_section_hashes", "imported_section_hashes"),
+        ("project_settings", "surface_elevation"),
+    ];
+    let mut project = Project::new("Crafted".to_string(), None);
+    let section = project
+        .add_section(SectionData {
+            name: Some("SectionA".to_string()),
+            shots: vec![
+                ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                };
+                3
+            ],
+            ..Default::default()
+        })
+        .id;
+    project.ensure_shot_uuids();
+    project
+        .station_offsets
+        .insert(StationRef::new(section, 1).into(), (0.5, -0.25, 0.125));
+    project.station_comments.insert(
+        StationRef::new(section, 2).into(),
+        "Squeeze past the boulder".to_string(),
+    );
+    project.loop_closures.push(LoopClosure {
+        id: 1,
+        station_a: StationRef::new(section, 0).into(),
+        station_b: StationRef::new(section, 3).into(),
+        strategy: ClosureStrategy::Move,
+        is_aligned: false,
+        path_length: 15.0,
+        misclosure_distance: 0.5,
+        horizontal_misclosure: 0.25,
+        vertical_misclosure: 0.5,
+        error_percentage: 2.0,
+    });
+    project.imported_file_hashes.push("file-hash-1".to_string());
+    project
+        .imported_section_hashes
+        .push("section-hash-1".to_string());
+    project.surface_elevation = Some(-12.5);
+    let dir = TempDir::new().unwrap();
+    // The same project in every file, VACUUMed for `flip_one_schema_bit`.
+    let saved_at = |name: &str| {
+        let path = dir.path().join(name);
+        Database::open(&path)
+            .unwrap()
+            .save_project(&project)
+            .unwrap();
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("VACUUM;")
+            .unwrap();
+        path
+    };
+    let salvaged_project = |path: &Path| {
+        let salvaged = Database::export_salvageable(path).unwrap();
+        let loaded = salvaged
+            .full_project_json
+            .as_deref()
+            .map(|json| serde_json::from_str::<serde_json::Value>(json).unwrap());
+        (loaded, salvaged.errors)
+    };
+    let (clean, clean_errors) = salvaged_project(&saved_at("clean.stalx"));
+    let clean = clean.unwrap_or_default();
+    let fields: Vec<_> = tables
+        .iter()
+        .map(|(_, field)| (*field, clean[*field].clone()))
+        .collect();
+    println!("clean file: salvage errors {clean_errors:?}; the fields it read: {fields:?}");
+    let has_rows = |value: &serde_json::Value| match value {
+        serde_json::Value::Array(rows) => !rows.is_empty(),
+        value => !value.is_null(),
+    };
+    assert!(
+        clean_errors.is_empty() && fields.iter().all(|(_, value)| has_rows(value)),
+        "premise: the clean file's salvage reads a row of every optional table"
+    );
+
+    let mut dropped = Vec::new();
+    for (table, field) in tables {
+        for (cell, damage) in [
+            ("type case", "type 'Table'"),
+            ("type", "type a BLOB"),
+            ("name", "name a BLOB"),
+        ] {
+            let path = saved_at(&format!("{table}-{}.stalx", cell.replace(' ', "-")));
+            flip_one_schema_bit(&path, table, cell);
+            let conn = Connection::open(&path).unwrap();
+            let stored: (String, Vec<u8>, String, Vec<u8>) = conn
+                .query_row(
+                    "SELECT typeof(type), CAST(type AS BLOB), typeof(name), CAST(name AS BLOB)
+                     FROM sqlite_master WHERE tbl_name = ?1 AND sql LIKE 'CREATE TABLE%'",
+                    [table],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .unwrap();
+            let rows: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .unwrap();
+            let quick_check: String = conn
+                .query_row("PRAGMA quick_check", [], |r| r.get(0))
+                .unwrap();
+            drop(conn);
+            let (damaged, errors) = salvaged_project(&path);
+            let read = damaged.as_ref().map(|loaded| loaded[field].clone());
+            let opened: Vec<_> = [
+                ("open", Database::open as fn(&Path) -> Result<Database>),
+                ("open_existing", Database::open_existing),
+                ("open_existing_to_read", Database::open_existing_to_read),
+                ("open_readonly", Database::open_readonly),
+                ("open_for_metadata", Database::open_for_metadata),
+                (
+                    "open_for_metadata_recovering",
+                    Database::open_for_metadata_recovering,
+                ),
+            ]
+            .iter()
+            .map(|(name, open)| (*name, refused_what(open(&path))))
+            .collect();
+            println!(
+                "{table}, {damage}: stored as ({}, {:?}, {}, {:?}), {rows} row(s) SQLite reads, \
+                 quick_check -> {quick_check:?}; salvage errors {errors:?}, {field} read back as \
+                 {read:?}; openers refused as {opened:?}",
+                stored.0,
+                String::from_utf8_lossy(&stored.1),
+                stored.2,
+                String::from_utf8_lossy(&stored.3)
+            );
+
+            let expected = match cell {
+                "type case" => ("text", "Table", "text"),
+                "type" => ("blob", "table", "text"),
+                _ => ("text", "table", "blob"),
+            };
+            assert_eq!(
+                (
+                    (stored.0.as_str(), stored.1.as_slice(), stored.2.as_str()),
+                    stored.3.as_slice(),
+                    quick_check.as_str()
+                ),
+                (
+                    (expected.0, expected.1.as_bytes(), expected.2),
+                    table.as_bytes(),
+                    "ok"
+                ),
+                "premise: {table}, {damage}, which SQLite reads"
+            );
+            assert!(rows > 0, "premise: {table} holds a row");
+            for (name, refused) in opened {
+                assert_eq!(
+                    refused,
+                    Some(UNEXPECTED_TYPE),
+                    "{table}, {damage}: {name} still refuses it"
+                );
+            }
+            let every_table: Option<Vec<_>> = damaged.as_ref().map(|loaded| {
+                tables
+                    .iter()
+                    .map(|(_, field)| (*field, loaded[*field].clone()))
+                    .collect()
+            });
+            if !errors.is_empty() || every_table.as_ref() != Some(&fields) {
+                dropped.push(format!("{table}, {damage}: {field} read back as {read:?}"));
+            }
+        }
+    }
+    assert!(
+        dropped.is_empty(),
+        "the salvage reads every optional table's rows, the damaged one's included: {dropped:#?}"
+    );
 }
 
 /// [#619] What the salvage reads from a `type` or `name` BLOB goes through

@@ -755,7 +755,7 @@ impl Database {
         }
 
         // Full project (best-effort)
-        match db.load_project() {
+        match db.load_project_for_salvage() {
             Ok(project) => {
                 salvaged.full_project_json = serde_json::to_string(&project).ok();
             }
@@ -1056,7 +1056,9 @@ impl Database {
     /// the full project the salvage read back from it. [#619] So too a `type`
     /// or `name` cell one flipped bit left stored as a BLOB of the same bytes,
     /// which the guard reads as text: `lower` and the CAST read it as text too.
-    fn salvage_table_exists(&self, name: &str) -> Result<bool> {
+    /// The salvage's whole-project load finds its optional tables this way too
+    /// (`TableLookup::Salvage`).
+    pub(super) fn salvage_table_exists(&self, name: &str) -> Result<bool> {
         let exists: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM sqlite_master \
              WHERE lower(type) = 'table' AND CAST(name AS TEXT) = ?1",
