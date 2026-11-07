@@ -16,7 +16,8 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 
-import { shareableErrorText } from '../lib/shareableFailure';
+import { shareableFinding } from '../../../scripts/lib/shareable-finding.mjs';
+import { shareableErrorText, shareableFailureText, withheldAppText } from '../lib/shareableFailure';
 
 const serverPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'server.ts');
 const withLifecycle = process.env.AGENT_MCP_SMOKE_LIFECYCLE !== '0';
@@ -36,6 +37,43 @@ function parseText(res: ToolText): unknown {
   }
 }
 
+/**
+ * A check line's detail as the smoke prints it (#576 W41-NF1): codes, counts and
+ * code locations, never the app's text. What a tool returns carries the app's
+ * own values - a store value, the seeded fixture and project, a station's map
+ * position, an IPC or page error, a panic message - so a detail prints as its
+ * length unless one of the helpers below says what it is. The full results are
+ * in the session's actions.jsonl.
+ */
+class Shown {
+  constructor(readonly text: string) {}
+}
+
+/** A count the smoke took, or the names of its own expected tools: printed as they are. */
+function own(value: number | { missing: string[] } | undefined): Shown | undefined {
+  return value === undefined ? undefined : new Shown(JSON.stringify(value));
+}
+
+/** Text a shareable formatter already wrote (`shareableErrorText`, `shareableFailureText`). */
+function shareable(text: string): Shown {
+  return new Shown(JSON.stringify(text));
+}
+
+/** An oracle finding as findings/<n>/finding.json carries it: severity, kind, code, a panic's code location. */
+function finding(value: unknown): Shown {
+  return new Shown(JSON.stringify(shareableFinding(value)));
+}
+
+/** A tool's error as a crash headline: the app's text after a known prefix as its length, its other lines counted. */
+function toolError(message: string): Shown {
+  return shareable(shareableFailureText(message, [], 'the rest of the error is not printed'));
+}
+
+function shownDetail(detail: unknown): string {
+  if (detail instanceof Shown) return detail.text;
+  return JSON.stringify(withheldAppText(JSON.stringify(detail) ?? String(detail)));
+}
+
 async function main(): Promise<void> {
   const transport = new StdioClientTransport({
     command: process.execPath,
@@ -48,7 +86,7 @@ async function main(): Promise<void> {
 
   let failed = false;
   const check = (label: string, ok: boolean, detail?: unknown) => {
-    process.stdout.write(`${ok ? 'PASS' : 'FAIL'}: ${label}${detail !== undefined ? ` ${JSON.stringify(detail)}` : ''}\n`);
+    process.stdout.write(`${ok ? 'PASS' : 'FAIL'}: ${label}${detail !== undefined ? ` ${shownDetail(detail)}` : ''}\n`);
     if (!ok) failed = true;
   };
 
@@ -64,7 +102,7 @@ async function main(): Promise<void> {
       'seed', 'driver_script', 'check_problems', 'run_scenario',
     ];
     const missing = expected.filter((n) => !names.includes(n));
-    check(`tools/list has all ${expected.length} tools`, missing.length === 0, missing.length ? { missing } : names.length);
+    check(`tools/list has all ${expected.length} tools`, missing.length === 0, own(missing.length ? { missing } : names.length));
 
     if (!withLifecycle) {
       check('lifecycle skipped (AGENT_MCP_SMOKE_LIFECYCLE=0)', true);
@@ -77,7 +115,11 @@ async function main(): Promise<void> {
 
     const started = (await call('app_start', { build: 'auto' })) as ToolText;
     const startVal = parseText(started) as { state?: string; error?: string; sessionDir?: string };
-    check('app_start -> ready', startVal?.state === 'ready', startVal?.error ?? startVal?.state);
+    check(
+      'app_start -> ready',
+      startVal?.state === 'ready',
+      startVal?.error !== undefined ? toolError(startVal.error) : startVal?.state,
+    );
     if (startVal?.state !== 'ready') throw new Error(`app_start failed: ${JSON.stringify(startVal)}`);
 
     const status = parseText(await call('app_status')) as { driverAlive?: boolean };
@@ -88,7 +130,7 @@ async function main(): Promise<void> {
     check('screenshot returns image content', hasImage);
 
     const ui = parseText(await call('store_state', { store: 'ui' })) as { keys?: unknown[] };
-    check('store_state ui has keys', Array.isArray(ui?.keys) && ui.keys.length > 0, ui?.keys?.length);
+    check('store_state ui has keys', Array.isArray(ui?.keys) && ui.keys.length > 0, own(ui?.keys?.length));
 
     const view = parseText(await call('store_state', { store: 'ui', path: 'view' })) as { value?: unknown };
     check('store_state ui.view reads a value', view !== null && 'value' in (view as object), view);
@@ -130,7 +172,7 @@ async function main(): Promise<void> {
       };
       crashFinding = sweep?.findings?.find((f) => f.kind === 'crash-marker');
     }
-    check('oracle detects backend crash marker (fatal)', crashFinding?.severity === 'fatal', crashFinding);
+    check('oracle detects backend crash marker (fatal)', crashFinding?.severity === 'fatal', crashFinding && finding(crashFinding));
 
     const respondsAfterPanic = parseText(await call('store_state', { store: 'ui', path: 'view' })) as { value?: unknown };
     check('app survives thread panic (still responds)', respondsAfterPanic?.value === 'global');
@@ -268,7 +310,7 @@ async function main(): Promise<void> {
   } catch (err) {
     // The shareable crash form (#576 W39-NF3), as the `fatal:` line below: a
     // tool call's error can quote the app (an IPC rejection, a page script's error).
-    check('unexpected exception', false, shareableErrorText(err));
+    check('unexpected exception', false, shareable(shareableErrorText(err)));
   } finally {
     await client.close().catch(() => undefined);
   }

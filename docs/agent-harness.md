@@ -1050,6 +1050,13 @@ locations:
   carry an IPC rejection or a page script's error, so the raw stack is not
   printed, by these or any other file of the harness
   (`shareableRunnerOutput.test.ts`).
+- `agent:mcp:smoke`'s check lines (#576 W41-NF1) print a count the smoke
+  took and the names of the tools it found missing as they are, the
+  crash-marker finding as `finding.json` carries it, `app_start`'s error as a
+  crash headline, and any other value a tool returned (a store value, the seed
+  result, a map position) as its length (`mcpSmokeOutput.test.ts`). The tools
+  that return those record their full results in the session's
+  `actions.jsonl`.
 - `fuzz-matrix` prints a failed cell's FAIL block as the child wrote it. For
   a cell that died without one, it prints the last lines of the child's output
   fail-closed (`shareableTail`): the session and verdict lines, progress lines
