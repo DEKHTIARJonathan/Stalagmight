@@ -52,6 +52,46 @@ pub fn with_stalx_extension(path: PathBuf) -> PathBuf {
     }
 }
 
+/// [#576 W35-NF-1] A connection to the existing file at `path` for an opener
+/// that only reads it, leaving nothing beside it.
+///
+/// READ_ONLY, as before, for every file but one: a file in WAL journal mode
+/// with neither a `-wal` nor a `-journal` beside it. A read-only connection to
+/// that creates the `-wal` and `-shm` and cannot remove them when it closes
+/// (#576 RV8a-3, RV18-3), so it is opened READ_WRITE without CREATE instead,
+/// with `query_only` on: no statement can write through it, and with no `-wal`
+/// nothing is committed outside the file, so its last close has nothing to
+/// checkpoint into the file and removes the sidecars the open made. Every
+/// other file keeps the read-only open: a rollback-journal file's creates
+/// nothing, a hot journal still fails it with `SQLITE_READONLY_ROLLBACK`
+/// (which callers of [`Database::open_for_metadata`] rely on), and a WAL-mode
+/// file whose `-wal` is there - a live writer's, or one a crash left - is read
+/// as it was, never checkpointed by a reader.
+pub(super) fn connect_for_reading(path: &Path) -> rusqlite::Result<Connection> {
+    use rusqlite::OpenFlags;
+    if !wal_mode_with_nothing_beside(path) {
+        return Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY);
+    }
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    conn.pragma_update(None, "query_only", true)?;
+    Ok(conn)
+}
+
+/// Whether `path` is a SQLite database in WAL journal mode - the header's
+/// write and read format bytes (offsets 18 and 19) are 2 - with no `-wal` and
+/// no `-journal` beside it. Unreadable or not a database: no.
+fn wal_mode_with_nothing_beside(path: &Path) -> bool {
+    use std::io::Read as _;
+    let mut head = [0u8; 20];
+    let read = std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut head));
+    let wal_mode = read.is_ok()
+        && head.starts_with(b"SQLite format 3\0")
+        && head.get(18..20) == Some(&[2u8, 2][..]);
+    wal_mode
+        && !super::repair::sibling(path, "-wal").exists()
+        && !super::repair::sibling(path, "-journal").exists()
+}
+
 impl Database {
     /// Open or create a database at the given path
     pub fn open(path: &Path) -> Result<Self> {
@@ -477,8 +517,9 @@ impl Database {
         if !path.exists() {
             anyhow::bail!("File does not exist: {}", path.display());
         }
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .context("Failed to open database read-only for metadata")?;
+        // [#576 W35-NF-1] Read-only, leaving nothing beside a WAL-mode file.
+        let conn =
+            connect_for_reading(path).context("Failed to open database read-only for metadata")?;
         super::check_schema(&conn)?;
         Ok(Self { conn })
     }
@@ -531,9 +572,9 @@ impl Database {
             anyhow::bail!("Not a Stalagmight project file: {}", path.display());
         }
 
-        // Open in read-only mode - no writes possible
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-            .context("Failed to open database read-only")?;
+        // Open in read-only mode - no writes possible - leaving nothing beside a
+        // WAL-mode file (#576 W35-NF-1).
+        let conn = connect_for_reading(path).context("Failed to open database read-only")?;
         super::check_schema(&conn)?;
 
         let db = Self { conn };

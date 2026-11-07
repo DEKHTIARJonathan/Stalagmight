@@ -904,6 +904,15 @@ mod schema_guard_tests;
     reason = "test module: panics on a failed assumption are the point, and the printed \
               values are the evidence a run captures"
 )]
+mod sidecar_free_open_tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::print_stdout,
+    reason = "test module: panics on a failed assumption are the point, and the printed \
+              values are the evidence a run captures"
+)]
 mod history_ceiling_tests;
 
 #[cfg(test)]

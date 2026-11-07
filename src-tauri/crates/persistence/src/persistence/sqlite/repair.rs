@@ -20,7 +20,7 @@ const REPAIR_STAGING_SUFFIX: &str = ".repair-staging";
 
 /// `path` with `suffix` appended to its file name (`CaveA.stalx` + `.x` ->
 /// `CaveA.stalx.x`).
-fn sibling(path: &Path, suffix: &str) -> std::path::PathBuf {
+pub(super) fn sibling(path: &Path, suffix: &str) -> std::path::PathBuf {
     let mut name = path
         .file_name()
         .unwrap_or_else(|| std::ffi::OsStr::new("project"))
@@ -602,7 +602,8 @@ impl Database {
             anyhow::bail!("File does not exist");
         }
 
-        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        // Read-only, leaving nothing beside a WAL-mode file (#576 W35-NF-1).
+        let conn = super::open::connect_for_reading(path)
             .context("Failed to open database for recovery")?;
         super::check_schema(&conn)?;
 
@@ -794,15 +795,14 @@ impl Database {
     /// together with the rollback journal beside it if there is one - and the
     /// check must not change it.
     ///
-    /// Without a journal the file is self-contained and is opened read-only. With
-    /// one, its committed contents only appear once the journal is rolled back,
-    /// which is a write, so that happens on a copy beside it that is removed
-    /// again.
+    /// Without a journal the file is self-contained and is opened read-only
+    /// (leaving nothing beside a WAL-mode file, #576 W35-NF-1). With one, its
+    /// committed contents only appear once the journal is rolled back, which is
+    /// a write, so that happens on a copy beside it that is removed again.
     fn check_restore_candidate(candidate: &Path) -> std::result::Result<(), String> {
         if !journal_of(candidate).exists() {
-            let conn =
-                Connection::open_with_flags(candidate, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-                    .map_err(|e| format!("it cannot be opened ({e})"))?;
+            let conn = super::open::connect_for_reading(candidate)
+                .map_err(|e| format!("it cannot be opened ({e})"))?;
             return check_candidate_connection(conn);
         }
         let staging = sibling(candidate, CHECK_STAGING_SUFFIX);
