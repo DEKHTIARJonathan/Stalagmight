@@ -439,6 +439,8 @@ import { shotSetDelta, describeShotSetDelta } from '../lib/projectSnapshot';
 import { TraceRecorder, type TraceStep } from '../lib/fuzzTrace';
 import { fuzzFixture } from '../lib/fuzzKnobs';
 import { foldThenCut } from '../lib/fixtureCorpus';
+import { valueShape } from '../lib/shareableFailure';
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 import { MoveLog, openReplay, RERUN_WITH, writeRunTrace } from '../lib/fuzzHarness';
 import {
   asExportedToTml,
@@ -464,7 +466,6 @@ import {
   naturalExtension,
   PROJECT_OWNED_SHAPES,
   type ExportAttempt,
-  type ExportFormat,
   type ExportRoute,
   type OptionSnapshot,
   type PathShape,
@@ -483,6 +484,7 @@ import {
   enabledFormats,
   hasDiveRoute,
   isDataFormat,
+  isExportFormat,
   isImageFormat,
   modalIsOpen,
   openModal,
@@ -1828,7 +1830,9 @@ export const exportRoundtripFuzz: Scenario = {
       }
       const dialog = (await ctx.readStore('ui', 'activeDialog')) as { value?: unknown };
       if (dialog.value !== null && dialog.value !== undefined) {
-        fail(`E1 teardown left activeDialog = ${JSON.stringify(dialog.value)}\n  ${reproduce}`);
+        // A store value (`activeDialog: string | null`): it prints as a test id does,
+        // the words of the app's source and other text as its length (#576 W51).
+        fail(`E1 teardown left activeDialog = ${shareableTestId(dialog.value)}\n  ${reproduce}`);
       }
       // The panel's option set is per-project state; a close resets it, and E1
       // is where that contract is asserted rather than merely relied on.
@@ -1900,7 +1904,7 @@ export const exportRoundtripFuzz: Scenario = {
       const extension = inputs.extension;
       if (extension !== 'tml' && extension !== 'tmlu') {
         throw new Error(
-          `trace step for oracle ${name} names extension ${JSON.stringify(extension)}, ` +
+          `trace step for oracle ${name} names extension ${valueShape(extension)}, ` +
             `which this build does not export`,
         );
       }
@@ -1966,7 +1970,7 @@ export const exportRoundtripFuzz: Scenario = {
       const found = ORACLE_NAMES.find((name) => name === step.oracle);
       if (found === undefined) {
         throw new Error(
-          `refusing to replay oracle "${step.oracle}": ${SCENARIO} runs ${ORACLE_NAMES.join(', ')}`,
+          `refusing to replay oracle ${valueShape(step.oracle)}: ${SCENARIO} runs ${ORACLE_NAMES.join(', ')}`,
         );
       }
       return found;
@@ -1987,17 +1991,22 @@ export const exportRoundtripFuzz: Scenario = {
       const route = options.route;
       const shape = options.shape;
       if (route !== 'modal' && route !== 'panel' && route !== 'store') {
-        throw new Error(`trace step names route ${JSON.stringify(route)}, which this build does not run`);
+        throw new Error(`trace step names route ${valueShape(route)}, which this build does not run`);
       }
       if (typeof shape !== 'string' || !PATH_SHAPE_NAMES.has(shape)) {
-        throw new Error(`trace step names path shape ${JSON.stringify(shape)}, which this build does not run`);
+        throw new Error(`trace step names path shape ${valueShape(shape)}, which this build does not run`);
+      }
+      // Refused like a route or a shape: the format names metric keys and moves,
+      // and a trace's text is a forged copy's to choose (#576 W51).
+      if (!isExportFormat(step.format)) {
+        throw new Error(`trace step names format ${valueShape(step.format)}, which this build does not export`);
       }
       const imageOptions = options.imageOptions as ImageOptionDraw | undefined;
       if (imageOptions === undefined || typeof imageOptions !== 'object') {
         throw new Error('trace export step carries no image options');
       }
       return {
-        format: step.format as ExportFormat,
+        format: step.format,
         route: route as ExportRoute,
         shape: shape as PathShape,
         imageOptions,
@@ -2064,7 +2073,7 @@ export const exportRoundtripFuzz: Scenario = {
             // step naming a different one would walk around that check from
             // inside the file.
             throw new Error(
-              `trace ${replayPath} reloads ${step.fixture} but was recorded on ${replay.fixture}; ` +
+              `trace ${replayPath} reloads ${valueShape(step.fixture)} but was recorded on ${replay.fixture}; ` +
                 `its steps resolve against the recorded project`,
             );
           }

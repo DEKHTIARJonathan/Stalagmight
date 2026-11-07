@@ -30,6 +30,7 @@ import { cheapSweep, newOracleState, type OracleTarget } from './oracles';
 import { evalInApp } from './page';
 import type { ScenarioContext } from '../scenarios/framework';
 import { readPreview } from '../scenarios/exportFuzzActions';
+import { mapSkipCode } from '../scenarios/importDialogFuzz';
 import { computeImportScreenDigest, type ImportScreenDigest } from './importScreenDigest';
 
 const MARK = 'qzinpagecut';
@@ -122,10 +123,12 @@ describe('a cut made before the fold no longer splits a corpus name (#576 W33-NF
 
   it('the mapSkip metric key: a name across character 32 of the error message', () => {
     // `page error at /tmp/w/` is 21 characters: the old cut kept the name's first 11.
+    // Since #576 W51 the key is a code (`mapSkipCode`), never the error's text.
     const err = new Error(`page error at /tmp/w/${NAME}`);
-    const expression = scenarioExpression('ctx.metric(`mapSkip:${');
-    const key = `mapSkip:${String(new Function('err', 'foldThenCut', `return (${expression});`)(err, corpus.foldThenCut))}`;
-    expect(key).toBe(`mapSkip:page error at /tmp/w/${TAG.slice(0, 11)}`);
+    expect(scenarioExpression('ctx.metric(`mapSkip:${')).toBe('mapSkipCode(err)');
+    const key = `mapSkip:${mapSkipCode(err)}`;
+    expect(key).toBe('mapSkip:other');
+    expect(key).not.toContain(MARK);
   });
 });
 

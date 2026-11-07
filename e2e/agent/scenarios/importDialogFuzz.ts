@@ -411,6 +411,8 @@ import {
 } from '../lib/fixtureCorpus';
 import type { ImportScreenDigest } from '../lib/importScreenDigest';
 import { LogCursor } from '../lib/logs';
+import { valueShape } from '../lib/shareableFailure';
+import { shareableTestId } from '../../../scripts/lib/shareable-selector.mjs';
 import {
   checkAccounting,
   checkFrozenDelete,
@@ -438,6 +440,7 @@ import {
   IMPORT_GUARDED_SCREENS,
   isEscaped,
   NON_FLOW_SCREENS,
+  OVERLAP_MODES,
   progressMode,
   WEDGE_EXEMPT_SCREENS,
   type ScreenId,
@@ -677,6 +680,23 @@ interface Bounds extends FlowBounds {
 
 // ---------------------------------------------------------------------------
 
+/**
+ * A refused map click as its `mapSkip:*` metric key names it (#576 W51): a code
+ * for each refusal `lib/controls.ts` `mapClick` words itself, and `other` for
+ * any other error. The key prints in the runner's PASS line and the matrix
+ * report, and an error's own text - a page script's message, or a map position,
+ * which is where the cave is - is for neither.
+ */
+export const mapSkipCode = (err: unknown): string => {
+  if (!(err instanceof Error)) return 'unknown';
+  if (err.message === 'map not available') return 'map-not-available';
+  if (err.message.startsWith('map click failed: map point is outside the visible viewport')) return 'outside-viewport';
+  if (err.message.startsWith('map click failed: ')) return 'click-refused';
+  if (err.message === 'map interaction hooks are unavailable') return 'no-interaction-hooks';
+  if (/^map \w+ handler did not process the click/.test(err.message)) return 'not-processed';
+  return 'other';
+};
+
 export const importDialogFuzz: Scenario = {
   name: SCENARIO,
   description:
@@ -902,7 +922,7 @@ export const importDialogFuzz: Scenario = {
       const root = path.resolve(sessionDir);
       const target = path.resolve(root, rel);
       if (target !== root && !target.startsWith(root + path.sep)) {
-        throw new Error(`generated file path ${JSON.stringify(rel)} escapes ${root}`);
+        throw new Error(`generated file path ${valueShape(rel)} escapes ${root}`);
       }
       return target;
     };
@@ -1262,9 +1282,10 @@ export const importDialogFuzz: Scenario = {
           // testid - because a shrunk trace reaches states with a different
           // camera and would otherwise die at the first recorded click.
           skip = 'map-unavailable';
-          // Folded before the cut (#576 W33-NF3): a metric key reaches the
-          // runner's PASS line and the matrix report, and neither folds it.
-          ctx.metric(`mapSkip:${err instanceof Error ? foldThenCut(err.message, 32) : 'unknown'}`);
+          // A code, not the error's text (#576 W51; it was the text folded
+          // and cut, W33-NF3): a metric key reaches the runner's PASS line and
+          // the matrix report, and neither folds it.
+          ctx.metric(`mapSkip:${mapSkipCode(err)}`);
         }
         digest = await observeScreen(ctx);
       } else if (move.kind === 'undo' || move.kind === 'redo') {
@@ -1342,7 +1363,10 @@ export const importDialogFuzz: Scenario = {
           // `failureSignature` builds a shrink's target from the first line: a
           // generic "unknown screen" headline matches every unknown screen, and
           // ddmin then accepts a candidate that fails on a different one.
-          `S1 UNKNOWN SCREEN ${JSON.stringify(digest.dialog)}: a dialog is up that this build's ` +
+          // A store value (`activeDialog: string | null`): it prints as a test
+          // id does, the words of the app's source and other text as its
+          // length (#576 W51).
+          `S1 UNKNOWN SCREEN "${shareableTestId(digest.dialog)}": a dialog is up that this build's ` +
             'screen table does not name',
           `  activeDialog=${JSON.stringify(digest.dialog)} after: ${move.label}\n` +
             `  dom: ${digest.why}\n` +
@@ -2166,7 +2190,7 @@ export const importDialogFuzz: Scenario = {
             // interjection, and the failure blamed the dispatcher for a chord it
             // had swallowed correctly - the dialog was simply gone by then.
             const gatesAtDispatch: string[] = [];
-            if (outcome.dialogAtDispatch !== null) gatesAtDispatch.push(`activeDialog="${outcome.dialogAtDispatch}"`);
+            if (outcome.dialogAtDispatch !== null) gatesAtDispatch.push(`activeDialog="${shareableTestId(outcome.dialogAtDispatch)}"`);
             if (outcome.placementAtDispatch === true) gatesAtDispatch.push('placementMode active');
             if (outcome.fullscreenAtDispatch === true) gatesAtDispatch.push('dataTableFullScreen');
             if (gatesAtDispatch.length > 0 && digest.screen === 'export-modal') {
@@ -2318,7 +2342,9 @@ export const importDialogFuzz: Scenario = {
             // disabled option - so a refusal here is the guard being reached, and
             // worth counting rather than asserting.
             if (!outcome.performed && outcome.skip === 'option-absent') {
-              ctx.metric(`overlapModeRefused:${overlapMode}`);
+              // A replayed move's value is a trace's text: only the picker's own
+              // option values name a metric (#576 W51).
+              ctx.metric(`overlapModeRefused:${OVERLAP_MODES.includes(overlapMode) ? overlapMode : 'other'}`);
               // But the guard must never disable ALL of them. `existing_data` and
               // `keep_both` are unconditional in the source, and a build where
               // one of them stopped being offered would leave a user with an
