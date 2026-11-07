@@ -272,6 +272,39 @@ fn the_read_only_reopen_refuses_a_file_swapped_in_after_the_first_open() {
     assert_eq!(refused, Some("a view"));
 }
 
+/// [#576 RV19a-8] `attempt_repair` renames its repaired copy into place and
+/// opens the file again to `quick_check` it. That second open ran no schema
+/// guard - the pattern every other reopen now guards - so a file swapped in
+/// between the rename and the reopen had its schema's SQL run by the check.
+#[test]
+fn the_repair_reopen_refuses_a_file_swapped_in_after_the_rename() {
+    let dir = TempDir::new().unwrap();
+    let path = project_file_with(&dir, "");
+    project_at(
+        &dir.path().join("swapped.stalx"),
+        "CREATE VIEW v AS SELECT 1;",
+    );
+
+    open::between_opens::set(swap_in_the_hostile_file);
+    let repaired = Database::attempt_repair(&path);
+    let refused = repaired.as_ref().err().and_then(|err| {
+        err.chain()
+            .find_map(|c| c.downcast_ref::<RefusedSchemaObject>())
+            .map(|refused| refused.what)
+    });
+    println!(
+        "file swapped for a hostile one before the repair's verifying reopen: {:?}; refused as \
+         {refused:?}",
+        repaired.as_ref().map_err(|e| format!("{e:#}"))
+    );
+
+    assert!(
+        !dir.path().join("swapped.stalx").exists(),
+        "premise: the swap happened"
+    );
+    assert_eq!(refused, Some("a view"));
+}
+
 // === check_schema_at leaves nothing beside the file (#576 RV18-3) ===
 
 fn files_in(dir: &Path) -> Vec<String> {

@@ -661,7 +661,11 @@ impl Database {
         }
 
         // 5. Verify result
+        #[cfg(test)]
+        super::open::between_opens::run(path);
         let conn = Connection::open(path).context("Failed to reopen the repaired database")?;
+        // Another open of the file: guarded like the first (#608, #576 RV19a-8).
+        super::check_schema(&conn)?;
         let check: String = conn
             .query_row("PRAGMA quick_check", [], |row| row.get(0))
             .unwrap_or_else(|_| "error".to_string());

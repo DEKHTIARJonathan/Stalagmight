@@ -660,8 +660,10 @@ impl Database {
 
 /// Test-only seam (#576 RV18-2): a hook that runs between the two opens of one
 /// existing file - the refusing first open of [`Database::open_existing_to_read`]
-/// and its copy into memory, and the handle [`Database::into_read_only`] drops
-/// and its read-only reopen - with no connection to the file held. A test swaps
+/// and its copy into memory, the handle [`Database::into_read_only`] drops
+/// and its read-only reopen, and the rename of [`Database::attempt_repair`]'s
+/// repaired copy and its verifying reopen (#576 RV19a-8) - with no connection
+/// to the file held. A test swaps
 /// the file there: the only way a file reaches the second open's schema guard,
 /// because the first open refuses a hostile one itself.
 #[cfg(test)]
@@ -678,7 +680,7 @@ pub(super) mod between_opens {
         HOOK.with(|slot| slot.set(Some(hook)));
     }
 
-    pub(super) fn run(path: &Path) {
+    pub(in crate::persistence::sqlite) fn run(path: &Path) {
         if let Some(hook) = HOOK.with(Cell::take) {
             hook(path);
         }
