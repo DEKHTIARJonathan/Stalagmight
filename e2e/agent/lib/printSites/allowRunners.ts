@@ -256,8 +256,6 @@ export const GROUP: SiteGroup = {
       'log: msg': R.FORWARD,
       'check: name': R.FORWARD,
       'check: detail': R.FORWARD,
-      'main: JSON.stringify(started)':
-        'the StartResult, folded: state/build words, ports, the display, a commit hash, and its paths (session, profile, builtFrom.repoRoot, rebuild reasons) folded',
       "main: session.recorder.writeScreenshot(session.recorder.nextSeq(), 'smoke', shot)":
         "Recorder.writeScreenshot's session-relative path, screenshots/<seq>-smoke.png (lib/recorder.ts)",
       'main: before.latestSeq': "the log ring's latest sequence number (get_recent_logs_since's u64 latest_seq, lib/logs.ts)",
@@ -390,6 +388,10 @@ export const GROUP: SiteGroup = {
       scenarioName:
         "a scenario name from the CLI or a trace: itself only when it has the registry's shape /^[a-z][a-z0-9-]{1,63}$/ (as fuzz-matrix validates --scenario), else valueShape",
       gitRev: 'a trace revision: its first 12 characters only when /^(?:[0-9a-f]{7,40}|unknown)$/ holds, else valueShape',
+    },
+    'e2e/agent/smoke.ts': {
+      smokeStartedLine:
+        'the StartResult (lib/smokeStartLine.ts): state/build words, ports, a commit hash, the display as `:N`, `aqua` or `<display>` (#576 W58 Q14), and its paths folded',
     },
     'e2e/agent/mcp/smoke-client.ts': {
       shownDetail:

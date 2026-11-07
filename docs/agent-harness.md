@@ -1138,8 +1138,10 @@ locations:
   error - an open dialog, an undo entry's command type - keeps only the words
   of the app's source, as a test id does; a section name or a leftover temp
   file prints as its length or a count, and a metric key holds codes only
-  (`mapSkip:<code>`). `agent:smoke`'s `started:` line is folded and its
-  integrity check gives `<n> message(s), save_blocked=<bool>`;
+  (`mapSkip:<code>`). `agent:smoke`'s `started:` line is folded, its X
+  display prints only as `:N` (any other `DISPLAY`, such as `localhost:10.0`
+  under `ssh -X`, as `<display>`; #576 W58 Q14), and its integrity check
+  gives `<n> message(s), save_blocked=<bool>`;
   `ipc-payload-probe.ts` gives serde's rejection as its class from a fixed
   set (`missing field`, `premature end of input`, ...; `lib/ipcPayloadProbe.ts`)
   and its length, and reads an error that is none of them as `OTHER`, never
