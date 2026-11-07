@@ -7,15 +7,6 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
-### Fixed
-
-- **SpeleoDB:** projects Stalagmight publishes or adopts are now typed `stalagmight` on SpeleoDB instead of `other`, a type SpeleoDB never builds maps for. Projects already adopted as `other` are relabelled on their next push. Their maps update once SpeleoDB generates maps for Stalagmight projects.
-
-### Security
-
-- **Bundled SQLite updated from 3.45.0 to 3.54.1** - `.stalx` project files are SQLite databases you may be sent by others, and this picks up the upstream memory-safety fixes since January 2024, including several for crafted database files ([#598](https://github.com/Stalagmight/Stalagmight/issues/598))
-- **Bundled SQLite built without full-text search, R-tree, DBSTAT and extension loading** - Stalagmight uses none of them, and leaving them out means a crafted `.stalx` cannot reach their code ([#608](https://github.com/Stalagmight/Stalagmight/issues/608))
-
 ## [0.5.0] - 2026-08-13
 
 The first release with builds for all three platforms. The headline additions are
@@ -130,6 +121,9 @@ between divers.
 - **Opening a project from the recents list goes through the same checks as opening a file from anywhere else**, and accepts project files only, so a stale or hand-edited entry pointing at something else can no longer be opened by mistake. A message that could print your full file path, home folder and username included, for certain unsupported files no longer does ([#450](https://github.com/Stalagmight/Stalagmight/issues/450))
 - **The import wizards use their space better** - the map preview fills its pane instead of holding a centred square, the divider between the panes can be moved from the keyboard, the suggestion step's section settings fold away until needed, and the placement buttons stay visible on a short window ([#567](https://github.com/Stalagmight/Stalagmight/issues/567))
 - **Map drawing does less work per frame** - the WebGL layers look up their shader handles once when a program links instead of on every frame ([#339](https://github.com/Stalagmight/Stalagmight/issues/339))
+- **Plan mode's Segments and Cylinders tables are now spreadsheet grids**, like the data table, and the Equipment tab is split into **Cylinders** and **DPV** tabs. The add-cylinder picker and the Conservative gas option sit at the top right of the Cylinders tab, and the explanation of Conservative gas is a hover tip ([#403](https://github.com/Stalagmight/Stalagmight/issues/403))
+- **The map library is upgraded to MapLibre 6**, which closes a critical advisory in its attribution handling (not reachable in Stalagmight, which never shows the attribution control). The map's stylesheet is now bundled with the app instead of fetched from the internet, so the map controls look the same offline ([#606](https://github.com/Stalagmight/Stalagmight/issues/606))
+- **Opening a large project is faster** - the load-time alignment of sections walks each connected group once instead of rescanning for every section, taking a synthetic 8000-section project from 5.2 s to 0.65 s in that step ([#602](https://github.com/Stalagmight/Stalagmight/issues/602))
 
 ### Removed
 
@@ -165,6 +159,8 @@ between divers.
 - **Project depth statistics reported a made-up range** - the min/max depth in the project-statistics IPC payload was a per-section walk of depth *changes* seeded at zero: a survey that never leaves 30-35 m came through as 0-5 m, and two sections at different depths cancelled instead of combining. No screen displayed these two numbers (the panels compute their range from station depths directly), but any consumer of the payload would have disagreed with every depth shown in the app. The payload now carries the real station depth range ([#481](https://github.com/Stalagmight/Stalagmight/issues/481))
 - **An unreadable edit history is bounded, discarded and reported in a banner**, instead of failing silently ([#473](https://github.com/Stalagmight/Stalagmight/issues/473))
 - **A survey can no longer outgrow its shot identity space** - a shot's identity is derived from its section's number, which caps how many sections a project can hold (42,949). Nothing enforced the cap: a large enough import, merge, split or plain section creation silently wrapped identities so shots in different sections collided. Every path that creates sections now refuses past the cap before changing anything, naming the limit, and opening a `.stalx` that already carries section numbers past it - written by another tool, or corrupted - is refused with a message naming the offending id, instead of corrupting shot identity ([#555](https://github.com/Stalagmight/Stalagmight/issues/555), [#557](https://github.com/Stalagmight/Stalagmight/issues/557))
+- **A survey could appear to hang on open when it had many merge or closure links.** Merging stations in large groups and clearing out closures left unattached to the survey scaled badly with their number, in the worst case taking hours; both now take milliseconds ([#596](https://github.com/Stalagmight/Stalagmight/issues/596), [#597](https://github.com/Stalagmight/Stalagmight/issues/597))
+- **The map survey no longer vanishes when the window was hidden or the graphics context was lost.** The survey layers are restored after the map rebuilds its style. On a machine without WebGL2 the map area now says so instead of failing, and the rest of the app keeps working ([#606](https://github.com/Stalagmight/Stalagmight/issues/606))
 
 #### SpeleoDB
 
@@ -181,6 +177,7 @@ between divers.
 - **Adopting a project could report the wrong outcome** - three cases where adoption described itself inaccurately. It flipped the SpeleoDB project type a second time after the upload had already done it, so a transient failure on that redundant request warned that the type could not be changed when it had been. If the upload succeeded but handing the write lock back failed, it reported the conversion as "on this machine only" - about a survey that was already safely on the server - and marked the project as having unsaved work; that case now says the upload landed and that the write lock is the thing left outstanding. And taking the lock is now serialised against sign-out - the span covers the account read, the holder probe and the acquire together - so signing out during an adoption can no longer leave the project locked on the server with nothing recording it.
 - **Adoption now tells you about everything it left unfinished.** If the connection dropped after the upload landed, the write lock and the project type could BOTH be left outstanding, but the notice mentioned only the lock - so after releasing it the project was still typed as an Ariane one, still offering to be adopted over a copy that already existed. Alongside that: a project whose type was changed to something else while the adoption ran was reported as re-typed with the server left untouched; a lock release whose reply was lost in transit is now re-checked against the server rather than reported as still held; and the proof that an upload landed now confirms it is reading the adopted project's own record.
 - **Opening a survey from SpeleoDB could quietly drop shots, and the warnings that explained why.** Adopting a remote Ariane file threw away every conversion warning and never mentioned shots the conversion had excluded, so a file that excluded all of them could open as an empty survey with nothing said about it. Opening from SpeleoDB reports what a manual import of the same file would ([#411](https://github.com/Stalagmight/Stalagmight/issues/411))
+- **Projects published or adopted to SpeleoDB were typed `other`, a type SpeleoDB never builds maps for.** They are now typed `stalagmight`, and projects already adopted as `other` are relabelled on their next push. Their maps update once SpeleoDB generates maps for Stalagmight projects.
 
 #### Legibility
 
@@ -282,6 +279,13 @@ between divers.
 - **A depth-only survey exported to Ariane and read back complained that its pitch and depth disagreed, about data that says no such thing.** A level shot with no recorded pitch goes into the file as a wire value of exactly zero, and the reader took that back as a measured zero. It is read as "no pitch recorded" in exactly the cases where the warning would have been invented, and left alone where a recorded zero can be real ([#482](https://github.com/Stalagmight/Stalagmight/issues/482))
 - **Some branching `.tml` surveys were broken into more disconnected pieces than they needed to be.** The reader now follows the longest branch through a junction instead of stopping there, and rejoins side chains to the main line where that is unambiguous, so the imported shape is closer to how the cave was surveyed. Some fragmentation remains ([#412](https://github.com/Stalagmight/Stalagmight/issues/412))
 - **A `.tml`'s per-shot trip metadata now cuts sections instead of collapsing them** ([#427](https://github.com/Stalagmight/Stalagmight/issues/427))
+
+### Security
+
+- **Bundled SQLite updated from 3.45.0 to 3.54.1** - `.stalx` project files are SQLite databases you may be sent by others, and this picks up the upstream memory-safety fixes since January 2024, including several for crafted database files ([#598](https://github.com/Stalagmight/Stalagmight/issues/598))
+- **Bundled SQLite built without full-text search, R-tree, DBSTAT and extension loading** - Stalagmight uses none of them, and leaving them out means a crafted `.stalx` cannot reach their code ([#608](https://github.com/Stalagmight/Stalagmight/issues/608))
+- **A `.stalx` whose database could run its own SQL is refused** - views, triggers, virtual tables and unusual constraints are things Stalagmight never writes, so a project file containing one was altered by another program. Opening it, or downloading it from SpeleoDB, now stops with a clear message instead, and your other projects are not affected ([#608](https://github.com/Stalagmight/Stalagmight/issues/608))
+- **The raw SQLite viewer no longer reads virtual tables**, which could otherwise run a module's code over a crafted file ([#608](https://github.com/Stalagmight/Stalagmight/issues/608))
 
 
 ## [0.2.0] - 2026-06-02
