@@ -476,6 +476,8 @@ export const GROUP: SiteGroup = {
       num: 'a finite number as itself, any other value as its argShape',
       word: "a member of the step's fixed set (BUTTONS, DIALOG_KINDS) as itself, any other value as its argShape",
       code: 'a string matching its shape (NAME /^[\\w.:-]{1,80}$/, GIT_HEAD, DISPLAY, VERSION) as itself, any other value as its argShape',
+      ipcCommand:
+        'an ipc command: `plugin:<[\\w-]{1,80}>|<NAME>` with the `|` escaped (PLUGIN_COMMAND, two shape-checked captures), else code()',
       argShape: "a value's shape, never its value: a string as its length, a number as its type, an object's field-name keys",
       redactPath: 'a chosen file as <file.ext>: the extension only, whitelisted to /^\\.[A-Za-z0-9]{1,12}$/',
       describeKeys: 'press_keys keys: WebDriver key names from a fixed set, U+ code points, other keys counted in characters',

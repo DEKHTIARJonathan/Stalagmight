@@ -1137,7 +1137,10 @@ locations:
   they have the form the harness writes them in - a number, a word of the
   tool's fixed set, identifier characters - and so do the header's session
   id, commit, display and each step's number and tool; any other value, which
-  only a forged or hand-edited log holds, is its shape (#576 W49-NF1). A
+  only a forged or hand-edited log holds, is its shape (#576 W49-NF1). An
+  `ipc` step's Tauri plugin command keeps its `plugin:<name>|` prefix before
+  a command name, the `|` escaped for markdown (`plugin:dialog\|open`, #576
+  W58). A
   test id or a selector keeps its structure and the words the
   app's own source uses (#576 RV19b-P1, `scripts/lib/shareable-selector.mjs`):
   a test id - and an `#id`, an `id=` value or an attribute's value in a

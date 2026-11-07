@@ -769,6 +769,57 @@ describe('generate-repro-report.mjs', () => {
     });
   });
 
+  // A Tauri plugin command is `plugin:<name>|<cmd>`: its `|` is not a name
+  // character, so it printed as its shape. The prefix is allowed, the `|`
+  // escaped for markdown; a command that only looks like one is still its
+  // shape (#576 W58 Q12).
+  describe('ipc steps keep a Tauri plugin command, its | escaped', () => {
+    let pluginDir: string;
+
+    beforeAll(() => {
+      pluginDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-plugin-'));
+      const ts = (s: number) => new Date(1751970000000 + s * 1000).toISOString();
+      const ipc = (seq: number, command: string) =>
+        record({ type: 'action', v: 1, seq, ts: ts(seq), tool: 'ipc', mutating: true, params: { command, args: {} }, outcome: { ok: true, durationMs: 1 } });
+      const lines = [
+        record({ type: 'session-start', v: 1, sessionId: 'plugin-fixture', startedAt: ts(0) }),
+        ipc(1, 'plugin:dialog|open'),
+        ipc(2, 'plugin:fs-extra|read_text_file'),
+        ipc(3, 'save_project'),
+        ipc(4, 'plugin:x|y qzCaveA'),
+        ipc(5, 'plugin:x|y\n## forged'),
+        ipc(6, 'plugin:x|y`'),
+        ipc(7, 'plugin:x|y|z'),
+        ipc(8, 'plugin:|y'),
+        ipc(9, 'plugin:x|'),
+        ipc(10, 'plugin:x y|z'),
+      ];
+      fs.writeFileSync(path.join(pluginDir, 'actions.jsonl'), `${lines.join('\n')}\n`);
+      execFileSync(process.execPath, [reportGen, pluginDir], { encoding: 'utf8' });
+    });
+
+    afterAll(() => fs.rmSync(pluginDir, { recursive: true, force: true }));
+
+    it('prints a plugin command with its prefix and any other command as before or as its shape', () => {
+      const md = fs.readFileSync(path.join(pluginDir, 'report.md'), 'utf8');
+      const steps = md.split('## Steps to reproduce')[1].split('Automated replay')[0].trim().split('\n');
+      expect(steps).toEqual([
+        '1. `ipc` plugin:dialog\\|open({})',
+        '2. `ipc` plugin:fs-extra\\|read_text_file({})',
+        '3. `ipc` save_project({})',
+        '4. `ipc` string(18)({})',
+        '5. `ipc` string(20)({})',
+        '6. `ipc` string(11)({})',
+        '7. `ipc` string(12)({})',
+        '8. `ipc` string(9)({})',
+        '9. `ipc` string(9)({})',
+        '10. `ipc` string(12)({})',
+      ]);
+      expect(md).not.toContain('qzCaveA');
+      expect(md).not.toContain('forged');
+    });
+  });
+
   // A `press_keys` step types every key that is not a WebDriver key name, one
   // character at a time: a run of single characters - or one longer string -
   // spells a name as surely as `type_text` does (#576 W39-NF2). Named keys stay.
