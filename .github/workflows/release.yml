@@ -235,6 +235,34 @@ jobs:
           APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD_SECRET: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
+      # Tauri notarizes and staples the .app, then builds the DMG around it and
+      # signs the DMG with the same Developer ID - but never notarizes the DMG.
+      # Gatekeeper assesses a quarantined, SIGNED disk image when it is opened
+      # (`spctl -a -t open --context context:primary-signature`), and a
+      # Developer-ID-signed but unnotarized DMG is rejected there, so a user
+      # would hit a malware warning before ever reaching the notarized app.
+      # Submit the DMG too and staple its ticket. Before the checksum step, as
+      # stapling rewrites the file.
+      - name: Notarize and staple the macOS DMG
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "Ad-hoc build: nothing to notarize."
+            exit 0
+          fi
+          shopt -s nullglob
+          dmgs=( "$BUNDLE_DIR"/dmg/*.dmg )
+          [ "${#dmgs[@]}" -eq 1 ] || { echo "::error::expected exactly 1 DMG, found ${#dmgs[@]}"; exit 1; }
+          xcrun notarytool submit "${dmgs[0]}" \
+            --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" \
+            --wait --timeout 30m
+          xcrun stapler staple "${dmgs[0]}"
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
       # The verify job checks the SQLite strip on Linux only, but the flags work
       # by a later -U cancelling libsqlite3-sys's own -D, which each platform's C
       # compiler (MSVC on Windows) must honour. Check it with this leg's
