@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { testIdSelector } from './lib/test-id-selector.mjs';
+import { codeWords, shareableSelector, shareableTestId } from './lib/shareable-selector.mjs';
 
 const repoRoot = path.resolve(__dirname, '..');
 const replayGen = path.join(repoRoot, 'scripts', 'generate-replay.mjs');
@@ -303,6 +304,28 @@ describe('testIdSelector', () => {
   });
 });
 
+describe('shareable test ids and selectors', () => {
+  // The kept words are the app's source's: with no source to read, nothing is
+  // known and every word is counted (#576 RV19b-P1).
+  it('counts every word when the source cannot be read', () => {
+    const none = codeWords(path.join(os.tmpdir(), 'stalagmight-no-such-checkout'));
+    expect(none.size).toBe(0);
+    expect(shareableTestId('save-button', none)).toBe('<11 characters>');
+    expect(shareableSelector('[data-testid="save-button"]', none)).toBe('[<11 characters>="<11 characters>"]');
+  });
+
+  it('keeps the words a test id and a selector share with the source, and numbers', () => {
+    const words = new Set(['section', 'row', 'span', 'button', 'role', 'data', 'testid']);
+    expect(shareableTestId('section-row-12', words)).toBe('section-row-12');
+    expect(shareableTestId('section-row-Qzcave-row', words)).toBe('section-row-<6 characters>-row');
+    expect(shareableSelector('button[role=button] span', words)).toBe('button[role=button] span');
+    expect(shareableSelector('[data-testid=section-row-qz_cave]', words)).toBe('[data-testid=section-row-<7 characters>]');
+    // Text a selector matches is counted even when its words are known.
+    expect(shareableSelector('span=section row', words)).toBe('span=<11 characters>');
+    expect(shareableSelector("//span[normalize-space()='row']", words)).toContain("='<3 characters>'");
+  });
+});
+
 describe('generate-repro-report.mjs', () => {
   it('produces a report.md with the mutating steps and the recorded finding, scrubbed of $HOME', () => {
     execFileSync(process.execPath, [reportGen, sessionDir, '--title', 'Golden fixture'], {
@@ -459,6 +482,13 @@ describe('generate-repro-report.mjs', () => {
           params: { testid: 'evil\n## Injected heading\n<img src=x onerror=alert(1)> `code`' },
           outcome: { ok: true, durationMs: 10 },
         }),
+        // A selector keeps its structure (#576 RV19b-P1), so markdown in it is
+        // still neutralised rather than counted away.
+        record({
+          type: 'action', v: 1, seq: 13, ts: ts(13), tool: 'click', mutating: true,
+          params: { selector: 'div\n## Injected heading\n<img src=x onerror=alert(1)>' },
+          outcome: { ok: true, durationMs: 10 },
+        }),
       ];
       fs.writeFileSync(path.join(v2Dir, 'actions.jsonl'), `${lines.join('\n')}\n`);
     });
@@ -519,6 +549,8 @@ describe('generate-repro-report.mjs', () => {
       expect(steps).not.toContain('\n## Injected heading');
       expect(steps).not.toContain('<img');
       expect(steps).toContain('&lt;img');
+      // The test id is no word of the app's source: only its length is left.
+      expect(steps).toContain('`click` testid=<60 characters>');
     });
 
     // path.extname hands back everything after the last dot, so the redacted
@@ -672,7 +704,7 @@ describe('generate-repro-report.mjs', () => {
         '8. `map_view` set {center: array(2) of number, zoom: number, bearing: number}',
         "9. `ipc` save_project' ## forged({})",
         "10. `store_action` project.undo'\\|x()",
-        "11. `os_click` testid=toolbar' ## forged [OS-level]",
+        '11. `os_click` testid=<18 characters> [OS-level]',
         '12. `os_keys` cmd+s ## forged [OS-level]',
       ]);
     });
@@ -732,6 +764,65 @@ describe('generate-repro-report.mjs', () => {
         '4. `press_keys` ["Shift", "Tab", "Escape", "F2", "ArrowDown"]',
         '5. `press_keys` [3 characters, U+E007, 1 character]',
         '6. `press_keys` ["Page_Up", 12 characters]',
+      ]);
+    });
+  });
+
+  // A test id or a selector can name an element by the user's data: its text
+  // (`span=<name>`, an xpath text()), an attribute that holds text, or a value
+  // a test id was built from (#576 RV19b-P1). The report keeps their structure
+  // and the words of the app's source, and gives the rest as its length.
+  describe('steps keep a test id or selector by its structure, never the text it names', () => {
+    let selDir: string;
+
+    beforeAll(() => {
+      selDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-sel-'));
+      const ts = (s: number) => new Date(1751970000000 + s * 1000).toISOString();
+      const step = (seq: number, tool: string, params: object) =>
+        record({ type: 'action', v: 1, seq, ts: ts(seq), tool, mutating: true, params, outcome: { ok: true, durationMs: 1 } });
+      const lines = [
+        record({ type: 'session-start', v: 1, sessionId: 'sel-fixture', startedAt: ts(0) }),
+        step(1, 'click', { selector: 'span=Qzcave Nord Sump' }),
+        step(2, 'click', { testid: 'publish-to-speleodb-dialog-collab-remove-qzbob@example.org' }),
+        step(3, 'hover', { selector: "//td[text()='Qzstation A12']" }),
+        step(4, 'drag', { fromSelector: '[aria-label="Qzcave Nord"]', toTestid: 'system-card-%2Fhome%2Fqz%2FQzcave.srv' }),
+        step(5, 'scroll', { selector: '*=Qzcave', deltaY: 100 }),
+        step(6, 'select_option', { selector: 'aria/Qzcave', value: 'x' }),
+        step(7, 'type_text', { testid: 'qzcave-name-input', text: 'abc' }),
+        step(8, 'file_dialog_answer', { kind: 'open', triggerTestid: 'qzbob@example.org', path: '/x/a.srv' }),
+        step(9, 'os_click', { testid: 'save-button' }),
+        step(10, 'click', { selector: '[data-testid="toolbar-undo-button"] > svg' }),
+        step(11, 'click', { selector: '//*[@data-testid="section-row-12"]' }),
+      ];
+      fs.writeFileSync(path.join(selDir, 'actions.jsonl'), `${lines.join('\n')}\n`);
+      execFileSync(process.execPath, [reportGen, selDir], { encoding: 'utf8' });
+    });
+
+    afterAll(() => fs.rmSync(selDir, { recursive: true, force: true }));
+
+    const steps = (): string =>
+      fs
+        .readFileSync(path.join(selDir, 'report.md'), 'utf8')
+        .split('## Steps to reproduce')[1]
+        .split('Automated replay')[0];
+
+    it('prints none of the text', () => {
+      for (const value of ['Qz', 'qz', 'Nord', 'Sump', 'example.org', 'bob', '%2F']) expect(steps()).not.toContain(value);
+    });
+
+    it('keeps the structure and the code words, and gives the rest as its length', () => {
+      expect(steps().trim().split('\n')).toEqual([
+        '1. `click` selector=span=<16 characters>',
+        '2. `click` testid=publish-to-speleodb-dialog-collab-remove-<17 characters>',
+        "3. `hover` selector=//td[text()='<13 characters>']",
+        '4. `drag` selector=[aria-label="<11 characters>"] -> testid=system-card-<25 characters>',
+        '5. `scroll` selector=*=<6 characters> by (0,100)',
+        '6. `select_option` selector=aria/<6 characters> = string(1)',
+        '7. `type_text` string(3) into <6 characters>-name-input',
+        '8. `file_dialog_answer` open dialog answered <file.srv> (trigger <17 characters>)',
+        '9. `os_click` testid=save-button [OS-level]',
+        '10. `click` selector=[data-testid="toolbar-undo-button"] &gt; svg',
+        '11. `click` selector=//*[@data-testid="section-row-12"]',
       ]);
     });
   });

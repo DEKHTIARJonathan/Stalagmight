@@ -1079,8 +1079,21 @@ locations:
   `file_dialog_answer` step gives a file), a `select_option` step the length
   of the chosen value, and a map position - `map_click`'s `lngLat`,
   `map_view`'s `set` - its shape, since a coordinate is where the cave is.
-  Screen coordinates, test ids, selectors, command, store and action names
-  stay, each neutralised for markdown. A `press_keys` step lists its named
+  Screen coordinates, command, store and action names stay, each neutralised
+  for markdown. A test id or a selector keeps its structure and the words the
+  app's own source uses (#576 RV19b-P1, `scripts/lib/shareable-selector.mjs`):
+  a test id - and an `#id`, an `id=` value or an attribute's value in a
+  selector - keeps each word between `-` and `_` that is a number or a word of
+  the production source under `src/`, and the span from the first other word
+  to the last is its length
+  (`testid=publish-to-speleodb-dialog-collab-remove-<17 characters>`,
+  `system-card-<25 characters>` for a card keyed by a file path). Text a
+  selector matches is its length whatever its words: WebdriverIO's `=text`,
+  `*=text`, `span=text`, `aria/label`, an xpath string that is not an
+  attribute's value (`//td[text()='<13 characters>']`), and the value of an
+  attribute that holds text, such as `aria-label`, `title` or `placeholder`.
+  Tags, classes, combinators and xpath axes stay, their words judged as a test
+  id's are. A `press_keys` step lists its named
   keys (`["Control", 1 character]`, `[5 characters, "Enter"]`): `browser.keys`
   types any key that is not a WebDriver key name, so a run of single
   characters can spell a name, and each such run is a count of characters

@@ -14,6 +14,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import { shareableFinding } from './lib/shareable-finding.mjs';
+import { shareableSelector, shareableTestId } from './lib/shareable-selector.mjs';
 
 const args = process.argv.slice(2);
 if (args.length === 0 || args[0].startsWith('--')) {
@@ -330,7 +331,7 @@ function describeAction(a) {
     case 'map_click':
       // A geographic point is where the cave is: its shape only (#576 W33-NF2).
       // Screen coordinates stay - they place a pointer, not a cave.
-      return p.testid ? `testid=${mdInline(p.testid)}` : p.selector ? `selector=${mdInline(p.selector)}` : p.lngLat ? `lngLat=${argShape(p.lngLat)}` : `coords=(${p.x},${p.y})`;
+      return p.testid ? `testid=${shareableTestId(p.testid)}` : p.selector ? `selector=${shareableSelector(p.selector)}` : p.lngLat ? `lngLat=${argShape(p.lngLat)}` : `coords=(${p.x},${p.y})`;
     case 'map_feature_click': {
       const which =
         p.featureType === 'station'
@@ -340,15 +341,15 @@ function describeAction(a) {
     }
     case 'type_text':
       // The typed text is data the user would enter: its length only - see argShape.
-      return `${argShape(String(p.text ?? ''))}${p.testid ? ` into ${mdInline(p.testid)}` : ''}`;
+      return `${argShape(String(p.text ?? ''))}${p.testid ? ` into ${shareableTestId(p.testid)}` : ''}`;
     case 'hover':
-      return p.testid ? `testid=${mdInline(p.testid)}` : `selector=${mdInline(p.selector)}`;
+      return p.testid ? `testid=${shareableTestId(p.testid)}` : `selector=${shareableSelector(p.selector)}`;
     case 'drag': {
       const end = (kindTestid, kindSelector, x, y) =>
         kindTestid
-          ? `testid=${mdInline(kindTestid)}`
+          ? `testid=${shareableTestId(kindTestid)}`
           : kindSelector
-            ? `selector=${mdInline(kindSelector)}`
+            ? `selector=${shareableSelector(kindSelector)}`
             : `(${x},${y})`;
       const from = end(p.fromTestid, p.fromSelector, p.fromX, p.fromY);
       const to = end(p.toTestid, p.toSelector, p.toX, p.toY);
@@ -356,9 +357,9 @@ function describeAction(a) {
     }
     case 'scroll': {
       const target = p.testid
-        ? `testid=${mdInline(p.testid)}`
+        ? `testid=${shareableTestId(p.testid)}`
         : p.selector
-          ? `selector=${mdInline(p.selector)}`
+          ? `selector=${shareableSelector(p.selector)}`
           : 'window';
       // Two modes on one tool: a pixel delta, or scroll-into-view.
       return p.deltaX != null || p.deltaY != null
@@ -367,12 +368,12 @@ function describeAction(a) {
     }
     case 'select_option':
       // The chosen option can be a section or a station: its length only (#576 W33-NF2).
-      return `${p.testid ? `testid=${mdInline(p.testid)}` : `selector=${mdInline(p.selector)}`} = ${argShape(String(p.value ?? ''))}`;
+      return `${p.testid ? `testid=${shareableTestId(p.testid)}` : `selector=${shareableSelector(p.selector)}`} = ${argShape(String(p.value ?? ''))}`;
     case 'file_dialog_answer':
       // The chosen path is redacted to its extension - see redactPath.
       return p.cancel
-        ? `${p.kind} dialog cancelled (trigger ${mdInline(p.triggerTestid)})`
-        : `${p.kind} dialog answered ${redactPath(p.paths ?? p.path)} (trigger ${mdInline(p.triggerTestid)})`;
+        ? `${p.kind} dialog cancelled (trigger ${shareableTestId(p.triggerTestid)})`
+        : `${p.kind} dialog answered ${redactPath(p.paths ?? p.path)} (trigger ${shareableTestId(p.triggerTestid)})`;
     case 'press_keys':
       // Named keys stay, typed text is counted - see describeKeys (#576 W39-NF2).
       return describeKeys(p.keys);
@@ -401,7 +402,7 @@ function describeAction(a) {
     case 'os_grant':
       return 'OS input granted for this session';
     case 'os_click':
-      return `${p.testid ? `testid=${mdInline(p.testid)}` : `screen ${p.x},${p.y}`}${p.button === 'right' ? ' (right)' : ''}${p.double ? ' (double)' : ''}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
+      return `${p.testid ? `testid=${shareableTestId(p.testid)}` : `screen ${p.x},${p.y}`}${p.button === 'right' ? ' (right)' : ''}${p.double ? ' (double)' : ''}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
     case 'os_keys':
       return `${mdInline(p.spec)}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
     case 'os_screenshot':
