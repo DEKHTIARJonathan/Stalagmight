@@ -135,6 +135,27 @@ fn remove_staged_with_sidecars(staged: &Path) {
     remove_sidecars(staged);
 }
 
+/// Put the finished file at `staged` in place as `dest` - a same-directory
+/// rename, so `dest` is either the old file or the new one - and drop the SQLite
+/// sidecars the old file left beside it. The ONE install of a file over the
+/// cache `.stalx`, for the download replace and the Ariane adoption alike, so
+/// the two cannot drift (#576 RV20-2).
+///
+/// [#576 W52-2] Sidecars beside `dest` are the OLD file's - a crash while it
+/// was open leaves a hot `-journal` (or a `-wal`/`-shm`) - and the rename keeps
+/// them beside the new file, whose next read-write open would play the old
+/// file's pages back into it. Removed only after the rename: before it they
+/// still belong to the file a failed install leaves in place (and the callers
+/// re-open), and a hot journal is what rolls that file back to a consistent
+/// state.
+///
+/// A failed rename leaves `dest` and its sidecars as they were.
+pub(super) fn install_over(staged: &Path, dest: &Path) -> std::io::Result<()> {
+    std::fs::rename(staged, dest)?;
+    remove_sidecars(dest);
+    Ok(())
+}
+
 /// Remove the SQLite sidecars (`-journal`, `-wal`, `-shm`) beside `path`. One
 /// that is not there is the common case; any other failure is logged, as the
 /// sidecar then stays beside the file.
@@ -481,7 +502,9 @@ impl AppState {
                         return Err(e);
                     }
                 }
-                if let Err(e) = std::fs::rename(&staged, dest) {
+                // [#576 W52-2] The install also drops the old cache's sidecars
+                // (see `install_over`).
+                if let Err(e) = install_over(&staged, dest) {
                     remove_staged_with_sidecars(&staged);
                     if closed {
                         let _ = self.open_project(dest.to_path_buf());
@@ -491,14 +514,6 @@ impl AppState {
                         dest.display()
                     )));
                 }
-                // [#576 W52-2] Sidecars beside `dest` are the OLD cache's - a crash
-                // while it was open leaves a hot `-journal` (or a `-wal`/`-shm`) -
-                // and the rename keeps them beside the new file, whose next
-                // read-write open would play the old file's pages back into it.
-                // Removed only now: before the rename they still belong to the file
-                // the failure paths above re-open, and a hot journal is what rolls
-                // that file back to a consistent state.
-                remove_sidecars(dest);
                 Ok(preserved_view)
             }
             Err(e) => {
