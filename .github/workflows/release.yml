@@ -408,8 +408,8 @@ jobs:
           UPDATER_ON: ${{ steps.updater.outputs.on }}
       # Job-internal: records which macOS signing path the build job used
       # (see "Record macOS signing marker" above). Logged for the release
-      # run's own record - not consumed by anything yet, that lands with the
-      # updater-manifest generation step in a later PR of the #579 arc.
+      # run's own record and exported for the release notes below; the
+      # updater-manifest generation step in a later PR of the #579 arc reads it too.
       # Deleted here regardless, so it never rides along with
       # `gh release create release-artifacts/*` below - it is not an
       # installable artifact and nobody downloads it.
@@ -419,6 +419,10 @@ jobs:
         run: |
           if [ -f MACOS-SIGNED ]; then
             echo "macOS signing mode: $(cat MACOS-SIGNED)"
+            # release-notes.sh picks the macOS install instructions from this:
+            # a notarized app must not be published with quarantine-stripping
+            # advice, and an ad-hoc one must not promise a clean launch.
+            echo "MACOS_SIGNING=$(tr -cd 'a-z-' < MACOS-SIGNED)" >> "$GITHUB_ENV"
             rm MACOS-SIGNED
           else
             echo "::warning::MACOS-SIGNED marker missing from release artifacts"
