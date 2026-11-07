@@ -419,7 +419,10 @@ fn rv20_6s_row_past_the_end_is_dropped_at_the_open_and_never_comes_back() {
     let reopened_blocked = reopened.integrity_check().save_blocked;
     redo(&reopened);
     let reopened_redo = shown_comment(&reopened, station);
-    println!("the file holds             {in_file:?} (stations 0 to {})", stations_at_open - 1);
+    println!(
+        "the file holds             {in_file:?} (stations 0 to {})",
+        stations_at_open - 1
+    );
     println!("open: receipt drops {dropped_at_open}, the project holds {at_open:?}");
     println!("append: station 3 shows    {appended:?}");
     println!("the save writes            {saved_rows:?}");
@@ -435,8 +438,15 @@ fn rv20_6s_row_past_the_end_is_dropped_at_the_open_and_never_comes_back() {
         (vec![(sid, 3, "comment past the end".to_string())], 3),
         "fixture: the row names station 3 of a section whose stations are 0 to 2"
     );
-    assert_eq!(dropped_at_open, 1, "the open lists the orphan on its receipt");
-    assert_eq!(at_open, Vec::<String>::new(), "and the project does not hold it");
+    assert_eq!(
+        dropped_at_open, 1,
+        "the open lists the orphan on its receipt"
+    );
+    assert_eq!(
+        at_open,
+        Vec::<String>::new(),
+        "and the project does not hold it"
+    );
     assert_eq!(appended, None, "the appended station 3 gets no comment");
     assert_eq!(saved_rows, Vec::new(), "the save writes no comment row");
     assert_eq!(dropped_at_reopen, 0, "so the reopen has nothing to drop");
