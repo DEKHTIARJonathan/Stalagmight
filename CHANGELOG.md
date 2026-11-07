@@ -27,6 +27,7 @@ Update this file every time a new version is tagged.
 
 - **Bundled SQLite updated from 3.45.0 to 3.54.1** - `.stalx` project files are SQLite databases you may be sent by others, and this picks up the upstream memory-safety fixes since January 2024, including several for crafted database files ([#598](https://github.com/Stalagmight/Stalagmight/issues/598))
 - **Bundled SQLite built without full-text search, R-tree, DBSTAT and extension loading** - Stalagmight uses none of them, and leaving them out means a crafted `.stalx` cannot reach their code ([#608](https://github.com/Stalagmight/Stalagmight/issues/608))
+- **Full-text search, R-tree, DBSTAT and extension loading are also refused while a file is open** - every project file is opened with SQLite set to refuse them, so `stalx-reader` built from crates.io, whose SQLite has them compiled in, keeps a crafted `.stalx` away from their code too; a file whose schema names are not valid UTF-8 is refused as unsafe ([#619](https://github.com/Stalagmight/Stalagmight/issues/619))
 
 ## [0.5.0] - 2026-08-13
 

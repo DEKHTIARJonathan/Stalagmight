@@ -19,7 +19,11 @@
 //! counted before anything is loaded. Every connection to the copy runs in
 //! defensive mode with `trusted_schema` off, a cap on any value SQLite produces,
 //! no memory-mapping, cell-size checks, and a deadline that interrupts any
-//! statement still running past it.
+//! statement still running past it. The load's connection also has SQLite's
+//! authorizer refuse virtual tables, DBSTAT, and the functions of FTS, R-tree
+//! and extension loading, which this crate's bundled SQLite has compiled in; a
+//! file whose schema names or SQL are not valid UTF-8, which the authorizer
+//! cannot be handed, is refused before that.
 //!
 //! **Bounds.** One deadline covers the read from the first SQLite statement to
 //! the result, at two granularities: inside SQLite a statement is interrupted
