@@ -114,6 +114,26 @@ function gpsToEnu(
   return ecefToEnu(ecef, frame);
 }
 
+// [#576 RV18-W28-1] The longest offset `surfacePoint` pins as given: 1e150 m,
+// far beyond the horizon (about 6.4e6 m) and far below where squaring it
+// overflows (about 1.3e154 m).
+const PIN_MAX_OFFSET = 1e150;
+
+/**
+ * A finite offset longer than PIN_MAX_OFFSET, shortened to it in its own
+ * direction (#576 RV18-W28-1). From about 1.3e154 m the solve's terms overflow
+ * (qx * qx is Infinity) and the discriminant is NaN, which would turn a finite
+ * offset into [NaN, NaN] on the map. Such an offset is beyond the horizon
+ * whatever its length, and that far out the origin's own position is far below
+ * rounding, so the shortened one pins exactly where the full length would.
+ * Anything else, a non-finite input included, is returned as given.
+ */
+function shortenToPin(east: number, north: number): [number, number] {
+  const longest = Math.max(Math.abs(east), Math.abs(north));
+  if (!Number.isFinite(longest) || longest <= PIN_MAX_OFFSET) return [east, north];
+  return [(east / longest) * PIN_MAX_OFFSET, (north / longest) * PIN_MAX_OFFSET];
+}
+
 /**
  * Where the origin's vertical through (`east`, `north`) on its tangent plane
  * meets the WGS84 surface, as latitude/longitude in degrees (longitude in
@@ -130,11 +150,14 @@ function gpsToEnu(
  * The map's choice, see `metersToMapCoords`.
  */
 function surfacePoint(
-  east: number,
-  north: number,
+  eastGiven: number,
+  northGiven: number,
   frame: OriginFrame,
   pinToHorizon: boolean
 ): { latitude: number; longitude: number } | null {
+  const [east, north] = pinToHorizon
+    ? shortenToPin(eastGiven, northGiven)
+    : [eastGiven, northGiven];
   const b2 = WGS84_A * WGS84_A * (1 - WGS84_E2);
   const a2 = WGS84_A * WGS84_A;
   const { sinLat, cosLat, sinLon, cosLon } = frame;

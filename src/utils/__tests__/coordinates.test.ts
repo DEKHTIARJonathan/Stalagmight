@@ -263,6 +263,33 @@ describe('one local-to-GPS algorithm with the backend (#576 GEO-D1)', () => {
     expect(Number.isFinite(lng) && Number.isFinite(lat)).toBe(true);
   });
 
+  // [#576 RV18-W28-1] From about 1.3e154 m the quadratic's terms overflow
+  // (qx * qx is Infinity), and the pin must still hold: such an offset is
+  // beyond the horizon whatever its length, so it lands where a merely far one
+  // in the same direction does, not at [NaN, NaN]. Only a non-finite input
+  // gives NaN.
+  it('the map pins a finite offset too large to square, as a far one', () => {
+    const MID = { latitude: 20.5, longitude: -87.3 };
+    for (const [origin, east, north] of [
+      [EQUATOR_ORIGIN, 1e160, 0],
+      [EQUATOR_ORIGIN, Number.MAX_VALUE, Number.MAX_VALUE],
+      [MID, 1e160, 0],
+      [MID, -1e200, 3e199],
+      [MID, -Number.MAX_VALUE, -Number.MAX_VALUE],
+    ] as const) {
+      const scale = 1e150 / Math.max(Math.abs(east), Math.abs(north));
+      const far = metersToMapCoords(east * scale, north * scale, origin);
+      const huge = metersToMapCoords(east, north, origin);
+      expect(huge.every(Number.isFinite), `(${east}, ${north}) m: ${huge}`).toBe(true);
+      expect(huge[0], `(${east}, ${north}) m`).toBeCloseTo(far[0], 9);
+      expect(huge[1], `(${east}, ${north}) m`).toBeCloseTo(far[1], 9);
+    }
+    const [lng, lat] = metersToMapCoords(1e160, 0, EQUATOR_ORIGIN);
+    expect(lng).toBeCloseTo(90, 9);
+    expect(lat).toBeCloseTo(0, 9);
+    expect(metersToMapCoords(Number.POSITIVE_INFINITY, 0, MID).every(Number.isNaN)).toBe(true);
+  });
+
   // The frontend twin of geo.rs `local_to_gps_round_trips_within_a_
   // micrometre_out_to_50_km`: what the map draws converts back to the metres
   // it was drawn from, within 1e-6 m, anywhere within 50 km.
