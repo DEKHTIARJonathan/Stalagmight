@@ -7,6 +7,11 @@ on:
   # bundle paths and globs can be proven without cutting a tag first.
   workflow_dispatch:
 
+# Build the bundled SQLite without FTS3/4/5, RTREE, DBSTAT and extension
+# loading, so a hostile .stalx cannot reach them (#608, docs/toolchain.md).
+env:
+  LIBSQLITE3_FLAGS: "-USQLITE_ENABLE_FTS3 -USQLITE_ENABLE_FTS3_PARENTHESIS -USQLITE_ENABLE_FTS5 -USQLITE_ENABLE_RTREE -USQLITE_ENABLE_DBSTAT_VTAB -DSQLITE_OMIT_LOAD_EXTENSION"
+
 jobs:
   # Gate the release on the checks the tagged commit should already have passed.
   # Linux-only, which is what this workflow did before it grew a build matrix.
@@ -55,6 +60,10 @@ jobs:
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      # The flags above only take effect if libsqlite3-sys reads them; this pins
+      # the compiled-in options. Ignored in a plain local `cargo test` (#608).
+      - name: Bundled SQLite compile options
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence --lib -- --ignored --exact persistence::sqlite::tests::bundled_sqlite_omits_virtual_table_modules_and_extension_loading
       # Release-profile compile check (#541): the debug-profile test run above
       # cannot see a call whose only target is cfg(debug_assertions)-gated
       # (debug_assert! arguments still type-check in release), and this job is
@@ -217,6 +226,13 @@ jobs:
           APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD_SECRET: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
+      # The verify job checks the SQLite strip on Linux only, but the flags work
+      # by a later -U cancelling libsqlite3-sys's own -D, which each platform's C
+      # compiler (MSVC on Windows) must honour. Check it with this leg's
+      # compiler before anything ships (#608).
+      - name: Bundled SQLite compile options (this platform)
+        shell: bash
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-persistence --lib -- --ignored --exact persistence::sqlite::tests::bundled_sqlite_omits_virtual_table_modules_and_extension_loading
       # v0.5.0-rc1 shipped a .app that macOS refused to open as "damaged". The
       # cause was an absent signature rather than a corrupt download: with no
       # signing identity Tauri skips codesign entirely, leaving only the Rust
