@@ -362,6 +362,23 @@ jobs:
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/target-unstripped-sqlite
           STALAGMIGHT_EXPECT_UNSTRIPPED_SQLITE: "1"
+      # The same three crates declare `rust-version = "1.89.0"`: the oldest stable
+      # rustc that builds them (rusqlite 0.41 itself requires 1.89), and the floor
+      # library users get. Every other step builds on the latest stable, which takes
+      # an API stabilized after 1.89 without a word - `AtomicU64::try_update` (1.95)
+      # got in that way - so build them on the floor itself. --locked: the
+      # dependency versions the lockfile holds, which are what set the floor. Its
+      # own CARGO_TARGET_DIR, so these artifacts never mix with the stable ones the
+      # steps around it share. Self-contained on purpose (installs its toolchain,
+      # minimal profile: a check needs no rustfmt or clippy).
+      - name: MSRV check (stalx-reader and its crates, Rust 1.89.0)
+        if: ${{ !cancelled() }}
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/msrv-target
+        run: |
+          rustup toolchain install 1.89.0 --profile minimal
+          cargo +1.89.0 check --locked --manifest-path src-tauri/Cargo.toml \
+            -p stalx-reader -p stalagmight-persistence -p stalagmight-models
       # sccache health on the self-hosted path (the cache that replaces rust-cache
       # on the ephemeral runner). Skipped on hosted. !cancelled() (not always()):
       # still report on cargo FAILURE, but skip on a superseded/cancelled run.

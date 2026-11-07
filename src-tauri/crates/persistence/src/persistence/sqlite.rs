@@ -384,10 +384,14 @@ impl InflationBudget {
 
     /// Take `bytes` out of the budget, or fail without taking anything.
     ///
-    /// `try_update` (formerly `fetch_update`, deprecated in Rust 1.99) rather than a
-    /// load followed by a store: two threads reserving concurrently off the same
-    /// observed remainder would each believe they fit, and the budget would be
-    /// overspent by exactly the amount it is meant to bound.
+    /// A `compare_exchange` loop rather than a load followed by a store: two threads
+    /// reserving concurrently off the same observed remainder would each believe they
+    /// fit, and the budget would be overspent by exactly the amount it is meant to
+    /// bound. A failed exchange retries against the remainder it saw instead.
+    ///
+    /// Written out by hand, not with `AtomicU64::try_update` (stable only since Rust
+    /// 1.95) or `fetch_update` (deprecated in Rust 1.99), so the crate builds on the
+    /// `rust-version` it declares.
     ///
     /// The message deliberately shares NO distinctive phrase with the pre-scan's: a test
     /// that asserts on "load budget" cannot tell which of the two refused it, and one
@@ -395,17 +399,24 @@ impl InflationBudget {
     /// ran. Assert on "while inflating" for this one, "declares" for the pre-scan.
     fn reserve(&self, bytes: u64) -> Result<()> {
         use std::sync::atomic::Ordering;
-        self.remaining
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-                left.checked_sub(bytes)
-            })
-            .map_err(|left| {
-                anyhow::anyhow!(
+        let mut left = self.remaining.load(Ordering::SeqCst);
+        loop {
+            let Some(after) = left.checked_sub(bytes) else {
+                anyhow::bail!(
                     "history exceeded its inflation budget while inflating \
                      (a further {bytes} bytes requested with {left} left)"
-                )
-            })?;
-        Ok(())
+                );
+            };
+            match self.remaining.compare_exchange_weak(
+                left,
+                after,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(now) => left = now,
+            }
+        }
     }
 
     /// Hand back a reservation that turned out to be larger than the real output.
