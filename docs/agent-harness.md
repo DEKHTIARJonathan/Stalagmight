@@ -1154,8 +1154,9 @@ locations:
   ` failed: ` of a first line, or on a later line), or has an entry in its
   group's allow-list (`allowRunners.ts`, `allowLib.ts`, `allowScenarios.ts`,
   `allowScripts.ts`) saying why it is a code, a count, a length, an integer, a
-  word the harness writes or a path folded by `foldLocalPaths`. A bare name is
-  allowed only in the function it was checked in, a path only folded. Every
+  word the harness writes or a path folded by `foldLocalPaths`. A value is
+  allowed only in the function it was checked in (a callback is a function of
+  its own, named by its call: `main > files.forEach`), a path only folded. Every
   file write is listed as shareable or private, every private one by a name
   in the list below, and every shell, Python, PowerShell and Rust program
   under those directories is classified too. A new site fails the test until

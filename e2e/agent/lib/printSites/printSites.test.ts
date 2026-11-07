@@ -141,17 +141,17 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
 
   it('flags an app value on stdout, and passes it as a length or a helper result', () => {
     const raw = check({ 'a.ts': 'process.stdout.write(`renamed ${station.name}\\n`);\n' });
-    expect(raw.unchecked).toEqual(['a.ts:1 [stream] station.name']);
+    expect(raw.unchecked).toEqual(['a.ts:1 [stream] <module>: station.name']);
     expect(check({ 'a.ts': 'process.stdout.write(`renamed ${station.name.length}\\n`);\n' }).unchecked).toEqual([]);
     expect(check({ 'a.ts': 'console.error(`fatal: ${shareableErrorText(err)}`);\n' }).unchecked).toEqual([]);
   });
 
   it('follows a const to what it was made from, and a local arrow function to what it returns', () => {
     const viaConst = check({ 'a.ts': 'const line = `at ${p.x}`;\nP(line);\n' }, { wrappers: { 'a.ts': { P: 'stream' } } });
-    expect(viaConst.unchecked).toEqual(['a.ts:1 [stream] p.x']);
+    expect(viaConst.unchecked).toEqual(['a.ts:1 [stream] <module>: p.x']);
     // Each call stands its own argument in for the parameter (#576 W51: `id: v` hid both).
     const viaArrow = check({ 'a.ts': 'const id = (v) => `#${v}`;\nconsole.log(`${id(p.shotId)} in ${id(p.sectionId)}`);\n' });
-    expect(viaArrow.unchecked).toEqual(['a.ts:2 [stream] p.shotId', 'a.ts:2 [stream] p.sectionId']);
+    expect(viaArrow.unchecked).toEqual(['a.ts:2 [stream] <module>: p.shotId', 'a.ts:2 [stream] <module>: p.sectionId']);
     // A validator the scan cannot see through is a file helper, named with its reason.
     const validated = check(
       { 'a.ts': 'const id = (v) => (Number.isInteger(v) ? String(v) : argShape(v));\nconsole.log(`${id(p.shotId)}`);\n' },
@@ -165,7 +165,7 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
       { 'r.mjs': 'function describeAction(a) {\n  return `coords=(${a.params.x},${a.params.y})`;\n}\n' },
       { builders: { 'r.mjs': ['describeAction'] } },
     );
-    expect(found.unchecked).toEqual(['r.mjs:2 [return] a.params.x', 'r.mjs:2 [return] a.params.y']);
+    expect(found.unchecked).toEqual(['r.mjs:2 [return] describeAction: a.params.x', 'r.mjs:2 [return] describeAction: a.params.y']);
   });
 
   it("withholds an error's or a progress line's app text after `failed: ` and on its later lines", () => {
@@ -179,7 +179,7 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
     expect(found.unchecked).toEqual([
       's.ts:1 [error] <module>: i',
       's.ts:4 [error] <module>: i',
-      `s.ts:4 [error] leftovers.join(", ")`,
+      `s.ts:4 [error] <module>: leftovers.join(", ")`,
     ]);
   });
 
@@ -187,7 +187,7 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
     const source = 'throw new Error(`pnpm licenses failed: ${parsed.error.message}`);\n';
     expect(check({ 's/a.mjs': source }).unchecked).toEqual([]);
     const scripts = check({ 'scripts/a.mjs': source });
-    expect(scripts.unchecked).toEqual(['scripts/a.mjs:1 [error] parsed.error.message']);
+    expect(scripts.unchecked).toEqual(['scripts/a.mjs:1 [error] <module>: parsed.error.message']);
   });
 
   it('allows a path only folded', () => {
@@ -201,9 +201,9 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
   });
 
   it('holds a reason that says "folded" to a value that is (#576 W49-NF2: agent:smoke)', () => {
-    const allow = { 'smoke.ts': { 'JSON.stringify(started)': 'the StartResult, folded: its paths print as <repo> and ~' } };
+    const allow = { 'smoke.ts': { '<module>: JSON.stringify(started)': 'the StartResult, folded: its paths print as <repo> and ~' } };
     const raw = check({ 'smoke.ts': 'log(`started: ${JSON.stringify(started)}`);\n' }, { allow, wrappers: { 'smoke.ts': { log: 'stream' } } });
-    expect(raw.unchecked).toEqual(['smoke.ts:1 [stream] JSON.stringify(started)']);
+    expect(raw.unchecked).toEqual(['smoke.ts:1 [stream] <module>: JSON.stringify(started)']);
     const folded = check(
       { 'smoke.ts': 'log(`started: ${foldLocalPaths(JSON.stringify(started))}`);\n' },
       { allow, wrappers: { 'smoke.ts': { log: 'stream' } } },
@@ -284,13 +284,13 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
 
   it("checks a metric's key, which the PASS/FAIL line prints, and not its number", () => {
     const found = check({ 's.ts': "ctx.metric(`mapSkip:${err.message}`);\nctx.setMetric('maxDepth', depth);\n" });
-    expect(found.unchecked).toEqual(['s.ts:1 [stream] err.message']);
+    expect(found.unchecked).toEqual(['s.ts:1 [stream] <module>: err.message']);
   });
 
   it('checks only the arguments a wrapper prints', () => {
     const source = { 'a.ts': "check('session ready', await sessionReady(), `${n} keys`);\n" };
     expect(check(source, { wrappers: { 'a.ts': { check: 'stream' } } }).unchecked).toEqual([
-      'a.ts:1 [stream] sessionReady()',
+      'a.ts:1 [stream] <module>: sessionReady()',
       'a.ts:1 [stream] <module>: n',
     ]);
     expect(check(source, { wrappers: { 'a.ts': { check: { kind: 'stream', args: [0, 2] } } } }).unchecked).toEqual([
@@ -304,7 +304,7 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
       fileHelpers: { 'r.mjs': { code: 'a string of its shape as itself, else its argShape' } },
       fileSinks: { 'r.mjs': { '<module> -> outPath': { class: 'shareable' as const, what: 'report.md', reason: 'pasted into public issues' } } },
       // The entry report.md had: the join, as if only P pushed.
-      allow: { 'r.mjs': { "md.join('\\n')": 'the lines P(...) pushed, each one a checked stream site', 'P: s': R.FORWARD } },
+      allow: { 'r.mjs': { "<module>: md.join('\\n')": 'the lines P(...) pushed, each one a checked stream site', 'P: s': R.FORWARD } },
     };
     const pushed = check(
       {
@@ -314,10 +314,10 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
       },
       report,
     );
-    expect(pushed.unchecked).toEqual(['r.mjs:4 [file] start.profileDir']);
+    expect(pushed.unchecked).toEqual(['r.mjs:4 [file] <module>: start.profileDir']);
     // Handed to a function, it can hold anything: its join stays one value that needs a reason of its own.
     const handed = check({ 'r.mjs': "const md = [];\naddLines(md);\nfs.writeFileSync(outPath, md.join('\\n'));\n" }, { ...report, allow: {} });
-    expect(handed.unchecked).toEqual(["r.mjs:3 [file] md.join('\\n')"]);
+    expect(handed.unchecked).toEqual(["r.mjs:3 [file] <module>: md.join('\\n')"]);
   });
 
   it("keys a callback's names by its call, not by the function it is written in (#576 RV20-7)", () => {
@@ -344,5 +344,20 @@ describe('the scan catches what the reviews found (#576 W51)', () => {
       group,
     );
     expect(found.unchecked).toEqual(['r.mjs:2 [stream] <module> > actions.map().forEach: s', 'r.mjs:4 [stream] other > files.forEach: f']);
+  });
+
+  it('keys every value by its function, so an error message allowed in one is not allowed in another (#576 RV20-10)', () => {
+    const reason = "Node's `Command failed: git checkout -- src-tauri/gen/schemas` (stdio ignored)";
+    // The entry build.ts had, file-wide, and the key that one print has now.
+    const allow = { 'b.ts': { 'err.message': reason, 'stamp: err.message': reason } };
+    const found = check(
+      {
+        'b.ts':
+          'function stamp() {\n  try { x(); } catch (err) { console.error(`stamp failed ${err.message}`); }\n}\n' +
+          'function other() {\n  try { y(); } catch (err) { console.error(`other ${err.message}`); }\n}\n',
+      },
+      { allow },
+    );
+    expect(found.unchecked).toEqual(['b.ts:5 [stream] other: err.message']);
   });
 });

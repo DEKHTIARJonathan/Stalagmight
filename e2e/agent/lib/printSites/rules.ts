@@ -155,9 +155,13 @@ export function scanOptions(groups: readonly SiteGroup[]): ScanOptions {
 /** The kinds whose values reach a shareable sink. */
 const VALUE_KINDS: ReadonlySet<SinkKind> = new Set(['stream', 'progress', 'error', 'return']);
 
-/** How an allow-list keys a value: a bare identifier by its function, anything else as written. */
+/**
+ * How an allow-list keys a value: `<function>: <expression as written>`. Every value is
+ * keyed by the function it is written in (`fnName`), so an entry checked in one
+ * function - an error's message, a field of a record - allows nothing in another (#576 RV20-10).
+ */
 export function valueKey(value: PrintValue): string {
-  return value.bare ? `${value.fn}: ${value.text}` : value.text;
+  return `${value.fn}: ${value.text}`;
 }
 
 /** The key of a file or passthrough site. */

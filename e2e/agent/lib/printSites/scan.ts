@@ -67,9 +67,7 @@ export interface PrintValue {
   withheld: boolean;
   /** The value is a call of this function (the callee's last name), if any. */
   callee?: string;
-  /** A bare identifier: the allow-list keys it by function too. */
-  bare: boolean;
-  /** The function the value is written in (a const or a local arrow function can be another than the site's). */
+  /** The function the value is written in (a const or a local arrow function can be another than the site's): its allow key's first half. */
   fn: string;
   /** Inside a call of a folding helper (`foldLocalPaths`): a path in it prints folded. */
   folded: boolean;
@@ -324,7 +322,7 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
     if (seen.has(node)) return;
     seen.add(node);
     const add = (n: ts.Expression, callee?: string): void => {
-      out.push({ text: text(n), line: lineOf(n), withheld, ...(callee ? { callee } : {}), bare: ts.isIdentifier(n), folded, fn: fnName(n) });
+      out.push({ text: text(n), line: lineOf(n), withheld, ...(callee ? { callee } : {}), folded, fn: fnName(n) });
     };
     if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node) || ts.isNonNullExpression(node)) {
       return valuesOf(node.expression, withheld, out, seen, folded);
@@ -371,7 +369,7 @@ export function scanFile(repo: string, file: string, opts: ScanOptions): PrintSi
       const init = constInit(node);
       if (init && !ts.isArrowFunction(init) && !ts.isFunctionExpression(init)) return valuesOf(init, withheld, out, seen, folded);
       if (!folded && foldedParameter(node)) {
-        out.push({ text: text(node), line: lineOf(node), withheld, bare: true, folded: true, fn: fnName(node) });
+        out.push({ text: text(node), line: lineOf(node), withheld, folded: true, fn: fnName(node) });
         return;
       }
       return add(node);
