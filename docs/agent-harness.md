@@ -1056,7 +1056,15 @@ locations:
   field-name keys, string lengths, value types, array lengths; only a boolean
   or null keeps its value, and a key that is not a lowercase-led identifier is
   only counted), and a `type_text` step the length of its text (#576
-  RV18-W23-3).
+  RV18-W23-3). So does every other value a step carries (#576 W33-NF2): an
+  `eval` / `driver_script` step gives its script's length, a `seed` step the
+  length of the project name it chose and a fixture's extension only (as a
+  `file_dialog_answer` step gives a file), a `select_option` step the length
+  of the chosen value, and a map position - `map_click`'s `lngLat`,
+  `map_view`'s `set` - its shape, since a coordinate is where the cave is.
+  Screen coordinates, test ids, selectors, command, store and action names
+  stay, each neutralised for markdown. A `press_keys` step still lists its
+  keys.
 
 **Not for sharing** - the full text, for triage where the run happened: the
 session's `actions.jsonl` (each `finding` event with its detail, each

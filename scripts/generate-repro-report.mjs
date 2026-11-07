@@ -281,7 +281,9 @@ function describeAction(a) {
   switch (a.tool) {
     case 'click':
     case 'map_click':
-      return p.testid ? `testid=${mdInline(p.testid)}` : p.selector ? `selector=${mdInline(p.selector)}` : p.lngLat ? `lngLat=${JSON.stringify(p.lngLat)}` : `coords=(${p.x},${p.y})`;
+      // A geographic point is where the cave is: its shape only (#576 W33-NF2).
+      // Screen coordinates stay - they place a pointer, not a cave.
+      return p.testid ? `testid=${mdInline(p.testid)}` : p.selector ? `selector=${mdInline(p.selector)}` : p.lngLat ? `lngLat=${argShape(p.lngLat)}` : `coords=(${p.x},${p.y})`;
     case 'map_feature_click': {
       const which =
         p.featureType === 'station'
@@ -317,7 +319,8 @@ function describeAction(a) {
         : `${target} into view`;
     }
     case 'select_option':
-      return `${p.testid ? `testid=${mdInline(p.testid)}` : `selector=${mdInline(p.selector)}`} = "${mdInline(p.value)}"`;
+      // The chosen option can be a section or a station: its length only (#576 W33-NF2).
+      return `${p.testid ? `testid=${mdInline(p.testid)}` : `selector=${mdInline(p.selector)}`} = ${argShape(String(p.value ?? ''))}`;
     case 'file_dialog_answer':
       // The chosen path is redacted to its extension - see redactPath.
       return p.cancel
@@ -327,30 +330,34 @@ function describeAction(a) {
       return JSON.stringify(p.keys ?? []);
     case 'eval':
     case 'driver_script':
-      return `\`${String(p.script ?? '').slice(0, 60).replace(/\n/g, ' ')}\``;
+      // A script can name what it acts on - a station, a section: its length only (#576 W33-NF2).
+      return `script ${argShape(String(p.script ?? ''))}`;
     case 'seed':
+      // The project's name is the user's; a fixture is a survey file, named by its
+      // extension only - see redactPath (#576 W33-NF2).
       return p.mode === 'basic'
-        ? `basic project "${p.projectName ?? 'harness-project'}"`
-        : `open ${p.mode === 'fractal' ? 'fractal ' : ''}fixture ${p.name ?? '(default)'}`;
+        ? `basic project ${p.projectName == null ? '(default name)' : `named ${argShape(String(p.projectName))}`}`
+        : `open ${p.mode === 'fractal' ? 'fractal ' : ''}fixture ${p.name == null ? '(default)' : redactPath(p.name)}`;
     case 'run_scenario':
-      return `${p.name} (seed=${p.seed ?? 1}${p.iterations != null ? `, iterations=${p.iterations}` : ''})`;
+      return `${mdInline(p.name)} (seed=${p.seed ?? 1}${p.iterations != null ? `, iterations=${p.iterations}` : ''})`;
     // Argument shapes, not values - see argShape. store_action args are positional.
     case 'ipc':
-      return `${p.command}(${argShape(p.args ?? {})})`;
+      return `${mdInline(p.command)}(${argShape(p.args ?? {})})`;
     case 'store_action': {
       const list = p.args ?? [];
-      return `${p.store}.${p.action}(${Array.isArray(list) ? list.map((v) => argShape(v)).join(', ') : argShape(list)})`;
+      return `${mdInline(p.store)}.${mdInline(p.action)}(${Array.isArray(list) ? list.map((v) => argShape(v)).join(', ') : argShape(list)})`;
     }
     case 'map_view':
-      return p.set ? JSON.stringify(p.set) : 'read';
+      // The camera's center is where the cave is: the shape only (#576 W33-NF2).
+      return p.set ? `set ${argShape(p.set)}` : 'read';
     case 'os_grant':
       return 'OS input granted for this session';
     case 'os_click':
-      return `${p.testid ? `testid=${p.testid}` : `screen ${p.x},${p.y}`}${p.button === 'right' ? ' (right)' : ''}${p.double ? ' (double)' : ''}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
+      return `${p.testid ? `testid=${mdInline(p.testid)}` : `screen ${p.x},${p.y}`}${p.button === 'right' ? ' (right)' : ''}${p.double ? ' (double)' : ''}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
     case 'os_keys':
-      return `${p.spec}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
+      return `${mdInline(p.spec)}${p.force ? ' (forced, app was not frontmost)' : ''} [OS-level]`;
     case 'os_screenshot':
-      return `${p.name ?? 'os-shot'} [OS-level, real pixels]`;
+      return `${mdInline(p.name ?? 'os-shot')} [OS-level, real pixels]`;
     default:
       return '';
   }

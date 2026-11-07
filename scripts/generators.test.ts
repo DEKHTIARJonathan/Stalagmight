@@ -457,7 +457,8 @@ describe('generate-repro-report.mjs', () => {
       expect(md).toContain('`drag` testid=station-a -> testid=station-b');
       expect(md).toContain('open dialog answered <file.dmp>');
       expect(md).toContain('`scroll` testid=warnings-content by (0,400)');
-      expect(md).toContain('`select_option` testid=select-number-format = "en-US"');
+      // The chosen value as its length (#576 W33-NF2).
+      expect(md).toContain('`select_option` testid=select-number-format = string(5)');
       expect(md).toContain('`map_feature_click` shot id=17 in section 2');
       // A failed mutation stays, flagged.
       expect(md).toContain('`hover` testid=toolbar-undo-button **(failed)**');
@@ -594,6 +595,70 @@ describe('generate-repro-report.mjs', () => {
         '4. `ipc` update_section({sectionId: number, patch: {name: string(5), visible: true, ' +
           'depths: array(2) of number, anchor: object(2 keys)}, colors: {2 key(s) withheld}, tags: array(0)})',
       );
+    });
+  });
+
+  // A script, a project or fixture name, an option value and a map position
+  // are the user's data too: a script can name a station, a select can pick a
+  // section, a coordinate is a cave's location (#576 W33-NF2). And every name
+  // a step prints is neutralised for markdown, the command's too.
+  describe('steps quote no script, project or fixture name, option value or map position', () => {
+    let quotesDir: string;
+
+    beforeAll(() => {
+      quotesDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stalagmight-gen-quotes-'));
+      const ts = (s: number) => new Date(1751970000000 + s * 1000).toISOString();
+      const action = (seq: number, tool: string, params: object) =>
+        record({ type: 'action', v: 1, seq, ts: ts(seq), tool, mutating: true, params, outcome: { ok: true, durationMs: 1 } });
+      const lines = [
+        record({ type: 'session-start', v: 1, sessionId: 'quotes-fixture', startedAt: ts(0) }),
+        action(1, 'eval', { script: "return renameStation('StationA1', 'StationZ9')" }),
+        action(2, 'driver_script', { script: 'await page.fill("#name", "CaveA North")\n## forged heading' }),
+        action(3, 'seed', { mode: 'basic', projectName: 'CaveA Survey' }),
+        action(4, 'seed', { mode: 'fixture', name: 'CaveB-entrance.stalx' }),
+        action(5, 'seed', { mode: 'basic' }),
+        action(6, 'select_option', { testid: 'section-select', value: 'CaveC sump' }),
+        action(7, 'map_click', { lngLat: [-87.4321, 20.6543] }),
+        action(8, 'map_view', { set: { center: [-87.4321, 20.6543], zoom: 18, bearing: 0 } }),
+        action(9, 'ipc', { command: 'save_project`\n## forged', args: {} }),
+        action(10, 'store_action', { store: 'project', action: 'undo`|x', args: [] }),
+        action(11, 'os_click', { testid: 'toolbar`\n## forged' }),
+        action(12, 'os_keys', { spec: 'cmd+s\n## forged' }),
+      ];
+      fs.writeFileSync(path.join(quotesDir, 'actions.jsonl'), `${lines.join('\n')}\n`);
+      execFileSync(process.execPath, [reportGen, quotesDir], { encoding: 'utf8' });
+    });
+
+    afterAll(() => fs.rmSync(quotesDir, { recursive: true, force: true }));
+
+    const steps = (): string =>
+      fs
+        .readFileSync(path.join(quotesDir, 'report.md'), 'utf8')
+        .split('## Steps to reproduce')[1]
+        .split('Automated replay')[0];
+
+    it('prints none of them', () => {
+      const md = fs.readFileSync(path.join(quotesDir, 'report.md'), 'utf8');
+      for (const value of ['StationA1', 'StationZ9', 'CaveA', 'CaveB', 'CaveC', '87.43', '20.65']) {
+        expect(md).not.toContain(value);
+      }
+    });
+
+    it('gives each its shape or its extension, one line per step', () => {
+      expect(steps().trim().split('\n')).toEqual([
+        '1. `eval` script string(46)',
+        '2. `driver_script` script string(57)',
+        '3. `seed` basic project named string(12)',
+        '4. `seed` open fixture <file.stalx>',
+        '5. `seed` basic project (default name)',
+        '6. `select_option` testid=section-select = string(10)',
+        '7. `map_click` lngLat=array(2) of number',
+        '8. `map_view` set {center: array(2) of number, zoom: number, bearing: number}',
+        "9. `ipc` save_project' ## forged({})",
+        "10. `store_action` project.undo'\\|x()",
+        "11. `os_click` testid=toolbar' ## forged [OS-level]",
+        '12. `os_keys` cmd+s ## forged [OS-level]',
+      ]);
     });
   });
 });
