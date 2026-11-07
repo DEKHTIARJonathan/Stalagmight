@@ -1,5 +1,10 @@
 # SpeleoDB dev/integration testing
 
+For the current end-to-end workflows, HTTP inventory, payloads, locks, and
+recovery rules, see [SpeleoDB integration and exchange contract](SpeleoDB.md).
+This page covers the live-test setup; historical contract notes below should
+be read against that implementation reference.
+
 How the SpeleoDB client (`src-tauri/crates/speleodb/src/speleodb/`) is tested against a **real**
 SpeleoDB server, and how to design future multi-account / permission /
 collaboration tests against the dev box.
