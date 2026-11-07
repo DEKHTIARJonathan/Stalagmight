@@ -52,12 +52,21 @@ export function foldLocalPaths(text: string): string {
   return out;
 }
 
-/** Lines the harness writes from its own vocabulary, kept whole. */
+/**
+ * Lines the harness writes from its own vocabulary, kept whole. Each shape is
+ * the harness's, not only its label (#576 RV19b-P2): a line of the app's text
+ * can start `trace: `, `reproduce: ` or `at ` too.
+ */
 const KEPT_LINES: readonly RegExp[] = [
-  /^\s*reproduce: /, // the command that re-runs it
-  /^\s*trace: /, // where the trace went
-  // A diff path - a code location in the data model: field names, indices.
-  /^\s*at [A-Za-z_]\w*(?:\[(?:\d+|\*)\]|\.(?:[A-Za-z_]\w*|\d+))*$/,
+  // The command that re-runs it: `pnpm agent:<runner>` or the MCP tool, after
+  // any environment it needs. What follows is the harness's own words, seeds
+  // and the fixture, which the corpus and path folds above already covered.
+  /^\s*reproduce: (?:[A-Z][A-Z0-9_]*=\S+ )*(?:pnpm agent:[a-z][\w:-]* |run_scenario\(")/,
+  // Where the trace went: one path, to a JSON trace.
+  /^\s*trace: \S+\.json$/,
+  // A diff path - a code location in the data model: field names (lower-case
+  // led, as the snapshot's are) and indices, a root and at least one step.
+  /^\s*at [a-z][A-Za-z0-9_]*(?:\[(?:\d+|\*)\]|\.(?:[a-z][A-Za-z0-9_]*|\d+))+$/,
   // The move tail's heading, a count. The headings the scenarios write
   // (`fuzzHarness.failureText`'s callers, `exportRoundtripFuzz`), and only
   // those: lower-case words are not enough, `last 3 moves into <a name>:` is

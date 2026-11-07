@@ -1009,7 +1009,11 @@ locations:
   and classifier ids, and one count line for each run of other lines
   (`lib/shareableFailure.ts`). It is fail-closed: a line is kept only if its
   shape is one the harness writes, so a new oracle that quotes the app is
-  covered. An `ipc <command>:` / `eval:` / `javascript error:` headline keeps
+  covered. A shape is the whole line's, not its label, since the app's text
+  can start `trace:` too (#576 RV19b-P2): a `reproduce:` line runs `pnpm
+  agent:...` or `run_scenario("...")`, a `trace:` line is one path to a
+  `.json` trace, and a diff path is lower-case field names and indices. An
+  `ipc <command>:` / `eval:` / `javascript error:` headline keeps
   the prefix and the length of the app's text. Every line it keeps has the
   checkout folded to `<repo>` and the home directory to `~`
   (`foldLocalPaths`), so a `reproduce:` line's fixture path or a session
