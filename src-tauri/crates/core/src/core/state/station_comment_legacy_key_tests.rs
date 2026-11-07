@@ -50,7 +50,7 @@ pub(super) fn append_shot(state: &AppState, sid: u32) {
 
 /// Prepend a shot to the section: the end station moves from index 2 to 3,
 /// where a row at index 3 now resolves - two keys, one station.
-fn prepend_shot(state: &AppState, sid: u32) {
+pub(super) fn prepend_shot(state: &AppState, sid: u32) {
     let first = *shot_ids(state).first().unwrap();
     let prepended = state.execute(Command::CreateShot {
         section_id: sid,
@@ -307,7 +307,8 @@ pub(super) fn stored_rows(state: &AppState) -> Vec<String> {
 /// stored that text under the station's CANONICAL key, not the legacy `Index`
 /// key it came from. Undoing the append that made the legacy key name the
 /// station then removed the canonical key with the shot, and the comment the
-/// file held was gone. The append alone, undone, keeps it.
+/// file held was gone. [#576 W57-NF1] Undoing the append as well leaves the
+/// key past the end, which the undo now drops as an orphan.
 #[test]
 fn undoing_a_comment_change_restores_the_legacy_key_it_replaced() {
     let _cfg = crate::test_helpers::isolated_config();
@@ -346,74 +347,19 @@ fn undoing_a_comment_change_restores_the_legacy_key_it_replaced() {
             after_undo, loaded,
             "{label}: undo restores the comment under the key it was stored under"
         );
+        // [#576 W57-NF1] Once the append is undone the legacy key names no
+        // station (it is past the end again): an orphan, which the undo drops as
+        // the open does (`orphan_comment_restore_tests`).
         assert_eq!(
-            after_undo_append, loaded,
-            "{label}: undoing the append as well keeps the file's comment"
+            after_undo_append,
+            Vec::<String>::new(),
+            "{label}: undoing the append as well drops the key it leaves past the end"
         );
         assert_eq!(
             after_redo, after_change,
             "{label}: redoing both gives the changed comment again"
         );
     }
-}
-
-/// [#576 RV20-6] The append alone, undone after a save and a reopen, keeps the
-/// file's comment too, under its own key - as it does in session. The save
-/// writes the legacy row at the station it names (the appended one), so the
-/// reopen gives it that station's own key, `AfterShot(appended uuid)`, and the
-/// undo of the append removed it with the shot: `rows []`.
-#[test]
-fn undoing_an_append_after_a_save_and_reopen_keeps_the_legacy_keyed_comment() {
-    let _cfg = crate::test_helpers::isolated_config();
-    let temp = TempDir::new().unwrap();
-    let (path, sid) = file_with_comment_rows(temp.path(), &[(3, "comment past the end")]);
-    let state = state_with_null_sink();
-    state.do_load_project_full(path).unwrap();
-    let loaded = stored_rows(&state);
-    append_shot(&state, sid);
-    let saved = temp.path().join("saved.stalx");
-    let result = state.save_project(Some(saved.clone()));
-    assert!(result.success, "{:?}", result.error);
-    undo(&state);
-    let in_session = stored_rows(&state);
-    // What the save makes of that state (the row is past the end again).
-    let in_session_save = state.save_project(Some(temp.path().join("a.stalx")));
-
-    let reopened = state_with_null_sink();
-    reopened.do_load_project_full(saved).unwrap();
-    let after_reopen = stored_rows(&reopened);
-    undo(&reopened);
-    let after_undo = stored_rows(&reopened);
-    let reopened_save = reopened.save_project(Some(temp.path().join("b.stalx")));
-    redo(&reopened);
-    let station = StationRef::new(sid, 3);
-    let after_redo = shown_comment(&reopened, station);
-    println!("loaded                     {loaded:?}");
-    println!("in session, undo           {in_session:?}");
-    println!("saved and reopened         {after_reopen:?}");
-    println!("undo the append            {after_undo:?}");
-    println!(
-        "a save of each: in session {:?} / reopened {:?}",
-        in_session_save.error, reopened_save.error
-    );
-    println!("redo: station 3 shows      {after_redo:?}");
-
-    assert_eq!(in_session, loaded, "control: in session the undo keeps it");
-    assert_eq!(
-        after_undo, loaded,
-        "after a save and reopen the undo of the append keeps the file's comment under \
-         its own key, as in session"
-    );
-    assert_eq!(
-        (reopened_save.success, reopened_save.error),
-        (in_session_save.success, in_session_save.error),
-        "a save treats the two alike"
-    );
-    assert_eq!(
-        after_redo.as_deref(),
-        Some("comment past the end"),
-        "redoing the append shows it on the appended station again"
-    );
 }
 
 /// [#576 RV19a-2] The rows the undo records survive the persisted form the

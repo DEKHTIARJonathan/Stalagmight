@@ -641,6 +641,11 @@ impl AppState {
 
         // Epilogue: push to redo stack on success, push back to undo stack on failure
         if result.success {
+            // [#576 W57-NF1, RV20-6-NF1] No arm may leave a comment key that names
+            // no station: the next append or prepend would give it one. Dropped
+            // here, after every arm, as the open drops one (Q-W30-3-D1); a snapshot
+            // arm already dropped its own in `restore_snapshot_into`.
+            self.drop_orphan_comments_after_undo();
             result = self.settle_reversed_sections(&entry.command, result);
             self.undo_stack.lock().push_redo(entry);
             tracing::info!("Undo performed");

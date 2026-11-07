@@ -1229,6 +1229,12 @@ impl AppState {
                         "Dropped restored section offsets that were within dust of the origin"
                     );
                 }
+                // [#576 Q-W30-3-D1, W57-NF1] The open's orphan rule, one payload
+                // over: a snapshot an older build recorded can hold a comment key
+                // that names no station (a row past the end of its section, which
+                // that build's open kept). Left in, the next append or prepend gave
+                // it a station.
+                drop_orphan_comments(&mut restored, "restore a snapshot");
                 slot.set(Some(restored));
                 true
             }
@@ -1240,6 +1246,16 @@ impl AppState {
                 );
                 false
             }
+        }
+    }
+
+    /// [#576 W57-NF1, RV20-6-NF1] Apply the open's orphan rule to the live
+    /// project after an undo step: an arm that puts comment rows back (a
+    /// created shot's legacy rows, a set's previous rows) or takes a station
+    /// away (the undo of an append) can leave a key that names no station.
+    pub(super) fn drop_orphan_comments_after_undo(&self) {
+        if let Some(project) = self.project.lock().as_mut() {
+            drop_orphan_comments(project, "undo a history step");
         }
     }
 
@@ -1463,4 +1479,20 @@ pub(super) fn newer_file_edit_refusal(what: &str, version: i32) -> CommandError 
         CommandErrorCode::NewerFileEditDisabled,
         format!("{what} is disabled: {}", newer_file_reason(version)),
     )
+}
+
+/// [#576 Q-W30-3-D1] Drop every station comment of `project` whose key names no
+/// station (`Project::drop_orphan_station_comments`, the open's rule), logging
+/// each by position only - the text is the user's. Returns how many it dropped.
+pub(super) fn drop_orphan_comments(project: &mut Project, purpose: &'static str) -> usize {
+    let orphans = project.drop_orphan_station_comments();
+    for orphan in &orphans {
+        tracing::warn!(
+            section_id = orphan.section_id,
+            anchor = ?orphan.anchor,
+            purpose,
+            "Dropped a station comment that names no station"
+        );
+    }
+    orphans.len()
 }
