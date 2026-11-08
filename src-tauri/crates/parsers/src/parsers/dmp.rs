@@ -2217,15 +2217,13 @@ mod tests {
 
     /// Run cross-section suggestions on kb5.dmp sections (with 002 as existing)
     /// and validate the overlap detection results.
-    /// The tuned depth and length cutoffs reject the old 001/004 placements onto
-    /// existing 002; the shallow-crossing veto also rejects 001. These are not
-    /// automatic placements, even though a user can place the overlap manually.
     /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_suggestions_regression -- --ignored --nocapture
     #[test]
     #[ignore]
     fn kb5_suggestions_regression() {
         use crate::models::placement_suggest::{
-            suggest_all_placements, ExistingSection, ImportSectionForSuggestion, TargetType,
+            suggest_all_placements, ExistingSection, ImportSectionForSuggestion, MatchDirection,
+            TargetType,
         };
         use crate::models::shot::{Shot, ShotKind};
 
@@ -2321,17 +2319,26 @@ mod tests {
         // 1. import=4(005) impStn=7 → target=importing:0(001) exStn=25 matched=2 dir=forward
         // 2. import=3(004) impStn=0 → target=importing:0(001) exStn=28 matched=2 dir=reverse
         // 3. import=2(003) impStn=0 → target=importing:0(001) exStn=27 matched=2 dir=forward
-        // The former 001 back -> existing 002 placement fails the tuned depth,
-        // length and crossing checks.
+        // 4. import=0(001) impStn=107 → target=existing:0(002) exStn=182 matched=2 dir=reverse
+
+        // Verify the import→existing suggestion exists: 001 → 002
         let s001_to_002 = suggestions.iter().find(|s| {
             s.import_section_index == 0
                 && s.target_type == TargetType::Existing
                 && s.existing_section_id == Some(0)
         });
         assert!(
-            s001_to_002.is_none(),
-            "001 has no placement onto existing 002 under the tuned cutoffs, got {s001_to_002:?}"
+            s001_to_002.is_some(),
+            "should find 001→002 existing suggestion"
         );
+        let s = s001_to_002.unwrap();
+        assert_eq!(
+            s.import_station_index, 107,
+            "001 connects at its last station"
+        );
+        assert_eq!(s.existing_station_index, 182, "connects to 002 station 182");
+        assert_eq!(s.matched_shots, 2);
+        assert_eq!(s.direction, MatchDirection::Reverse);
 
         // Verify import→import suggestions exist
         // 005 → 001
@@ -2394,8 +2401,8 @@ mod tests {
             "003 connects to 001 station 27"
         );
 
-        // The former 004 back -> existing 002 placement also fails the tuned
-        // depth and length cutoffs.
+        // Verify section 004 also has an overlap against existing 002
+        // (This was the source of the double-treatment bug)
         let s004_to_existing = suggestions.iter().find(
             |s| {
                 s.import_section_index == 3
@@ -2403,9 +2410,13 @@ mod tests {
                     && s.import_station_index == 4
             }, // back of 004
         );
-        assert!(
-            s004_to_existing.is_none(),
-            "004's back has no placement onto existing 002 under the tuned cutoffs, got {s004_to_existing:?}"
+        assert!(s004_to_existing.is_some(),
+            "section 004 should have a back-end overlap with existing 002 (double-treatment regression)");
+        let s = s004_to_existing.unwrap();
+        assert_eq!(s.matched_shots, 2, "004→002 overlap should be 2 shots");
+        assert_eq!(
+            s.existing_station_index, 257,
+            "004 back connects to 002 station 257"
         );
     }
 
@@ -2420,10 +2431,6 @@ mod tests {
     /// - Import-to-existing (targetType=Existing): import overlap shots are INTERPOLATED (kept alive)
     /// - treatedShots guard: a shot already treated by a prior suggestion is skipped
     /// - Suggestions targeting importing:1 (section 002) are skipped (002 is existing, not imported)
-    ///
-    /// The tuned cutoffs reject 001/004 placements onto existing 002, so 001
-    /// keeps all its shots. This fixture no longer exercises double treatment
-    /// across an import-to-import and an import-to-existing overlap.
     ///
     /// Run with: cargo test --manifest-path src-tauri/Cargo.toml kb5_overlap_treatment_regression -- --ignored --nocapture
     #[test]
@@ -2621,8 +2628,8 @@ mod tests {
         );
 
         assert_eq!(
-            alive_001, 107,
-            "001: 107 raw, nothing deleted - no import-to-existing placement with 002 is offered"
+            alive_001, 105,
+            "001: 107 raw - 2 deleted (confirmed import-to-existing with 002) = 105"
         );
         assert_eq!(
             alive_005, 5,
@@ -2671,19 +2678,28 @@ mod tests {
             "004 attaches to 001 station 28"
         );
 
-        let s001 = suggestions.iter().find(|s| {
-            s.import_section_index == 0
-                && s.target_type == TargetType::Existing
-                && s.existing_section_id == Some(0)
-        });
-        assert!(
-            s001.is_none(),
-            "no automatic 001 -> 002 suggestion, got {s001:?}"
+        // 001 connects to existing 002 at station 182
+        let s001 = suggestions
+            .iter()
+            .find(|s| {
+                s.import_section_index == 0
+                    && s.target_type == TargetType::Existing
+                    && s.existing_section_id == Some(0)
+            })
+            .expect("001 should have an existing suggestion to 002");
+        assert_eq!(
+            s001.import_station_index, 107,
+            "001 connects at its back (station 107)"
+        );
+        assert_eq!(
+            s001.existing_station_index, 182,
+            "001 attaches to 002 station 182"
         );
 
-        // Raw overlap data for the 001 -> 002 connection when placed manually.
-        // That explicit placement deletes import shots 105/106 and interpolates
-        // existing shots 180/181, as verified by the integration test
+        // Overlap shot raw data for 001→002 connection.
+        // Import overlap shots 105, 106 are deleted from 001.
+        // Target shots 180, 181 on existing section 002 get interpolated values.
+        // Post-import interpolated values are verified in the integration test
         // kb5_import_overlap_interpolation_integration (core/state/tests.rs).
         let std_001: Vec<_> = dmp.sections[0]
             .shots
