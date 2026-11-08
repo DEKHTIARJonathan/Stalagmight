@@ -7,6 +7,15 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Added
+
+- **Beta updates** - Settings > Updates can follow Beta, which also installs release candidates of the next version, so you get new features sooner, with less testing behind them. Switching to Beta asks you to confirm first. Switching back to Stable does not downgrade: you keep the release candidate until the next stable release. Installs that were set to Weekly, which never received a build, now follow Beta. About shows the full version of a release candidate, for example 0.5.2-rc.1 ([#650](https://github.com/Stalagmight/Stalagmight/issues/650))
+
+### Fixed
+
+- **Turning off "Update automatically" now cancels an automatic download** that has not been installed yet, so nothing installs when you quit. An update you downloaded yourself with Download is kept ([#645](https://github.com/Stalagmight/Stalagmight/issues/645))
+- Development builds no longer download the published release by themselves and install it over their own build output when the window closes. The updater stays off in a development build unless `STALAGMIGHT_UPDATE_URL` is set ([#644](https://github.com/Stalagmight/Stalagmight/issues/644))
+
 ## [0.5.1] - 2026-11-08
 
 ### Added
