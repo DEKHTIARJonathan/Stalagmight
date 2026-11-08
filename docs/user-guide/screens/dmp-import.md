@@ -24,3 +24,19 @@ Imports an mNemo `.dmp` file into the open project, in steps. Opened by
 - The box at the top shows the file, its number of shots, total length and
   depth range.
 - **Direction**: whether the line was surveyed going in or out.
+
+## Step 2: zero datum (optional)
+
+Only shown when the project has no
+[zero datum](../concepts/sections-shots-stations.md) yet.
+
+![DMP import, zero datum section](../images/dmp-import-zero-datum.png)
+
+1. **Close**: nothing imported.
+2. Help on zero datums.
+3. Click the section that should carry the zero datum. Next you pick its
+   station and GPS position.
+4. **Cancel**: same as 1.
+5. **Back**: to step 1.
+6. **Skip Zero Datum**: import without one. It can be
+   [set later](../workflows/setting-a-zero-datum.md).
