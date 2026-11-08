@@ -6,6 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import SystemTable from '../SystemTable';
+import { useSpeleoStore } from '../../../store/speleoStore';
 import type { RecentListItem } from '../recentListItems';
 import type { SpeleoProjectSummary } from '../../../types/ipc.generated';
 
@@ -18,12 +19,13 @@ const SUMMARY: SpeleoProjectSummary = {
   latest_commit_sha: null,
 };
 
-const REMOTE_ITEM: RecentListItem = { kind: 'remote', projectId: 'p1', summary: SUMMARY };
+const REMOTE_ITEM: Extract<RecentListItem, { kind: 'remote' }> = { kind: 'remote', projectId: 'p1', summary: SUMMARY };
 
 function renderTable(
   overrides: { onOpenRemote?: ReturnType<typeof vi.fn>; busy?: boolean; summary?: SpeleoProjectSummary; cached?: SpeleoProjectSummary } = {},
 ) {
   const onOpenRemote = overrides.onOpenRemote ?? vi.fn();
+  useSpeleoStore.setState({ remoteSummaries: overrides.cached ? { p1: overrides.cached } : {} });
   render(
     <SystemTable
       items={[{ ...REMOTE_ITEM, summary: overrides.summary ?? SUMMARY }]}
@@ -32,7 +34,6 @@ function renderTable(
       sortField="name"
       sortDirection="asc"
       remoteLocks={{ p1: null }}
-      remoteSummaries={overrides.cached ? { p1: overrides.cached } : {}}
       remoteProjects={{ p1: 'Remote Cave' }}
       myEmail="me@x"
       onSort={vi.fn()}

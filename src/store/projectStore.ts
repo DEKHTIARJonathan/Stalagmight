@@ -1100,9 +1100,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
         // Update recent projects list
         await get().loadRecentProjects();
+        if (!current() || get().loading.clientOpId !== clientOpId) return superseded;
 
         get().resetLoading();
         await get().refreshUndoState();
+        if (!current() || get().loading.clientOpId !== clientOpId) return superseded;
         recordPerfTiming('loadProject total', performance.now() - tStart);
 
         // #204: refine the SpeleoDB action-shell edit-state (permission / lock
@@ -1143,7 +1145,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           /* best-effort: the shots are already safely Reference either way */
         }
 
-        return { success: true };
+        return current() ? { success: true } : superseded;
       } catch (e) {
         if (!current() || get().loading.clientOpId !== clientOpId) return superseded;
         const error = parseLoadError(e);
@@ -1165,6 +1167,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           useUIStore.getState().setView('single');
           get().resetLoading();
           await get().refreshUndoState();
+          if (!current() || get().loading.clientOpId !== clientOpId) return superseded;
           // #270: then re-resolve from the backend, which knows what the short
           // circuit cannot - the lock holder, the permission, the remote state,
           // and whether a link seeded on the way in still matches the server. That

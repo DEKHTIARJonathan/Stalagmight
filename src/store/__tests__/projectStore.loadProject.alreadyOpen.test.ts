@@ -214,3 +214,19 @@ it.each(['close', 'create'])('a newer %s invalidates an open waiting for access'
   expect(await open).toEqual({ success: false, superseded: true });
   expect(loadBinaryMock).not.toHaveBeenCalled();
 });
+
+it('reports superseded if a newer request arrives during already-open reconciliation', async () => {
+  const undo = deferred<void>();
+  const entered = deferred<void>();
+  useProjectStore.setState({ refreshUndoState: vi.fn().mockImplementationOnce(async () => {
+    entered.resolve();
+    await undo.promise;
+  }).mockResolvedValue(undefined) });
+  const store = useProjectStore.getState();
+  const a = store.loadProject('/A.stalx');
+  await entered.promise;
+  expect(await store.loadProject('/B.stalx')).toEqual({ success: true });
+  undo.resolve();
+  expect(await a).toEqual({ success: false, superseded: true });
+  expect(refreshLinkStatusMock).toHaveBeenCalledOnce();
+});

@@ -134,7 +134,8 @@ its ordering contract while independent access probes can proceed concurrently.
 
 The close dialog becomes busy before probing its destination and stays busy through
 saving, upload/release, and hand-back. Dismissal and editable choices are disabled;
-duplicate activation is ignored synchronously. Cancelling the native access warning
+duplicate activation is ignored synchronously. Escape from outside the dialog
+routes through the visible dialog's dismissal guard as well. Cancelling the native access warning
 restores the parent controls without saving, releasing, or closing. Replacing the
 prompt, project, or authenticated session stops stale continuations. Ordinary saves
 may refresh the project object without invalidating the operation. Older-version
