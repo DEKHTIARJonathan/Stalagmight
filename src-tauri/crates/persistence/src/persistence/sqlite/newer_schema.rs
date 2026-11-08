@@ -5,12 +5,21 @@
 //! `core::state::project_io` writes a fresh temp file and renames it over the
 //! original). Anything a newer schema added would be dropped without a word, and
 //! the open itself already writes into the file (the migration path's history
-//! cleanup, `init_schema`'s `CREATE TABLE IF NOT EXISTS`). So the openers refuse
-//! such a file before they write or read anything else; the `stalx-reader` crate
-//! refuses it the same way (its `ReadError::NewerSchema`).
+//! cleanup, `init_schema`'s `CREATE TABLE IF NOT EXISTS`).
 //!
-//! The refusal is [`NewerSchema`], which lives in `stalagmight-models` because
-//! the load and SpeleoDB errors carry it to the frontend too.
+//! So the project openers (`open` on an existing file, `open_existing`,
+//! `open_existing_untrusted`, `open_readonly`) refuse such a file right after
+//! `check_schema`, before they write to it, migrate it or run its integrity
+//! check. The metadata probes do NOT refuse, so a newer project still lists in
+//! Recents: `open_for_metadata` is read-only, and `open_for_metadata_recovering`
+//! opens read-write, so its first read rolls back a hot journal, which is a
+//! write, though one any open of that file would make. The `stalx-reader` crate
+//! refuses a newer file the same way (its `ReadError::NewerSchema`).
+//!
+//! The refusal is [`NewerSchema`], which rides inside the open error so callers
+//! can `downcast_ref` it to tell it apart from corruption or an I/O failure. It
+//! lives in `stalagmight-models` because the load and SpeleoDB errors carry it to
+//! the frontend too.
 
 use rusqlite::types::ValueRef;
 use rusqlite::Connection;
