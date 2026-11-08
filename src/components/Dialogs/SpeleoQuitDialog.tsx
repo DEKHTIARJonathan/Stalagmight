@@ -234,8 +234,8 @@ export default function SpeleoQuitDialog() {
             behind its scrim (#260). "Push, release & quit" below is the retry. */}
         {holdsLock && needsMessage && (
           <div>
-            <label className="block text-sm text-text-secondary mb-1">{t('speleodb.done.messageLabel')}</label>
-            <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} className="w-full px-2 py-1 bg-background border border-border rounded text-sm" data-testid="speleodb-quit-message" />
+            <label htmlFor="speleodb-quit-message" className="block text-sm text-text-secondary mb-1">{t('speleodb.done.messageLabel')}</label>
+            <textarea id="speleodb-quit-message" value={message} onChange={(e) => setMessage(e.target.value)} rows={3} className="w-full px-2 py-1 bg-background border border-border rounded text-sm" data-testid="speleodb-quit-message" />
           </div>
         )}
         <SpeleoPushFailureNotice />

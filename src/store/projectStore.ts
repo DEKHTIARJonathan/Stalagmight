@@ -1,3 +1,4 @@
+import { runDeduplicatedProjectLoad } from '../utils/projectLoadRequests';
 import { create } from 'zustand';
 import i18n from '../i18n';
 import { invokeIpc } from '../utils/ipc';
@@ -503,13 +504,6 @@ function isPartialMultiStepFailure(error: string | null): boolean {
 }
 
 /**
- * Tracks in-flight `loadProject(path)` calls so concurrent requests for the
- * same path share one execution. Each entry is removed when the underlying
- * promise settles. See loadProject for rationale.
- */
-const inFlightLoads = new Map<string, { request: number; promise: Promise<LoadProjectOutcome> }>();
-
-/**
  * Whether the project changed identity between issuing a command and its reply (#24).
  *
  * `created_at` alone: it is immutable for the life of a project, whereas `file_path` changes on
@@ -973,17 +967,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   //
   // Current same-path requests share decoding and geometry work. Ownership is
   // reserved before preflight; operation IDs protect dispatched loads afterward.
-  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number }) => {
-    const existing = inFlightLoads.get(path);
-    if (existing && isProjectRequestCurrent(existing.request)) return existing.promise;
-    const request = opts?.request ?? reserveProjectRequest();
+  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number }) =>
+    runDeduplicatedProjectLoad(path, opts?.request, (request) => {
     const current = () => isProjectRequestCurrent(request);
     const superseded: LoadProjectOutcome = { success: false, superseded: true };
-
-    // A-B-A must start a fresh A instead of reusing the superseded promise.
-    for (const key of [...inFlightLoads.keys()]) {
-      if (key !== path) inFlightLoads.delete(key);
-    }
 
     const promise: Promise<LoadProjectOutcome> = runConfirmedProjectSwitch(path, () => get().project?.file_path, opts?.accessConfirmed, async () => {
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
@@ -1264,12 +1251,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
     }, request);
 
-    inFlightLoads.set(path, { request, promise });
-    void promise.finally(() => {
-      if (inFlightLoads.get(path)?.promise === promise) inFlightLoads.delete(path);
-    });
     return promise;
-  },
+  }),
 
   // Project operations - uses consolidated create_project_full command
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) =>
@@ -1553,7 +1536,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           { releaseLock: opts?.releaseLock ?? true },
           { purpose: 'close project and release resources' },
         );
-        if (result.success) {
+        if (result.success && isProjectRequestCurrent(request)) {
           clearOpenProjectState(set);
         }
         return result;

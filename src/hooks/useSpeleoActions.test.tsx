@@ -897,3 +897,17 @@ describe('useSpeleoActions - pushing an unwound copy is confirmed first (#303)',
     expect(openDialog).toHaveBeenCalledWith('speleodb-unwound-push', { message: null });
   });
 });
+
+it('does not apply or flush a done result after its close operation loses ownership', async () => {
+  let resolve!: (value: unknown) => void;
+  invokeIpcMock.mockReturnValue(new Promise((yes) => { resolve = yes; }));
+  const { result } = renderHook(() => useSpeleoActions());
+  let current = true;
+  let pending!: Promise<unknown>;
+  act(() => { pending = result.current.done('Synthetic update', { isCurrent: () => current }); });
+  current = false;
+  await act(async () => { resolve({ kind: 'released' }); await pending; });
+  expect(useSpeleoStore.getState().applyDone).not.toHaveBeenCalled();
+  expect(saveProjectMock).not.toHaveBeenCalled();
+  expect(useSpeleoStore.getState().busy).toBe(false);
+});

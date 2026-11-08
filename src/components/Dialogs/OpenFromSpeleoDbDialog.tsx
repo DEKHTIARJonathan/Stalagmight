@@ -141,10 +141,8 @@ export default function OpenFromSpeleoDbDialog() {
   const handleOpen = async (project: SpeleoProjectSummary) => {
     setBusy(true);
     setError(null);
-    const outcome = await openRemote(project);if (false) {
-      // #258: the hook raised the file picker, which is an independent overlay - so
-      // unlike the prompt below, THIS dialog stays mounted underneath it and has to
-      // release its busy flag or the list stays frozen behind the choice.
+    const outcome = await openRemote(project);
+    if (outcome.status === 'cancelled') {
       setBusy(false);
     } else if (outcome.status === 'unpushed_local') {
       // #270: the hook raised the keep-local / take-remote prompt, which has already

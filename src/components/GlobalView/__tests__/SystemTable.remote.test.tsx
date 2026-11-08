@@ -21,17 +21,18 @@ const SUMMARY: SpeleoProjectSummary = {
 const REMOTE_ITEM: RecentListItem = { kind: 'remote', projectId: 'p1', summary: SUMMARY };
 
 function renderTable(
-  overrides: { onOpenRemote?: ReturnType<typeof vi.fn>; busy?: boolean } = {},
+  overrides: { onOpenRemote?: ReturnType<typeof vi.fn>; busy?: boolean; summary?: SpeleoProjectSummary; cached?: SpeleoProjectSummary } = {},
 ) {
   const onOpenRemote = overrides.onOpenRemote ?? vi.fn();
   render(
     <SystemTable
-      items={[REMOTE_ITEM]}
+      items={[{ ...REMOTE_ITEM, summary: overrides.summary ?? SUMMARY }]}
       selectedProjectId={null}
       multiSelectedIds={new Set()}
       sortField="name"
       sortDirection="asc"
       remoteLocks={{ p1: null }}
+      remoteSummaries={overrides.cached ? { p1: overrides.cached } : {}}
       remoteProjects={{ p1: 'Remote Cave' }}
       myEmail="me@x"
       onSort={vi.fn()}
@@ -68,4 +69,12 @@ describe('SystemTable remote row (#218)', () => {
     await userEvent.click(screen.getByTestId('system-row-remote-p1'));
     expect(onOpenRemote).not.toHaveBeenCalled();
   });
+});
+
+
+it.each(['READ_ONLY', 'READ_AND_WRITE'] as const)('uses the remote row permission %s over a conflicting cache', (permission) => {
+  renderTable({ summary: { ...SUMMARY, permission }, cached: { ...SUMMARY,
+    permission: permission === 'READ_ONLY' ? 'READ_AND_WRITE' : 'READ_ONLY',
+  } });
+  expect(screen.queryByTestId('system-row-remote-p1-speleo-read-only') !== null).toBe(permission === 'READ_ONLY');
 });

@@ -86,7 +86,15 @@ jobs:
       # has already built.
       - name: Updater manifest generator - fixture test
         run: node scripts/gen-updater-manifest.test.mjs
-      - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
+      - name: Offline Rust workspace tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --workspace --features telemetry -- --skip speleodb::client::tests::live_used_api_calls_with_email_and_token
+        env:
+          SPELEODB_API_TEST_ENABLED: "false"
+          XDG_CONFIG_HOME: ${{ runner.temp }}/config
+          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      - name: SpeleoDB live API tests
+        if: github.event_name != 'pull_request'
+        run: cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-speleodb --lib --features telemetry speleodb::client::tests::live_used_api_calls_with_email_and_token -- --exact
         env:
           SPELEODB_API_TEST_ENABLED: "true"
           SPELEODB_INSTANCE_URL: ${{ secrets.SPELEODB_INSTANCE_URL }}

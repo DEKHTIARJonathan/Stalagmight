@@ -67,7 +67,7 @@ const calledCommands = () => invokeIpcMock.mock.calls.map((c) => c[0] as string)
 let saveProject: ReturnType<typeof vi.fn>;
 
 function fillCommitMessage() {
-  const input = screen.queryByTestId('speleodb-quit-message') as HTMLTextAreaElement | null;
+  const input = screen.queryByRole('textbox', { name: 'Commit message' }) as HTMLTextAreaElement | null;
   if (input && !input.value) fireEvent.change(input, { target: { value: 'Survey update' } });
 }
 

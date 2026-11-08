@@ -11,7 +11,7 @@
  * ("Push, release & close", "Close & keep the write lock") could only fail.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -363,9 +363,21 @@ describe('close destination probe ownership', () => {
     if (replacement === 'project') useProjectStore.setState({ project: { file_path: '/other.stalx' } as never });
     if (replacement === 'session') useSpeleoStore.setState({ session: { loggedIn: false, endpoint: null, userEmail: null } });
     if (replacement === 'unmount') view.unmount();
-    resolve(null);
-    await waitFor(() => expect(invokeIpcMock).toHaveBeenCalledOnce());
+    await act(async () => { resolve(null); });
+    expect(invokeIpcMock).toHaveBeenCalledOnce();
     expect(closeProject).not.toHaveBeenCalled();
     expect(saveProject).not.toHaveBeenCalled();
   });
+});
+
+
+it('continues after an ordinary save refreshes the project object', async () => {
+  useProjectStore.setState({ isDirty: true });
+  saveProject.mockImplementation(async () => {
+    useProjectStore.setState((s) => ({ project: { ...s.project, modified_at: 'synthetic update' } as never }));
+    return { success: true };
+  });
+  render(<SpeleoCloseDialog />);
+  await userEvent.click(screen.getByTestId('speleodb-close-release'));
+  await waitFor(() => expect(closeProject).toHaveBeenCalledOnce());
 });

@@ -160,7 +160,7 @@ export default function SpeleoCloseDialog() {
     // confirmation over this dialog and answers `null`. The close (and the Open / New
     // Project it may be standing in for) would be lost with this prompt, so the intent
     // goes with it and the confirmation completes it.
-    const resolved = await done(message.trim() || null, { pendingExit: closeIntent });
+    const resolved = await done(message.trim() || null, { pendingExit: closeIntent, isCurrent: current });
     if (current() && resolved?.kind === 'released') {
       closeDialog();
       await closeThen();

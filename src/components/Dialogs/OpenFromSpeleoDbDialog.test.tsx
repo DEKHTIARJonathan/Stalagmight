@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
+const confirmMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,
@@ -41,6 +43,7 @@ function mockRoutes(overrides: Record<string, () => Promise<unknown>> = {}) {
 }
 
 beforeEach(() => {
+  confirmMock.mockReset().mockResolvedValue(true);
   invokeIpcMock.mockReset();
   loadProjectMock = vi.fn(async () => ({ success: true }));
   closeDialogMock = vi.fn();
@@ -241,4 +244,22 @@ describe('OpenFromSpeleoDbDialog with work at risk in the open project (#270)', 
     expect(loadProjectMock).not.toHaveBeenCalled();
     expect(closeDialogMock).not.toHaveBeenCalled();
   });
+});
+
+
+it.each(['read-only', 'locked'])('restores the browser after a cancelled %s warning', async (kind) => {
+  confirmMock.mockResolvedValue(false);
+  mockRoutes({ speleodb_list_projects: async () => [{ ...REMOTE_PROJECT,
+    permission: kind === 'read-only' ? 'READ_ONLY' : 'READ_AND_WRITE',
+    lock_holder: kind === 'locked' ? 'other@example.com' : null,
+  }] });
+  render(<OpenFromSpeleoDbDialog />);
+  const open = await screen.findByTestId('open-from-speleodb-open-p1');
+  await userEvent.click(open);
+  await waitFor(() => expect(open).toBeEnabled());
+  expect(confirmMock).toHaveBeenCalledOnce();
+  expect(loadProjectMock).not.toHaveBeenCalled();
+  expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_open_project')).toBe(false);
+  await userEvent.click(open);
+  expect(confirmMock).toHaveBeenCalledTimes(2);
 });

@@ -144,7 +144,9 @@ export default function SpeleoManagedFileDialog() {
       return;
     }
     const outcome = await openRemote(summary);
-    if (!stillPrompting(managed)) return;if (outcome.status === 'error') {
+    if (!stillPrompting(managed)) return;
+    if (outcome.status === 'cancelled') setBusy(false);
+    if (outcome.status === 'error') {
       setError(outcome.message);
       setBusy(false);
     }

@@ -13,6 +13,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
+const confirmMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,
@@ -54,6 +56,7 @@ let loadProjectMock: ReturnType<typeof vi.fn>;
 let closeDialogMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  confirmMock.mockReset().mockResolvedValue(true);
   invokeIpcMock.mockReset();
   invokeIpcMock.mockResolvedValue(undefined);
   loadProjectMock = vi.fn(async () => ({ success: true }));
@@ -283,4 +286,22 @@ describe('SpeleoManagedFileDialog', () => {
       expect(screen.getByTestId('speleodb-managed-file-error')).toBeInTheDocument(),
     );
   });
+});
+
+
+it.each(['read-only', 'locked'])('restores the managed prompt after a cancelled %s warning', async (kind) => {
+  confirmMock.mockResolvedValue(false);
+  invokeIpcMock.mockResolvedValue([{ ...SUMMARY,
+    permission: kind === 'read-only' ? 'READ_ONLY' : 'READ_AND_WRITE',
+    lock_holder: kind === 'locked' ? 'other@example.com' : null,
+  }]);
+  render(<SpeleoManagedFileDialog />);
+  const open = screen.getByTestId('speleodb-managed-file-open-remote');
+  await userEvent.click(open);
+  await waitFor(() => expect(open).toBeEnabled());
+  expect(screen.getByTestId('speleodb-managed-file-cancel')).toBeEnabled();
+  expect(loadProjectMock).not.toHaveBeenCalled();
+  expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_open_project')).toBe(false);
+  await userEvent.click(open);
+  expect(confirmMock).toHaveBeenCalledTimes(2);
 });

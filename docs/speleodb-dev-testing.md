@@ -56,19 +56,42 @@ Stalagmight to the enclosing repository's workspace, overrides or submodules.
 
 ## GitHub Actions
 
-SpeleoDB tests run in the existing `cargo test --workspace` steps alongside all
-other Rust tests. The `CI` workflow enables live EMAIL and TOKEN authentication
-on pushes to `master` and pull requests. The Release workflow's `verify` job
-enables them on tag pushes and manual release rehearsals. Both workflows use the
-default request timeout and retry count listed above.
+Offline workspace tests run on every applicable PR and push, without credential
+secrets. Both workflows set `SPELEODB_API_TEST_ENABLED=false` and explicitly skip
+`speleodb::client::tests::live_used_api_calls_with_email_and_token`:
 
-Configure these GitHub Actions repository secrets, or organization secrets
-accessible to this repository: `SPELEODB_INSTANCE_URL`, `SPELEODB_OAUTH_TOKEN`,
-`SPELEODB_EMAIL`, and `SPELEODB_PASSWORD`. They are injected into the existing Rust
-test steps. A missing secret fails live verification instead of silently skipping
-authentication. There are no fork or Dependabot exclusions. The manual runner
-benchmark stays offline. Each live run retains two synthetic test projects,
-as described below.
+```sh
+SPELEODB_API_TEST_ENABLED=false TELEMETRY_ENDPOINT=http://localhost/dummy \
+  cargo test --manifest-path src-tauri/Cargo.toml --workspace --features telemetry \
+  -- --skip speleodb::client::tests::live_used_api_calls_with_email_and_token
+```
+
+The separate "SpeleoDB live API tests" step runs after offline tests (and after
+CI's immediate generated-bindings check). Its condition is
+`github.event_name != 'pull_request'`:
+
+| Event | Offline tests | Live tests |
+|-------|---------------|------------|
+| Fork, same-repository, or Dependabot PR | Required | Skipped |
+| Master push | Required | Required |
+| Release tag or manual rehearsal | Required | Required |
+
+Only the live step receives `SPELEODB_INSTANCE_URL`, `SPELEODB_OAUTH_TOKEN`,
+`SPELEODB_EMAIL`, and `SPELEODB_PASSWORD` from repository/organization secrets.
+It sets `SPELEODB_API_TEST_ENABLED=true`, preserves telemetry and isolated config,
+and runs exactly the test exercising both EMAIL and TOKEN authentication:
+
+```sh
+SPELEODB_API_TEST_ENABLED=true TELEMETRY_ENDPOINT=http://localhost/dummy \
+  cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-speleodb --lib \
+  --features telemetry speleodb::client::tests::live_used_api_calls_with_email_and_token \
+  -- --exact
+```
+
+Missing credentials and live failures fail enabled verification. The manual runner
+benchmark stays offline. Each live run retains two synthetic test projects.
+Deterministic frontend regressions cover request supersession, warning cancellation,
+and close-operation ownership using synthetic data and deferred promises.
 
 ## Coverage and retained data
 

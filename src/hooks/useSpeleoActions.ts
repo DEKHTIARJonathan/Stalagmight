@@ -75,7 +75,7 @@ export interface SpeleoActions {
       confirmation finish it. */
   done: (
     message?: string | null,
-    opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit },
+    opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit; isCurrent?: () => boolean },
   ) => Promise<DoneResult | null>;
   /** #198 "Take remote": DISCARD local unpushed edits and reset to the server
       tip. Returns `true` once the tree is reloaded, `false` if the call threw.
@@ -411,7 +411,7 @@ export function useSpeleoActions(): SpeleoActions {
   const done = useCallback(
     async (
       message?: string | null,
-      opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit },
+      opts?: { acceptOlderVersion?: boolean; pendingExit?: PendingExit; isCurrent?: () => boolean },
     ): Promise<DoneResult | null> => {
       // [#303] The copy is dirty ONLY because a chain step walked it back to an older
       // version - the user has edited nothing. Pushing here does not save anyone's work,
@@ -454,6 +454,7 @@ export function useSpeleoActions(): SpeleoActions {
           message: message ?? null,
           acceptOlderVersion: opts?.acceptOlderVersion ?? false,
         });
+        if (opts?.isCurrent && !opts.isCurrent()) return null;
         applyDone(result);
         switch (asDoneKind(result.kind)) {
           case 'released':
@@ -492,6 +493,7 @@ export function useSpeleoActions(): SpeleoActions {
         }
         return result;
       } catch (e) {
+        if (opts?.isCurrent && !opts.isCurrent()) return null;
         const humanized = humanizeError(e, 'speleodb.editBar.toasts.doneFailed');
         raisePushFailedBanner({
           message: humanized,

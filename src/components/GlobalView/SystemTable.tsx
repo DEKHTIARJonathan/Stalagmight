@@ -204,7 +204,7 @@ export function SystemTable({
               myEmail,
               remoteProjects,
               localStates,
-              { ...remoteSummaries, [item.projectId]: item.summary },
+              { [item.projectId]: item.summary },
             );
             return (
               <tr
