@@ -13,7 +13,8 @@
 - **Merging** two stations connects the sections they are on. That is how
   separate sections become one cave.
 - **Zero datum**: a station tied to a real-world GPS position. Every other
-  station is positioned relative to it.
+  station is positioned relative to it. See
+  [Setting a zero datum](../workflows/setting-a-zero-datum.md).
 
 Add a section with **Add section** and merge stations with **Merge** in the
 [survey view](../screens/survey-view.md). The shot kind is the **J/R** column

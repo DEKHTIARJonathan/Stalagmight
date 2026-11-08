@@ -12,6 +12,8 @@
 5. Enter one row per shot and click **Create Section**.
 6. Click the map to [place the section](../screens/placement-mode.md). Rough
    is fine, it can be moved later.
+7. Optional: [set a zero datum](setting-a-zero-datum.md) to put the survey at
+   its real GPS position.
 
 Tick **Save project file immediately** to create the file right away. Otherwise
 it is saved once you add data.
