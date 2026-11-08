@@ -9,6 +9,7 @@
 4. Entering by hand: in the
    [Import / Create Section dialog](../screens/create-section-dialog.md), name
    the section and set the surveyor, date and color.
+5. Enter one row per shot and click **Create Section**.
 
 Tick **Save project file immediately** to create the file right away. Otherwise
 it is saved once you add data.
@@ -50,3 +51,13 @@ for the project details.
 - **Section Name** (2), **Surveyor** (3) and **Date** (4, when the line was
   surveyed) are optional.
 - **Color** (5) is how the section shows on the map.
+
+### 5. Shots
+
+![Shots table, scrolled down](../images/create-section-shots.png)
+
+- Per shot: **Len** (9), **Az** (10), **Depth In** (11), **Depth Out** (12).
+- **J/R** (13): leave blank for permanent line. Click it for `J` (jump) or `R`
+  (reference). See
+  [shot kinds](../concepts/sections-shots-stations.md).
+- **Create Section** (16).

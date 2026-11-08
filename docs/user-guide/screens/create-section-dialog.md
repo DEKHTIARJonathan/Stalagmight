@@ -10,18 +10,31 @@ the [survey view](survey-view.md).
 3. **Surveyor**
 4. **Date**: when the line was surveyed.
 5. **Color**: the section's color on the map.
-6. **Shots**: one row per shot. See
-   [Sections, shots and stations](../concepts/sections-shots-stations.md).
+6. **Shots**: one row per shot.
 7. Show or hide table columns.
 8. Enlarge the table.
 
+![Shots table, scrolled down](../images/create-section-shots.png)
+
+9. **Len**: shot length.
+10. **Az**: azimuth.
+11. **Depth In**: depth at the start of the shot.
+12. **Depth Out**: depth at the end of the shot.
+13. **J/R**: shot kind. Blank is permanent line, `J` is a jump, `R` is a
+    reference. Click the cell to change it. See
+    [shot kinds](../concepts/sections-shots-stations.md).
+14. **Comment**
+15. **Cancel**: same as 1.
+16. **Create Section**: creates the section, then you place it on the map.
+
 ## Details
 
-- **Cancel** and **Create Section** are below the table. Scroll down if the
-  window is small.
-- **Create Section** needs at least one complete shot. After clicking it, you
-  place the section on the map. Placing it on an existing station merges the
-  two.
+- **Create Section** needs at least one complete shot. A half-filled row has to
+  be completed or deleted first.
+- After **Create Section**, placing the section on an existing station merges
+  the two.
+- Shift+click on a **J/R** cell steps backwards.
 - Name, surveyor and date are optional. Color starts as the next unused section
   color.
+- The length unit is shown in the column header.
 - You can paste rows copied from a spreadsheet into the table.
