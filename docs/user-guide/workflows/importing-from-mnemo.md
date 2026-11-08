@@ -7,6 +7,8 @@
 3. Optional: click the section that should carry the
    [zero datum](../concepts/sections-shots-stations.md), or **Skip Zero
    Datum** and [set it later](setting-a-zero-datum.md).
+4. If you picked one: choose its station, enter the GPS position and click
+   **Confirm Zero Datum**.
 
 ## Step details
 
@@ -25,3 +27,14 @@
 - Only asked when the project has no zero datum yet.
 - Click the section's card, AC1 here (3).
 - **Skip Zero Datum** (6) imports without one.
+
+### 4. Zero datum station and position
+
+![DMP import, configure zero datum](../images/dmp-import-zero-datum-config.png)
+
+- **Zero datum station** (3): station 13 here. Clicking a station on the
+  preview (2) picks it too.
+- **GPS coordinates** (4), in any
+  [GPS format](../screens/edit-station-dialog.md#gps-formats). Check what it
+  read (5).
+- **Confirm Zero Datum** (12).

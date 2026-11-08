@@ -40,3 +40,29 @@ Only shown when the project has no
 5. **Back**: to step 1.
 6. **Skip Zero Datum**: import without one. It can be
    [set later](../workflows/setting-a-zero-datum.md).
+
+## Step 3: zero datum station and position
+
+After picking a section in step 2.
+
+![DMP import, configure zero datum](../images/dmp-import-zero-datum-config.png)
+
+1. **Close**: nothing imported.
+2. Preview. The ring marks the zero datum station. Click a station to pick it.
+3. **Zero datum station**
+4. **GPS coordinates**, in any [GPS format](edit-station-dialog.md#gps-formats).
+   The badge shows the format it was read as.
+5. The position as read from 4.
+6. **Depth below surface**: optional, in meters, positive below the surface.
+7. **Name**
+8. **Surveyor**
+9. **Reverse numbering**: number the section from the other end. The cave does
+   not move.
+10. **Cancel**: same as 1.
+11. **Back**: to step 2.
+12. **Confirm Zero Datum**: disabled until 4 can be read.
+
+### Details
+
+- Further down: date, color, direction, and the section's shots, which can
+  still be edited here.
