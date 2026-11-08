@@ -7,6 +7,8 @@ placed from reference shots and was placed by hand.
    toolbar.
 2. Click the station to merge.
 3. Click the station to merge it to.
+4. Check the two stations in the [Merge Stations dialog](../screens/merge-stations-dialog.md)
+   and click **Merge**.
 
 Right-clicking a station and picking **Merge With...** does steps 1 and 2 in one
 go. See the [station context menu](../screens/station-context-menu.md).
@@ -20,8 +22,16 @@ go. See the [station context menu](../screens/station-context-menu.md).
 - **Merge** (1) is active.
 - The first station (3) is picked. The banner (2) asks for the second.
 
+### 3-4. Second station and confirm
+
+![Merge Stations dialog](../images/merge-dialog.png)
+
+- **Station A** (2) is the first station clicked, **Station B** (3) the second.
+- **Merge** (5). The first station's section moves onto the second.
+
 ### Details
 
 - After the second click, Stalagmight checks that the merge is possible. If it
   is not, a notification says why.
-- See [merging](../concepts/sections-shots-stations.md).
+- Which side moves, and when a merge is refused: see the
+  [Merge Stations dialog](../screens/merge-stations-dialog.md).

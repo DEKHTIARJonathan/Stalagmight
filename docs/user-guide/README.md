@@ -23,6 +23,7 @@ How to use Stalagmight. Pages link to each other.
 - [Create Project for Import dialog](screens/create-project-for-import.md)
 - [Import Ariane Survey dialog](screens/ariane-import.md)
 - [Import report](screens/import-report.md)
+- [Merge Stations dialog](screens/merge-stations-dialog.md)
 
 **Concepts**
 - [Sections, shots and stations](concepts/sections-shots-stations.md)
