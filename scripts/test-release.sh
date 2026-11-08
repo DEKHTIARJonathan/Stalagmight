@@ -20,6 +20,23 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/release-test.XXXXXX")"
 [ -n "$WORK" ] && [ -d "$WORK" ] || { echo "mktemp -d produced no work dir" >&2; exit 1; }
 trap 'rm -rf "$WORK"' EXIT
 
+# release.sh regenerates THIRD-PARTY-LICENSES.md after bumping Cargo.lock (#648),
+# through `pnpm gen:third-party` unless RELEASE_GEN_THIRD_PARTY names another
+# command. A throwaway clone has no node_modules for the real generator to read,
+# so every case runs this stub instead. It records the stalagmight line of the
+# Cargo.lock it saw, which is what lets a case prove the bundle was regenerated
+# AFTER the bump and from the project root. Exported once, here, so no case can
+# reach the real generator by forgetting to set it.
+FAKE_GEN="$WORK/fake-gen-third-party"
+cat > "$FAKE_GEN" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+lock_line="$(awk '/^name = "stalagmight"/ { getline; sub(/\r$/, ""); print; exit }' src-tauri/Cargo.lock)"
+printf 'stub bundle generated against: %s\n' "$lock_line" > THIRD-PARTY-LICENSES.md
+SH
+chmod +x "$FAKE_GEN"
+export RELEASE_GEN_THIRD_PARTY="$FAKE_GEN"
+
 PASS=0
 FAIL=0
 
@@ -171,6 +188,13 @@ if "$D/scripts/release.sh" 9.9.9 --no-edit >/dev/null 2>&1; then
   assert "Cargo.lock bumped"         test "$(lock_version_of "$D")" = "9.9.9"
   assert "Cargo.lock is in the release commit" \
     bash -c 'git -C "$1" show --name-only --format= HEAD | grep -qx "src-tauri/Cargo.lock"' _ "$D"
+  # The bundle stamps the lock's hash, so a bump that left it behind turned
+  # leak-scan red on every release commit (#648). The stub writes the lock line
+  # it read, so this proves the regeneration ran after the bump, not before.
+  assert "license bundle regenerated against the bumped lock" \
+    grep -q 'generated against: version = "9.9.9"' "$D/THIRD-PARTY-LICENSES.md"
+  assert "license bundle is in the release commit" \
+    bash -c 'git -C "$1" show --name-only --format= HEAD | grep -qx "THIRD-PARTY-LICENSES.md"' _ "$D"
   assert "changelog section created" grep -q '^## \[9\.9\.9\]' "$D/CHANGELOG.md"
   assert "tag created"               has_tag "$D" v9.9.9
   assert "tree clean after release"  tree_clean "$D"
@@ -836,6 +860,57 @@ else
   else
     fail "v0.5.9 with a v0.5.10-weekly tag present was refused outright"
   fi
+fi
+
+# --- release.sh: the license bundle regeneration (#648) ---
+
+echo "== case 23: a failing license regeneration reverts every file it touched =="
+# The generator runs after the four version rewrites, so a failure there (no
+# cargo-about, a stale node_modules) must not strand a half-bumped tree. This
+# stub writes the bundle before failing, so the revert has something to undo.
+D=$(fresh_clone case23)
+CUR=$(version_of "$D")
+FAILING_GEN="$WORK/failing-gen-third-party"
+printf '%s\n' '#!/usr/bin/env bash' 'echo partial > THIRD-PARTY-LICENSES.md' 'exit 1' > "$FAILING_GEN"
+chmod +x "$FAILING_GEN"
+if out=$(RELEASE_GEN_THIRD_PARTY="$FAILING_GEN" "$D/scripts/release.sh" 7.7.7 --no-edit 2>&1); then
+  fail "release.sh carried on past a failing license regeneration"
+else
+  pass "refused after the license regeneration failed"
+  assert "message names the license bundle" \
+    bash -c 'printf "%s" "$1" | grep -q "regenerating THIRD-PARTY-LICENSES.md"' _ "$out"
+  assert "package.json reverted"    test "$(version_of "$D")" = "$CUR"
+  assert "Cargo.lock reverted"      test "$(lock_version_of "$D")" = "$CUR"
+  refute "no commit was made"       grep -q '7\.7\.7' <(git -C "$D" log -1 --format=%s)
+  refute "no tag created"           has_tag "$D" v7.7.7
+  # The generator runs before the changelog move, so nothing at all is left:
+  # the partial bundle included.
+  assert "tree clean, partial bundle reverted too" tree_clean "$D"
+fi
+
+echo "== case 24: a missing license generator refuses before anything is written =="
+D=$(fresh_clone case24)
+if out=$(RELEASE_GEN_THIRD_PARTY="$WORK/no-such-generator" "$D/scripts/release.sh" 7.7.7 --no-edit 2>&1); then
+  fail "release.sh ran with no license generator available"
+else
+  pass "refused with no license generator available"
+  assert "message names the missing command" \
+    bash -c 'printf "%s" "$1" | grep -q "no-such-generator. not found"' _ "$out"
+  assert "tree untouched" tree_clean "$D"
+fi
+
+echo "== case 25: --dry-run names the regeneration but does not run it =="
+D=$(fresh_clone case25)
+MARKING_GEN="$WORK/marking-gen-third-party"
+printf '%s\n' '#!/usr/bin/env bash' "touch '$WORK/marking-gen-ran'" > "$MARKING_GEN"
+chmod +x "$MARKING_GEN"
+if out=$(RELEASE_GEN_THIRD_PARTY="$MARKING_GEN" "$D/scripts/release.sh" 7.7.7 --no-edit --dry-run 2>&1); then
+  assert "dry run lists the license bundle" \
+    bash -c 'printf "%s" "$1" | grep -q "THIRD-PARTY-LICENSES.md: regenerate"' _ "$out"
+  refute "dry run did not run the generator" test -e "$WORK/marking-gen-ran"
+  assert "tree untouched by the dry run" tree_clean "$D"
+else
+  fail "--dry-run exited non-zero on a releasable tree"
 fi
 
 echo
