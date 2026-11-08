@@ -471,6 +471,18 @@ impl AppState {
                     );
                     early_return_err!(LoadError::unsafe_file(refused, &path.display().to_string()));
                 }
+                // A newer Stalagmight's file is refused before anything writes to
+                // it (#649); the remedy is an update, not a repair.
+                if let Some(newer) = crate::core::loading::newer_schema(&e) {
+                    tracing::warn!(
+                        path = ?path,
+                        found = newer.found,
+                        supported = newer.supported,
+                        purpose = "never rewrite a file a newer schema saved",
+                        "Refused to open a project saved by a newer version"
+                    );
+                    early_return_err!(LoadError::newer_schema(newer, &path.display().to_string()));
+                }
                 let msg = e.to_string();
                 // A permission denial (e.g. macOS forgot folder access after an
                 // update) otherwise masquerades as corruption - check it first.

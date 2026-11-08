@@ -86,6 +86,11 @@ pub enum SpeleoDbError {
     /// A response (or dump) could not be parsed into the expected shape.
     #[error("invalid response from SpeleoDB: {0}")]
     Parse(String),
+    /// The downloaded `.stalx` was saved by a newer schema than this build reads
+    /// (#649), so it was not installed as the local copy. `file` names the file
+    /// as it is on SpeleoDB; the `Display` is the shared refusal wording.
+    #[error("{0}")]
+    NewerSchema(crate::models::NewerSchema),
     /// The dump contained no openable project and no Ariane sidecar.
     #[error("the project dump contained nothing to open")]
     EmptyDump,

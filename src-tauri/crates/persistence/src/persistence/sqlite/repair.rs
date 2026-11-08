@@ -425,6 +425,9 @@ impl Database {
     pub fn attempt_repair(path: &Path) -> Result<(std::path::PathBuf, bool)> {
         tracing::info!("Attempting repair of: {:?}", path);
 
+        // 0. A newer schema's file is not this build's to rewrite (#649).
+        Self::check_not_newer_at(path)?;
+
         // 1. Create backup (never overwrite existing backups)
         let backup_path = Self::create_numbered_backup(path)?;
         tracing::info!("Created backup at: {:?}", backup_path);

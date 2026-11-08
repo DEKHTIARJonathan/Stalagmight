@@ -163,9 +163,13 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 - Reset to defaults per category
 
 ### 2.10 Updates & Telemetry
-- No auto-update mechanism
+- In-app updates from signed manifests on GitHub, on one of two tracks chosen in
+  Settings: **Stable** (final releases only, the default) or **Beta** (release
+  candidates, then the final they lead to). A build from a release candidate starts
+  on Beta. The retired Weekly track's setting is read as Beta. See
+  [releasing.md](releasing.md#updater-manifests)
 - Opt-in telemetry only
-- No external network calls except tile servers, SpeleoDB sync, and opt-in telemetry
+- No external network calls except tile servers, SpeleoDB sync, the update check, and opt-in telemetry
 
 ### 2.11 Recovery
 - Auto-save only (no crash recovery dialog)

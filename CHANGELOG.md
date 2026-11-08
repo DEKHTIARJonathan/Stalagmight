@@ -13,6 +13,7 @@ Update this file every time a new version is tagged.
 
 ### Fixed
 
+- **A project saved by a newer version of Stalagmight is no longer opened and quietly downgraded** - opening, merging, renaming, repairing or restoring such a project, or a dive-plan file in the same state, now stops with a message to update Stalagmight, and the file is left as it was. Before, the app only logged a warning and carried on, and saving the project rewrote it in the older format, dropping whatever the older version did not know. A project on SpeleoDB that a newer version saved is refused before the download replaces your local copy ([#649](https://github.com/Stalagmight/Stalagmight/issues/649))
 - **Turning off "Update automatically" now cancels an automatic download** that has not been installed yet, so nothing installs when you quit. An update you downloaded yourself with Download is kept ([#645](https://github.com/Stalagmight/Stalagmight/issues/645))
 - Development builds no longer download the published release by themselves and install it over their own build output when the window closes. The updater stays off in a development build unless `STALAGMIGHT_UPDATE_URL` is set ([#644](https://github.com/Stalagmight/Stalagmight/issues/644))
 

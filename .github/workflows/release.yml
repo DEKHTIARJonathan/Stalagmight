@@ -22,8 +22,29 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+    # The candidate build identity the build legs bake in (#650). Empty for a
+    # final, a dispatch rehearsal and any other tag.
+    outputs:
+      prerelease: ${{ steps.channel.outputs.prerelease }}
+      channel: ${{ steps.channel.outputs.channel }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # scripts/release-channel.sh is the one definition of what a tag bakes
+      # and publishes; the release job and repoint-updater-manifest.yml read
+      # the same script. Classified once here, on Linux, and handed to the
+      # build legs as job outputs: nothing in this workflow runs a repo shell
+      # script on the Windows leg, and this keeps it that way. Only a tag ref
+      # is classified - a dispatch from a branch builds with no candidate
+      # identity, like a final.
+      - name: Classify the release tag
+        id: channel
+        shell: bash
+        run: |
+          TAG=""
+          case "$GITHUB_REF" in
+            refs/tags/*) TAG="$GITHUB_REF_NAME" ;;
+          esac
+          bash scripts/release-channel.sh classify "$TAG" | tee -a "$GITHUB_OUTPUT"
       - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch @ 2026-06-30
       # Cached here but deliberately NOT in `build`: this job compiles only to
@@ -132,15 +153,15 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # plugins.updater.pubkey does not exist in the checked-in tauri.conf.json
-      # yet (issue #579 provisioning - see docs/releasing.md), and tauri-cli
-      # base64-decodes that pubkey with a hard failure at bundle time once
-      # createUpdaterArtifacts is on, so enabling it unconditionally breaks
-      # every build until the real key lands. Enablement is therefore CI-side
-      # only (the Build step below merges it in via --config), gated on the
-      # pubkey actually being present, so local `pnpm tauri build` never
-      # needs a signing key and this workflow degrades gracefully until the
-      # follow-up commit that adds the real pubkey.
+      # The updater pubkey is committed (plugins.updater.pubkey in
+      # tauri.conf.json, checked by the verify job's pubkey gate), but
+      # createUpdaterArtifacts stays out of the checked-in config: with it on,
+      # tauri-cli signs every updater bundle and fails outright when
+      # TAURI_SIGNING_PRIVATE_KEY is unset. Enablement is therefore CI-side
+      # only (the Build step below merges it in via --config), so a local
+      # `pnpm tauri build` never needs the signing key. It is still gated on
+      # the pubkey being present, so a fork that removes the key builds
+      # without updater artifacts instead of failing.
       - name: Determine updater enablement
         id: updater
         shell: bash
@@ -180,6 +201,27 @@ jobs:
               export "$v"="${!s}"
             fi
           done
+          # A release candidate (vX.Y.Z-rc.N) bakes its pre-release part and
+          # the Beta channel into the app (#650): the app reads both with
+          # option_env!, so they have to be in the environment cargo inherits
+          # through `pnpm tauri build`. The version files and every artifact
+          # name stay plain X.Y.Z (the MSI bundler rejects a non-numeric
+          # pre-release; see scripts/release-tag.sh). Same presence rule as the
+          # APPLE_* names above: exported only when non-empty, and unset
+          # otherwise, because option_env! reads an empty-but-present variable
+          # as Some(""), not as "no candidate".
+          if [ -n "$CHANNEL_PRERELEASE" ]; then
+            if [ -z "$CHANNEL_NAME" ]; then
+              echo "::error::the tag classified as a candidate ($CHANNEL_PRERELEASE) but with no channel - scripts/release-channel.sh and this step disagree."
+              exit 1
+            fi
+            export STALAGMIGHT_PRERELEASE="$CHANNEL_PRERELEASE"
+            export STALAGMIGHT_CHANNEL="$CHANNEL_NAME"
+            echo "Candidate build: STALAGMIGHT_PRERELEASE=$STALAGMIGHT_PRERELEASE STALAGMIGHT_CHANNEL=$STALAGMIGHT_CHANNEL"
+          else
+            unset STALAGMIGHT_PRERELEASE STALAGMIGHT_CHANNEL
+            echo "Not a candidate build: STALAGMIGHT_PRERELEASE and STALAGMIGHT_CHANNEL left unset."
+          fi
           # When the pubkey is present TAURI_SIGNING_PRIVATE_KEY is required.
           # Tauri itself already refuses to sign without it (its own error),
           # so this exists only to fail earlier with a named secret rather
@@ -219,6 +261,10 @@ jobs:
           fi
         env:
           UPDATER_ON: ${{ steps.updater.outputs.on }}
+          # Staged names; the run block exports STALAGMIGHT_PRERELEASE and
+          # STALAGMIGHT_CHANNEL from them only for a candidate.
+          CHANNEL_PRERELEASE: ${{ needs.verify.outputs.prerelease }}
+          CHANNEL_NAME: ${{ needs.verify.outputs.channel }}
           TELEMETRY_ENDPOINT: ${{ secrets.TELEMETRY_ENDPOINT }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -389,6 +435,14 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Which manifests this tag publishes, and with which version: the same
+      # scripts/release-channel.sh the verify job used to pick what the build
+      # legs baked, so the two cannot disagree about a tag shape. This job
+      # only runs for a tag ref (see `if:` above).
+      - name: Classify the release tag
+        id: channel
+        shell: bash
+        run: bash scripts/release-channel.sh classify "$GITHUB_REF_NAME" | tee -a "$GITHUB_OUTPUT"
       # The build job cannot pass its per-leg UPDATER_ON output across job
       # boundaries, so this job derives the same fact the same way: a
       # non-empty plugins.updater.pubkey in the checked-out tauri.conf.json.
@@ -415,18 +469,58 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPDATER_ON: ${{ steps.updater.outputs.on }}
+          CHANNEL_KIND: ${{ steps.channel.outputs.kind }}
+          CHANNEL_MANIFEST_VERSION: ${{ steps.channel.outputs.manifest_version }}
         run: |
           if [ "$UPDATER_ON" != "true" ]; then
             exit 0
           fi
           TAG="${GITHUB_REF_NAME}"
-          # Same strict shapes the publish step below derives a track from:
-          # a tag that matches neither publishes no manifest, so there is
-          # nothing to preflight for it.
-          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-weekly\.[0-9]{8}$ ]] || [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            if ! gh release view updater >/dev/null 2>&1; then
-              echo "::error::the rolling 'updater' GitHub release does not exist, but tag $TAG will publish an updater manifest. See docs/releasing.md (Updater manifests) to create it once, then re-run - before anything else in this job becomes public."
-              exit 1
+          # Same classification the publish step below routes on: a tag that
+          # is neither a final nor an rc.N candidate publishes no manifest, so
+          # there is nothing to preflight for it.
+          if [ "$CHANNEL_KIND" != final ] && [ "$CHANNEL_KIND" != candidate ]; then
+            exit 0
+          fi
+          if ! gh release view updater >/dev/null 2>&1; then
+            echo "::error::the rolling 'updater' GitHub release does not exist, but tag $TAG will publish an updater manifest. See docs/releasing.md (Updater manifests) to create it once, then re-run - before anything else in this job becomes public."
+            exit 1
+          fi
+          # Forward-only Beta (#650), checked here, before the release is
+          # public: a candidate must be newer than whatever latest-beta.json
+          # already announces. An rc.1 pushed after rc.2, or a candidate for a
+          # version whose final already shipped, would otherwise point Beta
+          # back at an older build - installs already past it are never
+          # offered it, and installs behind it would get it instead of the
+          # newest one. A candidate has no other reason to exist, so it is
+          # refused outright. A final is not refused here: a maintenance
+          # release below the current Stable is legitimate, so the publish
+          # step instead leaves any track it would move backwards alone. A
+          # missing latest-beta.json (the first candidate ever) has nothing to
+          # compare against; a present one that cannot be read fails closed.
+          # Moving a track backwards on purpose is what
+          # repoint-updater-manifest.yml is for.
+          if [ "$CHANNEL_KIND" = candidate ]; then
+            ASSETS="$(gh release view updater --json assets --jq '.assets[].name')"
+            if grep -qx 'latest-beta.json' <<<"$ASSETS"; then
+              mkdir -p "$RUNNER_TEMP/preflight-beta"
+              gh release download updater -p latest-beta.json -D "$RUNNER_TEMP/preflight-beta"
+              CURRENT="$(jq -r '.version' "$RUNNER_TEMP/preflight-beta/latest-beta.json")"
+              RC=0
+              bash scripts/release-channel.sh is-newer "$CHANNEL_MANIFEST_VERSION" "$CURRENT" || RC=$?
+              case "$RC" in
+                0) echo "latest-beta.json holds $CURRENT; $CHANNEL_MANIFEST_VERSION is newer." ;;
+                1)
+                  echo "::error::latest-beta.json already announces $CURRENT, which is not lower than $CHANNEL_MANIFEST_VERSION. Refusing to move Beta backwards. Cut a higher candidate, or roll the beta track back on purpose with the repoint-updater-manifest.yml workflow (docs/releasing.md, Rollback / repoint runbook)."
+                  exit 1
+                  ;;
+                *)
+                  echo "::error::could not compare $CHANNEL_MANIFEST_VERSION with the version in the current latest-beta.json ('$CURRENT'). Refusing to publish a candidate blind; check that file, or repoint the beta track (docs/releasing.md, Rollback / repoint runbook)."
+                  exit 1
+                  ;;
+              esac
+            else
+              echo "No latest-beta.json on the 'updater' release yet; this candidate starts the Beta track."
             fi
           fi
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -515,7 +609,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF_NAME}"
-          # A tag carrying a suffix (v0.5.0-rc1) is a candidate, not a release.
+          # A tag carrying a suffix (v0.5.2-rc.1) is a candidate, not a release.
           # Without --prerelease it would become "Latest" and be handed to
           # everyone as the real thing.
           PRERELEASE=()
@@ -530,48 +624,55 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-      # Updater manifests (#579): the rolling `updater` GitHub release carries
-      # latest-stable.json / latest-weekly.json, each overwritten on every
-      # publish of that track. An -rc* tag is a candidate, never a track, so it
-      # updates neither file - see docs/releasing.md (Updater manifests) for the
-      # full flow, including how to repoint or roll one back.
+      # Updater manifests (#579, #650): the rolling `updater` GitHub release
+      # carries latest-stable.json and latest-beta.json, plus latest-weekly.json
+      # as a byte-for-byte mirror of the beta one (the weekly track is retired,
+      # and 0.5.0/0.5.1 installs set to "Weekly" read that file). Each is
+      # overwritten on every publish to it. scripts/release-channel.sh decides
+      # which: a final vX.Y.Z publishes Stable, Beta and the mirror, each
+      # only where it is newer than what that track holds; a
+      # candidate vX.Y.Z-rc.N publishes Beta and the mirror; any other tag
+      # (the old -rcN shape included) publishes none. See docs/releasing.md
+      # (Updater manifests) for the full flow, including how to repoint or
+      # roll one back.
       - name: Publish updater manifest
         shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           UPDATER_ON: ${{ steps.updater.outputs.on }}
           MACOS_MODE: ${{ steps.macos-signing.outputs.mode }}
+          CHANNEL_KIND: ${{ steps.channel.outputs.kind }}
+          CHANNEL_BASE: ${{ steps.channel.outputs.base }}
+          CHANNEL_MANIFEST_VERSION: ${{ steps.channel.outputs.manifest_version }}
+          CHANNEL_MANIFESTS: ${{ steps.channel.outputs.manifests }}
         run: |
           if [ "$UPDATER_ON" != "true" ]; then
             echo "::notice::updater artifacts are disabled (no plugins.updater.pubkey committed yet - issue #579) - skipping updater manifest publish."
             exit 0
           fi
           TAG="${GITHUB_REF_NAME}"
-          # Strict, anchored shapes - not a `*-weekly.*` substring match, which
-          # let a malformed tag like v0.5.1-weekly.oops still clobber
-          # latest-weekly.json. A tag matching neither shape publishes to
-          # neither track.
-          if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-weekly\.[0-9]{8}$ ]]; then
-            TRACK=weekly
-          elif [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            TRACK=stable
-          else
-            echo "::notice::no manifest for tag $TAG (matches neither the strict weekly nor the strict stable shape)."
+          if [ "$CHANNEL_KIND" != final ] && [ "$CHANNEL_KIND" != candidate ]; then
+            echo "::notice::no updater manifest for tag $TAG: only a final vX.Y.Z (Stable and Beta) or a candidate vX.Y.Z-rc.N (Beta) publishes one."
             exit 0
           fi
-          VERSION="${TAG#v}"
+          read -r -a MANIFESTS <<<"$CHANNEL_MANIFESTS"
+          if [ "${#MANIFESTS[@]}" -eq 0 ] || [ -z "$CHANNEL_BASE" ] || [ -z "$CHANNEL_MANIFEST_VERSION" ]; then
+            echo "::error::tag $TAG classified as $CHANNEL_KIND but with no manifests, base or manifest version - scripts/release-channel.sh and this step disagree."
+            exit 1
+          fi
           # The manifest version has to match what was actually baked into
-          # these artifacts, or updater clients loop forever: version-baking
-          # from the tag currently comes from whatever the tree already said
-          # at build time (proper version-baking lands via workflow_call in a
-          # later PR), so a directly-pushed weekly tag can build, say, 0.5.0
-          # while this manifest claims 0.5.1-weekly.<date>. An updater on
-          # that 0.5.0-baked "weekly" install would see 0.5.1-weekly.<date>
-          # as newer, download it, and relaunch the exact same 0.5.0 build -
-          # forever. Parse the version actually baked into the artifacts
-          # (their filenames encode it, e.g. Stalagmight_0.5.1_amd64.AppImage
-          # - the same pattern the completeness check above globs) and
-          # refuse to publish on any mismatch, rather than trusting the tag.
+          # these artifacts, or updater clients loop forever. A candidate's
+          # artifacts are plain X.Y.Z (only the pre-release part is baked, via
+          # STALAGMIGHT_PRERELEASE), and the X.Y.Z comes from whatever the
+          # tree said at build time, not from the tag: a hand-pushed
+          # v0.5.2-rc.1 on a tree still at 0.5.1 builds 0.5.1 artifacts while
+          # this manifest would claim 0.5.2-rc.1. An updater on that build
+          # would see 0.5.2-rc.1 as newer than itself, download it, and
+          # relaunch the exact same build - forever. Parse the version
+          # actually baked into the artifacts (their filenames encode it, e.g.
+          # Stalagmight_0.5.1_amd64.AppImage - the same pattern the
+          # completeness check above globs) and refuse to publish unless it is
+          # the tag's base version, for a final and a candidate alike.
           ARTIFACT_VERSIONS=$(find release-artifacts -maxdepth 1 -type f -name 'Stalagmight_*' \
             | sed -E 's#.*/Stalagmight_([0-9]+\.[0-9]+\.[0-9]+)_.*#\1#' \
             | sort -u)
@@ -585,15 +686,8 @@ jobs:
             exit 1
           fi
           ARTIFACT_VERSION="$ARTIFACT_VERSIONS"
-          if [ "$TRACK" = "weekly" ]; then
-            TAG_BASE="${TAG%-weekly.*}"
-            TAG_BASE="${TAG_BASE#v}"
-            if [ "$TAG_BASE" != "$ARTIFACT_VERSION" ]; then
-              echo "::error::weekly tag $TAG has base $TAG_BASE but the built artifacts are version $ARTIFACT_VERSION - refusing to publish a mismatched weekly manifest (see the comment above for the update loop this prevents)."
-              exit 1
-            fi
-          elif [ "$VERSION" != "$ARTIFACT_VERSION" ]; then
-            echo "::error::tag $TAG is version $VERSION but the built artifacts are version $ARTIFACT_VERSION - refusing to publish a mismatched manifest."
+          if [ "$CHANNEL_BASE" != "$ARTIFACT_VERSION" ]; then
+            echo "::error::tag $TAG has base version $CHANNEL_BASE but the built artifacts are version $ARTIFACT_VERSION - refusing to publish a mismatched manifest (see the comment above for the update loop this prevents)."
             exit 1
           fi
           # Only a Developer ID build enters the manifest. "adhoc" is not a
@@ -613,9 +707,12 @@ jobs:
           else
             echo "::warning::macOS build was ad-hoc signed (not Developer ID) - excluding it from the updater manifest. Ad-hoc artifacts must never reach the trusted update channel."
           fi
-          OUT="release-artifacts/latest-${TRACK}.json"
+          # Generated once and copied, so every manifest this tag publishes is
+          # byte-identical (pub_date included) - the weekly mirror and, for a
+          # final, Stable and Beta alike.
+          OUT="$RUNNER_TEMP/updater-manifest.json"
           node scripts/gen-updater-manifest.mjs \
-            --version "$VERSION" \
+            --version "$CHANNEL_MANIFEST_VERSION" \
             --tag "$TAG" \
             --dir release-artifacts \
             --notes-file "$RUNNER_TEMP/release-body.md" \
@@ -631,5 +728,93 @@ jobs:
             echo "::error::the rolling 'updater' GitHub release does not exist. See docs/releasing.md (Updater manifests) to create it once, then re-run this job."
             exit 1
           fi
-          gh release upload updater "$OUT" --clobber
-          echo "Published $OUT to the 'updater' release (${TRACK} track)."
+          # A final must not move any track backwards (#650). Each track it
+          # would publish to takes it only when that track's manifest is
+          # missing or older than the final: a v0.5.3 maintenance release cut
+          # after v0.6.0 still publishes its GitHub release, but leaves
+          # latest-stable.json on 0.6.0 (a ::warning::, since Stable installs
+          # will not be offered it), and a 0.5.2 hotfix cut while 0.5.3-rc.1 is
+          # out leaves Beta and its weekly mirror on the candidate (a
+          # ::notice::, as that is Beta working as intended). Read here, just
+          # before the upload, so the window for another run to publish in
+          # between is as short as this step can make it. A version that
+          # cannot be read leaves its track alone and fails the step loudly,
+          # after whatever else could be published was uploaded. A candidate
+          # needs nothing here: the preflight already refused one that is not
+          # newer than Beta.
+          drop_manifests() {
+            local keep=() name x skip
+            for name in "${MANIFESTS[@]}"; do
+              skip=""
+              for x in "$@"; do [ "$name" = "$x" ] && skip=1; done
+              [ -n "$skip" ] || keep+=("$name")
+            done
+            MANIFESTS=("${keep[@]}")
+          }
+          # Sets CHECK (0: the final is newer or there is no manifest yet,
+          # 1: the manifest holds a version that is not older, 2: unreadable)
+          # and CURRENT (the version the manifest holds). Called as a plain
+          # statement so `-e` still applies inside it.
+          check_track() {
+            local name="$1" track="$2" dir="$RUNNER_TEMP/at-publish-$2"
+            CHECK=0
+            CURRENT=""
+            if ! grep -qx "$name" <<<"$ASSETS"; then
+              echo "No $name on the 'updater' release yet; $track takes this final."
+              return 0
+            fi
+            mkdir -p "$dir"
+            gh release download updater -p "$name" -D "$dir"
+            CURRENT="$(jq -r '.version' "$dir/$name")"
+            bash scripts/release-channel.sh is-newer "$CHANNEL_MANIFEST_VERSION" "$CURRENT" || CHECK=$?
+            if [ "$CHECK" -eq 0 ]; then
+              echo "$name holds $CURRENT; $CHANNEL_MANIFEST_VERSION is newer, so $track takes this final."
+            fi
+          }
+          UNREADABLE=()
+          if [ "$CHANNEL_KIND" = final ]; then
+            ASSETS="$(gh release view updater --json assets --jq '.assets[].name')"
+            check_track latest-stable.json stable
+            case "$CHECK" in
+              0) ;;
+              1)
+                echo "::warning::stable holds $CURRENT, which is not older than $CHANNEL_MANIFEST_VERSION; leaving latest-stable.json alone. The GitHub release for $TAG is published, but Stable installs will not be offered it. To point Stable at it anyway, use the repoint-updater-manifest.yml workflow (docs/releasing.md, Rollback / repoint runbook)."
+                drop_manifests latest-stable.json
+                ;;
+              *)
+                UNREADABLE+=("latest-stable.json ('$CURRENT')")
+                drop_manifests latest-stable.json
+                ;;
+            esac
+            check_track latest-beta.json beta
+            case "$CHECK" in
+              0) ;;
+              1)
+                if [ "$CURRENT" = "$CHANNEL_MANIFEST_VERSION" ]; then
+                  echo "::notice::beta already holds $CURRENT; leaving beta and its weekly mirror."
+                else
+                  echo "::notice::beta holds $CURRENT, newer than $CHANNEL_MANIFEST_VERSION; leaving beta and its weekly mirror."
+                fi
+                drop_manifests latest-beta.json latest-weekly.json
+                ;;
+              *)
+                UNREADABLE+=("latest-beta.json ('$CURRENT')")
+                drop_manifests latest-beta.json latest-weekly.json
+                ;;
+            esac
+          fi
+          FILES=()
+          for name in "${MANIFESTS[@]}"; do
+            cp "$OUT" "release-artifacts/$name"
+            FILES+=("release-artifacts/$name")
+          done
+          if [ "${#FILES[@]}" -gt 0 ]; then
+            gh release upload updater "${FILES[@]}" --clobber
+            echo "Published ${MANIFESTS[*]} to the 'updater' release ($CHANNEL_KIND, manifest version $CHANNEL_MANIFEST_VERSION)."
+          else
+            echo "No updater manifest written for $TAG: no track it could publish to would move forward."
+          fi
+          if [ "${#UNREADABLE[@]}" -gt 0 ]; then
+            echo "::error::could not compare $CHANNEL_MANIFEST_VERSION with the version in ${UNREADABLE[*]}, so that track was left alone. The GitHub release for $TAG is published${MANIFESTS[*]:+, and so is ${MANIFESTS[*]}}. Check the file, then repoint the track by hand (docs/releasing.md, Rollback / repoint runbook) if it should take this final."
+            exit 1
+          fi

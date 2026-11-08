@@ -47,10 +47,11 @@ replace_in_file() {
 # and a hard error for anyone who does build with `--locked`.
 #
 # Why hand-rolled awk rather than `cargo update -p stalagmight --offline`, which
-# would let Cargo own its own format: this script deliberately has no toolchain
-# dependency (no cargo, no node, no network), so it works on a machine set up only
-# to cut a release, and it stays a pure text transform that `test-release.sh` can
-# exercise in a throwaway clone in milliseconds. The cost is a second model of one
+# would let Cargo own its own format: the version rewrite deliberately has no
+# toolchain dependency (no cargo, no node, no network), so it stays a pure text
+# transform that `test-release.sh` can exercise in a throwaway clone in
+# milliseconds. (The license-bundle regeneration below is the one step that does
+# need a toolchain, and it sits behind a seam the tests stub.) The cost is a second model of one
 # line of the lock format, bounded by `END { if (hits != 1) exit 3 }` writing to a
 # temp file - a shape it does not recognise aborts with the manifest untouched
 # rather than guessing. Revisit if the lock ever carries this crate's version in
@@ -102,6 +103,20 @@ done
 if [ -z "$VERSION_ARG" ]; then
   echo "Usage: $0 <major|minor|patch|X.Y.Z> [--no-edit] [--dry-run]" >&2
   exit 1
+fi
+
+# THIRD-PARTY-LICENSES.md stamps a hash of src-tauri/Cargo.lock, so the lock bump
+# below leaves it stale and leak-scan red on every release commit until someone
+# regenerates it (#648). Regenerate it here and commit it with the bump. The
+# generator needs pnpm, cargo-about and a node_modules from a fresh
+# `pnpm install --frozen-lockfile` (scripts/gen-third-party-licenses.mjs).
+# RELEASE_GEN_THIRD_PARTY names a different command to run instead, from the
+# project root and with no arguments: test-release.sh points it at a stub, since
+# a throwaway clone has no node_modules to read licenses from.
+if [ -n "${RELEASE_GEN_THIRD_PARTY:-}" ]; then
+  GEN_THIRD_PARTY=("$RELEASE_GEN_THIRD_PARTY")
+else
+  GEN_THIRD_PARTY=(pnpm gen:third-party)
 fi
 
 # --- Read current version from package.json ---
@@ -165,6 +180,13 @@ if ! version_files_match "$CURRENT_VERSION" "package.json" "before the rewrite";
   exit 1
 fi
 
+if ! command -v "${GEN_THIRD_PARTY[0]}" >/dev/null 2>&1; then
+  echo "Error: '${GEN_THIRD_PARTY[0]}' not found. It regenerates THIRD-PARTY-LICENSES.md," >&2
+  echo "which stamps the Cargo.lock this release bumps." >&2
+  echo "Nothing was modified." >&2
+  exit 1
+fi
+
 if [ "$DRY_RUN" = true ]; then
   echo ""
   echo "[dry-run] Would update:"
@@ -172,6 +194,7 @@ if [ "$DRY_RUN" = true ]; then
   echo "  src-tauri/tauri.conf.json: $CURRENT_VERSION -> $NEW_VERSION"
   echo "  src-tauri/Cargo.toml: $CURRENT_VERSION -> $NEW_VERSION"
   echo "  src-tauri/Cargo.lock: $CURRENT_VERSION -> $NEW_VERSION"
+  echo "  THIRD-PARTY-LICENSES.md: regenerate with '${GEN_THIRD_PARTY[*]}'"
   echo "  CHANGELOG.md:         move [Unreleased] content under v$NEW_VERSION"
   echo "[dry-run] Would commit: chore: release v$NEW_VERSION"
   echo "[dry-run] Would tag:    v$NEW_VERSION"
@@ -246,6 +269,18 @@ if ! require_one_match "package.json"              "$NEW_JSON" "after the rewrit
   exit 1
 fi
 
+# --- Regenerate THIRD-PARTY-LICENSES.md against the bumped Cargo.lock ---
+# A subshell, so the generator runs from the project root without moving this
+# script's own working directory.
+if ! (cd "$PROJECT_ROOT" && "${GEN_THIRD_PARTY[@]}"); then
+  git -C "$PROJECT_ROOT" checkout -- \
+    package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock \
+    THIRD-PARTY-LICENSES.md
+  echo "Error: regenerating THIRD-PARTY-LICENSES.md ('${GEN_THIRD_PARTY[*]}') failed." >&2
+  echo "Reverted the version files and the license bundle. No commit or tag was made." >&2
+  exit 1
+fi
+
 # --- Update CHANGELOG.md: move [Unreleased] content under new version header ---
 TODAY=$(date +%Y-%m-%d)
 
@@ -269,7 +304,8 @@ if ! grep -q "^## \[$NEW_RE\]" "$CHANGELOG"; then
   echo "Error: CHANGELOG.md has no '## [$NEW_VERSION]' section after the rewrite." >&2
   echo "The '## [Unreleased]' header was probably not found." >&2
   git -C "$PROJECT_ROOT" checkout -- \
-    package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+    package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock \
+    THIRD-PARTY-LICENSES.md
   echo "Reverted the version files, left CHANGELOG.md alone. No commit or tag was made." >&2
   exit 1
 fi
@@ -286,7 +322,8 @@ if [ "$NO_EDIT" = false ]; then
   EDITOR="${EDITOR:-${VISUAL:-vi}}"
   if ! "$EDITOR" "$CHANGELOG"; then
     git -C "$PROJECT_ROOT" checkout -- \
-      package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+      package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock \
+      THIRD-PARTY-LICENSES.md
     echo "" >&2
     echo "Error: \$EDITOR ($EDITOR) exited non-zero. No commit or tag was made." >&2
     echo "Reverted the version files. CHANGELOG.md is left as-is, with the" >&2
@@ -302,6 +339,7 @@ git -C "$PROJECT_ROOT" add \
   src-tauri/tauri.conf.json \
   src-tauri/Cargo.toml \
   src-tauri/Cargo.lock \
+  THIRD-PARTY-LICENSES.md \
   CHANGELOG.md
 
 git -C "$PROJECT_ROOT" commit -m "chore: release v$NEW_VERSION"
@@ -314,7 +352,7 @@ if [ "$NO_TAG" = true ]; then
   # this script's checks do not cover, and a bare tag command gets none of them.
   echo "Next steps:"
   echo "  git push"
-  echo "  ./scripts/release-tag.sh v$NEW_VERSION-rc1   # a candidate, then rc2, rc3, ..."
+  echo "  ./scripts/release-tag.sh v$NEW_VERSION-rc.1   # a candidate for Beta, then rc.2, rc.3, ..."
   echo "  ./scripts/release-tag.sh v$NEW_VERSION       # the release"
   echo "  git push origin <the tag it created>"
   exit 0

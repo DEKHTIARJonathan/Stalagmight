@@ -2594,6 +2594,12 @@
   "importGate": {
     "inProgress": "Finish or cancel the current import first."
   },
+  "newerSchema": {
+    "message": "\"{{file}}\" was saved by a newer version of Stalagmight (file format {{found}}; this version reads up to {{supported}}). Update Stalagmight to open it.",
+    "open": {
+      "title": "Project saved by a newer Stalagmight"
+    }
+  },
   "newSection": {
     "collapse": "Shrink the table",
     "create": "Create Section",

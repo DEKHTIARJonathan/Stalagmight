@@ -13,6 +13,7 @@ export * from './ipc/LoadingProgress';
 export * from './ipc/LoadProjectFullResult';
 export * from './ipc/CreateProjectFullResult';
 export * from './ipc/SpeleoManagedFile';
+export * from './ipc/NewerSchema';
 export * from './ipc/Project';
 export * from './ipc/ProjectMetadata';
 export * from './ipc/ProjectStats';

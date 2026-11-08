@@ -1,4 +1,5 @@
 import type {
+  NewerSchema,
   SpeleoDbAction,
   SpeleoDumpCandidate,
   SpeleoErrorDto,
@@ -9,6 +10,7 @@ import i18n from '../i18n';
 import type { DumpPickerKind } from '../store/speleoStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { getErrorMessage } from './ipc';
+import { newerSchemaMessage } from './newerSchema';
 
 /**
  * The typed transport cause of a rejected SpeleoDB IPC call, or `null` when the
@@ -69,10 +71,27 @@ function transportMessage(cause: TransportCause): string {
 export function humanizeSpeleoError(e: unknown, contextPrefix?: string): string {
   const cause = transportCause(e);
   if (cause) return transportMessage(cause);
+  // #649: a download a newer Stalagmight saved. Self-framed like the transport
+  // line, and worded exactly as the open dialog words it.
+  const newer = newerSchemaOf(e);
+  if (newer) return newerSchemaMessage(newer, getErrorMessage(e));
   // Strip a trailing period so "…credentials." reads cleanly after our prefix.
   const msg = getErrorMessage(e).replace(/\.\s*$/, '');
   if (!contextPrefix) return msg;
   return `${contextPrefix}: ${msg}`;
+}
+
+/**
+ * #649: the newer-schema refusal a rejected SpeleoDB call carries, or `null`.
+ * Read structurally off the DTO, and only trusted when it is shaped like one.
+ */
+function newerSchemaOf(e: unknown): NewerSchema | null {
+  if (!e || typeof e !== 'object' || !('newer_schema' in e)) return null;
+  const newer = (e as Partial<SpeleoErrorDto>).newer_schema;
+  if (!newer || typeof newer !== 'object') return null;
+  const { file, found, supported } = newer;
+  if (typeof file !== 'string' || typeof found !== 'number' || typeof supported !== 'number') return null;
+  return newer;
 }
 
 /**

@@ -7,11 +7,11 @@ set -euo pipefail
 # preview come from the same code. Run it before tagging to see exactly what
 # will be published:
 #
-#   ./scripts/release-notes.sh v0.5.0
-#   ./scripts/release-notes.sh v0.5.0-rc1
+#   ./scripts/release-notes.sh v0.5.2
+#   ./scripts/release-notes.sh v0.5.2-rc.1
 #
 # A release candidate takes the notes of the version it is a candidate for:
-# v0.5.0-rc1 reads the `## [0.5.0]` changelog section, because an RC is that
+# v0.5.2-rc.1 reads the `## [0.5.2]` changelog section, because an RC is that
 # release, built early. If that section does not exist yet - the usual case
 # before `release.sh` moves it - it falls back to `## [Unreleased]`.
 #
@@ -25,12 +25,12 @@ CHANGELOG="${CHANGELOG:-$PROJECT_ROOT/CHANGELOG.md}"
 
 TAG="${1:-}"
 if [ -z "$TAG" ]; then
-  echo "Usage: $0 <tag>   (e.g. v0.5.0, v0.5.0-rc1)" >&2
+  echo "Usage: $0 <tag>   (e.g. v0.5.2, v0.5.2-rc.1)" >&2
   exit 1
 fi
 
 VERSION="${TAG#v}"
-# 0.5.0-rc1 -> 0.5.0 ; 0.5.0 -> 0.5.0
+# Everything before the first hyphen: 0.5.2-rc.1 -> 0.5.2 ; 0.5.2 -> 0.5.2
 BASE_VERSION="${VERSION%%-*}"
 PRERELEASE=false
 [ "$VERSION" != "$BASE_VERSION" ] && PRERELEASE=true
