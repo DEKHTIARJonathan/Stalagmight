@@ -2555,6 +2555,8 @@
     "dismiss": "Dismiss",
     "downloading": "Downloading update…",
     "restart": "Restart to update",
+    "readyOnQuit": "Stalagmight {{version}} will be installed when you quit",
+    "restartNow": "Restart now",
     "toasts": {
       "downloadFailed": "Could not download the update. Try again from the update banner.",
       "installFailed": "Could not install the update. Download it again from the update banner."
