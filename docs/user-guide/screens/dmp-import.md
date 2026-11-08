@@ -128,16 +128,30 @@ survey has the data to do it.
 1. The station under the pointer. Click the map to drop the sections there.
 2. The sections being placed, dashed.
 3. Sections already placed, solid.
-4. **Esc**: back to the wizard, for other ways to place them.
+4. **Esc**: back to the wizard, for
+   [other ways to place them](#step-6-other-placement-options).
+
+## Step 6: other placement options
+
+**Esc** in step 5 opens the options for the segment, a group of joined sections
+still to place.
+
+![DMP import, placement options](../images/dmp-import-placement-options.png)
+
+1. **Close**
+2. Sections placed so far.
+3. Preview of the segment. The ring is the anchor station, the one that lands
+   where you click. Click another station to change it.
+4. Which segment, and its sections.
+5. **From existing station**: join it to a station already in the project.
+6. **Manual placement**: click the map, as in step 5.
+7. **Do not place**: leave this segment out of the import.
+8. **Section Settings**: name and other details.
+9. **Cancel**
+10. **Back**
+11. **Next**
 
 ### Details
 
-Other placement methods, after **Esc**:
-
-- **Suggested connection**
-- **Place at center of screen**
-- **Zero Datum (GPS)**
-- **From existing station**
-- **Manual placement**: clicking the map, as above.
-- **Skip (place later)**
-- **Do not place**: these sections are not imported.
+- **Suggested connection** is offered too, when a suggestion for this segment
+  was skipped.

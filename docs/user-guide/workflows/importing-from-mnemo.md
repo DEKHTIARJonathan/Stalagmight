@@ -13,6 +13,8 @@
    **Confirm**, or **Skip** to place that section by hand later.
 6. Sections left over: click the map to drop them roughly where they belong.
    Connect them later, once the data is there.
+7. A section that does not belong to this survey: press **Esc**, pick **Do
+   not place** and click **Next**.
 
 ## Step details
 
@@ -60,8 +62,18 @@
 
 ![DMP import, placing sections by hand](../images/dmp-import-manual-placement.png)
 
-- Here two sections (2) are not connected to the survey yet: the data to join
-  them is not there.
+- Here the dashed sections (2) are not connected to the survey yet: the data to
+  join them is not there.
 - Click the map to drop them. The station under the pointer (1) lands where you
   click.
 - It does not need to be accurate. They can be moved, or connected, later.
+
+### 7. Leave a section out
+
+![DMP import, placement options](../images/dmp-import-placement-options.png)
+
+- Here AB1 turned out not to be part of this survey.
+- **Esc** during placement opens these options. Pick **Do not place** (7) and
+  click **Next** (11).
+- See [DMP import](../screens/dmp-import.md#step-6-other-placement-options) for
+  the other options.
