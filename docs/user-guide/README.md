@@ -13,6 +13,7 @@ How to use Stalagmight. Pages link to each other.
 - [Import / Create Section dialog](screens/create-section-dialog.md)
 - [Placement mode](screens/placement-mode.md)
 - [Station context menu](screens/station-context-menu.md)
+- [Edit Station dialog](screens/edit-station-dialog.md)
 
 **Concepts**
 - [Sections, shots and stations](concepts/sections-shots-stations.md)
@@ -24,7 +25,8 @@ How to use Stalagmight. Pages link to each other.
 - `workflows/` = tasks, `screens/` = one page per screen, `concepts/` = terms
   and ideas. New kind of page = new folder, listed above.
 - Screenshots: `images/<what-it-shows>.png`, 1920x1080 window, clean profile (no
-  recent projects, signed out of SpeleoDB), made-up survey data only.
+  recent projects, signed out of SpeleoDB). Use example data made for the docs,
+  never a private survey or account details.
 - Number every interactive element with a callout placed beside it, never on
   top of it. Screen pages list the elements in callout order; other pages refer
   to them as **Name** (n).
