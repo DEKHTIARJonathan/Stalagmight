@@ -61,10 +61,10 @@ use crate::core::AppState;
 /// Honoured unconditionally in a DEBUG build - that is the manual test recipe
 /// in docs/releasing.md, where a local `python3 -m http.server` stands in for
 /// GitHub - and REQUIRED there: without it a debug build does not update at
-/// all ([`dev_build_refusal`], #644). In a release build it is restricted to https `github.com` URLs
-/// ([`is_trusted_manifest_url`]): the manifest decides which binary an
-/// installed app downloads, so an attacker who can set one environment
-/// variable must not be able to redirect it. (The plugin's own
+/// all ([`dev_build_refusal`], #644). In a release build it is restricted to
+/// https `github.com` URLs ([`is_trusted_manifest_url`]): the manifest decides
+/// which binary an installed app downloads, so an attacker who can set one
+/// environment variable must not be able to redirect it. (The plugin's own
 /// `validate_endpoints` already refuses non-https in release; this narrows the
 /// host as well.)
 ///
@@ -1331,16 +1331,19 @@ mod tests {
     /// version rather than producing a version that sorts somewhere surprising.
     #[test]
     fn an_invalid_prerelease_falls_back_to_the_plain_version() {
-        for invalid in [
-            // Leading zero in a numeric identifier.
-            "rc.02", // Empty identifier.
-            "rc..2", "rc 2", // Build metadata is not part of a pre-release.
-            "rc.2+abc", // Valid semver, but `0.5.2--rc.2` sorts below `0.5.2-rc.1`.
-            "-rc.2",
+        for (invalid, why) in [
+            ("rc.02", "a leading zero in a numeric identifier"),
+            ("rc..2", "an empty identifier"),
+            ("rc 2", "a space"),
+            (
+                "rc.2+abc",
+                "build metadata, which is not part of a pre-release",
+            ),
+            ("-rc.2", "a leading hyphen"),
         ] {
             assert!(
                 effective_version(&v("0.5.2"), Some(invalid)).is_err(),
-                "{invalid:?} must be refused"
+                "{invalid:?} must be refused: {why}"
             );
             assert_eq!(
                 running_version(&v("0.5.2"), Some(invalid)),
@@ -1350,6 +1353,16 @@ mod tests {
         }
         // A package version that already carries a pre-release is not extended.
         assert!(effective_version(&v("0.5.2-alpha"), Some("rc.2")).is_err());
+    }
+
+    /// Why the leading hyphen needs its own refusal: semver accepts it, and the
+    /// result sorts below every real candidate, so the build would be offered
+    /// itself.
+    #[test]
+    fn a_leading_hyphen_would_sort_below_every_candidate() {
+        let hyphenated = v("0.5.2--rc.2");
+        assert!(hyphenated < v("0.5.2-rc.1"));
+        assert!(is_newer(&v("0.5.2-rc.2"), &hyphenated));
     }
 
     // ── Download bounds ──────────────────────────────────────────────────────
