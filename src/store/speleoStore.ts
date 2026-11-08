@@ -110,9 +110,9 @@ export interface SpeleoSession {
  *
  * Derived here rather than reported pre-combined by the backend, because the two halves
  * arrive at different times: a step onto the tip leaves the copy CLEAN, so the composite
- * was false at the moment of the poll, and the Undo that follows marks `hasUnpushedEdits`
+ * was false at the moment of the refresh, and the Undo that follows marks `hasUnpushedEdits`
  * optimistically without asking the backend anything. Composing locally is what makes the
- * status button react to that Undo instead of waiting a poll interval - which is exactly
+ * status button react to that Undo instead of waiting for another status refresh - which is exactly
  * how it was still offering "Push & release" after an unwind.
  */
 export function isUnwoundNotEdited(link: SpeleoLinkState | null | undefined): boolean {
@@ -151,7 +151,7 @@ export interface SpeleoLinkState {
   undoMode: UndoMode;
   /**
    * [#213] The `SpeleoDbConfig.allow_force_edit` opt-in (a global preference,
-   * mirrored per-poll onto the link). Gates whether the read-only "Edit without
+   * mirrored per-refresh onto the link). Gates whether the read-only "Edit without
    * lock" affordance appears at all; false hides it and the backend also refuses.
    */
   forceEditAllowed: boolean;
@@ -225,7 +225,7 @@ export function speleoSessionIssuedAt(): number {
  *
  * `!== false`, not `=== true`: a session that is merely ABSENT is not evidence of a
  * logout, it is a store that has not been seeded yet, and demanding one would make
- * raising the picker conditional on a status poll having landed first. Only a positive
+ * raising the picker conditional on a status refresh having landed first. Only a positive
  * `loggedIn: false` says the session ended under us.
  */
 export function speleoSessionStillCurrent(issuedAt: number): boolean {
@@ -322,7 +322,7 @@ interface SpeleoStore {
    */
   linkPath: string | null;
   /**
-   * [#218] The open remote project's SpeleoDB project id (from the poll'd status),
+   * [#218] The open remote project's SpeleoDB project id (from refreshed status),
    * so the in-project menu can open its revision history. `null` for a local project
    * / none open / before the first status seed.
    */
@@ -375,13 +375,9 @@ interface SpeleoStore {
    * then it stays false so later badge refreshes don't re-prompt.
    */
   heldLockPromptPending: boolean;
-  /**
-   * Bumped after a hand-off verb to restart the status poll timer, so the next
-   * poll is a full (≥30 s) interval away - a buffer that avoids re-reading a
-   * server mutex that hasn't reflected our just-issued release yet (1b).
-   */
-  pollNonce: number;
-  bumpPoll: () => void;
+  /** Counts keep loading visible until overlapping refreshes have all settled. */
+  projectRefreshCount: number;
+  statusRefreshCount: number;
   /**
    * True while a hand-off verb (start/update/push/done) is in flight. Shared so
    * every entry point - the status button AND the hamburger submenu - gates on
@@ -497,7 +493,7 @@ interface SpeleoStore {
    * edits - so for it the dirty bit is KNOWN true. Hardcoding false there seeded
    * "nothing outstanding" for the one project we have proof is dirty, which
    * disarmed the quit guard (`guardQuit` reads exactly this flag) and dropped the
-   * status button's unpushed warning until some later poll happened to correct it.
+   * status button's unpushed warning until some later refresh happened to correct it.
    */
   setLinkOnOpen: (a: {
     permission: Permission | null;
@@ -506,9 +502,9 @@ interface SpeleoStore {
     /**
      * WHICH SpeleoDB project this seed is for.
      *
-     * The seed used to omit it, leaving `remoteProjectId` to the status poll - which
+     * The seed used to omit it, leaving `remoteProjectId` to the status refresh - which
      * meant that after opening remote B from remote A the store still named A for as
-     * long as a poll took (30 s to a user-configurable 24 h). Every consumer keyed on
+     * long as the next status request took. Every consumer keyed on
      * it read the wrong project in that window, and the guards that compare against it
      * could not notice, because the id they were handed came from the same stale value.
      * The pull knows the answer at the call site; there is no reason to wait to be told.
@@ -531,7 +527,7 @@ interface SpeleoStore {
    * that silently made a project the user was editing uneditable. The only repair
    * was an unawaited `refreshLinkStatus()` whose failures are swallowed by design,
    * in exactly the conditions that had just broken a load (offline, disk trouble),
-   * and `SpeleoStatusButton`'s recovery poll is gated on `link !== null`, which
+   * and the status controls require `link !== null`, which
    * `clearLink` had just falsified - so nothing healed it for the rest of the
    * session, with no badge or message saying why.
    *
@@ -556,8 +552,8 @@ interface SpeleoStore {
    * Deliberately NOT `markDirty`, which short-circuits when the link is already dirty.
    * An unwound copy is always already dirty (`revision_swap_base` stamps the bit on any
    * restore off tip), so mirroring a forward edit through `markDirty` was a total no-op:
-   * `unwound` survived until the next `speleodb_link_status` poll, up to
-   * `MIN_POLL_INTERVAL_SECONDS` away. Inside that window {@link isUnwoundNotEdited} still
+   * `unwound` survived until the next `speleodb_link_status` refresh.
+   * Inside that window {@link isUnwoundNotEdited} still
    * held, so SpeleoStatusButton, the lock menu, the `done()` guard and both exit prompts
    * offered "Discard and take the latest" over work the user had just drawn.
    *
@@ -648,13 +644,13 @@ export function unhandledHandoffKind(kind: never): Record<string, never> {
 }
 
 /// Link objects produced by `seedFromStatus`, so `refreshLinkStatus` can tell a
-/// rival poll's seed apart from a LOCAL mutation of link truth.
+/// rival refresh's seed apart from a LOCAL mutation of link truth.
 ///
 /// The staleness guard has to drop a reply whose link changed under it - a push
-/// landing inside the poll's two round trips clears the dirty bit, and a reply
+/// landing inside the refresh's two round trips clears the dirty bit, and a reply
 /// carrying the pre-push snapshot would resurrect it. But `seedFromStatus`
 /// allocates a fresh object every time, so a plain identity check also fired when
-/// the change came from another poll: two overlapping refreshes invalidated each
+/// the change came from another refresh: two overlapping refreshes invalidated each
 /// other, and the LATER one - the one holding newer truth - was the one thrown
 /// away. A `WeakSet` keeps that distinction without a counter every future link
 /// mutator would have to remember to bump, and without retaining dead objects.
@@ -701,12 +697,11 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   heldLocks: null,
   heldLockPromptOpen: false,
   heldLockPromptPending: true,
-  pollNonce: 0,
+  projectRefreshCount: 0,
+  statusRefreshCount: 0,
   busy: false,
   pendingAuth: null,
   authError: null,
-
-  bumpPoll: () => set((state) => ({ pollNonce: state.pollNonce + 1 })),
 
   beginBusy: () => {
     busyOwner = ++busySeq;
@@ -750,6 +745,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // user left held (and prime the recents badges). `prompt: true` so it raises
         // the resume/release prompt even after the app-open scan already ran.
         void get().scanLocksOnOpen({ prompt: true });
+        void get().refreshLinkStatus();
       }
       return { ok: true };
     } catch (error) {
@@ -817,49 +813,56 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     }),
 
   refreshLinkStatus: async () => {
-    // Capture which project this poll/refresh is for BEFORE the await, and drop the
-    // reply if the open project changed (switch / close / another load) while it was
-    // in flight - so a stale status can't paint the previous project's lock holder /
-    // remote-state / permission onto the newly-open one. Mirrors the load-time
-    // `take_unrecognised_shot_kinds` + `checkProjectIntegrity` staleness guards. (fix S3)
-    const requestedPath = useProjectStore.getState().project?.file_path ?? null;
-    // Also drop the reply when the link CHANGED under it, not just when the
-    // project did. The backend reads the link row and then makes two network
-    // round trips, and `run_blocking` holds no command-level lock, so a push can
-    // land inside that window; the reply then carries the PRE-push snapshot, and
-    // `seedFromStatus` overwrites `hasUnpushedEdits` wholesale - resurrecting a
-    // dirty bit the push had just cleared, which re-arms the quit guard and
-    // re-paints the un-pushed warning over work that IS on the server.
-    //
-    // Object identity is the check on purpose: every action that mutates link
-    // truth builds a NEW link object (they all spread `...state.link`), so any
-    // future mutator is covered without having to remember to bump a counter.
-    // The no-op arms that return `{}` (markDirty when already dirty, applyPush's
-    // not_editing) keep the same object, and a reply is genuinely still valid
-    // there.
-    //
-    // A seed by ANOTHER refresh is explicitly not such a mutation (`seededLinks`).
-    // Counting it as one is what made overlapping refreshes cancel each other:
-    // `handleRelease` awaits its own `refreshLinkStatus` after releasing the lock,
-    // and a periodic poll landing in that window reseeded `link`, so the release's
-    // reply - the one that knew the lock was gone - was discarded. The toolbar kept
-    // the green pen and the shell stayed editable over a lock that no longer
-    // existed, until the next poll, which can be up to 24 hours out.
-    const seq = ++linkStatusSeq;
-    const requestedLink = get().link;
+    set((state) => ({ statusRefreshCount: state.statusRefreshCount + 1 }));
     try {
-      const status = await invokeIpc<SpeleoLinkStatus>('speleodb_link_status');
-      if ((useProjectStore.getState().project?.file_path ?? null) !== requestedPath) return;
-      const current = get().link;
-      if (current !== requestedLink && !(current && seededLinks.has(current))) return;
-      // Issue order, not arrival order: an older reply must never overwrite a
-      // newer one that already landed.
-      if (seq < linkStatusApplied) return;
-      linkStatusApplied = seq;
-      get().seedFromStatus(status);
-    } catch {
-      // Best-effort - leave the prior link state (the backend gate is the
-      // real enforcement; the shell just can't refresh its indicator).
+      // Capture which project this refresh is for BEFORE the await, and drop the
+      // reply if the open project changed (switch / close / another load) while it was
+      // in flight - so a stale status can't paint the previous project's lock holder /
+      // remote-state / permission onto the newly-open one. Mirrors the load-time
+      // `take_unrecognised_shot_kinds` + `checkProjectIntegrity` staleness guards. (fix S3)
+      const requestedPath = useProjectStore.getState().project?.file_path ?? null;
+      // Also drop the reply when the link CHANGED under it, not just when the
+      // project did. The backend reads the link row and then makes two network
+      // round trips, and `run_blocking` holds no command-level lock, so a push can
+      // land inside that window; the reply then carries the PRE-push snapshot, and
+      // `seedFromStatus` overwrites `hasUnpushedEdits` wholesale - resurrecting a
+      // dirty bit the push had just cleared, which re-arms the quit guard and
+      // re-paints the un-pushed warning over work that IS on the server.
+      //
+      // Object identity is the check on purpose: every action that mutates link
+      // truth builds a NEW link object (they all spread `...state.link`), so any
+      // future mutator is covered without having to remember to bump a counter.
+      // The no-op arms that return `{}` (markDirty when already dirty, applyPush's
+      // not_editing) keep the same object, and a reply is genuinely still valid
+      // there.
+      //
+      // A seed by ANOTHER refresh is explicitly not such a mutation (`seededLinks`).
+      // Counting it as one is what made overlapping refreshes cancel each other:
+      // `handleRelease` awaits its own `refreshLinkStatus` after releasing the lock,
+      // and another status request landing in that window reseeded `link`, so the release's
+      // reply - the one that knew the lock was gone - was discarded. The toolbar kept
+      // the green pen and the shell stayed editable over a lock that no longer
+      // existed, until another status request corrected it.
+      const seq = ++linkStatusSeq;
+      const requestedLink = get().link;
+      const requestedGeneration = get().sessionGeneration;
+      try {
+        const status = await invokeIpc<SpeleoLinkStatus>('speleodb_link_status');
+        if (get().sessionGeneration !== requestedGeneration) return;
+        if ((useProjectStore.getState().project?.file_path ?? null) !== requestedPath) return;
+        const current = get().link;
+        if (current !== requestedLink && !(current && seededLinks.has(current))) return;
+        // Issue order, not arrival order: an older reply must never overwrite a
+        // newer one that already landed.
+        if (seq < linkStatusApplied) return;
+        linkStatusApplied = seq;
+        get().seedFromStatus(status);
+      } catch {
+        // Best-effort - leave the prior link state (the backend gate is the
+        // real enforcement; the shell just can't refresh its indicator).
+      }
+    } finally {
+      set((state) => ({ statusRefreshCount: state.statusRefreshCount - 1 }));
     }
   },
 
@@ -906,67 +909,72 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   },
 
   scanLocksOnOpen: async (opts) => {
-    // Ensure we know who we are before filtering held-by-me: on the app-open home
-    // screen the frontend session may be cold even though the backend holds a
-    // rehydrated token (which list_projects uses).
-    if (!get().session) await get().refreshSession();
-    const issuedGeneration = get().sessionGeneration;
-    const me = get().session?.userEmail?.toLowerCase();
-    if (!get().session?.loggedIn || !me) {
-      // Logged out: no badges, no prompt. Also force the overlay shut (not just its
-      // pending flag) so a prompt open when the session ended can't linger. Consume
-      // the app-open "pending" so a later return-to-recents (still using the pending
-      // flag) can't retro-prompt; a subsequent login re-arms via its `prompt: true`.
-      set({
-        remoteLocks: {},
-        remoteProjects: {},
-        remoteSummaries: {},
-        heldLocks: null,
-        heldLockPromptPending: false,
-        heldLockPromptOpen: false,
-      });
-      return;
-    }
+    set((state) => ({ projectRefreshCount: state.projectRefreshCount + 1 }));
     try {
-      const projects = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
-      // Staleness guard: a logout / account switch can land while the list_projects
-      // GET is in flight. Bail if the session moved so we never repaint the ended
-      // session's badges or re-raise its prompt (mirrors refreshLinkStatus's guard).
-      if (get().sessionGeneration !== issuedGeneration ||
-          !get().session?.loggedIn || get().session?.userEmail?.toLowerCase() !== me) {
+      // Ensure we know who we are before filtering held-by-me: on the app-open home
+      // screen the frontend session may be cold even though the backend holds a
+      // rehydrated token (which list_projects uses).
+      if (!get().session) await get().refreshSession();
+      const issuedGeneration = get().sessionGeneration;
+      const me = get().session?.userEmail?.toLowerCase();
+      if (!get().session?.loggedIn || !me) {
+        // Logged out: no badges, no prompt. Also force the overlay shut (not just its
+        // pending flag) so a prompt open when the session ended can't linger. Consume
+        // the app-open "pending" so a later return-to-recents (still using the pending
+        // flag) can't retro-prompt; a subsequent login re-arms via its `prompt: true`.
+        set({
+          remoteLocks: {},
+          remoteProjects: {},
+          remoteSummaries: {},
+          heldLocks: null,
+          heldLockPromptPending: false,
+          heldLockPromptOpen: false,
+        });
         return;
       }
-      const remoteLocks: Record<string, string | null> = {};
-      const remoteProjects: Record<string, string> = {};
-      const remoteSummaries: Record<string, SpeleoProjectSummary> = {};
-      const heldLocks: HeldLock[] = [];
-      for (const p of projects) {
-        remoteLocks[p.id] = p.lock_holder;
-        remoteProjects[p.id] = p.name;
-        remoteSummaries[p.id] = p;
-        // Same ownership check the recents badge uses (emailsMatch), so the prompt's
-        // held list and the badge's "locked by you" can't disagree.
-        if (emailsMatch(p.lock_holder, me)) {
-          heldLocks.push({ projectId: p.id, projectName: p.name });
+      try {
+        const projects = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
+        // Staleness guard: a logout / account switch can land while the list_projects
+        // GET is in flight. Bail if the session moved so we never repaint the ended
+        // session's badges or re-raise its prompt (mirrors refreshLinkStatus's guard).
+        if (get().sessionGeneration !== issuedGeneration ||
+            !get().session?.loggedIn || get().session?.userEmail?.toLowerCase() !== me) {
+          return;
         }
+        const remoteLocks: Record<string, string | null> = {};
+        const remoteProjects: Record<string, string> = {};
+        const remoteSummaries: Record<string, SpeleoProjectSummary> = {};
+        const heldLocks: HeldLock[] = [];
+        for (const p of projects) {
+          remoteLocks[p.id] = p.lock_holder;
+          remoteProjects[p.id] = p.name;
+          remoteSummaries[p.id] = p;
+          // Same ownership check the recents badge uses (emailsMatch), so the prompt's
+          // held list and the badge's "locked by you" can't disagree.
+          if (emailsMatch(p.lock_holder, me)) {
+            heldLocks.push({ projectId: p.id, projectName: p.name });
+          }
+        }
+        set((state) => {
+          // Prompt on an explicit login/app-open scan (`prompt`), or on the FIRST scan
+          // of the session (`heldLockPromptPending`) - never on a routine badge refresh
+          // (returning to recents, the refresh button). That is what stops the prompt
+          // re-appearing on every recents visit while still firing on login + app-start.
+          const promptWorthy = opts?.prompt === true || state.heldLockPromptPending;
+          return {
+            remoteLocks,
+            remoteProjects,
+            remoteSummaries,
+            heldLocks: heldLocks.length > 0 ? heldLocks : null,
+            heldLockPromptPending: false,
+            ...(promptWorthy && heldLocks.length > 0 ? { heldLockPromptOpen: true } : {}),
+          };
+        });
+      } catch {
+        // Best-effort: keep prior badges and never raise a prompt on a failed scan.
       }
-      set((state) => {
-        // Prompt on an explicit login/app-open scan (`prompt`), or on the FIRST scan
-        // of the session (`heldLockPromptPending`) - never on a routine badge refresh
-        // (returning to recents, the refresh button). That is what stops the prompt
-        // re-appearing on every recents visit while still firing on login + app-start.
-        const promptWorthy = opts?.prompt === true || state.heldLockPromptPending;
-        return {
-          remoteLocks,
-          remoteProjects,
-          remoteSummaries,
-          heldLocks: heldLocks.length > 0 ? heldLocks : null,
-          heldLockPromptPending: false,
-          ...(promptWorthy && heldLocks.length > 0 ? { heldLockPromptOpen: true } : {}),
-        };
-      });
-    } catch {
-      // Best-effort: keep prior badges and never raise a prompt on a failed scan.
+    } finally {
+      set((state) => ({ projectRefreshCount: state.projectRefreshCount - 1 }));
     }
   },
 
@@ -1011,7 +1019,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   // dirty / lockedByOther / remoteState / noAccess / serverError behind would render
   // a self-contradictory button (e.g. yellow "click to edit" while still claiming we
   // hold the lock and have un-pushed edits). The shell offers Start editing again on
-  // re-login, and the next poll re-seeds. (fix 4)
+  // re-login, and the next refresh re-seeds. (fix 4)
   clearSession: () => {
     set((state) => ({
       session: null,
@@ -1029,13 +1037,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
             // and losing the token does not upload them. Clearing it here claimed
             // "nothing outstanding" at the exact moment the work became most
             // stranded, which disarmed the quit guard and hid the Toolbar's
-            // unpushed-edits warning; the next authenticated poll re-seeds it.
+            // unpushed-edits warning; the next authenticated refresh re-seeds it.
             // The backend drops the edit gate (and any force-edit) on a token loss,
             // so mirror that here or the shell would keep offering Reconnect.
             forceEditing: false,
             // We can no longer verify the server relationship without a token, so
-            // report Unknown (what a token-less backend poll returns) rather than
-            // claiming up-to-date; the next poll re-resolves it.
+            // report Unknown (what a token-less backend refresh returns) rather than
+            // claiming up-to-date; the next refresh re-resolves it.
             remoteState: 'unknown',
             noAccess: false,
             serverError: null,
@@ -1045,7 +1053,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       banner: null,
       // The revision-history section fetches per the open remote project id, which it
       // can no longer read token-lessly; drop it so it hides (rather than error-fetching)
-      // until a re-login re-seeds it from the next status poll.
+      // until a re-login re-seeds it from the next status refresh.
       remoteProjectId: null,
       // The lock scan was for this now-ended session; drop its badges + prompt.
       remoteLocks: {},
@@ -1078,7 +1086,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // no_anchor would otherwise mask the only way to reach that action), so claim
       // the slot when it is free OR held by no_anchor - but NEVER clobber transient
       // action feedback (push_unconfirmed / concurrent_session). Clear it only when
-      // WE own the slot, so a routine poll never wipes another banner.
+      // WE own the slot, so a routine refresh never wipes another banner.
       const prior = state.banner;
       let banner = prior;
       if (s.exclude_geojson) {
@@ -1094,17 +1102,17 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         lockHolder: s.lock_holder,
         // Read-only + a resolved holder ⟹ someone else holds it (the backend
         // gives us the gate when the lock is ours). Derived PURELY from this
-        // poll's (editState, lockHolder), with NO "preserve prior" carry: once the
-        // other holder releases (a later poll resolves no holder) the button stops
-        // reading "locked by other" instead of sticking orange until a poll both
+        // refresh's (editState, lockHolder), with NO "preserve prior" carry: once the
+        // other holder releases (a later refresh resolves no holder) the button stops
+        // reading "locked by other" instead of sticking orange until a refresh both
         // reaches the server AND happens to resolve a holder (fix 7). A transient
-        // offline poll may briefly drop it to read-only; the next poll re-resolves,
+        // offline refresh may briefly drop it to read-only; the next refresh re-resolves,
         // and the backend gate stays the real enforcement.
         lockedByOther: editState !== 'editing' && !!s.lock_holder,
         hasUnpushedEdits: s.has_unpushed_edits,
         unwound: s.unwound,
         // #213: force-edit (edit-enabled WITHOUT a held lock) is backend-authoritative
-        // and reported every poll; a reconnect that acquires the lock clears it there.
+        // and reported every refresh; a reconnect that acquires the lock clears it there.
         forceEditing: s.force_editing,
         forceEditAllowed: s.allow_force_edit,
         // [#303] Backend-resolved explicit project policy.
@@ -1115,7 +1123,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       };
       // Register the object this seed produced. `refreshLinkStatus` drops a reply
       // whose link changed under it, and without this marker a seed by ANOTHER
-      // refresh looked identical to a local mutation - so two overlapping polls
+      // refresh looked identical to a local mutation - so two overlapping refreshes
       // made each other's replies unusable and the fresher one was thrown away.
       seededLinks.add(seeded);
       return {
@@ -1144,7 +1152,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // pull's truth (we just took the server tip) and stays optimistic; the dirty
       // bit is NOT assumed - see the interface note - because "keep the local copy"
       // reaches this seed with edits the server has never seen. `seedFromStatus`
-      // refines lock holder / remote state on the first poll.
+      // refines lock holder / remote state on the first refresh.
       link: {
         permission,
         editState: 'read-only',
@@ -1154,13 +1162,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // A fresh pull is at the server tip, so no chain step has walked it anywhere.
         unwound: false,
         // A fresh pull always opens without the lock and not force-editing;
-        // `seedFromStatus` refines the opt-in + any force-edit on the first poll.
+        // `seedFromStatus` refines the opt-in + any force-edit on the first refresh.
         forceEditing: false,
         forceEditAllowed: false,
         undoMode: 'full',
         // A pull just took the server tip, so up-to-date is true by construction -
         // but only for a pull. A seed that already knows the copy holds un-pushed
-        // edits is by definition NOT in sync, so claim nothing until the first poll
+        // edits is by definition NOT in sync, so claim nothing until the first refresh
         // resolves it rather than render a self-contradictory "up to date + dirty".
         remoteState: hasUnpushedEdits ? 'unknown' : 'up_to_date',
         noAccess: false,

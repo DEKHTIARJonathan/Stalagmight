@@ -102,8 +102,8 @@ describe('useOpenRemoteProject (#218)', () => {
       // A PULL has, by construction, nothing local the server has not seen.
       hasUnpushedEdits: false,
       // And WHICH project, so `remoteProjectId` names it from the same synchronous
-      // `set()` rather than after a status poll - which left every consumer keyed on
-      // it reading the PREVIOUS project for the length of the poll interval.
+      // `set()` rather than after a status refresh - which left every consumer keyed on
+      // it reading the PREVIOUS project until that request finished.
       projectId: 'p1',
     });
     expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
@@ -111,9 +111,9 @@ describe('useOpenRemoteProject (#218)', () => {
 
   it('names the opened project immediately, so A -> B does not leave A on the store', async () => {
     // Driven through the REAL seed, because the bug is invisible to a test that sets
-    // `remoteProjectId` by hand: it was written only by the status poll, so after
-    // opening remote B from remote A the store named A for as long as a poll took
-    // (30 s to a user-configurable 24 h). Everything keyed on it read A - the revision
+    // `remoteProjectId` by hand: it was written only by the status refresh, so after
+    // opening remote B from remote A the store named A until that request finished.
+    // Everything keyed on it read A - the revision
     // history that lists revisions, and the revert guards that compare against the id
     // that history handed them, which is why both sides agreed on a stale A.
     useSpeleoStore.setState({
@@ -130,7 +130,7 @@ describe('useOpenRemoteProject (#218)', () => {
 
     expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
 
-    // No poll has run - `loadProject` is mocked and `refreshLinkStatus` is not driven -
+    // No refresh has run - `loadProject` is mocked and `refreshLinkStatus` is not driven -
     // so this can only be the seed.
     expect(useSpeleoStore.getState().remoteProjectId).toBe('p1');
   });
@@ -410,7 +410,7 @@ describe('useOpenRemoteProject (#218)', () => {
       );
     });
 
-    /** Another remote project is open, its first status poll settled. */
+    /** Another remote project is open, its first status refresh settled. */
     const anotherOpen = (link: SpeleoLinkState, isDirty = false) => {
       useProjectStore.setState({ project: { file_path: '/cache/p9.stalx' } as never, isDirty });
       useSpeleoStore.setState({ link, remoteProjectId: 'p9' });
@@ -522,7 +522,7 @@ describe('useOpenRemoteProject (#218)', () => {
     it('refuses keep-local when the open project goes unpushed while the prompt is up', async () => {
       // The real sequence rather than a synthetic one: the open IS guarded and the
       // project on screen is clean, so the backend's un-pushed refusal raises the
-      // prompt; the status poll then lands and marks that project un-pushed while the
+      // prompt; the status refresh then lands and marks that project un-pushed while the
       // user is still reading it.
       invokeIpcMock.mockImplementation((cmd: string) =>
         cmd === 'speleodb_open_project'
@@ -571,7 +571,7 @@ describe('useOpenRemoteProject (#218)', () => {
       // so neither half of the guard has anything to protect, and a disk-dirty refusal
       // would raise "save your changes first" over an action that cannot lose them.
       // Driven with `remoteProjectId` deliberately UNSET: the skip is decided by path,
-      // so it holds in the window before the first status poll records the open
+      // so it holds in the window before the first status refresh records the open
       // project's id, where the guard's own id-based exemption does not.
       useProjectStore.setState({
         project: { file_path: '/cache/p1.stalx' } as never,
@@ -665,21 +665,17 @@ describe('useOpenRemoteProject (#218)', () => {
      * it is the only place that can stop it. But the pull verbs' await is the
      * DOWNLOAD, and unlike the two prompt windows this branch already closed, that is
      * not a user sitting on a dialog: it is the network, on EVERY open.
-     * `download_dump` gets 120 s per attempt (`DUMP_DOWNLOAD_TIMEOUT`, idempotent so
-     * retried) against a 640 MB body ceiling, then the pull fetches the revision
-     * history and extracts. The poll's floor is 30 s, and `SpeleoStatusButton` stays
-     * MOUNTED throughout - `App` renders dialogs as siblings of `SingleSystemView`,
-     * so raising the browser does not unmount the toolbar - so `refreshLinkStatus`
-     * keeps landing and `seedFromStatus` rewrites `link` wholesale.
+     * While downloading and validating the remote copy, an already in-flight
+     * status refresh can finish and replace the link via `seedFromStatus`.
      *
      * `finishOpen` cannot be left to catch it: its first act is the optimistic seed,
-     * which overwrites the very link the poll just wrote, so by the time
+     * which overwrites the very link the refresh just wrote, so by the time
      * `loadProject` closes the open project the newly-discovered work is hidden and
      * the newly-discovered lock is silently released.
      */
     describe('the link changes while the pull is in flight', () => {
       /**
-       * A pull that lands, with `during` standing in for the poll rewriting the store
+       * A pull that lands, with `during` standing in for the refresh rewriting the store
        * WHILE the command is in flight - run synchronously inside the mock, before it
        * resolves, so the hook resumes on a link the entry check never saw.
        */
@@ -703,7 +699,7 @@ describe('useOpenRemoteProject (#218)', () => {
         // Not a dead token - there is nothing to re-login for.
         if (outcome.status === 'error') expect(outcome.reLogin).toBe(false);
         // The entry check DID pass, so the pull ran - this is the late half. What
-        // must not run is the seed (which overwrites the link the poll just wrote)
+        // must not run is the seed (which overwrites the link the refresh just wrote)
         // and the load (which closes p9 backend-side).
         expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_open_project', expect.anything());
         expect(setLinkOnOpenMock).not.toHaveBeenCalled();
@@ -741,7 +737,7 @@ describe('useOpenRemoteProject (#218)', () => {
         // closed the open project backend-side; refusing now would leave the shell
         // rendering a project the backend does not have open, where auto-save and
         // every later command fail with "no project open". Nothing is protected by
-        // refusing either - `finishOpen` skips the seed for this path, so the poll's
+        // refusing either - `finishOpen` skips the seed for this path, so the refresh's
         // update survives, and the load re-resolves the same project's link.
         //
         // Driven through the half of the guard that is NOT exempt for the same

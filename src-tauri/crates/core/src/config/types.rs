@@ -1599,8 +1599,6 @@ impl Config {
         self.panels.normalize();
         self.global_view.normalize();
         self.appearance.normalize();
-        // Normalize SpeleoDB polling settings.
-        self.speleodb.normalize();
         self.closure_adjustment.normalize();
         self.placement_suggestion.normalize();
         self.syntactic_highlighting.normalize();

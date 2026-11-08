@@ -15,8 +15,8 @@ export function ProjectStatsActions() {
   const { t } = useTranslation();
   const openDialog = useUIStore((s) => s.openDialog);
   // Select the BOOLEAN, not the link object: `seedFromStatus` allocates a fresh
-  // link on every status-poll tick, so a selector returning the object re-renders
-  // this component (and re-runs `useSpeleoWebLink`) on every tick even though the
+  // link on every status refresh, so a selector returning the object re-renders
+  // this component (and re-runs `useSpeleoWebLink`) on every status response even though the
   // only thing read is whether a link exists. Same fix, same reason, as
   // `useSpeleoMenuItems`.
   const isRemote = useSpeleoStore((s) => s.link !== null);

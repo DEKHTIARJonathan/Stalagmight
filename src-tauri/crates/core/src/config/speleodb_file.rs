@@ -172,7 +172,6 @@ mod tests {
         config.speleodb.email = Some("diver@example.com".to_owned());
         config.speleodb.token.0 = Some("synthetic-test-token".to_owned());
         config.speleodb.allow_force_edit = true;
-        config.speleodb.poll_interval_seconds = 45;
         config
     }
 
@@ -244,7 +243,6 @@ mod tests {
         assert_eq!(loaded.speleodb.token.0, config.speleodb.token.0);
         assert_eq!(loaded.speleodb.email, config.speleodb.email);
         assert!(loaded.speleodb.allow_force_edit);
-        assert_eq!(loaded.speleodb.poll_interval_seconds, 45);
     }
 
     #[test]

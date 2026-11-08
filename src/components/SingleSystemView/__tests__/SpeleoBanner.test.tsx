@@ -50,7 +50,7 @@ describe('SpeleoBanner force-edit (#213)', () => {
     render(<SpeleoBanner />);
     const banner = screen.getByTestId('speleo-banner');
     expect(banner).toHaveAttribute('data-kind', 'force_edit_active');
-    // No dismiss - it is backend-derived and re-raised every poll.
+    // No dismiss - it is backend-derived and re-raised every refresh.
     expect(screen.queryByTestId('speleo-banner-dismiss')).not.toBeInTheDocument();
   });
 

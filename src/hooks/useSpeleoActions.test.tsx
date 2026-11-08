@@ -40,7 +40,6 @@ beforeEach(() => {
     busy: false,
     applyDone: vi.fn(),
     applyPush: vi.fn(),
-    bumpPoll: vi.fn(),
     clearSession: vi.fn(),
     raiseNoAnchorBanner: vi.fn(),
   });
@@ -937,4 +936,20 @@ it('ignores a successful upload response after the project changes', async () =>
   await act(async () => { finish({ kind: 'pushed' }); outcome = await operation; });
   expect(outcome).toBeNull();
   expect(saveProjectMock).not.toHaveBeenCalled();
+});
+it('manual refresh waits for fresh lock and permission status even when the revision is current', async () => {
+  let finishStatus!: () => void;
+  const refreshLinkStatus = vi.fn(() => new Promise<void>((resolve) => { finishStatus = resolve; }));
+  useSpeleoStore.setState({ applyUpdate: vi.fn(), refreshLinkStatus });
+  invokeIpcMock.mockResolvedValue({ kind: 'up_to_date' });
+  const { result } = renderHook(() => useSpeleoActions());
+  let request!: Promise<void>;
+  await act(async () => { request = result.current.update(); });
+  expect(refreshLinkStatus).toHaveBeenCalledOnce();
+  expect(useSpeleoStore.getState().busy).toBe(true);
+  await act(async () => {
+    finishStatus();
+    await request;
+  });
+  expect(useSpeleoStore.getState().busy).toBe(false);
 });

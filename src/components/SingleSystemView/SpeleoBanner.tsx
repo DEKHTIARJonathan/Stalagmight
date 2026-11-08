@@ -18,7 +18,7 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
  *   won't refresh; offers Enable-rendering (a PATCH that takes effect on the NEXT
  *   push, gated behind an inline confirmation stating exactly that). This one is
  *   server-derived state, so it has NO Dismiss button - dismissing would just be
- *   re-derived by the next status poll; the resolution is Enable-rendering (or the
+ *   re-derived by the next status refresh; the resolution is Enable-rendering (or the
  *   flag being cleared server-side). It also preempts `no_anchor` in the store so it
  *   is always reachable.
  * - `no_anchor` - a push/unlock of a survey with no georeferenced zero datum, so the
@@ -80,7 +80,7 @@ export function SpeleoBanner() {
   // big-red data-safety warning that outranks the yellow transient notices - the
   // "this .stalx cannot be merged" message must never be masked by a lesser banner.
   // Its only action is Reconnect (acquire the lock + reconcile, via startEditing);
-  // it is not dismissable (backend state, re-derived every poll). When someone else
+  // it is not dismissable (backend state, re-derived every refresh). When someone else
   // holds the lock we name them, since their work is what a reconnect reconciles against.
   if (forceEditing) {
     return (
@@ -227,7 +227,7 @@ export function SpeleoBanner() {
               {t('speleodb.banner.enableRendering')}
             </button>
           ))}
-        {/* `rendering_disabled` is server-derived, so it has no Dismiss (a poll would
+        {/* `rendering_disabled` is server-derived, so it has no Dismiss (a refresh would
             just re-raise it): its resolution is Enable-rendering / the flag clearing.
             Every other kind is dismissable transient/action feedback. */}
         {banner.kind !== 'rendering_disabled' && (

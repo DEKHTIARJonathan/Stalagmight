@@ -124,7 +124,7 @@ export function SpeleoRevisionHistory() {
       if (!applied) return;
     } catch (e) {
       // The un-pushed-edits refusal is normally pre-empted by `viewBlocked`, but the
-      // dirty bit can flip between render and click (an auto-save, a poll), so the
+      // dirty bit can flip between render and click (an auto-save, a refresh), so the
       // race still has to say the same thing the hint does rather than fall through
       // to the backend's raw line.
       showToast(

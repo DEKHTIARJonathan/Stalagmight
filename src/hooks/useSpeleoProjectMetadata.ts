@@ -67,8 +67,8 @@ function toForm(m: SpeleoProjectMetadata): SpeleoMetadataForm {
 export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
   const { t } = useTranslation();
   const showToast = useUIStore((s) => s.showToast);
-  // Select the two primitives rather than the link object: the status poll hands
-  // out a fresh object on every tick, which would re-run the load effect below.
+  // Select the two primitives rather than the link object: the status refresh hands
+  // out a fresh object on every response, which would re-run the load effect below.
   const isLinked = useSpeleoStore((s) => s.link !== null);
   const permission = useSpeleoStore((s) => s.link?.permission ?? null);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);

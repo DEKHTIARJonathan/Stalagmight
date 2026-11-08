@@ -36,7 +36,7 @@ export function ProjectSettingsDialog() {
   const showToast = useUIStore((s) => s.showToast);
   // The SpeleoDB tab is only meaningful for a remote (linked) project.
   // The BOOLEAN, not the link object: `seedFromStatus` hands out a fresh link on
-  // every poll tick, so selecting the object re-rendered the whole settings dialog
+  // every status refresh, so selecting the object re-rendered the whole settings dialog
   // on each one.
   const isRemote = useSpeleoStore((s) => s.link != null);
   const { project, globalConfig, updateProjectSettings, setSurfaceElevation } = useProjectStore(

@@ -543,7 +543,7 @@ pub struct SpeleoLinkStatus {
     ///
     /// RAW rather than combined with the dirty bit, which it was at first and could not
     /// stay: a step onto the tip leaves the copy CLEAN, so the composite was false at the
-    /// only moment the frontend polls, and the Undo that follows marks dirty optimistically
+    /// post-step status refresh, and the Undo that follows marks dirty optimistically
     /// without asking the backend anything. The frontend therefore has to be able to
     /// compose the two itself, which means holding this half unmixed.
     pub unwound: bool,
@@ -588,7 +588,7 @@ pub struct SpeleoLinkStatus {
     /// [#213] The user's `SpeleoDbConfig.allow_force_edit` opt-in, surfaced here so
     /// the read-only shell can gate the "Edit without lock" affordance without a
     /// separate config fetch. A copy of a global preference (not per-link), refreshed
-    /// on every poll so a Settings change takes effect on the next status read. When
+    /// on every refresh so a Settings change takes effect on the next status read. When
     /// false, the force-edit menu item stays hidden and the backend also refuses.
     pub allow_force_edit: bool,
     /// [#218] The open remote project's SpeleoDB project id, so the in-project menu

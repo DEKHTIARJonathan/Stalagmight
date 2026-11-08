@@ -507,11 +507,11 @@ impl AppState {
                 // (nothing to strand - FF requires a clean copy) and re-enters
                 // deliberately via Start editing or Force edit.
                 let was_editing = self.edit_enabled() && !self.force_editing();
-                // Captured BEFORE the reload, which shuts the gate and lets a poll
+                // Captured BEFORE the reload, which shuts the gate and lets a refresh
                 // landing in that window clear the record: this is the last point the
                 // pre-reload truth exists. Kept SEPARATE from `was_editing` on
                 // purpose - the gate is a permission ("may I edit?"), the record is
-                // provenance ("did I take this lock?"), and the poll at the bottom of
+                // provenance ("did I take this lock?"), and the refresh at the bottom of
                 // `speleodb_link_status` can re-derive the gate from nothing but a
                 // matching holder email. Restoring the record from the gate would
                 // therefore mint provenance for a lock this process never took - an
@@ -531,7 +531,7 @@ impl AppState {
                 if was_editing {
                     self.set_edit_enabled(true);
                     // Restore the record only where there was one to restore: the
-                    // reload shut the gate, and a status poll landing in that window
+                    // reload shut the gate, and a status refresh landing in that window
                     // drops the record (as start-editing's FF arm re-records for the
                     // same reason). A session that held no record keeps none - the
                     // gate is restored either way, so an inherited lock stays as

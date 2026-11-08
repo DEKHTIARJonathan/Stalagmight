@@ -204,7 +204,7 @@ describe('SpeleoDbProjectDialog', () => {
     /**
      * What `loadProject` -> `syncProjectLink` commit for a remote -> remote switch:
      * a different local file, and a REPLACEMENT link that is still non-null (its
-     * permission unknown until the next status poll re-seeds it).
+     * permission unknown until the next status refresh re-seeds it).
      */
     const openProjectB = () =>
       act(() => {
@@ -221,7 +221,7 @@ describe('SpeleoDbProjectDialog', () => {
       expect(screen.getByTestId('speleodb-settings-save')).toBeEnabled();
 
       openProjectB();
-      // The status poll then resolves the NEW project's permission - which is what
+      // The status refresh then resolves the NEW project's permission - which is what
       // used to bring Save back to life over the old project's form.
       act(() => {
         useSpeleoStore.setState({ link: { ...LINK, permission: 'READ_AND_WRITE' } });
@@ -256,7 +256,7 @@ describe('SpeleoDbProjectDialog', () => {
 
     /**
      * DO NOT REGRESS: the guard keys on the open FILE, so the churn that does NOT
-     * change the open project must leave the dialog alone - the status poll hands out
+     * change the open project must leave the dialog alone - the status refresh hands out
      * a fresh link object every tick, and a metadata Save re-writes `project` with a
      * new object to fold the server-side rename in.
      */

@@ -100,8 +100,8 @@ describe('a remote project without the write lock (#270)', () => {
   it('seeds a pessimistic link so the status button still offers the way out', () => {
     useSpeleoStore.getState().syncProjectLink(true);
     const link = useSpeleoStore.getState().link;
-    // A null link hides SpeleoStatusButton entirely (and with it the poll that
-    // would recover), so a remote project must never be left without one.
+    // A null link hides SpeleoStatusButton entirely (and with it the actions that
+    // allow manual recovery), so a remote project must never be left without one.
     expect(link).not.toBeNull();
     expect(link?.editState).toBe('read-only');
     // The button derives its 'unlocked' kind (bare mark -> Start editing) from
@@ -175,7 +175,7 @@ describe('a failed or never-answered status call (#270)', () => {
     // Decided behavior: a failure resolves to the SAFE state, not to editable.
     // The project stays exactly as the synchronous open left it - read-only,
     // known-remote, with a link so the status button can still offer
-    // "Start editing" and the poll keeps retrying.
+    // "Start editing" or a manual refresh.
     expect(useSpeleoStore.getState().projectLinkKind).toBe('remote');
     expect(useSpeleoStore.getState().link).not.toBeNull();
     expect(readOnly()).toBe(true);

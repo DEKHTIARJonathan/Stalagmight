@@ -31,12 +31,6 @@ pub struct SpeleoDbConfig {
     /// lock is acquired (the only escape being "Save a local copy" / detach).
     #[serde(default)]
     pub allow_force_edit: bool,
-    /// How often (seconds) the action shell re-checks the linked project's remote
-    /// state (lock holder / remote-ahead / conflict) for its status icon. Default
-    /// 60; **clamped up to `MIN_POLL_INTERVAL_SECONDS` on load** so a hand-edited
-    /// config below the floor can't spam the server.
-    #[serde(default = "default_poll_interval_seconds")]
-    pub poll_interval_seconds: u32,
     /// [#303] Default undo policy for SpeleoDB-linked projects, under any
     /// per-project `speleo_link.undo_mode` override. Default
     /// [`UndoMode::Full`] - the hybrid stack the issue exists to deliver.
@@ -48,13 +42,6 @@ pub struct SpeleoDbConfig {
     pub undo_mode: crate::models::UndoMode,
 }
 
-/// Minimum interval for remote-state polling.
-pub const MIN_POLL_INTERVAL_SECONDS: u32 = 30;
-
-fn default_poll_interval_seconds() -> u32 {
-    60
-}
-
 impl Default for SpeleoDbConfig {
     fn default() -> Self {
         Self {
@@ -64,21 +51,7 @@ impl Default for SpeleoDbConfig {
             preserve_unreadable_file: false,
             insecure_http: false,
             allow_force_edit: false,
-            poll_interval_seconds: default_poll_interval_seconds(),
             undo_mode: crate::models::UndoMode::Full,
-        }
-    }
-}
-
-impl SpeleoDbConfig {
-    pub fn normalize(&mut self) {
-        if self.poll_interval_seconds < MIN_POLL_INTERVAL_SECONDS {
-            tracing::warn!(
-                requested = self.poll_interval_seconds,
-                floor = MIN_POLL_INTERVAL_SECONDS,
-                "SpeleoDB poll_interval_seconds below floor; clamping up"
-            );
-            self.poll_interval_seconds = MIN_POLL_INTERVAL_SECONDS;
         }
     }
 }

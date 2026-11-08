@@ -31,7 +31,6 @@ email = "you@example.com"
 token = "<API token>"
 insecure_http = false
 allow_force_edit = false
-poll_interval_seconds = 60
 undo_mode = "full"
 ```
 
@@ -65,7 +64,11 @@ untouched; cleanup failures are reported. No keychain access is restored.
 is restored only when the resolved instance matches its configured endpoint.
 Reloading configuration applies a changed endpoint, account or token to the live
 session and resets its edit gate; unrelated preference reloads retain the session.
-The poll interval is clamped to at least 30 seconds on load.
+Projects refresh at startup and immediately after sign-in. Successful "Log in now"
+closes Settings and shows the project listing. Refreshes display a spinner until
+they finish, including failed requests. Use the refresh button
+on the home screen to reload the listing, or Refresh in the open project's
+SpeleoDB menu. No periodic SpeleoDB refresh runs in the background.
 
 ## Key Config Options
 

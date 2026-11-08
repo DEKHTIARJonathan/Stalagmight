@@ -159,3 +159,17 @@ describe('SpeleoStatusButton state badge', () => {
     expect(stateBadge()).toBeInTheDocument();
   });
 });
+
+it('does not refresh remote status on a timer', async () => {
+  vi.useFakeTimers();
+  seed();
+  const { unmount } = render(<SpeleoStatusButton />);
+  try {
+    invokeIpcMock.mockClear();
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_link_status');
+  } finally {
+    unmount();
+    vi.useRealTimers();
+  }
+});

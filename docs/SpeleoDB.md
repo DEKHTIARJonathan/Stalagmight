@@ -142,7 +142,7 @@ prevents the confirmed exit from continuing. Clean shutdown also has a bounded
 best-effort backend release; an unreachable server or forcibly terminated process
 cannot guarantee that the server has observed a release. Confirmed close/quit
 re-checks ownership before releasing and serializes the release with local lock
-acquisition/status polling. A lock already held by another account is left alone.
+acquisition/status refreshes. A lock already held by another account is left alone.
 Explicit administrator lock recovery remains separate. The server has no atomic
 compare-and-release operation, so ownership changes between the probe and POST
 remain a protocol limitation.

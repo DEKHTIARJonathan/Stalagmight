@@ -489,7 +489,7 @@ impl AppState {
         // the lock is still genuinely ours.)
         //
         // The clear re-checks the gate for itself rather than acting on the snapshot
-        // above, which a fast-forward finishing underneath this poll makes stale - see
+        // above, which a fast-forward finishing underneath this refresh makes stale - see
         // [`Self::speleodb_forget_lock_acquired_if_gate_shut`].
         if !edit_enabled {
             self.speleodb_forget_lock_acquired_if_gate_shut();
@@ -520,7 +520,7 @@ impl AppState {
                                 // (get_revisions would fail the same way get_project
                                 // just did), so skip the doomed extra GET (N5).
                                 let lock_holder = p.active_mutex.map(|m| m.user);
-                                // The lock holder is what licenses the poll's
+                                // The lock holder is what licenses the refresh's
                                 // authorship recovery, so it has to be read from the
                                 // SAME get_project response the verdict is folded
                                 // from - not re-fetched or inferred.
@@ -601,7 +601,7 @@ impl AppState {
             // [#303] Mid-walk: a chain step has moved this copy off the tip. Reported RAW
             // so the frontend can combine it with its own optimistic dirty bit - a step onto
             // the tip leaves the copy clean, so a pre-combined flag was false at the only
-            // moment the frontend polls.
+            // moment the frontend refreshes.
             unwound: self.speleodb_unwound_from().is_some(),
             permission,
             lock_holder,
@@ -625,11 +625,11 @@ impl AppState {
 
     /// Best-effort remote-state (freshness fold, #202): resolve the server tip from
     /// the revision topology and project the BASE-vs-tip fence for the action
-    /// button (T2c). Any failure → `Unknown` - the passive poll must never surface
+    /// button (T2c). Any failure → `Unknown` - the passive refresh must never surface
     /// an error, and it is NOT routed through `handle_auth` (a transient 401 here
     /// must not auto-drop the session, mirroring [`Self::speleodb_lock_holder`]).
     ///
-    /// The policy itself lives in [`sync::poll_verdict`] so every branch is
+    /// The policy itself lives in [`sync::status_verdict`] so every branch is
     /// unit-tested offline and the passive button provably agrees with what the
     /// write path ([`sync::plan_push`]) would do on click; this wrapper is just the
     /// I/O around it.
@@ -642,30 +642,30 @@ impl AppState {
         lock_holder: Option<&str>,
     ) -> RemoteState {
         let my_email = self.speleodb_my_email().unwrap_or_default();
-        // What licenses the authorship recovery in `poll_verdict`: a commit in the
+        // What licenses the authorship recovery in `status_verdict`: a commit in the
         // BASE..tip gap can only be OUR unrecorded push if THIS process was the
         // single writer when it was made.
         //
         // The edit gate is NOT that evidence, which is why it is not read here.
         // `speleodb_link_status` re-derives the gate from the holder email itself, so
         // pairing the two only reads one signal twice: a second session on the same
-        // account holds the real lock, the poll opens this process's gate because the
+        // account holds the real lock, the refresh opens this process's gate because the
         // holder is "us", and the other session's commit gets explained away as our
         // own unrecorded push. What this asks instead is whether THIS process took
         // the lock on THIS project and is still editing under it - a claim only a
         // successful Start editing makes, cleared on every release and on the first
-        // poll that finds the gate shut. A lock inherited from an earlier run, or one
+        // refresh that finds the gate shut. A lock inherited from an earlier run, or one
         // a sibling session holds, records nothing and licenses nothing.
         //
         // A #213 force-edit session is excluded twice over: it records no acquisition
         // (it opens the gate precisely because it could NOT take a lock), and the flag
         // is re-checked here because force-edit can be entered after a release has
-        // shut the gate but before the poll that clears the record has run.
+        // shut the gate but before the refresh that clears the record has run.
         // (The frontend's `holdsWriteLock` is the same shape: `editing &&
         // !forceEditing`.)
         //
         // The gate is asked for TOO - not as evidence of authorship, but as a veto.
-        // The record can outlive a gate that shut underneath an in-flight poll (a
+        // The record can outlive a gate that shut underneath an in-flight refresh (a
         // concurrent same-path reopen re-derives the gate from `is_remote` and the
         // catch-all clear may not have run yet), and a session that may no longer
         // edit must not still be handed a licence to explain a gap commit away as
@@ -677,7 +677,7 @@ impl AppState {
         match head_with_empty_retry(link.base_commit_sha.as_deref(), || {
             self.speleodb_server_head(endpoint, token, insecure_http, &link.project_id)
         }) {
-            Ok((tip, commits)) => sync::poll_verdict(
+            Ok((tip, commits)) => sync::status_verdict(
                 link.base_commit_sha.as_deref(),
                 tip.as_deref(),
                 link.has_unpushed_edits,
@@ -706,13 +706,13 @@ impl AppState {
     /// already existed, never conjured from the gate alone (see there).
     /// Cleared by
     /// every release verb in this file, and - covering the release paths that live
-    /// elsewhere, plus close / project switch / logout / take-remote - by the poll in
+    /// elsewhere, plus close / project switch / logout / take-remote - by the refresh in
     /// [`Self::speleodb_link_status`], through
     /// [`Self::speleodb_forget_lock_acquired_if_gate_shut`].
     ///
     /// A poisoned session lock silently declines to record, which costs the shortcut
     /// rather than granting one: the same call also fails `speleodb_active_token`, so
-    /// the poll has no lock holder to compare against either.
+    /// the refresh has no lock holder to compare against either.
     ///
     /// Private, and deliberately so again. The split release in
     /// [`Self::speleodb_release_captured_lock`] used to reach in here for its clear,
@@ -1515,7 +1515,7 @@ impl AppState {
             //
             // BOTH gates, never just the first: `edit_enabled == false &&
             // force_editing == true` must never be observable. `speleodb_link_status`
-            // reports the flag on every poll, so a stranded one paints the big-red
+            // reports the flag on every refresh, so a stranded one paints the big-red
             // force-edit banner over a project that is read-only, and pre-empts the
             // surface that would explain why.
             self.set_edit_enabled(false);
@@ -2905,9 +2905,9 @@ mod tests {
     #[test]
     fn forget_clears_force_editing_on_an_auto_dropped_force_edit_session() {
         // #213 + the 401 auto-drop, together: the flag has to go with the gate it
-        // rides on. It did not, and `speleodb_link_status` reports it on every poll -
+        // rides on. It did not, and `speleodb_link_status` reports it on every refresh -
         // so the frontend cleared `forceEditing` on the token loss and the very next
-        // poll re-seeded it true. Its big-red force-edit banner then pre-empted the
+        // refresh re-seeded it true. Its big-red force-edit banner then pre-empted the
         // durable "your changes are only on this computer" push-failure banner,
         // hiding the Retry and the typed commit message behind a banner whose only
         // control (Reconnect) 401s again - while `guard_mutation` refused every edit.
@@ -3440,7 +3440,7 @@ mod tests {
         // the round trip. Dismiss the Settings dialog and unlink the same project in
         // that window and the two collide: the unlink makes it a plain local project
         // and reopens the edit gate, and this stale completion closes it again.
-        // Nothing reopens it from there - status polling needs a link the project no
+        // Nothing reopens it from there - status refreshing needs a link the project no
         // longer has - so an ordinary local project was stuck read-only until it was
         // closed and reopened.
         //
@@ -3473,7 +3473,7 @@ mod tests {
                 drop(listener);
                 assert!(
                     state.speleodb_lock_ops.try_lock().is_err(),
-                    "release must serialize polling and acquisition"
+                    "release must serialize refreshing and acquisition"
                 );
                 state.speleodb_unlink().expect("unlink mid-flight");
                 let body = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote"}"#;
@@ -3504,13 +3504,13 @@ mod tests {
 
     #[test]
     fn a_force_editor_does_not_claim_another_sessions_commit_as_its_own() {
-        // The authorship shortcut in `poll_verdict` explains a commit in the BASE..tip
+        // The authorship shortcut in `status_verdict` explains a commit in the BASE..tip
         // gap as OUR unrecorded push, and it is licensed by holding the single-writer
         // lock. A #213 force-editor holds NO lock - it opens the edit gate precisely
         // because it could not take one - so `edit_enabled` alone was not the claim
         // the comment above `we_hold_the_lock` said it was.
         //
-        // The setup is the concurrent-session case `poll_verdict` already refuses on
+        // The setup is the concurrent-session case `status_verdict` already refuses on
         // its own inputs: a second session on the SAME account holds the real lock and
         // has pushed, so the lock holder's email matches ours. Reported as UpToDate the
         // status button keeps its resting state, and the divergence the user will
@@ -3601,7 +3601,7 @@ mod tests {
     #[test]
     fn a_shut_edit_gate_withdraws_the_shortcut_even_with_the_record_intact() {
         // The record answers "did I take this lock?", the gate answers "may I edit?",
-        // and the shortcut needs BOTH. The poll's catch-all clear is what normally
+        // and the shortcut needs BOTH. The refresh's catch-all clear is what normally
         // keeps them in step, but it runs at the TOP of `speleodb_link_status` while
         // the verdict is folded further down, after a network round trip - so a path
         // that shuts the gate in between (a concurrent same-path reopen re-deriving it
@@ -3648,7 +3648,7 @@ mod tests {
     }
 
     /// A get_project body and a revisions body in one: serde ignores the fields the
-    /// other endpoint owns, so the single-body stub can serve a whole poll. The
+    /// other endpoint owns, so the single-body stub can serve a whole refresh. The
     /// mutex holder is OUR OWN account - a second session signed in as the same
     /// user - and the tip has moved one commit past BASE, authored by that account.
     const SAME_ACCOUNT_HOLDER_BODY: &str = r#"{
@@ -3666,8 +3666,8 @@ mod tests {
         // same holder email therefore read ONE signal twice.
         //
         // Here a second session on the same account holds the real lock and has
-        // pushed. This session never acquired anything: poll 1 re-derives the gate
-        // from the holder email, and poll 2 - reading the gate that poll 1 opened -
+        // pushed. This session never acquired anything: refresh 1 re-derives the gate
+        // from the holder email, and refresh 2 - reading the gate that refresh 1 opened -
         // used to hand the shortcut to a process that had pushed nothing, explaining
         // the OTHER session's commit away as its own unrecorded push and reporting
         // UpToDate over a real conflict.
@@ -3680,7 +3680,7 @@ mod tests {
              read-only, exactly as a restart or a second window does"
         );
 
-        let first = state.speleodb_link_status().expect("poll 1");
+        let first = state.speleodb_link_status().expect("refresh 1");
         assert_eq!(
             first.lock_holder.as_deref(),
             Some("u@x"),
@@ -3697,11 +3697,11 @@ mod tests {
             "the other session's commit is not ours to explain away"
         );
 
-        let second = state.speleodb_link_status().expect("poll 2");
+        let second = state.speleodb_link_status().expect("refresh 2");
         assert_eq!(
             second.remote_state,
             RemoteState::Conflict,
-            "and it is still not ours on the next poll, when the gate the first poll \
+            "and it is still not ours on the next refresh, when the gate the first refresh \
              opened is what `edit_enabled` reports - the verdict must not be laundered \
              through a gate derived from the very holder email it is corroborating"
         );
@@ -3709,7 +3709,7 @@ mod tests {
         // The other side of the line: a process that really did take this lock keeps
         // the shortcut, so its own landed push is not painted as a conflict.
         state.speleodb_note_lock_acquired(Some(REMOTE_ID));
-        let third = state.speleodb_link_status().expect("poll 3");
+        let third = state.speleodb_link_status().expect("refresh 3");
         assert_eq!(
             third.remote_state,
             RemoteState::UpToDate,
@@ -4085,12 +4085,12 @@ mod tests {
     }
 
     #[test]
-    fn a_poll_over_a_shut_gate_drops_a_stale_acquisition_record() {
+    fn a_refresh_over_a_shut_gate_drops_a_stale_acquisition_record() {
         // The catch-all for every way a lock-held session can end without passing
         // through a release verb in this file: a close / project switch / reopen, the
         // detached switch-time release, an admin release, the 401 auto-drop. All of
         // them leave the edit gate shut, and a shut gate means this process is not
-        // editing under a lock of its own - so the poll drops the record BEFORE its
+        // editing under a lock of its own - so the refresh drops the record BEFORE its
         // own re-derivation can reopen the gate and hand the shortcut back.
         let (base, _listener) = always_answering_stub(SAME_ACCOUNT_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
@@ -4101,7 +4101,7 @@ mod tests {
         // project switch, which re-derives the gate from is_remote).
         state.set_edit_enabled(false);
 
-        let status = state.speleodb_link_status().expect("poll");
+        let status = state.speleodb_link_status().expect("refresh");
         assert!(
             status.edit_enabled,
             "the reopen re-derivation still reopens the gate under our own lock"
@@ -4113,7 +4113,7 @@ mod tests {
         );
         assert!(
             !state.speleodb_lock_acquired_here(REMOTE_ID),
-            "and the record itself is gone, so later polls cannot resurrect it"
+            "and the record itself is gone, so later refreshes cannot resurrect it"
         );
     }
 
@@ -4209,15 +4209,15 @@ mod tests {
         assert!(
             capture < reload,
             "the capture must precede the reload - the reload shuts the gate, and a \
-             poll landing in that window is exactly what clears the record"
+             refresh landing in that window is exactly what clears the record"
         );
     }
 
     #[test]
-    fn the_poll_clears_the_record_through_the_gate_rechecking_helper() {
-        // The poll's catch-all clear must not act on the `edit_enabled` snapshot taken
+    fn the_refresh_clears_the_record_through_the_gate_rechecking_helper() {
+        // The refresh's catch-all clear must not act on the `edit_enabled` snapshot taken
         // at the top of `speleodb_link_status`: a fast-forward finishing underneath an
-        // in-flight poll reopens the gate and restores the record for a lock we still
+        // in-flight refresh reopens the gate and restores the record for a lock we still
         // genuinely hold, and clearing on the stale snapshot erases it - re-raising the
         // self-conflict this branch exists to fix. Pinned structurally because the
         // window needs two threads to observe; the helper's own contract is covered
@@ -4229,7 +4229,7 @@ mod tests {
             .expect("speleodb_link_status body precedes the next method");
         assert!(
             status.contains("self.speleodb_forget_lock_acquired_if_gate_shut();"),
-            "the poll must clear through the helper that re-reads the gate under the \
+            "the refresh must clear through the helper that re-reads the gate under the \
              session lock"
         );
         assert!(
@@ -4253,7 +4253,7 @@ mod tests {
         state.speleodb_forget_lock_acquired_if_gate_shut();
         assert!(
             state.speleodb_lock_acquired_here(REMOTE_ID),
-            "a poll that observed the reload's momentarily-shut gate must find the \
+            "a refresh that observed the reload's momentarily-shut gate must find the \
              gate open again when it reaches the clear, and leave our own record alone"
         );
 
@@ -4311,7 +4311,7 @@ mod tests {
         // release, a side effect of surrendering a claim they never held. When the
         // reset then fails part-way, dropping BOTH gates is the only outcome that
         // honours the request AND keeps `edit_enabled == false && force_editing ==
-        // true` unobservable: `speleodb_link_status` reports the flag on every poll,
+        // true` unobservable: `speleodb_link_status` reports the flag on every refresh,
         // so a stranded one paints the big-red force-edit banner over a project that
         // is now read-only.
         //
@@ -4826,7 +4826,7 @@ mod tests {
 
     /// A loopback server that answers the FIRST `projects/<id>/` read with the
     /// mutex held by us and every later one with `later_holder` - so a test can
-    /// model the world changing between the status poll's own holder read and
+    /// model the world changing between the status refresh's own holder read and
     /// the re-read that actually opens the gate. Requests for the revision
     /// topology get an empty body (the fold degrades to `Unknown`, which is not
     /// what these tests are about).
@@ -4882,7 +4882,7 @@ mod tests {
     }
 
     #[test]
-    fn the_poll_resumes_editing_when_the_lock_is_still_ours_as_it_opens_the_gate() {
+    fn the_refresh_resumes_editing_when_the_lock_is_still_ours_as_it_opens_the_gate() {
         // The invariant the reopen exists for: a project reopened while we still
         // hold its mutex must not sit read-only under our own lock.
         let (base, _listener) = holder_changes_after_the_first_read(REMOTE_ID, Some("u@x"));
@@ -4897,12 +4897,12 @@ mod tests {
     }
 
     #[test]
-    fn the_poll_leaves_the_gate_shut_when_the_mutex_went_away_mid_poll() {
-        // Round 6 (P1): the poll's holder read is one of several requests, and a
+    fn the_refresh_leaves_the_gate_shut_when_the_mutex_went_away_mid_refresh() {
+        // Round 6 (P1): the refresh's holder read is one of several requests, and a
         // captured or janitor release for this same project can complete before
         // the gate opens. That release's reclaim check finds no claim record (the
-        // poll never minted one) and no live edit session (the gate is still shut
-        // - which is why the poll is here at all), so it rightly frees the mutex.
+        // refresh never minted one) and no live edit session (the gate is still shut
+        // - which is why the refresh is here at all), so it rightly frees the mutex.
         // Opening the gate from the earlier read then left a session editing a
         // remote project with no server lock behind it and nothing recording one.
         //
@@ -5106,7 +5106,7 @@ mod tests {
     /// file's identity (F8), and only afterwards is the file handed to the OS.
     /// When that fails nothing has been destroyed: the lock is still ours, still
     /// guarding a project still on disk. But the session HAS been closed by
-    /// then, so no status poll will ever look at that mutex again, and this
+    /// then, so no status refresh will ever look at that mutex again, and this
     /// return does not reach the deferred release either - a claim dropped here
     /// leaves the mutex with nothing at all pointing at it.
     #[cfg(unix)]
@@ -5195,7 +5195,7 @@ mod tests {
     /// project's record while releasing the OLD project's lock. Nothing looks broken
     /// (the new lock is still held, still editable), but its acquisition PROVENANCE is
     /// gone - and that is the whole licence for the authorship shortcut in
-    /// `speleodb_remote_state`: without `we_hold_the_lock`, `poll_verdict` refuses to
+    /// `speleodb_remote_state`: without `we_hold_the_lock`, `status_verdict` refuses to
     /// explain a commit in the BASE..tip gap as our own landed push, so THIS process's
     /// own next push comes back as a divergence / self-conflict on a project nobody
     /// else touched, with the status mark routing the next click into the divergence

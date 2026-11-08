@@ -23,7 +23,7 @@ export default function SpeleoForceEditDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const { forceEdit } = useSpeleoActions();
-  // The scan/poll resolves the current holder; surface it so the user knows their
+  // The scan/refresh resolves the current holder; surface it so the user knows their
   // edits will have to reconcile against that person's work on reconnect.
   const lockHolder = useSpeleoStore((s) => s.link?.lockHolder ?? null);
   const lockedByOther = useSpeleoStore((s) => s.link?.lockedByOther ?? false);

@@ -34,9 +34,9 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
   const { t } = useTranslation();
   const openDialog = useUIStore((s) => s.openDialog);
   // Select the four PRIMITIVES this hook reads, not the link object: the status
-  // poll hands out a fresh object on every tick (`seedFromStatus` allocates), so
+  // refresh hands out a fresh object on every status response (`seedFromStatus` allocates), so
   // memoizing on the object meant the memo never held - all seven rows and their
-  // `SpeleoBadgedIcon` SVG trees were rebuilt on every poll, in both consumers
+  // `SpeleoBadgedIcon` SVG trees were rebuilt on every refresh, in both consumers
   // (the hamburger and the status button's right-click menu), for a menu that is
   // usually closed. `useSpeleoProjectMetadata` already does exactly this, for
   // exactly this reason.

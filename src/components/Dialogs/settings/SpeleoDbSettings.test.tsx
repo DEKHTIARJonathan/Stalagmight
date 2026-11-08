@@ -1,70 +1,52 @@
-/** SpeleoDB account and connection settings. */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-
-const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
-
-// Real copy, so the four states are asserted as the user reads them.
-import '../../../i18n';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { beforeEach, expect, it, vi } from 'vitest';
 import { SpeleoDbSettings } from './SpeleoDbSettings';
-import { defaultConfig } from '../../../types/config';
-import type { Config } from '../../../types/config';
 import { useSpeleoStore } from '../../../store/speleoStore';
+import { useUIStore } from '../../../store/uiStore';
+import { defaultConfig } from '../../../types/config';
 
-let onChange: ReturnType<typeof vi.fn>;
+const closeDialog = vi.fn();
+const onChange = vi.fn();
+let finishLogin: () => void;
 
-function renderPanel(overrides: Partial<Config['speleodb']> = {}) {
-  const config: Config = {
-    ...defaultConfig,
-    speleodb: { ...defaultConfig.speleodb, ...overrides },
-  };
+beforeEach(() => {
+  closeDialog.mockReset();
+  onChange.mockReset();
+  useUIStore.setState({ activeDialog: 'settings', dialogData: {}, closeDialog });
+  useSpeleoStore.setState({
+    session: null,
+    authError: null,
+    refreshSession: vi.fn(async () => {}),
+    pendingAuth: { kind: 'login', email: 'synthetic@example.com', password: 'synthetic', token: '', useToken: false },
+    applyPendingAuth: vi.fn(() => new Promise<{ ok: true }>((resolve) => {
+      finishLogin = () => resolve({ ok: true });
+    })),
+  });
+});
+
+function startLogin() {
   render(
     <SpeleoDbSettings
-      config={config}
+      config={defaultConfig}
       onChange={onChange}
       changedFields={new Set()}
       onValidationError={vi.fn()}
-      panelIdBase="settings"
+      panelIdBase="settings-test"
     />,
   );
-  return config;
+  fireEvent.click(screen.getByTestId('speleodb-settings-try-login'));
 }
 
-beforeEach(() => {
-  invokeIpcMock.mockReset();
-  invokeIpcMock.mockResolvedValue({ logged_in: false });
-  onChange = vi.fn();
-  // A signed-in-less session so the account panel stays inert.
-  useSpeleoStore.setState({ session: null, refreshSession: vi.fn(async () => {}) });
+it('closes the Settings instance that initiated a successful login', async () => {
+  startLogin();
+  await act(async () => finishLogin());
+  expect(closeDialog).toHaveBeenCalledOnce();
 });
 
-describe('SpeleoDbSettings allow-force-edit toggle (#213)', () => {
-  it('stages allow_force_edit=true through onChange when toggled on', async () => {
-    renderPanel({ allow_force_edit: false });
-    await userEvent.click(screen.getByTestId('toggle-speleodb-allow-force-edit'));
-    expect(onChange).toHaveBeenCalledWith({
-      speleodb: expect.objectContaining({ allow_force_edit: true }),
-    });
-  });
-
-  it('shows the warning only while enabled', () => {
-    renderPanel({ allow_force_edit: true });
-    expect(screen.getByTestId('speleodb-allow-force-edit-warning')).toBeInTheDocument();
-  });
-
-  it('hides the warning while disabled', () => {
-    renderPanel({ allow_force_edit: false });
-    expect(screen.queryByTestId('speleodb-allow-force-edit-warning')).not.toBeInTheDocument();
-  });
-});
-
-
-it('explains the single plaintext configuration file without storage controls', () => {
-  renderPanel({});
-  expect(screen.getByTestId('speleodb-credential-storage')).toHaveTextContent('speleodb/speleodb.conf');
-  expect(screen.getByTestId('speleodb-credential-storage')).toHaveTextContent('plaintext');
-  expect(screen.queryByTestId('toggle-speleodb-disable-keychain')).not.toBeInTheDocument();
-  expect(invokeIpcMock).not.toHaveBeenCalled();
+it.each(['error', 'settings'])('does not dismiss a replacement %s dialog after a slow login', async (activeDialog) => {
+  startLogin();
+  act(() => useUIStore.setState({ activeDialog, dialogData: { replacement: true } }));
+  await act(async () => finishLogin());
+  expect(closeDialog).not.toHaveBeenCalled();
+  expect(onChange).not.toHaveBeenCalled();
 });

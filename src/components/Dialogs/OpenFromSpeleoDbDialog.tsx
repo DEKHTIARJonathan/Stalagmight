@@ -1,3 +1,4 @@
+import { LoadingSpinner } from '../common/LoadingSpinner';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
@@ -256,7 +257,7 @@ export default function OpenFromSpeleoDbDialog() {
                   : ''}
               </span>
               <div className="flex gap-2">
-                <Button onClick={() => void handleRefresh()} disabled={busy} data-testid="open-from-speleodb-refresh">
+                <Button onClick={() => void handleRefresh()} disabled={busy} aria-busy={busy} icon={busy ? <LoadingSpinner testId="open-from-speleodb-refresh-spinner" /> : undefined} data-testid="open-from-speleodb-refresh">
                   {t('speleodb.browser.refresh')}
                 </Button>
                 <Button onClick={closeDialog} disabled={busy} data-testid="open-from-speleodb-close">

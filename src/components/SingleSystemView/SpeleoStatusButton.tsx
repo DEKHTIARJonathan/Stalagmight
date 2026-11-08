@@ -1,13 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { LoadingSpinner } from '../common/LoadingSpinner';
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSpeleoStore, isUnwoundNotEdited } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
-import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { useSpeleoMenuItems } from './useSpeleoMenuItems';
 import { SpeleoStatusMenu } from './SpeleoStatusMenu';
 import { permissionAtLeast } from '../../utils/speleoPermission';
-import { MIN_POLL_INTERVAL_SECONDS, MAX_POLL_INTERVAL_SECONDS } from '../../types/config';
 import { UNPUSHED_ACCENT } from '../../utils/speleoLocalState';
 import { holdsWriteLock } from '../../utils/quit';
 import { LockIcon } from '../common/icons';
@@ -58,23 +57,15 @@ type ButtonKind =
  * (`SpeleoStatusMenu`), so every hand-off verb is reachable from the indicator that
  * reports the state, not only the one the left click happens to be wired to.
  *
- * It also owns the remote-state poll (configurable interval, clamped 30s..24h)
- * while a remote project is open.
  */
 export function SpeleoStatusButton() {
   const { t } = useTranslation();
+  const refreshing = useSpeleoStore((s) => s.statusRefreshCount > 0);
   const link = useSpeleoStore((s) => s.link);
   const loggedIn = useSpeleoStore((s) => s.session?.loggedIn ?? false);
   const divergence = useSpeleoStore((s) => s.divergence);
-  const pollNonce = useSpeleoStore((s) => s.pollNonce);
-  const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
   const openDialog = useUIStore((s) => s.openDialog);
   const appMode = useUIStore((s) => s.appMode);
-  // Optional-chain `speleodb` too: the config is loaded async, so a render can land
-  // before it arrives (or with an older-shaped config that predates the speleodb
-  // block) - reading `.poll_interval_seconds` off an undefined `speleodb` would throw
-  // and crash the whole SingleSystemView on mount. Fall back to the 60s default.
-  const pollInterval = useProjectStore((s) => s.config?.speleodb?.poll_interval_seconds ?? 60);
   const { busy, startEditing, update, done } = useSpeleoActions();
   // The right-click menu's rows - the same array the hamburger's SpeleoDB submenu
   // renders. Held in LOCAL state rather than the `activeDialog` slot: the store-driven
@@ -84,34 +75,7 @@ export function SpeleoStatusButton() {
   const [menuOpen, setMenuOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
-  const isRemote = link !== null;
-
-  // Poll the remote state on the configured interval while the button is actually
-  // SHOWN - a remote project open in Survey mode with the window visible (T2c
-  // freshness). Clamped 30s (backend floor) .. 24h (fix 14). Gated on `appMode` +
-  // `document.hidden` so we don't spend server round trips on an indicator nobody
-  // can see in Plan/Export or a backgrounded window (fix 15). Depends on pollNonce
-  // so a just-issued hand-off verb restarts the timer - the next poll is then a full
-  // interval past a lock change the server may not yet reflect (1b).
-  useEffect(() => {
-    if (!isRemote || appMode !== 'survey') return undefined;
-    const seconds = Math.min(
-      MAX_POLL_INTERVAL_SECONDS,
-      Math.max(MIN_POLL_INTERVAL_SECONDS, pollInterval),
-    );
-    const id = setInterval(() => {
-      // Skip the round trip while the window is hidden (minimized / another app);
-      // the timer stays armed so polling resumes on the next visible tick.
-      if (!document.hidden) void refreshLinkStatus();
-    }, seconds * 1000);
-    return () => clearInterval(id);
-  }, [isRemote, appMode, pollInterval, refreshLinkStatus, pollNonce]);
-
-  // Only in Survey mode - Plan/Export are non-editing views, so the hand-off
-  // button + read-only badge are hidden there. The poll above is torn down in those
-  // modes (its effect early-returns on non-Survey, clearing the interval) and
-  // re-armed on return to Survey; the first poll is then up to one interval out, so
-  // a status change that landed while away surfaces on the next tick.
+  // The status controls are shown only in Survey mode.
   if (!link || appMode !== 'survey') return null;
 
   // #270: work that exists ONLY on this computer. This is NOT projectStore.isDirty
@@ -409,6 +373,11 @@ export function SpeleoStatusButton() {
             logo's corner (like the DisplayMenu shot/station symbols), not floating
             on the button. The MARK itself turns yellow while there are un-pushed
             local edits (#270). */}
+        {busy || refreshing ? (
+          <span role="status" aria-label={t('common.states.loading')}>
+            <LoadingSpinner testId="speleodb-status-spinner" />
+          </span>
+        ) : (
         <SpeleoBadgedIcon
           badge={glyph}
           badgeColor={glyphColor}
@@ -416,6 +385,7 @@ export function SpeleoStatusButton() {
           tint={tint}
           testIdPrefix="speleodb-status-icon"
         />
+        )}
         {unpushedBadge}
       </button>
       {menuOpen && (

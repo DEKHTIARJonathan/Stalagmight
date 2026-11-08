@@ -100,7 +100,6 @@ export function useSpeleoActions(): SpeleoActions {
   const applyUpdate = useSpeleoStore((s) => s.applyUpdate);
   const applyDone = useSpeleoStore((s) => s.applyDone);
   const applyPush = useSpeleoStore((s) => s.applyPush);
-  const bumpPoll = useSpeleoStore((s) => s.bumpPoll);
   const clearSession = useSpeleoStore((s) => s.clearSession);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
   const raiseNoAnchorBanner = useSpeleoStore((s) => s.raiseNoAnchorBanner);
@@ -224,10 +223,9 @@ export function useSpeleoActions(): SpeleoActions {
       handleError(e, 'speleodb.editBar.toasts.startFailed');
       return false;
     } finally {
-      bumpPoll();
       endBusy(busyToken);
     }
-  }, [routeStartEditingResult, handleError, beginBusy, endBusy, bumpPoll]);
+  }, [routeStartEditingResult, handleError, beginBusy, endBusy]);
 
   const discardChanges = useCallback(
     async (
@@ -258,11 +256,10 @@ export function useSpeleoActions(): SpeleoActions {
         if (!result) return 'released';
         return routed?.editing ? 'editing' : 'discarded_without_lock';
       } finally {
-        bumpPoll();
         endBusy(busyToken);
       }
     },
-    [routeStartEditingResult, beginBusy, endBusy, bumpPoll],
+    [routeStartEditingResult, beginBusy, endBusy],
   );
 
   const forceEdit = useCallback(async (): Promise<boolean> => {
@@ -282,10 +279,9 @@ export function useSpeleoActions(): SpeleoActions {
       handleError(e, 'speleodb.forceEdit.toasts.failed');
       return false;
     } finally {
-      bumpPoll();
       endBusy(busyToken);
     }
-  }, [refreshLinkStatus, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
+  }, [refreshLinkStatus, showToast, t, handleError, beginBusy, endBusy]);
 
   const update = useCallback(async () => {
     const issuedFor = speleoProjectSessionIssuedFor(
@@ -298,6 +294,10 @@ export function useSpeleoActions(): SpeleoActions {
       applyUpdate(result);
       switch (result.kind) {
         case 'up_to_date':
+          // Revision equality says nothing about changed locks or permissions.
+          // Manual refresh must refresh those too now that there is no timer.
+          await refreshLinkStatus();
+          if (!speleoProjectSessionStillCurrent(issuedFor)) return;
           showToast(t('speleodb.editBar.toasts.upToDate'), TOAST_KEYS.SPELEODB_UP_TO_DATE, 'info');
           break;
         case 'fast_forwarded':
@@ -322,10 +322,9 @@ export function useSpeleoActions(): SpeleoActions {
     } catch (e) {
       handleError(e, 'speleodb.editBar.toasts.updateFailed');
     } finally {
-      bumpPoll();
       endBusy(busyToken);
     }
-  }, [applyUpdate, loadProject, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
+  }, [applyUpdate, loadProject, refreshLinkStatus, showToast, t, handleError, beginBusy, endBusy]);
 
   const push = useCallback(
     async (
@@ -398,7 +397,6 @@ export function useSpeleoActions(): SpeleoActions {
         });
         return null;
       } finally {
-        bumpPoll();
         endBusy(busyToken);
       }
     },
@@ -409,7 +407,6 @@ export function useSpeleoActions(): SpeleoActions {
       humanizeError,
       beginBusy,
       endBusy,
-      bumpPoll,
       noteNoAnchorIfNeeded,
       flushToDiskAfterPush,
       raisePushFailedBanner,
@@ -512,7 +509,6 @@ export function useSpeleoActions(): SpeleoActions {
         });
         return null;
       } finally {
-        bumpPoll();
         endBusy(busyToken);
       }
     },
@@ -523,7 +519,6 @@ export function useSpeleoActions(): SpeleoActions {
       humanizeError,
       beginBusy,
       endBusy,
-      bumpPoll,
       noteNoAnchorIfNeeded,
       flushToDiskAfterPush,
       raisePushFailedBanner,
@@ -553,10 +548,9 @@ export function useSpeleoActions(): SpeleoActions {
       handleError(e, 'speleodb.editBar.toasts.takeRemoteFailed');
       return false;
     } finally {
-      bumpPoll();
       endBusy(busyToken);
     }
-  }, [loadProject, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
+  }, [loadProject, showToast, t, handleError, beginBusy, endBusy]);
 
   return { busy, startEditing, discardChanges, forceEdit, update, push, done, takeRemote };
 }

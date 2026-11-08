@@ -75,7 +75,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     async (
       result: { local_path: string; concurrent_session: boolean },
       permission: SpeleoProjectSummary['permission'],
-      /** The project this open is FOR, so the seed names it rather than waiting for a poll. */
+      /** The project this open is FOR, so the seed names it rather than waiting for a refresh. */
       projectId: string,
       ownership: ReturnType<typeof reserveRemoteOpen>,
       opts: {
@@ -110,7 +110,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
        * force-edit), and `loadProject` then short-circuits on ALREADY_OPEN so
        * nothing re-resolves it synchronously - a read-only survey UI and disarmed
        * exit guards for a project we hold the lock on, until some later status
-       * poll (30 s to a user-configurable 24 h) happens to correct it.
+       * refresh happens to correct it.
        *
        * Decided HERE rather than at a call site because all three routes into this
        * tail can name the open project: "Open from SpeleoDB" sits in the
@@ -196,7 +196,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         // read-only under the fail-closed gate - leaving the repair entirely to the
         // unawaited `refreshLinkStatus` below. That call swallows its errors by
         // design, and the conditions that break a load (offline, a bad disk) are the
-        // same ones that break a status call; `SpeleoStatusButton`'s recovery poll
+        // same ones that break a status call; the next manual status refresh
         // is gated on `link !== null`, which `clearLink` had just falsified. So a
         // local project the user was editing could go read-only for the rest of the
         // session because an unrelated remote open failed, with nothing on screen
@@ -247,9 +247,8 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    * guarded `openRemote` raised - but that
    * prompt is about the TARGET's cached copy, and this asks about the project on
    * SCREEN, which the answer says nothing about. The prompt is also a user
-   * interaction of unbounded length: `SpeleoUnpushedLocalDialog` sits there while
-   * `SpeleoStatusButton`'s poll (30 s to a user-configurable 24 h) keeps calling
-   * `refreshLinkStatus`, whose `seedFromStatus` rewrites the very `link` this reads -
+   * interaction of unbounded length: an in-flight `refreshLinkStatus` can finish
+   * while `SpeleoUnpushedLocalDialog` is open. Its `seedFromStatus` rewrites `link` -
    * so the open project can acquire un-pushed work, or have its lock resolved,
    * between the check and the load that replaces it. Nothing shuts the door out of an
    * un-pushed cache copy, because the case that needs that door is the one where the
@@ -284,9 +283,9 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // prompt is reached for the OPEN project, whose pull is refused over its
       // un-pushed cache copy and whose only way out is that prompt's "take the server
       // copy". Refusing on un-pushed work here would shut the door this branch exists
-      // behind. Decided from the id the status poll recorded, because that is all
+      // behind. Decided from the id the status refresh recorded, because that is all
       // there is to go on BEFORE the pull; `remoteProjectId` is null until the first
-      // poll lands, so that window refuses an open it could have allowed - a menu
+      // refresh lands, so that window refuses an open it could have allowed - a menu
       // trip, against losing work the other way.
       const reopeningOpenProject = speleo.remoteProjectId === summary.id;
       if (!reopeningOpenProject && needsSpeleoHandBackPrompt(speleo.link))
@@ -313,24 +312,13 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    * gap is not a user sitting on a dialog the way the open confirm and the
    * refused-open prompt are. It is the network, on EVERY open: `download_stalx` runs
    * with a 120-second timeout and a 512 MiB ceiling. The pull resolves the revision
-   * history, downloads and validates native SQLite, then installs it. The status poll's
-   * floor is 30 s, so at least one poll can land inside a single slow attempt.
-   *
-   * It does land, because `SpeleoStatusButton` stays MOUNTED underneath: `App`
-   * renders the dialogs as SIBLINGS of `SingleSystemView`, so raising the browser
-   * (or the refused-open prompt) does not unmount the toolbar, and its interval
-   * keeps calling `refreshLinkStatus` throughout the wait. `seedFromStatus` rewrites
-   * `link` wholesale - `hasUnpushedEdits`, `editState`, `lockHolder` - so the
-   * project on screen can acquire un-pushed work, or have its lock resolved, between
-   * the entry check and the load that closes it backend-side. (GlobalView's remote
-   * rows are the one host where it cannot: `view === 'global'` renders GlobalView
-   * INSTEAD of `SingleSystemView`, so the button is unmounted and the poll unarmed.
-   * The hook is shared, so the guard belongs here rather than in the host that
-   * happens to need it.)
+   * history, downloads and validates native SQLite, then installs it. An in-flight
+   * status refresh or a local edit can change the open project's state during
+   * that wait. Recheck before replacing it, whichever view initiated the open.
    *
    * `finishOpen` cannot be left to notice, for the reason the entry check exists at
    * all: its first act is the optimistic seed, which overwrites exactly what the
-   * poll just wrote. By the time `loadProject` replaces the project the evidence is
+   * refresh just wrote. By the time `loadProject` replaces the project the evidence is
    * already gone - the newly-discovered work hidden, or the newly-discovered lock
    * silently released.
    *
@@ -353,7 +341,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    * displaying a project the backend does not have open, where every later command,
    * auto-save included, fails with "no project open" - the exact state that
    * function's own failure path goes out of its way to undo. And there is nothing to
-   * protect: `finishOpen` skips the seed for that path (`alreadyOpen`), so the poll's
+   * protect: `finishOpen` skips the seed for that path (`alreadyOpen`), so the refresh's
    * update is not overwritten, and the `loadProject` that follows re-resolves the
    * same project's link anyway.
    *
@@ -424,7 +412,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           reLogin: speleoErrorAction(e) === 'ReLogin',
         };
       }
-      // The link the entry check read is now as old as the download, and the poll
+      // The link the entry check read is now as old as the download, and the refresh
       // underneath has had the whole of it to rewrite the link (see
       // `handBackRefusalAfterPull`). Re-read it BEFORE the seed overwrites it and
       // before the load closes the open project.
@@ -457,7 +445,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    * default seed says `hasUnpushedEdits: false`, and that value is exactly what
    * `guardQuit` and the status button's warning read - so seeding it clean
    * disarmed the quit guard for the one project proven to have work at risk,
-   * until some later status poll (30 s to a user-configurable 24 h) happened to
+   * until some later status refresh happened to
    * correct it.
    *
    * The other half - seeding NOTHING when the refusal names the already-open
@@ -468,7 +456,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    * the TARGET's, so whenever that is a different project this ends in a
    * `loadProject` that closes the one on screen backend-side - and the answer the
    * user gave was about the target's cached copy, not about the work in that
-   * project. Between the refusal and this click the status poll can have marked the
+   * project. Between the refusal and this click the status refresh can have marked the
    * open project un-pushed or resolved its lock, so the guard has to be re-read here
    * rather than inherited from the `openRemote` that raised the prompt.
    */
@@ -481,7 +469,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // would raise "save your changes first" over an action that cannot lose them.
       // Decided by PATH, the same comparison `finishOpen` makes for the same reason
       // (`alreadyOpen`) - and unlike the id-based exemption inside the guard, it does
-      // not depend on a status poll having landed to record `remoteProjectId`.
+      // not depend on a status refresh having landed to record `remoteProjectId`.
       //
       // Literal, for the reason spelled out at `alreadyOpen`: it predicts the
       // backend's own literal already-open test rather than asserting file identity.
@@ -524,9 +512,8 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
        * project on screen.
        *
        * The `openRemote` that raised the prompt ran the guard, but the prompt is a
-       * user interaction of unbounded length and `SpeleoStatusButton`'s poll (30 s to
-       * a user-configurable 24 h) keeps rewriting the link the guard reads while it is
-       * up. Same gap the open route had, same fix; every other hand-back exit
+       * user interaction of unbounded length. Local edits or an in-flight status
+       * refresh can change the link the guard reads while the prompt is up. Same gap the open route had, same fix; every other hand-back exit
        * evaluates its guard immediately before the destructive step.
        *
        * Both halves apply even when the target IS the open project. The hand-back

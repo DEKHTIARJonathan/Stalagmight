@@ -1,3 +1,4 @@
+import { LoadingSpinner } from '../common/LoadingSpinner';
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
@@ -587,7 +588,7 @@ export default function GlobalView() {
     ],
     [recentProjects, remoteSummaries]
   );
-  const { states: localStates, reload: reloadLocalStates } = useSpeleoLocalStates(localStateIds);
+  const { states: localStates, loaded: localStatesLoaded, reload: reloadLocalStates } = useSpeleoLocalStates(localStateIds);
 
   // Manual SpeleoDB re-scan (the header refresh button, #201): re-reads lock state
   // for the recents badges. `prompt`-less, so it never re-raises the held-lock
@@ -598,15 +599,11 @@ export default function GlobalView() {
   // this computer is LOCAL state, which the lock scan does not touch, and the hook
   // keys its fetch on the id SET - so over an unchanged recents list nothing
   // re-issued it and the accent stayed at whatever it was when GlobalView mounted.
-  const [refreshingLocks, setRefreshingLocks] = useState(false);
+  const refreshingProjects = useSpeleoStore((s) => s.projectRefreshCount > 0);
+  const refreshingLocks = refreshingProjects || !localStatesLoaded;
   const handleRefreshLocks = useCallback(async () => {
-    setRefreshingLocks(true);
     reloadLocalStates();
-    try {
-      await scanLocksOnOpen();
-    } finally {
-      setRefreshingLocks(false);
-    }
+    await scanLocksOnOpen();
   }, [scanLocksOnOpen, reloadLocalStates]);
 
   const isSearching = searchTerm.trim().length > 0;
@@ -707,6 +704,31 @@ export default function GlobalView() {
     [t, handleNewProject, openDialog, speleoLoggedIn],
   );
 
+  const speleoRefreshButton = (speleoLoggedIn || refreshingProjects) ? (
+    <Button
+      type="button"
+      size="sm"
+      onClick={() => void handleRefreshLocks()}
+      disabled={refreshingLocks}
+      aria-busy={refreshingLocks}
+      title={t('globalView.speleoRefresh.title')}
+      data-testid="globalview-speleo-refresh"
+      className="whitespace-nowrap"
+      icon={refreshingLocks ? (
+        <LoadingSpinner testId="globalview-speleo-refresh-spinner" />
+      ) : (
+        <SpeleoBadgedIcon
+          badge={<RefreshGlyph size={10} />}
+          badgeColor="text-accent"
+          size={18}
+          testIdPrefix="globalview-speleo-refresh-icon"
+        />
+      )}
+    >
+      {t('globalView.speleoRefresh.label')}
+    </Button>
+  ) : null;
+
   return (
     <div data-testid="global-view" className="h-full flex flex-col">
       {/* Header - left: menu + primary actions, center: title, right: Map|List toggle */}
@@ -733,6 +755,16 @@ export default function GlobalView() {
             title={actionsCondensed ? t('globalView.actions.openOrImport') : undefined}
           >
             {actionsCondensed ? null : t('globalView.actions.openOrImport')}
+          </Button>
+          <Button
+            data-testid="global-speleodb-button"
+            className="whitespace-nowrap"
+            onClick={() => openDialog('settings', { initialCategory: 'speleodb' })}
+            icon={showToolbarIcons || actionsCondensed ? <SpeleoBadgedIcon size={16} testIdPrefix="global-speleodb-icon" /> : undefined}
+            aria-label={actionsCondensed ? 'SpeleoDB' : undefined}
+            title={actionsCondensed ? 'SpeleoDB' : undefined}
+          >
+            {actionsCondensed ? null : 'SpeleoDB'}
           </Button>
         </div>
 
@@ -788,28 +820,15 @@ export default function GlobalView() {
               </button>
             </div>
           )}
-          {/* SpeleoDB re-scan, far right of the view toggle - only when logged in
-              (#201). Refreshes the recents lock badges without re-prompting. */}
-          {speleoLoggedIn && (
-            <button
-              type="button"
-              onClick={() => void handleRefreshLocks()}
-              disabled={refreshingLocks}
-              title={t('globalView.speleoRefresh.title')}
-              aria-label={t('globalView.speleoRefresh.aria')}
-              data-testid="globalview-speleo-refresh"
-              className="flex items-center justify-center w-8 h-8 rounded text-text-secondary hover:text-text hover:bg-panel transition-colors disabled:opacity-50"
-            >
-              <SpeleoBadgedIcon
-                badge={<RefreshGlyph size={10} />}
-                badgeColor="text-accent"
-                size={18}
-                testIdPrefix="globalview-speleo-refresh-icon"
-              />
-            </button>
-          )}
         </div>
       </header>
+
+      {refreshingLocks && (
+        <div role="status" className="flex items-center gap-2 px-4 py-2 text-sm text-text-secondary" data-testid="globalview-refresh-status">
+          <LoadingSpinner testId="globalview-list-spinner" />
+          {t('globalView.speleoRefresh.loading')}
+        </div>
+      )}
 
       {/* Loading Modal Overlay */}
       {loading.isLoading && (
@@ -837,7 +856,14 @@ export default function GlobalView() {
       {/* Content */}
       <main className="flex-1 overflow-hidden flex">
         {/* Main content area - disabled during loading */}
-        <div className={`flex-1 overflow-hidden ${loading.isLoading ? 'pointer-events-none opacity-50' : ''}`}>
+        <div className={`flex-1 min-w-0 overflow-hidden grid grid-rows-[auto_minmax(0,1fr)] ${loading.isLoading ? 'pointer-events-none opacity-50' : ''}`}>
+          <div>
+            {(!hasRecentItems || activeTab === 'map') && speleoRefreshButton && (
+              <div className="flex justify-end px-6 pt-4 pb-2">
+                {speleoRefreshButton}
+              </div>
+            )}
+          </div>
           {!hasRecentItems ? (
             <div className="h-full overflow-auto p-6">
               <EmptyState
@@ -883,6 +909,7 @@ export default function GlobalView() {
                       })}
                     </Button>
                   )}
+                  {speleoRefreshButton}
                   <RecentSortControl
                     field={recentSort.field}
                     direction={recentSort.direction}

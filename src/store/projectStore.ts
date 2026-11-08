@@ -1164,8 +1164,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // view paints. `refreshLinkStatus` below refines it, but it is unawaited
           // and swallows its errors, so with `unknown` left standing a failed
           // status call renders the project permanently read-only under the
-          // fail-closed gate AND leaves no status button to act from (it arms its
-          // recovery poll on `link !== null`). Seeding remote is the pessimistic
+          // fail-closed gate AND leaves no status button to act from (it requires
+          // `link !== null`). Seeding remote is the pessimistic
           // direction - read-only, with a way out on screen - and the status reply
           // resolves it either way (a non-remote status seeds `local`).
           if (useSpeleoStore.getState().projectLinkKind === 'unknown') {
@@ -1182,8 +1182,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // success the callers act on: the refused-open prompt's "Keep the local
           // copy" used to seed a pessimistic read-only link over a project we hold
           // the lock on, and this branch preserved it verbatim - a read-only survey
-          // UI and a disarmed quit guard that healed only on the next status poll
-          // (Survey mode only, 30 s to 24 h).
+          // UI and a disarmed quit guard until another status refresh.
           //
           // Unawaited and best-effort on purpose: `speleodb_link_status` does
           // blocking HTTP for a remote project, and no caller of `loadProject` may

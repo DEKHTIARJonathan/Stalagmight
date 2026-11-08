@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Toggle } from '../../common/Toggle';
 import { Button } from '../../common/Button';
@@ -9,11 +9,10 @@ import type { SettingsCategoryProps } from './types';
 import {
   isFieldChanged,
   createToggleHandler,
-  createNumericHandler,
-  parseIntRadix10,
 } from './types';
-import { defaultConfig, MIN_POLL_INTERVAL_SECONDS } from '../../../types/config';
+import { defaultConfig } from '../../../types/config';
 import { useSpeleoStore, type PendingLogin } from '../../../store/speleoStore';
+import { useUIStore } from '../../../store/uiStore';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
 
 /** SpeleoDB account and connection settings. */
@@ -21,10 +20,10 @@ export function SpeleoDbSettings({
   config,
   onChange,
   changedFields,
-  onValidationError,
   panelIdBase,
 }: SettingsCategoryProps) {
   const { t } = useTranslation();
+  const closeDialog = useUIStore((s) => s.closeDialog);
   const session = useSpeleoStore((s) => s.session);
   const refreshSession = useSpeleoStore((s) => s.refreshSession);
   const pendingAuth = useSpeleoStore((s) => s.pendingAuth);
@@ -41,26 +40,6 @@ export function SpeleoDbSettings({
     void refreshSession();
   }, [refreshSession]);
 
-  // Poll interval floor is a hard validation error (blocks Save; backend also
-  // clamps a hand-edited file on load).
-  const pollHasErrorRef = useRef(false);
-  useEffect(() => {
-    const hasError = speleo.poll_interval_seconds < MIN_POLL_INTERVAL_SECONDS;
-    if (hasError !== pollHasErrorRef.current) {
-      pollHasErrorRef.current = hasError;
-      onValidationError('speleodb', hasError);
-    }
-  }, [speleo.poll_interval_seconds, onValidationError]);
-  // Clear a lingering validation error when the panel unmounts (switching category
-  // only renders the active one) - otherwise a strayed error would block Save with
-  // no visible cause.
-  useEffect(
-    () => () => {
-      if (pollHasErrorRef.current) onValidationError('speleodb', false);
-    },
-    [onValidationError],
-  );
-
   // --- staged account (A2) ---
   const login: PendingLogin =
     pendingAuth?.kind === 'login'
@@ -73,7 +52,7 @@ export function SpeleoDbSettings({
 
   // Log in NOW (don't wait for Save) so the user can verify their credentials
   // against the staged endpoint. Applies the same login `applyPendingAuth` runs on
-  // Save; on success it clears the staged login + flips the panel to "signed in",
+  // Save; on success it closes Settings while the project listing refreshes,
   // on failure it surfaces the error. The credentials required (email or token) -
   // an empty form just reports the backend's "missing credentials".
   const canTryLogin = login.useToken ? login.token.trim().length > 0 : login.email.trim().length > 0;
@@ -81,12 +60,18 @@ export function SpeleoDbSettings({
     // Ensure the typed credentials are staged before applyPendingAuth reads them
     // (zustand `set` is synchronous, so the subsequent read sees this).
     if (pendingAuth?.kind !== 'login') setPendingAuth(login);
+    const issuedDialog = useUIStore.getState().dialogData;
     setLoggingIn(true);
     try {
       const result = await applyPendingAuth(speleo.endpoint);
+      // A slow login may finish after Settings was dismissed or replaced.
+      // Its session still applies, but it must not close or edit the new dialog.
+      const currentDialog = useUIStore.getState();
+      if (currentDialog.activeDialog !== 'settings' || currentDialog.dialogData !== issuedDialog) return;
       if (result.ok) {
         const endpoint = useSpeleoStore.getState().session?.endpoint;
         if (endpoint) onChange({ speleodb: { ...speleo, endpoint } });
+        closeDialog();
       } else {
         setAuthError(humanizeSpeleoError(result.error, t('speleodb.errors.loginFailed')));
       }
@@ -106,11 +91,6 @@ export function SpeleoDbSettings({
   const handleAllowForceEditToggle = createToggleHandler(onChange, (v) => ({
     speleodb: { ...speleo, allow_force_edit: v },
   }));
-  const handlePollIntervalChange = createNumericHandler(
-    onChange,
-    (n) => ({ speleodb: { ...speleo, poll_interval_seconds: n } }),
-    parseIntRadix10,
-  );
 
   return (
     <div
@@ -320,34 +300,6 @@ export function SpeleoDbSettings({
           </div>
         )}
 
-        <SettingRow
-          label={t('settings.speleodb.pollInterval.label')}
-          helpText={t('settings.speleodb.pollInterval.help', { min: MIN_POLL_INTERVAL_SECONDS })}
-          isChanged={isFieldChanged(changedFields, 'speleodb.poll_interval_seconds')}
-          onReset={() =>
-            onChange({
-              speleodb: { ...speleo, poll_interval_seconds: defaultConfig.speleodb.poll_interval_seconds },
-            })
-          }
-          isDefault={speleo.poll_interval_seconds === defaultConfig.speleodb.poll_interval_seconds}
-          data-testid="setting-speleodb-poll-interval"
-        >
-          <input
-            type="number"
-            inputMode="numeric"
-            min={MIN_POLL_INTERVAL_SECONDS}
-            value={speleo.poll_interval_seconds}
-            onChange={(e) => handlePollIntervalChange(e.target.value)}
-            className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-            aria-label={t('settings.speleodb.pollInterval.aria')}
-            data-testid="input-speleodb-poll-interval"
-          />
-        </SettingRow>
-        {speleo.poll_interval_seconds < MIN_POLL_INTERVAL_SECONDS && (
-          <div className="mb-2 text-xs text-error" data-testid="speleodb-poll-interval-error">
-            {t('settings.speleodb.pollInterval.tooLow', { min: MIN_POLL_INTERVAL_SECONDS })}
-          </div>
-        )}
 
       </SettingsSection>
     </div>

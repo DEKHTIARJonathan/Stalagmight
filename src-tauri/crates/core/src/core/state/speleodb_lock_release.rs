@@ -190,7 +190,7 @@ impl AppState {
     /// force-editor). See [`LockClaim::kept`](super::speleodb_session::LockClaim)
     /// for what the mark is for: without it the janitor cannot tell this from a
     /// session that died holding a lock, and hands the mutex back on the next
-    /// status poll.
+    /// status refresh.
     pub fn speleodb_keep_open_lock_deliberately(&self) {
         if !self.edit_enabled() || self.force_editing() {
             return;
@@ -261,7 +261,7 @@ impl AppState {
     /// broken - the new lock is still held and still editable - but the acquisition
     /// PROVENANCE for it is gone, and that provenance is the entire licence for the
     /// authorship shortcut in `AppState::speleodb_remote_state`: it is what feeds
-    /// `we_hold_the_lock` into `crate::speleodb::sync::poll_verdict`, which without it
+    /// `we_hold_the_lock` into `crate::speleodb::sync::status_verdict`, which without it
     /// refuses to explain a commit in the `BASE..tip` gap as our own landed push. The
     /// concrete outcome is that OUR OWN next push comes back as
     /// `RemoteState::Conflict` - a self-conflict against our own commit on a project
@@ -274,7 +274,7 @@ impl AppState {
     /// length that an id comparison does NOT close ITS race. The races are different
     /// and neither test substitutes for the other:
     ///
-    /// - There, the poll and the fast-forward that can be trampled are on the SAME
+    /// - There, the refresh and the fast-forward that can be trampled are on the SAME
     ///   project, so the ids always match and the clear fires regardless; only
     ///   re-reading the edit GATE separates them.
     /// - Here the interloper is by definition a DIFFERENT project - there is one
@@ -297,7 +297,7 @@ impl AppState {
     ///
     /// A poisoned session lock silently declines to clear, matching
     /// `speleodb_note_lock_acquired`: it costs the shortcut rather than granting one,
-    /// since the same poisoned mutex fails the token read the poll needs to identify a
+    /// since the same poisoned mutex fails the token read the refresh needs to identify a
     /// lock holder at all.
     /// Returns the claim it removed, for the one caller that may have to put it
     /// back: `AppState::delete_project` clears at snapshot time and can still
@@ -440,12 +440,12 @@ impl AppState {
         //
         // What is NOT captured here is the GATE. It comes off inside the
         // release's own lock-ops span, because shutting it here opens a window
-        // the status poll walks straight into: a shut gate over a mutex the
+        // the status refresh walks straight into: a shut gate over a mutex the
         // server still says this account holds is exactly what its
-        // inherited-lock reopen exists for, so the poll takes the guard first,
+        // inherited-lock reopen exists for, so the refresh takes the guard first,
         // reopens the gate, and the release then stands down for a session that
         // is about to be torn down anyway - lock stranded. Left open, there is
-        // nothing for the poll to resurrect, and the release shuts it under the
+        // nothing for the refresh to resurrect, and the release shuts it under the
         // same guard that then decides (`speleodb_stand_down_and_release`).
         let (p, claim, entry_gen) = {
             let _proj_guard = self

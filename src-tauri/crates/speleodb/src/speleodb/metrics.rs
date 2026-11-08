@@ -4,8 +4,8 @@
 //! the single choke point a new method cannot forget. This module turns each
 //! attempt through that choke point into three no-PII telemetry dimensions -
 //! **count**, **latency**, and **outcome** - so the backend can size the server
-//! load Stalagmight causes and spot a runaway poll/retry loop *before* it reaches
-//! the server (§4.11 F1). The payload never carries a host, project id, email,
+//! load Stalagmight causes and spot excessive requests or retries (§4.11 F1).
+//! The payload never carries a host, project id, email,
 //! token, or file bytes: only the endpoint *kind*, the outcome class, and a
 //! latency bucket.
 //!

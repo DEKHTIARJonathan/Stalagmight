@@ -35,7 +35,7 @@ export function SpeleoDbProjectDialog() {
   // A project can unlink from another surface while this sits open (the delete flow
   // closes the dialog itself), which leaves every tab with nothing to administer.
   // The BOOLEAN, not the link object - `seedFromStatus` reallocates the link on
-  // every poll tick, and selecting it re-rendered this whole tabbed dialog (roster
+  // every status refresh, and selecting it re-rendered this whole tabbed dialog (roster
   // rows, revision list, metadata form) on each one.
   const isRemote = useSpeleoStore((s) => s.link !== null);
   const metadata = useSpeleoProjectMetadata();
@@ -61,7 +61,7 @@ export function SpeleoDbProjectDialog() {
   //
   // The binding is the open FILE PATH, not `remoteProjectId`: the path is committed
   // in the same synchronous `set()` as the project itself, whereas `remoteProjectId`
-  // is nulled by the switch and only re-seeded by the next status poll - it reads
+  // is nulled by the switch and only re-seeded by the next status refresh - it reads
   // "unchanged" for exactly the window this guard exists to cover.
   const openPath = useProjectStore((s) => s.project?.file_path ?? null);
   const boundPath = useRef(openPath);

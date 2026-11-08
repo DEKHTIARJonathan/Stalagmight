@@ -691,12 +691,6 @@
       },
       "credentials": {
         "fileStorage": "SpeleoDB settings and your API token are saved in speleodb/speleodb.conf in the app configuration folder. The token is stored as plaintext."
-      },
-      "pollInterval": {
-        "label": "Remote refresh interval",
-        "help": "How often (seconds) to re-check a linked project's remote state. Minimum {{min}}.",
-        "aria": "Remote refresh interval in seconds",
-        "tooLow": "Must be at least {{min}} seconds."
       }
     },
     "advanced": {
@@ -2148,8 +2142,10 @@
       "aria": "Switch between map and list view"
     },
     "speleoRefresh": {
-      "title": "Refresh SpeleoDB write-lock state",
-      "aria": "Refresh SpeleoDB write-lock state"
+      "label": "Refresh SpeleoDB",
+      "loading": "Refreshing projects...",
+      "title": "Refresh SpeleoDB projects",
+      "aria": "Refresh SpeleoDB projects"
     },
     "tabs": {
       "map": "Map",

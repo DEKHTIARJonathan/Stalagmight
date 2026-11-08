@@ -397,7 +397,7 @@ impl AppState {
     /// frontend hides the affordance on `None` rather than offering a step that fails.
     ///
     /// Needs the revision topology, so it costs one `GET /revisions/`. Called when the
-    /// undo dropdown opens (and by the confirmation dialog), not on the status poll.
+    /// undo dropdown opens (and by the confirmation dialog), not on the status refresh.
     pub fn speleodb_unwind_target(&self) -> Result<Option<SpeleoUnwindTarget>, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
         // Disabled mode never SHIPPED history, so there is nothing in those commits to
@@ -1220,7 +1220,7 @@ mod tests {
         // only reachable with the write lock genuinely held (its entry guards refuse a
         // force-editor and require an open gate), yet it closes the project and
         // reloads it - and a fresh load of a remote project is read-only, so the gate
-        // is shut for the length of that reload. A status poll landing in the window
+        // is shut for the length of that reload. A status refresh landing in the window
         // clears the acquisition record, and the `if restore` block reopened the GATE
         // without it: the record was gone permanently, and our own next landed push
         // came back as a Conflict.
@@ -1255,7 +1255,7 @@ mod tests {
             capture < reload && reload < restore_back,
             "capture BEFORE the reload (it is the last point the pre-reload truth \
              exists) and re-record AFTER it (a record written before the reload is \
-             what the poll in that window drops)"
+             what the refresh in that window drops)"
         );
         assert!(
             restore.contains("if had_lock_record {"),

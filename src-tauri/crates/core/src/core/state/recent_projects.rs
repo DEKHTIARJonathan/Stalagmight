@@ -341,7 +341,7 @@ impl AppState {
                 // Kept, not dropped: nothing has been destroyed yet, and the
                 // trash below can still fail. A claim cleared over a file that
                 // survived is a mutex left held with no local pointer to it -
-                // the session is closed, so the poll's catch-alls never see it,
+                // the session is closed, so the refresh's catch-alls never see it,
                 // and the no-project janitor has nothing to retry. See the
                 // trash-failure return, which puts it back.
                 cleared_claim = held_lock
@@ -413,7 +413,7 @@ impl AppState {
                 // Nothing was destroyed, so the lock is still ours and still
                 // guarding a project that is still there. Put the claim back -
                 // without it the mutex has no local pointer at all: this call
-                // closed the session, so the poll's catch-alls will never run
+                // closed the session, so the refresh's catch-alls will never run
                 // over it, and the deferred release below is not reached from
                 // here either.
                 self.speleodb_restore_lock_claim(cleared_claim);

@@ -315,7 +315,7 @@ pub async fn speleodb_restore_revision(
 ///
 /// Read-only and permission-free, like the revision list it reads. Costs one
 /// `GET /revisions/`, so the frontend asks when the undo dropdown opens rather than on
-/// every status poll.
+/// every status refresh.
 #[tauri::command]
 pub async fn speleodb_unwind_target(
     app: AppHandle,
@@ -367,7 +367,7 @@ pub async fn speleodb_discard_changes(
 /// offering a step that would discard the edit.
 ///
 /// Same cost and same timing as its backward twin: one `GET /revisions/`, asked when the
-/// redo dropdown opens rather than on every status poll.
+/// redo dropdown opens rather than on every status refresh.
 #[tauri::command]
 pub async fn speleodb_rewind_target(
     app: AppHandle,

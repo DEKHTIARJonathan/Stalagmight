@@ -358,7 +358,6 @@ export const defaultConfig: Config = {
     "email": null,
     "insecure_http": false,
     "allow_force_edit": false,
-    "poll_interval_seconds": 60,
     "undo_mode": "full"
   }
 };

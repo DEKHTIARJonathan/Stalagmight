@@ -135,7 +135,7 @@ describe('speleoStore', () => {
       // that never reached the server - and losing the token does not upload them.
       // Clearing it claimed "nothing outstanding" at the exact moment the work
       // became most stranded, which disarmed the quit guard and hid the Toolbar's
-      // unpushed-edits warning. The next authenticated poll re-seeds it.
+      // unpushed-edits warning. The next authenticated refresh re-seeds it.
       expect(s.link?.hasUnpushedEdits).toBe(true);
       expect(s.link?.remoteState).toBe('unknown');
       expect(s.link?.noAccess).toBe(false);
@@ -206,8 +206,8 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().link?.lockedByOther).toBe(false);
     });
 
-    it('clears a prior lockedByOther once a later poll resolves no holder (fix 7)', () => {
-      // Someone else held it, then released: the next poll reports no holder, and the
+    it('clears a prior lockedByOther once a later refresh resolves no holder (fix 7)', () => {
+      // Someone else held it, then released: the next refresh reports no holder, and the
       // flag must drop (no "preserve prior" carry keeping the button stuck orange).
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false, lock_holder: 'a@b' }));
       expect(useSpeleoStore.getState().link?.lockedByOther).toBe(true);
@@ -220,7 +220,7 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().link?.noAccess).toBe(true);
     });
 
-    it('surfaces an unexpected server_error, and clears it on the next clean poll (fix 12)', () => {
+    it('surfaces an unexpected server_error, and clears it on the next clean refresh (fix 12)', () => {
       const err = { message: 'No Project matches the given query.', action: 'Fatal' as const, status: 404, transport: null, unpushed_local: null, dump_candidates: null, dump_candidate_kind: null, newer_schema: null };
       useSpeleoStore.getState().seedFromStatus(status({ server_error: err }));
       expect(useSpeleoStore.getState().link?.serverError).toEqual(err);
@@ -235,7 +235,7 @@ describe('speleoStore', () => {
       const link = useSpeleoStore.getState().link;
       expect(link?.forceEditing).toBe(true);
       expect(link?.forceEditAllowed).toBe(true);
-      // A later poll that acquired the lock clears force-edit (backend-authoritative).
+      // A later refresh that acquired the lock clears force-edit (backend-authoritative).
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true, force_editing: false }));
       expect(useSpeleoStore.getState().link?.forceEditing).toBe(false);
     });
@@ -260,7 +260,7 @@ describe('speleoStore', () => {
       );
       const inFlight = useSpeleoStore.getState().refreshLinkStatus();
 
-      // The push lands while that poll is still waiting on the network.
+      // The push lands while that refresh is still waiting on the network.
       useSpeleoStore.getState().markDirty();
       useSpeleoStore.getState().applyPush({ kind: 'pushed' });
       expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
@@ -273,7 +273,7 @@ describe('speleoStore', () => {
     });
 
     it('applies a reply when nothing mutated the link while it was in flight', async () => {
-      // The guard must not be so strict that ordinary polling stops working.
+      // The guard must not be so strict that ordinary refreshing stops working.
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
       invokeIpcMock.mockResolvedValue(status({ edit_enabled: true, has_unpushed_edits: true }));
       await useSpeleoStore.getState().refreshLinkStatus();
@@ -282,13 +282,13 @@ describe('speleoStore', () => {
 
     it('keeps the FRESHER of two overlapping refreshes instead of dropping it', async () => {
       // `seedFromStatus` allocates a new link object every time, so a plain
-      // identity guard treated a rival poll's seed as a local mutation - and the
+      // identity guard treated a rival refresh's seed as a local mutation - and the
       // reply it discarded was the LATER one, holding newer truth.
       //
       // The path that matters: `handleRelease` releases the lock and awaits its own
-      // refresh. A periodic poll landing in that window reseeded `link`, the
+      // refresh. An overlapping refresh landing in that window reseeded `link`, the
       // release's own reply was thrown away, and the toolbar kept the green pen
-      // over a lock that no longer existed - until the next poll, up to 24h out.
+      // over a lock that no longer existed - until another status refresh.
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
 
       const pending: Array<(s: SpeleoLinkStatus) => void> = [];
@@ -296,13 +296,13 @@ describe('speleoStore', () => {
         () => new Promise<SpeleoLinkStatus>((resolve) => pending.push(resolve)),
       );
 
-      const poll = useSpeleoStore.getState().refreshLinkStatus();
+      const refresh = useSpeleoStore.getState().refreshLinkStatus();
       const afterRelease = useSpeleoStore.getState().refreshLinkStatus();
       expect(pending).toHaveLength(2);
 
-      // The periodic poll answers first, still describing the held lock.
+      // The overlapping refresh answers first, still describing the held lock.
       pending[0]!(status({ edit_enabled: true }));
-      await poll;
+      await refresh;
       // Then the release's own refresh answers: the lock is gone.
       pending[1]!(status({ edit_enabled: false }));
       await afterRelease;
@@ -311,8 +311,8 @@ describe('speleoStore', () => {
     });
 
     it('lets an older reply lose to a newer one that already landed', async () => {
-      // Issue order, not arrival order. Without it the release-then-poll ordering
-      // is fixed but the poll-then-release one regresses.
+      // Issue order, not arrival order. Without it the release-then-refresh ordering
+      // is fixed but the refresh-then-release one regresses.
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
 
       const pending: Array<(s: SpeleoLinkStatus) => void> = [];
@@ -523,7 +523,7 @@ describe('speleoStore', () => {
 
     // [#303] The bug this pair exists to prevent: `markDirty` short-circuits on an
     // already-dirty link, and an unwound copy is ALWAYS already dirty, so mirroring a
-    // forward edit through it left `unwound` standing until the next poll - and
+    // forward edit through it left `unwound` standing until the next refresh - and
     // `isUnwoundNotEdited` kept routing the user to a discard of work they just made.
     it('markDirty leaves unwound standing on an already-dirty link', () => {
       useSpeleoStore
@@ -670,7 +670,7 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().banner).toBeNull();
     });
 
-    it('a rendering-disabled poll never clobbers transient push_unconfirmed feedback', () => {
+    it('a rendering-disabled refresh never clobbers transient push_unconfirmed feedback', () => {
       useSpeleoStore.setState({ banner: { kind: 'push_unconfirmed' } });
       useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
       expect(useSpeleoStore.getState().banner).toEqual({ kind: 'push_unconfirmed' });
@@ -686,7 +686,7 @@ describe('speleoStore', () => {
     });
 
     it('rendering_disabled preempts a no_anchor banner (so Enable-rendering is reachable)', () => {
-      // Both conditions true: no_anchor holds the slot, then a poll sees
+      // Both conditions true: no_anchor holds the slot, then a refresh sees
       // exclude_geojson. rendering_disabled must take over - otherwise its
       // Enable-rendering action (gated on the banner kind) is unreachable.
       useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
@@ -694,8 +694,8 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().banner).toEqual({ kind: 'rendering_disabled' });
     });
 
-    it('a no_anchor notice is never clobbered by a poll when rendering is enabled', () => {
-      // exclude_geojson off: a no_anchor notice must survive routine polls (only a
+    it('a no_anchor notice is never clobbered by a refresh when rendering is enabled', () => {
+      // exclude_geojson off: a no_anchor notice must survive routine refreshes (only a
       // rendering_disabled banner that WE own is cleared when the flag goes off).
       useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
       useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: false }));
@@ -999,4 +999,72 @@ describe('speleoStore', () => {
       expect(PUSH_FAILURE_DIALOGS).toContain(id);
     });
   });
+});
+
+describe('successful sign-in refresh', () => {
+  beforeEach(reset);
+
+  it('fetches project rows immediately without waiting for Settings to close', async () => {
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_login') return { user_email: 'me@x', endpoint: 'https://x/' };
+      if (cmd === 'speleodb_list_projects') return [{ id: 'p1', name: 'New cave', lock_holder: null }];
+      if (cmd === 'speleodb_link_status') return status();
+      return null;
+    });
+    useSpeleoStore.getState().setPendingAuth({
+      kind: 'login', email: 'me@x', password: 'synthetic', token: '', useToken: false,
+    });
+    expect(await useSpeleoStore.getState().applyPendingAuth('https://x/')).toEqual({ ok: true });
+    await vi.waitFor(() => {
+      expect(useSpeleoStore.getState().remoteProjects).toEqual({ p1: 'New cave' });
+    });
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_list_projects');
+  });
+});
+
+
+describe('refresh progress', () => {
+  beforeEach(reset);
+
+  it('stays active across overlapping listing requests and clears after failure', async () => {
+    loggedInAs('me@x');
+    let finish!: (value: unknown) => void;
+    let fail!: (error: Error) => void;
+    invokeIpcMock.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    invokeIpcMock.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const first = useSpeleoStore.getState().scanLocksOnOpen();
+    const second = useSpeleoStore.getState().scanLocksOnOpen();
+    expect(useSpeleoStore.getState().projectRefreshCount).toBe(2);
+    finish([]);
+    await first;
+    expect(useSpeleoStore.getState().projectRefreshCount).toBe(1);
+    fail(new Error('offline'));
+    await second;
+    expect(useSpeleoStore.getState().projectRefreshCount).toBe(0);
+  });
+
+  it('clears status progress when a request fails', async () => {
+    let fail!: (error: Error) => void;
+    invokeIpcMock.mockImplementationOnce(() => new Promise((_resolve, reject) => { fail = reject; }));
+    const request = useSpeleoStore.getState().refreshLinkStatus();
+    expect(useSpeleoStore.getState().statusRefreshCount).toBe(1);
+    fail(new Error('offline'));
+    await request;
+    expect(useSpeleoStore.getState().statusRefreshCount).toBe(0);
+  });
+});
+
+
+it('does not apply an old account status after a successful replacement login', async () => {
+  reset();
+  useSpeleoStore.getState().seedFromStatus(status({ permission: 'READ_AND_WRITE' }));
+  const original = useSpeleoStore.getState().link;
+  let finish!: (value: SpeleoLinkStatus) => void;
+  invokeIpcMock.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+  const request = useSpeleoStore.getState().refreshLinkStatus();
+  useSpeleoStore.getState().setSessionFromLogin({ user_email: 'new@example.com', endpoint: 'https://x/' });
+  finish(status({ permission: 'ADMIN', edit_enabled: true }));
+  await request;
+  expect(useSpeleoStore.getState().link).toBe(original);
+  expect(useSpeleoStore.getState().statusRefreshCount).toBe(0);
 });

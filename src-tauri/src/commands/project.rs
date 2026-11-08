@@ -83,7 +83,7 @@ pub(crate) fn close_project_impl(state: &AppState, release_lock: bool) -> Comman
         // Recorded on the claim BEFORE the teardown, while the link row is still
         // readable - and recorded at all because the stranded-claim janitor
         // cannot otherwise tell a deliberate keep from a session that died
-        // holding a lock, and would hand this one back on the next status poll.
+        // holding a lock, and would hand this one back on the next status refresh.
         state.speleodb_keep_open_lock_deliberately();
     }
     state.execute(Command::CloseProject)
