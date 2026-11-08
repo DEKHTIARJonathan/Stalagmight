@@ -11,7 +11,8 @@ the [survey view](survey-view.md).
 4. **Date**: when the line was surveyed.
 5. **Color**: the section's color on the map.
 6. **Shots**: one row per shot.
-7. Show or hide table columns.
+7. **Choose visible columns**, including the extra columns hidden by default:
+   LRUD, and azimuth and inclination per end of the shot.
 8. Enlarge the table.
 
 ![Shots table, scrolled down](../images/create-section-shots.png)
@@ -29,6 +30,15 @@ the [survey view](survey-view.md).
 
 ## Details
 
+- Extra columns in 7, hidden by default:
+
+  ![Choose visible columns menu](../images/columns-menu.png)
+
+  - **LRUD**: passage size, as `L`, `R`, `U`, `D`.
+  - **Azimuth**: `Avg` (default) is one value per shot. `In+Out` gives
+    `Az In` and `Az Out`, for surveyors who read the azimuth at both ends.
+  - **Inclination**: same choices, `Off` by default. It can be typed in, but is
+    mainly filled by mNemo imports.
 - **Create Section** needs at least one complete shot. A half-filled row has to
   be completed or deleted first.
 - After **Create Section**, placing the section on an existing station merges

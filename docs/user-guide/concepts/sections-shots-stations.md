@@ -7,6 +7,8 @@
     or the main line to the surface.
   - **Reference** (`R`): a shot retaken along a line already surveyed, so two
     sections can be joined exactly, without ambiguity.
+- **LRUD**: left, right, up and down distances to the cave walls, i.e. the
+  passage size.
 - **Section**: a run of shots, usually one linear stretch of surveyed line.
 - **Merging** two stations connects the sections they are on. That is how
   separate sections become one cave.

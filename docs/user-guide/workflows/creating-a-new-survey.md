@@ -61,3 +61,6 @@ for the project details.
   (reference). See
   [shot kinds](../concepts/sections-shots-stations.md).
 - **Create Section** (16).
+- LRUD, and azimuth or inclination at both ends of a shot, are extra columns
+  under the eye icon. See the
+  [dialog page](../screens/create-section-dialog.md).
