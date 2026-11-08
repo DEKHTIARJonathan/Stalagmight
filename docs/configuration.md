@@ -28,6 +28,7 @@ recent_projects_max = 20            # Maximum recent projects to track
 locale = "system"                   # "system" or a specific locale tag like "en-US"
 number_format = "locale"            # "locale" (follow language) or a locale tag like "de-DE"
 date_format = "locale"              # "locale" (follow language) or a locale tag like "en-GB"
+update_track = "stable"             # "stable" (finals) or "beta" (candidates, then finals); see Update Track
 
 [units]
 length = "meters"                   # meters, feet
@@ -446,6 +447,24 @@ select = ["S", "Shift+S"]  # Primary + secondary binding
 
 Missing shortcut fields are filled with defaults during config loading.
 
+## Update Track
+
+`general.update_track` picks which updater manifest the app reads
+([releasing.md](releasing.md#updater-manifests)):
+
+| Value | Gets | Reads |
+|-------|------|-------|
+| `"stable"` | final releases only | `latest-stable.json` |
+| `"beta"` | release candidates, then the final they lead to | `latest-beta.json` |
+
+The default is `"stable"`, except in a build from a release candidate, which is
+compiled with `STALAGMIGHT_CHANNEL=beta` and defaults to `"beta"`. Switching from
+Beta back to Stable does not downgrade:
+an install on a candidate stays on it until the next final.
+
+`"weekly"` is the legacy value 0.5.0 and 0.5.1 wrote for the track Beta replaces
+(see the table below). It still loads, as `"beta"`, and is written back as `"beta"`.
+
 ## Deprecated Settings
 
 The old top-level `[snap]` block is migrated on load (`Config::migrate_legacy`),
@@ -460,6 +479,7 @@ than carried over.
 | `snap.enabled_merge` | `map.snap.enabled_merge` | yes |
 | `snap.enabled_measure` | `map.snap.enabled_measure` | yes |
 | `snap.threshold_pixels` | `map.snap.threshold` | yes |
+| `general.update_track = "weekly"` | `general.update_track = "beta"` | yes (read as `"beta"`, saved as `"beta"`) |
 
 ## Settings Dialog
 

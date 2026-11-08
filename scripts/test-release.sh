@@ -20,6 +20,23 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/release-test.XXXXXX")"
 [ -n "$WORK" ] && [ -d "$WORK" ] || { echo "mktemp -d produced no work dir" >&2; exit 1; }
 trap 'rm -rf "$WORK"' EXIT
 
+# release.sh regenerates THIRD-PARTY-LICENSES.md after bumping Cargo.lock (#648),
+# through `pnpm gen:third-party` unless RELEASE_GEN_THIRD_PARTY names another
+# command. A throwaway clone has no node_modules for the real generator to read,
+# so every case runs this stub instead. It records the stalagmight line of the
+# Cargo.lock it saw, which is what lets a case prove the bundle was regenerated
+# AFTER the bump and from the project root. Exported once, here, so no case can
+# reach the real generator by forgetting to set it.
+FAKE_GEN="$WORK/fake-gen-third-party"
+cat > "$FAKE_GEN" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+lock_line="$(awk '/^name = "stalagmight"/ { getline; sub(/\r$/, ""); print; exit }' src-tauri/Cargo.lock)"
+printf 'stub bundle generated against: %s\n' "$lock_line" > THIRD-PARTY-LICENSES.md
+SH
+chmod +x "$FAKE_GEN"
+export RELEASE_GEN_THIRD_PARTY="$FAKE_GEN"
+
 PASS=0
 FAIL=0
 
@@ -89,18 +106,20 @@ fresh_clone() {
   # useful while iterating on them too. Committed in the clone so the cases can
   # assert on a clean tree without seeing these copies as modifications.
   #
-  # All four, not just release.sh: the two entry points now share
+  # All five, not just release.sh: the two entry points now share
   # lib/release-version.sh, and release-tag.sh shells out to release-notes.sh for
-  # the body it gates on. Copying only some of them would test an on-disk script
-  # against its committed collaborators - which passes right up until the change
-  # under test is in the part that was not copied.
+  # the body it gates on and to release-channel.sh for the tag shapes it accepts.
+  # Copying only some of them would test an on-disk script against its committed
+  # collaborators - which passes right up until the change under test is in the
+  # part that was not copied.
   mkdir -p "$dir/scripts/lib"
   cp "$PROJECT_ROOT/scripts/release.sh"            "$dir/scripts/release.sh"
   cp "$PROJECT_ROOT/scripts/release-tag.sh"        "$dir/scripts/release-tag.sh"
   cp "$PROJECT_ROOT/scripts/release-notes.sh"      "$dir/scripts/release-notes.sh"
+  cp "$PROJECT_ROOT/scripts/release-channel.sh"    "$dir/scripts/release-channel.sh"
   cp "$PROJECT_ROOT/scripts/lib/release-version.sh" "$dir/scripts/lib/release-version.sh"
   git -C "$dir" add scripts/release.sh scripts/release-tag.sh \
-    scripts/release-notes.sh scripts/lib/release-version.sh
+    scripts/release-notes.sh scripts/release-channel.sh scripts/lib/release-version.sh
   # Pin the changelog these cases run against instead of inheriting the live one.
   # release.sh refuses an empty `## [Unreleased]` - case 5 asserts that refusal is
   # correct - so cutting a release, which empties that section by moving it under
@@ -171,6 +190,13 @@ if "$D/scripts/release.sh" 9.9.9 --no-edit >/dev/null 2>&1; then
   assert "Cargo.lock bumped"         test "$(lock_version_of "$D")" = "9.9.9"
   assert "Cargo.lock is in the release commit" \
     bash -c 'git -C "$1" show --name-only --format= HEAD | grep -qx "src-tauri/Cargo.lock"' _ "$D"
+  # The bundle stamps the lock's hash, so a bump that left it behind turned
+  # leak-scan red on every release commit (#648). The stub writes the lock line
+  # it read, so this proves the regeneration ran after the bump, not before.
+  assert "license bundle regenerated against the bumped lock" \
+    grep -q 'generated against: version = "9.9.9"' "$D/THIRD-PARTY-LICENSES.md"
+  assert "license bundle is in the release commit" \
+    bash -c 'git -C "$1" show --name-only --format= HEAD | grep -qx "THIRD-PARTY-LICENSES.md"' _ "$D"
   assert "changelog section created" grep -q '^## \[9\.9\.9\]' "$D/CHANGELOG.md"
   assert "tag created"               has_tag "$D" v9.9.9
   assert "tree clean after release"  tree_clean "$D"
@@ -350,12 +376,12 @@ fi
 echo "== case 11: bump then tag a candidate, the two-script flow end to end =="
 D=$(fresh_clone case11)
 if "$D/scripts/release.sh" 5.5.5 --no-edit --no-tag >/dev/null 2>&1 \
-  && out=$("$D/scripts/release-tag.sh" v5.5.5-rc1 2>&1); then
-  assert "candidate tag created"  has_tag "$D" v5.5.5-rc1
+  && out=$("$D/scripts/release-tag.sh" v5.5.5-rc.1 2>&1); then
+  assert "candidate tag created"  has_tag "$D" v5.5.5-rc.1
   # Annotated, not lightweight: release.sh annotates, and `git describe` and the
   # release UI both treat the two differently.
   assert "the tag is annotated" \
-    bash -c '[ "$(git -C "$1" cat-file -t v5.5.5-rc1)" = tag ]' _ "$D"
+    bash -c '[ "$(git -C "$1" cat-file -t v5.5.5-rc.1)" = tag ]' _ "$D"
   assert "the body is shown before tagging" \
     bash -c 'printf "%s" "$1" | grep -q "fixture entry"' _ "$out"
   assert "the preview carries the candidate banner" \
@@ -363,17 +389,17 @@ if "$D/scripts/release.sh" 5.5.5 --no-edit --no-tag >/dev/null 2>&1 \
   # Pushing starts a paid three-platform build and, for a bare vX.Y.Z, publishes
   # as Latest. The script stops at the local tag and says what comes next.
   assert "it says how to push rather than pushing" \
-    bash -c 'printf "%s" "$1" | grep -q "git push origin v5.5.5-rc1"' _ "$out"
+    bash -c 'printf "%s" "$1" | grep -q "git push origin v5.5.5-rc.1"' _ "$out"
   assert "tree clean" tree_clean "$D"
 else
   fail "the bump-then-tag flow exited non-zero"
 fi
 
 echo "== case 12: a tag whose version the tree does not carry is refused =="
-# The gate the manual flow never had. Cutting v9.9.9-rc1 from a tree still at
+# The gate the manual flow never had. Cutting v9.9.9-rc.1 from a tree still at
 # 0.5.0 would build Stalagmight_0.5.0_* artifacts under a tag promising 9.9.9.
 D=$(fresh_clone case12)
-if out=$("$D/scripts/release-tag.sh" v9.9.9-rc1 2>&1); then
+if out=$("$D/scripts/release-tag.sh" v9.9.9-rc.1 2>&1); then
   fail "tagged a version the version files do not carry"
 else
   pass "refused a tag the version files do not match"
@@ -381,7 +407,7 @@ else
     bash -c 'printf "%s" "$1" | grep -q "version files do not match the tag"' _ "$out"
   assert "message names the bump that would fix it" \
     bash -c 'printf "%s" "$1" | grep -q "release.sh 9.9.9"' _ "$out"
-  refute "no tag created" has_tag "$D" v9.9.9-rc1
+  refute "no tag created" has_tag "$D" v9.9.9-rc.1
   assert "tree untouched" tree_clean "$D"
 fi
 
@@ -394,13 +420,13 @@ D=$(fresh_clone case12b)
 CUR=$(version_of "$D")
 set_lock_version "$D" 0.0.1
 git -C "$D" commit --quiet -am "desync Cargo.lock"
-if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" 2>&1); then
+if out=$("$D/scripts/release-tag.sh" "v$CUR-rc.1" 2>&1); then
   fail "tagged a tree whose Cargo.lock disagreed with the tag"
 else
   pass "refused a drifted Cargo.lock"
   assert "message names the lock" \
     bash -c 'printf "%s" "$1" | grep -q "Cargo.lock records stalagmight at .0.0.1."' _ "$out"
-  refute "no tag created" has_tag "$D" "v$CUR-rc1"
+  refute "no tag created" has_tag "$D" "v$CUR-rc.1"
 fi
 
 echo "== case 12c: a missing version file refuses, rather than passing unread =="
@@ -415,12 +441,12 @@ for missing in package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-t
   CUR=$(version_of "$D")
   rm "$D/$missing"
   git -C "$D" commit --quiet -am "remove $missing"
-  if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" 2>&1); then
+  if out=$("$D/scripts/release-tag.sh" "v$CUR-rc.1" 2>&1); then
     fail "tagged with $missing missing"
   else
     assert "refusal names $missing" \
       bash -c 'printf "%s" "$1" | grep -q "$2"' _ "$out" "$missing"
-    refute "no tag created without $missing" has_tag "$D" "v$CUR-rc1"
+    refute "no tag created without $missing" has_tag "$D" "v$CUR-rc.1"
   fi
 done
 # release.sh shares the same helper, so it must fail closed too - it is the
@@ -439,8 +465,8 @@ fi
 echo "== case 13: an existing tag is refused rather than moved =="
 D=$(fresh_clone case13)
 CUR=$(version_of "$D")
-git -C "$D" tag "v$CUR-rc1"
-if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" 2>&1); then
+git -C "$D" tag "v$CUR-rc.1"
+if out=$("$D/scripts/release-tag.sh" "v$CUR-rc.1" 2>&1); then
   fail "accepted a tag that already exists"
 else
   pass "refused an existing tag"
@@ -456,7 +482,7 @@ echo "== case 14: a dirty tree is refused =="
 D=$(fresh_clone case14)
 CUR=$(version_of "$D")
 printf '\n- an uncommitted note\n' >> "$D/CHANGELOG.md"
-if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" 2>&1); then
+if out=$("$D/scripts/release-tag.sh" "v$CUR-rc.1" 2>&1); then
   fail "tagged a dirty tree"
 else
   pass "refused a dirty tree"
@@ -464,7 +490,7 @@ else
   # of this repo open, which file is dirty is the whole question.
   assert "message lists the dirty file" \
     bash -c 'printf "%s" "$1" | grep -q "CHANGELOG.md"' _ "$out"
-  refute "no tag created" has_tag "$D" "v$CUR-rc1"
+  refute "no tag created" has_tag "$D" "v$CUR-rc.1"
 fi
 # An untracked file blocks too, and the advice has to work: plain `git stash`
 # leaves '??' files behind, so a message saying only "stash" sends the operator
@@ -472,7 +498,7 @@ fi
 D=$(fresh_clone case14b)
 CUR=$(version_of "$D")
 printf 'scratch\n' > "$D/notes-to-self.txt"
-if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" 2>&1); then
+if out=$("$D/scripts/release-tag.sh" "v$CUR-rc.1" 2>&1); then
   fail "tagged with an untracked file present"
 else
   pass "refused an untracked file"
@@ -495,7 +521,7 @@ printf '%s\n' \
   "## [$CUR] - 2026-01-01" '' '- the notes as written' \
   > "$D/CHANGELOG.md"
 git -C "$D" commit --quiet -am "leave an entry unfolded"
-if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" 2>&1); then
+if out=$("$D/scripts/release-tag.sh" "v$CUR-rc.1" 2>&1); then
   fail "tagged with entries left under [Unreleased]"
 else
   pass "refused entries left under [Unreleased]"
@@ -505,12 +531,12 @@ else
     bash -c 'printf "%s" "$1" | grep -q "Fold those entries"' _ "$out"
   assert "message names the override" \
     bash -c 'printf "%s" "$1" | grep -q -- "--allow-unannounced"' _ "$out"
-  refute "no tag created" has_tag "$D" "v$CUR-rc1"
+  refute "no tag created" has_tag "$D" "v$CUR-rc.1"
 fi
 # Shipping them unmentioned is a legitimate choice - a late fix nobody wants to
 # announce - but it has to be said out loud.
-if "$D/scripts/release-tag.sh" "v$CUR-rc1" --allow-unannounced >/dev/null 2>&1; then
-  assert "--allow-unannounced tags anyway" has_tag "$D" "v$CUR-rc1"
+if "$D/scripts/release-tag.sh" "v$CUR-rc.1" --allow-unannounced >/dev/null 2>&1; then
+  assert "--allow-unannounced tags anyway" has_tag "$D" "v$CUR-rc.1"
 else
   fail "--allow-unannounced did not override the refusal"
 fi
@@ -531,11 +557,11 @@ printf '%s\n' \
 git -C "$D" commit --quiet -am "leave an entry unfolded"
 printf '%s\n' '# Changelog' '' '## [Unreleased]' '' \
   "## [$CUR] - 2026-01-01" '' '- decoy notes, nothing unfolded' > "$WORK/decoy.md"
-if CHANGELOG="$WORK/decoy.md" "$D/scripts/release-tag.sh" "v$CUR-rc1" >/dev/null 2>&1; then
+if CHANGELOG="$WORK/decoy.md" "$D/scripts/release-tag.sh" "v$CUR-rc.1" >/dev/null 2>&1; then
   fail "an exported \$CHANGELOG redirected the gate and the tag was created"
 else
   pass "the gate read the repository's changelog, not the override"
-  refute "no tag created" has_tag "$D" "v$CUR-rc1"
+  refute "no tag created" has_tag "$D" "v$CUR-rc.1"
 fi
 
 echo "== case 16: a malformed tag is refused =="
@@ -549,15 +575,46 @@ for bad in "0.5.0" "v0.5" "v0.5.0.1" "release-1"; do
 done
 assert "tree untouched" tree_clean "$D"
 
+echo "== case 16b: the old undotted -rcN shape is refused, naming the dotted form =="
+# Candidates are vX.Y.Z-rc.N (#650): semver compares rc10 as text, below rc9,
+# and the release workflow bakes the Beta channel and publishes latest-beta.json
+# only for -rc.N. The tag carries the tree's own version, so the shape is the
+# only thing that can refuse it - and the dotted spelling must then pass.
+D=$(fresh_clone case16b)
+CUR=$(version_of "$D")
+if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" 2>&1); then
+  fail "tagged the undotted v$CUR-rc1"
+else
+  pass "refused the undotted v$CUR-rc1"
+  assert "message names the dotted replacement" \
+    bash -c 'printf "%s" "$1" | grep -qF "use $2 instead"' _ "$out" "v$CUR-rc.1"
+  refute "no tag created" has_tag "$D" "v$CUR-rc1"
+fi
+assert "the dotted spelling of the same candidate passes" \
+  "$D/scripts/release-tag.sh" "v$CUR-rc.1" --dry-run
+
+echo "== case 16c: any other suffix is refused, not cut as an unpublished candidate =="
+D=$(fresh_clone case16c)
+CUR=$(version_of "$D")
+# rc.0 and rc.01 too: candidates count from 1, and semver forbids the leading
+# zero, so the updater could not parse a 0.5.2-rc.01 manifest.
+for bad in "v$CUR-beta.1" "v$CUR-rc.1.1" "v$CUR-RC.1" "v$CUR-rc.x" "v$CUR-rc.0" "v$CUR-rc.01"; do
+  assert "refused '$bad' as a shape the workflow does not publish" \
+    bash -c '"$1" "$2" 2>&1 | grep -q "not a tag shape the release workflow publishes"' \
+    _ "$D/scripts/release-tag.sh" "$bad"
+  refute "no tag created for '$bad'" has_tag "$D" "$bad"
+done
+assert "tree untouched" tree_clean "$D"
+
 echo "== case 17: --dry-run shows the body and creates no tag =="
 D=$(fresh_clone case17)
 CUR=$(version_of "$D")
-if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" --dry-run 2>&1); then
+if out=$("$D/scripts/release-tag.sh" "v$CUR-rc.1" --dry-run 2>&1); then
   assert "the body is rendered" \
     bash -c 'printf "%s" "$1" | grep -q "fixture entry"' _ "$out"
   assert "it says it would tag" \
     bash -c 'printf "%s" "$1" | grep -q "\[dry-run\] Would tag"' _ "$out"
-  refute "no tag created" has_tag "$D" "v$CUR-rc1"
+  refute "no tag created" has_tag "$D" "v$CUR-rc.1"
   assert "tree untouched" tree_clean "$D"
 else
   fail "--dry-run exited non-zero on a taggable tree"
@@ -613,7 +670,7 @@ printf '%s\n' \
   "## [$CUR] - 2026-01-01" '' '- the notes as written' \
   > "$D/CHANGELOG.md"
 git -C "$D" commit --quiet -am "fold the changelog"
-if out=$("$D/scripts/release-tag.sh" "v$CUR-rc1" --dry-run 2>&1); then
+if out=$("$D/scripts/release-tag.sh" "v$CUR-rc.1" --dry-run 2>&1); then
   refute "a candidate is not nagged about candidates" \
     bash -c 'printf "%s" "$1" | grep -q "never cut as a candidate"' _ "$out"
   refute "a candidate is not nagged about the date" \
@@ -650,9 +707,9 @@ refute "final tag has no candidate banner" \
 # A candidate takes the notes of the version it is a candidate for, not its own
 # (nonexistent) section, and says clearly that it is a candidate.
 assert "candidate uses the base version's section" \
-  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0-rc1 2>/dev/null | grep -q "the 0.4.0 thing"' _ "$FIXTURE" "$NOTES"
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0-rc.1 2>/dev/null | grep -q "the 0.4.0 thing"' _ "$FIXTURE" "$NOTES"
 assert "candidate is labelled as one" \
-  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0-rc1 2>/dev/null | grep -q "Release candidate for 0.4.0"' _ "$FIXTURE" "$NOTES"
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0-rc.1 2>/dev/null | grep -q "Release candidate for 0.4.0"' _ "$FIXTURE" "$NOTES"
 
 # Before release.sh moves it, a version has no section yet - fall back to
 # [Unreleased] rather than publishing an empty body.
@@ -706,7 +763,7 @@ assert "warns that unfolded [Unreleased] entries will not publish" \
 assert "the warning counts the lines at risk" \
   bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>&1 >/dev/null | grep -q "^warning: 1 line(s)"' _ "$FIXTURE" "$NOTES"
 assert "a candidate warns too, not just a final tag" \
-  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0-rc1 2>&1 >/dev/null | grep -q "will NOT be published"' _ "$FIXTURE" "$NOTES"
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0-rc.1 2>&1 >/dev/null | grep -q "will NOT be published"' _ "$FIXTURE" "$NOTES"
 
 # The warning MUST NOT reach stdout: release.yml redirects stdout into the release
 # body, so a warning printed there would be published to every recipient.
@@ -759,8 +816,10 @@ if out=$("$D/scripts/release-tag.sh" "v${CUR}-weekly.20260817" 2>&1); then
   fail "tagged a weekly-shaped tag by hand"
 else
   pass "refused a weekly-shaped tag"
-  assert "message names weekly tags as reserved for the automated pipeline" \
-    bash -c 'printf "%s" "$1" | grep -q "automated weekly pipeline"' _ "$out"
+  assert "message says the weekly track is retired" \
+    bash -c 'printf "%s" "$1" | grep -q "weekly track is retired"' _ "$out"
+  assert "message points at the candidate shape instead" \
+    bash -c 'printf "%s" "$1" | grep -q "vX.Y.Z-rc.N"' _ "$out"
   refute "no tag created" has_tag "$D" "v${CUR}-weekly.20260817"
 fi
 
@@ -837,6 +896,116 @@ else
     fail "v0.5.9 with a v0.5.10-weekly tag present was refused outright"
   fi
 fi
+
+# --- release.sh: the license bundle regeneration (#648) ---
+
+echo "== case 23: a failing license regeneration reverts every file it touched =="
+# The generator runs after the four version rewrites, so a failure there (no
+# cargo-about, a stale node_modules) must not strand a half-bumped tree. This
+# stub writes the bundle before failing, so the revert has something to undo.
+D=$(fresh_clone case23)
+CUR=$(version_of "$D")
+FAILING_GEN="$WORK/failing-gen-third-party"
+printf '%s\n' '#!/usr/bin/env bash' 'echo partial > THIRD-PARTY-LICENSES.md' 'exit 1' > "$FAILING_GEN"
+chmod +x "$FAILING_GEN"
+if out=$(RELEASE_GEN_THIRD_PARTY="$FAILING_GEN" "$D/scripts/release.sh" 7.7.7 --no-edit 2>&1); then
+  fail "release.sh carried on past a failing license regeneration"
+else
+  pass "refused after the license regeneration failed"
+  assert "message names the license bundle" \
+    bash -c 'printf "%s" "$1" | grep -q "regenerating THIRD-PARTY-LICENSES.md"' _ "$out"
+  assert "package.json reverted"    test "$(version_of "$D")" = "$CUR"
+  assert "Cargo.lock reverted"      test "$(lock_version_of "$D")" = "$CUR"
+  refute "no commit was made"       grep -q '7\.7\.7' <(git -C "$D" log -1 --format=%s)
+  refute "no tag created"           has_tag "$D" v7.7.7
+  # The generator runs before the changelog move, so nothing at all is left:
+  # the partial bundle included.
+  assert "tree clean, partial bundle reverted too" tree_clean "$D"
+fi
+
+echo "== case 24: a missing license generator refuses before anything is written =="
+D=$(fresh_clone case24)
+if out=$(RELEASE_GEN_THIRD_PARTY="$WORK/no-such-generator" "$D/scripts/release.sh" 7.7.7 --no-edit 2>&1); then
+  fail "release.sh ran with no license generator available"
+else
+  pass "refused with no license generator available"
+  assert "message names the missing command" \
+    bash -c 'printf "%s" "$1" | grep -q "no-such-generator. not found"' _ "$out"
+  assert "tree untouched" tree_clean "$D"
+fi
+
+echo "== case 25: --dry-run names the regeneration but does not run it =="
+D=$(fresh_clone case25)
+MARKING_GEN="$WORK/marking-gen-third-party"
+printf '%s\n' '#!/usr/bin/env bash' "touch '$WORK/marking-gen-ran'" > "$MARKING_GEN"
+chmod +x "$MARKING_GEN"
+if out=$(RELEASE_GEN_THIRD_PARTY="$MARKING_GEN" "$D/scripts/release.sh" 7.7.7 --no-edit --dry-run 2>&1); then
+  assert "dry run lists the license bundle" \
+    bash -c 'printf "%s" "$1" | grep -q "THIRD-PARTY-LICENSES.md: regenerate"' _ "$out"
+  refute "dry run did not run the generator" test -e "$WORK/marking-gen-ran"
+  assert "tree untouched by the dry run" tree_clean "$D"
+else
+  fail "--dry-run exited non-zero on a releasable tree"
+fi
+
+echo "== release-channel.sh =="
+# The one definition of what a tag bakes and publishes (#650): release.yml's
+# build, preflight and publish steps and the repoint workflow all read it. The
+# whole six-line output is compared, so a missing or extra key fails too, and a
+# key that goes missing from $GITHUB_OUTPUT cannot pass as "empty".
+CHANNEL="$PROJECT_ROOT/scripts/release-channel.sh"
+classify_is() {
+  [ "$(bash "$CHANNEL" classify "$1")" = "$2" ]
+}
+assert "a candidate bakes rc.N and beta, and publishes Beta plus the weekly mirror" \
+  classify_is v0.5.2-rc.1 "$(printf '%s\n' kind=candidate base=0.5.2 prerelease=rc.1 channel=beta \
+    manifest_version=0.5.2-rc.1 'manifests=latest-beta.json latest-weekly.json')"
+assert "a final bakes nothing, and publishes Stable, Beta and the weekly mirror" \
+  classify_is v0.5.2 "$(printf '%s\n' kind=final base=0.5.2 prerelease= channel= \
+    manifest_version=0.5.2 'manifests=latest-stable.json latest-beta.json latest-weekly.json')"
+NONE="$(printf '%s\n' kind=none base= prerelease= channel= manifest_version= manifests=)"
+# The old undotted shape, the retired weekly shape, other suffixes, near
+# misses, a dispatch's branch name and an empty ref: none of them bakes the
+# Beta channel or publishes a manifest. The last one is a ref name trying to
+# smuggle a second line into $GITHUB_OUTPUT.
+for t in v0.5.2-rc1 v0.5.1-weekly.20260817 v0.5.2-beta.1 v0.5.2-rc.1.1 v0.5.2-RC.1 \
+  v0.5.2-rc. v0.5.2-rc.x v0.5.2-rc.0 v0.5.2-rc.01 0.5.2 v0.5 master '' \
+  "$(printf 'v0.5.2\nkind=final')"; do
+  assert "'$t' bakes and publishes nothing" classify_is "$t" "$NONE"
+done
+refute "classify without a tag is a usage error" \
+  bash -c 'bash "$1" classify 2>/dev/null' _ "$CHANNEL"
+# The dotted rc number is a separate numeric identifier, which is the whole
+# reason for the shape: semver compares rc10 as text, below rc9.
+assert "rc.10 is newer than rc.9"           bash "$CHANNEL" is-newer 0.5.2-rc.10 0.5.2-rc.9
+assert "a final is newer than its candidates" bash "$CHANNEL" is-newer 0.5.2 0.5.2-rc.9
+assert "the next candidate is newer than the last final" \
+  bash "$CHANNEL" is-newer 0.5.3-rc.1 0.5.2
+assert "the core compares numerically, not as text" \
+  bash "$CHANNEL" is-newer 0.5.10-rc.1 0.5.9
+refute "a candidate is not newer than itself"  bash "$CHANNEL" is-newer 0.5.2-rc.1 0.5.2-rc.1
+refute "a candidate is not newer than its final" bash "$CHANNEL" is-newer 0.5.2-rc.3 0.5.2
+refute "an earlier candidate is not newer"     bash "$CHANNEL" is-newer 0.5.2-rc.1 0.5.2-rc.2
+# The publish step's check for a final: a 0.5.2 hotfix cut while Beta holds
+# 0.5.3-rc.1 must leave Beta alone, so it has to read as not newer.
+refute "a hotfix final is not newer than the next version's candidate" \
+  bash "$CHANNEL" is-newer 0.5.2 0.5.3-rc.1
+refute "a final is not newer than itself" bash "$CHANNEL" is-newer 0.5.2 0.5.2
+# The publish step's Stable check for a final: a v0.5.3 maintenance release
+# cut after v0.6.0 still publishes as a release, but must leave Stable on
+# 0.6.0, so it has to read as not newer; a final above Stable takes it.
+refute "a maintenance final below the current stable is not newer" \
+  bash "$CHANNEL" is-newer 0.5.3 0.6.0
+assert "a final above the current stable is newer" \
+  bash "$CHANNEL" is-newer 0.5.2 0.5.1
+# "Cannot tell" must not read as "not newer" or "newer": the preflight treats
+# it as its own failure. jq prints `null` for a manifest with no version.
+assert "an unrecognised version exits 2, distinct from 'not newer'" \
+  bash -c 'bash "$1" is-newer 0.5.2-rc.1 null 2>/dev/null; [ $? -eq 2 ]' _ "$CHANNEL"
+assert "a leading-zero rc number is not a version the pipeline writes" \
+  bash -c 'bash "$1" is-newer 0.5.2-rc.01 0.5.2-rc.1 2>/dev/null; [ $? -eq 2 ]' _ "$CHANNEL"
+assert "a weekly-shaped version exits 2 too" \
+  bash -c 'bash "$1" is-newer 0.5.2-rc.1 0.5.1-weekly.20260817 2>/dev/null; [ $? -eq 2 ]' _ "$CHANNEL"
 
 echo
 echo "release tooling: $PASS passed, $FAIL failed"

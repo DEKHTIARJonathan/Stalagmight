@@ -1,10 +1,12 @@
 name: Repoint updater manifest
 
-# Rollback/repoint tool for the updater manifests (issue #579). The release
-# job publishes a manifest automatically on every stable/weekly tag; this
-# workflow exists for the day that automatic publish needs to be undone or
-# redirected by hand - "repoint latest-stable.json back at v0.5.0 because
-# v0.5.1 has a bad regression" - without cutting a whole new release.
+# Rollback/repoint tool for the updater manifests (issues #579, #650). The
+# release job publishes manifests automatically on every final (Stable and
+# Beta) and rc.N candidate (Beta) tag; this workflow exists for the day that
+# automatic publish needs to be undone or redirected by hand - "repoint
+# latest-stable.json back at v0.5.0 because v0.5.1 has a bad regression" -
+# without cutting a whole new release. Repointing beta rewrites the
+# latest-weekly.json mirror with it, as the release job does.
 #
 # Regenerates one track's manifest from a PAST tag's already-published
 # release assets and its own notes, then clobber-uploads it to the rolling
@@ -26,9 +28,9 @@ on:
         type: choice
         options:
           - stable
-          - weekly
+          - beta
       tag:
-        description: 'Tag to repoint the manifest at (e.g. v0.5.0, v0.5.1-weekly.20260817)'
+        description: 'Tag to repoint the manifest at (stable: a final such as v0.5.1; beta: a final or a candidate such as v0.5.2-rc.1)'
         required: true
         type: string
       include-darwin:
@@ -74,6 +76,7 @@ jobs:
             echo "on=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Validate inputs and tag shape
+        id: classify
         shell: bash
         env:
           UPDATER_ON: ${{ steps.updater.outputs.on }}
@@ -84,20 +87,24 @@ jobs:
             echo "::error::updater artifacts are disabled (no plugins.updater.pubkey committed) - there is no manifest to repoint."
             exit 1
           fi
-          # The same shape rule release.yml uses to pick a track from a tag,
-          # checked here in the other direction: the chosen track must be
-          # able to have produced this tag, or the repoint would publish a
-          # manifest under the wrong track entirely.
+          # The same classification release.yml publishes from
+          # (scripts/release-channel.sh), checked here in the other
+          # direction: the chosen track must be one this tag could have
+          # published to, or the repoint would put a manifest on the wrong
+          # track entirely. Stable takes finals only; Beta takes finals and
+          # rc.N candidates.
+          CLASS="$(bash scripts/release-channel.sh classify "$TAG")"
+          KIND="$(sed -n 's/^kind=//p' <<<"$CLASS")"
           case "$TRACK" in
-            weekly)
-              if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-weekly\.[0-9]{8}$ ]]; then
-                echo "::error::track is 'weekly' but tag '$TAG' is not a vX.Y.Z-weekly.YYYYMMDD tag."
+            stable)
+              if [ "$KIND" != final ]; then
+                echo "::error::track is 'stable' but tag '$TAG' is not a bare vX.Y.Z release tag."
                 exit 1
               fi
               ;;
-            stable)
-              if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-                echo "::error::track is 'stable' but tag '$TAG' is not a bare vX.Y.Z release tag."
+            beta)
+              if [ "$KIND" != final ] && [ "$KIND" != candidate ]; then
+                echo "::error::track is 'beta' but tag '$TAG' is neither a vX.Y.Z-rc.N candidate nor a bare vX.Y.Z release tag."
                 exit 1
               fi
               ;;
@@ -106,6 +113,7 @@ jobs:
               exit 1
               ;;
           esac
+          printf '%s\n' "$CLASS" >> "$GITHUB_OUTPUT"
       - name: Fetch the target release's assets and notes
         shell: bash
         env:
@@ -138,21 +146,34 @@ jobs:
           TAG: ${{ inputs.tag }}
           TRACK: ${{ inputs.track }}
           INCLUDE_DARWIN: ${{ inputs.include-darwin }}
+          MANIFEST_VERSION: ${{ steps.classify.outputs.manifest_version }}
         run: |
-          VERSION="${TAG#v}"
-          OUT="release-artifacts/latest-${TRACK}.json"
+          # latest-weekly.json mirrors latest-beta.json byte for byte, as the
+          # release job publishes it: 0.5.0/0.5.1 installs set to the retired
+          # Weekly track read it.
+          case "$TRACK" in
+            stable) MANIFESTS=(latest-stable.json) ;;
+            beta) MANIFESTS=(latest-beta.json latest-weekly.json) ;;
+            *) echo "::error::unknown track '$TRACK'."; exit 1 ;;
+          esac
+          OUT="release-artifacts/${MANIFESTS[0]}"
           node scripts/gen-updater-manifest.mjs \
-            --version "$VERSION" \
+            --version "$MANIFEST_VERSION" \
             --tag "$TAG" \
             --dir release-artifacts \
             --notes-file "$RUNNER_TEMP/notes.md" \
             --out "$OUT" \
             --include-darwin "$INCLUDE_DARWIN"
+          FILES=("$OUT")
+          for name in "${MANIFESTS[@]:1}"; do
+            cp "$OUT" "release-artifacts/$name"
+            FILES+=("release-artifacts/$name")
+          done
           # Same rule as the release job: this workflow only ever uploads to
           # the rolling release, never creates it.
           if ! gh release view updater >/dev/null 2>&1; then
             echo "::error::the rolling 'updater' GitHub release does not exist. See docs/releasing.md (Updater manifests) to create it once, then re-run."
             exit 1
           fi
-          gh release upload updater "$OUT" --clobber
-          echo "Repointed latest-${TRACK}.json at $TAG (include-darwin=$INCLUDE_DARWIN)."
+          gh release upload updater "${FILES[@]}" --clobber
+          echo "Repointed ${MANIFESTS[*]} at $TAG, manifest version $MANIFEST_VERSION (include-darwin=$INCLUDE_DARWIN)."
