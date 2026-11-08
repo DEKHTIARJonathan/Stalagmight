@@ -530,7 +530,7 @@ Which tag publishes what:
 
 | Tag | Manifest version | Publishes | The build bakes |
 |-----|------------------|-----------|-----------------|
-| `vX.Y.Z` (final) | `X.Y.Z` | `latest-stable.json`, `latest-beta.json`, `latest-weekly.json` | nothing |
+| `vX.Y.Z` (final) | `X.Y.Z` | `latest-stable.json`; `latest-beta.json` and `latest-weekly.json` unless Beta already holds a version that is not older | nothing |
 | `vX.Y.Z-rc.N` (candidate) | `X.Y.Z-rc.N` | `latest-beta.json`, `latest-weekly.json` | `STALAGMIGHT_PRERELEASE=rc.N`, `STALAGMIGHT_CHANNEL=beta` |
 | anything else (`-rcN`, `-weekly.*`, any other suffix) | (none) | nothing, with a `::notice::` | nothing |
 
@@ -573,9 +573,9 @@ than the candidate's (`scripts/release-channel.sh is-newer`), or the step fails
 before anything is public. That catches an `rc.1` pushed after `rc.2`, and a
 candidate for a version whose final already shipped. A missing
 `latest-beta.json` (the first candidate ever) passes; one whose version cannot
-be read fails closed. A final always publishes; see [Candidate versions and the
-forward-only Beta track](#candidate-versions-and-the-forward-only-beta-track)
-for what that does not cover.
+be read fails closed. A final is checked later, in the publish step; see
+[Candidate versions and the forward-only Beta
+track](#candidate-versions-and-the-forward-only-beta-track).
 
 The `release` job's "Publish updater manifest" step (`.github/workflows/release.yml`)
 runs after `gh release create`, once the tag's own release and its artifacts
@@ -620,7 +620,10 @@ exist. It:
    above, reusing the same rendered `release-body.md` that `gh release
    create` already published as this release's notes. It then copies the
    result to every other file the tag publishes, so they are byte-identical,
-   `pub_date` included.
+   `pub_date` included. For a final it first reads the current
+   `latest-beta.json`: unless that is missing or older than the final, Beta
+   and the weekly mirror are left as they are, with a `::notice::` naming the
+   version Beta holds, and only `latest-stable.json` is written.
 6. Uploads them all to the `updater` release in one `gh release upload
    --clobber` - each publish fully replaces the previous content of every
    file it writes.
@@ -739,17 +742,21 @@ It is also why the build bakes `STALAGMIGHT_PRERELEASE`: an `rc.1` install that
 believed it was plain `0.5.2` would never be offered `0.5.2-rc.2` (lower) or
 the final (equal).
 
-Beta only moves forward on its own: the preflight refuses a candidate that is
-not newer than what `latest-beta.json` already announces. Two cases it does not
-cover:
+Beta only moves forward on its own, for candidates and finals alike:
 
-- **A final always publishes to Beta**, even when Beta already holds a later
-  candidate (a `0.5.2` hotfix cut while `0.5.3-rc.1` is out). Beta then points
-  at `0.5.2` until the next `0.5.3` candidate or final: installs already on
-  `0.5.3-rc.1` are offered nothing meanwhile, and installs behind it get
-  `0.5.2`. Repoint `beta` at the candidate afterwards if that matters.
-- **Two release runs publishing at once.** The check runs at preflight, so
-  whichever run uploads last wins.
+- **A candidate** that is not newer than what `latest-beta.json` already
+  announces is refused at preflight, before anything is public.
+- **A final** always publishes `latest-stable.json`, but takes Beta and the
+  weekly mirror only when `latest-beta.json` is missing or older than it. A
+  `0.5.2` hotfix cut while `0.5.3-rc.1` is out reaches Stable and leaves Beta
+  on the candidate, with a `::notice::` saying so; without that, Beta installs
+  behind the candidate would be pointed back at `0.5.2`. This check runs in
+  the publish step, just before the upload. If the current Beta version cannot
+  be read, Stable is still published and the step then fails, naming the file
+  to check.
+
+Not covered: **two release runs publishing at once.** Each check reads
+`latest-beta.json` before its own upload, so whichever run uploads last wins.
 
 ### The retired weekly track
 

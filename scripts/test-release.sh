@@ -986,6 +986,11 @@ assert "the core compares numerically, not as text" \
 refute "a candidate is not newer than itself"  bash "$CHANNEL" is-newer 0.5.2-rc.1 0.5.2-rc.1
 refute "a candidate is not newer than its final" bash "$CHANNEL" is-newer 0.5.2-rc.3 0.5.2
 refute "an earlier candidate is not newer"     bash "$CHANNEL" is-newer 0.5.2-rc.1 0.5.2-rc.2
+# The publish step's check for a final: a 0.5.2 hotfix cut while Beta holds
+# 0.5.3-rc.1 must leave Beta alone, so it has to read as not newer.
+refute "a hotfix final is not newer than the next version's candidate" \
+  bash "$CHANNEL" is-newer 0.5.2 0.5.3-rc.1
+refute "a final is not newer than itself" bash "$CHANNEL" is-newer 0.5.2 0.5.2
 # "Cannot tell" must not read as "not newer" or "newer": the preflight treats
 # it as its own failure. jq prints `null` for a manifest with no version.
 assert "an unrecognised version exits 2, distinct from 'not newer'" \

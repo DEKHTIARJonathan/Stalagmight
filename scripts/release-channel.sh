@@ -33,6 +33,8 @@ set -euo pipefail
 # updater's parser would reject.
 #
 # Beta gets candidates and the finals they lead to; Stable gets finals only.
+# `manifests` is what a tag may publish: the release job still leaves Beta and
+# the weekly mirror alone when a final is not newer than what Beta holds.
 # latest-weekly.json is a mirror of latest-beta.json: the weekly track is
 # retired, and 0.5.0/0.5.1 installs set to "Weekly" read that file. Anything
 # else with a suffix (the old -rcN shape, a weekly-looking tag) publishes no

@@ -493,7 +493,8 @@ jobs:
           # past it are never offered it, and installs behind it are offered
           # the older build instead of the newest one.
           # Checked here, before the release is public. Only candidates: a
-          # final always publishes. A missing latest-beta.json (the first
+          # final always publishes latest-stable.json, and the publish step
+          # decides whether it also takes Beta. A missing latest-beta.json (the first
           # candidate ever) has nothing to compare against; a present one that
           # cannot be read fails closed. Moving Beta backwards on purpose is
           # what repoint-updater-manifest.yml is for.
@@ -626,7 +627,8 @@ jobs:
       # as a byte-for-byte mirror of the beta one (the weekly track is retired,
       # and 0.5.0/0.5.1 installs set to "Weekly" read that file). Each is
       # overwritten on every publish to it. scripts/release-channel.sh decides
-      # which: a final vX.Y.Z publishes Stable, Beta and the mirror; a
+      # which: a final vX.Y.Z publishes Stable, plus Beta and the mirror
+      # unless Beta already holds something newer; a
       # candidate vX.Y.Z-rc.N publishes Beta and the mirror; any other tag
       # (the old -rcN shape included) publishes none. See docs/releasing.md
       # (Updater manifests) for the full flow, including how to repoint or
@@ -714,11 +716,6 @@ jobs:
             --notes-file "$RUNNER_TEMP/release-body.md" \
             --out "$OUT" \
             --include-darwin "$INCLUDE_DARWIN"
-          FILES=("$OUT")
-          for name in "${MANIFESTS[@]:1}"; do
-            cp "$OUT" "release-artifacts/$name"
-            FILES+=("release-artifacts/$name")
-          done
           # The rolling release is created once, by hand, per issue #579 - this
           # workflow only ever uploads to it, never creates it, so a missing
           # release fails loudly instead of silently doing nothing useful.
@@ -729,5 +726,58 @@ jobs:
             echo "::error::the rolling 'updater' GitHub release does not exist. See docs/releasing.md (Updater manifests) to create it once, then re-run this job."
             exit 1
           fi
+          # A final must not move Beta backwards (#650). latest-stable.json is
+          # always written, but Beta and its weekly mirror only when the final
+          # is newer than what latest-beta.json announces now, or when there
+          # is no latest-beta.json yet: a 0.5.2 hotfix cut while 0.5.3-rc.1 is
+          # out would otherwise point every Beta install back at 0.5.2. Read
+          # here, just before the upload, so the window for another run to
+          # publish in between is as short as this step can make it. A version
+          # that cannot be read leaves Beta alone and fails the step loudly, as
+          # the candidate guard in the preflight does - after latest-stable.json
+          # is uploaded, since Stable takes every final regardless. A candidate
+          # needs nothing here: the preflight already refused one that is not
+          # newer.
+          BETA_UNREADABLE=""
+          if [ "$CHANNEL_KIND" = final ]; then
+            ASSETS="$(gh release view updater --json assets --jq '.assets[].name')"
+            if grep -qx 'latest-beta.json' <<<"$ASSETS"; then
+              mkdir -p "$RUNNER_TEMP/beta-at-publish"
+              gh release download updater -p latest-beta.json -D "$RUNNER_TEMP/beta-at-publish"
+              CURRENT="$(jq -r '.version' "$RUNNER_TEMP/beta-at-publish/latest-beta.json")"
+              RC=0
+              bash scripts/release-channel.sh is-newer "$CHANNEL_MANIFEST_VERSION" "$CURRENT" || RC=$?
+              case "$RC" in
+                0) echo "latest-beta.json holds $CURRENT; $CHANNEL_MANIFEST_VERSION is newer, so Beta gets the final too." ;;
+                1)
+                  if [ "$CURRENT" = "$CHANNEL_MANIFEST_VERSION" ]; then
+                    echo "::notice::beta already holds $CURRENT; leaving beta and its weekly mirror."
+                  else
+                    echo "::notice::beta holds $CURRENT, newer than $CHANNEL_MANIFEST_VERSION; leaving beta and its weekly mirror."
+                  fi
+                  ;;
+                *) BETA_UNREADABLE="$CURRENT" ;;
+              esac
+              if [ "$RC" -ne 0 ]; then
+                KEEP=()
+                for name in "${MANIFESTS[@]}"; do
+                  case "$name" in
+                    latest-beta.json|latest-weekly.json) ;;
+                    *) KEEP+=("$name") ;;
+                  esac
+                done
+                MANIFESTS=("${KEEP[@]}")
+              fi
+            fi
+          fi
+          FILES=("$OUT")
+          for name in "${MANIFESTS[@]:1}"; do
+            cp "$OUT" "release-artifacts/$name"
+            FILES+=("release-artifacts/$name")
+          done
           gh release upload updater "${FILES[@]}" --clobber
           echo "Published ${MANIFESTS[*]} to the 'updater' release ($CHANNEL_KIND, manifest version $CHANNEL_MANIFEST_VERSION)."
+          if [ -n "$BETA_UNREADABLE" ]; then
+            echo "::error::published ${MANIFESTS[*]}, but could not compare $CHANNEL_MANIFEST_VERSION with the version in the current latest-beta.json ('$BETA_UNREADABLE'), so beta and its weekly mirror were left alone. Check latest-beta.json, then repoint the beta track by hand (docs/releasing.md, Rollback / repoint runbook) if it should take this final."
+            exit 1
+          fi
