@@ -126,6 +126,13 @@ UI regression coverage must include:
   direct file opens inspect SQLite metadata and warn before replacing the project.
 - Cancelling an open warning performs no download, lock release or project
   replacement, including a switch initiated through the close dialog.
+- Deferred open/create setup, remote downloads, and reconciliation cannot replay
+  older selections over newer requests. Stale successes and failures leave the newer
+  loading state, link, dialog, and telemetry intact.
+- Routine session refreshes do not abort close operations. Login/logout, project
+  replacement, and dialog replacement invalidate close and older-version confirmation
+  continuations before further side effects. Cancelled or superseded remote opens
+  restore the owning prompt's controls without resetting replacement prompts.
 - Manual SpeleoDB Save and publishing collect a commit message. Autosave remains
   local; failures keep the message and local edits available for retry.
 - Switching projects or closing the app warns about unsaved/unuploaded work.

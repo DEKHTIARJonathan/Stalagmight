@@ -131,16 +131,25 @@ its warning is cancelled. Older probes cannot raise warnings, load a project,
 surface errors, or clear the newer request's telemetry. Same-path opens share an
 execution only while current; A-B-A selects the final A. Tree replacement retains
 its ordering contract while independent access probes can proceed concurrently.
+Remote opens reserve that same token before their native warning and download, then
+carry it into the file load. A stale pull cannot seed access state, replace a newer
+selection, or raise an error over its dialog. Create-project operations check ownership
+through cancellation, creation, and reconciliation as well.
 
 The close dialog becomes busy before probing its destination and stays busy through
 saving, upload/release, and hand-back. Dismissal and editable choices are disabled;
 duplicate activation is ignored synchronously. Escape from outside the dialog
-routes through the visible dialog's dismissal guard as well. Cancelling the native access warning
-restores the parent controls without saving, releasing, or closing. Replacing the
+routes through the visible dialog's dismissal guard as well. Cancelling the native
+access warning restores the parent controls without saving, releasing, or closing. Replacing the
 prompt, project, or authenticated session stops stale continuations. Ordinary saves
-may refresh the project object without invalidating the operation. Older-version
-upload confirmation carries the pending exit through its existing cancel-return flow.
+may refresh the project object without invalidating the operation. Routine session
+status refreshes are also allowed; login/logout changes the session generation and
+invalidates the operation. Older-version upload confirmation carries request/session
+ownership with the pending exit and checks it before upload/release or hand-back,
+while retaining its cancel-return flow.
 
 Cancelling read-only or locked-project warnings in the browser or managed-file prompt
 restores retry and dismissal without an error. A replaced managed-file prompt retains
-ownership of its own controls.
+ownership of its own controls. A superseded discard-and-open in the unpushed-local
+prompt similarly restores retry and dismissal without resetting a replacement prompt's
+operation.
