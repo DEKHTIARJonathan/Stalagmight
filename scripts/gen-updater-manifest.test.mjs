@@ -8,10 +8,14 @@
 // Run: node scripts/gen-updater-manifest.test.mjs  (also a CI check step).
 
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { buildManifest, parseArgs } from './gen-updater-manifest.mjs';
+
+const GENERATOR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'gen-updater-manifest.mjs');
 
 let passed = 0;
 const failures = [];
@@ -58,14 +62,14 @@ function minisignSig(label) {
 // Writes a full set of three-platform artifacts + sigs, with a name pattern
 // that resembles the real bundler output (underscore-separated, per the
 // `collect release artifacts` globs in release.yml).
-function writeHappyPathArtifacts(dir, { linux = true, windows = true, darwin = true } = {}) {
+function writeHappyPathArtifacts(dir, { linux = true, windows = true, darwin = true, version = '0.5.1' } = {}) {
   if (linux) {
-    write(dir, 'Stalagmight_0.5.1_amd64.AppImage');
-    write(dir, 'Stalagmight_0.5.1_amd64.AppImage.sig', minisignSig('linux'));
+    write(dir, `Stalagmight_${version}_amd64.AppImage`);
+    write(dir, `Stalagmight_${version}_amd64.AppImage.sig`, minisignSig('linux'));
   }
   if (windows) {
-    write(dir, 'Stalagmight_0.5.1_x64-setup.exe');
-    write(dir, 'Stalagmight_0.5.1_x64-setup.exe.sig', minisignSig('windows'));
+    write(dir, `Stalagmight_${version}_x64-setup.exe`);
+    write(dir, `Stalagmight_${version}_x64-setup.exe.sig`, minisignSig('windows'));
   }
   if (darwin) {
     write(dir, 'Stalagmight.app.tar.gz');
@@ -281,6 +285,57 @@ test('weekly version string passes through unchanged', () => {
   writeHappyPathArtifacts(dir, { darwin: false });
   const manifest = buildManifest({ ...BASE, version: '0.5.1-weekly.20260817', dir, includeDarwin: false });
   assert.equal(manifest.version, '0.5.1-weekly.20260817');
+});
+
+// A release candidate (#650): the manifest announces X.Y.Z-rc.N, the release
+// is the vX.Y.Z-rc.N tag, and the artifacts on it are plain X.Y.Z, because
+// only the app's baked STALAGMIGHT_PRERELEASE carries the rc.N.
+test('candidate: --version X.Y.Z-rc.N passes through; URLs name the rc tag and the plain artifacts', () => {
+  const dir = makeDir();
+  writeHappyPathArtifacts(dir, { version: '0.5.2' });
+  const manifest = buildManifest({ version: '0.5.2-rc.1', tag: 'v0.5.2-rc.1', notes: 'n', dir, includeDarwin: true });
+  assert.equal(manifest.version, '0.5.2-rc.1');
+  assert.equal(
+    manifest.platforms['linux-x86_64'].url,
+    'https://github.com/Stalagmight/Stalagmight/releases/download/v0.5.2-rc.1/Stalagmight_0.5.2_amd64.AppImage',
+  );
+  assert.equal(
+    manifest.platforms['windows-x86_64'].url,
+    'https://github.com/Stalagmight/Stalagmight/releases/download/v0.5.2-rc.1/Stalagmight_0.5.2_x64-setup.exe',
+  );
+  assert.equal(
+    manifest.platforms['darwin-aarch64'].url,
+    'https://github.com/Stalagmight/Stalagmight/releases/download/v0.5.2-rc.1/Stalagmight.app.tar.gz',
+  );
+});
+
+// The same, through the command line the release and repoint workflows run:
+// argument parsing, --notes-file, the written file and its JSON, not just the
+// exported function.
+test('candidate end to end: the CLI writes an X.Y.Z-rc.N manifest', () => {
+  const dir = makeDir();
+  writeHappyPathArtifacts(dir, { version: '0.5.2' });
+  const notesFile = path.join(dir, 'notes.md');
+  fs.writeFileSync(notesFile, 'Candidate notes.\n');
+  const out = path.join(dir, 'latest-beta.json');
+  const stdout = execFileSync(process.execPath, [
+    GENERATOR,
+    '--version', '0.5.2-rc.1',
+    '--tag', 'v0.5.2-rc.1',
+    '--dir', dir,
+    '--notes-file', notesFile,
+    '--out', out,
+    '--include-darwin', 'false',
+  ], { encoding: 'utf8' });
+  assert.match(stdout, /version 0\.5\.2-rc\.1, 2 platform\(s\)/);
+  const manifest = JSON.parse(fs.readFileSync(out, 'utf8'));
+  assert.equal(manifest.version, '0.5.2-rc.1');
+  assert.equal(manifest.notes, 'Candidate notes.\n');
+  assert.deepEqual(Object.keys(manifest.platforms), ['linux-x86_64', 'windows-x86_64']);
+  assert.equal(
+    manifest.platforms['linux-x86_64'].url,
+    'https://github.com/Stalagmight/Stalagmight/releases/download/v0.5.2-rc.1/Stalagmight_0.5.2_amd64.AppImage',
+  );
 });
 
 test('asset filenames are URL-encoded', () => {

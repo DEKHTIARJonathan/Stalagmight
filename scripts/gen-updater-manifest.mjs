@@ -3,9 +3,12 @@
 // Builds one Tauri v2 updater manifest (a static JSON, not signed itself -
 // each platform entry carries its own minisign signature) from a directory of
 // release artifacts. Two tracks exist, `latest-stable.json` and
-// `latest-weekly.json`; this script emits ONE manifest per invocation, so the
-// release workflow picks the file name via `--out` and uploads it to the
-// rolling `updater` GitHub release afterward (see docs/releasing.md).
+// `latest-beta.json`, plus `latest-weekly.json` as a copy of the beta one for
+// installs still set to the retired Weekly track (#650). This script emits ONE
+// manifest per invocation; the release workflow picks the file name via
+// `--out`, copies it to the other names the tag publishes
+// (scripts/release-channel.sh decides which), and uploads them to the rolling
+// `updater` GitHub release afterward (see docs/releasing.md).
 //
 // Usage:
 //   node scripts/gen-updater-manifest.mjs \
@@ -13,14 +16,13 @@
 //     --notes-file notes.md --out latest-stable.json [--include-darwin true]
 //
 // `--version` is what the updater compares against the running app's own
-// version - it is the manifest version, not necessarily the tag. A weekly
-// build's version carries a `-weekly.YYYYMMDD` suffix on the NEXT unconsumed
-// base (the base no stable release has shipped yet), never on the last
-// stable's own base - a `-weekly.` suffix is a semver PRE-release, so
-// `0.5.1-weekly.20260817` sorts BELOW plain `0.5.1`, not above it. Baking it
-// onto the next base keeps every weekly version strictly above the last
-// stable and strictly below the next one, which is the actual invariant the
-// updater's "only ever offer something newer" comparison depends on.
+// version - it is the manifest version, not necessarily what the artifacts are
+// named. A release candidate's is `X.Y.Z-rc.N` while its artifacts stay plain
+// `X.Y.Z` (the MSI bundler rejects a non-numeric pre-release, so only the
+// app's baked STALAGMIGHT_PRERELEASE carries the rc.N); a final's is `X.Y.Z`.
+// `-rc.N` is a semver PRE-release, so `0.5.2-rc.1` sorts below `0.5.2-rc.2`,
+// which sorts below the final `0.5.2`: each candidate, then the final, is
+// strictly newer than the build before it.
 //
 // `--tag` names the GitHub release the artifacts were uploaded to; asset URLs
 // are built from it as
@@ -51,7 +53,7 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
 // a hardcoded base is simpler than a flag nothing would ever set differently.
 const GITHUB_RELEASE_BASE = 'https://github.com/Stalagmight/Stalagmight/releases/download';
 
-// X.Y.Z, optionally followed by a dot/alnum suffix (`-rc1`, `-weekly.20260817`).
+// X.Y.Z, optionally followed by a dot/alnum suffix (`-rc.1`).
 const VERSION_RE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/;
 
 // vX.Y.Z, optionally suffixed - the same shape release-tag.sh accepts.
