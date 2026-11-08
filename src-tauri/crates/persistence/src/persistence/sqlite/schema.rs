@@ -1209,25 +1209,16 @@ impl Database {
             return Ok(());
         }
 
-        if stamped > SCHEMA_VERSION {
-            tracing::warn!(
-                current = stamped,
-                expected = SCHEMA_VERSION,
-                "Database schema version is newer than this app"
-            );
-            // The file is opened anyway (the project tables are read with the
-            // columns this build knows), but its undo history is not. Every
-            // migration arm below exists because some persisted payload became
-            // ambiguous or unsafe to replay, and a version this build has never
-            // heard of runs NONE of them - so a file merely CLAIMING to be from
-            // the future keeps exactly the pre-v17 payloads the v17 arm exists
-            // to drop, which is all it takes to turn `PRAGMA user_version = 99`
-            // into a replay that wipes a section's name, surveyor and date.
-            // Dropping the history is the fail-safe: it costs a best-effort,
-            // capped, local-only stack, and the project data itself is left
-            // exactly as the file holds it.
-            self.drop_legacy_undo_history()?;
-            return Ok(());
+        // A newer file is refused (#649). Every opener already refuses it before
+        // reaching here (`newer_schema::check_not_newer`); this keeps the rule
+        // where the migrations are, so no caller can migrate, or clear the
+        // history of, a file whose schema this build has never seen.
+        if current > SCHEMA_VERSION {
+            return Err(anyhow::Error::new(super::NewerSchema {
+                file: super::newer_schema::file_name_of(&self.conn),
+                found: current,
+                supported: SCHEMA_VERSION,
+            }));
         }
 
         // Everything past this point WRITES. An unstamped file whose row claims
@@ -1244,14 +1235,7 @@ impl Database {
         // (#517): the save carries them with `load_resolved_warnings_verbatim`,
         // which reads the un-migrated table in the shape it actually has.
         //
-        // `== SCHEMA_VERSION`, not `>=`. A row claiming the FUTURE does not
-        // belong here: its branch below drops the undo history precisely because
-        // no arm has sanitized those payloads, and bypassing that would let the
-        // load path restore pre-v17 entries this function classifies as unsafe to
-        // replay. Such a file reaches the DELETE and fails the open on read-only
-        // media - which is exactly what master did with it (master derived
-        // `current` from the row too, and hit the same DELETE), so nothing
-        // regresses.
+        // `== SCHEMA_VERSION`: a row claiming the FUTURE was refused above.
         //
         // Deliberately NOT extended to a file with a real stamp below
         // SCHEMA_VERSION either: that one already reached these writes and
@@ -1270,23 +1254,6 @@ impl Database {
                  running migrations"
             );
             return Ok(());
-        }
-
-        if current > SCHEMA_VERSION {
-            // Only reachable with `claimed_only`: a real stamp above
-            // SCHEMA_VERSION returned above. The row's word is enough to skip
-            // every version-gated arm (they are all `current < N`, so none run)
-            // and to drop the history those arms exist to sanitize - but NOT to
-            // skip `migrate_schema`, which is idempotent and adds only columns
-            // and tables this build needs to read the file at all. Returning
-            // here instead is how the #485 shape survived one branch earlier:
-            // permanently, since nothing stamps afterwards either.
-            tracing::warn!(
-                claimed = current,
-                expected = SCHEMA_VERSION,
-                "Unstamped database whose project row claims a version newer than this app"
-            );
-            self.drop_legacy_undo_history()?;
         }
 
         // `migrate_schema` is idempotent - every step is a CREATE IF NOT EXISTS

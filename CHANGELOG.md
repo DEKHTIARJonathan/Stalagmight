@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A project saved by a newer version of Stalagmight is no longer opened and quietly downgraded** - opening, merging, renaming, repairing or restoring such a project, or a dive-plan file in the same state, now stops with a message to update Stalagmight, and the file is left as it was. Before, the app only logged a warning and carried on, and saving the project rewrote it in the older format, dropping whatever the older version did not know. A project on SpeleoDB that a newer version saved is refused before the download replaces your local copy ([#649](https://github.com/Stalagmight/Stalagmight/issues/649))
+
 ## [0.5.1] - 2026-11-08
 
 ### Added

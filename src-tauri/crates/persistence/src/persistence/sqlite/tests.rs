@@ -179,14 +179,13 @@ fn a_project_row_claiming_the_current_version_cannot_skip_the_migration_chain() 
 
 /// [#485] The same shape, one branch earlier: the future-version bail.
 ///
-/// It also ran on the row-derived version, so an unstamped file whose project
-/// row claims 99 returned having run neither `migrate_schema` nor the stamp -
-/// permanently, since the next open repeats the decision. The row's word is
-/// enough to skip the version-gated arms and to drop the history they exist to
-/// sanitize; it is not enough to skip the idempotent column adds this build
-/// needs to read the file at all.
+/// It used to run on the row-derived version and return having run neither
+/// `migrate_schema` nor the stamp, permanently. Since #649 the row's claim
+/// refuses the open outright, as `stalx-reader` already did: no migration, no
+/// stamp and no column add land in a file this build cannot vouch for, so the
+/// #485 shape (a file left unmigrated forever) cannot arise from it either.
 #[test]
-fn an_unstamped_file_whose_project_row_claims_the_future_still_gains_shot_uuid() {
+fn an_unstamped_file_whose_project_row_claims_the_future_is_refused_untouched() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("from_the_future.stalx");
 
@@ -213,40 +212,29 @@ fn an_unstamped_file_whose_project_row_claims_the_future_still_gains_shot_uuid()
             .unwrap();
     }
 
-    let db = Database::open_existing(&path).expect("a file claiming the future still opens");
+    let before = std::fs::read(&path).unwrap();
 
-    let has_column: i64 = db
-        .conn
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('resolved_warnings') WHERE name='shot_uuid'",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
+    let err = Database::open_existing(&path)
+        .err()
+        .expect("a file claiming the future is refused");
+
     assert_eq!(
-        has_column, 1,
-        "the idempotent column adds must run even when the row claims the future"
-    );
-    let stamped: i64 = db
-        .conn
-        .query_row("PRAGMA user_version", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(stamped, 0, "a claim from the future certifies nothing");
-    let claimed: i64 = db
-        .conn
-        .query_row("SELECT schema_version FROM project LIMIT 1", [], |r| {
-            r.get(0)
+        err.downcast_ref::<NewerSchema>(),
+        Some(&NewerSchema {
+            file: "from_the_future.stalx".to_string(),
+            found: 99,
+            supported: SCHEMA_VERSION
         })
-        .unwrap();
+    );
     assert_eq!(
-        claimed, 99,
-        "the claim itself must survive: the next open reads it to pick its arms"
+        std::fs::read(&path).unwrap(),
+        before,
+        "no column add, stamp or claim rewrite reached the file"
     );
 }
 
-/// A REAL stamp above `SCHEMA_VERSION` is unchanged by #485: run nothing, drop
-/// the history no arm has sanitized, return. Pinned because the branch above it
-/// now falls through, and the two must not be collapsed.
+/// A REAL stamp above `SCHEMA_VERSION` runs no migration and is not downgraded:
+/// since #649 the open refuses it before anything writes.
 #[test]
 fn a_genuinely_stamped_future_file_still_runs_no_migration() {
     let temp = TempDir::new().unwrap();
@@ -274,7 +262,12 @@ fn a_genuinely_stamped_future_file_still_runs_no_migration() {
             .unwrap();
     }
 
-    let db = Database::open_existing(&path).unwrap();
+    let err = Database::open_existing(&path)
+        .err()
+        .expect("a file from a newer schema is refused (#649)");
+    assert!(err.downcast_ref::<NewerSchema>().is_some(), "{err:#}");
+
+    let db = Database::open_for_metadata(&path).unwrap();
     let has_column: i64 = db
         .conn
         .query_row(
@@ -371,11 +364,9 @@ fn an_unwritable_unstamped_file_still_opens_without_running_the_chain() {
 /// read-only bypass.
 ///
 /// The bypass exists so a file that reached no write before #485 still opens. A
-/// future claim is not that file: its branch drops the undo history precisely
-/// because no arm has sanitized those payloads, and bypassing that would hand
-/// the load path pre-v17 entries that replay into a wiped section name, surveyor
-/// and date. Master derived `current` from the row too and hit the same DELETE,
-/// so failing here is master's behaviour, not a regression.
+/// future claim is not that file: opening it would hand the load path undo
+/// payloads no migration arm has vetted. Since #649 it is refused as a newer
+/// file before the bypass is reached.
 #[test]
 #[cfg(unix)]
 fn an_unwritable_file_claiming_the_future_is_refused_rather_than_left_unsanitized() {
@@ -409,10 +400,10 @@ fn an_unwritable_file_claiming_the_future_is_refused_rather_than_left_unsanitize
 
     let opened = Database::open_existing(&path);
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
-    assert!(
-        opened.is_err(),
-        "a future-claiming file must never be opened with its unsanitized history intact"
-    );
+    let err = opened
+        .err()
+        .expect("a future-claiming file must never be opened with its unsanitized history intact");
+    assert!(err.downcast_ref::<NewerSchema>().is_some(), "{err:#}");
 }
 
 /// [#485] Withholding the stamp may not re-arm a one-shot migration.
@@ -2793,10 +2784,11 @@ fn a_pre_v17_file_loses_its_explicit_null_section_undo_history_on_open() {
 /// nothing sensible it could run - so a stamp of 99 used to walk straight past
 /// the v7, v13, v15, v16 and v17 drops with the stacks intact. That is a
 /// one-pragma bypass of the v17 arm in particular, whose payloads still PARSE
-/// and whose replay wipes a section's name, surveyor and date. The history goes
-/// instead; the project data is left exactly as the file holds it.
+/// and whose replay wipes a section's name, surveyor and date. The open used to
+/// drop the history instead, which wrote into a newer build's file; since #649
+/// it refuses the file, so the stacks are neither replayed nor deleted.
 #[test]
-fn a_file_claiming_a_future_schema_loses_its_undo_history_but_keeps_its_project() {
+fn a_file_claiming_a_future_schema_is_refused_with_its_history_left_in_place() {
     let temp_dir = TempDir::new().unwrap();
     let path = temp_dir.path().join("from-the-future.stalx");
     {
@@ -2842,21 +2834,16 @@ fn a_file_claiming_a_future_schema_loses_its_undo_history_but_keeps_its_project(
         drop(db);
     }
 
-    let db = Database::open_existing(&path).unwrap();
-    assert!(
-        db.load_undo_stack_with_timestamps().unwrap().is_empty(),
-        "a forged future user_version kept undo payloads no migration arm could vet"
-    );
-    assert!(
-        db.load_redo_stack_with_timestamps().unwrap().is_empty(),
-        "a forged future user_version kept redo payloads no migration arm could vet"
-    );
-    // The stamp itself is left alone - this build has not migrated anything and
-    // must not claim it has - and the project still loads.
+    let err = Database::open_existing(&path)
+        .err()
+        .expect("a forged future user_version is refused, so nothing replays its payloads");
+    assert!(err.downcast_ref::<NewerSchema>().is_some(), "{err:#}");
+
+    // Nothing was deleted or re-stamped either: the file is the newer build's.
+    let db = Database::open_for_metadata(&path).unwrap();
+    assert_eq!(db.load_undo_stack_with_timestamps().unwrap().len(), 1);
+    assert_eq!(db.load_redo_stack_with_timestamps().unwrap().len(), 1);
     assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION + 82);
-    let project = db.load_project().unwrap();
-    assert_eq!(project.name, "Future");
-    assert_eq!(project.sections.len(), 1);
 }
 
 #[test]

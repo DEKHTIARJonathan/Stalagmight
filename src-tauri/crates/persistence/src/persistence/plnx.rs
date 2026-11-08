@@ -43,6 +43,19 @@ impl PlnxStore {
     /// [`ensure_identity`](Self::ensure_identity).
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path).context("Failed to open dive-plan file")?;
+        // A newer Stalagmight's file is refused before the stamp below would
+        // rewrite its version to this build's (#649).
+        let stored: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+        if stored > PLNX_SCHEMA_VERSION {
+            return Err(anyhow::Error::new(crate::models::NewerSchema {
+                file: path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                found: stored,
+                supported: PLNX_SCHEMA_VERSION,
+            }));
+        }
         // Crash-safe in-place writes; ignore pragma failures (defaults are already safe).
         let _ = conn.pragma_update(None, "journal_mode", "DELETE");
         let _ = conn.pragma_update(None, "synchronous", "FULL");
@@ -250,6 +263,7 @@ impl PlnxStore {
 mod tests {
     #![expect(
         clippy::unwrap_used,
+        clippy::panic,
         reason = "tests build from known-valid literals; a failed unwrap should fail the test"
     )]
     use super::*;
@@ -424,5 +438,46 @@ mod tests {
         }
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// [#649] A `.plnx` a newer Stalagmight wrote is refused, and `open` does not
+    /// stamp this build's version over it on the way.
+    #[test]
+    fn a_newer_plnx_is_refused_and_left_unchanged() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("cave.plnx");
+        {
+            let store = PlnxStore::open(&path).unwrap();
+            store
+                .ensure_identity("2026-05-05T00:00:00Z", "Cave")
+                .unwrap();
+            store
+                .insert("P1", "2026-07-06T10:00:00Z", 1, r#"{"x":1}"#)
+                .unwrap();
+            store.set_user_version(PLNX_SCHEMA_VERSION + 1).unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+
+        let Err(err) = PlnxStore::open(&path) else {
+            panic!("a newer .plnx must be refused");
+        };
+
+        assert_eq!(
+            err.downcast_ref::<crate::models::NewerSchema>(),
+            Some(&crate::models::NewerSchema {
+                file: "cave.plnx".to_owned(),
+                found: PLNX_SCHEMA_VERSION + 1,
+                supported: PLNX_SCHEMA_VERSION,
+            }),
+            "{err:#}"
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        // The identity probe the plan commands run first still reads it.
+        assert_eq!(
+            PlnxStore::probe_stored_project_created_at(&path)
+                .unwrap()
+                .as_deref(),
+            Some("2026-05-05T00:00:00Z")
+        );
     }
 }

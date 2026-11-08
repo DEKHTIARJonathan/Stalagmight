@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use ts_rs::TS;
 
 use crate::core::events::EventSink;
-use crate::persistence::RefusedSchemaObject;
+use crate::persistence::{NewerSchema, RefusedSchemaObject};
 
 // ============================================================================
 // LoadError
@@ -53,6 +53,12 @@ pub struct LoadError {
     /// degradation is the generic error UI instead of the managed-file prompt.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speleodb_managed: Option<SpeleoManagedFile>,
+    /// Set only by [`Self::newer_schema`] (#649): the file name and both
+    /// versions, so the frontend renders the refusal from its own string with
+    /// them rather than relaying `message`. Dropped by the `Display` fallback
+    /// on the same terms as `speleodb_managed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub newer_schema: Option<NewerSchema>,
 }
 
 impl LoadError {
@@ -63,6 +69,7 @@ impl LoadError {
             message: message.into(),
             details: None,
             speleodb_managed: None,
+            newer_schema: None,
         }
     }
 
@@ -77,6 +84,7 @@ impl LoadError {
             message: message.into(),
             details: Some(details.into()),
             speleodb_managed: None,
+            newer_schema: None,
         }
     }
 
@@ -123,6 +131,16 @@ impl LoadError {
             ),
             path,
         )
+    }
+
+    /// The open was refused because a newer Stalagmight saved the file (#649):
+    /// this build would read it with only the columns it knows and drop the
+    /// rest on the next save. `path` rides in `details`, the refusal itself in
+    /// `newer_schema`, and `message` is its one English wording.
+    pub fn newer_schema(newer: &NewerSchema, path: &str) -> Self {
+        let mut err = Self::with_details("NEWER_SCHEMA", newer.to_string(), path);
+        err.newer_schema = Some(newer.clone());
+        err
     }
 
     /// Error when the OS denied filesystem access to the file - e.g. macOS
@@ -280,6 +298,12 @@ pub(crate) fn is_path_not_found(err: &anyhow::Error) -> bool {
 pub(crate) fn refused_schema(err: &anyhow::Error) -> Option<&RefusedSchemaObject> {
     err.chain()
         .find_map(|cause| cause.downcast_ref::<RefusedSchemaObject>())
+}
+
+/// The newer-schema refusal inside an open error, if that is why it failed.
+pub(crate) fn newer_schema(err: &anyhow::Error) -> Option<&NewerSchema> {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<NewerSchema>())
 }
 
 /// True if any cause carries SQLite's errno-free `SQLITE_CANTOPEN` message -
