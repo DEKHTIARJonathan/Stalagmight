@@ -19,12 +19,15 @@ application continues to use its saved endpoint and credential storage.
 | `SPELEODB_EMAIL`, `SPELEODB_PASSWORD` | Email login, followed by profile validation |
 | `SPELEODB_API_TIMEOUT_MS` | Per-request timeout, including file transfers; defaults to `20000` |
 | `SPELEODB_API_RETRY_COUNT` | Additional attempts for safe reads and token exchange; defaults to `3` |
-| `SPELEODB_API_TEST_ENABLED` | Exactly `true` enables live requests; defaults to `true` |
+| `SPELEODB_API_TEST_ENABLED` | Exactly `true` enables live requests; defaults to `false` |
 
 Defaults apply when neither the exported variable nor `.env` supplies a value.
 Set `SPELEODB_API_TEST_ENABLED=false` to disable live requests explicitly.
 Both authentication paths are required when live testing is enabled. Missing,
-blank or placeholder credentials fail the test. Credentials are never printed.
+blank or placeholder credentials skip before any network operation, naming only the
+missing variable names. Diagnostics distinguish disabled, incomplete configuration,
+and execution; authentication/API/assertion/cleanup failures after validation fail
+the test. Credentials are never printed.
 Set a timeout long enough for the test server's native-file processing; a process
 override can be used without editing `.env`.
 
@@ -38,7 +41,7 @@ TELEMETRY_ENDPOINT=http://localhost/dummy SPELEODB_API_TEST_ENABLED=false \
   cargo test --manifest-path src-tauri/Cargo.toml --workspace --features telemetry
 
 # Live native-file round trips using BOTH email login and the provided token.
-TELEMETRY_ENDPOINT=http://localhost/dummy \
+SPELEODB_API_TEST_ENABLED=true TELEMETRY_ENDPOINT=http://localhost/dummy \
   cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-speleodb \
   --features telemetry live_used_api_calls_with_email_and_token -- --nocapture
 
@@ -66,8 +69,8 @@ SPELEODB_API_TEST_ENABLED=false TELEMETRY_ENDPOINT=http://localhost/dummy \
   -- --skip speleodb::client::tests::live_used_api_calls_with_email_and_token
 ```
 
-The separate "SpeleoDB live API tests" step runs after offline tests (and after
-CI's immediate generated-bindings check). Its condition is
+The separate "SpeleoDB live API tests" step runs after all deterministic checks in its job, including
+release-profile compilation and CI's generated-bindings/clippy checks. Its condition is
 `github.event_name != 'pull_request'`:
 
 | Event | Offline tests | Live tests |
@@ -85,20 +88,22 @@ and runs exactly the test exercising both EMAIL and TOKEN authentication:
 SPELEODB_API_TEST_ENABLED=true TELEMETRY_ENDPOINT=http://localhost/dummy \
   cargo test --manifest-path src-tauri/Cargo.toml -p stalagmight-speleodb --lib \
   --features telemetry speleodb::client::tests::live_used_api_calls_with_email_and_token \
-  -- --exact
+  -- --exact --nocapture
 ```
 
-Missing credentials and live failures fail enabled verification. The manual runner
-benchmark stays offline. Each live run retains two synthetic test projects.
+Missing credentials visibly skip enabled verification; `--nocapture` exposes the
+diagnostic. A skipped run is not live API validation. Live failures fail the job.
+The manual runner benchmark stays offline. Each live run deletes its two synthetic projects.
 Deterministic frontend regressions cover request supersession, warning cancellation,
 and close-operation ownership using synthetic data and deferred promises.
 
-## Coverage and retained data
+## Coverage and cleanup
 
 Only operations used by the application are exercised: token exchange, profile,
 project list/detail/create/update, revisions, individual lock acquire/release,
 and native upload/download at HEAD and at a revision. There are no collaborator,
-team, remote project deletion, release-all or archive endpoints in the suite.
+team, release-all or archive endpoints in the suite. The SDK deletion endpoint is
+used only by test cleanup.
 
 Offline HTTP tests check request methods, paths, bearer headers, login payloads,
 permission and mutex projection, nullable metadata patches, one multipart
@@ -115,9 +120,12 @@ The live test generates synthetic SQLite databases in temporary directories. For
 each authentication path it creates a unique private `STALAGMIGHT` project, verifies
 metadata and locking, uploads two native revisions, checks the unchanged-file
 response, and compares downloaded bytes at HEAD and at the first revision. It
-releases only that test-owned project's lock. Projects are **retained**, with IDs
-printed for inspection. The suite never deletes remote data or uses private cave
-fixtures.
+attempts lock release and deletion of only IDs returned by this run, after success,
+returned failure or an assertion panic. Both cleanup operations are attempted even
+if release fails; cleanup failures fail the test and are reported separately from
+the original failure. It never sweeps by name/prefix. If creation completes remotely
+but its response is lost, the project ID is unknown and cannot safely be deleted
+automatically. All test content is synthetic; no private cave fixtures are used.
 
 UI regression coverage must include:
 
@@ -136,8 +144,8 @@ UI regression coverage must include:
 - Manual SpeleoDB Save and publishing collect a commit message. Autosave remains
   local; failures keep the message and local edits available for retry.
 - Switching projects or closing the app warns about unsaved/unuploaded work.
-  Cancelling preserves the current project and lock. Confirmed exits release the
-  held lock after checking the current owner; a different holder is not released.
+  Cancelling preserves the current project and lock. Keep-lock exits close locally without contacting the current server. Confirmed
+  release exits check the current owner; a different holder is not released.
   Local release/acquire/poll operations are serialized. A failed upload or explicit
   release keeps the exit dialog open.
 - Read-only users cannot acquire or upload; another user's mutex does not become
