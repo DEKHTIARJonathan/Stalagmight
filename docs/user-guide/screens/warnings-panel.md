@@ -1,7 +1,8 @@
 # Warnings panel
 
 The **Warnings** tab of the right panel. It lists problems in the survey
-geometry, whether from the survey itself or from data entry. While it is open,
+geometry, whether from the survey itself or from data entry, split into
+[errors and warnings](../concepts/errors-and-warnings.md). While it is open,
 the map is colored by problem: red is an error, yellow a warning, green no
 problem.
 

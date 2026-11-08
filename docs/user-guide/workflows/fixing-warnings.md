@@ -5,6 +5,9 @@
 2. Click **Resolve** on a warning, pick a fix, check the preview on the map and
    click **Apply**.
 
+Always fix errors. A warning may just mean the shot needs retaking, see
+[Errors and warnings](../concepts/errors-and-warnings.md).
+
 ## Step details
 
 ### 1. Warnings tab

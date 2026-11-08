@@ -19,6 +19,7 @@ How to use Stalagmight. Pages link to each other.
 
 **Concepts**
 - [Sections, shots and stations](concepts/sections-shots-stations.md)
+- [Errors and warnings](concepts/errors-and-warnings.md)
 
 ## Contributing
 
