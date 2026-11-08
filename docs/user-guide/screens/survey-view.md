@@ -26,7 +26,8 @@ The main window of an open project: the map, with **Sections** on the left,
 
 **Panels and map**
 
-12. **Add section**: a new, empty section for entering data by hand.
+12. **Add section**: enter a new section by hand in the
+    [Import / Create Section dialog](create-section-dialog.md).
 13. **Import data**: same as 2.
 14. Pin or hide the **Sections** panel.
 15. **Fit to view**: zoom to the whole survey.

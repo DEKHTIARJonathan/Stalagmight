@@ -6,6 +6,9 @@
 3. In the [survey view](../screens/survey-view.md), add data: **Import** a file
    (for example a `.dmp` from an mNemo), or click **+** next to **Sections** to
    enter it by hand.
+4. Entering by hand: in the
+   [Import / Create Section dialog](../screens/create-section-dialog.md), name
+   the section and set the surveyor, date and color.
 
 Tick **Save project file immediately** to create the file right away. Otherwise
 it is saved once you add data.
@@ -39,3 +42,11 @@ for the project details.
   `.dmp` from an mNemo.
 - **Add section** (12): start an empty section and enter shots by hand. See
   [Sections, shots and stations](../concepts/sections-shots-stations.md).
+
+### 4. Section details
+
+![Import / Create Section dialog](../images/create-section-dialog.png)
+
+- **Section Name** (2), **Surveyor** (3) and **Date** (4, when the line was
+  surveyed) are optional.
+- **Color** (5) is how the section shows on the map.

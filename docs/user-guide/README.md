@@ -9,6 +9,7 @@ How to use Stalagmight. Pages link to each other.
 - [Start screen](screens/start-screen.md)
 - [New Project dialog](screens/new-project-dialog.md)
 - [Survey view](screens/survey-view.md)
+- [Import / Create Section dialog](screens/create-section-dialog.md)
 
 **Concepts**
 - [Sections, shots and stations](concepts/sections-shots-stations.md)
