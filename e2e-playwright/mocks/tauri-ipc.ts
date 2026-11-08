@@ -5547,7 +5547,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // parking an update banner over whatever that spec is asserting on.
           // A spec that wants the banner overrides this case.
           case 'check_for_app_update':
-            return { status: { kind: 'up_to_date' }, current_version: '0.5.0' };
+            return { status: { kind: 'up_to_date' }, current_version: '0.5.0', installs_on_quit: true };
 
           case 'arm_app_update_restart':
           case 'unarm_app_update_restart':
