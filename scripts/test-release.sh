@@ -596,7 +596,9 @@ assert "the dotted spelling of the same candidate passes" \
 echo "== case 16c: any other suffix is refused, not cut as an unpublished candidate =="
 D=$(fresh_clone case16c)
 CUR=$(version_of "$D")
-for bad in "v$CUR-beta.1" "v$CUR-rc.1.1" "v$CUR-RC.1" "v$CUR-rc.x"; do
+# rc.0 and rc.01 too: candidates count from 1, and semver forbids the leading
+# zero, so the updater could not parse a 0.5.2-rc.01 manifest.
+for bad in "v$CUR-beta.1" "v$CUR-rc.1.1" "v$CUR-RC.1" "v$CUR-rc.x" "v$CUR-rc.0" "v$CUR-rc.01"; do
   assert "refused '$bad' as a shape the workflow does not publish" \
     bash -c '"$1" "$2" 2>&1 | grep -q "not a tag shape the release workflow publishes"' \
     _ "$D/scripts/release-tag.sh" "$bad"
@@ -967,7 +969,8 @@ NONE="$(printf '%s\n' kind=none base= prerelease= channel= manifest_version= man
 # Beta channel or publishes a manifest. The last one is a ref name trying to
 # smuggle a second line into $GITHUB_OUTPUT.
 for t in v0.5.2-rc1 v0.5.1-weekly.20260817 v0.5.2-beta.1 v0.5.2-rc.1.1 v0.5.2-RC.1 \
-  v0.5.2-rc. v0.5.2-rc.x 0.5.2 v0.5 master '' "$(printf 'v0.5.2\nkind=final')"; do
+  v0.5.2-rc. v0.5.2-rc.x v0.5.2-rc.0 v0.5.2-rc.01 0.5.2 v0.5 master '' \
+  "$(printf 'v0.5.2\nkind=final')"; do
   assert "'$t' bakes and publishes nothing" classify_is "$t" "$NONE"
 done
 refute "classify without a tag is a usage error" \
@@ -987,6 +990,8 @@ refute "an earlier candidate is not newer"     bash "$CHANNEL" is-newer 0.5.2-rc
 # it as its own failure. jq prints `null` for a manifest with no version.
 assert "an unrecognised version exits 2, distinct from 'not newer'" \
   bash -c 'bash "$1" is-newer 0.5.2-rc.1 null 2>/dev/null; [ $? -eq 2 ]' _ "$CHANNEL"
+assert "a leading-zero rc number is not a version the pipeline writes" \
+  bash -c 'bash "$1" is-newer 0.5.2-rc.01 0.5.2-rc.1 2>/dev/null; [ $? -eq 2 ]' _ "$CHANNEL"
 assert "a weekly-shaped version exits 2 too" \
   bash -c 'bash "$1" is-newer 0.5.2-rc.1 0.5.1-weekly.20260817 2>/dev/null; [ $? -eq 2 ]' _ "$CHANNEL"
 

@@ -28,6 +28,10 @@ set -euo pipefail
 #   vX.Y.Z-rc.N    candidate  X.Y.Z-rc.N        latest-beta.json latest-weekly.json
 #   anything else  none       (empty)           (empty)
 #
+# N counts from 1 with no leading zero: rc.0 is not a candidate anyone cut,
+# and semver forbids a leading zero in a numeric identifier (rc.01), which the
+# updater's parser would reject.
+#
 # Beta gets candidates and the finals they lead to; Stable gets finals only.
 # latest-weekly.json is a mirror of latest-beta.json: the weekly track is
 # retired, and 0.5.0/0.5.1 installs set to "Weekly" read that file. Anything
@@ -45,7 +49,7 @@ set -euo pipefail
 # $GITHUB_OUTPUT lines. Bash 3.2 compatible, for the macOS userland.
 
 FINAL_RE='^v([0-9]+\.[0-9]+\.[0-9]+)$'
-CANDIDATE_RE='^v([0-9]+\.[0-9]+\.[0-9]+)-(rc\.[0-9]+)$'
+CANDIDATE_RE='^v([0-9]+\.[0-9]+\.[0-9]+)-(rc\.[1-9][0-9]*)$'
 
 usage() {
   echo "Usage: $0 classify <tag> | is-newer <version> <than>" >&2
@@ -81,7 +85,7 @@ classify() {
 version_key() {
   if [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
     echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]} 1 0"
-  elif [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)-rc\.([0-9]+)$ ]]; then
+  elif [[ "$1" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)-rc\.([1-9][0-9]*)$ ]]; then
     echo "${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]} 0 ${BASH_REMATCH[4]}"
   else
     return 1

@@ -87,7 +87,10 @@ further fixes land before `rc.2`.
 **Candidates are `vX.Y.Z-rc.N`, with the dot** (`v0.5.1-rc.1` was the first).
 The rc number is then its own numeric identifier, so semver - and the updater -
 orders `rc.10` above `rc.9`; the undotted `rc10` compares as text and sorts
-below `rc9`. The release workflow keys on the exact shape too: only
+below `rc9`. N counts from 1 with no leading zero: `rc.0` and `rc.01` are
+refused, the latter because semver forbids a leading zero in a numeric
+identifier and the updater would fail to parse it. The release workflow keys
+on the exact shape too: only
 `vX.Y.Z-rc.N` bakes the Beta channel and publishes to Beta (see [Updater
 manifests](#updater-manifests)). `v0.5.0-rc1` to `-rc6` used the old shape;
 `release-tag.sh` now refuses it and names the dotted spelling.

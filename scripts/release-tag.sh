@@ -127,8 +127,10 @@ esac
 # Candidates are vX.Y.Z-rc.N (#650). The dotted number is its own numeric
 # identifier, so semver - and the updater, which compares X.Y.Z-rc.N - orders
 # rc.10 above rc.9; the undotted rc10 compares as text and sorts below rc9.
-# v0.5.0-rc1 to -rc6 used the old shape, so name the replacement.
-if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc([0-9]+)$ ]]; then
+# v0.5.0-rc1 to -rc6 used the old shape, so name the replacement. Only for a
+# number the dotted shape accepts (from 1, no leading zero); rc0 or rc01 falls
+# through to the generic refusal below rather than being told to use rc.0.
+if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc([1-9][0-9]*)$ ]]; then
   echo "Error: '$TAG' is the old undotted candidate shape." >&2
   echo "Candidates are vX.Y.Z-rc.N now: use ${TAG%-rc*}-rc.${BASH_REMATCH[1]} instead." >&2
   echo "(Semver compares rc10 as text, below rc9; rc.10 compares as a number.)" >&2
@@ -144,7 +146,8 @@ fi
 CHANNEL_KIND="$("$SCRIPT_DIR/release-channel.sh" classify "$TAG" | sed -n 's/^kind=//p')"
 if [ "$CHANNEL_KIND" != final ] && [ "$CHANNEL_KIND" != candidate ]; then
   echo "Error: '$TAG' is not a tag shape the release workflow publishes." >&2
-  echo "The only candidate shape is vX.Y.Z-rc.N (e.g. v0.5.2-rc.1); a release is a bare vX.Y.Z." >&2
+  echo "The only candidate shape is vX.Y.Z-rc.N, N from 1 with no leading zero" >&2
+  echo "(e.g. v0.5.2-rc.1); a release is a bare vX.Y.Z." >&2
   echo "Nothing was tagged." >&2
   exit 1
 fi
