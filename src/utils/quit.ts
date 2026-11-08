@@ -1,3 +1,4 @@
+import { isProjectRequestCurrent, reserveProjectRequest } from './projectTransition';
 import { confirmSpeleoFileOpen } from './confirmSpeleoOpen';
 /**
  * Quit entry point, shared by every affordance (GlobalView menu, in-project
@@ -269,6 +270,7 @@ export type PendingExit =
       /** A New Project request the close prompt displaced (#270). */
       pendingNewProject?: boolean;
       accessConfirmed?: boolean;
+      request?: number;
     };
 
 /**
@@ -281,13 +283,14 @@ export type PendingExit =
 export function readPendingExit(data: Record<string, unknown>): PendingExit | null {
   const raw = data.pendingExit;
   if (typeof raw !== 'object' || raw === null) return null;
-  const { kind, pendingOpenPath, pendingNewProject, accessConfirmed } = raw as Record<string, unknown>;
+  const { kind, pendingOpenPath, pendingNewProject, accessConfirmed, request } = raw as Record<string, unknown>;
   if (kind === 'quit') return { kind: 'quit' };
   if (kind !== 'close') return null;
   return {
     kind: 'close',
     pendingOpenPath: typeof pendingOpenPath === 'string' ? pendingOpenPath : null,
     pendingNewProject: pendingNewProject === true,
+    ...(typeof request === 'number' ? { request } : {}),
     ...(accessConfirmed === true ? { accessConfirmed: true } : {}),
   };
 }
@@ -305,22 +308,27 @@ export function readPendingExit(data: Record<string, unknown>): PendingExit | nu
  * growing a second copy of the ordering argument above.
  */
 export async function handBackProject(
-  exit: { pendingOpenPath?: string | null; pendingNewProject?: boolean; accessConfirmed?: boolean },
+  exit: { pendingOpenPath?: string | null; pendingNewProject?: boolean; accessConfirmed?: boolean; request?: number },
   opts?: { releaseLock?: boolean },
 ): Promise<void> {
+  const request = exit.request ?? reserveProjectRequest();
+  const current = () => isProjectRequestCurrent(request);
+  if (!current()) return;
   const { closeProject, loadProject } = useProjectStore.getState();
   if (exit.pendingOpenPath && !exit.accessConfirmed) {
     try {
-      if (!await confirmSpeleoFileOpen(exit.pendingOpenPath)) return;
+      if (!await confirmSpeleoFileOpen(exit.pendingOpenPath, current)) return;
     } catch (error) {
+      if (!current()) return;
       useUIStore.getState().openDialog('error', { title: 'Open Failed', message: String(error) });
       return;
     }
   }
-  const result = await closeProject(opts);
-  if (!result.success) return;
+  if (!current()) return;
+  const result = await closeProject({ ...opts, request });
+  if (!current() || !result.success) return;
   // loadProject switches the view and surfaces its own failures.
-  if (exit.pendingOpenPath) await loadProject(exit.pendingOpenPath, { accessConfirmed: true });
+  if (exit.pendingOpenPath) await loadProject(exit.pendingOpenPath, { accessConfirmed: true, request });
   // `createProject` seeds the shell from here; the close above already left us on the
   // global view (App falls back to it whenever no project is open).
   else if (exit.pendingNewProject) useUIStore.getState().openDialog('new-project');

@@ -9,10 +9,21 @@ import type { LoadProjectOutcome } from '../store/projectStore';
  * Existing switches finish before a replacement starts; switches requested during
  * the replacement wait until its frontend reconciliation is complete.
  */
+let requestGeneration = 0;
+
+/** Reserve ownership before any asynchronous preflight or replacement wait. */
+export function reserveProjectRequest(): number {
+  return ++requestGeneration;
+}
+
+export function isProjectRequestCurrent(request: number): boolean {
+  return request === requestGeneration;
+}
+
 let replacementTail: Promise<void> = Promise.resolve();
 let switchTail: Promise<void> = Promise.resolve();
 
-export function runProjectSwitch<T>(work: () => Promise<T>): Promise<T> {
+export function runProjectSwitch<T>(work: () => Promise<T>, _request = reserveProjectRequest()): Promise<T> {
   const result = replacementTail.then(work);
   switchTail = Promise.allSettled([switchTail, result]).then(() => undefined);
   return result;
@@ -45,20 +56,27 @@ export function runConfirmedProjectSwitch(
   currentPath: () => string | null | undefined,
   accessConfirmed: boolean | undefined,
   work: () => Promise<LoadProjectOutcome>,
+  request = reserveProjectRequest(),
 ): Promise<LoadProjectOutcome> {
+  const current = () => isProjectRequestCurrent(request);
+  const superseded: LoadProjectOutcome = { success: false, superseded: true };
   return runProjectSwitch(async () => {
+    if (!current()) return superseded;
     if (!accessConfirmed && currentPath() !== path) {
       try {
-        if (!await confirmSpeleoFileOpen(path)) {
+        if (!await confirmSpeleoFileOpen(path, current)) {
+          if (!current()) return superseded;
           clearProjectActionSource();
           return { success: false };
         }
       } catch (error) {
+        if (!current()) return superseded;
         clearProjectActionSource();
         useUIStore.getState().openDialog('error', { title: 'Open Failed', message: getErrorMessage(error) });
         return { success: false };
       }
     }
+    if (!current()) return superseded;
     return work();
-  });
+  }, request);
 }

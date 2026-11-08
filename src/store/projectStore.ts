@@ -59,7 +59,7 @@ import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
-import { runProjectSwitch, runConfirmedProjectSwitch } from '../utils/projectTransition';
+import { runProjectSwitch, runConfirmedProjectSwitch, reserveProjectRequest, isProjectRequestCurrent } from '../utils/projectTransition';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
@@ -292,7 +292,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   cancelLoading: () => Promise<void>;
 
   /** Load a project using the consolidated load_project_full command */
-  loadProject: (path: string, opts?: { accessConfirmed?: boolean }) => Promise<LoadProjectOutcome>;
+  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number }) => Promise<LoadProjectOutcome>;
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
@@ -335,7 +335,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * the server mutex (fix 1). The release opt-out is reserved for internal tree
    * replacements that retain the same project's edit session.
    */
-  closeProject: (opts?: { releaseLock?: boolean }) => Promise<CommandResult>;
+  closeProject: (opts?: { releaseLock?: boolean; request?: number }) => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
   /**
    * Mark the project dirty (unsaved changes) without running a command. The DMP
@@ -507,7 +507,7 @@ function isPartialMultiStepFailure(error: string | null): boolean {
  * same path share one execution. Each entry is removed when the underlying
  * promise settles. See loadProject for rationale.
  */
-const inFlightLoads = new Map<string, Promise<{ success: boolean }>>();
+const inFlightLoads = new Map<string, { request: number; promise: Promise<LoadProjectOutcome> }>();
 
 /**
  * Whether the project changed identity between issuing a command and its reply (#24).
@@ -956,6 +956,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     })),
 
   cancelLoading: async () => {
+    const op = get().loading.clientOpId;
     // Safe to call even when no load is active - backend is idempotent
     try {
       await invokeIpc('cancel_loading', undefined, {
@@ -964,32 +965,22 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     } catch {
       // Ignore errors - might be called when no load active
     }
-    // Always reset loading state
-    get().resetLoading();
+    // A delayed cancellation cannot clear a newer load.
+    if (get().loading.clientOpId === op) get().resetLoading();
   },
 
   // Load project using the consolidated load_project_full command
   //
-  // Concurrent calls for the same path share one execution. Without this,
-  // a fast double-click on a SystemCard (or React StrictMode dev re-mount)
-  // fires loadProject multiple times; each call decodes ~600 KB of shot
-  // floats + 350 KB of station coords and rebuilds 240 k MapLibre
-  // features in two workers, even though all but the last result are
-  // discarded by the clientOpId race check. The thrown-away allocations
-  // churn JSC's bmalloc slabs and leave committed (but unused) memory
-  // behind. The dedup map ensures the heavy path runs exactly once.
-  loadProject: (path: string, opts?: { accessConfirmed?: boolean }) => {
+  // Current same-path requests share decoding and geometry work. Ownership is
+  // reserved before preflight; operation IDs protect dispatched loads afterward.
+  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number }) => {
     const existing = inFlightLoads.get(path);
-    if (existing) return existing;
+    if (existing && isProjectRequestCurrent(existing.request)) return existing.promise;
+    const request = opts?.request ?? reserveProjectRequest();
+    const current = () => isProjectRequestCurrent(request);
+    const superseded: LoadProjectOutcome = { success: false, superseded: true };
 
-    // Drop in-flight entries for OTHER paths: this load is about to
-    // call `cancelLoading()` which will bump the clientOpId, dooming
-    // any in-flight load for a different path to return
-    // `{success: false}` from its clientOpId check.  If we kept those
-    // entries around, a user re-click for one of those paths would
-    // receive the now-doomed promise instead of starting a fresh load.
-    // The same-path entry below would have short-circuited above; this
-    // only clears stale ones.
+    // A-B-A must start a fresh A instead of reusing the superseded promise.
     for (const key of [...inFlightLoads.keys()]) {
       if (key !== path) inFlightLoads.delete(key);
     }
@@ -1000,6 +991,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // resolution, the Zustand set, the view switch / MapCanvas mount, or
       // something else. Each checkpoint is logged to the MemoryProbe panel.
       const { recordPerfTiming } = await import('../utils/memoryProbe');
+      if (!current()) return superseded;
       const tStart = performance.now();
 
       // Clear GlobalView geometry cache to cancel pending loads and free memory
@@ -1008,6 +1000,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // ALWAYS cancel first - NO isLoading guard
       // cancel_loading is idempotent on backend
       await get().cancelLoading();
+      if (!current()) return superseded;
 
       // Use cross-platform path splitting for project name extraction
       const initialName = extractFilename(path, /\.stalx$/i) || 'Project';
@@ -1020,6 +1013,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // `load_project_full` JSON response so the rest of the load pipeline
         // doesn't need to change. See utils/loadProjectBinary.ts.
         const { loadProjectFullBinary } = await import('../utils/loadProjectBinary');
+        if (!current()) return superseded;
         const result = await loadProjectFullBinary(path);
         // The await above includes both the Rust handler runtime AND the
         // JS-side msgpack decode + typed-array materialization.
@@ -1029,9 +1023,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Check clientOpId hasn't changed (cancelled/new load started). Reported
         // as SUPERSEDED, not as a plain failure: the caller's rollback (if it has
         // one) would land on a project this call never opened.
-        if (get().loading.clientOpId !== clientOpId) {
-          clearProjectActionSource();
-          return { success: false, superseded: true };
+        if (!current() || get().loading.clientOpId !== clientOpId) {
+          return superseded;
         }
 
         // Count the open with its entry-point source now that the load has
@@ -1165,20 +1158,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
         return { success: true };
       } catch (e) {
+        if (!current() || get().loading.clientOpId !== clientOpId) return superseded;
         const error = parseLoadError(e);
 
         // Handle ALREADY_OPEN specially - not an error, just switch view
         if (error.code === 'ALREADY_OPEN') {
-          // The same staleness guard both neighbouring branches carry (the
-          // success path above, the error path below). Without it this branch
-          // acted for a load that had already lost its slot: it flipped the view
-          // and called `resetLoading()`, which tears down the loading modal of the
-          // NEWER load still running, and then reported success - a boolean
-          // `keepLocalCopy` / `finishOpen` now act on.
-          if (get().loading.clientOpId !== clientOpId) {
-            clearProjectActionSource();
-            return { success: false, superseded: true };
-          }
           // #270 (hardening): resolve the edit gate SYNCHRONOUSLY when nothing has
           // resolved it, mirroring the success path's `syncProjectLink` before the
           // view paints. `refreshLinkStatus` below refines it, but it is unawaited
@@ -1263,7 +1247,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // the loading state would discard the CURRENT load's progress, while
           // the prompt would be about a file nobody is opening any more. The
           // newer load owns both the loading state and the action source.
-          if (get().loading.clientOpId !== clientOpId) return { success: false };
           get().resetLoading();
           useUIStore.getState().openDialog('speleodb-managed-file', {
             managed: error.speleodbManaged,
@@ -1279,11 +1262,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         clearProjectActionSource();
         return { success: false };
       }
-    });
+    }, request);
 
-    inFlightLoads.set(path, promise);
+    inFlightLoads.set(path, { request, promise });
     void promise.finally(() => {
-      if (inFlightLoads.get(path) === promise) inFlightLoads.delete(path);
+      if (inFlightLoads.get(path)?.promise === promise) inFlightLoads.delete(path);
     });
     return promise;
   },
@@ -1558,9 +1541,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       return Promise.resolve(emptyCommandResult(false, 'Already closing'));
     }
 
+    const request = opts?.request ?? reserveProjectRequest();
     set({ isClosing: true });
     return runProjectSwitch(async () => {
       try {
+        if (!isProjectRequestCurrent(request)) return emptyCommandResult(false, 'Superseded');
         const result = await invokeIpc<CommandResult>(
           'close_project',
           // Default: release a held SpeleoDB lock so the close doesn't strand it
@@ -1575,7 +1560,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       } finally {
         set({ isClosing: false });
       }
-    });
+    }, request);
   },
 
   isShotFrozen: (sectionId: number, shotIndex: number) => {

@@ -19,7 +19,8 @@ export async function confirmSpeleoOpen(summary: SpeleoProjectSummary): Promise<
 }
 
 /** Probe disk metadata even before the recents/session caches have loaded. */
-export async function confirmSpeleoFileOpen(path: string): Promise<boolean> {
+export async function confirmSpeleoFileOpen(path: string, current: () => boolean = () => true): Promise<boolean> {
   const summary = await invokeIpc<SpeleoProjectSummary | null>('speleodb_project_access_at', { path });
+  if (!current()) return false;
   return !summary || confirmSpeleoOpen(summary);
 }

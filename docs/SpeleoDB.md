@@ -122,3 +122,24 @@ required authentication paths, synthetic native-file round trips, retained test
 projects and the offline/UI coverage matrix. Generated IPC types are regenerated
 from Rust with `pnpm gen:ipc-types`; removed commands and their generated types must
 also disappear from browser mocks and telemetry.
+
+## Opening and closing request ownership
+
+Project switches reserve a shared request generation before access metadata or
+replacement queues are awaited. The newest request owns the transition, even if
+its warning is cancelled. Older probes cannot raise warnings, load a project,
+surface errors, or clear the newer request's telemetry. Same-path opens share an
+execution only while current; A-B-A selects the final A. Tree replacement retains
+its ordering contract while independent access probes can proceed concurrently.
+
+The close dialog becomes busy before probing its destination and stays busy through
+saving, upload/release, and hand-back. Dismissal and editable choices are disabled;
+duplicate activation is ignored synchronously. Cancelling the native access warning
+restores the parent controls without saving, releasing, or closing. Replacing the
+prompt, project, or authenticated session stops stale continuations. Ordinary saves
+may refresh the project object without invalidating the operation. Older-version
+upload confirmation carries the pending exit through its existing cancel-return flow.
+
+Cancelling read-only or locked-project warnings in the browser or managed-file prompt
+restores retry and dismissal without an error. A replaced managed-file prompt retains
+ownership of its own controls.

@@ -57,7 +57,7 @@ let saveProject: ReturnType<typeof vi.fn>;
 let closeDialog: ReturnType<typeof vi.fn>;
 
 function fillCommitMessage() {
-  const input = screen.queryByTestId('speleodb-close-message') as HTMLTextAreaElement | null;
+  const input = screen.queryByRole('textbox', { name: 'Commit message' }) as HTMLTextAreaElement | null;
   if (input && !input.value) fireEvent.change(input, { target: { value: 'Survey update' } });
 }
 
@@ -116,7 +116,7 @@ describe('SpeleoCloseDialog with no lock (#270)', () => {
 
     await userEvent.click(screen.getByTestId('speleodb-close-anyway'));
 
-    await waitFor(() => expect(closeProject).toHaveBeenCalledWith(undefined));
+    await waitFor(() => expect(closeProject).toHaveBeenCalledWith({ request: expect.any(Number) }));
     expect(
       invokeIpcMock.mock.calls.filter((c) => String(c[0]).startsWith('speleodb_')),
     ).toEqual([]);
@@ -182,7 +182,7 @@ describe('SpeleoCloseDialog replays the exit that raised it', () => {
 
     await userEvent.click(screen.getByTestId('speleodb-close-anyway'));
 
-    await waitFor(() => expect(loadProject).toHaveBeenCalledWith('/cave/other.stalx', { accessConfirmed: true }));
+    await waitFor(() => expect(loadProject).toHaveBeenCalledWith('/cave/other.stalx', { accessConfirmed: true, request: expect.any(Number) }));
   });
 
   it('reopens the new-project dialog after the close lands', async () => {
@@ -261,7 +261,7 @@ describe('SpeleoCloseDialog - the unwound-push confirmation carries the close', 
 
     await userEvent.click(screen.getByTestId('speleodb-unwound-push-push-anyway'));
 
-    await waitFor(() => expect(loadProject).toHaveBeenCalledWith('/cave/other.stalx', { accessConfirmed: true }));
+    await waitFor(() => expect(loadProject).toHaveBeenCalledWith('/cave/other.stalx', { accessConfirmed: true, request: expect.any(Number) }));
     expect(closeProject).toHaveBeenCalled();
     expect(useUIStore.getState().activeDialog).toBeNull();
   });
@@ -326,4 +326,46 @@ it('cancelling destination access from the actual close dialog does not save or 
   expect(closeProject).not.toHaveBeenCalled();
   expect(saveProject).not.toHaveBeenCalled();
   expect(invokeIpcMock.mock.calls.some(([cmd]) => cmd === 'speleodb_release_current_lock')).toBe(false);
+});
+
+
+describe('close destination probe ownership', () => {
+  it.each(['speleodb-close-release', 'speleodb-close-push-release'])('protects the entire %s attempt', async (button) => {
+    let resolve!: (value: unknown) => void;
+    const probe = new Promise((yes) => { resolve = yes; });
+    invokeIpcMock.mockImplementation((command) => command === 'speleodb_project_access_at' ? probe : Promise.resolve({ kind: 'released' }));
+    useUIStore.setState({ dialogData: { pendingOpenPath: '/synthetic/destination.stalx' } });
+    useProjectStore.setState({ isDirty: true });
+    render(<SpeleoCloseDialog />);
+    fillCommitMessage();
+    fireEvent.click(screen.getByTestId(button));
+    fireEvent.click(screen.getByTestId(button));
+    expect(screen.getByTestId('speleodb-close-cancel')).toBeDisabled();
+    expect(screen.getByTestId('speleodb-close-save-locally')).toBeDisabled();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.click(screen.getByTestId('speleodb-close-dialog-close'));
+    expect(closeDialog).not.toHaveBeenCalled();
+    confirmMock.mockResolvedValue(false);
+    resolve({ permission: 'READ_ONLY', name: 'Synthetic', lock_holder: null });
+    await waitFor(() => expect(screen.getByTestId(button)).toBeEnabled());
+    expect(saveProject).not.toHaveBeenCalled();
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(invokeIpcMock.mock.calls.map((c) => c[0])).toEqual(['speleodb_project_access_at']);
+  });
+
+  it.each(['dialog', 'project', 'session', 'unmount'])('stops after %s replacement during the probe', async (replacement) => {
+    let resolve!: (value: unknown) => void;
+    invokeIpcMock.mockReturnValue(new Promise((yes) => { resolve = yes; }));
+    useUIStore.setState({ dialogData: { pendingOpenPath: '/synthetic/destination.stalx' } });
+    const view = render(<SpeleoCloseDialog />);
+    fireEvent.click(screen.getByTestId('speleodb-close-release'));
+    if (replacement === 'dialog') useUIStore.setState({ dialogData: {} });
+    if (replacement === 'project') useProjectStore.setState({ project: { file_path: '/other.stalx' } as never });
+    if (replacement === 'session') useSpeleoStore.setState({ session: { loggedIn: false, endpoint: null, userEmail: null } });
+    if (replacement === 'unmount') view.unmount();
+    resolve(null);
+    await waitFor(() => expect(invokeIpcMock).toHaveBeenCalledOnce());
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(saveProject).not.toHaveBeenCalled();
+  });
 });
