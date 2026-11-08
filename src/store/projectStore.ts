@@ -1259,9 +1259,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   // Project operations - uses consolidated create_project_full command
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) =>
-    runProjectSwitch(async () => {
+    runProjectSwitch(async (request) => {
+    const current = () => isProjectRequestCurrent(request);
+    if (!current()) return emptyCommandResult(false, 'Superseded');
     // ALWAYS cancel first - NO isLoading guard
     await get().cancelLoading();
+    if (!current()) return emptyCommandResult(false, 'Superseded');
 
     const clientOpId = get().startLoading(name, '');
     // A deferred initial save reserves file_path but leaves the backend database
@@ -1285,15 +1288,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         { purpose: 'create new project workspace', fields: { name } }
       );
 
-      // Check clientOpId hasn't changed
-      if (get().loading.clientOpId !== clientOpId) {
-        // Superseded/cancelled - drop the entry-point source so it can't
-        // mis-attribute a later, unrelated project command (it has no auto-reset;
-        // only a completed flow (setView) or this clear drops it). Mirrors
-        // loadProject's clear on every early-return.
-        clearProjectActionSource();
-        return emptyCommandResult(false, 'Cancelled');
-      }
+      if (!current() || get().loading.clientOpId !== clientOpId) return emptyCommandResult(false, 'Superseded');
 
       // Set backend loadingId from result for event correlation
       get().setLoadingProgress({ loadingId: result.loadingId });
@@ -1335,17 +1330,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       useUIStore.getState().resetToolTransientsForProjectSwitch();
       useUIStore.getState().setView('single');
       await get().loadRecentProjects();
+      if (!current() || get().loading.clientOpId !== clientOpId) return emptyCommandResult(false, 'Superseded');
       get().resetLoading();
 
       return emptyCommandResult(true, null);
     } catch (e) {
+      if (!current() || get().loading.clientOpId !== clientOpId) return emptyCommandResult(false, 'Superseded');
       // Create failed - drop the entry-point source (no auto-reset) so it can't
       // mis-attribute a later, unrelated project command. Mirrors loadProject.
       clearProjectActionSource();
       const error = parseLoadError(e);
-      if (get().loading.clientOpId === clientOpId) {
-        get().setLoadingError(error.message, error.details);
-      }
+      get().setLoadingError(error.message, error.details);
       return emptyCommandResult(false, error.message);
     }
     }),

@@ -23,8 +23,8 @@ export function isProjectRequestCurrent(request: number): boolean {
 let replacementTail: Promise<void> = Promise.resolve();
 let switchTail: Promise<void> = Promise.resolve();
 
-export function runProjectSwitch<T>(work: () => Promise<T>, _request = reserveProjectRequest()): Promise<T> {
-  const result = replacementTail.then(work);
+export function runProjectSwitch<T>(work: (request: number) => Promise<T>, request = reserveProjectRequest()): Promise<T> {
+  const result = replacementTail.then(() => work(request));
   switchTail = Promise.allSettled([switchTail, result]).then(() => undefined);
   return result;
 }
