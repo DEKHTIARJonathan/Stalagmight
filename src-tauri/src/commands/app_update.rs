@@ -59,7 +59,8 @@ use crate::core::AppState;
 ///
 /// Honoured unconditionally in a DEBUG build - that is the manual test recipe
 /// in docs/releasing.md, where a local `python3 -m http.server` stands in for
-/// GitHub. In a release build it is restricted to https `github.com` URLs
+/// GitHub - and REQUIRED there: without it a debug build does not update at
+/// all ([`dev_build_refusal`], #644). In a release build it is restricted to https `github.com` URLs
 /// ([`is_trusted_manifest_url`]): the manifest decides which binary an
 /// installed app downloads, so an attacker who can set one environment
 /// variable must not be able to redirect it. (The plugin's own
@@ -342,6 +343,36 @@ fn self_update_refusal(bundle: Option<BundleType>, release_build: bool) -> Optio
     ))
 }
 
+/// Why a DEBUG build must not update itself, or `None` (#644).
+///
+/// A debug build is a developer's `target/debug` binary, not an install: left
+/// to the real manifest, `./scripts/dev.sh` on a branch older than the
+/// published stable would download that release and, on window close, have the
+/// plugin replace `target/debug/stalagmight` (Linux) or move `target/debug`
+/// away (macOS). So a debug build checks, downloads and installs ONLY when
+/// [`UPDATE_URL_ENV`] names a manifest - the local test recipe - and refuses
+/// otherwise. "Names" means what [`endpoint_for_track`] would honour in a debug
+/// build, so a blank value refuses here exactly as it falls back there.
+///
+/// Parameterised for the same reason as [`resolve_override`]: under
+/// `cargo test` `cfg!(debug_assertions)` is always true, so the release branch
+/// would otherwise be unreachable from a test.
+fn dev_build_refusal(debug_build: bool, override_url: Option<&str>) -> Option<String> {
+    if !debug_build || resolve_override(override_url, false).is_some() {
+        return None;
+    }
+    Some(format!(
+        "This is a development build, which does not update itself; set {UPDATE_URL_ENV} to a manifest URL to test the updater"
+    ))
+}
+
+/// [`dev_build_refusal`] for the running build and the current environment.
+/// Read at call time, like the endpoint override itself.
+fn this_build_refusal() -> Option<String> {
+    let raw = std::env::var(UPDATE_URL_ENV).ok();
+    dev_build_refusal(cfg!(debug_assertions), raw.as_deref())
+}
+
 /// Is this a manifest URL a release build may fetch?
 ///
 /// https, and `github.com` exactly - not a suffix match, which would accept
@@ -602,6 +633,11 @@ pub async fn check_for_app_update(
     if !updater_configured() {
         return Err(updater_not_configured());
     }
+    // A development build never asks the real manifest (#644). Before any
+    // state is touched, like the bundle gate below.
+    if let Some(refusal) = this_build_refusal() {
+        return Err(refusal);
+    }
     // Before any state is touched, for the same reason as the transport-failure
     // arm below. Gating the check is enough: download and install refuse
     // without the `Update` only a successful check parks.
@@ -693,6 +729,11 @@ pub async fn download_app_update(
     app: AppHandle,
     update_state: State<'_, AppUpdateState>,
 ) -> Result<(), String> {
+    // Unreachable through the check, which refuses first; repeated so the
+    // download does not depend on that ordering (#644).
+    if let Some(refusal) = this_build_refusal() {
+        return Err(refusal);
+    }
     let (generation, update) = checked_update(&update_state)?;
 
     // Shared with the progress closure, which runs inside the download future
@@ -899,6 +940,13 @@ fn take_for_exit(pending: &mut Pending) -> Option<(Update, Vec<u8>)> {
 /// after the window has gone.
 pub fn install_downloaded_update_on_exit(app: &AppHandle) {
     if !installs_on_quit() {
+        return;
+    }
+    // Defense in depth for #644: the check already refuses in a development
+    // build, but this is the step that overwrites `target/debug`, so it does
+    // not rely on that.
+    if let Some(refusal) = this_build_refusal() {
+        tracing::info!(reason = %refusal, "Not installing an update on quit");
         return;
     }
     let Some(update_state) = app.try_state::<AppUpdateState>() else {
@@ -1233,6 +1281,44 @@ mod tests {
         }
         assert!(self_update_refusal(None, true).is_some());
         assert_eq!(self_update_refusal(None, false), None);
+    }
+
+    /// [#644] A debug build left on the real manifest downloaded the published
+    /// release and replaced `target/debug` on quit. Without an override it now
+    /// refuses, by name, and says how to test the updater instead.
+    #[test]
+    fn a_debug_build_refuses_without_an_override() {
+        for unset in [None, Some(""), Some("   ")] {
+            let message = dev_build_refusal(true, unset).unwrap_or_default();
+            assert!(
+                message.contains("development build") && message.contains(UPDATE_URL_ENV),
+                "{unset:?} must refuse naming the override, got {message:?}"
+            );
+        }
+    }
+
+    /// ...while the local recipe (a debug build pointed at a local manifest)
+    /// keeps working, and a release build is never refused on these grounds.
+    #[test]
+    fn the_override_and_a_release_build_pass_the_dev_gate() {
+        assert_eq!(
+            dev_build_refusal(true, Some("http://127.0.0.1:8000/latest.json")),
+            None
+        );
+        for raw in [None, Some(""), Some("http://127.0.0.1:8000/latest.json")] {
+            assert_eq!(dev_build_refusal(false, raw), None, "{raw:?}");
+        }
+    }
+
+    /// The gate reads the same variable the endpoint does, at call time.
+    #[test]
+    fn the_dev_gate_follows_the_environment() {
+        let _lock = env_lock();
+        let _env = EnvVarGuard::set(None);
+        // Every test binary is a debug build.
+        assert!(this_build_refusal().is_some());
+        std::env::set_var(UPDATE_URL_ENV, "http://127.0.0.1:8000/latest.json");
+        assert_eq!(this_build_refusal(), None);
     }
 
     // ── State machine ────────────────────────────────────────────────────────
