@@ -288,6 +288,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         SpeleoDbError::NoEndpoint
         | SpeleoDbError::MissingCredentials
         | SpeleoDbError::Parse(_)
+        | SpeleoDbError::NewerSchema { .. }
         | SpeleoDbError::EmptyDump
         | SpeleoDbError::Io(_)
         | SpeleoDbError::InvalidProjectId

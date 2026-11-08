@@ -310,6 +310,24 @@ impl AppState {
                         "the downloaded project file was refused: {e:#}"
                     )));
                 }
+                // A file a newer Stalagmight saved must not replace the cache either:
+                // this build could neither open it nor save it without dropping what
+                // it does not know (#649). Same place, same clean-up.
+                if let Err(e) = crate::persistence::Database::check_not_newer_at(&staged) {
+                    let _ = std::fs::remove_file(&staged);
+                    if closed {
+                        let _ = self.open_project(dest.to_path_buf());
+                    }
+                    return Err(match e.downcast_ref::<crate::persistence::NewerSchema>() {
+                        Some(newer) => SpeleoDbError::NewerSchema {
+                            found: newer.found,
+                            supported: newer.supported,
+                        },
+                        None => SpeleoDbError::Parse(format!(
+                            "the downloaded project file was refused: {e:#}"
+                        )),
+                    });
+                }
                 // [#303] THE chokepoint. Every server `.stalx` that becomes the local
                 // cache file passes through here, so dropping the inherited history in
                 // one place is what makes "a pulled stack is never silently adopted"
@@ -720,6 +738,70 @@ mod tests {
             replaced_project_name(&dest),
             "Server Copy",
             "the server copy landed"
+        );
+    }
+
+    /// [#649] A server `.stalx` a newer Stalagmight saved never replaces the local
+    /// copy: this build could not open it, and a save from it would push a file
+    /// with the newer build's additions dropped. Refused before the history
+    /// cleanup writes into the staged copy and before the rename.
+    #[test]
+    fn a_download_from_a_newer_schema_never_replaces_the_cache() {
+        use std::io::Write as _;
+
+        let seed_dir = tempfile::TempDir::new().expect("seed temp");
+        let seeded = seed_dir.path().join("seeded.stalx");
+        {
+            let mut db = Database::open(&seeded).expect("open seed");
+            db.save_project(&Project::new("From the future".to_owned(), None))
+                .expect("save project");
+        }
+        rusqlite::Connection::open(&seeded)
+            .expect("reopen seed")
+            .pragma_update(None, "user_version", crate::persistence::SCHEMA_VERSION + 1)
+            .expect("stamp a newer schema");
+        let bytes = std::fs::read(&seeded).expect("read seed");
+        let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
+        writer
+            .start_file(ENTRY, zip::write::SimpleFileOptions::default())
+            .expect("start entry");
+        writer.write_all(&bytes).expect("write entry");
+        let zip = writer.finish().expect("finish zip").into_inner();
+
+        let temp = tempfile::TempDir::new().expect("temp");
+        let dest = temp.path().join("project.stalx");
+        seed_linked_stalx(&dest, false);
+        let before = std::fs::read(&dest).expect("read destination");
+        let state = AppState::new().expect("state");
+
+        let err = state
+            .replace_cache_stalx(
+                &mut Dump::open(&zip).expect("open dump"),
+                ENTRY,
+                &dest,
+                ID,
+                InheritedUndo::Drop,
+            )
+            .expect_err("a newer schema's download must not be installed");
+
+        assert!(
+            matches!(
+                err,
+                SpeleoDbError::NewerSchema { found, supported }
+                    if found == crate::persistence::SCHEMA_VERSION + 1
+                        && supported == crate::persistence::SCHEMA_VERSION
+            ),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("Update Stalagmight"), "{err}");
+        assert_eq!(
+            std::fs::read(&dest).expect("read destination"),
+            before,
+            "the local copy is byte-identical"
+        );
+        assert!(
+            !sanitized_download_path(&dest).exists(),
+            "the staged download is cleaned up"
         );
     }
 }
