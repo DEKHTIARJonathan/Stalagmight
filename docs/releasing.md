@@ -652,11 +652,11 @@ hard-fails - naming what is wrong - on:
 
 - a missing artifact or signature
 - an ambiguous match (more than one file fits a platform's pattern)
-- a malformed `--version` or a malformed `--tag` (checked against
-  `X.Y.Z[-suffix]`/`vX.Y.Z[-suffix]` - wider than the two shapes the
-  workflows pass, since `release-channel.sh` rather than this script decides
-  which tags publish; `--tag` flows into a URL path segment, and the script
-  is also exposed as a bare `pnpm` command a caller could invoke by hand)
+- a `--version` other than `X.Y.Z` or `X.Y.Z-rc.N`, or a `--tag` other than
+  `vX.Y.Z` or `vX.Y.Z-rc.N` (N from 1, no leading zero - the same two shapes
+  `release-channel.sh` classifies as publishing; `--tag` flows into a URL path
+  segment, and the script is also exposed as a bare `pnpm` command a caller
+  could invoke by hand)
 - an empty signature file, **or one that is not shaped like a real minisign
   signature** (an `untrusted comment:` header line followed by a base64
   body line - Tauri's signer's own format). A merely-non-empty check let a

@@ -280,11 +280,31 @@ test('a --tag missing the leading v fails', () => {
   );
 });
 
-test('weekly version string passes through unchanged', () => {
+// Only X.Y.Z and X.Y.Z-rc.N (N from 1, no leading zero) are versions the
+// pipeline publishes, the same pair scripts/release-channel.sh accepts. The old
+// undotted candidate, the retired weekly shape and a leading zero are refused.
+test('a --version other than X.Y.Z or X.Y.Z-rc.N fails', () => {
   const dir = makeDir();
   writeHappyPathArtifacts(dir, { darwin: false });
-  const manifest = buildManifest({ ...BASE, version: '0.5.1-weekly.20260817', dir, includeDarwin: false });
-  assert.equal(manifest.version, '0.5.1-weekly.20260817');
+  for (const version of ['0.5.1-rc1', '0.5.1-weekly.20260817', '0.5.1-rc.0', '0.5.1-rc.01', '0.5.1-beta.1']) {
+    assert.throws(
+      () => buildManifest({ ...BASE, version, dir, includeDarwin: false }),
+      /not a valid version \(expected X\.Y\.Z or X\.Y\.Z-rc\.N\)/,
+      version,
+    );
+  }
+});
+
+test('a --tag other than vX.Y.Z or vX.Y.Z-rc.N fails', () => {
+  const dir = makeDir();
+  writeHappyPathArtifacts(dir, { darwin: false });
+  for (const tag of ['v0.5.1-rc1', 'v0.5.1-weekly.20260817', 'v0.5.1-rc.0', 'v0.5.1-rc.01']) {
+    assert.throws(
+      () => buildManifest({ ...BASE, tag, dir, includeDarwin: false }),
+      /not a valid release tag/,
+      tag,
+    );
+  }
 });
 
 // A release candidate (#650): the manifest announces X.Y.Z-rc.N, the release

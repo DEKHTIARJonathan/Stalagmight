@@ -53,13 +53,17 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
 // a hardcoded base is simpler than a flag nothing would ever set differently.
 const GITHUB_RELEASE_BASE = 'https://github.com/Stalagmight/Stalagmight/releases/download';
 
-// X.Y.Z, optionally followed by a dot/alnum suffix (`-rc.1`).
-const VERSION_RE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/;
+// X.Y.Z, or a candidate's X.Y.Z-rc.N with N from 1 and no leading zero: the
+// only two versions the pipeline publishes, matching scripts/release-channel.sh
+// (whose classifier is what the workflows pass here). A leading zero is not
+// just untidy - semver forbids it, and the updater could not parse it.
+const VERSION_RE = /^\d+\.\d+\.\d+(-rc\.[1-9]\d*)?$/;
 
-// vX.Y.Z, optionally suffixed - the same shape release-tag.sh accepts.
-// Flows unvalidated into a URL path segment otherwise, and this script is
-// also exposed as a bare pnpm command that a caller could invoke by hand.
-const TAG_RE = /^v\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/;
+// vX.Y.Z or vX.Y.Z-rc.N, the same two shapes release-channel.sh classifies as
+// publishing and release-tag.sh accepts. Flows unvalidated into a URL path
+// segment otherwise, and this script is also exposed as a bare pnpm command
+// that a caller could invoke by hand.
+const TAG_RE = /^v\d+\.\d+\.\d+(-rc\.[1-9]\d*)?$/;
 
 // Tauri's signer writes the .sig as ONE base64 line wrapping a whole minisign
 // signature file, and that base64 line is exactly what the manifest's
@@ -185,10 +189,10 @@ function readSig(dir, artifactFile, label) {
 // CLI layer resolves --notes vs --notes-file before calling this).
 export function buildManifest({ version, tag, dir, notes, includeDarwin }) {
   if (!VERSION_RE.test(version)) {
-    throw new Error(`--version "${version}" is not a valid version (expected X.Y.Z or X.Y.Z-suffix)`);
+    throw new Error(`--version "${version}" is not a valid version (expected X.Y.Z or X.Y.Z-rc.N)`);
   }
   if (!TAG_RE.test(tag)) {
-    throw new Error(`--tag "${tag}" is not a valid release tag (expected vX.Y.Z or vX.Y.Z-suffix)`);
+    throw new Error(`--tag "${tag}" is not a valid release tag (expected vX.Y.Z or vX.Y.Z-rc.N)`);
   }
 
   const platforms = {};
