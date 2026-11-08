@@ -20,6 +20,12 @@ copying it, and most of these do.
 Then [`TESTING.md`](TESTING.md) before your first PR - which tier a test belongs
 in determines how you write it, and picking wrong is the most common rework.
 
+## User guide
+
+| Doc | Contents |
+|-----|----------|
+| [user-guide/README.md](user-guide/README.md) | The guide for people using the app, written as linked wiki pages with screenshots: step-by-step workflows and a reference page per screen. It keeps its own index, so its pages are not listed here. |
+
 ## Orientation
 
 | Doc | Contents |
