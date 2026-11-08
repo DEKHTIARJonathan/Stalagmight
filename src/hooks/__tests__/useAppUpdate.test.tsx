@@ -8,7 +8,7 @@
  * never fired in development at all.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { StrictMode } from 'react';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -26,6 +26,7 @@ import {
 } from '../useAppUpdate';
 import { useProjectStore } from '../../store/projectStore';
 import { useUpdateStore } from '../../store/updateStore';
+import { UpdateBanner } from '../../components/UpdateBanner';
 import { defaultConfig } from '../../types/config';
 import type { Config } from '../../types/config';
 
@@ -544,6 +545,93 @@ describe('turning automatic updates off', () => {
     await vi.advanceTimersByTimeAsync(11_000);
 
     expect(discardCalls()).toBe(0);
+  });
+
+  /** Answer by name, with the discard's outcome under the test's control. */
+  function answerDiscard(discard: () => Promise<unknown>, download: () => Promise<unknown> = async () => null) {
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'download_app_update') return download();
+      if (cmd === 'discard_app_update_download') return discard();
+      return Promise.resolve(AVAILABLE);
+    });
+  }
+
+  /**
+   * [review] The store used to flip to Download before the backend answered.
+   * The exit install needs no arm, so on a refused discard the banner offered
+   * Download over bytes that were still going to install at quit.
+   */
+  it('a refused discard leaves the banner on Restart, and says why in the log', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    answerDiscard(() => Promise.reject(new Error('The update state is unusable')));
+    useProjectStore.setState({ config: config() });
+    render(
+      <>
+        <Harness />
+        <UpdateBanner />
+      </>,
+    );
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(screen.getByTestId('update-banner-restart')).toBeInTheDocument();
+
+    useProjectStore.setState({ config: config({ update_check_enabled: false }) });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(discardCalls()).toBe(1);
+    expect(useUpdateStore.getState().status).toBe('ready');
+    expect(useUpdateStore.getState().downloadOrigin).toBe('check');
+    expect(screen.getByTestId('update-banner-restart')).toBeInTheDocument();
+    expect(screen.queryByTestId('update-banner-download')).not.toBeInTheDocument();
+    expect(consoleError).toHaveBeenCalledWith(
+      expect.stringContaining('could not discard the automatic download'),
+      expect.any(Error),
+    );
+    consoleError.mockRestore();
+  });
+
+  it('the store changes only once the backend has dropped the download', async () => {
+    let confirm: ((v: unknown) => void) | undefined;
+    answerDiscard(() => new Promise((resolve) => (confirm = resolve)));
+    useProjectStore.setState({ config: config() });
+    render(<Harness />);
+    await vi.advanceTimersByTimeAsync(11_000);
+
+    useProjectStore.setState({ config: config({ update_check_enabled: false }) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(discardCalls()).toBe(1);
+    expect(useUpdateStore.getState().status).toBe('ready');
+
+    confirm?.(null);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useUpdateStore.getState().status).toBe('available');
+  });
+
+  /**
+   * The download finishing while the discard is in flight: its bytes landed
+   * before the discard, so the discard dropped them, and the store must not be
+   * left saying `ready` over nothing.
+   */
+  it('a download that finishes during the discard does not end up ready', async () => {
+    let finish: ((v: unknown) => void) | undefined;
+    let confirm: ((v: unknown) => void) | undefined;
+    answerDiscard(
+      () => new Promise((resolve) => (confirm = resolve)),
+      () => new Promise((resolve) => (finish = resolve)),
+    );
+    useProjectStore.setState({ config: config() });
+    render(<Harness />);
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(useUpdateStore.getState().status).toBe('downloading');
+
+    useProjectStore.setState({ config: config({ update_check_enabled: false }) });
+    await vi.advanceTimersByTimeAsync(0);
+    finish?.(null);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useUpdateStore.getState().status).toBe('ready');
+
+    confirm?.(null);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useUpdateStore.getState().status).toBe('available');
   });
 
   it('the update stays one click away: Download after abandoning works', async () => {

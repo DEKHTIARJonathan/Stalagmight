@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invokeIpc } from '../utils/ipc';
 import { debugLog } from '../utils/debugLog';
 import { useProjectStore } from '../store/projectStore';
-import { useUpdateStore, type DownloadOrigin } from '../store/updateStore';
+import { useUpdateStore, holdsAutomaticDownload, type DownloadOrigin } from '../store/updateStore';
 import type { AppUpdateCheck } from '../types/ipc/AppUpdateCheck';
 import type { AppUpdateProgress } from '../types/ipc/AppUpdateProgress';
 import type { UpdateTrack } from '../types/ipc/UpdateTrack';
@@ -178,18 +178,30 @@ export async function runAppUpdateCheck(
  * started on its own, running or finished, so nothing installs at quit. The
  * banner goes back to offering Download, so the update is still one click away.
  * A download the user started from the banner is not touched.
+ *
+ * The backend drops its copy FIRST, and the store follows only once it has: the
+ * exit-time install needs no arm, so a banner offering Download over bytes the
+ * backend still holds would hide an install that is going to happen. On a
+ * refusal the banner keeps saying what will happen.
+ *
+ * A download that finishes while the discard is in flight stays harmless: if
+ * its bytes landed first the discard drops them and the store is then reset
+ * over its `ready`; if they land after, the backend refuses them; and once the
+ * store has abandoned it, the bumped `downloadSeq` makes its reply stale.
  */
 export async function abandonAutomaticDownload(): Promise<void> {
-  if (!useUpdateStore.getState().abandonAutomaticDownload()) return;
+  if (!holdsAutomaticDownload(useUpdateStore.getState())) return;
   try {
     await invokeIpc('discard_app_update_download', undefined, {
       purpose: 'discard the automatic app update download',
     });
   } catch (e) {
-    // Only an unusable update state refuses this; the bytes may then still
-    // install at quit, which is worth more than a debug line.
+    // Only an unusable update state refuses this, and the bytes will then
+    // install at quit - worth more than a debug line.
     console.error('[useAppUpdate] could not discard the automatic download:', e);
+    return;
   }
+  useUpdateStore.getState().abandonAutomaticDownload();
 }
 
 /**

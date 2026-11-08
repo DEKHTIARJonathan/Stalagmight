@@ -21,6 +21,15 @@ export type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | '
  */
 export type DownloadOrigin = 'check' | 'user';
 
+/**
+ * Is a download a check started in hand, running or finished (#645)? What
+ * turning "Update automatically" off may abandon - asked BEFORE the backend is
+ * told to drop it, so the store only changes once that has worked.
+ */
+export function holdsAutomaticDownload(state: Pick<UpdateStore, 'status' | 'downloadOrigin'>): boolean {
+  return state.downloadOrigin === 'check' && (state.status === 'downloading' || state.status === 'ready');
+}
+
 export interface UpdateInfo {
   version: string;
   notesUrl: string;
@@ -99,10 +108,11 @@ interface UpdateStore {
   /** A download (or the install of one) failed - the banner re-offers the download it already knows about. */
   setDownloadFailed: () => void;
   /**
-   * "Update automatically" was turned off (#645): abandon a download a check
-   * started, running or finished, and go back to offering Download - the offer
-   * itself stands. Returns whether there was one, so the caller knows to drop
-   * the backend's copy too. A download the user started is left alone.
+   * "Update automatically" was turned off (#645) and the backend has dropped
+   * the download: abandon a download a check started, running or finished, and
+   * go back to offering Download - the offer itself stands. Returns whether
+   * there was one ({@link holdsAutomaticDownload}). A download the user started
+   * is left alone.
    */
   abandonAutomaticDownload: () => boolean;
   dismiss: (version: string) => void;
@@ -230,10 +240,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
       downloadOrigin: null,
     })),
   abandonAutomaticDownload: () => {
-    const { status, downloadOrigin } = get();
-    if (downloadOrigin !== 'check' || (status !== 'downloading' && status !== 'ready')) {
-      return false;
-    }
+    if (!holdsAutomaticDownload(get())) return false;
     // Bumping `downloadSeq` makes the abandoned download's own completion or
     // failure land nowhere, as for a download a check superseded.
     set((state) => ({
