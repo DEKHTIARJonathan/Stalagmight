@@ -20,6 +20,11 @@
 //! the download from the install is what keeps the point of no return behind
 //! the existing quit guards.
 //!
+//! A download nobody restarts into is installed as the app exits instead
+//! ([`install_downloaded_update_on_exit`], #631), so an ordinary quit is
+//! enough to update and nothing ever forces a restart. Not on Windows - see
+//! [`INSTALLS_ON_QUIT`].
+//!
 //! ## What is trusted, and where
 //!
 //! The manifest is fetched over https but is NOT itself signed - only the
@@ -43,7 +48,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use tauri::utils::config::BundleType;
-use tauri::{AppHandle, Emitter, State, Url};
+use tauri::{AppHandle, Emitter, Manager, State, Url};
 use tauri_plugin_updater::{Update, UpdaterExt};
 use ts_rs::TS;
 
@@ -124,7 +129,19 @@ pub struct AppUpdateCheck {
     /// The version the RUNNING app was built as, so the UI can say "you have X"
     /// without a second round trip.
     pub current_version: String,
+    /// Whether a downloaded update is installed when the app quits
+    /// ([`INSTALLS_ON_QUIT`]), so the banner can promise it - or not.
+    pub installs_on_quit: bool,
 }
+
+/// Whether [`install_downloaded_update_on_exit`] installs on this platform.
+///
+/// Not on Windows: the plugin's NSIS install always passes `/R` in passive mode
+/// (`WindowsUpdateInstallMode::nsis_args`, tauri-plugin-updater 2.9.0), so the
+/// installer reopens the app when it finishes. Installing on quit there would
+/// bring back the window the user just closed, which is a restart they never
+/// asked for. Windows keeps "Restart to update" until that can be suppressed.
+pub const INSTALLS_ON_QUIT: bool = !cfg!(windows);
 
 /// Whether an update is on offer.
 ///
@@ -572,6 +589,7 @@ pub async fn check_for_app_update(
         return Ok(AppUpdateCheck {
             status: AppUpdateStatus::UpToDate,
             current_version,
+            installs_on_quit: INSTALLS_ON_QUIT,
         });
     };
 
@@ -592,6 +610,7 @@ pub async fn check_for_app_update(
             version,
         },
         current_version,
+        installs_on_quit: INSTALLS_ON_QUIT,
     })
 }
 
@@ -775,6 +794,60 @@ pub fn install_app_update_and_restart(
         return Err(format!("Update install failed: {e}"));
     }
     app.restart();
+}
+
+/// Take a verified download for the exit-time install, if one is waiting for
+/// the CURRENT check.
+///
+/// Needs no arm, unlike [`take_installable`]. The arm exists so a stray
+/// `invoke` cannot restart the app out from under unsaved work; this runs only
+/// from the `RunEvent::Exit` handler, after the process has already committed
+/// to exiting, so there is no work left to protect and no webview path to it.
+///
+/// Taking the bytes (not peeking) also keeps the restart path from installing
+/// twice: `install_app_update_and_restart` has already taken them by the time
+/// its `app.restart()` reaches the exit event.
+fn take_for_exit(pending: &mut Pending) -> Option<(Update, Vec<u8>)> {
+    let (generation, _) = pending.bytes.as_ref()?;
+    if *generation != pending.generation {
+        return None;
+    }
+    let (_, bytes) = pending.bytes.take()?;
+    pending.update.clone().map(|update| (update, bytes))
+}
+
+/// Install a downloaded update as the app exits, without relaunching (#631).
+///
+/// Called from the `RunEvent::Exit` handler in `lib.rs`, so it runs after every
+/// exit guard has passed and the window is gone: the user quit normally, and
+/// the next launch starts the new version. Nothing is restarted.
+///
+/// Best-effort: a failure is logged and the exit goes ahead. The next launch
+/// re-checks and downloads the update again. On macOS an install into a
+/// location the user cannot write raises the system's admin prompt (the
+/// plugin's own fallback), exactly as the restart path does.
+pub fn install_downloaded_update_on_exit(app: &AppHandle) {
+    if !INSTALLS_ON_QUIT {
+        return;
+    }
+    let Some(update_state) = app.try_state::<AppUpdateState>() else {
+        return;
+    };
+    let taken = match update_state.with(take_for_exit) {
+        Ok(taken) => taken,
+        Err(e) => {
+            tracing::warn!(error = %e, "Update state unusable at exit; not installing");
+            return;
+        }
+    };
+    let Some((update, bytes)) = taken else {
+        return;
+    };
+    let version = update.version.clone();
+    match update.install(&bytes) {
+        Ok(()) => tracing::info!(%version, "Installed the downloaded update on quit"),
+        Err(e) => tracing::warn!(%version, error = %e, "Installing the update on quit failed"),
+    }
 }
 
 #[cfg(test)]
@@ -1297,6 +1370,44 @@ mod tests {
     /// Put the state where a real check + download would leave it, without an
     /// `Update` (which needs a live plugin). Anything that needs the `Update`
     /// itself is covered by the command-level paths, not here.
+    // ── Install on quit (#631) ───────────────────────────────────────────────
+
+    /// Bytes from a check a later one superseded must not be installed: they
+    /// would be applied by the newer `Update`, a version nobody downloaded.
+    /// They are left in place, which is what makes the refusal observable here.
+    #[test]
+    fn the_exit_install_skips_bytes_a_newer_check_superseded() {
+        let state = AppUpdateState::default();
+        seed_download(&state, 1);
+        state
+            .with(|pending| pending.generation = 2)
+            .expect("lockable");
+
+        assert!(state.with(take_for_exit).expect("lockable").is_none());
+        assert!(state
+            .with(|pending| pending.bytes.is_some())
+            .expect("lockable"));
+    }
+
+    /// The exit install needs no arm, but it does take the bytes, so the
+    /// restart path (which takes them first) can never install a second time
+    /// from the exit event its own `app.restart()` raises.
+    #[test]
+    fn the_exit_install_takes_a_current_download_without_an_arm() {
+        let state = AppUpdateState::default();
+        seed_download(&state, 1);
+        assert!(!state
+            .with(|pending| pending.restart_armed)
+            .expect("lockable"));
+
+        // An `Update` cannot be constructed outside a live plugin, so the take
+        // stops at the last step; the bytes being gone proves it got there.
+        assert!(state.with(take_for_exit).expect("lockable").is_none());
+        assert!(state
+            .with(|pending| pending.bytes.is_none())
+            .expect("lockable"));
+    }
+
     fn seed_download(state: &AppUpdateState, generation: u64) {
         state
             .with(|pending| {
