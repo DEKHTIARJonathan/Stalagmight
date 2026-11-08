@@ -352,7 +352,7 @@ if [ "$NO_TAG" = true ]; then
   # this script's checks do not cover, and a bare tag command gets none of them.
   echo "Next steps:"
   echo "  git push"
-  echo "  ./scripts/release-tag.sh v$NEW_VERSION-rc1   # a candidate, then rc2, rc3, ..."
+  echo "  ./scripts/release-tag.sh v$NEW_VERSION-rc.1   # a candidate for Beta, then rc.2, rc.3, ..."
   echo "  ./scripts/release-tag.sh v$NEW_VERSION       # the release"
   echo "  git push origin <the tag it created>"
   exit 0

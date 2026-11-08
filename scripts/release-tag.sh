@@ -4,7 +4,7 @@ set -euo pipefail
 # release-tag.sh - tag an already-bumped tree, with the checks release.sh has.
 #
 # Usage:
-#   ./scripts/release-tag.sh <vX.Y.Z|vX.Y.Z-rcN> [--allow-unannounced] [--dry-run]
+#   ./scripts/release-tag.sh <vX.Y.Z|vX.Y.Z-rc.N> [--allow-unannounced] [--dry-run]
 #
 # There are two release flows (docs/releasing.md). release.sh owns the first:
 # bump the four version files, move the changelog, commit. This script owns the
@@ -16,10 +16,11 @@ set -euo pipefail
 # and rc2 (#406). What it checks, none of it new information, all of it
 # previously left to the operator remembering:
 #
-#   - the tag is well-formed and does not already exist
+#   - the tag is well-formed - a final vX.Y.Z or a candidate vX.Y.Z-rc.N, the
+#     only shapes the release workflow publishes - and does not already exist
 #   - the tree is clean, so the tag means what the commit says
-#   - all four version files read the tag's base version, so v0.5.1-rc1 cannot
-#     be cut from a tree still saying 0.5.0
+#   - all four version files read the tag's base version, so v0.5.2-rc.1 cannot
+#     be cut from a tree still saying 0.5.1
 #   - the notes that will actually be published are non-empty, and nothing is
 #     left under [Unreleased] to ship unannounced
 #
@@ -29,8 +30,9 @@ set -euo pipefail
 #
 # The version files deliberately stay at the plain X.Y.Z for a candidate: the
 # Windows MSI bundler rejects a non-numeric pre-release identifier, so an
-# in-tree 0.5.0-rc1 fails the Windows build outright. The candidate lives only
-# in the tag.
+# in-tree 0.5.2-rc.1 fails the Windows build outright. The candidate lives only
+# in the tag; the release workflow bakes its rc.N into the app at build time
+# (STALAGMIGHT_PRERELEASE, #650), not into any version file.
 
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -93,7 +95,7 @@ for arg in "$@"; do
 done
 
 if [ -z "$TAG" ]; then
-  echo "Usage: $0 <vX.Y.Z|vX.Y.Z-rcN> [--allow-unannounced] [--dry-run]" >&2
+  echo "Usage: $0 <vX.Y.Z|vX.Y.Z-rc.N> [--allow-unannounced] [--dry-run]" >&2
   exit 1
 fi
 
@@ -103,26 +105,49 @@ fi
 # candidate must be something that workflow will refuse to mark as "Latest".
 if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
   echo "Error: '$TAG' is not a release tag." >&2
-  echo "Expected vX.Y.Z for a release, or vX.Y.Z-<suffix> (e.g. v0.5.1-rc1) for a candidate." >&2
+  echo "Expected vX.Y.Z for a release, or vX.Y.Z-rc.N (e.g. v0.5.2-rc.1) for a candidate." >&2
   exit 1
 fi
 
-# A weekly tag (v0.5.1-weekly.20260817) matches the shape check above too,
-# but it is not one this script hand-tags: weekly tags are reserved for the
-# automated weekly pipeline (issue #579, lands separately from this script),
-# and a hand-typed weekly tag would either collide with, or masquerade as,
-# one of those. Refuse it here rather than let it silently succeed as a
-# candidate.
+# A weekly tag (v0.5.1-weekly.20260817) matches the shape check above too. The
+# weekly track is retired (#650): its automated builds never shipped, and
+# latest-weekly.json now mirrors the Beta manifest, which candidates feed.
+# Named separately from the generic refusal below so the message says why.
 case "$TAG" in
   *-weekly.*)
     echo "Error: '$TAG' looks like a weekly tag." >&2
-    echo "Weekly tags are reserved for the automated weekly pipeline (#579," >&2
-    echo "lands separately) - they are never hand-tagged." >&2
-    echo "See docs/releasing.md (Updater manifests) for the weekly-track flow." >&2
+    echo "The weekly track is retired (#650): weekly builds never shipped, and" >&2
+    echo "latest-weekly.json now mirrors Beta. Cut a candidate instead, vX.Y.Z-rc.N." >&2
+    echo "See docs/releasing.md (Updater manifests)." >&2
     echo "Nothing was tagged." >&2
     exit 1
     ;;
 esac
+
+# Candidates are vX.Y.Z-rc.N (#650). The dotted number is its own numeric
+# identifier, so semver - and the updater, which compares X.Y.Z-rc.N - orders
+# rc.10 above rc.9; the undotted rc10 compares as text and sorts below rc9.
+# v0.5.0-rc1 to -rc6 used the old shape, so name the replacement.
+if [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-rc([0-9]+)$ ]]; then
+  echo "Error: '$TAG' is the old undotted candidate shape." >&2
+  echo "Candidates are vX.Y.Z-rc.N now: use ${TAG%-rc*}-rc.${BASH_REMATCH[1]} instead." >&2
+  echo "(Semver compares rc10 as text, below rc9; rc.10 compares as a number.)" >&2
+  echo "Nothing was tagged." >&2
+  exit 1
+fi
+
+# Everything else must be a shape the release workflow publishes, asked of the
+# same script it routes on, so this check cannot drift from it. A suffix it
+# does not recognise (v0.5.2-beta.1) would build and publish as a pre-release
+# that no Beta install is ever offered: the workflow bakes the Beta channel and
+# writes latest-beta.json only for -rc.N.
+CHANNEL_KIND="$("$SCRIPT_DIR/release-channel.sh" classify "$TAG" | sed -n 's/^kind=//p')"
+if [ "$CHANNEL_KIND" != final ] && [ "$CHANNEL_KIND" != candidate ]; then
+  echo "Error: '$TAG' is not a tag shape the release workflow publishes." >&2
+  echo "The only candidate shape is vX.Y.Z-rc.N (e.g. v0.5.2-rc.1); a release is a bare vX.Y.Z." >&2
+  echo "Nothing was tagged." >&2
+  exit 1
+fi
 
 VERSION="${TAG#v}"
 BASE_VERSION="${VERSION%%-*}"
@@ -157,9 +182,9 @@ if [ -n "$DIRT" ]; then
   exit 1
 fi
 
-# The check the manual flow never had. Cutting v0.5.1-rc1 from a tree whose
-# manifests still say 0.5.0 builds artifacts named Stalagmight_0.5.0_* and an
-# About box reading 0.5.0, from a tag promising otherwise.
+# The check the manual flow never had. Cutting v0.5.2-rc.1 from a tree whose
+# manifests still say 0.5.1 builds artifacts named Stalagmight_0.5.1_* and an
+# About box reading 0.5.1, from a tag promising otherwise.
 if ! version_files_match "$BASE_VERSION" "tag $TAG" "for $TAG"; then
   echo "" >&2
   echo "The version files do not match the tag. Either you meant a different tag," >&2
@@ -231,7 +256,7 @@ fi
 # invisible otherwise.
 if [ "$PRERELEASE" = false ]; then
   if [ -z "$(git -C "$PROJECT_ROOT" tag --list "v${BASE_VERSION}-*")" ]; then
-    echo "note: no v${BASE_VERSION}-rcN tag exists - this release was never cut as a candidate." >&2
+    echo "note: no v${BASE_VERSION}-rc.N tag exists - this release was never cut as a candidate." >&2
   fi
 
   # release.sh stamped the section header the day the version was bumped, which
@@ -302,7 +327,7 @@ echo "Tag:      $TAG"
 echo "Version:  $BASE_VERSION (in package.json, tauri.conf.json, Cargo.toml, Cargo.lock)"
 echo "Commit:   $(git -C "$PROJECT_ROOT" log -1 --format='%h %s')"
 if [ "$PRERELEASE" = true ]; then
-  echo "Kind:     pre-release (published as a candidate, never as Latest)"
+  echo "Kind:     pre-release (published as a candidate, never as Latest; offered to Beta installs)"
 else
   echo "Kind:     release (published as Latest)"
 fi
