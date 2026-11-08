@@ -7,6 +7,7 @@ How to use Stalagmight. Pages link to each other.
 - [Setting a zero datum](workflows/setting-a-zero-datum.md)
 - [Fixing warnings](workflows/fixing-warnings.md)
 - [Importing from an mNemo](workflows/importing-from-mnemo.md)
+- [Importing an Ariane survey](workflows/importing-from-ariane.md)
 
 **Screens**
 - [Start screen](screens/start-screen.md)
@@ -18,6 +19,7 @@ How to use Stalagmight. Pages link to each other.
 - [Edit Station dialog](screens/edit-station-dialog.md)
 - [Warnings panel](screens/warnings-panel.md)
 - [DMP import](screens/dmp-import.md)
+- [Create Project for Import dialog](screens/create-project-for-import.md)
 
 **Concepts**
 - [Sections, shots and stations](concepts/sections-shots-stations.md)

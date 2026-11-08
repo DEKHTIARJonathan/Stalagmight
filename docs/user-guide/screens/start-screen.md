@@ -6,7 +6,8 @@ Shown at launch until you open a project. After that it lists recent projects.
 
 1. **Menu**: New project, Open / Import, Settings, Debug Logs, Quit.
 2. **New project**: opens the [New Project dialog](new-project-dialog.md).
-3. **Open / Import**: open a `.stalx` project or import another format.
+3. **Open / Import**: open a `.stalx` project or import another format, for
+   example [an Ariane survey](../workflows/importing-from-ariane.md).
 4. **Drop area**: click it to do the same as 3, or drop a file anywhere on the
    window.
 5. **Start a new project instead**: same as 2.
