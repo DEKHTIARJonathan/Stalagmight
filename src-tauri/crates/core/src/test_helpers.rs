@@ -269,12 +269,14 @@ pub fn with_isolated_config<T>(f: impl FnOnce() -> T) -> T {
 /// race, or a worker whose write the parent reads back - capture on the parent
 /// and adopt inside the worker:
 ///
-/// ```ignore
+/// ```
+/// use stalagmight_core::test_helpers::ConfigHandoff;
+///
 /// let handoff = ConfigHandoff::capture();
 /// std::thread::spawn(move || {
 ///     let _config = handoff.adopt();
 ///     // ... every Config::load()/save() here is the parent's file
-/// });
+/// }).join().expect("config worker should finish");
 /// ```
 ///
 /// `Clone` because a `'static` thread closure has to own its copy: capture once
