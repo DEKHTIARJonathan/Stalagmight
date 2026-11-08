@@ -1215,6 +1215,7 @@ impl Database {
         // history of, a file whose schema this build has never seen.
         if current > SCHEMA_VERSION {
             return Err(anyhow::Error::new(super::NewerSchema {
+                file: super::newer_schema::file_name_of(&self.conn),
                 found: current,
                 supported: SCHEMA_VERSION,
             }));

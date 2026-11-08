@@ -319,10 +319,17 @@ impl AppState {
                         let _ = self.open_project(dest.to_path_buf());
                     }
                     return Err(match e.downcast_ref::<crate::persistence::NewerSchema>() {
-                        Some(newer) => SpeleoDbError::NewerSchema {
-                            found: newer.found,
-                            supported: newer.supported,
-                        },
+                        // The check read the staged copy, whose name is ours; name
+                        // the file as it is on SpeleoDB.
+                        Some(newer) => {
+                            SpeleoDbError::NewerSchema(crate::persistence::NewerSchema {
+                                file: Path::new(entry)
+                                    .file_name()
+                                    .map(|name| name.to_string_lossy().into_owned())
+                                    .unwrap_or_default(),
+                                ..newer.clone()
+                            })
+                        }
                         None => SpeleoDbError::Parse(format!(
                             "the downloaded project file was refused: {e:#}"
                         )),
@@ -383,6 +390,7 @@ impl AppState {
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
+    clippy::panic,
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod tests {
@@ -784,16 +792,19 @@ mod tests {
             )
             .expect_err("a newer schema's download must not be installed");
 
-        assert!(
-            matches!(
-                err,
-                SpeleoDbError::NewerSchema { found, supported }
-                    if found == crate::persistence::SCHEMA_VERSION + 1
-                        && supported == crate::persistence::SCHEMA_VERSION
-            ),
-            "{err:?}"
+        let SpeleoDbError::NewerSchema(newer) = &err else {
+            panic!("refused for the wrong reason: {err:?}");
+        };
+        assert_eq!(
+            *newer,
+            crate::persistence::NewerSchema {
+                // The entry's own name, not the staged copy's.
+                file: "project.stalx".to_owned(),
+                found: crate::persistence::SCHEMA_VERSION + 1,
+                supported: crate::persistence::SCHEMA_VERSION,
+            }
         );
-        assert!(err.to_string().contains("Update Stalagmight"), "{err}");
+        assert_eq!(err.to_string(), newer.to_string(), "the shared wording");
         assert_eq!(
             std::fs::read(&dest).expect("read destination"),
             before,

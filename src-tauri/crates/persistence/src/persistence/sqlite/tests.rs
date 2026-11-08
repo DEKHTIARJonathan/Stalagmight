@@ -221,6 +221,7 @@ fn an_unstamped_file_whose_project_row_claims_the_future_is_refused_untouched() 
     assert_eq!(
         err.downcast_ref::<NewerSchema>(),
         Some(&NewerSchema {
+            file: "from_the_future.stalx".to_string(),
             found: 99,
             supported: SCHEMA_VERSION
         })

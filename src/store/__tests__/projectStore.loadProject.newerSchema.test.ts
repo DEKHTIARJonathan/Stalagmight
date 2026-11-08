@@ -16,11 +16,16 @@ vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
 vi.mock('../../utils/loadProjectBinary', () => ({ loadProjectFullBinary: loadBinaryMock }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 
+/** The one wording, as the backend's `NewerSchema` Display and `en.json` both say it. */
+const WORDING =
+  '"cave.stalx" was saved by a newer version of Stalagmight (file format 19; this version reads up to 18). Update Stalagmight to open it.';
+
 /** The backend's refusal, in the shape `parseLoadError` reads. */
 const REFUSAL = {
   code: 'NEWER_SCHEMA',
-  message: 'This project was saved by a newer version of Stalagmight (file format 19, this version reads up to 18). Update Stalagmight to open it.',
+  message: WORDING,
   details: '/surveys/cave.stalx',
+  newerSchema: { file: 'cave.stalx', found: 19, supported: 18 },
 };
 
 beforeEach(() => {
@@ -46,15 +51,37 @@ describe('loadProject NEWER_SCHEMA (#649)', () => {
     expect(ui.activeDialog).toBe('error');
     expect(ui.dialogData).toEqual({
       title: i18n.t('newerSchema.open.title'),
-      message: i18n.t('newerSchema.open.message'),
+      message: WORDING,
       hideReportHint: true,
     });
-    // The strings resolved, rather than falling back to their keys.
-    expect(ui.dialogData.message).toContain('Update Stalagmight');
+    // Rendered from the localized string with the payload's values, not relayed.
+    expect(i18n.t('newerSchema.open.title')).not.toBe('newerSchema.open.title');
     const { loading } = useProjectStore.getState();
     expect(loading.isLoading).toBe(false);
     expect(loading.error).toBeUndefined();
     expect(ui.view).toBe('global');
+  });
+
+  it('interpolates the payload rather than relaying the backend text', async () => {
+    loadBinaryMock.mockRejectedValue({
+      ...REFUSAL,
+      message: 'backend text',
+      newerSchema: { file: 'other.stalx', found: 25, supported: 18 },
+    });
+
+    await useProjectStore.getState().loadProject('/surveys/other.stalx');
+
+    expect(useUIStore.getState().dialogData.message).toBe(
+      '"other.stalx" was saved by a newer version of Stalagmight (file format 25; this version reads up to 18). Update Stalagmight to open it.'
+    );
+  });
+
+  it('falls back to the backend wording when the payload is missing', async () => {
+    loadBinaryMock.mockRejectedValue({ ...REFUSAL, newerSchema: undefined });
+
+    await useProjectStore.getState().loadProject('/surveys/cave.stalx');
+
+    expect(useUIStore.getState().dialogData.message).toBe(WORDING);
   });
 
   it('stays quiet when a newer load took over', async () => {

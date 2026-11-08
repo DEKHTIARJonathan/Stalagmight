@@ -154,6 +154,8 @@ fn main() {
     export::<LoadProjectFullResult>(&out_dir);
     export::<CreateProjectFullResult>(&out_dir);
     export::<SpeleoManagedFile>(&out_dir);
+    // [#649] A file a newer Stalagmight saved: carried on LoadError and SpeleoErrorDto.
+    export::<stalagmight_lib::models::NewerSchema>(&out_dir);
 
     // Project/model types
     export::<Project>(&out_dir);
@@ -435,6 +437,7 @@ fn main() {
         "LoadProjectFullResult",
         "CreateProjectFullResult",
         "SpeleoManagedFile",
+        "NewerSchema",
         "Project",
         "ProjectMetadata",
         "ProjectStats",

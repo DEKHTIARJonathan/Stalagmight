@@ -241,6 +241,12 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         }
         _ => (None, None),
     };
+    // [#649] Same discipline again: only the newer-schema refusal carries it, so the
+    // frontend renders that refusal from the shared `newerSchema.message` string.
+    let newer_schema = match err {
+        SpeleoDbError::NewerSchema(newer) => Some(newer.clone()),
+        _ => None,
+    };
     let (action, status, message) = match err {
         // Status: carry the parsed human detail WITHOUT the "SpeleoDB returned HTTP
         // N:" wrapper - the frontend frames it per operation ("Login to SpeleoDB
@@ -288,7 +294,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         SpeleoDbError::NoEndpoint
         | SpeleoDbError::MissingCredentials
         | SpeleoDbError::Parse(_)
-        | SpeleoDbError::NewerSchema { .. }
+        | SpeleoDbError::NewerSchema(_)
         | SpeleoDbError::EmptyDump
         | SpeleoDbError::Io(_)
         | SpeleoDbError::InvalidProjectId
@@ -304,6 +310,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         unpushed_local,
         dump_candidates,
         dump_candidate_kind,
+        newer_schema,
     }
 }
 
@@ -595,6 +602,26 @@ mod tests {
             !body.contains("_ =>"),
             "the action match must stay exhaustive - a wildcard lets a new SpeleoDbError \
              variant default to Fatal without anyone deciding that it should"
+        );
+    }
+
+    /// [#649] A newer-schema refusal is a dead end this build cannot route around,
+    /// so it is `Fatal`, and it carries its payload so the frontend can say it in
+    /// the open dialog's words; no other error carries one.
+    #[test]
+    fn a_newer_schema_refusal_is_fatal_and_carries_its_payload() {
+        let newer = crate::models::NewerSchema {
+            file: "project.stalx".to_owned(),
+            found: 19,
+            supported: 18,
+        };
+        let dto = dto_for_error(Endpoint::User, &SpeleoDbError::NewerSchema(newer.clone()));
+        assert_eq!(dto.action, SpeleoDbAction::Fatal);
+        assert_eq!(dto.message, newer.to_string());
+        assert_eq!(dto.newer_schema, Some(newer));
+        assert_eq!(
+            dto_for_error(Endpoint::User, &SpeleoDbError::EmptyDump).newer_schema,
+            None
         );
     }
 

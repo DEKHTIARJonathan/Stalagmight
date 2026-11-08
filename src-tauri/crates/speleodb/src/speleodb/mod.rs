@@ -87,12 +87,10 @@ pub enum SpeleoDbError {
     #[error("invalid response from SpeleoDB: {0}")]
     Parse(String),
     /// The downloaded `.stalx` was saved by a newer schema than this build reads
-    /// (#649), so it was not installed as the local copy.
-    #[error(
-        "This project on SpeleoDB was saved by a newer version of Stalagmight (file format \
-         {found}, this version reads up to {supported}). Update Stalagmight to open it."
-    )]
-    NewerSchema { found: i32, supported: i32 },
+    /// (#649), so it was not installed as the local copy. `file` names the file
+    /// as it is on SpeleoDB; the `Display` is the shared refusal wording.
+    #[error("{0}")]
+    NewerSchema(crate::models::NewerSchema),
     /// The dump contained no openable project and no Ariane sidecar.
     #[error("the project dump contained nothing to open")]
     EmptyDump,

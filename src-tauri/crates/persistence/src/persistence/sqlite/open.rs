@@ -221,7 +221,7 @@ impl Database {
         if super::check_schema(&conn).is_err() {
             return Ok(());
         }
-        super::newer_schema::check_not_newer(&conn)
+        Ok(super::newer_schema::check_not_newer(&conn)?)
     }
 
     /// Open a database for read-only metadata extraction only.

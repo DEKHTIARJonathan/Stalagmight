@@ -8,35 +8,25 @@
 //! cleanup, `init_schema`'s `CREATE TABLE IF NOT EXISTS`). So the openers refuse
 //! such a file before they write or read anything else; the `stalx-reader` crate
 //! refuses it the same way (its `ReadError::NewerSchema`).
+//!
+//! The refusal is [`NewerSchema`], which lives in `stalagmight-models` because
+//! the load and SpeleoDB errors carry it to the frontend too.
 
 use rusqlite::types::ValueRef;
 use rusqlite::Connection;
 
+pub use crate::models::NewerSchema;
+
 use super::SCHEMA_VERSION;
 
-/// A project file saved by a newer Stalagmight than this one. Rides inside the
-/// open error, so callers can `downcast_ref` it to tell this refusal apart from
-/// corruption or an I/O failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NewerSchema {
-    /// The file's schema version.
-    pub found: i32,
-    /// The newest schema version this build reads, [`SCHEMA_VERSION`].
-    pub supported: i32,
+/// The name (no directory) of the file `conn` has open, or an empty string for
+/// a connection with no file behind it.
+pub(super) fn file_name_of(conn: &Connection) -> String {
+    conn.path()
+        .and_then(|p| std::path::Path::new(p).file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
-
-impl std::fmt::Display for NewerSchema {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "this project was saved by a newer version of Stalagmight (file format {}, this \
-             version reads up to {}); update Stalagmight to open it",
-            self.found, self.supported
-        )
-    }
-}
-
-impl std::error::Error for NewerSchema {}
 
 /// The schema version `conn`'s file was written at, by the rule
 /// `ensure_schema_version` and the `stalx-reader` crate both use:
@@ -76,15 +66,16 @@ pub(super) fn file_schema_version(conn: &Connection) -> i32 {
 }
 
 /// Refuse `conn`'s file if a newer schema than [`SCHEMA_VERSION`] wrote it.
-/// Call it right after [`super::check_schema`] on every open of an existing
-/// file, before anything writes to or validates it.
-pub(super) fn check_not_newer(conn: &Connection) -> anyhow::Result<()> {
+/// Call it right after [`super::check_schema`] on every project open of an
+/// existing file, before anything writes to or validates it.
+pub(super) fn check_not_newer(conn: &Connection) -> Result<(), NewerSchema> {
     let found = file_schema_version(conn);
     if found > SCHEMA_VERSION {
-        return Err(anyhow::Error::new(NewerSchema {
+        return Err(NewerSchema {
+            file: file_name_of(conn),
             found,
             supported: SCHEMA_VERSION,
-        }));
+        });
     }
     Ok(())
 }

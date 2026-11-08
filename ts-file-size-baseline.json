@@ -304,7 +304,7 @@
     "src/store/globalViewStore.ts": 141,
     "src/store/index.ts": 2,
     "src/store/networkStore.ts": 13,
-    "src/store/projectStore.ts": 1567,
+    "src/store/projectStore.ts": 1571,
     "src/store/speleoStore.ts": 722,
     "src/store/uiStore.ts": 1238,
     "src/theme/syntacticPalette.ts": 154,

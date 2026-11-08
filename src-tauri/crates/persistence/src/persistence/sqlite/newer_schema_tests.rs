@@ -48,7 +48,7 @@ fn newer_file(dir: &TempDir, name: &str, claim: Claim) -> PathBuf {
     path
 }
 
-fn assert_refused_as_newer(result: anyhow::Result<Database>, what: &str) {
+fn assert_refused_as_newer(result: anyhow::Result<Database>, file: &str, what: &str) {
     let Err(err) = result else {
         panic!("{what}: a file from a newer schema must be refused");
     };
@@ -59,6 +59,7 @@ fn assert_refused_as_newer(result: anyhow::Result<Database>, what: &str) {
     assert_eq!(
         *newer,
         NewerSchema {
+            file: file.to_string(),
             found: SCHEMA_VERSION + 1,
             supported: SCHEMA_VERSION,
         },
@@ -77,13 +78,15 @@ fn every_project_opener_refuses_a_newer_file_and_leaves_it_unchanged() {
         let path = newer_file(&dir, "newer.stalx", claim);
         let before = bytes(&path);
 
-        assert_refused_as_newer(Database::open(&path), "open");
-        assert_refused_as_newer(Database::open_existing(&path), "open_existing");
+        let name = "newer.stalx";
+        assert_refused_as_newer(Database::open(&path), name, "open");
+        assert_refused_as_newer(Database::open_existing(&path), name, "open_existing");
         assert_refused_as_newer(
             Database::open_existing_untrusted(&path, 1 << 20, std::time::Duration::from_secs(5)),
+            name,
             "open_existing_untrusted",
         );
-        assert_refused_as_newer(Database::open_readonly(&path), "open_readonly");
+        assert_refused_as_newer(Database::open_readonly(&path), name, "open_readonly");
 
         assert_eq!(bytes(&path), before, "a refused open wrote into the file");
         // The history cleanup the open used to run is the write most likely to
@@ -136,7 +139,9 @@ fn the_path_check_refuses_only_a_newer_file() {
         let path = newer_file(&dir, "check.stalx", claim);
         let before = bytes(&path);
         let err = Database::check_not_newer_at(&path).unwrap_err();
-        assert!(err.downcast_ref::<NewerSchema>().is_some(), "{err:#}");
+        let newer = err.downcast_ref::<NewerSchema>().unwrap();
+        assert_eq!(newer.file, "check.stalx");
+        assert_eq!(newer.found, SCHEMA_VERSION + 1);
         assert_eq!(bytes(&path), before);
         std::fs::remove_file(&path).unwrap();
     }
@@ -178,7 +183,11 @@ fn the_migration_chain_refuses_a_newer_file_on_its_own() {
 
         let err = db.ensure_schema_version().unwrap_err();
 
-        assert!(err.downcast_ref::<NewerSchema>().is_some(), "{err:#}");
+        assert_eq!(
+            err.downcast_ref::<NewerSchema>().map(|n| n.file.as_str()),
+            Some("chain.stalx"),
+            "{err:#}"
+        );
         drop(db);
         assert_eq!(bytes(&path), before);
     }

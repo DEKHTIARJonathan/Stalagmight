@@ -47,11 +47,14 @@ impl PlnxStore {
         // rewrite its version to this build's (#649).
         let stored: i32 = conn.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         if stored > PLNX_SCHEMA_VERSION {
-            anyhow::bail!(
-                "these dive plans were saved by a newer version of Stalagmight (dive-plan \
-                 file format {stored}, this version reads up to {PLNX_SCHEMA_VERSION}); \
-                 update Stalagmight to open them"
-            );
+            return Err(anyhow::Error::new(crate::models::NewerSchema {
+                file: path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+                found: stored,
+                supported: PLNX_SCHEMA_VERSION,
+            }));
         }
         // Crash-safe in-place writes; ignore pragma failures (defaults are already safe).
         let _ = conn.pragma_update(None, "journal_mode", "DELETE");
@@ -459,8 +462,13 @@ mod tests {
             panic!("a newer .plnx must be refused");
         };
 
-        assert!(
-            err.to_string().contains("newer version of Stalagmight"),
+        assert_eq!(
+            err.downcast_ref::<crate::models::NewerSchema>(),
+            Some(&crate::models::NewerSchema {
+                file: "cave.plnx".to_owned(),
+                found: PLNX_SCHEMA_VERSION + 1,
+                supported: PLNX_SCHEMA_VERSION,
+            }),
             "{err:#}"
         );
         assert_eq!(std::fs::read(&path).unwrap(), before);

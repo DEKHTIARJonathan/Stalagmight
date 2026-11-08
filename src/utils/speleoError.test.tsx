@@ -32,6 +32,7 @@ const dto = (over: Partial<SpeleoErrorDto> = {}): SpeleoErrorDto => ({
   unpushed_local: null,
   dump_candidate_kind: null,
   dump_candidates: null,
+  newer_schema: null,
   ...over,
 });
 
@@ -45,6 +46,24 @@ beforeEach(() => {
       storage: 'keychain',
       keychain: 'available',
     },
+  });
+});
+
+describe('humanizeSpeleoError - a download a newer Stalagmight saved (#649)', () => {
+  it('says it in the open dialog wording, with the file and both versions, unprefixed', () => {
+    const line = humanizeSpeleoError(
+      dto({
+        message: 'backend text',
+        action: 'Fatal',
+        transport: null,
+        newer_schema: { file: 'project.stalx', found: 19, supported: 18 },
+      }),
+      'Unable to open the project'
+    );
+
+    expect(line).toBe(
+      '"project.stalx" was saved by a newer version of Stalagmight (file format 19; this version reads up to 18). Update Stalagmight to open it.'
+    );
   });
 });
 

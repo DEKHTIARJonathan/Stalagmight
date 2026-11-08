@@ -949,6 +949,10 @@ pub struct SpeleoErrorDto {
     /// an `ariane.tml` are different operations - so guessing it wrong shows the
     /// wrong dialog rather than merely the wrong wording.
     pub dump_candidate_kind: Option<DumpCandidateKind>,
+    /// [#649] Set ONLY when the download was refused because a newer Stalagmight
+    /// saved it, so the frontend renders the same refusal string the open dialog
+    /// uses. `None` on every other error.
+    pub newer_schema: Option<crate::models::NewerSchema>,
 }
 
 /// [#258] Which flavour of ambiguity a picker is being offered for.
@@ -1078,6 +1082,7 @@ mod tests {
             unpushed_local: None,
             dump_candidates: None,
             dump_candidate_kind: None,
+            newer_schema: None,
         })
         .expect("serialize error dto");
         // The single-writer hand-off DTOs (#194/#197) must also never carry a token

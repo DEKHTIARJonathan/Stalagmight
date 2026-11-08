@@ -12,7 +12,7 @@ use tempfile::TempDir;
 
 use super::AppState;
 use crate::core::events::EventSink;
-use crate::models::Project;
+use crate::models::{NewerSchema, Project};
 use crate::persistence::{Database, SCHEMA_VERSION};
 
 /// The load needs a sink for its progress events; nothing listens here.
@@ -56,12 +56,15 @@ fn the_load_refuses_a_newer_project_with_its_own_code() {
     };
 
     assert_eq!(err.code, "NEWER_SCHEMA", "{}", err.message);
-    assert!(
-        err.message.contains("newer version of Stalagmight")
-            && err.message.contains("Update Stalagmight"),
-        "{}",
-        err.message
-    );
+    let newer = NewerSchema {
+        file: "newer.stalx".to_string(),
+        found: SCHEMA_VERSION + 1,
+        supported: SCHEMA_VERSION,
+    };
+    // The payload the frontend renders its string from, and the same wording in
+    // the message for anything that only relays it.
+    assert_eq!(err.newer_schema.as_ref(), Some(&newer));
+    assert_eq!(err.message, newer.to_string());
     assert_eq!(
         err.details.as_deref(),
         Some(path.display().to_string().as_str())
@@ -93,7 +96,7 @@ fn the_legacy_open_refuses_a_newer_project() {
         result
             .error
             .as_deref()
-            .is_some_and(|e| e.contains("update Stalagmight to open it")),
+            .is_some_and(|e| e.contains("Update Stalagmight to open it.")),
         "{:?}",
         result.error
     );

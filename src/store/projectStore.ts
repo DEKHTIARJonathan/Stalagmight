@@ -41,6 +41,8 @@ import type {
 import type { ExistingShotUpdate } from '../types/ipc/ExistingShotUpdate';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
 import type { SpeleoManagedFile } from '../types/ipc/SpeleoManagedFile';
+import type { NewerSchema } from '../types/ipc/NewerSchema';
+import { newerSchemaMessage } from '../utils/newerSchema';
 import type { Config } from '../types/config';
 import type { AzimuthReference } from '../types/ipc/AzimuthReference';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, TmlRootPlacement, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
@@ -135,6 +137,7 @@ interface LoadError {
   message: string;
   details?: string | undefined;
   speleodbManaged?: SpeleoManagedFile | undefined;
+  newerSchema?: NewerSchema | undefined;
 }
 
 interface CreateProjectOptions {
@@ -177,6 +180,7 @@ function parseLoadError(e: unknown): LoadError {
       message: (obj.message as string) || String(e),
       details: obj.details as string | undefined,
       speleodbManaged: obj.speleodbManaged as SpeleoManagedFile | undefined,
+      newerSchema: obj.newerSchema as NewerSchema | undefined,
     };
   }
   return { code: 'UNKNOWN', message: String(e) };
@@ -1242,7 +1246,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           get().resetLoading();
           useUIStore.getState().openDialog('error', {
             title: i18n.t('newerSchema.open.title'),
-            message: i18n.t('newerSchema.open.message'),
+            message: newerSchemaMessage(error.newerSchema, error.message),
             hideReportHint: true,
           });
           clearProjectActionSource();
