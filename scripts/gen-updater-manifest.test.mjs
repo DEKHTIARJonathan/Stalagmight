@@ -32,11 +32,18 @@ function write(dir, name, content = 'synthetic content') {
   fs.writeFileSync(path.join(dir, name), content);
 }
 
-// Shaped like a real minisign signature file (an "untrusted comment:" header
-// line, then a base64 body line) - the structure gen-updater-manifest.mjs's
-// readSig now validates, not just "non-empty".
+// A plain-text minisign signature file: an "untrusted comment:" header line,
+// a base64 body line, then the trusted comment and global signature.
+function minisignText(label) {
+  return `untrusted comment: signature from tauri secret key\n${Buffer.from(`fake-${label}-signature-body`).toString('base64')}\ntrusted comment: timestamp:1794087098\tfile:fake\n${Buffer.from(`fake-${label}-global-signature`).toString('base64')}\n`;
+}
+
+// Shaped like a real Tauri .sig: the minisign file above, base64-encoded onto a
+// single line. That line is what the manifest's `signature` field must carry
+// verbatim. (v0.5.0's real .sig files start "dW50cnVzdGVkIGNvbW1lbnQ6", i.e.
+// base64 of "untrusted comment:".)
 function minisignSig(label) {
-  return `untrusted comment: signature from minisign secret key\n${Buffer.from(`fake-${label}-signature-body`).toString('base64')}\ntrusted comment: fake trusted comment\n${Buffer.from(`fake-${label}-global-signature`).toString('base64')}\n`;
+  return Buffer.from(minisignText(label)).toString('base64');
 }
 
 // Writes a full set of three-platform artifacts + sigs, with a name pattern
@@ -104,23 +111,56 @@ test('empty sig fails', () => {
   assert.throws(() => buildManifest({ ...BASE, dir, includeDarwin: true }), /signature is empty/);
 });
 
-test('garbage-but-non-empty sig fails (not minisign-shaped)', () => {
+test('the signature is the .sig content verbatim (a trailing newline is trimmed)', () => {
+  const dir = makeDir();
+  writeHappyPathArtifacts(dir);
+  write(dir, 'Stalagmight_0.5.1_amd64.AppImage.sig', `${minisignSig('linux')}\n`);
+  const manifest = buildManifest({ ...BASE, dir, includeDarwin: true });
+  assert.equal(manifest.platforms['linux-x86_64'].signature, minisignSig('linux'));
+  assert.ok(manifest.platforms['linux-x86_64'].signature.startsWith('dW50cnVzdGVkIGNvbW1lbnQ6'));
+});
+
+test('garbage-but-non-empty sig fails (not base64)', () => {
   const dir = makeDir();
   writeHappyPathArtifacts(dir);
   write(dir, 'Stalagmight_0.5.1_amd64.AppImage.sig', 'not a real signature, just some text\n');
   assert.throws(
     () => buildManifest({ ...BASE, dir, includeDarwin: true }),
-    /does not look like a minisign signature/,
+    /not a single base64 line/,
   );
 });
 
-test('a sig missing the base64 body line fails', () => {
+test('a plain-text minisign file fails: Tauri clients expect it base64-wrapped', () => {
   const dir = makeDir();
   writeHappyPathArtifacts(dir);
-  write(dir, 'Stalagmight_0.5.1_amd64.AppImage.sig', 'untrusted comment: signature from minisign secret key\n');
+  write(dir, 'Stalagmight_0.5.1_amd64.AppImage.sig', minisignText('linux'));
   assert.throws(
     () => buildManifest({ ...BASE, dir, includeDarwin: true }),
-    /does not look like a minisign signature/,
+    /not a single base64 line/,
+  );
+});
+
+test('base64 that does not decode to minisign fails', () => {
+  const dir = makeDir();
+  writeHappyPathArtifacts(dir);
+  write(dir, 'Stalagmight_0.5.1_amd64.AppImage.sig', Buffer.from('hello world, not a signature\n').toString('base64'));
+  assert.throws(
+    () => buildManifest({ ...BASE, dir, includeDarwin: true }),
+    /does not decode to a minisign signature \(missing "untrusted comment:" header\)/,
+  );
+});
+
+test('a decoded sig missing the base64 body line fails', () => {
+  const dir = makeDir();
+  writeHappyPathArtifacts(dir);
+  write(
+    dir,
+    'Stalagmight_0.5.1_amd64.AppImage.sig',
+    Buffer.from('untrusted comment: signature from tauri secret key\n').toString('base64'),
+  );
+  assert.throws(
+    () => buildManifest({ ...BASE, dir, includeDarwin: true }),
+    /does not decode to a minisign signature \(second line is not base64\)/,
   );
 });
 
