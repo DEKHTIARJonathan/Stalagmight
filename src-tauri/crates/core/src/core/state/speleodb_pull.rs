@@ -22,6 +22,9 @@ pub(super) fn usable_tip(tip: Option<String>, project_id: &str) -> Option<String
     None
 }
 
+const DOWNLOADED_VALUE_LIMIT: i32 = 64 * 1024 * 1024;
+const DOWNLOADED_PROCESSING_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+
 impl AppState {
     pub fn speleodb_list_projects(&self) -> Result<Vec<SpeleoProjectSummary>, SpeleoErrorDto> {
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
@@ -186,14 +189,35 @@ impl AppState {
         &self,
         source: &std::path::Path,
         dest: &std::path::Path,
-        mut link: crate::models::SpeleoLink,
+        link: crate::models::SpeleoLink,
         policy: LocalEditsPolicy,
         undo: InheritedUndo,
     ) -> Result<(), SpeleoDbError> {
+        self.install_linked_download_with_limits(
+            source,
+            dest,
+            link,
+            policy,
+            undo,
+            (DOWNLOADED_VALUE_LIMIT, DOWNLOADED_PROCESSING_DEADLINE),
+        )
+    }
+
+    fn install_linked_download_with_limits(
+        &self,
+        source: &std::path::Path,
+        dest: &std::path::Path,
+        mut link: crate::models::SpeleoLink,
+        policy: LocalEditsPolicy,
+        undo: InheritedUndo,
+        limits: (i32, std::time::Duration),
+    ) -> Result<(), SpeleoDbError> {
         {
-            let db = crate::persistence::Database::open_existing(source).map_err(|e| {
-                SpeleoDbError::Io(format!("could not open downloaded project: {e}"))
-            })?;
+            let db =
+                crate::persistence::Database::open_existing_untrusted(source, limits.0, limits.1)
+                    .map_err(|e| {
+                    SpeleoDbError::Io(format!("could not open downloaded project: {e}"))
+                })?;
             link.undo_mode = Some(self.effective_undo_mode(preserved_undo_mode(&db)));
             db.save_speleo_link(Some(&link)).map_err(|e| {
                 SpeleoDbError::Io(format!("could not link downloaded project: {e}"))
@@ -229,6 +253,56 @@ mod tests {
             last_verify_at: None,
             undo_mode: None,
         }
+    }
+
+    #[test]
+    fn hostile_downloads_and_resource_limits_preserve_the_working_cache() {
+        crate::test_helpers::with_isolated_config(|| {
+            let dir = tempfile::tempdir().expect("temp");
+            let dest = dir.path().join("working.stalx");
+            Database::open(&dest)
+                .expect("database")
+                .save_project(&Project::new("Unpushed local work".into(), None))
+                .expect("project");
+            let before = std::fs::read(&dest).expect("bytes");
+            let state = AppState::new().expect("state");
+            for case in ["invalid", "schema", "value", "deadline"] {
+                let source = dir.path().join(format!("{case}.stalx"));
+                if case == "invalid" {
+                    std::fs::write(&source, b"not SQLite").expect("invalid");
+                } else {
+                    Database::open(&source)
+                        .expect("database")
+                        .save_project(&Project::new("X".repeat(4096), None))
+                        .expect("project");
+                    if case == "schema" {
+                        rusqlite::Connection::open(&source)
+                            .expect("connection")
+                            .execute_batch("CREATE VIEW hostile AS SELECT 1;")
+                            .expect("schema");
+                    }
+                }
+                let limits = match case {
+                    "value" => (1024, DOWNLOADED_PROCESSING_DEADLINE),
+                    "deadline" => (DOWNLOADED_VALUE_LIMIT, std::time::Duration::ZERO),
+                    _ => (DOWNLOADED_VALUE_LIMIT, DOWNLOADED_PROCESSING_DEADLINE),
+                };
+                assert!(
+                    state
+                        .install_linked_download_with_limits(
+                            &source,
+                            &dest,
+                            link(),
+                            LocalEditsPolicy::Protect,
+                            InheritedUndo::Drop,
+                            limits
+                        )
+                        .is_err(),
+                    "{case} must be refused"
+                );
+                assert_eq!(std::fs::read(&dest).expect("cache bytes"), before, "{case}");
+            }
+        });
     }
 
     #[test]

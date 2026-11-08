@@ -49,9 +49,15 @@ it. If saving general preferences fails after writing the SpeleoDB file, the old
 credential bytes (or prior absence) are restored with private permissions. A failed
 rollback is reported explicitly; two files cannot provide crash-atomic updates.
 
-SpeleoDB settings are read only from `speleodb/speleodb.conf`. The app does not
-load previous SpeleoDB configuration or legacy credentials. Sign in once to
-save a token in the new file.
+When `speleodb/speleodb.conf` is genuinely absent, the legacy `[speleodb]` table
+supplies endpoint, email, `insecure_http`, `allow_force_edit`,
+`poll_interval_seconds` and `undo_mode`. Normalization still applies, including the
+polling floor. Passwords, tokens and obsolete credential-storage options are ignored;
+sign in again to store a token. The separate file always takes precedence, including
+when damaged or unreadable. Malformed legacy preferences are logged without source
+values and retained on unrelated saves for recovery. A successful two-file save
+persists migrated preferences and removes the legacy table; a failed general save
+restores the prior separate file or its absence.
 `DEV_SPELEODB_URL` still overrides the instance for development, but a saved token
 is restored only when the resolved instance matches its configured endpoint.
 Reloading configuration applies a changed endpoint, account or token to the live

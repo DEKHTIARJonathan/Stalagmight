@@ -1,13 +1,19 @@
 import { confirm } from '@tauri-apps/plugin-dialog';
 import i18n from '../i18n';
 import { invokeIpc } from './ipc';
-import type { SpeleoProjectSummary } from '../types/ipc.generated';
+import { useSpeleoStore } from '../store/speleoStore';
+import { emailsMatch } from './email';
+import { endpointsMatch } from './speleoEndpoint';
+import type { SpeleoFileAccess, SpeleoProjectSummary } from '../types/ipc.generated';
 
 /** Warn before opening a project with restricted access. Cancel leaves it unopened. */
-export async function confirmSpeleoOpen(summary: SpeleoProjectSummary): Promise<boolean> {
+export async function confirmSpeleoOpen(summary: SpeleoProjectSummary, endpoint?: string, unavailable = false): Promise<boolean> {
+  const session = useSpeleoStore.getState().session;
+  const ownLock = session?.loggedIn && endpointsMatch(endpoint ?? session.endpoint, session.endpoint) && emailsMatch(summary.lock_holder, session.userEmail);
   const warnings = [
-    summary.permission === 'READ_ONLY' ? i18n.t('speleodb.browser.readOnlyWarning') : null,
-    summary.lock_holder ? i18n.t('speleodb.browser.lockedWarning', { email: summary.lock_holder }) : null,
+    unavailable ? 'SpeleoDB access could not be verified. This file will open conservatively until access can be verified.' : null,
+    !unavailable && summary.permission === 'READ_ONLY' ? i18n.t('speleodb.browser.readOnlyWarning') : null,
+    summary.lock_holder && !ownLock ? i18n.t('speleodb.browser.lockedWarning', { email: summary.lock_holder }) : null,
   ].filter(Boolean);
   if (!warnings.length) return true;
   return confirm(warnings.join('\n\n'), {
@@ -19,8 +25,8 @@ export async function confirmSpeleoOpen(summary: SpeleoProjectSummary): Promise<
 }
 
 /** Probe disk metadata even before the recents/session caches have loaded. */
-export async function confirmSpeleoFileOpen(path: string, current: () => boolean = () => true): Promise<boolean> {
-  const summary = await invokeIpc<SpeleoProjectSummary | null>('speleodb_project_access_at', { path });
+export async function confirmSpeleoFileOpen(path: string, current: () => boolean = () => true, localOnly = false): Promise<boolean> {
+  const access = await invokeIpc<SpeleoFileAccess | null>('speleodb_project_access_at', localOnly ? { path, localOnly: true } : { path });
   if (!current()) return false;
-  return !summary || confirmSpeleoOpen(summary);
+  return !access || confirmSpeleoOpen(access.project, access.endpoint, access.verification === 'unavailable');
 }

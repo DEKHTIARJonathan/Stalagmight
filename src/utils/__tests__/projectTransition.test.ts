@@ -15,7 +15,7 @@ function deferred<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-const restricted = { permission: 'READ_ONLY', name: 'Synthetic cave', lock_holder: null };
+const restricted = { project: { permission: 'READ_ONLY', name: 'Synthetic cave', lock_holder: null }, endpoint: 'https://example.com', verification: 'verified' };
 beforeEach(() => { vi.clearAllMocks(); probe.mockResolvedValue(null); warning.mockResolvedValue(true); });
 
 it.each(['success', 'rejection', 'cancel'] as const)('supersedes a slow probe: %s', async (mode) => {

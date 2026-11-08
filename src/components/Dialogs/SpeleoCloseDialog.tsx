@@ -1,3 +1,4 @@
+import { confirm } from '@tauri-apps/plugin-dialog';
 import { isProjectRequestCurrent, reserveProjectRequest } from '../../utils/projectTransition';
 import { confirmSpeleoFileOpen } from '../../utils/confirmSpeleoOpen';
 import { useEffect, useRef, useState } from 'react';
@@ -133,10 +134,10 @@ export default function SpeleoCloseDialog() {
    */
   const closeIntent: PendingExit = { kind: 'close', pendingOpenPath, pendingNewProject };
   const closeThen = (opts?: { releaseLock?: boolean }) => handBackProject(closeIntent, opts);
-  const confirmDestination = async (current: () => boolean) => {
+  const confirmDestination = async (current: () => boolean, localOnly = false) => {
     if (!pendingOpenPath) return true;
     try {
-      if (!await confirmSpeleoFileOpen(pendingOpenPath, current)) return false;
+      if (!await confirmSpeleoFileOpen(pendingOpenPath, current, localOnly)) return false;
       if (!current()) return false;
       closeIntent.accessConfirmed = true;
       return true;
@@ -168,15 +169,27 @@ export default function SpeleoCloseDialog() {
     }
   });
 
+  const keepLockAndClose = () => runClose(async (current, request) => {
+    closeIntent.request = request;
+    closeIntent.sessionGeneration = useSpeleoStore.getState().sessionGeneration;
+    if (!await confirmDestination(current, true) || !current()) return;
+    if (!await maybeSaveLocally(current) || !current()) return;
+    closeDialog();
+    await closeThen({ releaseLock: false });
+  });
+
   const closeWithoutUpload = () => runClose(async (current, request) => {
     closeIntent.request = request;
     closeIntent.sessionGeneration = useSpeleoStore.getState().sessionGeneration;
     if (!await confirmDestination(current) || !current()) return;
     if (!(await maybeSaveLocally(current)) || !current()) return;
     if (holdsLock) {
+      const session = useSpeleoStore.getState().session;
+      const expected = { project_id: useSpeleoStore.getState().remoteProjectId, endpoint: session?.endpoint, user_email: session?.userEmail };
+      if (!await confirm('Release without uploading? Your edits remain local. Another collaborator may advance the remote project.', { kind: 'warning', okLabel: 'Release without uploading', cancelLabel: t('common.actions.cancel') }) || !current()) return;
       setSaving(true);
       try {
-        await invokeIpc<null>('speleodb_release_current_lock', { ownOnly: true });
+        await invokeIpc<null>('speleodb_release_current_lock', { ownOnly: true, allowUnpushed: true, expected });
       } catch (e) {
         if (!current()) return;
         openDialog('error', { title: t('speleodb.lock.releaseFailed'), message: getErrorMessage(e) });
@@ -251,19 +264,24 @@ export default function SpeleoCloseDialog() {
           <Button onClick={dismiss} disabled={busyAny} data-testid="speleodb-close-cancel">
             {t('common.actions.cancel')}
           </Button>
+          {holdsLock && (
+            <Button variant="primary" onClick={() => void keepLockAndClose()} disabled={busyAny} data-primary-action="" data-testid="speleodb-close-keep-lock">
+              Keep lock and close
+            </Button>
+          )}
           {holdsLock ? (
             <>
               <Button
-                variant={unwound ? 'primary' : 'secondary'}
+                variant="secondary"
                 onClick={() => void closeWithoutUpload()}
                 disabled={busyAny}
-                data-primary-action={unwound ? '' : undefined}
+
                 data-testid="speleodb-close-release"
               >
                 {t('speleodb.close.releaseWithoutUpload')}
               </Button>
               <Button
-                variant={unwound ? 'danger' : 'primary'}
+                variant={unwound ? 'danger' : 'secondary'}
                 onClick={() => void pushReleaseThenClose()}
                 disabled={busyAny || (needsMessage && !message.trim())}
                 data-testid="speleodb-close-push-release"

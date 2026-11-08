@@ -6,6 +6,11 @@ conventions, and the traps that have cost real debugging time.
 For *which tier a test belongs in*, and the testability contract a component has
 to satisfy, see the [Testing Guide](TESTING.md).
 
+For SpeleoDB live coverage, see [SpeleoDB testing](speleodb-dev-testing.md).
+It is opt-in, validates both email/password and token authentication, visibly skips
+incomplete credentials, and deletes only projects created by the run. Deterministic
+workspace validation must set `SPELEODB_API_TEST_ENABLED=false`.
+
 ## The undo fuzz gate (Rust tier)
 
 `src-tauri/crates/core/src/core/state/fuzz_undo_tests.rs` runs the undo/redo fuzzing model

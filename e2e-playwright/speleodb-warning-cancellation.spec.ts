@@ -63,7 +63,7 @@ for (const button of ['speleodb-close-release', 'speleodb-close-push-release']) 
       w.__MOCK_IPC_OVERRIDES__ = {
         'plugin:dialog|confirm': false,
         speleodb_project_access_at: new Promise((resolve) => {
-          w.__finishProbe = () => resolve({ name: 'Synthetic destination', permission: 'READ_ONLY', lock_holder: null });
+          w.__finishProbe = () => resolve({ project: { name: 'Synthetic destination', permission: 'READ_ONLY', lock_holder: null }, endpoint: 'https://example.com', verification: 'verified' });
         }),
       };
       for (const command of ['save_project', 'speleodb_done', 'speleodb_release_current_lock', 'close_project', 'load_project_full_binary']) {

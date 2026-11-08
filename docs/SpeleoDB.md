@@ -18,7 +18,9 @@ The frontend lists only `STALAGMIGHT` projects. It displays read-only permission
 lock ownership independently and warns before opening a read-only or locked
 project. This includes cold recents, file-picker, drag/drop and OS file opens: a
 read-only SQLite metadata preflight checks access before replacing the open project.
-Unavailable access information produces a read-only warning. Opening does not grant write access. Start editing must acquire the
+Unavailable verification produces its own notice, distinct from verified read-only
+permission. Own-lock warnings are suppressed only for matching endpoint and normalized
+account email. Local-only inspection is available for keep-lock exits. Opening does not grant write access. Start editing must acquire the
 server mutex and reconcile the local base before enabling edits.
 
 Collaborator/team management and remote project deletion are absent. Local file
@@ -51,6 +53,16 @@ with an empty country: existing accounts can have no country, while the SDK coun
 enum requires a country code. Non-success responses and other malformed profiles
 still fail authentication.
 
+Project-list decoding alone tolerates future enum values: unknown types are omitted
+from the native browser, unknown permissions grant nothing, and unknown optional
+metadata does not invalidate other entries. Required IDs/names/structure, HTTP errors,
+invalid JSON and all mutation responses remain strict.
+
+The SDK is `AGPL-3.0-only`; first-party code remains `AGPL-3.0-or-later`. Version 3
+is available under the app's grant, so the combined distribution uses AGPL version 3.
+This does not grant later-version rights for the SDK or combined distribution.
+SDK attribution remains in `THIRD-PARTY-LICENSES.md`; neither project is relicensed.
+
 ## Native file transfer
 
 `project.stalx` is a SQLite database. Upload sends one multipart `artifact` with
@@ -66,7 +78,8 @@ result is its top-level `hexsha`; an HTTP 304 remains the existing no-change out
 An uncertain upload does not clear dirty state or automatically release the lock.
 
 Downloads stream to an owned temporary file, with a 512 MiB limit. The cache
-installer checks the SQLite schema, stages the replacement, strips inherited undo
+installer opens the temporary copy through `open_existing_untrusted`, with a
+64 MiB SQLite value limit and a 30-second processing deadline, checks the schema, stages the replacement, strips inherited undo
 unless an explicit Unwind requires it, and preserves local display preferences.
 The downloaded copy receives its validated SpeleoDB link before replacement. A
 failed download, validation or link write leaves the existing cache intact. Replacements
@@ -86,8 +99,11 @@ The existing HTTP policy permits loopback/private deployments and requires HTTPS
 elsewhere unless explicitly configured otherwise. Redirects and implicit Reqwest
 retries are disabled. Safe reads and token exchange retry transient transport/5xx
 failures twice, after 200 ms and 500 ms. Mutations are never automatically replayed.
-Read requests use 30 seconds, native transfers 120 seconds, and lock probes five
-seconds with no retries. JSON responses are capped at 10 MiB. Production settings
+Metadata requests use 30 seconds and lock probes five seconds with no retries.
+Downloads have a 30-second connection limit and a 120-second read inactivity limit,
+with no total transfer deadline. Buffered multipart uploads have a size-aware total
+budget of 120 seconds plus transfer time at 16 KiB/s. Response-read timeouts are not
+upload-progress timeouts. JSON responses are capped at 10 MiB. Production settings
 do not read the live-test environment variables.
 
 HTTP statuses retain their existing typed frontend actions: re-login on an expired
@@ -98,14 +114,23 @@ or ownership decisions. Diagnostic transport errors omit request URLs.
 ## Save, switching and exit
 
 Manual Save in a normal SpeleoDB edit session opens the commit-message dialog and
-uploads after confirmation. Publish also collects a message. Autosave writes only
+saves locally before uploading after confirmation. Only confirmed `pushed` is
+success. Failure says "Saved locally, but not uploaded to SpeleoDB."; uncertainty
+says "Saved locally; upload could not be confirmed." The typed message, saved file
+and unpushed state remain available for retry, and the lock stays held. Publish also collects a message. Autosave writes only
 to the local SQLite file. Force-editing without a mutex remains local until the user
 reconnects and reconciles.
 
 Switching projects, creating a new project, closing a project and quitting pass
 through the existing unsaved/unuploaded-work guards. Cancellation keeps the project
-and lock. The close/quit dialogs allow uploading before release or retaining work
-locally and releasing without upload. A failed save, upload or explicit release
+and lock. The default Keep lock action saves locally when requested and closes
+without contacting the current server. Quit first completes this local close, so
+backend exit cleanup has no open project to release. An available destination file
+can be inspected locally; a remote-only project still requires downloading.
+The dialogs also allow uploading before release, or explicitly confirmed release
+without upload. The latter retains local edits and warns that collaborators may
+advance the remote project. Backend consent is default-false and scoped to the
+expected project and authenticated account. A failed save, upload or explicit release
 prevents the confirmed exit from continuing. Clean shutdown also has a bounded
 best-effort backend release; an unreachable server or forcibly terminated process
 cannot guarantee that the server has observed a release. Confirmed close/quit
@@ -118,8 +143,8 @@ remain a protocol limitation.
 ## Verification
 
 See [SpeleoDB testing](speleodb-dev-testing.md) for automatic `.env` loading, both
-required authentication paths, synthetic native-file round trips, retained test
-projects and the offline/UI coverage matrix. Generated IPC types are regenerated
+required authentication paths, synthetic native-file round trips, test-project
+deletion and the offline/UI coverage matrix. Generated IPC types are regenerated
 from Rust with `pnpm gen:ipc-types`; removed commands and their generated types must
 also disappear from browser mocks and telemetry.
 

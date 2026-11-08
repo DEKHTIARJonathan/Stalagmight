@@ -19,6 +19,11 @@ use super::{SpeleoDbError, TransportCause};
 
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(120);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+
+fn upload_timeout(bytes: usize) -> Duration {
+    TRANSFER_TIMEOUT + Duration::from_secs((bytes as u64).div_ceil(16 * 1024))
+}
 const JSON_LIMIT: usize = 10 * 1024 * 1024;
 pub(crate) const NATIVE_LIMIT: u64 = 512 * 1024 * 1024;
 
@@ -65,10 +70,19 @@ impl SdkClient {
         settings: Settings,
     ) -> Result<Self, SpeleoDbError> {
         super::tls::enforce(base, insecure)?;
-        let transport = reqwest::Client::builder()
+        let mut builder = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
-            .timeout(settings.timeout.unwrap_or(timeout))
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(if timeout.is_zero() {
+                settings.timeout.unwrap_or(TRANSFER_TIMEOUT)
+            } else {
+                TRANSFER_TIMEOUT
+            });
+        if !timeout.is_zero() {
+            builder = builder.timeout(settings.timeout.unwrap_or(timeout));
+        }
+        let transport = builder
             .build()
             .map_err(|_| SpeleoDbError::Io("could not initialize the SpeleoDB transport".into()))?;
         let mut http = HttpClient::with_client(transport)
@@ -364,16 +378,88 @@ pub fn list_projects(
 ) -> Result<Vec<Project>, SpeleoDbError> {
     let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::ListProjects, true, || async {
-        c.http
-            .v2_projects_list(None)
-            .await
-            .map_err(api_error)?
-            .into_iter()
-            .filter(|value| matches!(value.r#type, types::ProjectType::Stalagmight))
-            .map(project)
-            .collect()
+        match c.http.v2_projects_list(None).await {
+            Ok(values) => list_projection(
+                serde_json::to_value(values)
+                    .map_err(|_| SpeleoDbError::Parse("invalid project list".into()))?,
+            ),
+            // The SDK still owns transport, status handling and the bounded body.
+            // List-only projection tolerates future enums without weakening mutations.
+            Err(ApiOpError::Api(error)) if error.status == 200 => {
+                let value = serde_json::from_slice(&error.raw_body)
+                    .map_err(|_| SpeleoDbError::Parse("invalid project list".into()))?;
+                list_projection(value)
+            }
+            Err(error) => Err(api_error(error)),
+        }
     })
 }
+fn list_projection(value: serde_json::Value) -> Result<Vec<Project>, SpeleoDbError> {
+    let invalid = || SpeleoDbError::Parse("invalid project list".into());
+    let rows = value.as_array().ok_or_else(invalid)?;
+    let mut projects = Vec::new();
+    for row in rows {
+        let id = row
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(invalid)?;
+        uuid::Uuid::parse_str(id).map_err(|_| invalid())?;
+        let name = row
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(invalid)?;
+        let kind = row
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(invalid)?;
+        if kind != "STALAGMIGHT" {
+            continue;
+        }
+        let permission = row
+            .get("permission")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|p| match p {
+                "WEB_VIEWER" => Some(Permission::WebViewer),
+                "READ_ONLY" => Some(Permission::ReadOnly),
+                "READ_AND_WRITE" => Some(Permission::ReadAndWrite),
+                "ADMIN" => Some(Permission::Admin),
+                _ => None,
+            });
+        let optional = |key: &str| {
+            row.get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        };
+        let nested = |key: &str, field: &str| {
+            row.get(key)
+                .and_then(|v| v.as_str().or_else(|| v.get(field)?.as_str()))
+                .map(str::to_owned)
+        };
+        projects.push(Project {
+            id: id.into(),
+            name: name.into(),
+            kind: "stalagmight".into(),
+            permission,
+            active_mutex: nested("active_mutex", "user").map(|user| ActiveMutex { user }),
+            latest_commit: nested("latest_commit", "id").map(|id| Commit { id }),
+            exclude_geojson: row
+                .get("exclude_geojson")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            description: optional("description"),
+            country: optional("country"),
+            visibility: optional("visibility").and_then(|v| match v.as_str() {
+                "PRIVATE" => Some(Visibility::Private),
+                "PUBLIC" => Some(Visibility::Public),
+                _ => None,
+            }),
+            latitude: row.get("latitude").and_then(serde_json::Value::as_f64),
+            longitude: row.get("longitude").and_then(serde_json::Value::as_f64),
+        });
+    }
+    Ok(projects)
+}
+
 pub fn get_project(
     base: &str,
     token: &str,
@@ -519,7 +605,7 @@ pub fn upload_stalx(
         ));
     }
     let content = std::fs::read(path).map_err(io_error)?;
-    let c = client(base, Some(token), insecure, TRANSFER_TIMEOUT)?;
+    let c = client(base, Some(token), insecure, upload_timeout(content.len()))?;
     c.call(Endpoint::Upload, false, || async {
         let request = types::ProjectUploadRequestRequest {
             message: message.into(),
@@ -551,7 +637,7 @@ pub fn download_stalx(
     insecure: bool,
     id: &str,
 ) -> Result<NativeFile, SpeleoDbError> {
-    client(base, Some(token), insecure, TRANSFER_TIMEOUT)?.download(id, None)
+    client(base, Some(token), insecure, Duration::ZERO)?.download(id, None)
 }
 pub fn download_stalx_at_hash(
     base: &str,
@@ -560,7 +646,7 @@ pub fn download_stalx_at_hash(
     id: &str,
     sha: &str,
 ) -> Result<NativeFile, SpeleoDbError> {
-    client(base, Some(token), insecure, TRANSFER_TIMEOUT)?.download(id, Some(sha))
+    client(base, Some(token), insecure, Duration::ZERO)?.download(id, Some(sha))
 }
 
 #[cfg(test)]

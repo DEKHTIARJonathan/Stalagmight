@@ -66,12 +66,12 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    DoneResult, Permission, PushResult, RemoteState, SpeleoDbAction, SpeleoErrorDto,
-    SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult,
-    SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
-    SpeleoPublishResult, SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus,
-    SpeleoUnwindTarget, StartEditingResult, TransportCause, UnpushedLocalEdits, UpdateResult,
-    Visibility,
+    DoneResult, Permission, PushResult, RemoteState, SpeleoAccessVerification, SpeleoDbAction,
+    SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult,
+    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoReleaseContext, SpeleoRevision,
+    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult,
+    TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_attribution::TileAttribution;
 use stalagmight_lib::tile_providers::TileProviderInfo;
@@ -390,6 +390,9 @@ fn main() {
     // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
+    export::<SpeleoFileAccess>(&out_dir);
+    export::<SpeleoAccessVerification>(&out_dir);
+    export::<SpeleoReleaseContext>(&out_dir);
     export::<SpeleoLoginResult>(&out_dir);
     export::<SpeleoOpenResult>(&out_dir);
     // #214 adopt-Ariane result (import + link + type-flip outcome), and what the
@@ -617,6 +620,9 @@ fn main() {
         "AppUpdateProgress",
         "Permission",
         "SpeleoProjectSummary",
+        "SpeleoFileAccess",
+        "SpeleoAccessVerification",
+        "SpeleoReleaseContext",
         "SpeleoLoginResult",
         "SpeleoOpenResult",
         "SpeleoRevision",

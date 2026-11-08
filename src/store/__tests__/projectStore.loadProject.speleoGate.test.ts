@@ -165,7 +165,7 @@ describe('restricted native file preflight', () => {
     const current = { file_path: '/current.stalx', name: 'Current' };
     useProjectStore.setState({ project: current as never });
     invokeIpcMock.mockImplementation(async (command: string) => {
-      if (command === 'speleodb_project_access_at') return { id: 'p', name: 'Restricted', ...access };
+      if (command === 'speleodb_project_access_at') return { project: { id: 'p', name: 'Restricted', ...access }, endpoint: 'https://example.com', verification: 'verified' };
       return [];
     });
     confirmMock.mockResolvedValue(false);

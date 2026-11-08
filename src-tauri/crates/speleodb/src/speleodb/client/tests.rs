@@ -301,33 +301,137 @@ fn reads_retry_transient_failures_and_native_streams_enforce_a_limit() {
     assert_eq!(s.finish().len(), 1);
 }
 
+const LIVE_INPUTS: [&str; 4] = [
+    "SPELEODB_INSTANCE_URL",
+    "SPELEODB_OAUTH_TOKEN",
+    "SPELEODB_EMAIL",
+    "SPELEODB_PASSWORD",
+];
+
+fn live_value(
+    name: &str,
+    environment: &impl Fn(&str) -> Option<String>,
+    file: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    environment(name).or_else(|| file.get(name).cloned())
+}
+fn live_credentials(
+    value: &impl Fn(&str) -> Option<String>,
+) -> Result<[String; 4], Vec<&'static str>> {
+    let inputs = LIVE_INPUTS.map(|name| {
+        value(name)
+            .filter(|v| !v.trim().is_empty() && !v.to_ascii_lowercase().contains("placeholder"))
+    });
+    let missing: Vec<_> = LIVE_INPUTS
+        .iter()
+        .zip(&inputs)
+        .filter_map(|(name, input)| input.is_none().then_some(*name))
+        .collect();
+    if missing.is_empty() {
+        Ok(inputs.map(|v| v.expect("validated input")))
+    } else {
+        Err(missing)
+    }
+}
+fn cleanup_created<T, E>(
+    release: impl FnOnce() -> Result<T, E>,
+    delete: impl FnOnce() -> Result<T, E>,
+) -> (Result<T, E>, Result<T, E>) {
+    let released = release();
+    let deleted = delete();
+    (released, deleted)
+}
+
 #[test]
-#[expect(
-    clippy::print_stderr,
-    clippy::panic,
-    reason = "live-test diagnostics and missing-credential assertions"
-)]
+fn live_configuration_is_opt_in_and_validates_every_input_without_network() {
+    let file =
+        std::collections::HashMap::from([("SPELEODB_API_TEST_ENABLED".into(), "true".into())]);
+    assert_eq!(
+        live_value(
+            "SPELEODB_API_TEST_ENABLED",
+            &|_| Some("false".into()),
+            &file
+        )
+        .as_deref(),
+        Some("false")
+    );
+    assert_eq!(
+        live_value("SPELEODB_API_TEST_ENABLED", &|_| None, &file).as_deref(),
+        Some("true")
+    );
+    assert!(live_value("SPELEODB_API_TEST_ENABLED", &|_| None, &Default::default()).is_none());
+    for name in LIVE_INPUTS {
+        for invalid in [None, Some(""), Some("  "), Some("<placeholder>")] {
+            assert_eq!(
+                live_credentials(&|key| if key == name {
+                    invalid.map(str::to_owned)
+                } else {
+                    Some("configured".into())
+                })
+                .unwrap_err(),
+                vec![name]
+            );
+        }
+    }
+    assert!(live_credentials(&|_| Some("configured".into())).is_ok());
+}
+
+#[test]
+fn cleanup_attempts_deletion_even_when_release_fails() {
+    for failed_release in [false, true] {
+        for failed_delete in [false, true] {
+            let calls = std::cell::RefCell::new(Vec::new());
+            let (release, delete) = cleanup_created(
+                || {
+                    calls.borrow_mut().push("release");
+                    if failed_release {
+                        Err("release")
+                    } else {
+                        Ok(())
+                    }
+                },
+                || {
+                    calls.borrow_mut().push("delete");
+                    if failed_delete {
+                        Err("delete")
+                    } else {
+                        Ok(())
+                    }
+                },
+            );
+            assert_eq!(*calls.borrow(), vec!["release", "delete"]);
+            assert_eq!(release.is_err(), failed_release);
+            assert_eq!(delete.is_err(), failed_delete);
+        }
+    }
+}
+
+#[test]
+#[expect(clippy::print_stderr, reason = "live-test diagnostics")]
 fn live_used_api_calls_with_email_and_token() {
     // Read .env without mutating process-wide environment or making it an app config.
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../.env");
     let file: std::collections::HashMap<String, String> = match dotenvy::from_path_iter(path) {
-        Ok(values) => values.map(|v| v.expect("valid .env entry")).collect(),
+        Ok(values) => values.filter_map(Result::ok).collect(),
         Err(_) => Default::default(),
     };
-    let value = |name: &str| std::env::var(name).ok().or_else(|| file.get(name).cloned());
-    if value("SPELEODB_API_TEST_ENABLED").unwrap_or_else(|| "true".into()) != "true" {
+    let value = |name: &str| live_value(name, &|key| std::env::var(key).ok(), &file);
+    if value("SPELEODB_API_TEST_ENABLED").unwrap_or_else(|| "false".into()) != "true" {
         eprintln!("live SpeleoDB API tests disabled; set SPELEODB_API_TEST_ENABLED=true");
         return;
     }
-    let required = |name: &str| {
-        value(name)
-            .filter(|v| !v.trim().is_empty() && !v.contains("<placeholder>"))
-            .unwrap_or_else(|| panic!("missing {name}; both authentication paths are required"))
+    let inputs = match live_credentials(&value) {
+        Ok(inputs) => inputs,
+        Err(missing) => {
+            eprintln!(
+                "live SpeleoDB API tests skipped: credentials incomplete: {}",
+                missing.join(", ")
+            );
+            return;
+        }
     };
-    let base = required("SPELEODB_INSTANCE_URL");
-    let provided_token = required("SPELEODB_OAUTH_TOKEN");
-    let email = required("SPELEODB_EMAIL");
-    let password = required("SPELEODB_PASSWORD");
+    let [base, provided_token, email, password] = inputs;
+    eprintln!("live SpeleoDB API tests executing EMAIL and TOKEN authentication paths");
     let timeout = value("SPELEODB_API_TIMEOUT_MS")
         .unwrap_or_else(|| "20000".into())
         .parse::<u64>()
@@ -350,9 +454,9 @@ fn live_used_api_calls_with_email_and_token() {
         .expect("TOKEN profile")
         .eq_ignore_ascii_case(&email));
     for (label, token) in [("EMAIL", login_token), ("TOKEN", provided_token)] {
-        let project=create_project_with(&base,&token,false,&json!({"name":format!("Stalagmight SDK test {}",uuid::Uuid::new_v4()),"description":"Synthetic native-file API test; retained intentionally","country":"US","type":"STALAGMIGHT","visibility":"PRIVATE"}).to_string()).expect("create test-owned project");
+        let project=create_project_with(&base,&token,false,&json!({"name":format!("Stalagmight SDK test {}",uuid::Uuid::new_v4()),"description":"Synthetic native-file API test; deleted after execution","country":"US","type":"STALAGMIGHT","visibility":"PRIVATE"}).to_string()).expect("create test-owned project");
         let id = &project.id;
-        eprintln!("{label}: retained test project {id}");
+        eprintln!("{label}: created test project {id}");
         let result = std::panic::catch_unwind(|| {
             (|| -> Result<(), SpeleoDbError> {
                 assert!(list_projects(&base, &token, false)?
@@ -421,13 +525,32 @@ fn live_used_api_calls_with_email_and_token() {
                 Ok(())
             })()
         });
-        // Only the project this test just created is released. No remote deletion.
-        let released = release_lock(&base, &token, false, id);
+        // Only IDs returned by this invocation may be deleted. Always attempt both
+        // cleanup operations, including after an assertion panic or release failure.
+        let (released, deleted) = cleanup_created(
+            || release_lock(&base, &token, false, id).map(|_| ()),
+            || {
+                client(&base, Some(&token), false, READ_TIMEOUT).and_then(|c| {
+                    runtime()?
+                        .block_on(c.http.v2_projects_destroy(id, None, None::<&str>))
+                        .map(|_| ())
+                        .map_err(api_error)
+                })
+            },
+        );
+        if released.is_err() {
+            eprintln!("{label}: test lock cleanup failed for {id}");
+        }
+        if deleted.is_err() {
+            eprintln!("{label}: test project deletion failed for {id}");
+        }
         result
             .expect("round-trip assertion")
             .expect("native-file round trip");
         released.expect("release test-owned lock");
+        deleted.expect("delete test-owned project");
     }
+    eprintln!("live SpeleoDB API tests executed successfully; both test-created projects deleted");
 }
 
 #[test]
@@ -447,4 +570,44 @@ fn profile_accepts_unset_country_but_rejects_other_invalid_profiles() {
         assert!(fetch_user_email(&s.base, "t", false).is_err());
         assert_eq!(s.finish().len(), 1);
     }
+}
+
+#[test]
+fn list_only_projection_tolerates_unknown_enums_without_granting_permissions() {
+    let mut future = project_json();
+    future["permission"] = json!("FUTURE_PERMISSION");
+    future["visibility"] = json!("FUTURE_VISIBILITY");
+    future["country"] = json!("FUTURE_COUNTRY");
+    let mut unknown_type = project_json();
+    unknown_type["type"] = json!("FUTURE_TYPE");
+    let s = Server::json(json!([project_json(), future.clone(), unknown_type]));
+    let rows = list_projects(&s.base, "t", false).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].permission, Some(Permission::Admin));
+    assert_eq!(rows[1].permission, None);
+    s.finish();
+    for invalid in [
+        json!({"not":"an array"}),
+        json!([{"type":"UNKNOWN", "name":"Missing ID"}]),
+        json!([{"id":"invalid", "name":"Bad ID", "type":"STALAGMIGHT"}]),
+    ] {
+        let s = Server::json(invalid);
+        assert!(list_projects(&s.base, "t", false).is_err());
+        s.finish();
+    }
+    let s = Server::json(future);
+    assert!(
+        get_project(&s.base, "t", false, ID).is_err(),
+        "detail and mutations stay strict"
+    );
+    s.finish();
+}
+
+#[test]
+fn upload_budget_scales_for_slow_buffered_transfers() {
+    assert_eq!(upload_timeout(0), Duration::from_secs(120));
+    assert_eq!(upload_timeout(1), Duration::from_secs(121));
+    assert_eq!(upload_timeout(16 * 1024), Duration::from_secs(121));
+    assert_eq!(upload_timeout(16 * 1024 + 1), Duration::from_secs(122));
+    assert_eq!(upload_timeout(64 * 1024 * 1024), Duration::from_secs(4216));
 }

@@ -3381,6 +3381,74 @@ mod tests {
     }
 
     #[test]
+    fn release_requires_scoped_unpushed_consent_before_network() {
+        let (base, _listener, seen) = recording_stub(
+            r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote","active_mutex":{"user":"u@x"}}"#,
+        );
+        let (_temp, state) = editing_fixture(&base);
+        state.mark_remote_dirty();
+        assert!(state
+            .speleodb_release_current_lock(true, false, None)
+            .is_err());
+        assert!(state
+            .speleodb_release_current_lock(true, true, None)
+            .is_err());
+        let context = |id: &str, email: &str| crate::speleodb::SpeleoReleaseContext {
+            project_id: id.into(),
+            endpoint: base.clone(),
+            user_email: email.into(),
+        };
+        assert!(state
+            .speleodb_release_current_lock(
+                true,
+                true,
+                Some(context("22222222-2222-2222-2222-222222222222", "u@x"))
+            )
+            .is_err());
+        assert!(state
+            .speleodb_release_current_lock(true, true, Some(context(REMOTE_ID, "another@x")))
+            .is_err());
+        assert!(seen.lock().expect("requests").is_empty());
+        state
+            .speleodb_release_current_lock(true, true, Some(context(REMOTE_ID, "u@x")))
+            .expect("acknowledged release");
+        assert!(seen
+            .lock()
+            .expect("requests")
+            .iter()
+            .any(|line| line.starts_with("POST ")));
+        assert!(
+            state
+                .speleodb_open_link()
+                .expect("local link")
+                .has_unpushed_edits
+        );
+    }
+
+    #[test]
+    fn local_only_access_inspection_never_contacts_the_current_server() {
+        let (base, _listener, seen) = recording_stub("{}");
+        let (temp, state) = editing_fixture(&base);
+        let result = state
+            .speleodb_project_access_at(
+                temp.path()
+                    .join("remote.stalx")
+                    .to_string_lossy()
+                    .into_owned(),
+                true,
+            )
+            .expect("inspection")
+            .expect("linked");
+        assert!(matches!(
+            result.verification,
+            crate::speleodb::SpeleoAccessVerification::Unavailable
+        ));
+        assert!(result.project.permission.is_none());
+        assert!(seen.lock().expect("requests").is_empty());
+        assert!(state.edit_enabled());
+    }
+
+    #[test]
     fn automatic_release_only_releases_our_current_lock_and_clears_its_claim() {
         for (holder, posts) in [("u@x", 1), ("other@x", 0)] {
             let body = if holder == "u@x" {
@@ -3391,7 +3459,7 @@ mod tests {
             let (base, _listener, seen) = recording_stub(body);
             let (_temp, state) = editing_fixture(&base);
             state
-                .speleodb_release_current_lock(true)
+                .speleodb_release_current_lock(true, false, None)
                 .expect("release own lock only");
             assert!(!state.edit_enabled());
             assert!(!state.speleodb_lock_acquired_here(REMOTE_ID));
@@ -3413,12 +3481,14 @@ mod tests {
         );
         let (_temp, state) = editing_fixture(&base);
         state
-            .speleodb_release_current_lock(false)
+            .speleodb_release_current_lock(false, false, None)
             .expect("manual release");
         assert!(!state.speleodb_lock_acquired_here(REMOTE_ID));
         assert!(seen.lock().expect("requests")[0].starts_with("POST "));
         *state.speleodb.lock().expect("session") = authed_session_at("https://another.example");
-        assert!(state.speleodb_release_current_lock(true).is_err());
+        assert!(state
+            .speleodb_release_current_lock(true, false, None)
+            .is_err());
         assert_eq!(seen.lock().expect("requests").len(), 1);
     }
 
@@ -3434,14 +3504,15 @@ mod tests {
                     .join("remote.stalx")
                     .to_string_lossy()
                     .into_owned(),
+                false,
             )
             .expect("preflight")
             .expect("linked");
         assert_eq!(
-            access.permission,
+            access.project.permission,
             Some(crate::speleodb::Permission::ReadOnly)
         );
-        assert_eq!(access.lock_holder.as_deref(), Some("other@x"));
+        assert_eq!(access.project.lock_holder.as_deref(), Some("other@x"));
         assert!(
             state.edit_enabled(),
             "preflight must not close the current project"
@@ -3507,7 +3578,7 @@ mod tests {
                 let _ = stream.flush();
             });
             state
-                .speleodb_release_current_lock(false)
+                .speleodb_release_current_lock(false, false, None)
                 .expect("the release itself succeeds");
         });
 

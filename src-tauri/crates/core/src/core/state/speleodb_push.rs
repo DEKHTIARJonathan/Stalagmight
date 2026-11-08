@@ -433,7 +433,7 @@ impl AppState {
         if !keep_lock {
             // Hand it back. `None` rather than a fabricated editing result, so no caller
             // can mistake a released project for one it may still write to.
-            self.speleodb_release_current_lock(true)?;
+            self.speleodb_release_current_lock(true, false, None)?;
             return Ok(None);
         }
         // Re-acquire through the ordinary verb rather than by hand, so the fence, the

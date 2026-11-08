@@ -263,6 +263,7 @@ pub struct Project {
 /// IPC-facing summary of a project for the spike dialog's list. Derived from
 /// [`Project`]; carries only display fields - never a token or raw API detail.
 #[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "../../bindings/SpeleoProjectSummary.ts")]
 pub struct SpeleoProjectSummary {
     pub id: String,
     pub name: String,
@@ -273,6 +274,32 @@ pub struct SpeleoProjectSummary {
     pub type_tag: String,
     /// SHA of the latest commit, if the project has any commits.
     pub latest_commit_sha: Option<String>,
+}
+
+/// Access inspection is conservative when the server cannot be verified.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export, export_to = "../../bindings/")]
+pub struct SpeleoFileAccess {
+    pub project: SpeleoProjectSummary,
+    pub endpoint: String,
+    pub verification: SpeleoAccessVerification,
+}
+
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export, export_to = "../../bindings/")]
+pub enum SpeleoAccessVerification {
+    Verified,
+    Unavailable,
+}
+
+/// Consent to release local unpushed work belongs to this account and project.
+#[derive(Debug, Clone, Deserialize, TS)]
+#[ts(export, export_to = "../../bindings/")]
+pub struct SpeleoReleaseContext {
+    pub project_id: String,
+    pub endpoint: String,
+    pub user_email: String,
 }
 
 impl SpeleoProjectSummary {

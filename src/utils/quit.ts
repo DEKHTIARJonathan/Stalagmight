@@ -407,7 +407,7 @@ export function guardQuit(): boolean {
   // unpushed needs no prompt at QUIT time specifically: the backend's exit-time
   // release is safe then, and vetoes itself otherwise (aab5121d). The close flow
   // does not get that for free, so it guards on the lock as well.
-  if (hasUnpushedSpeleoWork(link)) {
+  if (needsSpeleoHandBackPrompt(link)) {
     openExitPrompt('speleodb-quit');
     return true;
   }

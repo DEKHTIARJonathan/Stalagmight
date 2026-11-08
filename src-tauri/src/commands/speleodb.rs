@@ -486,9 +486,15 @@ pub async fn speleodb_publish(
 pub async fn speleodb_release_current_lock(
     app: AppHandle,
     own_only: Option<bool>,
+    allow_unpushed: Option<bool>,
+    expected: Option<stalagmight_core::speleodb::SpeleoReleaseContext>,
 ) -> Result<(), SpeleoErrorDto> {
     run_blocking(app, move |s| {
-        s.speleodb_release_current_lock(own_only.unwrap_or(false))
+        s.speleodb_release_current_lock(
+            own_only.unwrap_or(false),
+            allow_unpushed.unwrap_or(false),
+            expected,
+        )
     })
     .await
 }
@@ -498,6 +504,10 @@ pub async fn speleodb_release_current_lock(
 pub async fn speleodb_project_access_at(
     app: AppHandle,
     path: String,
-) -> Result<Option<SpeleoProjectSummary>, SpeleoErrorDto> {
-    run_blocking(app, move |s| s.speleodb_project_access_at(path)).await
+    local_only: Option<bool>,
+) -> Result<Option<stalagmight_core::speleodb::SpeleoFileAccess>, SpeleoErrorDto> {
+    run_blocking(app, move |s| {
+        s.speleodb_project_access_at(path, local_only.unwrap_or(false))
+    })
+    .await
 }

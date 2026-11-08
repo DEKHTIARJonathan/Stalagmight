@@ -24,6 +24,9 @@ vi.mock('../../utils/ipc', () => ({
   getErrorMessage: (_e: unknown, f?: string) => f ?? 'the server said no',
 }));
 
+const confirmMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
+
 const performQuitMock = vi.hoisted(() => vi.fn());
 // `holdsWriteLock` is the real predicate, not a stub: this dialog adapts its whole
 // action set to it, so a mocked-away version would let the cases below pass against
@@ -73,6 +76,7 @@ function fillCommitMessage() {
 
 beforeEach(() => {
   invokeIpcMock.mockReset();
+  confirmMock.mockReset().mockResolvedValue(true);
   performQuitMock.mockReset();
   saveProject = vi.fn(async () => ({ success: true }) as never);
   // A georeferenced zero datum keeps the unrelated `no_anchor` notice out of the
@@ -81,6 +85,7 @@ beforeEach(() => {
     project: { zero_datums: [{}] } as never,
     isDirty: false,
     saveProject: saveProject as never,
+    closeProject: vi.fn(async () => ({ success: true })) as never,
   });
   useSpeleoStore.setState({ link: { ...LINK }, banner: null, busy: false });
   useUIStore.setState({
@@ -140,7 +145,7 @@ describe('SpeleoQuitDialog - retain local edits and release on quit', () => {
 
     await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
     expect(calledCommands()).toEqual(['speleodb_release_current_lock']);
-    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_release_current_lock', { ownOnly: true });
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_release_current_lock', expect.objectContaining({ ownOnly: true, allowUnpushed: true }));
   });
 
   it('saves locally and releases before quitting', async () => {
@@ -152,56 +157,29 @@ describe('SpeleoQuitDialog - retain local edits and release on quit', () => {
     await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
     expect(saveProject).toHaveBeenCalledTimes(1);
     expect(calledCommands()).toEqual(['speleodb_release_current_lock']);
-    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_release_current_lock', { ownOnly: true });
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_release_current_lock', expect.objectContaining({ ownOnly: true, allowUnpushed: true }));
   });
 });
 
-describe('SpeleoQuitDialog - discard & release', () => {
-  it('is two-step, so a single stray press cannot release anything', async () => {
+describe('SpeleoQuitDialog - keep-lock exit', () => {
+  it('closes locally before quitting without a release request', async () => {
     render(<SpeleoQuitDialog />);
-
-    await userEvent.click(screen.getByTestId('speleodb-quit-discard-release'));
-
-    expect(await screen.findByTestId('speleodb-quit-discard-warning')).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('speleodb-quit-keep-lock'));
+    await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
+    expect(useProjectStore.getState().closeProject).toHaveBeenCalledWith({ releaseLock: false });
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+  });
+  it('does not release or quit when acknowledgment is cancelled', async () => {
+    confirmMock.mockResolvedValue(false);
+    render(<SpeleoQuitDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-quit-release'));
     expect(invokeIpcMock).not.toHaveBeenCalled();
     expect(performQuitMock).not.toHaveBeenCalled();
   });
-
-  it('releases the lock explicitly on the second press, then quits', async () => {
-    invokeIpcMock.mockResolvedValue(null);
+  it('focuses the keep-lock action by default', () => {
     render(<SpeleoQuitDialog />);
-
-    await userEvent.click(screen.getByTestId('speleodb-quit-discard-release'));
-    await userEvent.click(screen.getByTestId('speleodb-quit-discard-release'));
-
-    await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
-    expect(calledCommands()).toEqual(['speleodb_release_current_lock']);
-    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_release_current_lock', { ownOnly: true });
-    expect(calledCommands()).not.toContain('speleodb_done');
-  });
-
-  it('does NOT quit when the release fails', async () => {
-    invokeIpcMock.mockRejectedValue(new Error('server refused'));
-    render(<SpeleoQuitDialog />);
-
-    await userEvent.click(screen.getByTestId('speleodb-quit-discard-release'));
-    await userEvent.click(screen.getByTestId('speleodb-quit-discard-release'));
-
-    await waitFor(() => expect(calledCommands()).toContain('speleodb_release_current_lock'));
-    expect(performQuitMock).not.toHaveBeenCalled();
-    expect(screen.getByTestId('speleodb-quit-dialog')).toBeInTheDocument();
-  });
-
-  // It is destructive, so it must never be what the initial focus (and therefore a
-  // stray Enter) lands on - DialogWrapper's heuristic follows [data-primary-action].
-  it('is not the primary action - the safe push is', () => {
-    render(<SpeleoQuitDialog />);
-    expect(screen.getByTestId('speleodb-quit-discard-release')).not.toHaveAttribute(
-      'data-primary-action',
-    );
-    expect(screen.getByTestId('speleodb-quit-push-release')).toHaveAttribute(
-      'data-primary-action',
-    );
+    expect(screen.getByTestId('speleodb-quit-keep-lock')).toHaveAttribute('data-primary-action');
+    expect(screen.getByTestId('speleodb-quit-push-release')).not.toHaveAttribute('data-primary-action');
   });
 });
 
@@ -284,7 +262,7 @@ describe('SpeleoQuitDialog - reached without the write lock', () => {
     expect(screen.getByTestId('speleodb-quit-anyway')).toBeInTheDocument();
     expect(screen.queryByTestId('speleodb-quit-push-release')).not.toBeInTheDocument();
     expect(screen.queryByTestId('speleodb-quit-release')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('speleodb-quit-discard-release')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-quit-release')).not.toBeInTheDocument();
   });
 
   it('does the same for a force-edit session, which holds no lock either', () => {
@@ -408,11 +386,11 @@ describe('SpeleoQuitDialog - unwound copy', () => {
   const unwind = () =>
     useSpeleoStore.setState({ link: { ...LINK, hasUnpushedEdits: true, unwound: true } });
 
-  it('defaults to releasing without upload and marks pushing destructive', () => {
+  it('defaults to keeping the lock and marks pushing an older version destructive', () => {
     unwind();
     render(<SpeleoQuitDialog />);
 
-    const keep = screen.getByTestId('speleodb-quit-release');
+    const keep = screen.getByTestId('speleodb-quit-keep-lock');
     const push = screen.getByTestId('speleodb-quit-push-release');
     expect(keep).toHaveAttribute('data-primary-action');
     expect(push).not.toHaveAttribute('data-primary-action');
@@ -436,7 +414,7 @@ describe('SpeleoQuitDialog - unwound copy', () => {
     useSpeleoStore.setState({ link: { ...LINK, hasUnpushedEdits: true, unwound: false } });
     render(<SpeleoQuitDialog />);
 
-    expect(screen.getByTestId('speleodb-quit-push-release')).toHaveAttribute('data-primary-action');
+    expect(screen.getByTestId('speleodb-quit-keep-lock')).toHaveAttribute('data-primary-action');
     expect(screen.getByTestId('speleodb-quit-release')).not.toHaveAttribute(
       'data-primary-action',
     );

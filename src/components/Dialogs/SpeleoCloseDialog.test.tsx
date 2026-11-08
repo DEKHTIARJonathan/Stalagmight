@@ -64,7 +64,7 @@ function fillCommitMessage() {
 beforeEach(() => {
   confirmMock.mockReset().mockResolvedValue(true);
   invokeIpcMock.mockReset();
-  invokeIpcMock.mockResolvedValue({ kind: 'released' });
+  invokeIpcMock.mockImplementation(async (command) => command === 'speleodb_project_access_at' ? null : { kind: 'released' });
   closeProject = vi.fn(async () => ({ success: true }));
   saveProject = vi.fn(async () => ({ success: true }));
   closeDialog = vi.fn();
@@ -310,7 +310,7 @@ describe('close and project-switch release safety', () => {
 
 it('cancelling restricted destination access preserves the current project before hand-back', async () => {
   const { handBackProject } = await import('../../utils/quit');
-  invokeIpcMock.mockResolvedValue({ id: 'p', name: 'Restricted', permission: 'READ_ONLY', lock_holder: null });
+  invokeIpcMock.mockResolvedValue({ project: { id: 'p', name: 'Restricted', permission: 'READ_ONLY', lock_holder: null }, endpoint: 'https://example.com', verification: 'verified' });
   confirmMock.mockResolvedValue(false);
   await handBackProject({ pendingOpenPath: '/cold.stalx' });
   expect(closeProject).not.toHaveBeenCalled();
@@ -319,7 +319,7 @@ it('cancelling restricted destination access preserves the current project befor
 
 it('cancelling destination access from the actual close dialog does not save or release', async () => {
   useUIStore.setState({ dialogData: { pendingOpenPath: '/cold.stalx' } });
-  invokeIpcMock.mockResolvedValue({ id: 'p', name: 'Restricted', permission: 'READ_ONLY', lock_holder: null });
+  invokeIpcMock.mockResolvedValue({ project: { id: 'p', name: 'Restricted', permission: 'READ_ONLY', lock_holder: null }, endpoint: 'https://example.com', verification: 'verified' });
   confirmMock.mockResolvedValue(false);
   render(<SpeleoCloseDialog />);
   await userEvent.click(screen.getByTestId('speleodb-close-release'));
@@ -346,7 +346,7 @@ describe('close destination probe ownership', () => {
     fireEvent.click(screen.getByTestId('speleodb-close-dialog-close'));
     expect(closeDialog).not.toHaveBeenCalled();
     confirmMock.mockResolvedValue(false);
-    resolve({ permission: 'READ_ONLY', name: 'Synthetic', lock_holder: null });
+    resolve({ project: { permission: 'READ_ONLY', name: 'Synthetic', lock_holder: null }, endpoint: 'https://example.com', verification: 'verified' });
     await waitFor(() => expect(screen.getByTestId(button)).toBeEnabled());
     expect(saveProject).not.toHaveBeenCalled();
     expect(closeProject).not.toHaveBeenCalled();

@@ -181,12 +181,10 @@ describe('all four exits agree on the SpeleoDB guard (#270)', () => {
     expect(openDialog).not.toHaveBeenCalledWith('speleodb-close', expect.anything());
   });
 
-  // The one deliberate asymmetry, pinned so it cannot be "fixed" by accident: the
-  // three exits that keep the app running must hand the lock back; quit gets that
-  // from the backend's exit-time release.
-  it('lock held + nothing unpushed: every HAND-BACK exit prompts, quit does not', async () => {
+  // All exits offer a deliberate local keep-lock choice, even on a clean copy.
+  it('lock held + nothing unpushed: every exit offers the keep-lock prompt', async () => {
     useSpeleoStore.setState({ link: link({ editState: 'editing', hasUnpushedEdits: false }) });
-    expect(await allExits()).toEqual({ quit: false, close: true, open: true, new: true });
+    expect(await allExits()).toEqual({ quit: true, close: true, open: true, new: true });
     expect(closeProject).not.toHaveBeenCalled();
     expect(loadProject).not.toHaveBeenCalled();
   });

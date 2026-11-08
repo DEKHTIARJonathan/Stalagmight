@@ -7,9 +7,14 @@ Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. S
 For a linked SpeleoDB project being edited under its write lock, manual Save
 (Ctrl+S or the menu action) asks for a nonblank commit message, saves locally,
 and uploads the native SQLite `project.stalx` through the dedicated endpoint.
-Autosave still writes locally. Closing, switching projects or quitting warns
-about unsaved or unuploaded work and releases the held lock before continuing.
-A failed save, upload or release keeps the project open. See
+Autosave writes locally, including while the message dialog is open or cancelled.
+Confirmation saves locally and immediately uploads; only a confirmed upload reports
+combined success. Failed or uncertain uploads retain the message and saved file for
+retry without making the local disk dirty. The lock remains held.
+Closing, switching projects or quitting offers Keep lock as the default local exit.
+Release without uploading requires explicit confirmation: edits remain local and
+another collaborator may advance the remote project. A requested local-save failure
+blocks exit; failed upload/release blocks the corresponding exit action. See
 [SpeleoDB integration](SpeleoDB.md) for the transfer and lock contract.
 
 Every import-into-new-project flow now creates its project deferred, so the
