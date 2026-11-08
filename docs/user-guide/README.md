@@ -9,6 +9,7 @@ How to use Stalagmight. Pages link to each other.
 - [Importing from an mNemo](workflows/importing-from-mnemo.md)
 - [Importing an Ariane survey](workflows/importing-from-ariane.md)
 - [Merging stations](workflows/merging-stations.md)
+- [Closing a loop](workflows/closing-a-loop.md)
 
 **Screens**
 - [Start screen](screens/start-screen.md)

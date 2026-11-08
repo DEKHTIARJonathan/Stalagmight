@@ -15,6 +15,10 @@
 - **Merging** two stations connects the sections they are on. That is how
   separate sections become one cave. See
   [Merging stations](../workflows/merging-stations.md).
+- **Loop closure**: where survey lines meet up again, completing a loop. It is
+  shown as a dashed line and does not move the measured survey. The adjusted
+  view (in **Plan**, or **Closures Computed View** under **Display**) spreads
+  the error around the loop. See [Closing a loop](../workflows/closing-a-loop.md).
 - **Zero datum**: a station tied to a real-world GPS position. Every other
   station is positioned relative to it. See
   [Setting a zero datum](../workflows/setting-a-zero-datum.md).

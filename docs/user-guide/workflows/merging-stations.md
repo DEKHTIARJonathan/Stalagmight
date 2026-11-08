@@ -31,7 +31,8 @@ go. See the [station context menu](../screens/station-context-menu.md).
 
 ### Details
 
-- After the second click, Stalagmight checks that the merge is possible. If it
-  is not, a notification says why.
+- After the second click, Stalagmight checks that the merge is possible. If the
+  sections are already connected, or both are fixed, it offers a
+  [loop closure](closing-a-loop.md) instead. Otherwise a notification says why.
 - Which side moves, and when a merge is refused: see the
   [Merge Stations dialog](../screens/merge-stations-dialog.md).
