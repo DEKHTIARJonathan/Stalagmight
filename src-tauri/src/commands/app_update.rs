@@ -399,6 +399,9 @@ enum DownloadAbort {
     OverCap,
     /// More bytes than the server itself said it would send.
     OverDeclaredLength,
+    /// A later check replaced the update this download is for, so its bytes
+    /// could never be stored (see [`store_downloaded_bytes`]).
+    Superseded,
 }
 
 impl DownloadAbort {
@@ -411,6 +414,7 @@ impl DownloadAbort {
             Self::OverDeclaredLength => {
                 "The update download sent more data than it declared and was stopped".to_owned()
             }
+            Self::Superseded => SUPERSEDED_MESSAGE.to_owned(),
         }
     }
 }
@@ -430,6 +434,32 @@ fn download_abort_reason(downloaded: u64, content_length: Option<u64>) -> Option
         Some(declared) if downloaded > declared => Some(DownloadAbort::OverDeclaredLength),
         _ => None,
     }
+}
+
+const SUPERSEDED_MESSAGE: &str =
+    "A newer update check replaced this one while it was downloading; check again";
+
+/// Should the download for `generation` stop at this chunk?
+///
+/// Adds the one stateful reason to [`download_abort_reason`]: a newer check
+/// (a track switch mid-download) has replaced the offer. Its bytes would be
+/// refused at the end anyway, so stopping now is what frees the bandwidth and
+/// the partial buffer instead of holding both until the body ends or
+/// `DOWNLOAD_TIMEOUT` fires. A poisoned lock also stops it: nothing could be
+/// stored under one.
+fn chunk_abort_reason(
+    update_state: &AppUpdateState,
+    generation: u64,
+    downloaded: u64,
+    content_length: Option<u64>,
+) -> Option<DownloadAbort> {
+    let current = update_state
+        .with(|pending| pending.generation == generation)
+        .unwrap_or(false);
+    if !current {
+        return Some(DownloadAbort::Superseded);
+    }
+    download_abort_reason(downloaded, content_length)
 }
 
 /// The parked update and the generation it belongs to.
@@ -457,10 +487,7 @@ fn store_downloaded_bytes(
 ) -> Result<(), String> {
     update_state.with(|pending| {
         if pending.generation != generation {
-            return Err(
-                "A newer update check replaced this one while it was downloading; check again"
-                    .to_owned(),
-            );
+            return Err(SUPERSEDED_MESSAGE.to_owned());
         }
         pending.bytes = Some((generation, bytes));
         Ok(())
@@ -684,7 +711,9 @@ pub async fn download_app_update(
         let mut download = Box::pin(update.download(
             |chunk, content_length| {
                 downloaded += chunk as u64;
-                if let Some(why) = download_abort_reason(downloaded, content_length) {
+                if let Some(why) =
+                    chunk_abort_reason(&update_state, generation, downloaded, content_length)
+                {
                     reason = Some(why);
                     abort.store(true, Ordering::Relaxed);
                     return;
@@ -1098,6 +1127,44 @@ mod tests {
         assert!(DownloadAbort::OverDeclaredLength
             .message()
             .contains("more data than it declared"));
+        assert!(DownloadAbort::Superseded
+            .message()
+            .contains("newer update check"));
+    }
+
+    /// A track switch mid-download replaces the offer; the old transfer stops
+    /// at its next chunk instead of running to the end of the body.
+    #[test]
+    fn a_download_a_newer_check_replaced_stops_at_the_next_chunk() {
+        let state = AppUpdateState::default();
+        let started = state.with(|pending| pending.generation).expect("lock");
+        assert_eq!(
+            chunk_abort_reason(&state, started, 1_000, Some(10_000)),
+            None
+        );
+
+        state
+            .with(|pending| pending.generation = pending.generation.wrapping_add(1))
+            .expect("lock");
+        assert_eq!(
+            chunk_abort_reason(&state, started, 2_000, Some(10_000)),
+            Some(DownloadAbort::Superseded)
+        );
+    }
+
+    /// The generation check is added to the size bounds, not swapped in for them.
+    #[test]
+    fn a_current_download_still_obeys_the_size_bounds() {
+        let state = AppUpdateState::default();
+        let current = state.with(|pending| pending.generation).expect("lock");
+        assert_eq!(
+            chunk_abort_reason(&state, current, MAX_UPDATE_BYTES + 1, None),
+            Some(DownloadAbort::OverCap)
+        );
+        assert_eq!(
+            chunk_abort_reason(&state, current, 1_001, Some(1_000)),
+            Some(DownloadAbort::OverDeclaredLength)
+        );
     }
 
     // ── Updater configuration ────────────────────────────────────────────────
