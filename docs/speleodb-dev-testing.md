@@ -17,7 +17,7 @@ application continues to use its saved endpoint and credential storage.
 | `SPELEODB_INSTANCE_URL` | Test server base URL |
 | `SPELEODB_OAUTH_TOKEN` | Existing bearer token, validated independently |
 | `SPELEODB_EMAIL`, `SPELEODB_PASSWORD` | Email login, followed by profile validation |
-| `SPELEODB_API_TIMEOUT_MS` | Per-request timeout, including file transfers; defaults to `10000` |
+| `SPELEODB_API_TIMEOUT_MS` | Per-request timeout, including file transfers; defaults to `20000` |
 | `SPELEODB_API_RETRY_COUNT` | Additional attempts for safe reads and token exchange; defaults to `3` |
 | `SPELEODB_API_TEST_ENABLED` | Exactly `true` enables live requests; defaults to `true` |
 
@@ -53,6 +53,22 @@ path override, run Cargo from an external temporary directory and pass the
 absolute Stalagmight manifest path. For a standalone reproduction, copy this
 checkout outside that enclosing tree and run its locked build there. Do not add
 Stalagmight to the enclosing repository's workspace, overrides or submodules.
+
+## GitHub Actions
+
+SpeleoDB tests run in the existing `cargo test --workspace` steps alongside all
+other Rust tests. The `CI` workflow enables live EMAIL and TOKEN authentication
+on pushes to `master` and pull requests. The Release workflow's `verify` job
+enables them on tag pushes and manual release rehearsals. Both workflows use the
+default request timeout and retry count listed above.
+
+Configure these GitHub Actions repository secrets, or organization secrets
+accessible to this repository: `SPELEODB_INSTANCE_URL`, `SPELEODB_OAUTH_TOKEN`,
+`SPELEODB_EMAIL`, and `SPELEODB_PASSWORD`. They are injected into the existing Rust
+test steps. A missing secret fails live verification instead of silently skipping
+authentication. There are no fork or Dependabot exclusions. The manual runner
+benchmark stays offline. Each live run retains two synthetic test projects,
+as described below.
 
 ## Coverage and retained data
 

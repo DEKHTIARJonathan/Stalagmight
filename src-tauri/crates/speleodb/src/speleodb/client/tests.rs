@@ -329,7 +329,7 @@ fn live_used_api_calls_with_email_and_token() {
     let email = required("SPELEODB_EMAIL");
     let password = required("SPELEODB_PASSWORD");
     let timeout = value("SPELEODB_API_TIMEOUT_MS")
-        .unwrap_or_else(|| "10000".into())
+        .unwrap_or_else(|| "20000".into())
         .parse::<u64>()
         .expect("timeout milliseconds");
     let retries = value("SPELEODB_API_RETRY_COUNT")
