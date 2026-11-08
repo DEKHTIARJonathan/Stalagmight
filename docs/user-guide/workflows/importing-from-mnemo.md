@@ -37,4 +37,6 @@
 - **GPS coordinates** (4), in any
   [GPS format](../screens/edit-station-dialog.md#gps-formats). Check what it
   read (5).
-- **Confirm Zero Datum** (12).
+- Optional: scroll down to check or change the shots (16). This can also be
+  done later. See [DMP import](../screens/dmp-import.md).
+- **Confirm Zero Datum** (12) continues the import.

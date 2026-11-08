@@ -56,13 +56,21 @@ After picking a section in step 2.
 6. **Depth below surface**: optional, in meters, positive below the surface.
 7. **Name**
 8. **Surveyor**
-9. **Reverse numbering**: number the section from the other end. The cave does
-   not move.
+9. **Reverse numbering**: number the stations and shots from the other end
+   (ticked here). The cave does not move.
 10. **Cancel**: same as 1.
 11. **Back**: to step 2.
 12. **Confirm Zero Datum**: disabled until 4 can be read.
 
-### Details
+Scrolled down, the section's details and shots:
 
-- Further down: date, color, direction, and the section's shots, which can
-  still be edited here.
+![DMP import, configure zero datum, shots](../images/dmp-import-zero-datum-shots.png)
+
+13. **Date**
+14. **Dir**: surveyed going in or out.
+15. **Color**
+16. **Shot Data**: every shot of the section. Values can be changed here, or
+    any time later.
+17. A ⚠ in this column marks a shot with a warning. Hover it to read it.
+18. Choose visible columns.
+19. Enlarge the table.
