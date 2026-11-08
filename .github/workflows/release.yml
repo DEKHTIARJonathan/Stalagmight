@@ -132,15 +132,15 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # plugins.updater.pubkey does not exist in the checked-in tauri.conf.json
-      # yet (issue #579 provisioning - see docs/releasing.md), and tauri-cli
-      # base64-decodes that pubkey with a hard failure at bundle time once
-      # createUpdaterArtifacts is on, so enabling it unconditionally breaks
-      # every build until the real key lands. Enablement is therefore CI-side
-      # only (the Build step below merges it in via --config), gated on the
-      # pubkey actually being present, so local `pnpm tauri build` never
-      # needs a signing key and this workflow degrades gracefully until the
-      # follow-up commit that adds the real pubkey.
+      # The updater pubkey is committed (plugins.updater.pubkey in
+      # tauri.conf.json, checked by the verify job's pubkey gate), but
+      # createUpdaterArtifacts stays out of the checked-in config: with it on,
+      # tauri-cli signs every updater bundle and fails outright when
+      # TAURI_SIGNING_PRIVATE_KEY is unset. Enablement is therefore CI-side
+      # only (the Build step below merges it in via --config), so a local
+      # `pnpm tauri build` never needs the signing key. It is still gated on
+      # the pubkey being present, so a fork that removes the key builds
+      # without updater artifacts instead of failing.
       - name: Determine updater enablement
         id: updater
         shell: bash
