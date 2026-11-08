@@ -6,6 +6,7 @@ import pkg from './package.json';
 // Dev-only console/eval bridge (apply: 'serve', so inert in builds). See
 // scripts/lib/vite-agent-bridge.mjs and docs/debug-gates.md.
 import { agentBridge } from './scripts/lib/vite-agent-bridge.mjs';
+import { readBakedPrerelease } from './src/utils/semverPrerelease';
 
 /** Short hash of the checked-out commit, or `unknown` when git is unavailable. */
 function gitShortHash(): string {
@@ -46,30 +47,24 @@ function releaseTag(): string | null {
   }
 }
 
-/** One semver pre-release identifier: numeric without a leading zero, or alphanumeric. */
-const SEMVER_PRERELEASE_IDENT = '(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)';
-const SEMVER_PRERELEASE = new RegExp(
-  `^${SEMVER_PRERELEASE_IDENT}(?:\\.${SEMVER_PRERELEASE_IDENT})*$`,
-);
-
 /**
  * The pre-release part CI bakes into a release candidate (#650), e.g. `rc.2`,
  * or null for a final release (unset or empty).
  *
  * The backend reads the same variable to decide which updates are newer than
  * this build (`effective_version` in src-tauri/src/commands/app_update.rs), so
- * About has to show the version that comparison uses. Validated by the same
- * rule: semver pre-release identifiers and no leading hyphen. A value the
- * backend would ignore is ignored here too, with a warning.
+ * About has to show the version that comparison uses. The rule lives in
+ * `readBakedPrerelease`, tested against the Rust cases; a value the backend
+ * would ignore is ignored here too, with a warning.
  */
 function bakedPrerelease(): string | null {
-  const raw = (process.env.STALAGMIGHT_PRERELEASE ?? '').trim();
-  if (raw === '') return null;
-  if (!raw.startsWith('-') && SEMVER_PRERELEASE.test(raw)) return raw;
-  console.warn(
-    `[vite] Ignoring STALAGMIGHT_PRERELEASE=${JSON.stringify(raw)}: not a semver pre-release`,
-  );
-  return null;
+  const baked = readBakedPrerelease(process.env.STALAGMIGHT_PRERELEASE);
+  if (baked.kind === 'invalid') {
+    console.warn(
+      `[vite] Ignoring STALAGMIGHT_PRERELEASE=${JSON.stringify(baked.value)}: not a semver pre-release`,
+    );
+  }
+  return baked.kind === 'candidate' ? baked.prerelease : null;
 }
 
 // A release candidate reports its effective version (#650), the one the
