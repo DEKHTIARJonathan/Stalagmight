@@ -24,7 +24,7 @@ in determines how you write it, and picking wrong is the most common rework.
 
 | Doc | Contents |
 |-----|----------|
-| [user-guide/README.md](user-guide/README.md) | The guide for people using the app, written as linked wiki pages with screenshots: step-by-step workflows and a reference page per screen. It keeps its own index, so its pages are not listed here. |
+| [user-guide/README.md](user-guide/README.md) | For people using the app: workflows and screens, with screenshots. Has its own index. |
 
 ## Orientation
 
