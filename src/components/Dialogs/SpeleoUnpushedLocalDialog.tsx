@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
@@ -46,6 +46,13 @@ export default function SpeleoUnpushedLocalDialog() {
   const [busy, setBusy] = useState(false);
   const [discardArmed, setDiscardArmed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    setBusy(false);
+    setDiscardArmed(false);
+    setError(null);
+  }, [dialogData]);
+  const stillPrompting = () => useUIStore.getState().activeDialog === 'speleodb-unpushed-local' &&
+    useUIStore.getState().dialogData === dialogData;
 
   const summary = dialogData.summary as SpeleoProjectSummary | undefined;
   const unpushedLocal = dialogData.unpushedLocal as UnpushedLocalEdits | undefined;
@@ -79,6 +86,8 @@ export default function SpeleoUnpushedLocalDialog() {
     setBusy(true);
     setError(null);
     const outcome = await keepLocalCopy(summary, unpushedLocal.local_path);
+    if (!stillPrompting()) return;
+    if (outcome.status === 'cancelled') setBusy(false);
     if (outcome.status === 'error') {
       setError(outcome.message);
       setBusy(false);
@@ -91,11 +100,9 @@ export default function SpeleoUnpushedLocalDialog() {
   const handleTakeRemote = async () => {
     setBusy(true);
     setError(null);
-    const outcome = await takeRemoteDiscardingLocal(summary);if (false) {
-      // [#258] The hook raised the file picker over this prompt, which stays mounted
-      // underneath. Releasing `busy` is not cosmetic here: it gates `onClose` and
-      // every button, so holding it while the user cancels the picker left this
-      // dialog with no way out at all.
+    const outcome = await takeRemoteDiscardingLocal(summary);
+    if (!stillPrompting()) return;
+    if (outcome.status === 'cancelled') {
       setBusy(false);
     } else if (outcome.status === 'error') {
       setError(outcome.message);

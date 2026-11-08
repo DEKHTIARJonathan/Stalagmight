@@ -106,7 +106,7 @@ describe('useOpenRemoteProject (#218)', () => {
       // it reading the PREVIOUS project for the length of the poll interval.
       projectId: 'p1',
     });
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true });
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
   });
 
   it('names the opened project immediately, so A -> B does not leave A on the store', async () => {
@@ -230,7 +230,7 @@ describe('useOpenRemoteProject (#218)', () => {
   it('keepLocalCopy loads the local path without any SpeleoDB command', async () => {
     const outcome = await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
     expect(outcome).toEqual({ status: 'opened' });
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true });
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
     expect(invokeIpcMock.mock.calls.filter((c) => String(c[0]).startsWith('speleodb_'))).toEqual([]);
   });
 
@@ -259,7 +259,7 @@ describe('useOpenRemoteProject (#218)', () => {
     const outcome = await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
     expect(outcome).toEqual({ status: 'opened' });
     expect(setLinkOnOpenMock).not.toHaveBeenCalled();
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true });
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
   });
 
   it('does not touch the live link when the already-open keep-local load fails', async () => {
@@ -386,7 +386,7 @@ describe('useOpenRemoteProject (#218)', () => {
     const outcome = await hook().openRemote(SUMMARY);
     expect(outcome).toEqual({ status: 'opened' });
     expect(setLinkOnOpenMock).not.toHaveBeenCalled();
-    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true });
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
   });
 
   /**
@@ -582,7 +582,7 @@ describe('useOpenRemoteProject (#218)', () => {
         remoteProjectId: null,
       });
       expect(await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx')).toEqual({ status: 'opened' });
-      expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true });
+      expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
     });
 
     /** The discarding re-open SUCCEEDS, so an unguarded branch runs all the way to the load. */
@@ -635,7 +635,7 @@ describe('useOpenRemoteProject (#218)', () => {
         remoteProjectId: 'p1',
       });
       expect(await hook().takeRemoteDiscardingLocal(SUMMARY)).toEqual({ status: 'opened' });
-      expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true });
+      expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
     });
 
     it('still refuses the take-remote for the open project over unsaved-to-disk edits', async () => {
@@ -731,7 +731,7 @@ describe('useOpenRemoteProject (#218)', () => {
         pullDuringWhich(() => {});
 
         expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
-        expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true });
+        expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
       });
 
       it('still opens when the pull names the project already on screen', async () => {
@@ -755,7 +755,7 @@ describe('useOpenRemoteProject (#218)', () => {
         pullDuringWhich(() => useProjectStore.setState({ isDirty: true }));
 
         expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
-        expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true });
+        expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
       });
 
       it('refuses the take-remote when the open project goes unpushed during ITS download', async () => {
@@ -861,4 +861,65 @@ describe('restricted-project warnings', () => {
     expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
     expect(confirmMock).not.toHaveBeenCalled();
   });
+});
+
+function deferredOpen<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)(
+  '%s cannot replay a slow remote download over a newer project selection', async (action) => {
+    const download = deferredOpen<{ local_path: string; concurrent_session: boolean }>();
+    const entered = deferredOpen<void>();
+    invokeIpcMock.mockImplementation(() => { entered.resolve(); return download.promise; });
+    const beforeLoad = vi.fn();
+    const pending = hook({ onBeforeLoad: beforeLoad })[action](SUMMARY);
+    await entered.promise;
+    const { runConfirmedProjectSwitch } = await import('../utils/projectTransition');
+    await runConfirmedProjectSwitch('/newer.stalx', () => null, true, async () => ({ success: true }));
+    download.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+    expect(await pending).toEqual({ status: 'cancelled' });
+    expect(setLinkOnOpenMock).not.toHaveBeenCalled();
+    expect(loadProjectMock).not.toHaveBeenCalled();
+    expect(beforeLoad).not.toHaveBeenCalled();
+  },
+);
+
+it('suppresses a stale download error instead of replacing a newer dialog', async () => {
+  const download = deferredOpen<never>();
+  const entered = deferredOpen<void>();
+  invokeIpcMock.mockImplementation(() => { entered.resolve(); return download.promise; });
+  const pending = hook().openRemote(SUMMARY);
+  await entered.promise;
+  const { reserveProjectRequest } = await import('../utils/projectTransition');
+  reserveProjectRequest();
+  download.reject(new Error('stale download failure'));
+  expect(await pending).toEqual({ status: 'cancelled' });
+  expect(useUIStore.getState().openDialog).not.toHaveBeenCalled();
+});
+
+it('does not download after a stale native warning is accepted', async () => {
+  const warning = deferredOpen<boolean>();
+  confirmMock.mockReturnValue(warning.promise);
+  const pending = hook().openRemote({ ...SUMMARY, permission: 'READ_ONLY' });
+  const { reserveProjectRequest } = await import('../utils/projectTransition');
+  reserveProjectRequest();
+  warning.resolve(true);
+  expect(await pending).toEqual({ status: 'cancelled' });
+  expect(invokeIpcMock).not.toHaveBeenCalled();
+});
+
+it('does not continue a remote download across login/logout', async () => {
+  const download = deferredOpen<{ local_path: string; concurrent_session: boolean }>();
+  const entered = deferredOpen<void>();
+  invokeIpcMock.mockImplementation(() => { entered.resolve(); return download.promise; });
+  const pending = hook().openRemote(SUMMARY);
+  await entered.promise;
+  useSpeleoStore.setState((state) => ({ sessionGeneration: state.sessionGeneration + 1 }));
+  download.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+  expect(await pending).toEqual({ status: 'cancelled' });
+  expect(loadProjectMock).not.toHaveBeenCalled();
 });

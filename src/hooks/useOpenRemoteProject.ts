@@ -1,3 +1,4 @@
+import { isProjectRequestCurrent, reserveProjectRequest } from '../utils/projectTransition';
 import { useCallback } from 'react';
 import { confirmSpeleoOpen } from '../utils/confirmSpeleoOpen';
 import { useTranslation } from 'react-i18next';
@@ -44,6 +45,14 @@ interface UseOpenRemoteProjectOpts {
   cancelReturnsTo?: string;
 }
 
+/** One ownership token covers the warning, download, seed, and file load. */
+function reserveRemoteOpen() {
+  const request = reserveProjectRequest();
+  const sessionGeneration = useSpeleoStore.getState().sessionGeneration;
+  return { request, current: () => isProjectRequestCurrent(request) &&
+    useSpeleoStore.getState().sessionGeneration === sessionGeneration };
+}
+
 /** Pull a native project, seed its access state, load it, and roll back a failed load. */
 export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   const { t } = useTranslation();
@@ -63,6 +72,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       permission: SpeleoProjectSummary['permission'],
       /** The project this open is FOR, so the seed names it rather than waiting for a poll. */
       projectId: string,
+      ownership: ReturnType<typeof reserveRemoteOpen>,
       opts: {
         /**
          * `kind` defaults to `info` for an ordinary successful open; callers can
@@ -79,6 +89,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       } = {},
     ): Promise<OpenRemoteOutcome> => {
       const { successToast, hasUnpushedEdits } = opts;
+      if (!ownership.current()) return { status: 'cancelled' };
       // #270: what to put back if the load fails. Captured BEFORE the seed, so the
       // rollback below is a true undo rather than a clear-and-hope. `priorPath` is
       // the project the snapshot describes, so the rollback can tell "the load
@@ -150,7 +161,8 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         });
       }
       onBeforeLoad?.();
-      const loaded = await loadProject(result.local_path, { accessConfirmed: true });
+      const loaded = await loadProject(result.local_path, { accessConfirmed: true, request: ownership.request });
+      if (!ownership.current()) return { status: 'load_failed' };
       if (!loaded.success) {
         // Nothing to roll back when we never seeded: the link on screen is still
         // the open project's own, resolved state, and clearing it would be the very
@@ -200,6 +212,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       ) {
         return { status: 'load_failed' };
       }
+      if (!ownership.current()) return { status: 'load_failed' };
       if (successToast) showToast(successToast.message, successToast.key, successToast.kind);
       return { status: 'opened' };
     },
@@ -368,7 +381,13 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // given up silently (see `handBackRefusal`).
       const refusal = handBackRefusal(summary);
       if (refusal) return { status: 'error', message: refusal, reLogin: false };
-      if (!await confirmSpeleoOpen(summary)) return { status: 'cancelled' };
+      const ownership = reserveRemoteOpen();
+      try {
+        if (!await confirmSpeleoOpen(summary) || !ownership.current()) return { status: 'cancelled' };
+      } catch (e) {
+        if (!ownership.current()) return { status: 'cancelled' };
+        return { status: 'error', message: humanizeSpeleoError(e, t('speleodb.errors.openFailed')), reLogin: false };
+      }
       const afterWarning = handBackRefusal(summary);
       if (afterWarning) return { status: 'error', message: afterWarning, reLogin: false };
       let result: SpeleoOpenResult;
@@ -381,6 +400,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           latestCommitSha: summary.latest_commit_sha ?? null,
         });
       } catch (e) {
+        if (!ownership.current()) return { status: 'cancelled' };
         const unpushed = unpushedLocalEdits(e);
         if (unpushed) {
           openDialog('speleodb-unpushed-local', {
@@ -402,9 +422,10 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // underneath has had the whole of it to rewrite the link (see
       // `handBackRefusalAfterPull`). Re-read it BEFORE the seed overwrites it and
       // before the load closes the open project.
+      if (!ownership.current()) return { status: 'cancelled' };
       const landed = handBackRefusalAfterPull(summary, result.local_path);
       if (landed) return { status: 'error', message: landed, reLogin: false };
-      return finishOpen(result, summary.permission, summary.id);
+      return finishOpen(result, summary.permission, summary.id, ownership);
     },
     [
       finishOpen,
@@ -474,6 +495,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         { local_path: localPath, concurrent_session: false },
         summary.permission,
         summary.id,
+        reserveRemoteOpen(),
         { hasUnpushedEdits: true },
       );
     },
@@ -511,8 +533,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
        */
       const refusal = handBackRefusal(summary);
       if (refusal) return { status: 'error', message: refusal, reLogin: false };
-      // Captured immediately before the request, so an Ambiguous reply that lands
-      // after the session ended routes nowhere (see `sessionStillCurrent`).
+      const ownership = reserveRemoteOpen();
       let result: SpeleoOpenResult;
       try {
         result = await invokeIpc<SpeleoOpenResult>('speleodb_open_project_discarding_local', {
@@ -521,6 +542,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           latestCommitSha: summary.latest_commit_sha ?? null,
         });
       } catch (e) {
+        if (!ownership.current()) return { status: 'cancelled' };
         return {
           status: 'error',
           message: humanizeSpeleoError(e, t('speleodb.errors.openFailed')),
@@ -530,9 +552,10 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // Same download, same window, same re-read - this verb is `openRemote`'s pull
       // with the guard waived for the TARGET's cache copy, which says nothing about
       // the project on screen. See `handBackRefusalAfterPull`.
+      if (!ownership.current()) return { status: 'cancelled' };
       const landed = handBackRefusalAfterPull(summary, result.local_path);
       if (landed) return { status: 'error', message: landed, reLogin: false };
-      return finishOpen(result, summary.permission, summary.id);
+      return finishOpen(result, summary.permission, summary.id, ownership);
     },
     [
       finishOpen,
