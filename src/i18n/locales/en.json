@@ -2587,6 +2587,12 @@
   "importGate": {
     "inProgress": "Finish or cancel the current import first."
   },
+  "newerSchema": {
+    "open": {
+      "title": "Project saved by a newer Stalagmight",
+      "message": "This project was saved by a newer version of Stalagmight, and this version cannot open it without losing data. Update Stalagmight to open it."
+    }
+  },
   "newSection": {
     "collapse": "Shrink the table",
     "create": "Create Section",

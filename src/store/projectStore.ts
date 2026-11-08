@@ -1233,6 +1233,22 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           return { success: false };
         }
 
+        // A project saved by a newer Stalagmight (#649). Nothing here can fix
+        // it - not Retry, not repair - so it gets the error dialog naming the
+        // one remedy instead of the loading panel. Superseded loads stay quiet,
+        // as below.
+        if (error.code === 'NEWER_SCHEMA') {
+          if (get().loading.clientOpId !== clientOpId) return { success: false };
+          get().resetLoading();
+          useUIStore.getState().openDialog('error', {
+            title: i18n.t('newerSchema.open.title'),
+            message: i18n.t('newerSchema.open.message'),
+            hideReportHint: true,
+          });
+          clearProjectActionSource();
+          return { success: false };
+        }
+
         // Canonical-storage refusal: this .stalx is a non-canonical copy of a
         // SpeleoDB project. Backend-enforced (recents clicks bypass the
         // routeOpenedFile guards); the prompt offers the two real ways forward.
