@@ -106,9 +106,9 @@
         "updates": "Updates"
       },
       "updateCheck": {
-        "label": "Check for updates automatically",
-        "help": "Checks GitHub for new releases shortly after Stalagmight starts. Checking contacts GitHub; nothing is downloaded until you choose to.",
-        "aria": "Enable automatic update checks"
+        "label": "Update automatically",
+        "help": "Checks GitHub for new releases when Stalagmight starts and every 4 hours while it is open, and downloads them in the background. A downloaded update installs when you quit (on Windows, when you choose Restart to update). Turn this off to check and download only when you ask.",
+        "aria": "Enable automatic updates"
       },
       "updateTrack": {
         "label": "Update track",
@@ -2552,9 +2552,11 @@
     "available": "Stalagmight {{version}} is available",
     "download": "Download",
     "releaseNotes": "Release notes",
-    "dismiss": "Dismiss",
+    "dismiss": "Hide",
     "downloading": "Downloading update…",
     "restart": "Restart to update",
+    "readyOnQuit": "Stalagmight {{version}} will be installed when you quit",
+    "restartNow": "Restart now",
     "toasts": {
       "downloadFailed": "Could not download the update. Try again from the update banner.",
       "installFailed": "Could not install the update. Download it again from the update banner."

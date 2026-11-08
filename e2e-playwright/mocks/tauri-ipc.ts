@@ -3890,6 +3890,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 number_format: 'locale',
                 date_format: 'locale',
                 splash_screen: false,
+                // The real defaults (#631: the opt-out gates the background
+                // download, so leaving it unset silently reads as "off").
+                update_check_enabled: true,
+                update_track: 'stable',
                 // Keep onboarding disabled in E2E to avoid overlay interception.
                 onboarding_enabled: false,
                 onboarding_completed_flows: [],
@@ -4308,6 +4312,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 number_format: 'locale',
                 date_format: 'locale',
                 splash_screen: false,
+                // The real defaults (#631: the opt-out gates the background
+                // download, so leaving it unset silently reads as "off").
+                update_check_enabled: true,
+                update_track: 'stable',
                 // Keep onboarding disabled in E2E to avoid overlay interception.
                 onboarding_enabled: false,
                 onboarding_completed_flows: [],
@@ -5547,7 +5555,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // parking an update banner over whatever that spec is asserting on.
           // A spec that wants the banner overrides this case.
           case 'check_for_app_update':
-            return { status: { kind: 'up_to_date' }, current_version: '0.5.0' };
+            return { status: { kind: 'up_to_date' }, current_version: '0.5.0', installs_on_quit: true };
 
           case 'arm_app_update_restart':
           case 'unarm_app_update_restart':
