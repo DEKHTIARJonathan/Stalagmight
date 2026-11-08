@@ -688,6 +688,8 @@ impl AppState {
         Ok(SpeleoOpenResult {
             local_path,
             concurrent_session: false,
+            offline: None,
+            has_unpushed_edits: None,
         })
     }
 }

@@ -194,7 +194,6 @@ mod tests {
         );
         assert_eq!(loaded.speleodb.email.as_deref(), Some("legacy@example.com"));
         assert!(loaded.speleodb.insecure_http && loaded.speleodb.allow_force_edit);
-        assert_eq!(loaded.speleodb.poll_interval_seconds, 30);
         assert_eq!(loaded.speleodb.undo_mode, crate::models::UndoMode::Disabled);
         assert!(loaded.speleodb.token.0.is_none());
         loaded.save_to_path(&path).unwrap();

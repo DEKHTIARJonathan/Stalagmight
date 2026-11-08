@@ -14,14 +14,25 @@ blocking command boundary; frontend IPC and the core sync engine stay synchronou
 Core orchestration still owns cache paths, credentials, project identity, local
 edit protection, lock ownership, revision ancestry and undo policy.
 
-The frontend lists only `STALAGMIGHT` projects. It displays read-only permission and
-lock ownership independently and warns before opening a read-only or locked
-project. This includes cold recents, file-picker, drag/drop and OS file opens: a
+The frontend lists only `STALAGMIGHT` projects. It displays project name, SpeleoDB identity, permission and lock owner.
+It warns before opening a read-only project or one locked by another account.
+A lock held by the signed-in account is labeled as yours, independently of whether
+editing is enabled yet. This includes cold recents, file-picker, drag/drop and OS file opens: a
 read-only SQLite metadata preflight checks access before replacing the open project.
 Unavailable verification produces its own notice, distinct from verified read-only
 permission. Own-lock warnings are suppressed only for matching endpoint and normalized
 account email. Local-only inspection is available for keep-lock exits. Opening does not grant write access. Start editing must acquire the
 server mutex and reconcile the local base before enabling edits.
+
+The home screen uses the same card or table row for downloaded and undownloaded
+SpeleoDB projects. Selecting one never exposes local Project Details, local open,
+or local deletion actions. Opening always attempts a fresh download. Only a DNS,
+connection-unavailable or timeout failure allows opening an existing cache, whose
+stored project ID and endpoint must match. The UI announces that offline fallback
+and preserves the cached unsynced-edit state. Authentication, permission, missing
+remote project, TLS and invalid-download errors do not fall back to the cache.
+If a successful download would overwrite unsynced edits, the user can cancel or
+explicitly confirm replacing them; the prompt offers no online local-copy shortcut.
 
 Collaborator/team management and remote project deletion are absent. Local file
 management, local imports and local exports remain separate application features.

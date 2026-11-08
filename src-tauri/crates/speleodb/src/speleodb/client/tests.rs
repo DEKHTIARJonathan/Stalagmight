@@ -769,3 +769,31 @@ fn downloads_allow_healthy_progress_beyond_the_idle_budget_but_reject_stalls() {
         worker.join().unwrap();
     }
 }
+
+#[test]
+fn dns_failure_keeps_its_typed_cause_for_offline_open() {
+    struct OfflineDns;
+    impl reqwest::dns::Resolve for OfflineDns {
+        fn resolve(&self, _name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+            Box::pin(async { Err(std::io::Error::other("synthetic DNS failure").into()) })
+        }
+    }
+    let error = runtime().expect("runtime").block_on(async {
+        reqwest::Client::builder()
+            .no_proxy()
+            .dns_resolver(Arc::new(OfflineDns))
+            .build()
+            .expect("client")
+            .get("http://synthetic.invalid/")
+            .send()
+            .await
+            .expect_err("synthetic resolver always fails")
+    });
+    assert!(matches!(
+        network_error(error),
+        SpeleoDbError::Transport {
+            cause: TransportCause::Dns,
+            ..
+        }
+    ));
+}

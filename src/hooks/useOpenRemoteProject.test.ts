@@ -64,7 +64,7 @@ beforeEach(() => {
   confirmMock.mockReset().mockResolvedValue(true);
   loadProjectMock = vi.fn(async () => ({ success: true }));
   setLinkOnOpenMock = vi.fn();
-  // `keepLocalCopy` compares the refused path against the LIVE open project, so the
+  // `offline fallback` compares the refused path against the LIVE open project, so the
   // "nothing open" baseline has to be explicit.
   useProjectStore.setState({
     loadProject: loadProjectMock,
@@ -78,12 +78,21 @@ beforeEach(() => {
     // The open remote project's id, which the entry guard reads to tell "the target
     // IS what is on screen" from a swap. Reset explicitly - the store is shared.
     remoteProjectId: null,
+    session: { loggedIn: true, userEmail: "me@example.com", endpoint: "https://example.com" },
   });
   useUIStore.setState({ showToast: vi.fn(), openDialog: vi.fn() });
 });
 
 const hook = (opts: Parameters<typeof useOpenRemoteProject>[0] = {}) =>
   renderHook(() => useOpenRemoteProject(opts)).result.current;
+
+const openOfflineCopy = async () => {
+  invokeIpcMock.mockResolvedValue({
+    local_path: '/cache/p1.stalx', concurrent_session: false,
+    offline: true, has_unpushed_edits: true,
+  });
+  return hook().openRemote(SUMMARY);
+};
 
 describe('useOpenRemoteProject (#218)', () => {
   it('opens a project: seeds the link, loads, and reports opened', async () => {
@@ -162,7 +171,7 @@ describe('useOpenRemoteProject (#218)', () => {
       return Promise.resolve(null);
     });
     const outcome = await hook().openRemote(SUMMARY);
-    expect(outcome).toEqual({ status: 'load_failed' });
+    expect(outcome).toEqual({ status: 'load_failed', localPath: '/cache/p1.stalx' });
 
     // Back to 'local', NOT 'unknown' - and still editable, with no network involved.
     expect(useSpeleoStore.getState().projectLinkKind).toBe('local');
@@ -181,7 +190,7 @@ describe('useOpenRemoteProject (#218)', () => {
     if (outcome.status === 'error') expect(outcome.reLogin).toBe(true);
   });
 
-  it('raises the keep-local prompt when the open is refused over unpushed edits', async () => {
+  it('raises the offline fallback prompt when the open is refused over unpushed edits', async () => {
     // GlobalView's shape: no onBeforeLoad, outcome routed straight to its toast/
     // busy handling. The refusal must NOT come back as `error` (that would toast a
     // dead-end message) - it raises the prompt and reports `unpushed_local`.
@@ -227,28 +236,26 @@ describe('useOpenRemoteProject (#218)', () => {
     expect(openDialogMock).not.toHaveBeenCalled();
   });
 
-  it('keepLocalCopy loads the local path without any SpeleoDB command', async () => {
-    const outcome = await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
+  it('offline fallback opens the cached path only after the remote open command', async () => {
+    const outcome = await openOfflineCopy();
     expect(outcome).toEqual({ status: 'opened' });
     expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
-    expect(invokeIpcMock.mock.calls.filter((c) => String(c[0]).startsWith('speleodb_'))).toEqual([]);
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_open_project', expect.objectContaining({ projectId: SUMMARY.id }));
   });
 
-  // The core of the #270 keep-local defect: this branch pulls NOTHING and is
-  // reachable ONLY because the backend refused the open over un-pushed local edits,
-  // so the copy is provably dirty. The shared seed defaults to `false`, and that
-  // exact flag is what `guardQuit` and the status button's warning read.
-  it('keepLocalCopy seeds the dirty bit TRUE - the refusal is proof the copy is dirty', async () => {
-    await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
+  // Offline opening must preserve edits that never reached the server.
+  it('offline fallback seeds the dirty bit TRUE - the backend reports that the cached copy is dirty', async () => {
+    await openOfflineCopy();
     expect(setLinkOnOpenMock).toHaveBeenCalledWith({
       permission: 'READ_AND_WRITE',
       forPath: '/cache/p1.stalx',
       hasUnpushedEdits: true,
+      offline: true,
       projectId: 'p1',
     });
   });
 
-  it('keepLocalCopy seeds NOTHING when the refusal names the already-open project', async () => {
+  it('offline fallback seeds NOTHING when the refusal names the already-open project', async () => {
     // "Open from SpeleoDB" is in the in-project menu, so re-opening the current
     // project is an ordinary mis-step. The live link is fully resolved (lock held,
     // permission, remote state); the optimistic seed would replace it with a
@@ -256,13 +263,13 @@ describe('useOpenRemoteProject (#218)', () => {
     // nothing re-resolves it synchronously - dropping the survey UI to read-only for
     // a project we hold the lock on. Skipping the seed is correct offline too.
     useProjectStore.setState({ project: { file_path: '/cache/p1.stalx' } as never });
-    const outcome = await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
+    const outcome = await openOfflineCopy();
     expect(outcome).toEqual({ status: 'opened' });
     expect(setLinkOnOpenMock).not.toHaveBeenCalled();
     expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
   });
 
-  it('does not touch the live link when the already-open keep-local load fails', async () => {
+  it('does not touch the live link when the already-open offline fallback load fails', async () => {
     // There was no seed to roll back, and the link on screen is the open project's
     // own resolved state - downgrading it is the very thing the rollback undoes.
     const live = {
@@ -280,10 +287,10 @@ describe('useOpenRemoteProject (#218)', () => {
       serverError: null,
     };
     useProjectStore.setState({ project: { file_path: '/cache/p1.stalx' } as never });
-    useSpeleoStore.setState({ link: live, projectLinkKind: 'remote', linkPath: '/cache/p1.stalx' });
+    useSpeleoStore.setState({ link: live, projectLinkKind: 'remote', linkPath: '/cache/p1.stalx', remoteProjectId: SUMMARY.id });
     loadProjectMock.mockResolvedValue({ success: false });
-    const outcome = await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
-    expect(outcome).toEqual({ status: 'load_failed' });
+    const outcome = await openOfflineCopy();
+    expect(outcome).toEqual({ status: 'load_failed', localPath: '/cache/p1.stalx' });
     expect(useSpeleoStore.getState().link).toEqual(live);
     expect(useSpeleoStore.getState().projectLinkKind).toBe('remote');
   });
@@ -315,15 +322,22 @@ describe('useOpenRemoteProject (#218)', () => {
     );
   });
 
-  // End to end through the REAL store action: the whole point of the dirty-bit seed
-  // is that the app's exit guard is armed afterwards. Before this, "Keep the local
-  // copy" produced a link claiming nothing outstanding, so menu Quit, Ctrl+Q and the
-  // OS window X all walked straight past `SpeleoQuitDialog` and the edits that had
-  // just refused an overwrite could be lost on the next quit.
-  it('arms the quit guard after keepLocalCopy (real store seed)', async () => {
+  // Exercise the real store seed and exit guard with a dirty offline result.
+  it('never claims an offline clean cache is up to date before the server responds', async () => {
+    useSpeleoStore.setState({ setLinkOnOpen: realSetLinkOnOpen });
+    invokeIpcMock.mockResolvedValue({
+      local_path: '/cache/p1.stalx', concurrent_session: false,
+      offline: true, has_unpushed_edits: false,
+    });
+    expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+    expect(useSpeleoStore.getState().link?.remoteState).toBe('unknown');
+    expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+  });
+
+  it('arms the quit guard after offline fallback (real store seed)', async () => {
     useSpeleoStore.setState({ setLinkOnOpen: realSetLinkOnOpen });
     useUIStore.setState({ openDialog: vi.fn() as never, activeDialog: null, dialogData: {} });
-    await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
+    await openOfflineCopy();
 
     expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
     // guardQuit needs a project open to guard.
@@ -361,14 +375,14 @@ describe('useOpenRemoteProject (#218)', () => {
     });
 
     const outcome = await hook().openRemote(SUMMARY);
-    expect(outcome).toEqual({ status: 'load_failed' });
+    expect(outcome).toEqual({ status: 'load_failed', localPath: '/cache/p1.stalx' });
     // The project the user actually has open is untouched - and still editable.
     expect(useSpeleoStore.getState().projectLinkKind).toBe('local');
     expect(selectSpeleoReadOnly(useSpeleoStore.getState())).toBe(false);
   });
 
   /**
-   * [#270] `keepLocalCopy` skipped the seed for the already-open project; the two
+   * [#270] `offline fallback` skipped the seed for the already-open project; the two
    * other routes into the same tail did not. "Open from SpeleoDB" is in the
    * IN-PROJECT menu, so `openRemote` re-opening the current project is an ordinary
    * mis-step - and for a CLEAN open project the backend does not refuse it, so it
@@ -507,7 +521,7 @@ describe('useOpenRemoteProject (#218)', () => {
      * the prompt had concluded, which by then is stale by an unbounded amount.
      * `SpeleoUnpushedLocalDialog` sits on screen for as long as the user takes to
      * decide, while `SpeleoStatusButton`'s interval keeps calling `refreshLinkStatus`
-     * for the project underneath (30 s to a user-configurable 24 h) and its
+     * for the project underneath, and its
      * `seedFromStatus` rewrites `link` wholesale - `hasUnpushedEdits`, `editState`,
      * `lockHolder`. So the project on screen can acquire un-pushed work, or have its
      * lock resolved, between the check and the load that closes it backend-side.
@@ -519,7 +533,7 @@ describe('useOpenRemoteProject (#218)', () => {
      * correct. The half of its intent that IS correct is kept below: the same-project
      * routes must stay open.)
      */
-    it('refuses keep-local when the open project goes unpushed while the prompt is up', async () => {
+    it('refuses offline fallback when the open project goes unpushed while the prompt is up', async () => {
       // The real sequence rather than a synthetic one: the open IS guarded and the
       // project on screen is clean, so the backend's un-pushed refusal raises the
       // prompt; the status refresh then lands and marks that project un-pushed while the
@@ -543,7 +557,7 @@ describe('useOpenRemoteProject (#218)', () => {
 
       useSpeleoStore.setState({ link: openLink({ hasUnpushedEdits: true }) });
 
-      const outcome = await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
+      const outcome = await openOfflineCopy();
       expect(outcome.status).toBe('error');
       // Not a dead token - there is nothing to re-login for.
       if (outcome.status === 'error') expect(outcome.reLogin).toBe(false);
@@ -551,38 +565,25 @@ describe('useOpenRemoteProject (#218)', () => {
       expect(loadProjectMock).not.toHaveBeenCalled();
     });
 
-    it('refuses keep-local over unsaved-to-disk changes in the project being swapped out', async () => {
+    it('refuses offline fallback over unsaved-to-disk changes in the project being swapped out', async () => {
       // Keeping the TARGET's local copy still ends in a `loadProject` for a different
       // file, which replaces the open project and drops its unsaved in-memory survey.
       useProjectStore.setState({
         project: { file_path: '/cave/local.stalx' } as never,
         isDirty: true,
       });
-      const outcome = await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
+      const outcome = await openOfflineCopy();
       expect(outcome.status).toBe('error');
       if (outcome.status === 'error') expect(outcome.message).toMatch(/sav/i);
       expect(loadProjectMock).not.toHaveBeenCalled();
     });
 
-    it('keep-local still opens the path already on screen - that call replaces nothing', async () => {
-      // Do-not-regress (passes before the guard was added too). This branch issues no
-      // SpeleoDB command, and `loadProject` short-circuits on ALREADY_OPEN for its own
-      // path - it flips the view and re-resolves the link, never re-reading the file -
-      // so neither half of the guard has anything to protect, and a disk-dirty refusal
-      // would raise "save your changes first" over an action that cannot lose them.
-      // Driven with `remoteProjectId` deliberately UNSET: the skip is decided by path,
-      // so it holds in the window before the first status refresh records the open
-      // project's id, where the guard's own id-based exemption does not.
-      useProjectStore.setState({
-        project: { file_path: '/cache/p1.stalx' } as never,
-        isDirty: true,
-      });
-      useSpeleoStore.setState({
-        link: openLink({ hasUnpushedEdits: true, editState: 'editing' }),
-        remoteProjectId: null,
-      });
-      expect(await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx')).toEqual({ status: 'opened' });
-      expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', { accessConfirmed: true, request: expect.any(Number) });
+    it('does not bypass unsaved changes even if the target has a cached copy', async () => {
+      useProjectStore.setState({ project: { file_path: '/cache/p1.stalx' } as never, isDirty: true });
+      useSpeleoStore.setState({ remoteProjectId: SUMMARY.id });
+      expect((await openOfflineCopy()).status).toBe('error');
+      expect(invokeIpcMock).not.toHaveBeenCalled();
+      expect(loadProjectMock).not.toHaveBeenCalled();
     });
 
     /** The discarding re-open SUCCEEDS, so an unguarded branch runs all the way to the load. */
@@ -776,7 +777,7 @@ describe('useOpenRemoteProject (#218)', () => {
 
   /**
    * DO-NOT-REGRESS. Both "is this the project already on screen?" tests in the hook
-   * (`finishOpen`'s `alreadyOpen`, `keepLocalCopy`'s skip) compare paths as LITERAL
+   * (`finishOpen`'s `alreadyOpen`, `offline fallback`'s skip) compare paths as LITERAL
    * strings, and that is the point rather than an oversight: they predict whether
    * `loadProject` will short-circuit, and the backend decides that with the same
    * literal test (`do_load_project_full`: `project.file_path.as_ref() ==
@@ -812,7 +813,7 @@ describe('useOpenRemoteProject (#218)', () => {
       });
     });
 
-    it('keepLocalCopy still guards when the open project is spelled differently', async () => {
+    it('offline fallback still guards when the open project is spelled differently', async () => {
       // Case alias - the same file on Windows/macOS, and NOT what the backend's
       // literal check matches. So this ends in a full reload that drops the unsaved
       // in-memory survey, which is precisely what the disk-dirty refusal is for.
@@ -821,7 +822,7 @@ describe('useOpenRemoteProject (#218)', () => {
         isDirty: true,
       });
 
-      const outcome = await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
+      const outcome = await openOfflineCopy();
 
       expect(outcome.status).toBe('error');
       if (outcome.status === 'error') expect(outcome.message).toMatch(/sav/i);
@@ -850,6 +851,39 @@ describe('restricted-project warnings', () => {
     expect(await hook().openRemote({ ...SUMMARY, permission: 'READ_ONLY' })).toEqual({ status: 'opened' });
     expect(setLinkOnOpenMock).toHaveBeenCalledWith(expect.objectContaining({ permission: 'READ_ONLY' }));
     expect(confirmMock.mock.invocationCallOrder[0]).toBeLessThan(invokeIpcMock.mock.invocationCallOrder[0]!);
+  });
+
+  it('recognizes the signed-in lock owner, ignoring email case', async () => {
+    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', concurrent_session: false });
+    expect(await hook().openRemote({ ...SUMMARY, lock_holder: 'ME@EXAMPLE.COM' })).toEqual({ status: 'opened' });
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it('still warns about read-only permission when the lock belongs to this user', async () => {
+    confirmMock.mockResolvedValue(false);
+    expect(await hook().openRemote({ ...SUMMARY, permission: 'READ_ONLY', lock_holder: 'me@example.com' })).toEqual({ status: 'cancelled' });
+    const warning = confirmMock.mock.calls[0]![0] as string;
+    expect(warning).toContain('read-only');
+    expect(warning).not.toContain('locked by');
+  });
+
+  it('hydrates a cold session before deciding that our lock belongs to another account', async () => {
+    useSpeleoStore.setState({ session: null });
+    invokeIpcMock.mockImplementation(async (command) => command === 'speleodb_session'
+      ? { logged_in: true, user_email: 'me@example.com', endpoint: 'https://example.com' }
+      : { local_path: '/cache/p1.stalx', concurrent_session: false });
+    expect(await hook().openRemote({ ...SUMMARY, lock_holder: 'ME@EXAMPLE.COM' })).toEqual({ status: 'opened' });
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_session');
+    expect(confirmMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps the access warning when the cold session cannot be resolved', async () => {
+    useSpeleoStore.setState({ session: null });
+    invokeIpcMock.mockRejectedValue(new Error('offline'));
+    confirmMock.mockResolvedValue(false);
+    expect(await hook().openRemote({ ...SUMMARY, lock_holder: 'me@example.com' })).toEqual({ status: 'cancelled' });
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(loadProjectMock).not.toHaveBeenCalled();
   });
 
   it('unlocked writable projects open without a warning', async () => {

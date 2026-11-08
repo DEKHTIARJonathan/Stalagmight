@@ -102,6 +102,26 @@ describe('speleoStore', () => {
         });
     });
 
+    it('does not let a delayed cold-session read overwrite a newer login', async () => {
+      let resolveStatus!: (value: unknown) => void;
+      invokeIpcMock.mockReturnValue(new Promise((resolve) => { resolveStatus = resolve; }));
+      const pending = useSpeleoStore.getState().refreshSession();
+      useSpeleoStore.getState().setSessionFromLogin({ user_email: 'new@x', endpoint: 'https://new.example' });
+      resolveStatus({ logged_in: true, user_email: 'old@x', endpoint: 'https://old.example' });
+      await pending;
+      expect(useSpeleoStore.getState().session?.userEmail).toBe('new@x');
+    });
+
+    it('does not resurrect a session after logout during a cold-session read', async () => {
+      let resolveStatus!: (value: unknown) => void;
+      invokeIpcMock.mockReturnValue(new Promise((resolve) => { resolveStatus = resolve; }));
+      const pending = useSpeleoStore.getState().refreshSession();
+      useSpeleoStore.getState().clearSession();
+      resolveStatus({ logged_in: true, user_email: 'old@x', endpoint: 'https://old.example' });
+      await pending;
+      expect(useSpeleoStore.getState().session).toBeNull();
+    });
+
     it('clearSession degrades an active edit to read-only', () => {
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
       useSpeleoStore
@@ -204,6 +224,13 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().link?.lockedByOther).toBe(true);
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true, lock_holder: 'me@x' }));
       expect(useSpeleoStore.getState().link?.lockedByOther).toBe(false);
+    });
+
+    it('does not call our own lock another user when editing is not enabled yet', () => {
+      useSpeleoStore.setState({ session: { loggedIn: true, userEmail: 'me@x', endpoint: 'https://example.com' } });
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: false, lock_holder: 'ME@X' }));
+      expect(useSpeleoStore.getState().link?.lockedByOther).toBe(false);
+      expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
     });
 
     it('clears a prior lockedByOther once a later refresh resolves no holder (fix 7)', () => {

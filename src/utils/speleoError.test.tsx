@@ -84,7 +84,7 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
     for (const line of [refused, timeout, dns, tls, unknown]) {
       expect(line).toContain(ENDPOINT);
     }
-    expect(refused).toMatch(/refused/i);
+    expect(refused).toMatch(/could not connect/i);
     expect(timeout).toMatch(/did not respond in time/i);
     expect(dns).toMatch(/could not find/i);
     expect(tls).toMatch(/secure connection/i);

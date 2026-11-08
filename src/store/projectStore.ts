@@ -1187,8 +1187,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // Unawaited and best-effort on purpose: `speleodb_link_status` does
           // blocking HTTP for a remote project, and no caller of `loadProject` may
           // be stalled behind the network. So it is a REFINEMENT, never the fix -
-          // the seeding side (`keepLocalCopy`, and now every route through
-          // `finishOpen`) is correct on its own, offline included, and the
+          // the seeding side (`finishOpen`) is correct on its own, offline included, and the
           // fail-closed fallback above covers the case nothing else resolved.
           void useSpeleoStore.getState().refreshLinkStatus();
           return { success: true };

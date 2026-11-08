@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   fileNameFromPath,
   deriveMissingPaths,
-  deriveRemoteOnlyItems,
+  deriveRemoteItems,
   buildRecentListItems,
   filterRecentListItems,
   type RecentListItem,
@@ -44,6 +44,12 @@ describe('fileNameFromPath', () => {
 });
 
 describe('deriveMissingPaths', () => {
+  it('does not offer local missing-file actions for managed SpeleoDB cache paths', () => {
+    expect(deriveMissingPaths([
+      '/cache/speleodb/11111111-1111-1111-1111-111111111111/project.stalx',
+      '/projects/local.stalx',
+    ], [])).toEqual(['/projects/local.stalx']);
+  });
   it('returns config paths that have no loaded metadata, in config order', () => {
     const recentPaths = ['/a', '/gone', '/b', '/also-gone'];
     const available = [project({ file_path: '/a' }), project({ file_path: '/b' })];
@@ -56,28 +62,42 @@ describe('deriveMissingPaths', () => {
   });
 });
 
-describe('deriveRemoteOnlyItems', () => {
-  it('keeps remotes not linked to any local recent, sorted by name', () => {
+describe('deriveRemoteItems', () => {
+  it('lists each remote once, whether cached or not, sorted by name', () => {
     const summaries = {
       p2: summary({ id: 'p2', name: 'Zeta' }),
       p1: summary({ id: 'p1', name: 'Alpha' }),
       p3: summary({ id: 'p3', name: 'Mu' }),
     };
-    // p3 is already open locally (a linked recent), so it must NOT be listed again.
+    // p3 is cached, but still uses the same remote row.
     const available = [project({ file_path: '/a', speleodb_project_id: 'p3' })];
-    const items = deriveRemoteOnlyItems(summaries, available);
-    expect(items.map((i) => (i.kind === 'remote' ? i.summary.name : ''))).toEqual(['Alpha', 'Zeta']);
+    const items = deriveRemoteItems(summaries, available);
+    expect(items.map((i) => (i.kind === 'remote' ? i.summary.name : ''))).toEqual(['Alpha', 'Mu', 'Zeta']);
     expect(items.every((i) => i.kind === 'remote')).toBe(true);
   });
 
-  it('returns nothing when every remote is already a local recent', () => {
+  it('retains remote entries when every project is cached', () => {
     const summaries = { p1: summary({ id: 'p1' }) };
     const available = [project({ file_path: '/a', speleodb_project_id: 'p1' })];
-    expect(deriveRemoteOnlyItems(summaries, available)).toEqual([]);
+    expect(deriveRemoteItems(summaries, available)).toEqual([{ kind: 'remote', projectId: 'p1', summary: summaries.p1 }]);
+  });
+
+  it('uses cached names with unknown access before an offline refresh can resolve them', () => {
+    const cached = project({ file_path: '/cache/p1.stalx', is_remote: true, speleodb_project_id: 'p1', name: 'Cached cave' });
+    const remote = deriveRemoteItems({}, [cached]);
+    expect(remote).toMatchObject([{ kind: 'remote', projectId: 'p1', summary: { name: 'Cached cave', permission: null } }]);
+    expect(buildRecentListItems([cached], [], remote)).toEqual(remote);
+  });
+
+  it('never emits a cached SpeleoDB project as an available local row', () => {
+    const cached = project({ file_path: '/cache/p1.stalx', is_remote: true, speleodb_project_id: 'p1' });
+    const summaries = { p1: summary({ id: 'p1', name: 'Server name' }) };
+    expect(buildRecentListItems([cached], [], deriveRemoteItems(summaries, [cached])))
+      .toEqual([{ kind: 'remote', projectId: 'p1', summary: summaries.p1 }]);
   });
 
   it('returns nothing when there are no scanned summaries', () => {
-    expect(deriveRemoteOnlyItems({}, [project({ file_path: '/a' })])).toEqual([]);
+    expect(deriveRemoteItems({}, [project({ file_path: '/a' })])).toEqual([]);
   });
 });
 
@@ -86,7 +106,7 @@ describe('buildRecentListItems', () => {
     const withRemote = buildRecentListItems(
       [project({ file_path: '/a', name: 'A' })],
       ['/gone'],
-      deriveRemoteOnlyItems({ p1: summary({ id: 'p1', name: 'Remote' }) }, []),
+      deriveRemoteItems({ p1: summary({ id: 'p1', name: 'Remote' }) }, []),
     );
     expect(withRemote.map((i) => i.kind)).toEqual(['available', 'remote', 'missing']);
   });
@@ -114,7 +134,7 @@ describe('filterRecentListItems', () => {
   });
 
   // These fixture items are all available/missing (both carry filePath); the remote
-  // kind (which has no filePath) is exercised in the deriveRemoteOnlyItems tests.
+  // kind (which has no filePath) is exercised in the deriveRemoteItems tests.
   const paths = (list: RecentListItem[]) => list.map((i) => ('filePath' in i ? i.filePath : ''));
 
   it('matches on name (case-insensitive)', () => {

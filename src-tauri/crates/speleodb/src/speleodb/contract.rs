@@ -67,8 +67,7 @@ pub enum SpeleoDbAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub enum TransportCause {
-    /// The host answered the dial with a refusal / dropped the connection
-    /// (nothing listening on that port, or the server closed on us).
+    /// The connection was refused, dropped, or the network/host was unreachable.
     Refused,
     /// A configured timeout elapsed (dial, response, or body read).
     Timeout,
@@ -76,7 +75,7 @@ pub enum TransportCause {
     Dns,
     /// The TLS handshake / certificate validation failed.
     Tls,
-    /// Anything else - no route, a blackholed address (the EINVAL this fix was
+    /// Anything else - a blackholed address (the EINVAL this fix was
     /// found through), an unclassified transport failure. Fails to the generic
     /// "could not reach the server" line rather than showing the raw errno.
     Unknown,

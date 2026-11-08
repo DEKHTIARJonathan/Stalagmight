@@ -8,6 +8,9 @@ import type { SpeleoFileAccess, SpeleoProjectSummary } from '../types/ipc.genera
 
 /** Warn before opening a project with restricted access. Cancel leaves it unopened. */
 export async function confirmSpeleoOpen(summary: SpeleoProjectSummary, endpoint?: string, unavailable = false): Promise<boolean> {
+  if (summary.lock_holder && !useSpeleoStore.getState().session) {
+    await useSpeleoStore.getState().refreshSession();
+  }
   const session = useSpeleoStore.getState().session;
   const ownLock = session?.loggedIn && endpointsMatch(endpoint ?? session.endpoint, session.endpoint) && emailsMatch(summary.lock_holder, session.userEmail);
   const warnings = [

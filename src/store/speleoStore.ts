@@ -499,6 +499,8 @@ interface SpeleoStore {
     permission: Permission | null;
     forPath?: string | null;
     hasUnpushedEdits?: boolean;
+    /** Cached data has no confirmed relationship to the current server tip. */
+    offline?: boolean;
     /**
      * WHICH SpeleoDB project this seed is for.
      *
@@ -900,9 +902,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   },
 
   refreshSession: async () => {
+    const issuedGeneration = get().sessionGeneration;
     try {
       const status = await invokeIpc<SpeleoSessionStatus>('speleodb_session');
-      get().setSession(status);
+      if (get().sessionGeneration === issuedGeneration) get().setSession(status);
     } catch {
       // Best-effort - leave whatever the store had.
     }
@@ -1100,15 +1103,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // last-known permission rather than blanking the gate on a transient miss.
         permission: s.permission ?? state.link?.permission ?? null,
         lockHolder: s.lock_holder,
-        // Read-only + a resolved holder ⟹ someone else holds it (the backend
-        // gives us the gate when the lock is ours). Derived PURELY from this
-        // refresh's (editState, lockHolder), with NO "preserve prior" carry: once the
-        // other holder releases (a later refresh resolves no holder) the button stops
-        // reading "locked by other" instead of sticking orange until a refresh both
-        // reaches the server AND happens to resolve a holder (fix 7). A transient
-        // offline refresh may briefly drop it to read-only; the next refresh re-resolves,
-        // and the backend gate stays the real enforcement.
-        lockedByOther: editState !== 'editing' && !!s.lock_holder,
+        // Ownership is independent of edit readiness: our lock may still need
+        // reconciliation, or our permission may have changed.
+        lockedByOther: editState !== 'editing' && !!s.lock_holder &&
+          !emailsMatch(s.lock_holder, state.session?.userEmail),
         hasUnpushedEdits: s.has_unpushed_edits,
         unwound: s.unwound,
         // #213: force-edit (edit-enabled WITHOUT a held lock) is backend-authoritative
@@ -1135,7 +1133,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       };
     }),
 
-  setLinkOnOpen: ({ permission, forPath = null, hasUnpushedEdits = false, projectId = null }) =>
+  setLinkOnOpen: ({ permission, forPath = null, hasUnpushedEdits = false, offline = false, projectId = null }) =>
     set({
       // Committed in the SAME synchronous `set()` as the rest of the seed, so nothing
       // can observe the new project's link beside the old project's id. `syncProjectLink`
@@ -1168,9 +1166,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         undoMode: 'full',
         // A pull just took the server tip, so up-to-date is true by construction -
         // but only for a pull. A seed that already knows the copy holds un-pushed
-        // edits is by definition NOT in sync, so claim nothing until the first refresh
+        // edits, or an offline cache, has no confirmed server tip; claim nothing until a refresh
         // resolves it rather than render a self-contradictory "up to date + dirty".
-        remoteState: hasUnpushedEdits ? 'unknown' : 'up_to_date',
+        remoteState: offline || hasUnpushedEdits ? 'unknown' : 'up_to_date',
         noAccess: false,
         serverError: null,
       },

@@ -416,6 +416,14 @@ pub struct SpeleoOpenResult {
     /// surfaces a notice (the ancestry self-heal assumes a single same-account
     /// session - a concurrent one would misattribute its commits as ours).
     pub concurrent_session: bool,
+    /// Present only when a failed connection required opening a validated cache.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub offline: Option<bool>,
+    /// Preserve unsynced work when seeding the frontend's offline link state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub has_unpushed_edits: Option<bool>,
 }
 
 /// Outcome of `speleodb_start_editing` (#194): the result of acquiring the write
@@ -673,9 +681,7 @@ pub struct SpeleoErrorDto {
 ///
 /// The two branches the frontend offers, and exactly what each calls:
 ///
-/// - **Keep local** - open [`Self::local_path`] through the normal
-///   `load_project_full` open flow. Nothing is downloaded and nothing is
-///   overwritten; the cached copy opens with its un-pushed edits intact.
+/// - **Cancel** - leave the cached copy and its un-pushed edits intact.
 /// - **Take remote and discard local** - call
 ///   `speleodb_open_project_discarding_local` with the same arguments the refused
 ///   `speleodb_open_project` was given. That is the abandoning verb: it performs
@@ -685,7 +691,7 @@ pub struct SpeleoErrorDto {
 pub struct UnpushedLocalEdits {
     /// The SpeleoDB project whose local copy holds the un-pushed edits.
     pub project_id: String,
-    /// The `.stalx` that holds them - the file "keep local" opens.
+    /// The `.stalx` that holds the protected edits.
     pub local_path: String,
     /// When it was last edited (RFC-3339), when known. `None` for an older copy
     /// that never recorded one.
@@ -730,6 +736,8 @@ mod tests {
         let open = serde_json::to_string(&SpeleoOpenResult {
             local_path: "/cache/project.stalx".to_owned(),
             concurrent_session: false,
+            offline: None,
+            has_unpushed_edits: None,
         })
         .expect("serialize open result");
         // [Track A] #186/D-B2: the structured error DTO must also never carry a

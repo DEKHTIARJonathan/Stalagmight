@@ -27,7 +27,7 @@ export type OpenRemoteOutcome =
   | { status: 'opened' }
   | { status: 'cancelled' }
 
-  | { status: 'load_failed' }
+  | { status: 'load_failed'; localPath: string }
   | { status: 'unpushed_local' }
   | { status: 'error'; message: string; reLogin: boolean };
 
@@ -73,7 +73,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   // read-only link for a project that never opened.
   const finishOpen = useCallback(
     async (
-      result: { local_path: string; concurrent_session: boolean },
+      result: SpeleoOpenResult,
       permission: SpeleoProjectSummary['permission'],
       /** The project this open is FOR, so the seed names it rather than waiting for a refresh. */
       projectId: string,
@@ -84,12 +84,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
          * provide another severity when the result needs attention.
          */
         successToast?: { message: string; key: string; kind: ToastKind };
-        /**
-         * [#270] Seed the link's dirty bit as TRUE. The seed's default is a fresh
-         * pull (nothing local the server has not seen); "keep the local copy" and
-         * an open are the opposite by construction, and seeding them clean
-         * disarmed the quit guard for a project we have proof is dirty.
-         */
+        /** Preserve the cached dirty bit when opening offline. */
         hasUnpushedEdits?: boolean;
       } = {},
     ): Promise<OpenRemoteOutcome> => {
@@ -162,17 +157,18 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           permission,
           forPath: result.local_path,
           hasUnpushedEdits: hasUnpushedEdits === true,
+          ...(result.offline ? { offline: true } : {}),
           projectId,
         });
       }
       onBeforeLoad?.();
       const loaded = await loadProject(result.local_path, { accessConfirmed: true, request: ownership.request });
-      if (!ownership.current()) return { status: 'load_failed' };
+      if (!ownership.current()) return { status: 'load_failed', localPath: result.local_path };
       if (!loaded.success) {
         // Nothing to roll back when we never seeded: the link on screen is still
         // the open project's own, resolved state, and clearing it would be the very
         // downgrade this branch exists to undo.
-        if (alreadyOpen) return { status: 'load_failed' };
+        if (alreadyOpen) return { status: 'load_failed', localPath: result.local_path };
         // #270: the snapshot describes a project that is no longer the one on
         // screen, so putting it back would overwrite the link of whatever the user
         // actually opened. `loadProject` reports `success: false` for two different
@@ -188,7 +184,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         const groundMoved =
           loaded.superseded === true ||
           (useProjectStore.getState().project?.file_path ?? null) !== priorPath;
-        if (groundMoved) return { status: 'load_failed' };
+        if (groundMoved) return { status: 'load_failed', localPath: result.local_path };
         // #270: the failed load left the PREVIOUS project on screen and still open
         // backend-side, so put its link state back exactly as it was.
         //
@@ -206,18 +202,18 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         // the moment before the attempt, not as fresh as now. Opportunistic, not
         // load-bearing: unawaited, and the restore above already stands on its own.
         void useSpeleoStore.getState().refreshLinkStatus();
-        return { status: 'load_failed' };
+        return { status: 'load_failed', localPath: result.local_path };
       }
       // Reopening the file already on screen makes loadProject take its intentional
       // already-open fast path. The backend may still have replaced the whole tree, so
       // run the same post-replacement cleanup as fast-forward, discard, and restore.
       if (
-        alreadyOpen &&
+        alreadyOpen && !result.offline &&
         !(await applySpeleoTreeReplacement(speleoProjectSessionIssuedFor(projectId), true))
       ) {
-        return { status: 'load_failed' };
+        return { status: 'load_failed', localPath: result.local_path };
       }
-      if (!ownership.current()) return { status: 'load_failed' };
+      if (!ownership.current()) return { status: 'load_failed', localPath: result.local_path };
       if (successToast) showToast(successToast.message, successToast.key, successToast.kind);
       return { status: 'opened' };
     },
@@ -254,11 +250,6 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    * un-pushed cache copy, because the case that needs that door is the one where the
    * target IS the open project, and that is exactly what the same-project exemption
    * below lets through.
-   *
-   * `keepLocalCopy` is the one partial exception, and only when the path it opens is
-   * the one already on screen: it issues no command and `loadProject` short-circuits
-   * on ALREADY_OPEN, so it replaces nothing and there is nothing to guard - see
-   * there.
    *
    * It REFUSES rather than raising the shared hand-back prompt, the way
    * `HeldLockResumeDialog`'s Continue-editing row does. `speleodb-close` replays what
@@ -324,8 +315,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    *
    * Refusing here leaves the pulled copy on disk, and that is a price rather than a
    * second data risk. Under `LocalEditsPolicy::Protect` the backend runs
-   * `guard_local_edits` before it downloads anything AND again inside
-   * `replace_cache_stalx`, and that guard fails CLOSED (a local copy it cannot read
+   * `guard_local_edits` inside `replace_cache_stalx`, and that guard fails CLOSED (a local copy it cannot read
    * refuses too), so a replace only ever happens over a cache copy with
    * `has_unpushed_edits == false` - a clean copy of a server revision, re-downloadable
    * in full. `Discard` is the take-remote branch, where the user confirmed that exact
@@ -419,7 +409,14 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       if (!ownership.current()) return { status: 'cancelled' };
       const landed = handBackRefusalAfterPull(summary, result.local_path);
       if (landed) return { status: 'error', message: landed, reLogin: false };
-      return finishOpen(result, summary.permission, summary.id, ownership);
+      return finishOpen(result, summary.permission, summary.id, ownership, {
+        hasUnpushedEdits: result.has_unpushed_edits === true,
+        ...(result.offline ? { successToast: {
+          message: t('speleodb.projectListing.offlineCopy'),
+          key: 'speleodb-offline-open',
+          kind: 'warning' as const,
+        } } : {}),
+      });
     },
     [
       finishOpen,
@@ -429,71 +426,6 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       cancelReturnsTo,
       t,
     ],
-  );
-
-  /**
-   * [#270] "Keep the local copy" - the safe branch of the refused-open prompt.
-   *
-   * Deliberately calls NO SpeleoDB command: nothing is downloaded and nothing is
-   * overwritten. The local `.stalx` named by the refusal is opened through the
-   * SAME tail every successful pull uses (`finishOpen` -> loadProject, with the
-   * link seed + rollback), so the two branches can never drift apart.
-   *
-   * One thing the shared tail must be told, because this branch is NOT a pull:
-   * the copy is DIRTY, and we know it. This branch is reachable only because the
-   * backend refused the open over edits the server has never seen. The tail's
-   * default seed says `hasUnpushedEdits: false`, and that value is exactly what
-   * `guardQuit` and the status button's warning read - so seeding it clean
-   * disarmed the quit guard for the one project proven to have work at risk,
-   * until some later status refresh happened to
-   * correct it.
-   *
-   * The other half - seeding NOTHING when the refusal names the already-open
-   * project - is the tail's own job now, since every route into it can name the
-   * open project (see `finishOpen`'s `alreadyOpen`).
-   *
-   * Guarded, but only when it would REPLACE something. The local copy it opens is
-   * the TARGET's, so whenever that is a different project this ends in a
-   * `loadProject` that closes the one on screen backend-side - and the answer the
-   * user gave was about the target's cached copy, not about the work in that
-   * project. Between the refusal and this click the status refresh can have marked the
-   * open project un-pushed or resolved its lock, so the guard has to be re-read here
-   * rather than inherited from the `openRemote` that raised the prompt.
-   */
-  const keepLocalCopy = useCallback(
-    async (summary: SpeleoProjectSummary, localPath: string): Promise<OpenRemoteOutcome> => {
-      // Opening the path already on screen replaces NOTHING: this branch issues no
-      // SpeleoDB command, and `loadProject` short-circuits on ALREADY_OPEN - it flips
-      // the view and re-resolves the link, and never re-reads the file, so no unsaved
-      // in-memory survey is dropped and no cache `.stalx` is overwritten. Refusing it
-      // would raise "save your changes first" over an action that cannot lose them.
-      // Decided by PATH, the same comparison `finishOpen` makes for the same reason
-      // (`alreadyOpen`) - and unlike the id-based exemption inside the guard, it does
-      // not depend on a status refresh having landed to record `remoteProjectId`.
-      //
-      // Literal, for the reason spelled out at `alreadyOpen`: it predicts the
-      // backend's own literal already-open test rather than asserting file identity.
-      // A spelling that test would not match (symlink, `..`, a case alias) falls to
-      // the guarded branch, and that is the CORRECT answer there, not merely the
-      // careful one - the backend reloads such a path in full, which is exactly how
-      // unsaved in-memory survey gets dropped, so the disk-dirty refusal the guard
-      // raises is the one that belongs. Case-folding or collapsing dot segments here
-      // would skip the guard for a load that still replaces the project.
-      const replacesOpenProject =
-        (useProjectStore.getState().project?.file_path ?? null) !== localPath;
-      if (replacesOpenProject) {
-        const refusal = handBackRefusal(summary);
-        if (refusal) return { status: 'error', message: refusal, reLogin: false };
-      }
-      return finishOpen(
-        { local_path: localPath, concurrent_session: false },
-        summary.permission,
-        summary.id,
-        reserveRemoteOpen(),
-        { hasUnpushedEdits: true },
-      );
-    },
-    [finishOpen, handBackRefusal],
   );
 
   /**
@@ -559,5 +491,5 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     ],
   );
 
-  return { openRemote, keepLocalCopy, takeRemoteDiscardingLocal };
+  return { openRemote, takeRemoteDiscardingLocal };
 }

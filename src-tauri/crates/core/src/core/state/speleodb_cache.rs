@@ -17,7 +17,7 @@
 //! the server has never seen, and those exist in no git anywhere - overwriting
 //! them is unrecoverable. So the plain verb REFUSES that replace
 //! ([`SpeleoDbError::WouldDiscardLocalEdits`], which crosses IPC as a typed
-//! routing signal for the keep-local / take-remote choice), and a caller that
+//! routing signal for the cancel / take-remote choice), and a caller that
 //! genuinely means to discard has to say so by name through
 //! [`AppState::replace_cache_stalx_abandoning`]. Same shape as the lock release
 //! (`speleodb_release_held_lock_best_effort` vs `_abandoning`): the safe verb is
@@ -175,7 +175,7 @@ impl AppState {
         // transient `SQLITE_BUSY`, and in both cases a read-write open would have
         // recovered work that reading the silence as "clean" would have overwritten.
         // Refusing is recoverable in a way overwriting is not: the frontend's prompt
-        // offers keep-local (nothing is touched) or an explicit take-remote.
+        // offers cancel (nothing is touched) or an explicit take-remote.
         let Some(local) = self.local_copy_state(project_id, dest) else {
             tracing::warn!(
                 project_id = %project_id,

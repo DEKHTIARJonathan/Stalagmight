@@ -3473,18 +3473,17 @@
       "copySaved": "Saved an unlinked copy to {{path}}. You are still working on the SpeleoDB-managed project."
     },
     "unpushedLocal": {
+      "cancelHint": "Cancel to preserve your unsynced changes, or confirm replacing them with the server version.",
       "title": "Changes on this computer are not on SpeleoDB",
-      "message": "\"{{name}}\" has already been opened on this computer, and that local copy has changes SpeleoDB has never seen. Downloading the server copy would delete them, so nothing has been downloaded yet.",
+      "message": "\"{{name}}\" has already been opened on this computer, and that local copy has changes SpeleoDB has never seen. Replacing the local copy would delete them, so your local changes have been left intact.",
       "lastEdited": "Local copy last edited: {{when}}",
       "lastEditedUnknown": "We could not tell when the local copy was last edited.",
-      "keepHint": "Keeping the local copy downloads nothing and overwrites nothing: it opens exactly as you left it, with your changes intact, and you can upload them to SpeleoDB later.",
-      "keepLocal": "Keep the local copy & open it",
       "takeRemote": "Take the server copy & discard my changes",
       "discardWarning": "Taking the server copy permanently deletes the changes made to \"{{name}}\" on this computer. They are not on SpeleoDB, so there is no other copy and this cannot be undone.",
       "takeRemoteConfirm": "Yes, discard my changes"
     },
     "transport": {
-      "refused": "Could not reach SpeleoDB at {{endpoint}} - the server refused the connection. Check that it is running and that the address is right.",
+      "refused": "Could not connect to SpeleoDB at {{endpoint}}. Check your network connection, the server address, and whether the server is running.",
       "timeout": "SpeleoDB at {{endpoint}} did not respond in time. Check your network connection and that the server is running.",
       "dns": "Could not find the SpeleoDB server at {{endpoint}}. Check the address in Settings and your network connection.",
       "tls": "Could not set up a secure connection to SpeleoDB at {{endpoint}}. Check the server's certificate and the address in Settings.",
@@ -3535,6 +3534,21 @@
       "lockedByYou": "Linked to SpeleoDB - write lock held by you",
       "lockedByOther": "Linked to SpeleoDB - write lock held by {{email}}"
     },
+    "projectListing": {
+      "permission": "Permission: {{permission}}",
+      "permissions": {
+        "WEB_VIEWER": "Web viewer",
+        "READ_ONLY": "Read-only",
+        "READ_AND_WRITE": "Read and write",
+        "ADMIN": "Admin",
+        "unknown": "Unknown"
+      },
+      "lockedBy": "LOCKED by {{email}}",
+      "lockedByYou": "LOCKED by you ({{email}})",
+      "unlocked": "Not locked",
+      "lockUnknown": "Lock status unknown",
+      "offlineCopy": "SpeleoDB is unreachable. Opened the last downloaded copy; it may be out of date."
+    },
     "recentInfo": {
       "prefix": "SpeleoDB: {{name}}",
       "lockedByYou": "Write-locked by you",
@@ -3557,7 +3571,7 @@
       "open": "Open",
       "refresh": "Refresh",
       "signedInAs": "Signed in as {{email}}",
-      "concurrentSession": "Your account already holds the write lock on this project in another session. Editing it from two sessions at once is unsupported and can lose edits.",
+      "concurrentSession": "Your account holds the write lock on this project. If it is open in another session, close it there before editing here to avoid losing changes.",
       "listFailed": "Could not load projects",
       "openFailed": "Could not open project"
     },
