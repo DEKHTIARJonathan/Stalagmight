@@ -20,7 +20,8 @@ The main window of an open project: the map, with **Sections** on the left,
 6. **Select** (`S`)
 7. **Merge** (`M`): merge two stations to connect sections. See
    [Merging stations](../workflows/merging-stations.md).
-8. **Comment**: put a comment on the map.
+8. **Comment**: comment on a station or shot. See
+   [Adding comments](../workflows/adding-comments.md).
 9. **Move**: move a segment, shot or station.
 10. **Measure** (`R`): measure on the map.
 11. **Display**: what the map shows.

@@ -10,6 +10,7 @@ How to use Stalagmight. Pages link to each other.
 - [Importing an Ariane survey](workflows/importing-from-ariane.md)
 - [Merging stations](workflows/merging-stations.md)
 - [Closing a loop](workflows/closing-a-loop.md)
+- [Adding comments](workflows/adding-comments.md)
 
 **Screens**
 - [Start screen](screens/start-screen.md)
