@@ -8,7 +8,7 @@ Releases are created through Claude Code. The process:
 2. Claude writes a human-readable summary into the `## [Unreleased]` section of `CHANGELOG.md`
 3. Claude commits the changelog update
 4. Claude runs `./scripts/release.sh <patch|minor|major> --no-edit --no-tag`
-5. Claude tags with `./scripts/release-tag.sh vX.Y.Z[-rcN]`, then pushes the
+5. Claude tags with `./scripts/release-tag.sh vX.Y.Z[-rc.N]`, then pushes the
    commit and the tag
 6. GitHub Actions builds the app and creates a release with artifacts
 
@@ -50,8 +50,8 @@ created by hand therefore still gets no gate, which is the reason to go through
 Preview the exact body before tagging - it is the same script CI runs:
 
 ```bash
-./scripts/release-notes.sh v0.5.0
-./scripts/release-notes.sh v0.5.0-rc1
+./scripts/release-notes.sh v0.5.2
+./scripts/release-notes.sh v0.5.2-rc.1
 ```
 
 The script picks the section, then appends the install instructions and the
@@ -59,9 +59,9 @@ checksum note that every release carries:
 
 | Tag | Notes come from |
 |-----|-----------------|
-| `v0.5.0`, after `release.sh` moved the section | `## [0.5.0]` |
-| `v0.5.0`, before that | `## [Unreleased]` (fallback) |
-| `v0.5.0-rc1` | `## [0.5.0]`, or `## [Unreleased]`, plus a candidate banner |
+| `v0.5.2`, after `release.sh` moved the section | `## [0.5.2]` |
+| `v0.5.2`, before that | `## [Unreleased]` (fallback) |
+| `v0.5.2-rc.1` | `## [0.5.2]`, or `## [Unreleased]`, plus a candidate banner |
 | anything with no matching section | `Release <tag>` (last resort) |
 
 A candidate deliberately reuses the notes of the version it is a candidate for -
@@ -72,17 +72,25 @@ an RC *is* that release, built early - so the notes are written once.
 Bump once, then cut as many candidates as you like before the real thing:
 
 ```bash
-./scripts/release.sh 0.5.0 --no-edit --no-tag      # bump + changelog, no tag
+./scripts/release.sh 0.5.2 --no-edit --no-tag      # bump + changelog, no tag
 git push
-./scripts/release-tag.sh v0.5.0-rc1                # then rc2, rc3, ...
-git push origin v0.5.0-rc1
-./scripts/release-tag.sh v0.5.0                    # the real one
-git push origin v0.5.0
+./scripts/release-tag.sh v0.5.2-rc.1               # then rc.2, rc.3, ...
+git push origin v0.5.2-rc.1
+./scripts/release-tag.sh v0.5.2                    # the real one
+git push origin v0.5.2
 ```
 
-`--no-tag` matters: without it `release.sh` creates `v0.5.0` immediately, which
+`--no-tag` matters: without it `release.sh` creates `v0.5.2` immediately, which
 would either publish the real release early or sit on the wrong commit once
-further fixes land before `rc2`.
+further fixes land before `rc.2`.
+
+**Candidates are `vX.Y.Z-rc.N`, with the dot** (`v0.5.1-rc.1` was the first).
+The rc number is then its own numeric identifier, so semver - and the updater -
+orders `rc.10` above `rc.9`; the undotted `rc10` compares as text and sorts
+below `rc9`. The release workflow keys on the exact shape too: only
+`vX.Y.Z-rc.N` bakes the Beta channel and publishes to Beta (see [Updater
+manifests](#updater-manifests)). `v0.5.0-rc1` to `-rc6` used the old shape;
+`release-tag.sh` now refuses it and names the dotted spelling.
 
 **Use `release-tag.sh` rather than a bare `git tag`.** The two scripts split the
 work: `release.sh` owns a *new version* (bump the four files, move the changelog,
@@ -94,10 +102,12 @@ between `v0.5.0-rc1` and `rc2`
 
 | Condition | Why |
 |-----------|-----|
-| the version files do not carry the tag's version | `v0.5.1-rc1` cut from a `0.5.0` tree builds `Stalagmight_0.5.0_*` artifacts and an About box reading `0.5.0` |
+| the version files do not carry the tag's version | `v0.5.2-rc.1` cut from a `0.5.1` tree builds `Stalagmight_0.5.1_*` artifacts and an About box reading `0.5.1` |
 | the working tree is dirty | a tag names a commit, so uncommitted notes are not the notes that publish |
 | the tag already exists | candidates are kept, not recycled - a tester's bug report names one |
-| the tag is malformed | the accepted shape matches what `release.yml` will mark as a pre-release |
+| the tag is not `vX.Y.Z` or `vX.Y.Z-rc.N` | those are the only shapes `release.yml` publishes; it asks the same `scripts/release-channel.sh` the workflow routes on. Another suffix (`-beta.1`) would publish a pre-release no Beta install is offered |
+| the tag is the old undotted `-rcN` | the message names the `-rc.N` spelling to use instead |
+| the tag is weekly-shaped | the weekly track is retired (see [The retired weekly track](#the-retired-weekly-track)) |
 | the changelog has no notes for it | the published body would be the bare string `Release v0.5.0` |
 | entries sit under `[Unreleased]` | they ship in the build and are named nowhere (`--allow-unannounced` to override) |
 
@@ -110,15 +120,24 @@ irreversible step: it starts a paid three-platform build and, for a bare
 `vX.Y.Z`, publishes as **Latest**. `--dry-run` does everything except create the
 tag, which is the cheapest way to read the body you are about to publish.
 
-- **The version files stay at the plain `0.5.0`.** The candidate lives only in
+- **The version files stay at the plain `0.5.2`.** The candidate lives only in
   the tag. This is not a style choice: the Windows MSI bundler rejects a
-  non-numeric pre-release identifier, so `0.5.0-rc1` in `tauri.conf.json` fails
+  non-numeric pre-release identifier, so `0.5.2-rc.1` in `tauri.conf.json` fails
   the Windows build outright. Artifacts are therefore named
-  `Stalagmight_0.5.0_*` for every candidate.
+  `Stalagmight_0.5.2_*` for every candidate.
+- **CI bakes the pre-release part into the app instead.** For a `vX.Y.Z-rc.N`
+  tag every build leg sets `STALAGMIGHT_PRERELEASE=rc.N` and
+  `STALAGMIGHT_CHANNEL=beta` in the environment of `pnpm tauri build`; the app
+  reads both at compile time. The first makes the app know it is `0.5.2-rc.1`,
+  so the updater offers it `rc.2` and then the final; the second makes a fresh
+  install from a candidate start on the Beta track. Neither is set for a final.
 - **A tag with a suffix is published as a GitHub pre-release**, so it never
   becomes "Latest" and is not handed to people expecting the final build.
-- **About shows the tag**, so a candidate reads `0.5.0-rc1` and cannot be
-  mistaken for the final release. Keep candidates rather than deleting them -
+- **A candidate reaches Beta installs, never Stable ones.** It publishes
+  `latest-beta.json` (and the weekly mirror); `latest-stable.json` changes only
+  on a final.
+- **About shows the full version**, so a candidate reads `0.5.2-rc.1` and cannot
+  be mistaken for the final release. Keep candidates rather than deleting them -
   a tester's bug report names one.
 
 ## Step-by-step (what Claude does)
@@ -165,14 +184,15 @@ them. **Do not run `release.sh` again** - it would bump you onto the *next* vers
 
 # 2. Render and READ the body that will actually be published, and check the
 #    version files, the tree and the tag in the same pass.
-./scripts/release-tag.sh vX.Y.Z-rcN --dry-run     # or vX.Y.Z for the real one
+./scripts/release-tag.sh vX.Y.Z-rc.N --dry-run    # or vX.Y.Z for the real one
 
 # 3. Tag the commit you mean, then push the tag.
-./scripts/release-tag.sh vX.Y.Z-rcN
-git push origin vX.Y.Z-rcN
+./scripts/release-tag.sh vX.Y.Z-rc.N
+git push origin vX.Y.Z-rc.N
 ```
 
-A tag with a suffix publishes as a pre-release; a bare `vX.Y.Z` publishes as **Latest**.
+A candidate publishes as a pre-release and reaches Beta installs; a bare
+`vX.Y.Z` publishes as **Latest** and reaches Stable and Beta installs.
 Check the `## [X.Y.Z] - YYYY-MM-DD` date before the final tag: `release.sh` stamped it
 the day the version was bumped, which may be well before the day it ships.
 `release-tag.sh` says so when they differ, but only *you* can decide which date the
@@ -189,9 +209,21 @@ release should carry.
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
    - `src-tauri/Cargo.lock` (this crate's stanza only)
-6. Moves `[Unreleased]` content under a new `## [X.Y.Z] - YYYY-MM-DD` header
-7. Commits: `chore: release vX.Y.Z`
-8. Tags: `vX.Y.Z`
+6. Regenerates `THIRD-PARTY-LICENSES.md` with `pnpm gen:third-party`. The
+   bundle stamps a hash of `src-tauri/Cargo.lock`, so a bump that left it
+   behind turned leak-scan red on every release commit
+   ([#648](https://github.com/Stalagmight/Stalagmight/issues/648)). This is the
+   one step that needs a toolchain: pnpm, `cargo-about` 0.9.1, and a
+   `node_modules` from a fresh `pnpm install --frozen-lockfile` (see
+   `scripts/gen-third-party-licenses.mjs`). A missing `pnpm` refuses before
+   anything is written; a failing generator reverts the version files and the
+   bundle. `RELEASE_GEN_THIRD_PARTY` names another command to run instead
+   (from the project root, no arguments), which is how `test-release.sh` stubs
+   it
+7. Moves `[Unreleased]` content under a new `## [X.Y.Z] - YYYY-MM-DD` header
+8. Commits the four version files, `THIRD-PARTY-LICENSES.md` and `CHANGELOG.md`:
+   `chore: release vX.Y.Z`
+9. Tags: `vX.Y.Z`
 
 ### Flags
 
@@ -199,7 +231,7 @@ release should carry.
 |------|--------|
 | `--no-edit` | Skip opening `$EDITOR` on the changelog (required for Claude) |
 | `--dry-run` | Print what would happen without making changes |
-| `--no-tag` | Bump, move the changelog and commit, but create no tag - use when the next thing you cut is a candidate (`v0.5.0-rc1`) rather than the release |
+| `--no-tag` | Bump, move the changelog and commit, but create no tag - use when the next thing you cut is a candidate (`v0.5.2-rc.1`) rather than the release |
 
 ## What `scripts/release-tag.sh` does
 
@@ -207,9 +239,10 @@ Tags a tree that is *already* at the right version - see [Release
 candidates](#release-candidates) for what it refuses and why. It writes nothing
 but the tag: no version files, no changelog, no push.
 
-1. Checks the tag's shape, and that it does not already exist
+1. Checks the tag's shape - `vX.Y.Z` or `vX.Y.Z-rc.N`, as `scripts/release-channel.sh`
+   classifies it - and that it does not already exist
 2. Checks the working tree is clean
-3. Checks all 4 version files carry the tag's base version (`v0.5.0-rc1` -> `0.5.0`)
+3. Checks all 4 version files carry the tag's base version (`v0.5.2-rc.1` -> `0.5.2`)
 4. Renders the release body with `release-notes.sh`, and refuses an empty one
 5. Refuses if entries under `[Unreleased]` would go unpublished
 6. Prints the body, then creates the annotated tag
@@ -236,9 +269,9 @@ but the tag: no version files, no changelog, no push.
 
 | Job | Runner | Does |
 |-----|--------|------|
-| `verify` | `ubuntu-latest` | TypeScript check + Rust tests + a release-profile `cargo check --release`, plus the third-party license bundle gate (leak-scan runs on branch/PR events only, so a tag push would otherwise skip it) - mostly a subset of the CI `check` job, not the whole gate. It does not run `cargo fmt --check`, clippy, vitest, the file-size ratchets or the private-leak/em-dash scans; those gate the merge, and a tag is cut from already-merged code |
-| `build` | `ubuntu-latest`, `macos-latest`, `windows-latest` | `pnpm tauri build`, collects that platform's bundles, checksums them, uploads them as a job artifact |
-| `release` | `ubuntu-latest` | Downloads all three artifact sets, re-verifies the checksums, asserts every platform is represented, extracts the changelog section, creates the GitHub release via the `gh` CLI |
+| `verify` | `ubuntu-latest` | Classifies the tag with `scripts/release-channel.sh` (its candidate identity becomes the job's outputs), then TypeScript check + Rust tests + a release-profile `cargo check --release`, plus the third-party license bundle gate (leak-scan runs on branch/PR events only, so a tag push would otherwise skip it) - mostly a subset of the CI `check` job, not the whole gate. It does not run `cargo fmt --check`, clippy, vitest, the file-size ratchets or the private-leak/em-dash scans; those gate the merge, and a tag is cut from already-merged code |
+| `build` | `ubuntu-latest`, `macos-latest`, `windows-latest` | `pnpm tauri build` (with `STALAGMIGHT_PRERELEASE` and `STALAGMIGHT_CHANNEL` exported for a candidate only), collects that platform's bundles, checksums them, uploads them as a job artifact |
+| `release` | `ubuntu-latest` | Classifies the tag again, preflights the `updater` release, downloads all three artifact sets, re-verifies the checksums, asserts every platform is represented, extracts the changelog section, creates the GitHub release via the `gh` CLI, then publishes the updater manifests (see [Updater manifests](#updater-manifests)) |
 
 - **Artifacts**: `.deb` / `.rpm` / `.AppImage` (Linux), `.dmg` (macOS, Apple Silicon
   only), `.msi` / `-setup.exe` (Windows), plus a `SHA256SUMS` covering all of them
@@ -341,7 +374,14 @@ confirmed by a run that produces the files.
 
 A rehearsal covers everything except the `release` job, so two things stay
 unproven until a real tag: `actions/download-artifact` and the publish step
-itself. Watch the first tagged run's `release` job rather than assuming.
+itself. A rehearsal also bakes no candidate identity: only a tag ref is
+classified, so a dispatch from a branch builds like a final.
+
+The cheap real tag is a candidate. It runs the whole `release` job, publishes
+`latest-beta.json` and the weekly mirror, and reaches Beta installs directly,
+while `latest-stable.json` is untouched until the final. So after any change to
+the pipeline, cut a candidate first and watch its `release` job rather than
+assuming.
 
 ### The one macOS check no workflow can do
 
@@ -464,10 +504,41 @@ publish".
 
 ## Updater manifests
 
-Two update tracks exist, **stable** and **weekly**, each user-selectable at
-runtime. Each track's manifest is a static JSON file, `latest-stable.json` or
-`latest-weekly.json`, published as an asset on **`updater`**: a rolling
-GitHub prerelease with no release notes of its own, created **once, by
+Two update tracks exist, each user-selectable in Settings
+([#650](https://github.com/Stalagmight/Stalagmight/issues/650)):
+
+| Track | Gets | Manifest |
+|-------|------|----------|
+| **Stable** (the default) | final releases only | `latest-stable.json` |
+| **Beta** | release candidates, then the final they lead to | `latest-beta.json` |
+
+A build from a candidate tag starts on Beta (it is built with
+`STALAGMIGHT_CHANNEL=beta`, see [Release candidates](#release-candidates));
+every other build starts on Stable. Switching back to Stable does not
+downgrade: an install on a candidate stays on it until the next final, which
+is newer.
+
+A third file, `latest-weekly.json`, is a byte-for-byte copy of
+`latest-beta.json`, rewritten on every Beta publish. It exists only for 0.5.0
+and 0.5.1 installs set to the retired Weekly track, which read it - see [The
+retired weekly track](#the-retired-weekly-track).
+
+Which tag publishes what:
+
+| Tag | Manifest version | Publishes | The build bakes |
+|-----|------------------|-----------|-----------------|
+| `vX.Y.Z` (final) | `X.Y.Z` | `latest-stable.json`, `latest-beta.json`, `latest-weekly.json` | nothing |
+| `vX.Y.Z-rc.N` (candidate) | `X.Y.Z-rc.N` | `latest-beta.json`, `latest-weekly.json` | `STALAGMIGHT_PRERELEASE=rc.N`, `STALAGMIGHT_CHANNEL=beta` |
+| anything else (`-rcN`, `-weekly.*`, any other suffix) | (none) | nothing, with a `::notice::` | nothing |
+
+The artifacts are plain `X.Y.Z` in every row. `scripts/release-channel.sh
+classify <tag>` is the one definition of this table: the `verify` job, the
+`release` job's preflight and publish steps, `release-tag.sh` and the repoint
+workflow all ask it, so none of them can disagree about a tag shape, and
+`test-release.sh` pins its output.
+
+Each manifest is a static JSON file published as an asset on **`updater`**: a
+rolling GitHub prerelease with no release notes of its own, created **once, by
 hand**, per issue #579 (`gh release create updater --prerelease --title
 "Updater manifests" --notes "Rolling manifests for the auto-updater. Not a
 release - see docs/releasing.md."`). Nothing in this repo's automation ever
@@ -482,8 +553,8 @@ has to act on once.
 Before anything is made public, a **"Preflight rolling updater release" step**
 runs early in the `release` job (right after "Determine updater enablement",
 well before `gh release create`): when `UPDATER_ON` is true and the tag
-matches either strict track shape (below), it confirms `gh release view
-updater` succeeds and fails loudly - naming this doc - if it does not. This
+publishes a manifest at all (a final or a candidate), it confirms `gh release
+view updater` succeeds and fails loudly - naming this doc - if it does not. This
 has to happen *before* the tag's own release goes public: the "Publish
 updater manifest" step's own identical check (kept as a backup for the race
 where the release disappears in between) runs far too late to prevent the bad
@@ -493,6 +564,16 @@ now-public release with no manifest update, and a re-run cannot recover by
 re-running the whole job - `gh release create` refuses a tag that already
 exists.
 
+For a candidate the preflight also keeps **Beta forward-only**: when
+`latest-beta.json` already exists on `updater`, its `version` must be lower
+than the candidate's (`scripts/release-channel.sh is-newer`), or the step fails
+before anything is public. That catches an `rc.1` pushed after `rc.2`, and a
+candidate for a version whose final already shipped. A missing
+`latest-beta.json` (the first candidate ever) passes; one whose version cannot
+be read fails closed. A final always publishes; see [Candidate versions and the
+forward-only Beta track](#candidate-versions-and-the-forward-only-beta-track)
+for what that does not cover.
+
 The `release` job's "Publish updater manifest" step (`.github/workflows/release.yml`)
 runs after `gh release create`, once the tag's own release and its artifacts
 exist. It:
@@ -500,31 +581,25 @@ exist. It:
 1. Skips, with an `::notice::`, when updater artifacts are CI-side disabled
    (no `plugins.updater.pubkey` yet - see [Update artifacts and
    signing](#update-artifacts-and-signing)).
-2. Derives the track from the tag using the same **strict, anchored** shapes
-   the preflight step and the repoint workflow use - not a substring match:
-   `^v[0-9]+\.[0-9]+\.[0-9]+-weekly\.[0-9]{8}$` -> `weekly`;
-   `^v[0-9]+\.[0-9]+\.[0-9]+$` -> `stable`; anything else (an `-rc*`
-   candidate, or a malformed weekly-looking tag like `v0.5.1-weekly.oops`)
-   touches **neither** manifest - the step logs `no manifest for tag` and
-   exits cleanly. A `*-weekly.*` substring match once let a malformed tag
-   still clobber `latest-weekly.json`; the anchored regex is what closes
-   that. **A release candidate is never offered to updater clients on
-   either track.**
+2. Routes on the job's tag classification (the table above), from the same
+   strict, anchored patterns the preflight and the repoint workflow use. A
+   tag that publishes nothing (the old `-rcN` shape, a weekly-looking tag,
+   any other suffix) logs `no updater manifest for tag` as a `::notice::`
+   and exits cleanly. **A candidate is offered to Beta installs only; Stable
+   never sees one.**
 3. Reconciles the manifest version against what was actually **built**,
-   before trusting the tag at all. Version-baking currently comes from
-   whatever the tree already said at build time (proper tag-driven
-   version-baking lands via `workflow_call` in a later PR), so a directly
-   pushed weekly tag can build a stale tree version while the tag claims a
-   newer one - a `0.5.0`-baked build published under a `0.5.1-weekly.<date>`
-   manifest would have updater clients see `0.5.1-weekly.<date>` as newer
-   than their installed `0.5.0`, download it, and relaunch the exact same
-   `0.5.0` build forever. The step parses the version baked into the
-   artifacts from their filenames (`Stalagmight_X.Y.Z_...` - the same
-   pattern the completeness check globs), asserts every artifact agrees, and
-   requires: for **weekly**, the tag's numeric base equals the artifact
-   version; for **stable**, the tag version equals the artifact version
-   exactly. Any mismatch is a named `::error::` and the step exits 1 rather
-   than publish a manifest that would loop clients on a stale build.
+   before trusting the tag at all. The version files, not the tag, decide
+   the `X.Y.Z` a build carries, so a hand-pushed `v0.5.2-rc.1` on a tree
+   still at `0.5.1` builds `0.5.1` artifacts while the manifest would claim
+   `0.5.2-rc.1` - updater clients would see that as newer than what they
+   run, download it, and relaunch the exact same build forever. The step
+   parses the version baked into the artifacts from their filenames
+   (`Stalagmight_X.Y.Z_...` - the same pattern the completeness check
+   globs), asserts every artifact agrees, and requires it to equal the
+   tag's base `X.Y.Z`, for a final and a candidate alike (a candidate's
+   artifacts are plain `X.Y.Z` too). Any mismatch is a named `::error::` and
+   the step exits 1 rather than publish a manifest that would loop clients
+   on a stale build.
 4. Reads the `MACOS-SIGNED` marker's captured value (see [Update artifacts
    and signing](#update-artifacts-and-signing)) to decide `--include-darwin`
    - **only `developer-id` enters the manifest.** `adhoc` is excluded with a
@@ -537,12 +612,15 @@ exist. It:
      fails loudly rather than guessing - a silent default there would
      publish a manifest with no macOS entry, or the wrong one, on an
      otherwise-green run.
-5. Runs `scripts/gen-updater-manifest.mjs` against the job's own
-   `release-artifacts/` directory, reusing the same rendered `release-body.md`
-   that `gh release create` already published as this release's notes.
-6. Uploads the result to the `updater` release as `latest-<track>.json`, with
-   `--clobber` - each publish on a track fully replaces the previous manifest
-   for that track.
+5. Runs `scripts/gen-updater-manifest.mjs` once against the job's own
+   `release-artifacts/` directory, with the manifest version from the table
+   above, reusing the same rendered `release-body.md` that `gh release
+   create` already published as this release's notes. It then copies the
+   result to every other file the tag publishes, so they are byte-identical,
+   `pub_date` included.
+6. Uploads them all to the `updater` release in one `gh release upload
+   --clobber` - each publish fully replaces the previous content of every
+   file it writes.
 
 ### `scripts/gen-updater-manifest.mjs`
 
@@ -565,10 +643,11 @@ hard-fails - naming what is wrong - on:
 
 - a missing artifact or signature
 - an ambiguous match (more than one file fits a platform's pattern)
-- a malformed `--version` or a malformed `--tag` (both checked against the
-  same `vX.Y.Z[-suffix]`/`X.Y.Z[-suffix]` shape `release-tag.sh` accepts -
-  `--tag` flows into a URL path segment, and the script is also exposed as a
-  bare `pnpm` command a caller could invoke by hand)
+- a malformed `--version` or a malformed `--tag` (checked against
+  `X.Y.Z[-suffix]`/`vX.Y.Z[-suffix]` - wider than the two shapes the
+  workflows pass, since `release-channel.sh` rather than this script decides
+  which tags publish; `--tag` flows into a URL path segment, and the script
+  is also exposed as a bare `pnpm` command a caller could invoke by hand)
 - an empty signature file, **or one that is not shaped like a real minisign
   signature** (an `untrusted comment:` header line followed by a base64
   body line - Tauri's signer's own format). A merely-non-empty check let a
@@ -590,11 +669,18 @@ must not reach the paid build matrix with a broken generator either).
 `contents: write`, guarded to this repository) exists for the day a manifest
 needs to point somewhere other than what the automatic publish wrote - most
 often "stable regressed, repoint `latest-stable.json` back at the previous
-release." Given a `track`, a past `tag`, and an explicit `include-darwin`
-input, it downloads that release's update artifacts + sigs, regenerates the
-manifest with that release's own notes (`gh release view <tag> --json
-body`), and clobber-uploads it - the same file the automatic publish step
-would have written for that tag, republished now.
+release." Given a `track` (`stable` or `beta`), a past `tag`, and an explicit
+`include-darwin` input, it downloads that release's update artifacts + sigs,
+regenerates the manifest with that release's own notes (`gh release view <tag>
+--json body`), and clobber-uploads it - the same file the automatic publish
+step would have written for that tag, republished now.
+
+The tag has to be one the track could have published, checked through the
+same `release-channel.sh`: `stable` takes a bare `vX.Y.Z` only, `beta` a bare
+tag or a `vX.Y.Z-rc.N` candidate, and the manifest version follows the table
+above (`X.Y.Z-rc.N` for a candidate). Repointing `beta` rewrites the
+`latest-weekly.json` mirror with it. Unlike the release job it applies no
+forward-only check: moving a track backwards is what it is for.
 
 **`include-darwin` is a required choice input with no default, never
 inferred from whether a `.app.tar.gz` pair merely exists on the release.**
@@ -625,56 +711,81 @@ the bad build until the next good release reaches them normally.
 partway through.** `gh release create` and `gh release upload updater
 --clobber` are two separate steps; a failure between them (or a failure
 inside the manifest-generation step itself) leaves the tag's own GitHub
-release published with no updated manifest, or with the previous track's
-manifest left in place - `latest-<track>.json` never rotated to the new
-tag. There is no re-run of just the failed step: re-running the `release`
-job would try to `gh release create` a tag that already exists and fail
-immediately. Repoint the track at the tag that already has its artifacts
-published instead.
+release published with the previous manifests left in place - they never
+rotated to the new tag. There is no re-run of just the failed step:
+re-running the `release` job would try to `gh release create` a tag that
+already exists and fail immediately. Repoint each track the tag should have
+published to (a final: `stable` and `beta`; a candidate: `beta`) at the tag
+that already has its artifacts published instead.
 
 ```bash
 gh workflow run repoint-updater-manifest.yml \
-  -f track=stable -f tag=v0.5.0 -f include-darwin=true
+  -f track=stable -f tag=v0.5.1 -f include-darwin=true
+gh workflow run repoint-updater-manifest.yml \
+  -f track=beta -f tag=v0.5.2-rc.1 -f include-darwin=true
 ```
 
-### The weekly version invariant
+### Candidate versions and the forward-only Beta track
 
-A weekly build's version carries a `-weekly.YYYYMMDD` suffix, which is a
-semver **pre-release** identifier - `0.5.1-weekly.20260817` sorts *below*
-plain `0.5.1`, not above it, so "just append `-weekly.<today>` to the last
-stable's base" would be wrong: the first weekly cut after `0.5.1` ships would
-compare as older than `0.5.1` itself and never reach anyone on that stable.
-The scheme that later PR in the #579 arc implements instead bakes each
-weekly onto the **next unconsumed base** - the base no stable release has
-shipped yet. That keeps every weekly version strictly above the last stable
-and strictly below the next one: after `0.5.1` ships, weeklies are cut as
-`0.5.2-weekly.YYYYMMDD` until `0.5.2` itself ships, at which point they
-converge - `0.5.2` is not "older" than `0.5.2-weekly.20260901`, it is the
-release that pre-release series was building toward, and stable correctly
-supersedes it.
+A candidate's manifest version is `X.Y.Z-rc.N`, a semver pre-release of the
+version it leads to, so every step of a release train is strictly newer than
+the one before it: `0.5.1` < `0.5.2-rc.1` < `0.5.2-rc.2` < `0.5.2`. That is
+the ordering the updater's "only ever offer something newer" comparison needs,
+and it is why the rc number is dotted (`rc.10` > `rc.9`, but `rc10` < `rc9`).
+It is also why the build bakes `STALAGMIGHT_PRERELEASE`: an `rc.1` install that
+believed it was plain `0.5.2` would never be offered `0.5.2-rc.2` (lower) or
+the final (equal).
 
-### The weekly-track supersession warning
+Beta only moves forward on its own: the preflight refuses a candidate that is
+not newer than what `latest-beta.json` already announces. Two cases it does not
+cover:
 
-The weekly manifest, once that later PR starts cutting weekly tags on a
-schedule, only ever moves forward: each publish clobbers the previous
-`latest-weekly.json`. Given the invariant above, a problem only arises when
-a weekly tag's base is **strictly greater** than the stable base being cut -
-that means a weekly series already targets a version beyond the stable
-about to ship, so weekly-track users on that build (or a later one in the
-same series) will never be offered it; there is no mechanism for a stable
-release to "supersede" a weekly build already aimed past it. At an *equal*
-base the two converge as described above, and the stable correctly
-supersedes the weekly series - not a condition to warn about.
-`scripts/release-tag.sh` warns about exactly the strictly-greater case
-(without blocking - it may be an intentional patch cut behind a weekly build
-that shipped nothing users need), comparing versions numerically
-component-by-component (so `0.5.10` correctly reads as greater than `0.5.9`,
-not less, the way a lexical comparison would get wrong) and taking the
-**highest** weekly base found across every `v*-weekly.*` tag, not merely the
-first match. Weekly tags themselves are refused outright by
-`release-tag.sh` - they are reserved for the automated weekly pipeline
-(#579, lands separately), never hand-typed, and a hand-typed one could
-collide with or masquerade as a real one.
+- **A final always publishes to Beta**, even when Beta already holds a later
+  candidate (a `0.5.2` hotfix cut while `0.5.3-rc.1` is out). Beta then points
+  at `0.5.2` until the next `0.5.3` candidate or final: installs already on
+  `0.5.3-rc.1` are offered nothing meanwhile, and installs behind it get
+  `0.5.2`. Repoint `beta` at the candidate afterwards if that matters.
+- **Two release runs publishing at once.** The check runs at preflight, so
+  whichever run uploads last wins.
+
+### The retired weekly track
+
+0.5.0 and 0.5.1 offered a Weekly track in Settings that reads
+`latest-weekly.json`, but the scheduled weekly builds (#579 part C) never
+landed and no weekly tag exists, so an install set to Weekly was offered
+nothing at all. Beta replaces it:
+
+- Every Beta publish, and every repoint of `beta`, also writes
+  `latest-weekly.json` as a byte-identical copy, so a 0.5.0 or 0.5.1 install
+  still set to Weekly is offered candidates and finals exactly like a Beta one.
+  Those versions compare with the updater plugin's default plain-semver
+  ordering, which already ranks `0.5.1` < `0.5.2-rc.1` < `0.5.2`.
+- A config that says `update_track = "weekly"` is read as Beta from 0.5.2 on
+  (see [configuration.md](configuration.md#update-track)).
+- `release-tag.sh` refuses weekly-shaped tags, and a hand-pushed one publishes
+  nothing. Its weekly-supersession note (a final whose base is below some
+  `v*-weekly.*` tag's) is still there, but it cannot fire while no weekly tag
+  exists.
+- Scheduled weekly or nightly builds are out of scope: each release build costs
+  about 181 billed minutes and a manual approval, and a candidate cut on demand
+  serves the same purpose.
+
+### Rehearsing an update from a candidate
+
+A candidate reaches Beta installs directly, so the update path is rehearsed
+against real signed artifacts just by cutting one - no hand-made manifest:
+
+1. Tag and push `vX.Y.Z-rc.N` as usual. The release job publishes
+   `latest-beta.json` and the weekly mirror pointing at it.
+2. On an install of an earlier version, switch Settings to Beta (a 0.5.0 or
+   0.5.1 install can stay on Weekly) and check for updates: it is offered the
+   candidate.
+3. A Stable install is not offered it. `latest-stable.json` changes only on a
+   final, so it is the check that the candidate stayed off Stable.
+
+[#650](https://github.com/Stalagmight/Stalagmight/issues/650) has the full
+0.5.2 test plan: rc.1 from a 0.5.1 Weekly install, rc.1 to rc.2 on Beta, rc.2
+to the final, and Stable untouched throughout.
 
 ## Testing the release tooling
 
@@ -682,17 +793,22 @@ collide with or masquerade as a real one.
 ./scripts/test-release.sh
 ```
 
-Covers all three scripts. For `release.sh` it clones the repo to a temp directory and
-drives the real script through a normal bump, a `--no-tag` bump, and seven refusal
+Covers all four scripts. For `release.sh` it clones the repo to a temp directory and
+drives the real script through a normal bump, a `--no-tag` bump, and the refusal
 or recovery cases (re-releasing the current version, an existing tag, a drifted
 version-string format, an empty `[Unreleased]`, a `Cargo.lock` already out of step,
-a `Cargo.lock` whose stanza is missing entirely, and a failing `$EDITOR`), plus a
-CRLF checkout, asserting each time that the tree is left clean and nothing was
-tagged. For `release-tag.sh` it drives the whole bump-then-tag flow in a clone,
-then each refusal above, asserting every time that the run failed, said why, and
+a `Cargo.lock` whose stanza is missing entirely, a failing `$EDITOR`, and a failing
+or missing license-bundle generator), plus a CRLF checkout, asserting each time that
+the tree is left clean and nothing was tagged. `RELEASE_GEN_THIRD_PARTY` points every
+case at a stub generator that records the `Cargo.lock` it saw, which is how case 1
+proves the bundle is regenerated after the bump. For `release-tag.sh` it drives the
+whole bump-then-tag flow in a clone, then each refusal above (the `-rcN`, other-suffix
+and weekly shapes included), asserting every time that the run failed, said why, and
 left no tag. For `release-notes.sh` it runs the real script against a
 fixture changelog and checks the section each tag shape resolves to, the
-candidate banner, and that an empty changelog still yields a usable body.
+candidate banner, and that an empty changelog still yields a usable body. For
+`release-channel.sh` it pins the full classification of finals, `rc.N` candidates
+and every shape that publishes nothing, and the version ordering the Beta guard uses.
 
 Run it after touching any of them, including `lib/release-version.sh`, which the
 two entry points share; it takes a few seconds and needs no network.
@@ -740,6 +856,12 @@ too, so it is safe to check before you start.
 A shape problem rather than a value one - the rewrite anchors on the single
 `name = "stalagmight"` stanza with its `version` on the following line. Look at
 `src-tauri/Cargo.lock` before doing anything else; nothing was modified.
+
+### "regenerating THIRD-PARTY-LICENSES.md (...) failed"
+The version files and the bundle are reverted; nothing was committed. The generator
+needs `cargo-about` 0.9.1 (`cargo install cargo-about --version 0.9.1 --locked
+--features cli`) and a fresh `pnpm install --frozen-lockfile`; its own error above
+the message says which is missing. Fix that and re-run.
 
 ### `$EDITOR` exited non-zero
 The version files are reverted automatically, but `CHANGELOG.md` keeps the moved
