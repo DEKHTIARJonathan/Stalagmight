@@ -35,7 +35,7 @@ The main window of an open project: the map, with **Sections** on the left,
 17. Pin or hide the **Details** panel.
 18. **Data**: tables of sections and raw shot data.
 19. **Details**: project statistics or the selected item. **Warnings**: problems
-    found in the data.
+    found in the data, see the [Warnings panel](warnings-panel.md).
 
 ## Details
 

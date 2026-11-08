@@ -5,6 +5,7 @@ How to use Stalagmight. Pages link to each other.
 **Workflows**
 - [Creating a new survey](workflows/creating-a-new-survey.md)
 - [Setting a zero datum](workflows/setting-a-zero-datum.md)
+- [Fixing warnings](workflows/fixing-warnings.md)
 
 **Screens**
 - [Start screen](screens/start-screen.md)
@@ -14,6 +15,7 @@ How to use Stalagmight. Pages link to each other.
 - [Placement mode](screens/placement-mode.md)
 - [Station context menu](screens/station-context-menu.md)
 - [Edit Station dialog](screens/edit-station-dialog.md)
+- [Warnings panel](screens/warnings-panel.md)
 
 **Concepts**
 - [Sections, shots and stations](concepts/sections-shots-stations.md)

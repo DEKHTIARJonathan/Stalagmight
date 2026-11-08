@@ -14,6 +14,7 @@
    is fine, it can be moved later.
 7. Optional: [set a zero datum](setting-a-zero-datum.md) to put the survey at
    its real GPS position.
+8. Check the **Warnings** tab and [fix what it finds](fixing-warnings.md).
 
 Tick **Save project file immediately** to create the file right away. Otherwise
 it is saved once you add data.
