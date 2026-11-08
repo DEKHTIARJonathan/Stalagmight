@@ -17,7 +17,7 @@ Right-clicking the first station and picking **Merge With...** does steps 1 and
 
 The closure shows as a dashed line. The survey itself does not move. To see it
 adjusted to its closures, switch to **Plan**, or pick **Closures Computed View**
-under **Display**.
+in the [Display menu](../screens/display-menu.md).
 
 ## Step details
 

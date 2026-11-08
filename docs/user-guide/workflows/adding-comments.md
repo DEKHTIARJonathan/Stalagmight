@@ -19,6 +19,6 @@
 
 - Clicking a station or shot that already has a comment opens it for editing.
   Clearing the text removes the comment.
-- **Display** has **Station comments** and **Shot comments** to show them on
-  the map.
+- The [Display menu](../screens/display-menu.md) has **Station comments** and
+  **Shot comments** to show them on the map.
 - The small arrow on **Comment** switches to **Move comment**.

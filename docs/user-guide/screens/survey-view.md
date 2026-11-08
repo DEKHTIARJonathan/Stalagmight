@@ -24,7 +24,7 @@ The main window of an open project: the map, with **Sections** on the left,
    [Adding comments](../workflows/adding-comments.md).
 9. **Move**: move a segment, shot or station.
 10. **Measure** (`R`): measure on the map.
-11. **Display**: what the map shows.
+11. **Display**: what the map shows. See the [Display menu](display-menu.md).
 
 **Panels and map**
 

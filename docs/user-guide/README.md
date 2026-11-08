@@ -27,6 +27,7 @@ How to use Stalagmight. Pages link to each other.
 - [Import report](screens/import-report.md)
 - [Merge Stations dialog](screens/merge-stations-dialog.md)
 - [Create Loop Closure dialog](screens/closure-dialog.md)
+- [Display menu](screens/display-menu.md)
 
 **Concepts**
 - [Sections, shots and stations](concepts/sections-shots-stations.md)
