@@ -705,16 +705,21 @@ The version string lives in 4 tracked files. `release.sh` updates all of them:
 |------|-------|-------------------------|
 | `package.json` | `"version"` | yes |
 | `src-tauri/tauri.conf.json` | `"version"` | yes |
-| `src-tauri/Cargo.toml` | `version` | yes |
-| `src-tauri/Cargo.lock` | the `name = "stalagmight"` entry | yes |
+| `src-tauri/Cargo.toml` | `workspace.package.version` and local dependency versions | yes |
+| `src-tauri/Cargo.lock` | all nine workspace package entries | yes |
 
-`Cargo.lock` records the crate's own version, and because nothing here builds with
+All workspace packages inherit `workspace.package.version`, so app and library
+versions move together. The publishable local dependencies inherit their paths and
+version requirements from `workspace.dependencies`. Vendored crates and standalone
+helper tools keep their own versions.
+
+`Cargo.lock` records each workspace crate's version, and because nothing here builds with
 `cargo --locked`, a mismatch never fails a build - the next `cargo` invocation just
 rewrites the lock in place, leaving an unexplained dirty file in a tree the release
 reported as clean. That is how the lock sat at `0.2.0` while everything else said
 `0.5.0`. `release.sh` bumps it now
-([#352](https://github.com/Stalagmight/Stalagmight/issues/352)), rewriting only the
-line after `name = "stalagmight"` - every dependency has a `version` line too, so a
+([#352](https://github.com/Stalagmight/Stalagmight/issues/352)), rewriting the version lines for the nine
+workspace packages - every dependency has a `version` line too, so a
 blanket substitution would rewrite the whole file. The pre-flight refuses to start
 if the lock is already out of step with `package.json`, rather than quietly bumping
 past a discrepancy worth looking at.

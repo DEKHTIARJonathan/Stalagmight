@@ -1,6 +1,6 @@
 [package]
 name = "stalagmight"
-version = "0.5.0"
+version.workspace = true
 description = "Cave Survey Processing Application"
 authors = ["Stalagmight Team"]
 edition = "2021"
@@ -26,10 +26,9 @@ resolver = "2"
 # members, which would drag the vendored crate into the fmt/clippy gates.
 exclude = ["vendor/compass_data"]
 
-# Shared keys future members inherit via `key.workspace = true`. Deliberately
-# no `version` here: members declare their own 0.0.0, and the root package
-# keeps its real version line above (scripts/release.sh asserts on it).
+# Shared package metadata, including the app version bumped by scripts/release.sh.
 [workspace.package]
+version = "0.5.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 
@@ -38,6 +37,8 @@ license = "AGPL-3.0-or-later"
 # additive). tauri + its plugins, tauri-build, and the vendored compass_data
 # path dep stay declared on the packages that use them.
 [workspace.dependencies]
+stalagmight-models = { path = "crates/models", version = "0.5.0" }
+stalagmight-persistence = { path = "crates/persistence", version = "0.5.0" }
 serde = "1"
 serde_json = "1"
 rusqlite = "0.41"

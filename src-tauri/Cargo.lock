@@ -4670,7 +4670,7 @@ dependencies = [
 
 [[package]]
 name = "stalagmight-core"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4698,7 +4698,7 @@ dependencies = [
 
 [[package]]
 name = "stalagmight-export"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4720,7 +4720,7 @@ dependencies = [
 
 [[package]]
 name = "stalagmight-models"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "serde",
@@ -4732,7 +4732,7 @@ dependencies = [
 
 [[package]]
 name = "stalagmight-parsers"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4753,7 +4753,7 @@ dependencies = [
 
 [[package]]
 name = "stalagmight-persistence"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4771,7 +4771,7 @@ dependencies = [
 
 [[package]]
 name = "stalagmight-speleodb"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "http",
@@ -4794,7 +4794,7 @@ dependencies = [
 
 [[package]]
 name = "stalagmight-telemetry"
-version = "0.0.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4813,7 +4813,7 @@ dependencies = [
 
 [[package]]
 name = "stalx-reader"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "rusqlite",

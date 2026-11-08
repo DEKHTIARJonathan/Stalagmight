@@ -1,6 +1,6 @@
 [package]
 name = "stalx-reader"
-version = "0.1.0"
+version.workspace = true
 description = "Read-only reader for Stalagmight .stalx project files"
 repository = "https://github.com/Stalagmight/Stalagmight"
 readme = false
@@ -12,8 +12,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
-stalagmight-models = { path = "../models", version = "=0.1.0" }
-stalagmight-persistence = { path = "../persistence", version = "=0.1.0" }
+stalagmight-models = { workspace = true }
+stalagmight-persistence = { workspace = true }
 rusqlite = { workspace = true, features = ["bundled", "hooks", "limits"] }
 tempfile = { workspace = true }
 thiserror = { workspace = true }

@@ -20,9 +20,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Mirrors vite.config.ts so the UI's About version and telemetry's
     // app_version agree. Falls back to `unknown` when git is unavailable (e.g. a
     // source tarball).
-    let pkg_version = app_pkg_version()?;
+    // All workspace packages inherit the application version.
+    let pkg_version = env!("CARGO_PKG_VERSION");
     let short_hash = git_short_hash();
-    let app_version = if let Some(tag) = release_tag(&pkg_version) {
+    let app_version = if let Some(tag) = release_tag(pkg_version) {
         tag.trim_start_matches('v').to_string()
     } else if std::env::var("CI").is_ok() {
         format!("{pkg_version}-{short_hash}")
@@ -80,44 +81,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
-}
-
-/// The application's version, read from the root package manifest two levels
-/// up. Workspace member crates are versioned 0.0.0 on purpose, so this crate's
-/// own CARGO_PKG_VERSION is useless here - APP_VERSION must carry the version
-/// the app releases under (scripts/release.sh asserts on that manifest line).
-fn app_pkg_version() -> Result<String, Box<dyn std::error::Error>> {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")?;
-    let root_manifest = std::path::Path::new(&manifest_dir).join("../../Cargo.toml");
-    // A root version bump must re-derive APP_VERSION.
-    println!("cargo::rerun-if-changed=../../Cargo.toml");
-    let contents = std::fs::read_to_string(&root_manifest)?;
-    package_version(&contents).ok_or_else(|| {
-        format!(
-            "no `version = \"...\"` line in the [package] table of {}",
-            root_manifest.display()
-        )
-        .into()
-    })
-}
-
-/// First `version = "..."` line inside the `[package]` table: the scan is
-/// anchored on the `[package]` header and stops at the next table header (a
-/// line starting with `[`), so it stays correct even if `[package]` stops
-/// being the manifest's first table. The deliberate absence of a
-/// [workspace.package] version (see the root manifest) keeps the table itself
-/// unambiguous; dependency `{ version = ... }` entries never start the line
-/// with `version`.
-fn package_version(manifest: &str) -> Option<String> {
-    manifest
-        .lines()
-        .map(str::trim_start)
-        .skip_while(|line| !line.starts_with("[package]"))
-        .skip(1)
-        .take_while(|line| !line.starts_with('['))
-        .find_map(|line| line.strip_prefix("version = \""))
-        .and_then(|rest| rest.split('"').next())
-        .map(str::to_string)
 }
 
 /// The release tag on the checked-out commit, or `None`.

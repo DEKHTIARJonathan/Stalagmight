@@ -41,24 +41,14 @@ replace_in_file() {
   cat "$tmp" > "$file"
 }
 
-# Rewrite the Cargo.lock version line, and fail rather than write if it is not found exactly
-# once. Cargo would fix the version itself on the next build, but only by leaving
-# an unexplained dirty Cargo.lock in a tree the release just reported as clean -
-# and a hard error for anyone who does build with `--locked`.
-#
-# Why hand-rolled awk rather than `cargo update -p stalagmight --offline`, which
-# would let Cargo own its own format: this script deliberately has no toolchain
-# dependency (no cargo, no node, no network), so it works on a machine set up only
-# to cut a release, and it stays a pure text transform that `test-release.sh` can
-# exercise in a throwaway clone in milliseconds. The cost is a second model of one
-# line of the lock format, bounded by `END { if (hits != 1) exit 3 }` writing to a
-# temp file - a shape it does not recognise aborts with the manifest untouched
-# rather than guessing. Revisit if the lock ever carries this crate's version in
-# more than one place.
+# Rewrite all nine workspace package versions, preserving third-party versions.
+# Keep this toolchain-free so release tests and release-only machines need no Cargo.
+# The count check rejects missing or duplicated workspace package entries.
 rewrite_lock_version() {
   local new="$1" file="$PROJECT_ROOT/src-tauri/Cargo.lock" tmp="$SCRATCH/lockrewrite"
   awk -v new="$new" '
-    /^name = "stalagmight"[[:space:]]*$/ {
+    /^name = "(stalagmight|stalagmight-core|stalagmight-export|stalagmight-models|stalagmight-parsers|stalagmight-persistence|stalagmight-speleodb|stalagmight-telemetry|stalx-reader)"[[:space:]]*$/ {
+      if (seen[$0]++) exit 3
       print
       if ((getline nxt) > 0) {
         if (nxt ~ /^version = "/) {
@@ -71,9 +61,9 @@ rewrite_lock_version() {
       next
     }
     { print }
-    END { if (hits != 1) exit 3 }
+    END { if (hits != 9) exit 3 }
   ' "$file" > "$tmp" || {
-    echo "Error: src-tauri/Cargo.lock has no single stalagmight version line. Aborting." >&2
+    echo "Error: src-tauri/Cargo.lock must have exactly nine workspace package version lines. Aborting." >&2
     return 1
   }
   if [ ! -s "$tmp" ]; then
@@ -223,11 +213,13 @@ replace_in_file "s/\"version\": \"$CURRENT_RE\"/\"version\": \"$NEW_VERSION\"/" 
 replace_in_file "s/\"version\": \"$CURRENT_RE\"/\"version\": \"$NEW_VERSION\"/" \
   "$PROJECT_ROOT/src-tauri/tauri.conf.json"
 
-# --- Update Cargo.toml (only the package version line) ---
+# --- Update Cargo.toml (shared version and publishable local dependencies) ---
 replace_in_file "s/^version = \"$CURRENT_RE\"/version = \"$NEW_VERSION\"/" \
   "$PROJECT_ROOT/src-tauri/Cargo.toml"
+replace_in_file "s/\\(stalagmight-.*version = \"\\)$CURRENT_RE\"/\\1$NEW_VERSION\"/" \
+  "$PROJECT_ROOT/src-tauri/Cargo.toml"
 
-# --- Update Cargo.lock (only this crate's stanza) ---
+# --- Update Cargo.lock (all workspace packages) ---
 if ! rewrite_lock_version "$NEW_VERSION"; then
   git -C "$PROJECT_ROOT" checkout -- \
     package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock

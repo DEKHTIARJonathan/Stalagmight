@@ -1,6 +1,6 @@
 [package]
 name = "stalagmight-persistence"
-version = "0.1.0"
+version.workspace = true
 description = "Stalagmight .stalx persistence. Internal to Stalagmight, published only so `stalx-reader` can depend on it; no semver promise - use stalx-reader."
 repository = "https://github.com/Stalagmight/Stalagmight"
 edition.workspace = true
@@ -21,7 +21,7 @@ workspace = true
 test-support = []
 
 [dependencies]
-stalagmight-models = { path = "../models", version = "=0.1.0" }
+stalagmight-models = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 # `float_roundtrip` mirrors the root crate's serde_json entry (see the rationale
 # there): features are additive, so workspace builds already parse floats

@@ -169,6 +169,19 @@ if "$D/scripts/release.sh" 9.9.9 --no-edit >/dev/null 2>&1; then
   # nothing failed on: the next cargo invocation rewrote it in place, so the only
   # symptom was an unexplained dirty lock in a tree the release called clean.
   assert "Cargo.lock bumped"         test "$(lock_version_of "$D")" = "9.9.9"
+  assert "all workspace lock versions bumped" awk '
+    /^name = "(stalagmight|stalagmight-core|stalagmight-export|stalagmight-models|stalagmight-parsers|stalagmight-persistence|stalagmight-speleodb|stalagmight-telemetry|stalx-reader)"[[:space:]]*$/ {
+      getline
+      sub(/\r$/, "")
+      if ($0 != "version = \"9.9.9\"") exit 1
+      count++
+    }
+    END { if (count != 9) exit 1 }
+  ' "$D/src-tauri/Cargo.lock"
+  assert "models dependency version bumped" \
+    grep -q '^stalagmight-models = { path = "crates/models", version = "9.9.9" }' "$D/src-tauri/Cargo.toml"
+  assert "persistence dependency version bumped" \
+    grep -q '^stalagmight-persistence = { path = "crates/persistence", version = "9.9.9" }' "$D/src-tauri/Cargo.toml"
   assert "Cargo.lock is in the release commit" \
     bash -c 'git -C "$1" show --name-only --format= HEAD | grep -qx "src-tauri/Cargo.lock"' _ "$D"
   assert "changelog section created" grep -q '^## \[9\.9\.9\]' "$D/CHANGELOG.md"
