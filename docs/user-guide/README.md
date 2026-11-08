@@ -21,6 +21,7 @@ How to use Stalagmight. Pages link to each other.
 - [DMP import](screens/dmp-import.md)
 - [Create Project for Import dialog](screens/create-project-for-import.md)
 - [Import Ariane Survey dialog](screens/ariane-import.md)
+- [Import report](screens/import-report.md)
 
 **Concepts**
 - [Sections, shots and stations](concepts/sections-shots-stations.md)

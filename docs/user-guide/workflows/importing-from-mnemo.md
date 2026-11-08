@@ -15,6 +15,8 @@
    Connect them later, once the data is there.
 7. A section that does not belong to this survey: press **Esc**, pick **Do
    not place** and click **Next**.
+8. If an [import report](../screens/import-report.md) opens, read it and click
+   **Continue to map**.
 
 ## Step details
 

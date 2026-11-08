@@ -13,7 +13,7 @@ the [Create Project for Import dialog](create-project-for-import.md).
 5. Select all or none.
 6. Tick the sections to import.
 7. **Cancel**
-8. **Import**
+8. **Import**, followed by the [import report](import-report.md).
 
 Scrolled down, the import options:
 

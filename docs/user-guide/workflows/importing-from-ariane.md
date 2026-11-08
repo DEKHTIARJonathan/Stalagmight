@@ -6,6 +6,8 @@
    cave location are optional.
 3. Untick any sections you do not want. Scroll down to check where the survey
    goes and the other options, then click **Import**.
+4. Read the [import report](../screens/import-report.md) and click **Continue
+   to map**. Then [check the warnings](fixing-warnings.md).
 
 ## Step details
 
@@ -33,3 +35,11 @@
 - Virtual shots (13) become jumps or references by Stalagmight's best guess.
 - See [Import Ariane Survey](../screens/ariane-import.md) for what each option
   does.
+
+### 4. Import report
+
+![Import report](../images/import-receipt.png)
+
+- What was imported (2) and where the zero datum went (3).
+- Warnings (4): here two sections had no shots left and were dropped.
+- **Continue to map** (5).
