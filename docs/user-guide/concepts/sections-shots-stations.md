@@ -13,7 +13,8 @@
   passage size.
 - **Section**: a run of shots, usually one linear stretch of surveyed line.
 - **Merging** two stations connects the sections they are on. That is how
-  separate sections become one cave.
+  separate sections become one cave. See
+  [Merging stations](../workflows/merging-stations.md).
 - **Zero datum**: a station tied to a real-world GPS position. Every other
   station is positioned relative to it. See
   [Setting a zero datum](../workflows/setting-a-zero-datum.md).
