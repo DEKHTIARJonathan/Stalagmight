@@ -8,13 +8,17 @@ How to use Stalagmight. Pages link to each other.
 **Screens**
 - [Start screen](screens/start-screen.md)
 - [New Project dialog](screens/new-project-dialog.md)
+- [Survey view](screens/survey-view.md)
+
+**Concepts**
+- [Sections, shots and stations](concepts/sections-shots-stations.md)
 
 ## Contributing
 
 - Keep pages short. Most important first, details at the end.
 - Link to a page instead of repeating it.
-- `workflows/` = tasks, `screens/` = one page per screen. New kind of page = new
-  folder, listed above.
+- `workflows/` = tasks, `screens/` = one page per screen, `concepts/` = terms
+  and ideas. New kind of page = new folder, listed above.
 - Screenshots: `images/<what-it-shows>.png`, 1920x1080 window, clean profile (no
   recent projects, signed out of SpeleoDB), made-up survey data only.
 - Number every interactive element with a callout placed beside it, never on
