@@ -18,15 +18,26 @@ problem.
 
 ## Resolving
 
-**Resolve** offers fixes that fit the problem. For a shot shorter than its
-depth change, as here:
+**Resolve** (5) replaces the list with the fixes that fit the problem.
 
-- **Set length to depth change**
-- **Set length from inclination**, if the shot has an inclination
-- **Set length**: type in a new length
+![Resolving a warning](../images/warning-resolve.png)
+
+8. **Back**: to the list, nothing changed.
+9. **Zoom to the shot**
+10. **Set length to depth change**: the shortest length that is physically
+    possible.
+11. **Set length**: type the right length. Better when the recorded one was a
+    typo.
+12. The new length.
+13. **Apply**
+14. Preview of the fixed shot on the map.
 
 ## Details
 
+- The fixes depend on the problem. A shot shorter than its depth change can also
+  get **Set length from inclination**, if it has an inclination.
+- **Resolve all** (3) shows the same view with **Skip**, **Exit** and **Apply /
+  Next**.
 - Errors can only be fixed. Warnings can also be ignored with **Ignore (keep
   value, don't warn again)**.
 - Under **Show resolved**, resolved warnings are struck through. **Mark
