@@ -9,6 +9,8 @@
    Datum** and [set it later](setting-a-zero-datum.md).
 4. If you picked one: choose its station, enter the GPS position and click
    **Confirm Zero Datum**.
+5. For each suggested connection: check it on the preview and click
+   **Confirm**, or **Skip** to place that section by hand later.
 
 ## Step details
 
@@ -40,3 +42,14 @@
 - Optional: scroll down to check or change the shots (16). This can also be
   done later. See [DMP import](../screens/dmp-import.md).
 - **Confirm Zero Datum** (12) continues the import.
+
+### 5. Suggested connections
+
+![DMP import, connection wizard](../images/dmp-import-suggestion.png)
+
+- Stalagmight found where this section joins from matching reference shots.
+  Here there is one high-confidence match (5), and it is right.
+- Check the join on the preview (3): the gold dot is the shared station.
+- **Confirm** (12) if it is right. Otherwise **Skip** (11) and place the
+  section by hand later.
+- Scroll down to view or edit the shots. This can also be done later.

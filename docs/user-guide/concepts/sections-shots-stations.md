@@ -6,7 +6,9 @@
   - **Jump** (`J`): temporary line the surveyor lays to connect permanent lines,
     or the main line to the surface.
   - **Reference** (`R`): a shot retaken along a line already surveyed, so two
-    sections can be joined exactly, without ambiguity.
+    sections can be joined exactly, without ambiguity. On
+    [import](../workflows/importing-from-mnemo.md), Stalagmight uses them to
+    suggest where sections join.
 - **LRUD**: left, right, up and down distances to the cave walls, i.e. the
   passage size.
 - **Section**: a run of shots, usually one linear stretch of surveyed line.

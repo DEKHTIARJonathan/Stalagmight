@@ -74,3 +74,42 @@ Scrolled down, the section's details and shots:
 17. A ⚠ in this column marks a shot with a warning. Hover it to read it.
 18. Choose visible columns.
 19. Enlarge the table.
+
+## Step 4: connection wizard
+
+Stalagmight matches [reference shots](../concepts/sections-shots-stations.md)
+between sections and suggests where each section joins, one at a time.
+
+![DMP import, connection wizard](../images/dmp-import-suggestion.png)
+
+1. **Close**
+2. Sections placed so far.
+3. Preview: grey is already placed, red is the section being placed, the gold
+   dot is where they join.
+4. The suggested connection: which station joins which.
+5. Confidence (high, medium or low) and how many shots matched. The arrow shows
+   whether they run the same way (→) or opposite ways (←).
+6. **Merge at**: pick another station pair, when there is more than one.
+7. **Overlap**: what to do with shots that were surveyed twice, see below.
+8. **Section Settings**: the section's name, surveyor, date, color and
+   direction.
+9. **Cancel**: asks whether to keep or remove sections already imported.
+10. **Back**: starts the import over. Sections this wizard already imported are
+    removed first, which can be undone.
+11. **Skip**: leave this section for now and place it by hand at the end.
+12. **Confirm**: accept the connection.
+
+**Overlap**:
+
+- **Keep both (reference)**: keep both copies. The new ones become reference
+  shots.
+- **Use import data**: keep one copy, with the new values.
+- **Use existing data**: keep one copy, with the values already in the project.
+- **Interpolate**: keep one copy, averaging the two.
+
+### Details
+
+- Scroll down for the section's shot table. Edit it here if needed, or later.
+- **Use import data** and **Interpolate** are greyed out when the existing shots
+  are pinned on both sides, by a zero datum, a merge or a closure.
+- The overlap choice is remembered for the project.
