@@ -82,7 +82,7 @@ describe('About "Check for updates" (#579)', () => {
 /**
  * [review] The track LINE and the check BEHAVIOUR must agree. The line used to
  * read the staged `localConfig`, while `check_for_app_update` reads the config
- * the backend has on disk - so staging Weekly without saving showed "Weekly"
+ * the backend has on disk - so staging Beta without saving showed "Beta"
  * next to a button that queried Stable.
  */
 describe('the About update-track line', () => {
@@ -105,7 +105,7 @@ describe('the About update-track line', () => {
     // `localConfig` is seeded once on mount and then only by the user's edits,
     // so changing the STORE config afterwards is the staged/persisted split
     // without having to drive the portal-based Select: staged = stable (what
-    // the dialog opened with), persisted = weekly (what the backend would
+    // the dialog opened with), persisted = beta (what the backend would
     // query).
     useProjectStore.setState({
       config: { ...defaultConfig, general: { ...defaultConfig.general, update_track: 'stable' } },
@@ -118,7 +118,7 @@ describe('the About update-track line', () => {
       useProjectStore.setState({
         config: {
           ...defaultConfig,
-          general: { ...defaultConfig.general, update_track: 'weekly' },
+          general: { ...defaultConfig.general, update_track: 'beta' },
         },
       });
     });
@@ -126,7 +126,7 @@ describe('the About update-track line', () => {
     await screen.findByTestId('about-dialog');
 
     // The line follows the PERSISTED track - what the check will actually ask.
-    expect(screen.getByTestId('about-update-track')).toHaveTextContent(/weekly/i);
+    expect(screen.getByTestId('about-update-track')).toHaveTextContent(/beta/i);
     // ...and the disagreement with the staged value is called out rather than
     // silently resolved either way.
     expect(screen.getByTestId('about-update-track-pending')).toBeInTheDocument();

@@ -2,7 +2,7 @@
 //!
 //! Rust drives the whole cycle rather than the plugin's JS guest API, for one
 //! concrete reason: the guest `check()` cannot override the endpoint per call,
-//! and the endpoint is exactly what changes between the stable and weekly
+//! and the endpoint is exactly what changes between the stable and beta
 //! release tracks. So the endpoint is computed here from the user's configured
 //! track and handed to a per-call [`tauri_plugin_updater::UpdaterBuilder`].
 //!
@@ -46,6 +46,7 @@ use std::sync::{Mutex, OnceLock};
 use std::task::Poll;
 use std::time::Duration;
 
+use semver::{Prerelease, Version};
 use serde::Serialize;
 use tauri::utils::config::BundleType;
 use tauri::{AppHandle, Emitter, Manager, State, Url};
@@ -73,8 +74,15 @@ pub const UPDATE_URL_ENV: &str = "STALAGMIGHT_UPDATE_URL";
 /// Per-track manifests, both rolling assets of the `updater` release.
 const STABLE_ENDPOINT: &str =
     "https://github.com/Stalagmight/Stalagmight/releases/download/updater/latest-stable.json";
-const WEEKLY_ENDPOINT: &str =
-    "https://github.com/Stalagmight/Stalagmight/releases/download/updater/latest-weekly.json";
+const BETA_ENDPOINT: &str =
+    "https://github.com/Stalagmight/Stalagmight/releases/download/updater/latest-beta.json";
+
+/// The pre-release part of THIS build's version, without its leading hyphen
+/// (#650): `rc.2` for a release candidate, unset or empty for a final release.
+/// Baked in by CI at compile time. The package version - and with it every
+/// artifact - stays a plain `X.Y.Z`, so this is the only place a candidate
+/// learns that it is one.
+const BAKED_PRERELEASE: Option<&str> = option_env!("STALAGMIGHT_PRERELEASE");
 
 /// The only host a release build will fetch a manifest from.
 const TRUSTED_MANIFEST_HOST: &str = "github.com";
@@ -128,7 +136,9 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_mins(10);
 pub struct AppUpdateCheck {
     pub status: AppUpdateStatus,
     /// The version the RUNNING app was built as, so the UI can say "you have X"
-    /// without a second round trip.
+    /// without a second round trip. The EFFECTIVE version
+    /// ([`effective_version`]): `0.5.2-rc.2` for a candidate, the same version
+    /// the offer was compared against.
     pub current_version: String,
     /// Whether a downloaded update is installed when the app quits
     /// ([`installs_on_quit`]), so the banner can promise it - or not.
@@ -423,9 +433,73 @@ pub fn endpoint_for_track(track: UpdateTrack) -> String {
     }
     match track {
         UpdateTrack::Stable => STABLE_ENDPOINT,
-        UpdateTrack::Weekly => WEEKLY_ENDPOINT,
+        UpdateTrack::Beta => BETA_ENDPOINT,
     }
     .to_owned()
+}
+
+/// The version this build compares offers against (#650): the package version
+/// with the baked pre-release, so `0.5.2` built with `rc.2` is `0.5.2-rc.2`.
+///
+/// Unset or blank is a final release and yields the package version as it is.
+/// `Err` says why a non-blank value was not used; [`running_version`] logs it
+/// and falls back to the package version.
+///
+/// A leading hyphen is refused although semver would accept it: `-rc.2` parses
+/// as the identifier `-rc` and makes `0.5.2--rc.2`, which sorts BELOW
+/// `0.5.2-rc.1` - so the build would be offered, and install, itself on every
+/// check.
+fn effective_version(package: &Version, prerelease: Option<&str>) -> Result<Version, String> {
+    let Some(pre) = prerelease.map(str::trim).filter(|p| !p.is_empty()) else {
+        return Ok(package.clone());
+    };
+    if pre.starts_with('-') {
+        return Err(format!(
+            "STALAGMIGHT_PRERELEASE {pre:?} must not start with a hyphen"
+        ));
+    }
+    if !package.pre.is_empty() {
+        return Err(format!(
+            "the package version {package} already has a pre-release"
+        ));
+    }
+    let pre = Prerelease::new(pre)
+        .map_err(|e| format!("STALAGMIGHT_PRERELEASE {pre:?} is not a semver pre-release: {e}"))?;
+    Ok(Version {
+        pre,
+        ..package.clone()
+    })
+}
+
+/// [`effective_version`], falling back to the plain package version - with a
+/// warning - when the baked pre-release is unusable. Comparing against the
+/// plain version is what the plugin did before #650, so the fallback can miss
+/// later candidates of the same release but can never downgrade.
+fn running_version(package: &Version, prerelease: Option<&str>) -> Version {
+    effective_version(package, prerelease).unwrap_or_else(|why| {
+        tracing::warn!(
+            %why,
+            purpose = "compare update offers against this build's version",
+            "Ignoring the baked pre-release; using the plain package version"
+        );
+        package.clone()
+    })
+}
+
+/// Is `offered` an update for a build whose effective version is `running`?
+///
+/// Strictly greater by semver PRECEDENCE: `0.5.2-rc.1 < 0.5.2-rc.2 <
+/// 0.5.2-rc.10 < 0.5.2`. An equal version is not an update, and neither is a
+/// lower one - which is what makes switching from Beta back to Stable stay on
+/// the candidate instead of downgrading. Precedence ignores build metadata,
+/// which `Version`'s `Ord` does not.
+///
+/// Handed to the plugin as its `version_comparator`. Without one the plugin
+/// compares against the PACKAGE version, a plain `X.Y.Z` even in a candidate,
+/// so a candidate would never be offered the candidates after it, nor its own
+/// final release.
+fn is_newer(offered: &Version, running: &Version) -> bool {
+    offered.cmp_precedence(running) == std::cmp::Ordering::Greater
 }
 
 /// Why a download must stop before the body ends.
@@ -652,7 +726,8 @@ pub async fn check_for_app_update(
     ) {
         return Err(refusal);
     }
-    let current_version = app.package_info().version.to_string();
+    let running = running_version(&app.package_info().version, BAKED_PRERELEASE);
+    let current_version = running.to_string();
     let track = state.get_config().general.update_track;
     let endpoint = endpoint_for_track(track);
     let url = Url::parse(&endpoint)
@@ -661,6 +736,9 @@ pub async fn check_for_app_update(
     let updater = app
         .updater_builder()
         .timeout(CHECK_TIMEOUT)
+        // The plugin passes its own idea of the current version, the package
+        // version; it is ignored in favour of the effective one (#650).
+        .version_comparator(move |_package, release| is_newer(&release.version, &running))
         .endpoints(vec![url])
         .map_err(|e| format!("Update endpoint was rejected: {e}"))?
         .build()
@@ -1054,17 +1132,19 @@ mod tests {
         let _env = EnvVarGuard::set(None);
 
         let stable = endpoint_for_track(UpdateTrack::Stable);
-        let weekly = endpoint_for_track(UpdateTrack::Weekly);
+        let beta = endpoint_for_track(UpdateTrack::Beta);
         assert!(stable.ends_with("/latest-stable.json"), "{stable}");
-        assert!(weekly.ends_with("/latest-weekly.json"), "{weekly}");
+        // Not the legacy `latest-weekly.json`, which the release pipeline only
+        // mirrors for 0.5.0/0.5.1 installs (#650).
+        assert!(beta.ends_with("/latest-beta.json"), "{beta}");
         assert_ne!(
-            stable, weekly,
+            stable, beta,
             "the two tracks must not resolve to one manifest"
         );
         // Both defaults must satisfy the release allowlist, or a release build
         // would refuse its own endpoints if they were ever routed through it.
         assert!(is_trusted_manifest_url(&stable), "{stable}");
-        assert!(is_trusted_manifest_url(&weekly), "{weekly}");
+        assert!(is_trusted_manifest_url(&beta), "{beta}");
     }
 
     #[test]
@@ -1072,7 +1152,7 @@ mod tests {
         let _lock = env_lock();
         let _env = EnvVarGuard::set(Some("http://127.0.0.1:8000/latest.json"));
 
-        for track in [UpdateTrack::Stable, UpdateTrack::Weekly] {
+        for track in [UpdateTrack::Stable, UpdateTrack::Beta] {
             // Debug build (which every test binary is), so the local recipe URL
             // is honoured verbatim.
             assert_eq!(
@@ -1088,7 +1168,7 @@ mod tests {
         let _env = EnvVarGuard::set(Some("   "));
 
         assert_eq!(endpoint_for_track(UpdateTrack::Stable), STABLE_ENDPOINT);
-        assert_eq!(endpoint_for_track(UpdateTrack::Weekly), WEEKLY_ENDPOINT);
+        assert_eq!(endpoint_for_track(UpdateTrack::Beta), BETA_ENDPOINT);
     }
 
     /// The override is read on every call, not captured once. A support session
@@ -1153,9 +1233,123 @@ mod tests {
         // Mirrors what `check_for_app_update` builds, which is the one place the
         // `v` prefix and the tag shape are decided.
         assert_eq!(
-            format!("{RELEASE_TAG_URL_PREFIX}0.5.1-weekly.20260817"),
-            "https://github.com/Stalagmight/Stalagmight/releases/tag/v0.5.1-weekly.20260817"
+            format!("{RELEASE_TAG_URL_PREFIX}0.5.2-rc.2"),
+            "https://github.com/Stalagmight/Stalagmight/releases/tag/v0.5.2-rc.2"
         );
+    }
+
+    // ── Effective version and ordering (#650) ───────────────────────────────
+
+    fn v(text: &str) -> Version {
+        Version::parse(text).expect("a test version")
+    }
+
+    /// The release chain a Beta user walks, in order: each step is offered to
+    /// the one before it, and never the other way round.
+    #[test]
+    fn candidates_sort_below_their_release_and_numerically_among_themselves() {
+        let chain = ["0.5.1", "0.5.2-rc.1", "0.5.2-rc.2", "0.5.2-rc.10", "0.5.2"];
+        for pair in chain.windows(2) {
+            let [older, newer] = [pair[0], pair[1]];
+            assert!(
+                is_newer(&v(newer), &v(older)),
+                "{newer} must be offered to {older}"
+            );
+            assert!(
+                !is_newer(&v(older), &v(newer)),
+                "{older} must not be offered to {newer}"
+            );
+        }
+        // Numeric, not lexical: "10" < "2" as text.
+        assert!(is_newer(&v("0.5.2-rc.10"), &v("0.5.2-rc.9")));
+    }
+
+    #[test]
+    fn an_equal_version_is_not_offered() {
+        for same in ["0.5.1", "0.5.2-rc.2", "0.5.2"] {
+            assert!(!is_newer(&v(same), &v(same)), "{same}");
+        }
+        // Build metadata does not make an otherwise equal version newer.
+        assert!(!is_newer(&v("0.5.2+abc"), &v("0.5.2")));
+    }
+
+    /// A candidate switched back to Stable reads a manifest that is BEHIND it.
+    /// It stays where it is until the final release of its version arrives.
+    #[test]
+    fn switching_beta_to_stable_never_downgrades() {
+        let candidate = running_version(&v("0.5.2"), Some("rc.2"));
+        assert_eq!(candidate, v("0.5.2-rc.2"));
+        assert!(
+            !is_newer(&v("0.5.1"), &candidate),
+            "the old stable is a downgrade"
+        );
+        assert!(
+            is_newer(&v("0.5.2"), &candidate),
+            "its own final release is an update"
+        );
+    }
+
+    /// Without the comparator the plugin compares against the package version.
+    /// Pinned so the reason for overriding it stays visible: a candidate built
+    /// as `0.5.2` would see `0.5.2` as nothing new.
+    #[test]
+    fn the_effective_version_is_what_makes_the_final_release_an_update() {
+        let package = v("0.5.2");
+        assert!(!is_newer(&v("0.5.2"), &package));
+        assert!(is_newer(
+            &v("0.5.2"),
+            &running_version(&package, Some("rc.2"))
+        ));
+    }
+
+    #[test]
+    fn the_baked_prerelease_makes_the_effective_version() {
+        assert_eq!(
+            effective_version(&v("0.5.2"), Some("rc.2")),
+            Ok(v("0.5.2-rc.2"))
+        );
+        assert_eq!(
+            effective_version(&v("0.5.2"), Some(" rc.10 ")),
+            Ok(v("0.5.2-rc.10"))
+        );
+    }
+
+    /// A final release bakes nothing (or an empty value): its version is the
+    /// package version, and that is not an error worth a warning.
+    #[test]
+    fn a_final_build_is_its_plain_package_version() {
+        for unset in [None, Some(""), Some("   ")] {
+            assert_eq!(
+                effective_version(&v("0.5.2"), unset),
+                Ok(v("0.5.2")),
+                "{unset:?}"
+            );
+        }
+    }
+
+    /// Anything that is not a plain pre-release falls back to the package
+    /// version rather than producing a version that sorts somewhere surprising.
+    #[test]
+    fn an_invalid_prerelease_falls_back_to_the_plain_version() {
+        for invalid in [
+            // Leading zero in a numeric identifier.
+            "rc.02", // Empty identifier.
+            "rc..2", "rc 2", // Build metadata is not part of a pre-release.
+            "rc.2+abc", // Valid semver, but `0.5.2--rc.2` sorts below `0.5.2-rc.1`.
+            "-rc.2",
+        ] {
+            assert!(
+                effective_version(&v("0.5.2"), Some(invalid)).is_err(),
+                "{invalid:?} must be refused"
+            );
+            assert_eq!(
+                running_version(&v("0.5.2"), Some(invalid)),
+                v("0.5.2"),
+                "{invalid:?}"
+            );
+        }
+        // A package version that already carries a pre-release is not extended.
+        assert!(effective_version(&v("0.5.2-alpha"), Some("rc.2")).is_err());
     }
 
     // ── Download bounds ──────────────────────────────────────────────────────

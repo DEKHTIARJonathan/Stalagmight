@@ -264,7 +264,7 @@ export function useAppUpdate(): void {
     };
   }, []);
 
-  // (d) A track switch (stable <-> weekly) re-checks against the new track,
+  // (d) A track switch (stable <-> beta) re-checks against the new track,
   // which also clears a stale available-banner when the new track has
   // nothing on offer (runAppUpdateCheck -> setUpToDate resets info/progress).
   // Not gated on update_check_enabled: the user just made an explicit choice

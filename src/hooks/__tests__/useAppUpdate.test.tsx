@@ -142,7 +142,7 @@ describe('the track switch', () => {
     expect(checkCalls()).toBe(0);
 
     useProjectStore.setState({
-      config: config({ update_check_enabled: false, update_track: 'weekly' }),
+      config: config({ update_check_enabled: false, update_track: 'beta' }),
     });
     await vi.advanceTimersByTimeAsync(0);
 
@@ -395,7 +395,7 @@ describe('who may download without asking', () => {
     await vi.advanceTimersByTimeAsync(11_000);
 
     useProjectStore.setState({
-      config: config({ update_check_enabled: false, update_track: 'weekly' }),
+      config: config({ update_check_enabled: false, update_track: 'beta' }),
     });
     await vi.advanceTimersByTimeAsync(0);
 
