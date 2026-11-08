@@ -11,6 +11,8 @@
    **Confirm Zero Datum**.
 5. For each suggested connection: check it on the preview and click
    **Confirm**, or **Skip** to place that section by hand later.
+6. Sections left over: click the map to drop them roughly where they belong.
+   Connect them later, once the data is there.
 
 ## Step details
 
@@ -53,3 +55,13 @@
 - **Confirm** (12) if it is right. Otherwise **Skip** (11) and place the
   section by hand later.
 - Scroll down to view or edit the shots. This can also be done later.
+
+### 6. Place the rest by hand
+
+![DMP import, placing sections by hand](../images/dmp-import-manual-placement.png)
+
+- Here two sections (2) are not connected to the survey yet: the data to join
+  them is not there.
+- Click the map to drop them. The station under the pointer (1) lands where you
+  click.
+- It does not need to be accurate. They can be moved, or connected, later.

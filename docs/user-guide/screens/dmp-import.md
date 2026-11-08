@@ -113,3 +113,31 @@ between sections and suggests where each section joins, one at a time.
 - **Use import data** and **Interpolate** are greyed out when the existing shots
   are pinned on both sides, by a zero datum, a merge or a closure.
 - The overlap choice is remembered for the project.
+
+## Step 5: place the rest by hand
+
+Sections with no suggested connection, and skipped ones, are placed by clicking
+the map, like [placement mode](placement-mode.md). Sections joined to each other
+move together.
+
+It does not need to be accurate. Move them later, or connect them once the
+survey has the data to do it.
+
+![DMP import, placing sections by hand](../images/dmp-import-manual-placement.png)
+
+1. The station under the pointer. Click the map to drop the sections there.
+2. The sections being placed, dashed.
+3. Sections already placed, solid.
+4. **Esc**: back to the wizard, for other ways to place them.
+
+### Details
+
+Other placement methods, after **Esc**:
+
+- **Suggested connection**
+- **Place at center of screen**
+- **Zero Datum (GPS)**
+- **From existing station**
+- **Manual placement**: clicking the map, as above.
+- **Skip (place later)**
+- **Do not place**: these sections are not imported.
