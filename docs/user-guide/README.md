@@ -7,6 +7,7 @@ How to use Stalagmight. Pages link to each other.
 
 **Screens**
 - [Start screen](screens/start-screen.md)
+- [New Project dialog](screens/new-project-dialog.md)
 
 ## Contributing
 
@@ -16,3 +17,6 @@ How to use Stalagmight. Pages link to each other.
   folder, listed above.
 - Screenshots: `images/<what-it-shows>.png`, 1920x1080 window, clean profile (no
   recent projects, signed out of SpeleoDB), made-up survey data only.
+- Number every interactive element with a callout placed beside it, never on
+  top of it. Screen pages list the elements in callout order; other pages refer
+  to them as **Name** (n).

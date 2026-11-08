@@ -2,19 +2,21 @@
 
 Shown at launch until you open a project. After that it lists recent projects.
 
-- **New project**: start an empty project. See
-  [Creating a new survey](../workflows/creating-a-new-survey.md).
-- **Open / Import**: open a `.stalx` project or import another format. Clicking
-  the dashed area or dropping a file on the window does the same.
-
 ![Start screen](../images/start-screen.png)
+
+1. **Menu**: New project, Open / Import, Settings, Debug Logs, Quit.
+2. **New project**: opens the [New Project dialog](new-project-dialog.md).
+3. **Open / Import**: open a `.stalx` project or import another format.
+4. **Drop area**: click it to do the same as 3, or drop a file anywhere on the
+   window.
+5. **Start a new project instead**: same as 2.
 
 ## Details
 
 - Formats: `.stalx` (Stalagmight), `.tml` / `.tmlu` (Ariane), `.dmp` (mNemo),
   `.dat` / `.mak` (Compass), `.srv` / `.wpj` (Walls), `.gpx` (GPX).
 - An import creates a new project. The original file is not changed.
-- **Start a new project instead** is the same as **New project**.
 - `Systems: 0` is the number of recent projects.
+- Signed in to SpeleoDB, the menu (1) also has **Open from SpeleoDB**.
 - The very first launch may show an orientation and a usage-statistics question
   on top of this screen.
