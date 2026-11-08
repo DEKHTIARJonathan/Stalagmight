@@ -453,6 +453,9 @@ fn effective_version(package: &Version, prerelease: Option<&str>) -> Result<Vers
     let Some(pre) = prerelease.map(str::trim).filter(|p| !p.is_empty()) else {
         return Ok(package.clone());
     };
+    // Checked here because `Prerelease::new` accepts it (`-` is an identifier
+    // character in semver-1.0.27 parse.rs `identifier`); see above for why it
+    // must not be.
     if pre.starts_with('-') {
         return Err(format!(
             "STALAGMIGHT_PRERELEASE {pre:?} must not start with a hyphen"
@@ -1353,16 +1356,6 @@ mod tests {
         }
         // A package version that already carries a pre-release is not extended.
         assert!(effective_version(&v("0.5.2-alpha"), Some("rc.2")).is_err());
-    }
-
-    /// Why the leading hyphen needs its own refusal: semver accepts it, and the
-    /// result sorts below every real candidate, so the build would be offered
-    /// itself.
-    #[test]
-    fn a_leading_hyphen_would_sort_below_every_candidate() {
-        let hyphenated = v("0.5.2--rc.2");
-        assert!(hyphenated < v("0.5.2-rc.1"));
-        assert!(is_newer(&v("0.5.2-rc.2"), &hyphenated));
     }
 
     // ── Download bounds ──────────────────────────────────────────────────────
