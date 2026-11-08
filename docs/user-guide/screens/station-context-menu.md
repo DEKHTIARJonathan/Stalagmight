@@ -20,6 +20,8 @@ Right-click a station on the map.
 
 ## Details
 
-- Merged stations also get **Unmerge Stations**. Stations on a loop closure get
+- Merged stations also get **Unmerge Stations**, see
+  [Unmerging stations](../workflows/merging-stations.md#unmerging-stations).
+  Stations on a loop closure get
   **Remove Closure**, see [Removing a closure](../workflows/closing-a-loop.md#removing-a-closure).
 - Both deletes ask for confirmation first.

@@ -36,3 +36,15 @@ go. See the [station context menu](../screens/station-context-menu.md).
   [loop closure](closing-a-loop.md) instead. Otherwise a notification says why.
 - Which side moves, and when a merge is refused: see the
   [Merge Stations dialog](../screens/merge-stations-dialog.md).
+
+## Unmerging stations
+
+Right-click a merged station and pick **Unmerge Stations**. The unmerge icon
+next to **Merged with** in **Details** does the same.
+
+![Unmerge Stations in the station context menu](../images/unmerge-menu.png)
+
+1. A merged station, right-clicked.
+2. **Unmerge Stations**
+
+A station merged with more than one other asks which merge to undo.
