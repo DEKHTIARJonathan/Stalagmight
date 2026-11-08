@@ -55,8 +55,11 @@ pub fn restore_from_backup(project_path: PathBuf, backup_path: PathBuf) -> Resul
     }
 
     // Copying a backup over a project a newer Stalagmight saved would put an
-    // older file in its place (#649).
-    Database::check_not_newer_at(&project_path).map_err(|e| format!("Not restored: {e}"))?;
+    // older file in its place, and a backup a newer Stalagmight saved would put
+    // a file this build cannot open there (#649). Both before the safety copy.
+    for file in [&project_path, &backup_path] {
+        Database::check_not_newer_at(file).map_err(|e| format!("Not restored: {e}"))?;
+    }
 
     // Create a safety backup of the current (corrupt) file before overwriting
     let safety = project_path.with_extension("stalx.pre-restore");
@@ -123,6 +126,33 @@ mod tests {
         let err = restore_from_backup(project.clone(), backup).unwrap_err();
 
         assert!(err.contains("newer version of Stalagmight"), "{err}");
+        assert_eq!(std::fs::read(&project).unwrap(), before);
+        assert!(
+            !project.with_extension("stalx.pre-restore").exists(),
+            "refused before the safety copy"
+        );
+    }
+
+    /// [#649] The roles swapped: a backup a newer Stalagmight saved is not put
+    /// over a project this build can open, and the refusal names the backup.
+    #[test]
+    fn a_restore_never_puts_a_newer_backup_over_a_project() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let project = project_file(dir.path(), "cave.stalx", SCHEMA_VERSION);
+        let backup = project_file(dir.path(), "cave.stalx.backup", SCHEMA_VERSION + 1);
+        let before = std::fs::read(&project).unwrap();
+
+        let err = restore_from_backup(project.clone(), backup).unwrap_err();
+
+        assert_eq!(
+            err,
+            format!(
+                "Not restored: \"cave.stalx.backup\" was saved by a newer version of \
+                 Stalagmight (file format {}; this version reads up to {SCHEMA_VERSION}). \
+                 Update Stalagmight to open it.",
+                SCHEMA_VERSION + 1
+            )
+        );
         assert_eq!(std::fs::read(&project).unwrap(), before);
         assert!(
             !project.with_extension("stalx.pre-restore").exists(),
