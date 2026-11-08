@@ -2,7 +2,7 @@
 //!
 //! Rust drives the whole cycle rather than the plugin's JS guest API, for one
 //! concrete reason: the guest `check()` cannot override the endpoint per call,
-//! and the endpoint is exactly what changes between the stable and weekly
+//! and the endpoint is exactly what changes between the stable and beta
 //! release tracks. So the endpoint is computed here from the user's configured
 //! track and handed to a per-call [`tauri_plugin_updater::UpdaterBuilder`].
 //!
@@ -46,6 +46,7 @@ use std::sync::{Mutex, OnceLock};
 use std::task::Poll;
 use std::time::Duration;
 
+use semver::{Prerelease, Version};
 use serde::Serialize;
 use tauri::utils::config::BundleType;
 use tauri::{AppHandle, Emitter, Manager, State, Url};
@@ -59,10 +60,11 @@ use crate::core::AppState;
 ///
 /// Honoured unconditionally in a DEBUG build - that is the manual test recipe
 /// in docs/releasing.md, where a local `python3 -m http.server` stands in for
-/// GitHub. In a release build it is restricted to https `github.com` URLs
-/// ([`is_trusted_manifest_url`]): the manifest decides which binary an
-/// installed app downloads, so an attacker who can set one environment
-/// variable must not be able to redirect it. (The plugin's own
+/// GitHub - and REQUIRED there: without it a debug build does not update at
+/// all ([`dev_build_refusal`], #644). In a release build it is restricted to
+/// https `github.com` URLs ([`is_trusted_manifest_url`]): the manifest decides
+/// which binary an installed app downloads, so an attacker who can set one
+/// environment variable must not be able to redirect it. (The plugin's own
 /// `validate_endpoints` already refuses non-https in release; this narrows the
 /// host as well.)
 ///
@@ -72,8 +74,15 @@ pub const UPDATE_URL_ENV: &str = "STALAGMIGHT_UPDATE_URL";
 /// Per-track manifests, both rolling assets of the `updater` release.
 const STABLE_ENDPOINT: &str =
     "https://github.com/Stalagmight/Stalagmight/releases/download/updater/latest-stable.json";
-const WEEKLY_ENDPOINT: &str =
-    "https://github.com/Stalagmight/Stalagmight/releases/download/updater/latest-weekly.json";
+const BETA_ENDPOINT: &str =
+    "https://github.com/Stalagmight/Stalagmight/releases/download/updater/latest-beta.json";
+
+/// The pre-release part of THIS build's version, without its leading hyphen
+/// (#650): `rc.2` for a release candidate, unset or empty for a final release.
+/// Baked in by CI at compile time. The package version - and with it every
+/// artifact - stays a plain `X.Y.Z`, so this is the only place a candidate
+/// learns that it is one.
+const BAKED_PRERELEASE: Option<&str> = option_env!("STALAGMIGHT_PRERELEASE");
 
 /// The only host a release build will fetch a manifest from.
 const TRUSTED_MANIFEST_HOST: &str = "github.com";
@@ -127,7 +136,9 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_mins(10);
 pub struct AppUpdateCheck {
     pub status: AppUpdateStatus,
     /// The version the RUNNING app was built as, so the UI can say "you have X"
-    /// without a second round trip.
+    /// without a second round trip. The EFFECTIVE version
+    /// ([`effective_version`]): `0.5.2-rc.2` for a candidate, the same version
+    /// the offer was compared against.
     pub current_version: String,
     /// Whether a downloaded update is installed when the app quits
     /// ([`installs_on_quit`]), so the banner can promise it - or not.
@@ -231,6 +242,11 @@ struct Pending {
     /// cannot have its bytes paired with that later check's `Update` - both
     /// would be validly signed, and the user would silently install a version
     /// nobody offered them. See [`store_downloaded_bytes`].
+    ///
+    /// Also bumped by [`discard_download`] (#645), which keeps the parked
+    /// `Update` but not the bytes. The pairing still holds: bytes are only ever
+    /// installed under the generation they were stored for, and the `Update`
+    /// parked at that generation is the one they were downloaded from.
     generation: u64,
     update: Option<Update>,
     /// The verified bundle and the generation it was downloaded for.
@@ -342,6 +358,36 @@ fn self_update_refusal(bundle: Option<BundleType>, release_build: bool) -> Optio
     ))
 }
 
+/// Why a DEBUG build must not update itself, or `None` (#644).
+///
+/// A debug build is a developer's `target/debug` binary, not an install: left
+/// to the real manifest, `./scripts/dev.sh` on a branch older than the
+/// published stable would download that release and, on window close, have the
+/// plugin replace `target/debug/stalagmight` (Linux) or move `target/debug`
+/// away (macOS). So a debug build checks, downloads and installs ONLY when
+/// [`UPDATE_URL_ENV`] names a manifest - the local test recipe - and refuses
+/// otherwise. "Names" means what [`endpoint_for_track`] would honour in a debug
+/// build, so a blank value refuses here exactly as it falls back there.
+///
+/// Parameterised for the same reason as [`resolve_override`]: under
+/// `cargo test` `cfg!(debug_assertions)` is always true, so the release branch
+/// would otherwise be unreachable from a test.
+fn dev_build_refusal(debug_build: bool, override_url: Option<&str>) -> Option<String> {
+    if !debug_build || resolve_override(override_url, false).is_some() {
+        return None;
+    }
+    Some(format!(
+        "This is a development build, which does not update itself; set {UPDATE_URL_ENV} to a manifest URL to test the updater"
+    ))
+}
+
+/// [`dev_build_refusal`] for the running build and the current environment.
+/// Read at call time, like the endpoint override itself.
+fn this_build_refusal() -> Option<String> {
+    let raw = std::env::var(UPDATE_URL_ENV).ok();
+    dev_build_refusal(cfg!(debug_assertions), raw.as_deref())
+}
+
 /// Is this a manifest URL a release build may fetch?
 ///
 /// https, and `github.com` exactly - not a suffix match, which would accept
@@ -387,9 +433,76 @@ pub fn endpoint_for_track(track: UpdateTrack) -> String {
     }
     match track {
         UpdateTrack::Stable => STABLE_ENDPOINT,
-        UpdateTrack::Weekly => WEEKLY_ENDPOINT,
+        UpdateTrack::Beta => BETA_ENDPOINT,
     }
     .to_owned()
+}
+
+/// The version this build compares offers against (#650): the package version
+/// with the baked pre-release, so `0.5.2` built with `rc.2` is `0.5.2-rc.2`.
+///
+/// Unset or blank is a final release and yields the package version as it is.
+/// `Err` says why a non-blank value was not used; [`running_version`] logs it
+/// and falls back to the package version.
+///
+/// A leading hyphen is refused although semver would accept it: `-rc.2` parses
+/// as the identifier `-rc` and makes `0.5.2--rc.2`, which sorts BELOW
+/// `0.5.2-rc.1` - so the build would be offered, and install, itself on every
+/// check.
+fn effective_version(package: &Version, prerelease: Option<&str>) -> Result<Version, String> {
+    let Some(pre) = prerelease.map(str::trim).filter(|p| !p.is_empty()) else {
+        return Ok(package.clone());
+    };
+    // Checked here because `Prerelease::new` accepts it (`-` is an identifier
+    // character in semver-1.0.27 parse.rs `identifier`); see above for why it
+    // must not be.
+    if pre.starts_with('-') {
+        return Err(format!(
+            "STALAGMIGHT_PRERELEASE {pre:?} must not start with a hyphen"
+        ));
+    }
+    if !package.pre.is_empty() {
+        return Err(format!(
+            "the package version {package} already has a pre-release"
+        ));
+    }
+    let pre = Prerelease::new(pre)
+        .map_err(|e| format!("STALAGMIGHT_PRERELEASE {pre:?} is not a semver pre-release: {e}"))?;
+    Ok(Version {
+        pre,
+        ..package.clone()
+    })
+}
+
+/// [`effective_version`], falling back to the plain package version - with a
+/// warning - when the baked pre-release is unusable. Comparing against the
+/// plain version is what the plugin did before #650, so the fallback can miss
+/// later candidates of the same release but can never downgrade.
+fn running_version(package: &Version, prerelease: Option<&str>) -> Version {
+    effective_version(package, prerelease).unwrap_or_else(|why| {
+        tracing::warn!(
+            %why,
+            purpose = "compare update offers against this build's version",
+            "Ignoring the baked pre-release; using the plain package version"
+        );
+        package.clone()
+    })
+}
+
+/// Is `offered` an update for a build whose effective version is `running`?
+///
+/// Strictly greater by semver PRECEDENCE: `0.5.2-rc.1 < 0.5.2-rc.2 <
+/// 0.5.2-rc.10 < 0.5.2`. An equal version is not an update, and neither is a
+/// lower one - which is what makes switching from Beta back to Stable stay on
+/// the candidate instead of downgrading. Precedence ignores build metadata,
+/// which `Version`'s `Ord` does not.
+///
+/// Handed to the plugin as its `version_comparator`. Without one the plugin
+/// compares against the PACKAGE version, a plain `X.Y.Z` even in a candidate,
+/// so a candidate would never be offered the candidates after it, nor its own
+/// final release.
+fn is_newer(offered: &Version, running: &Version) -> bool {
+    offered.cmp_precedence(running) == std::cmp::Ordering::Greater
 }
 
 /// Why a download must stop before the body ends.
@@ -437,7 +550,7 @@ fn download_abort_reason(downloaded: u64, content_length: Option<u64>) -> Option
 }
 
 const SUPERSEDED_MESSAGE: &str =
-    "A newer update check replaced this one while it was downloading; check again";
+    "A newer update check replaced this download, or it was cancelled; check again";
 
 /// Should the download for `generation` stop at this chunk?
 ///
@@ -602,6 +715,11 @@ pub async fn check_for_app_update(
     if !updater_configured() {
         return Err(updater_not_configured());
     }
+    // A development build never asks the real manifest (#644). Before any
+    // state is touched, like the bundle gate below.
+    if let Some(refusal) = this_build_refusal() {
+        return Err(refusal);
+    }
     // Before any state is touched, for the same reason as the transport-failure
     // arm below. Gating the check is enough: download and install refuse
     // without the `Update` only a successful check parks.
@@ -611,7 +729,8 @@ pub async fn check_for_app_update(
     ) {
         return Err(refusal);
     }
-    let current_version = app.package_info().version.to_string();
+    let running = running_version(&app.package_info().version, BAKED_PRERELEASE);
+    let current_version = running.to_string();
     let track = state.get_config().general.update_track;
     let endpoint = endpoint_for_track(track);
     let url = Url::parse(&endpoint)
@@ -620,6 +739,9 @@ pub async fn check_for_app_update(
     let updater = app
         .updater_builder()
         .timeout(CHECK_TIMEOUT)
+        // The plugin passes its own idea of the current version, the package
+        // version; it is ignored in favour of the effective one (#650).
+        .version_comparator(move |_package, release| is_newer(&release.version, &running))
         .endpoints(vec![url])
         .map_err(|e| format!("Update endpoint was rejected: {e}"))?
         .build()
@@ -693,6 +815,11 @@ pub async fn download_app_update(
     app: AppHandle,
     update_state: State<'_, AppUpdateState>,
 ) -> Result<(), String> {
+    // Unreachable through the check, which refuses first; repeated so the
+    // download does not depend on that ordering (#644).
+    if let Some(refusal) = this_build_refusal() {
+        return Err(refusal);
+    }
     let (generation, update) = checked_update(&update_state)?;
 
     // Shared with the progress closure, which runs inside the download future
@@ -836,6 +963,35 @@ pub fn unarm_app_update_restart(update_state: State<AppUpdateState>) -> Result<(
     update_state.with(|pending| pending.restart_armed = false)
 }
 
+/// Drop the download in hand, keeping the offer it was for (#645).
+///
+/// Bumping the generation is what reaches a download still IN FLIGHT: its
+/// next chunk sees the change and stops ([`chunk_abort_reason`]), and if the
+/// body ends first, [`store_downloaded_bytes`] refuses it. Finished bytes are
+/// dropped, so [`install_downloaded_update_on_exit`] finds nothing to install.
+/// The arm goes with them: it was consent for those bytes.
+///
+/// The parked `Update` stays, so a later [`download_app_update`] works without
+/// a new check - the frontend goes back to offering Download.
+fn discard_download(pending: &mut Pending) {
+    pending.generation = pending.generation.wrapping_add(1);
+    pending.bytes = None;
+    pending.restart_armed = false;
+}
+
+/// Abandon an automatic download because "Update automatically" was turned
+/// off (#645).
+///
+/// Unconditional on purpose: which download was automatic is the frontend's
+/// knowledge (the backend sees one `download_app_update` either way), and the
+/// frontend only calls this for a download a check started, never for one the
+/// user asked for. Idempotent, and harmless from a stray `invoke`: the worst
+/// it does is make the user download the update again.
+#[tauri::command]
+pub fn discard_app_update_download(update_state: State<AppUpdateState>) -> Result<(), String> {
+    update_state.with(discard_download)
+}
+
 /// Install the downloaded update and relaunch into it.
 ///
 /// The point of no return. It requires [`arm_app_update_restart`] to have run,
@@ -899,6 +1055,13 @@ fn take_for_exit(pending: &mut Pending) -> Option<(Update, Vec<u8>)> {
 /// after the window has gone.
 pub fn install_downloaded_update_on_exit(app: &AppHandle) {
     if !installs_on_quit() {
+        return;
+    }
+    // Defense in depth for #644: the check already refuses in a development
+    // build, but this is the step that overwrites `target/debug`, so it does
+    // not rely on that.
+    if let Some(refusal) = this_build_refusal() {
+        tracing::info!(reason = %refusal, "Not installing an update on quit");
         return;
     }
     let Some(update_state) = app.try_state::<AppUpdateState>() else {
@@ -972,17 +1135,19 @@ mod tests {
         let _env = EnvVarGuard::set(None);
 
         let stable = endpoint_for_track(UpdateTrack::Stable);
-        let weekly = endpoint_for_track(UpdateTrack::Weekly);
+        let beta = endpoint_for_track(UpdateTrack::Beta);
         assert!(stable.ends_with("/latest-stable.json"), "{stable}");
-        assert!(weekly.ends_with("/latest-weekly.json"), "{weekly}");
+        // Not the legacy `latest-weekly.json`, which the release pipeline only
+        // mirrors for 0.5.0/0.5.1 installs (#650).
+        assert!(beta.ends_with("/latest-beta.json"), "{beta}");
         assert_ne!(
-            stable, weekly,
+            stable, beta,
             "the two tracks must not resolve to one manifest"
         );
         // Both defaults must satisfy the release allowlist, or a release build
         // would refuse its own endpoints if they were ever routed through it.
         assert!(is_trusted_manifest_url(&stable), "{stable}");
-        assert!(is_trusted_manifest_url(&weekly), "{weekly}");
+        assert!(is_trusted_manifest_url(&beta), "{beta}");
     }
 
     #[test]
@@ -990,7 +1155,7 @@ mod tests {
         let _lock = env_lock();
         let _env = EnvVarGuard::set(Some("http://127.0.0.1:8000/latest.json"));
 
-        for track in [UpdateTrack::Stable, UpdateTrack::Weekly] {
+        for track in [UpdateTrack::Stable, UpdateTrack::Beta] {
             // Debug build (which every test binary is), so the local recipe URL
             // is honoured verbatim.
             assert_eq!(
@@ -1006,7 +1171,7 @@ mod tests {
         let _env = EnvVarGuard::set(Some("   "));
 
         assert_eq!(endpoint_for_track(UpdateTrack::Stable), STABLE_ENDPOINT);
-        assert_eq!(endpoint_for_track(UpdateTrack::Weekly), WEEKLY_ENDPOINT);
+        assert_eq!(endpoint_for_track(UpdateTrack::Beta), BETA_ENDPOINT);
     }
 
     /// The override is read on every call, not captured once. A support session
@@ -1071,9 +1236,126 @@ mod tests {
         // Mirrors what `check_for_app_update` builds, which is the one place the
         // `v` prefix and the tag shape are decided.
         assert_eq!(
-            format!("{RELEASE_TAG_URL_PREFIX}0.5.1-weekly.20260817"),
-            "https://github.com/Stalagmight/Stalagmight/releases/tag/v0.5.1-weekly.20260817"
+            format!("{RELEASE_TAG_URL_PREFIX}0.5.2-rc.2"),
+            "https://github.com/Stalagmight/Stalagmight/releases/tag/v0.5.2-rc.2"
         );
+    }
+
+    // ── Effective version and ordering (#650) ───────────────────────────────
+
+    fn v(text: &str) -> Version {
+        Version::parse(text).expect("a test version")
+    }
+
+    /// The release chain a Beta user walks, in order: each step is offered to
+    /// the one before it, and never the other way round.
+    #[test]
+    fn candidates_sort_below_their_release_and_numerically_among_themselves() {
+        let chain = ["0.5.1", "0.5.2-rc.1", "0.5.2-rc.2", "0.5.2-rc.10", "0.5.2"];
+        for pair in chain.windows(2) {
+            let [older, newer] = [pair[0], pair[1]];
+            assert!(
+                is_newer(&v(newer), &v(older)),
+                "{newer} must be offered to {older}"
+            );
+            assert!(
+                !is_newer(&v(older), &v(newer)),
+                "{older} must not be offered to {newer}"
+            );
+        }
+        // Numeric, not lexical: "10" < "2" as text.
+        assert!(is_newer(&v("0.5.2-rc.10"), &v("0.5.2-rc.9")));
+    }
+
+    #[test]
+    fn an_equal_version_is_not_offered() {
+        for same in ["0.5.1", "0.5.2-rc.2", "0.5.2"] {
+            assert!(!is_newer(&v(same), &v(same)), "{same}");
+        }
+        // Build metadata does not make an otherwise equal version newer.
+        assert!(!is_newer(&v("0.5.2+abc"), &v("0.5.2")));
+    }
+
+    /// A candidate switched back to Stable reads a manifest that is BEHIND it.
+    /// It stays where it is until the final release of its version arrives.
+    #[test]
+    fn switching_beta_to_stable_never_downgrades() {
+        let candidate = running_version(&v("0.5.2"), Some("rc.2"));
+        assert_eq!(candidate, v("0.5.2-rc.2"));
+        assert!(
+            !is_newer(&v("0.5.1"), &candidate),
+            "the old stable is a downgrade"
+        );
+        assert!(
+            is_newer(&v("0.5.2"), &candidate),
+            "its own final release is an update"
+        );
+    }
+
+    /// Without the comparator the plugin compares against the package version.
+    /// Pinned so the reason for overriding it stays visible: a candidate built
+    /// as `0.5.2` would see `0.5.2` as nothing new.
+    #[test]
+    fn the_effective_version_is_what_makes_the_final_release_an_update() {
+        let package = v("0.5.2");
+        assert!(!is_newer(&v("0.5.2"), &package));
+        assert!(is_newer(
+            &v("0.5.2"),
+            &running_version(&package, Some("rc.2"))
+        ));
+    }
+
+    #[test]
+    fn the_baked_prerelease_makes_the_effective_version() {
+        assert_eq!(
+            effective_version(&v("0.5.2"), Some("rc.2")),
+            Ok(v("0.5.2-rc.2"))
+        );
+        assert_eq!(
+            effective_version(&v("0.5.2"), Some(" rc.10 ")),
+            Ok(v("0.5.2-rc.10"))
+        );
+    }
+
+    /// A final release bakes nothing (or an empty value): its version is the
+    /// package version, and that is not an error worth a warning.
+    #[test]
+    fn a_final_build_is_its_plain_package_version() {
+        for unset in [None, Some(""), Some("   ")] {
+            assert_eq!(
+                effective_version(&v("0.5.2"), unset),
+                Ok(v("0.5.2")),
+                "{unset:?}"
+            );
+        }
+    }
+
+    /// Anything that is not a plain pre-release falls back to the package
+    /// version rather than producing a version that sorts somewhere surprising.
+    #[test]
+    fn an_invalid_prerelease_falls_back_to_the_plain_version() {
+        for (invalid, why) in [
+            ("rc.02", "a leading zero in a numeric identifier"),
+            ("rc..2", "an empty identifier"),
+            ("rc 2", "a space"),
+            (
+                "rc.2+abc",
+                "build metadata, which is not part of a pre-release",
+            ),
+            ("-rc.2", "a leading hyphen"),
+        ] {
+            assert!(
+                effective_version(&v("0.5.2"), Some(invalid)).is_err(),
+                "{invalid:?} must be refused: {why}"
+            );
+            assert_eq!(
+                running_version(&v("0.5.2"), Some(invalid)),
+                v("0.5.2"),
+                "{invalid:?}"
+            );
+        }
+        // A package version that already carries a pre-release is not extended.
+        assert!(effective_version(&v("0.5.2-alpha"), Some("rc.2")).is_err());
     }
 
     // ── Download bounds ──────────────────────────────────────────────────────
@@ -1233,6 +1515,44 @@ mod tests {
         }
         assert!(self_update_refusal(None, true).is_some());
         assert_eq!(self_update_refusal(None, false), None);
+    }
+
+    /// [#644] A debug build left on the real manifest downloaded the published
+    /// release and replaced `target/debug` on quit. Without an override it now
+    /// refuses, by name, and says how to test the updater instead.
+    #[test]
+    fn a_debug_build_refuses_without_an_override() {
+        for unset in [None, Some(""), Some("   ")] {
+            let message = dev_build_refusal(true, unset).unwrap_or_default();
+            assert!(
+                message.contains("development build") && message.contains(UPDATE_URL_ENV),
+                "{unset:?} must refuse naming the override, got {message:?}"
+            );
+        }
+    }
+
+    /// ...while the local recipe (a debug build pointed at a local manifest)
+    /// keeps working, and a release build is never refused on these grounds.
+    #[test]
+    fn the_override_and_a_release_build_pass_the_dev_gate() {
+        assert_eq!(
+            dev_build_refusal(true, Some("http://127.0.0.1:8000/latest.json")),
+            None
+        );
+        for raw in [None, Some(""), Some("http://127.0.0.1:8000/latest.json")] {
+            assert_eq!(dev_build_refusal(false, raw), None, "{raw:?}");
+        }
+    }
+
+    /// The gate reads the same variable the endpoint does, at call time.
+    #[test]
+    fn the_dev_gate_follows_the_environment() {
+        let _lock = env_lock();
+        let _env = EnvVarGuard::set(None);
+        // Every test binary is a debug build.
+        assert!(this_build_refusal().is_some());
+        std::env::set_var(UPDATE_URL_ENV, "http://127.0.0.1:8000/latest.json");
+        assert_eq!(this_build_refusal(), None);
     }
 
     // ── State machine ────────────────────────────────────────────────────────
@@ -1512,6 +1832,60 @@ mod tests {
         assert!(state
             .with(|pending| pending.bytes.is_none())
             .expect("lockable"));
+    }
+
+    // ── Discarding an automatic download (#645) ─────────────────────────────
+
+    /// A finished download is dropped, so nothing installs at quit and the
+    /// restart cannot be armed for it.
+    #[test]
+    fn a_discard_drops_finished_bytes_so_nothing_installs_at_quit() {
+        let state = AppUpdateState::default();
+        seed_download(&state, 1);
+        arm_restart(&state).expect("arming a ready download should work");
+
+        state.with(discard_download).expect("lockable");
+
+        assert!(state
+            .with(|pending| pending.bytes.is_none() && !pending.restart_armed)
+            .expect("lockable"));
+        assert!(state.with(take_for_exit).expect("lockable").is_none());
+        let arm = refusal(arm_restart(&state));
+        assert!(arm.contains("download it first"), "{arm}");
+    }
+
+    /// A download still in flight stops at its next chunk, and if its body
+    /// ends first, its bytes are refused rather than stored.
+    #[test]
+    fn a_discard_stops_an_in_flight_download_and_refuses_its_bytes() {
+        let state = AppUpdateState::default();
+        let started = state.with(|pending| pending.generation).expect("lockable");
+
+        state.with(discard_download).expect("lockable");
+
+        assert_eq!(
+            chunk_abort_reason(&state, started, 1_000, Some(10_000)),
+            Some(DownloadAbort::Superseded)
+        );
+        let err = refusal(store_downloaded_bytes(&state, started, vec![0u8; 8]));
+        assert!(err.contains("cancelled"), "{err}");
+        assert!(state
+            .with(|pending| pending.bytes.is_none())
+            .expect("lockable"));
+    }
+
+    /// The offer survives: a download started AFTER the discard - the user
+    /// pressing Download on the banner - is stored and can be armed, so the
+    /// discard cannot leave the update unreachable until the next check.
+    #[test]
+    fn a_download_after_a_discard_is_stored_and_armable() {
+        let state = AppUpdateState::default();
+        seed_download(&state, 1);
+        state.with(discard_download).expect("lockable");
+
+        let restarted = state.with(|pending| pending.generation).expect("lockable");
+        store_downloaded_bytes(&state, restarted, vec![2u8; 4]).expect("should store");
+        arm_restart(&state).expect("a download after the discard should arm");
     }
 
     /// Put the state where a real check + download would leave it, without an

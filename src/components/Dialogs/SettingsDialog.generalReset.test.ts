@@ -5,9 +5,9 @@
  *
  * The snapshot is produced by `pnpm gen:ipc-types` on a developer machine and
  * therefore always says `"stable"`, while `UpdateTrack::default()` in Rust
- * reads `option_env!("STALAGMIGHT_CHANNEL")` - so on a weekly build the real
- * default is `"weekly"`. The per-ROW reset was fixed for this and the
- * category-wide header button was not, so pressing it on a weekly build
+ * reads `option_env!("STALAGMIGHT_CHANNEL")` - so on a beta build the real
+ * default is `"beta"`. The per-ROW reset was fixed for this and the
+ * category-wide header button was not, so pressing it on a beta build
  * silently staged a switch to the stable track.
  */
 import { describe, it, expect } from 'vitest';

@@ -619,9 +619,9 @@ pub enum ShortcutFeedback {
 
 /// Which release track the in-app update check follows.
 ///
-/// The `Default` is a property of the BUILD, not of the user: the weekly CI
-/// workflow compiles with `STALAGMIGHT_CHANNEL=weekly` set, so a weekly install
-/// follows the weekly manifest out of the box while an ordinary stable build -
+/// The `Default` is a property of the BUILD, not of the user: CI compiles a
+/// release candidate with `STALAGMIGHT_CHANNEL=beta` set, so a candidate install
+/// follows the beta manifest out of the box while an ordinary stable build -
 /// which has no such variable at compile time - follows the stable one.
 /// `option_env!` is read when this crate is compiled, so flipping the variable
 /// on an installed app does nothing; the user's own choice lives in the config
@@ -630,16 +630,21 @@ pub enum ShortcutFeedback {
 #[serde(rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum UpdateTrack {
-    /// Tagged releases only.
+    /// Final releases only.
     Stable,
-    /// The Monday prerelease builds, which lead stable.
-    Weekly,
+    /// Release candidates of the next version, then its final release (#650).
+    ///
+    /// Read from `weekly` too: 0.5.0 and 0.5.1 saved that for the track this
+    /// replaces, and a config that stopped loading would lose every other
+    /// setting with it. Always written back as `beta`.
+    #[serde(alias = "weekly")]
+    Beta,
 }
 
 impl Default for UpdateTrack {
     fn default() -> Self {
         match option_env!("STALAGMIGHT_CHANNEL") {
-            Some("weekly") => Self::Weekly,
+            Some("beta" | "weekly") => Self::Beta,
             _ => Self::Stable,
         }
     }
@@ -692,7 +697,7 @@ pub struct GeneralConfig {
     /// Whether the telemetry opt-in dialog has been shown
     #[serde(default)]
     pub telemetry_opt_in_shown: bool,
-    /// Release track the update check follows: stable (default) or weekly
+    /// Release track the update check follows: stable (default) or beta
     #[serde(default)]
     pub update_track: UpdateTrack,
     /// Whether the AUTOMATIC launch-time update check runs. On by default.

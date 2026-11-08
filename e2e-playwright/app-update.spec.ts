@@ -182,6 +182,71 @@ test.describe('In-app update banner', () => {
     await expect(page.getByTestId('update-banner-download')).toHaveCount(0);
   });
 
+  /**
+   * [#645] The setting used to gate only whether a download STARTED. Turning it
+   * off now takes back the download a check started - here About's, which runs
+   * in view - and the banner offers Download again instead of an install.
+   */
+  test('turning automatic updates off takes back the automatic download', async ({ page }) => {
+    await setIpcOverrides(page, {
+      check_for_app_update: {
+        status: { kind: 'available', version: '9.9.9', notes_url: 'https://example.com/notes' },
+        current_version: '0.5.0',
+        installs_on_quit: true,
+      },
+      download_app_update: null,
+    });
+    await openSettingsFromMenu(page);
+    await page.getByTestId('settings-about-button').click();
+    await page.getByTestId('about-check-updates').click();
+    await expect(page.getByTestId('about-check-updates-result')).toContainText('9.9.9');
+    await page.getByTestId('about-close').click();
+
+    await page.getByTestId('toggle-update-check').click();
+    await page.getByTestId('settings-save-button').click();
+    await expect(page.getByTestId('settings-dialog')).toHaveCount(0);
+
+    await expect(page.getByTestId('update-banner-download')).toBeVisible();
+    await expect(page.getByTestId('update-banner-restart')).toHaveCount(0);
+    await expect(page.getByTestId('update-banner')).not.toContainText('will be installed when you quit');
+    expect(
+      await page.evaluate(
+        () => (window as unknown as { __MOCK_DISCARD_UPDATE_CALLS__?: number }).__MOCK_DISCARD_UPDATE_CALLS__,
+      ),
+    ).toBe(1);
+  });
+
+  /**
+   * [#650] Beta installs release candidates, so switching to it is confirmed
+   * first; Cancel keeps the track, and Stable needs no confirmation.
+   */
+  test('switching the update track to Beta asks first', async ({ page }) => {
+    await openSettingsFromMenu(page);
+    const track = page.getByTestId('select-update-track');
+    await expect(track).toContainText('Stable');
+
+    await track.click();
+    await page.getByTestId('select-update-track-option-beta').click();
+    const warning = page.getByTestId('update-track-beta-dialog');
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText('release candidates');
+    await page.getByTestId('update-track-beta-cancel').click();
+    await expect(warning).toHaveCount(0);
+    await expect(track).toContainText('Stable');
+
+    await track.click();
+    await page.getByTestId('select-update-track-option-beta').click();
+    await page.getByTestId('update-track-beta-confirm').click();
+    await expect(track).toContainText('Beta');
+    // The settings dialog itself is still open: the warning closed alone.
+    await expect(page.getByTestId('settings-dialog')).toBeVisible();
+
+    await track.click();
+    await page.getByTestId('select-update-track-option-stable').click();
+    await expect(page.getByTestId('update-track-beta-dialog')).toHaveCount(0);
+    await expect(track).toContainText('Stable');
+  });
+
   test('Dismiss hides the banner for the session, for that version only', async ({ page }) => {
     await seedAvailable(page, '9.9.9');
     await expect(page.getByTestId('update-banner')).toBeVisible();

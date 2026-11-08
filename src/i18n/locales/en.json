@@ -107,16 +107,23 @@
       },
       "updateCheck": {
         "label": "Update automatically",
-        "help": "Checks GitHub for new releases when Stalagmight starts and every 4 hours while it is open, and downloads them in the background. A downloaded update installs when you quit (on Windows, when you choose Restart to update). Turn this off to check and download only when you ask.",
+        "help": "Checks GitHub for new releases when Stalagmight starts and every 4 hours while it is open, and downloads them in the background. When one is ready, the update banner says whether it installs when you quit or needs Restart to update. Turning this off cancels an automatic download that is not installed yet; you can still check and download when you ask.",
         "aria": "Enable automatic updates"
       },
       "updateTrack": {
         "label": "Update track",
-        "help": "Stable releases are the recommended default. Weekly builds get new features sooner, with less testing.",
+        "help": "Stable releases are the recommended default. Beta also installs release candidates of the next version, which get new features sooner, with less testing.",
         "aria": "Update track preference",
         "options": {
           "stable": "Stable",
-          "weekly": "Weekly"
+          "beta": "Beta"
+        },
+        "betaWarning": {
+          "title": "Switch to Beta updates?",
+          "bugs": "Beta installs release candidates: early builds of the next version, which may still have bugs.",
+          "projects": "Projects you save with a release candidate may not open in an older version of Stalagmight.",
+          "noDowngrade": "Switching back to Stable does not downgrade. You stay on the release candidate until the next stable release comes out.",
+          "confirm": "Switch to Beta"
         }
       },
       "telemetry": {

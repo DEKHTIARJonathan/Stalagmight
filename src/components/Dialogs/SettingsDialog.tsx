@@ -895,8 +895,8 @@ export default function SettingsDialog() {
           {/* The PERSISTED track, not the staged `localConfig` one. The check
               button below runs a backend command that reads the config from
               disk, so showing the staged value made the line disagree with the
-              behaviour it sits next to: stage Weekly, do not Save, press Check,
-              and the label said Weekly while the query went to Stable. A staged
+              behaviour it sits next to: stage Beta, do not Save, press Check,
+              and the label said Beta while the query went to Stable. A staged
               change is called out instead of silently displayed. */}
           <p className="text-xs text-text-secondary" data-testid="about-update-track">
             {t('dialogs.about.track', {

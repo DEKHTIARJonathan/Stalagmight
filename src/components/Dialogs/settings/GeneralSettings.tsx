@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Toggle } from '../../common/Toggle';
 import { Select } from '../../common/Select';
 import { Button } from '../../common/Button';
+import { AlertDialog } from '../AlertDialog';
 import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
 import { getPanelId, getTabId } from '../SettingsSidebar';
@@ -125,8 +126,25 @@ export function GeneralSettings({
   // --- Updates (#579) ---
   const handleUpdateCheckToggle = createToggleHandler(onChange,
     (v) => ({ general: { ...config.general, update_check_enabled: v } }));
-  const handleUpdateTrackChange = createSelectHandler(onChange,
-    (v) => ({ general: { ...config.general, update_track: v as UpdateTrack } }));
+
+  // [#650] Switching TO Beta is confirmed first: a release candidate can save
+  // projects an older version cannot open, and switching back does not
+  // downgrade. Cancel stages nothing, so the Select (controlled by `config`)
+  // stays on the current track. Stable needs no confirmation. The row reset
+  // goes through here too, since on a beta build its default is Beta.
+  const [confirmBeta, setConfirmBeta] = useState(false);
+  const requestUpdateTrack = useCallback((track: UpdateTrack) => {
+    if (track === 'beta' && config.general.update_track !== 'beta') {
+      setConfirmBeta(true);
+      return;
+    }
+    onChange({ general: { ...config.general, update_track: track } });
+  }, [config.general, onChange]);
+  const handleConfirmBeta = useCallback(() => {
+    setConfirmBeta(false);
+    onChange({ general: { ...config.general, update_track: 'beta' } });
+  }, [config.general, onChange]);
+  const handleCancelBeta = useCallback(() => setConfirmBeta(false), []);
 
   // Not `defaultConfig.general.update_track` - that snapshot always says
   // "stable" while the Rust default is build-dependent. See
@@ -439,16 +457,16 @@ export function GeneralSettings({
           label={t('settings.general.updateTrack.label')}
           helpText={t('settings.general.updateTrack.help')}
           isChanged={isFieldChanged(changedFields, 'general.update_track')}
-          onReset={() => onChange({ general: { ...config.general, update_track: defaultUpdateTrack } })}
+          onReset={() => requestUpdateTrack(defaultUpdateTrack)}
           isDefault={config.general.update_track === defaultUpdateTrack}
           data-testid="setting-update-track"
         >
           <Select
             value={config.general.update_track}
-            onChange={handleUpdateTrackChange}
+            onChange={(v) => requestUpdateTrack(v as UpdateTrack)}
             options={[
               { value: 'stable', label: t('settings.general.updateTrack.options.stable') },
-              { value: 'weekly', label: t('settings.general.updateTrack.options.weekly') },
+              { value: 'beta', label: t('settings.general.updateTrack.options.beta') },
             ]}
             className="w-40"
             aria-label={t('settings.general.updateTrack.aria')}
@@ -456,6 +474,30 @@ export function GeneralSettings({
           />
         </SettingRow>
       </SettingsSection>
+
+      {/* `danger`, as for the category reset: the choice cannot be undone by
+          switching back. It also keeps the initial focus on Cancel, since only
+          a `primary` button takes it (AlertDialog `focusInitial`). */}
+      <AlertDialog
+        open={confirmBeta}
+        title={t('settings.general.updateTrack.betaWarning.title')}
+        onClose={handleCancelBeta}
+        data-testid="update-track-beta-dialog"
+        actions={
+          <>
+            <Button onClick={handleCancelBeta} data-testid="update-track-beta-cancel">
+              {t('common.actions.cancel')}
+            </Button>
+            <Button variant="danger" onClick={handleConfirmBeta} data-testid="update-track-beta-confirm">
+              {t('settings.general.updateTrack.betaWarning.confirm')}
+            </Button>
+          </>
+        }
+      >
+        <p>{t('settings.general.updateTrack.betaWarning.bugs')}</p>
+        <p>{t('settings.general.updateTrack.betaWarning.projects')}</p>
+        <p>{t('settings.general.updateTrack.betaWarning.noDowngrade')}</p>
+      </AlertDialog>
     </div>
   );
 }

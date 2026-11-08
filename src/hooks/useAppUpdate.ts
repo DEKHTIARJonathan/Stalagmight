@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { invokeIpc } from '../utils/ipc';
 import { debugLog } from '../utils/debugLog';
 import { useProjectStore } from '../store/projectStore';
-import { useUpdateStore } from '../store/updateStore';
+import { useUpdateStore, holdsAutomaticDownload, type DownloadOrigin } from '../store/updateStore';
 import type { AppUpdateCheck } from '../types/ipc/AppUpdateCheck';
 import type { AppUpdateProgress } from '../types/ipc/AppUpdateProgress';
 import type { UpdateTrack } from '../types/ipc/UpdateTrack';
@@ -74,12 +74,17 @@ export type AppUpdateCheckOutcome =
  *
  * `stale` means a later download took over while this one ran, so its answer
  * was not applied and is nothing to report.
+ *
+ * `origin` is who started it (#645): turning "Update automatically" off
+ * abandons a `check` download and never a `user` one. It defaults from
+ * `background`, since a hidden download is always one a check started.
  */
 export async function downloadAppUpdate(
   version: string,
   background: boolean,
+  origin: DownloadOrigin = background ? 'check' : 'user',
 ): Promise<'ready' | 'failed' | 'stale'> {
-  const seq = useUpdateStore.getState().startDownloading(version, background);
+  const seq = useUpdateStore.getState().startDownloading(version, background, origin);
   // A later download owns the store now; this one's answer is not the current one.
   const superseded = () => useUpdateStore.getState().downloadSeq !== seq;
   try {
@@ -154,7 +159,7 @@ export async function runAppUpdateCheck(
       // [#631] Fetch it straight away, so the banner's first appearance is
       // already "ready" and an ordinary quit can install it.
       if (useProjectStore.getState().config?.general.update_check_enabled) {
-        void downloadAppUpdate(version, !userInitiated);
+        void downloadAppUpdate(version, !userInitiated, 'check');
       }
       return { kind: 'available', currentVersion: result.current_version, version };
     }
@@ -169,6 +174,37 @@ export async function runAppUpdateCheck(
 }
 
 /**
+ * "Update automatically" was turned off (#645): abandon the download a check
+ * started on its own, running or finished, so nothing installs at quit. The
+ * banner goes back to offering Download, so the update is still one click away.
+ * A download the user started from the banner is not touched.
+ *
+ * The backend drops its copy FIRST, and the store follows only once it has: the
+ * exit-time install needs no arm, so a banner offering Download over bytes the
+ * backend still holds would hide an install that is going to happen. On a
+ * refusal the banner keeps saying what will happen.
+ *
+ * A download that finishes while the discard is in flight stays harmless: if
+ * its bytes landed first the discard drops them and the store is then reset
+ * over its `ready`; if they land after, the backend refuses them; and once the
+ * store has abandoned it, the bumped `downloadSeq` makes its reply stale.
+ */
+export async function abandonAutomaticDownload(): Promise<void> {
+  if (!holdsAutomaticDownload(useUpdateStore.getState())) return;
+  try {
+    await invokeIpc('discard_app_update_download', undefined, {
+      purpose: 'discard the automatic app update download',
+    });
+  } catch (e) {
+    // Only an unusable update state refuses this, and the bytes will then
+    // install at quit - worth more than a debug line.
+    console.error('[useAppUpdate] could not discard the automatic download:', e);
+    return;
+  }
+  useUpdateStore.getState().abandonAutomaticDownload();
+}
+
+/**
  * Drives the in-app updater's background checks (#579): mount once at app
  * root (see App.tsx). `check_for_app_update` deliberately does not gate on
  * `update_check_enabled` itself - this hook is the gate for the automatic
@@ -179,6 +215,7 @@ export async function runAppUpdateCheck(
 export function useAppUpdate(): void {
   const config = useProjectStore((s) => s.config);
   const prevTrackRef = useRef<UpdateTrack | undefined>(undefined);
+  const prevAutoUpdateRef = useRef<boolean | undefined>(undefined);
 
   // (a) The automatic launch check: once per process, ~10s after config is
   // available, gated on update_check_enabled.
@@ -239,7 +276,7 @@ export function useAppUpdate(): void {
     };
   }, []);
 
-  // (d) A track switch (stable <-> weekly) re-checks against the new track,
+  // (d) A track switch (stable <-> beta) re-checks against the new track,
   // which also clears a stale available-banner when the new track has
   // nothing on offer (runAppUpdateCheck -> setUpToDate resets info/progress).
   // Not gated on update_check_enabled: the user just made an explicit choice
@@ -256,4 +293,15 @@ export function useAppUpdate(): void {
       void runAppUpdateCheck();
     }
   }, [config?.general.update_track]);
+
+  // (e) [#645] Turning "Update automatically" off abandons the download it
+  // started. Only the on -> off TRANSITION does: a config that loads with the
+  // setting already off has started nothing to abandon.
+  useEffect(() => {
+    const enabled = config?.general.update_check_enabled;
+    if (enabled === undefined) return;
+    const wasEnabled = prevAutoUpdateRef.current;
+    prevAutoUpdateRef.current = enabled;
+    if (wasEnabled === true && !enabled) void abandonAutomaticDownload();
+  }, [config?.general.update_check_enabled]);
 }

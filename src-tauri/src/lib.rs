@@ -1987,6 +1987,9 @@ pub fn run() {
             // do - the arm is the backend's own proof that it did.
             commands::app_update::check_for_app_update,
             commands::app_update::download_app_update,
+            // Turning "Update automatically" off abandons the automatic
+            // download (#645).
+            commands::app_update::discard_app_update_download,
             commands::app_update::arm_app_update_restart,
             commands::app_update::unarm_app_update_restart,
             commands::app_update::install_app_update_and_restart,

@@ -124,6 +124,10 @@ tauri-plugin-opener = "2"
 # release that still accepts `tauri = "2.9.x"`, i.e. the tauri we are on.
 # Moving off 2.9.x means rebasing the wry fork onto 0.54 first.
 tauri-plugin-updater = "~2.9.0"
+# The plugin's `version_comparator` hands over `semver::Version`s, and the
+# effective version (#650, `commands::app_update`) is built as one. Already in
+# the tree through tauri and the plugin; named here so the type can be.
+semver = "1"
 serde = { workspace = true, features = ["derive"] }
 # `float_roundtrip` is REQUIRED, not a preference. serde_json's default float
 # parser is best-effort and lands up to 1 ULP away from the value the writer

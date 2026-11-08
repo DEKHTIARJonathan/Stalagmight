@@ -50,7 +50,7 @@ export function UpdateBanner() {
   // The user asked for this one, so unlike a background download its failure
   // is reported.
   const handleDownload = () => {
-    void downloadAppUpdate(downloadingVersion, false).then((outcome) => {
+    void downloadAppUpdate(downloadingVersion, false, 'user').then((outcome) => {
       if (outcome !== 'failed') return;
       useUIStore
         .getState()

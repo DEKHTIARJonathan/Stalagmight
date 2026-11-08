@@ -1802,11 +1802,11 @@ fn test_general_config_shortcut_feedback_roundtrip() {
 fn test_update_track_default_follows_the_build_channel() {
     // `option_env!` is read when this crate is COMPILED, so the answer here is
     // a property of how the test binary was built: an ordinary build has no
-    // STALAGMIGHT_CHANNEL and must land on Stable, a weekly CI build compiles
-    // the same expression with `weekly` and must land on Weekly. Pinning both
-    // arms is what catches the default being flipped outright.
+    // STALAGMIGHT_CHANNEL and must land on Stable, a candidate CI build compiles
+    // the same expression with `beta` (or the legacy `weekly`) and must land on
+    // Beta. Pinning both arms is what catches the default being flipped outright.
     let expected = match option_env!("STALAGMIGHT_CHANNEL") {
-        Some("weekly") => UpdateTrack::Weekly,
+        Some("beta" | "weekly") => UpdateTrack::Beta,
         _ => UpdateTrack::Stable,
     };
     assert_eq!(UpdateTrack::default(), expected);
@@ -1821,7 +1821,7 @@ fn test_update_track_serializes_snake_case() {
     }
     for (value, expected) in [
         (UpdateTrack::Stable, "value = \"stable\""),
-        (UpdateTrack::Weekly, "value = \"weekly\""),
+        (UpdateTrack::Beta, "value = \"beta\""),
     ] {
         let serialized = toml::to_string(&Wrapper { value }).expect("Should serialize");
         assert!(
@@ -1839,11 +1839,39 @@ fn test_update_track_deserializes_snake_case() {
     }
     for (input, expected) in [
         ("value = \"stable\"", UpdateTrack::Stable),
-        ("value = \"weekly\"", UpdateTrack::Weekly),
+        ("value = \"beta\"", UpdateTrack::Beta),
     ] {
         let w: Wrapper = toml::from_str(input).expect("Should deserialize");
         assert_eq!(w.value, expected);
     }
+}
+
+/// [#650] 0.5.0 and 0.5.1 wrote `weekly` for the track Beta replaces. Such a
+/// config must still load - a rejected value fails the whole file, not just
+/// this field - land on Beta, and be written back under the new name.
+#[test]
+fn test_update_track_reads_the_legacy_weekly_value_as_beta() {
+    #[derive(Serialize, Deserialize)]
+    struct Wrapper {
+        value: UpdateTrack,
+    }
+    let w: Wrapper = toml::from_str("value = \"weekly\"").expect("Should deserialize");
+    assert_eq!(w.value, UpdateTrack::Beta);
+    let rewritten = toml::to_string(&w).expect("Should serialize");
+    assert!(
+        rewritten.contains("value = \"beta\""),
+        "expected beta in {rewritten}"
+    );
+
+    // ...and in the shape 0.5.1 actually saved, next to the other settings.
+    let saved_by_051 = r#"
+auto_save = true
+auto_save_interval_seconds = 30
+recent_projects_max = 20
+update_track = "weekly"
+"#;
+    let config: GeneralConfig = toml::from_str(saved_by_051).expect("Should deserialize");
+    assert_eq!(config.update_track, UpdateTrack::Beta);
 }
 
 /// An unrecognised track is REJECTED, not silently coerced - the same contract
@@ -1884,24 +1912,24 @@ fn test_general_config_update_fields_explicit() {
 auto_save = true
 auto_save_interval_seconds = 30
 recent_projects_max = 20
-update_track = "weekly"
+update_track = "beta"
 update_check_enabled = false
 "#;
     let config: GeneralConfig = toml::from_str(toml_str).expect("Should deserialize");
-    assert_eq!(config.update_track, UpdateTrack::Weekly);
+    assert_eq!(config.update_track, UpdateTrack::Beta);
     assert!(!config.update_check_enabled);
 }
 
 #[test]
 fn test_general_config_update_fields_roundtrip() {
     let mut config = GeneralConfig::default();
-    config.update_track = UpdateTrack::Weekly;
+    config.update_track = UpdateTrack::Beta;
     config.update_check_enabled = false;
 
     let serialized = toml::to_string_pretty(&config).expect("Should serialize");
     let deserialized: GeneralConfig = toml::from_str(&serialized).expect("Should deserialize");
 
-    assert_eq!(deserialized.update_track, UpdateTrack::Weekly);
+    assert_eq!(deserialized.update_track, UpdateTrack::Beta);
     assert!(!deserialized.update_check_enabled);
 
     // ...and the other direction, so a stable/enabled pair is not just the

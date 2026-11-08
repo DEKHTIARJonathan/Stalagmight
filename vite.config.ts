@@ -6,6 +6,7 @@ import pkg from './package.json';
 // Dev-only console/eval bridge (apply: 'serve', so inert in builds). See
 // scripts/lib/vite-agent-bridge.mjs and docs/debug-gates.md.
 import { agentBridge } from './scripts/lib/vite-agent-bridge.mjs';
+import { readBakedPrerelease } from './src/utils/semverPrerelease';
 
 /** Short hash of the checked-out commit, or `unknown` when git is unavailable. */
 function gitShortHash(): string {
@@ -46,20 +47,44 @@ function releaseTag(): string | null {
   }
 }
 
-// A released build reports its tag: the tag already pins the commit, so the hash
-// is noise on the one build users actually read a version number off - and a
-// candidate says so (0.5.0-rc1) rather than passing for the final release.
-// Everything else keeps the commit, because that IS its only identity:
+/**
+ * The pre-release part CI bakes into a release candidate (#650), e.g. `rc.2`,
+ * or null for a final release (unset or empty).
+ *
+ * The backend reads the same variable to decide which updates are newer than
+ * this build (`effective_version` in src-tauri/src/commands/app_update.rs), so
+ * About has to show the version that comparison uses. The rule lives in
+ * `readBakedPrerelease`, tested against the Rust cases; a value the backend
+ * would ignore is ignored here too, with a warning.
+ */
+function bakedPrerelease(): string | null {
+  const baked = readBakedPrerelease(process.env.STALAGMIGHT_PRERELEASE);
+  if (baked.kind === 'invalid') {
+    console.warn(
+      `[vite] Ignoring STALAGMIGHT_PRERELEASE=${JSON.stringify(baked.value)}: not a semver pre-release`,
+    );
+  }
+  return baked.kind === 'candidate' ? baked.prerelease : null;
+}
+
+// A release candidate reports its effective version (#650), the one the
+// updater compares against: `0.5.2-rc.2` for package 0.5.2 built with `rc.2`.
+// Otherwise a released build reports its tag: the tag already pins the commit,
+// so the hash is noise on the one build users actually read a version number
+// off. Everything else keeps the commit, because that IS its only identity:
 // `x.y.z-<shorthash>` for CI builds and `x.y.z-dev-<shorthash>` locally.
 // Mirrors src-tauri/build.rs so the UI's About version and telemetry's
-// app_version agree.
+// app_version agree - except the pre-release, which build.rs does not read.
 const shortHash = gitShortHash();
 const tag = releaseTag();
-const appVersion = tag
-  ? tag.slice(1) // v0.5.0-rc1 -> 0.5.0-rc1
-  : process.env.CI
-    ? `${pkg.version}-${shortHash}`
-    : `${pkg.version}-dev-${shortHash}`;
+const prerelease = bakedPrerelease();
+const appVersion = prerelease
+  ? `${pkg.version}-${prerelease}`
+  : tag
+    ? tag.slice(1) // v0.5.0-rc1 -> 0.5.0-rc1
+    : process.env.CI
+      ? `${pkg.version}-${shortHash}`
+      : `${pkg.version}-dev-${shortHash}`;
 
 const coverageEnabled = process.env.VITE_COVERAGE === '1';
 const plugins: PluginOption[] = [
@@ -94,7 +119,7 @@ export default defineConfig({
     // the hash, but a bug report still needs to say which build it came from.
     __APP_COMMIT__: JSON.stringify(shortHash),
     // Which update channel this build was published on (#579). Set by the
-    // release workflow for weekly builds; defaults to 'stable' everywhere
+    // release workflow for release candidates (`beta`, #650); 'stable' everywhere
     // else (dev, and stable release builds), so the About dialog's channel
     // line is hidden unless it says otherwise.
     __APP_CHANNEL__: JSON.stringify(process.env.STALAGMIGHT_CHANNEL ?? 'stable'),

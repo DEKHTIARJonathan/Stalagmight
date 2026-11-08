@@ -4641,6 +4641,7 @@ dependencies = [
  "http",
  "image",
  "libc",
+ "semver",
  "serde",
  "serde_json",
  "sha2",
