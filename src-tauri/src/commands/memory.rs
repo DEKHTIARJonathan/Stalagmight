@@ -11,7 +11,7 @@ use serde::Serialize;
 use ts_rs::TS;
 
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../src/types/ipc/")]
+#[ts(export, export_to = "../src/types/ipc/")]
 pub struct ProcessMemory {
     pub pid: u32,
     pub name: String,
@@ -26,7 +26,7 @@ pub struct ProcessMemory {
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../src/types/ipc/")]
+#[ts(export, export_to = "../src/types/ipc/")]
 pub struct MemoryStats {
     pub backend: ProcessMemory,
     pub webkit_processes: Vec<ProcessMemory>,

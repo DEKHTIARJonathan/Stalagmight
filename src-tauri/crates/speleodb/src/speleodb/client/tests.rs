@@ -305,7 +305,7 @@ fn reads_retry_transient_failures_and_native_streams_enforce_a_limit() {
 #[expect(
     clippy::print_stderr,
     clippy::panic,
-    reason = "opt-in live-test diagnostics and missing-credential assertions"
+    reason = "live-test diagnostics and missing-credential assertions"
 )]
 fn live_used_api_calls_with_email_and_token() {
     // Read .env without mutating process-wide environment or making it an app config.
@@ -315,7 +315,7 @@ fn live_used_api_calls_with_email_and_token() {
         Err(_) => Default::default(),
     };
     let value = |name: &str| std::env::var(name).ok().or_else(|| file.get(name).cloned());
-    if value("SPELEODB_API_TEST_ENABLED").as_deref() != Some("true") {
+    if value("SPELEODB_API_TEST_ENABLED").unwrap_or_else(|| "true".into()) != "true" {
         eprintln!("live SpeleoDB API tests disabled; set SPELEODB_API_TEST_ENABLED=true");
         return;
     }
@@ -328,10 +328,12 @@ fn live_used_api_calls_with_email_and_token() {
     let provided_token = required("SPELEODB_OAUTH_TOKEN");
     let email = required("SPELEODB_EMAIL");
     let password = required("SPELEODB_PASSWORD");
-    let timeout = required("SPELEODB_API_TIMEOUT_MS")
+    let timeout = value("SPELEODB_API_TIMEOUT_MS")
+        .unwrap_or_else(|| "10000".into())
         .parse::<u64>()
         .expect("timeout milliseconds");
-    let retries = required("SPELEODB_API_RETRY_COUNT")
+    let retries = value("SPELEODB_API_RETRY_COUNT")
+        .unwrap_or_else(|| "3".into())
         .parse::<u32>()
         .expect("retry count");
     let settings = Settings {

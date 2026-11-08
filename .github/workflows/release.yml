@@ -88,6 +88,7 @@ jobs:
         run: node scripts/gen-updater-manifest.test.mjs
       - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
+          SPELEODB_API_TEST_ENABLED: "false"
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
       # The flags above only take effect if libsqlite3-sys reads them; this pins

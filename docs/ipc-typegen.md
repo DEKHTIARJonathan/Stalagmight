@@ -46,8 +46,9 @@ tree, and running the workspace tests rewrites every file in it. The **app
 crate hosts no bindings-defaulted exports** - keep it that way, so every
 writer of the committed tree follows the one explicit `export_to` convention.
 Its only ts exports are the two types in `commands/memory.rs`, which opt out
-with `#[ts(export, export_to = "../../src/types/ipc/")]` and land in the
-frontend tree instead.
+with `#[ts(export, export_to = "../src/types/ipc/")]` and land in the
+frontend tree instead. This path is relative to the app crate (`src-tauri/`),
+so it needs one parent traversal, unlike the exports in member crates.
 
 **Nothing consumes it.** No module in `src/`, `e2e-playwright/`, `e2e/` or
 `scripts/` imports from it, and it is in no tsconfig's `include` (see

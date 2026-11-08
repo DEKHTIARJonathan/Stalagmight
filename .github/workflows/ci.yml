@@ -163,6 +163,7 @@ jobs:
         run: sccache --zero-stats || true
       - run: cargo test --workspace --manifest-path src-tauri/Cargo.toml --features telemetry
         env:
+          SPELEODB_API_TEST_ENABLED: "false"
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
       # `src-tauri/bindings/` is a COMMITTED generated tree that nothing consumes
