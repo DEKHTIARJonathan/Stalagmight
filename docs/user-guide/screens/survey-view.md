@@ -8,7 +8,8 @@ The main window of an open project: the map, with **Sections** on the left,
 **Top bar**
 
 1. **Menu**
-2. **Import**: add data from a file, for example a `.dmp` from an mNemo.
+2. **Import**: add data from a file, for example a `.dmp` from an mNemo. See
+   [DMP import](dmp-import.md).
 3. **Undo**
 4. **Redo**
 5. **Survey** / **Plan** / **Export**: edit the survey, plan a dive, or export

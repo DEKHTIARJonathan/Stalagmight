@@ -3,9 +3,9 @@
 1. On the [start screen](../screens/start-screen.md), click **New project**.
 2. In the [New Project dialog](../screens/new-project-dialog.md), enter a name
    and click **Create Project**.
-3. In the [survey view](../screens/survey-view.md), add data: **Import** a file
-   (for example a `.dmp` from an mNemo), or click **+** next to **Sections** to
-   enter it by hand.
+3. In the [survey view](../screens/survey-view.md), add data:
+   [import a file](importing-from-mnemo.md) (for example a `.dmp` from an
+   mNemo), or click **+** next to **Sections** to enter it by hand.
 4. Entering by hand: in the
    [Import / Create Section dialog](../screens/create-section-dialog.md), name
    the section and set the surveyor, date and color.
