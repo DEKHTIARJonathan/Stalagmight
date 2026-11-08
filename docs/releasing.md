@@ -567,14 +567,17 @@ now-public release with no manifest update, and a re-run cannot recover by
 re-running the whole job - `gh release create` refuses a tag that already
 exists.
 
-For a candidate the preflight also keeps **Beta forward-only**: when
-`latest-beta.json` already exists on `updater`, its `version` must be lower
-than the candidate's (`scripts/release-channel.sh is-newer`), or the step fails
-before anything is public. That catches an `rc.1` pushed after `rc.2`, and a
-candidate for a version whose final already shipped. A missing
-`latest-beta.json` (the first candidate ever) passes; one whose version cannot
-be read fails closed. A final is checked later, in the publish step; see
-[Candidate versions and the forward-only Beta
+The preflight also keeps each tag's own track **forward-only**: the manifest
+it would replace (`latest-beta.json` for a candidate, `latest-stable.json` for
+a final), when it already exists on `updater`, must hold a lower version
+(`scripts/release-channel.sh is-newer`), or the step fails before anything is
+public. That catches an `rc.1` pushed after `rc.2`, a candidate for a version
+whose final already shipped, and a final below the current Stable (a `v0.5.3`
+hotfix after `v0.6.0`). A missing manifest (the first publish to that track)
+passes; one whose version cannot be read fails closed. Both errors name the
+[repoint workflow](#rollback--repoint-runbook), the deliberate way to move a
+track backwards. Whether a final also takes Beta is decided later, in the
+publish step; see [Candidate versions and the forward-only Beta
 track](#candidate-versions-and-the-forward-only-beta-track).
 
 The `release` job's "Publish updater manifest" step (`.github/workflows/release.yml`)
@@ -741,6 +744,12 @@ and it is why the rc number is dotted (`rc.10` > `rc.9`, but `rc10` < `rc9`).
 It is also why the build bakes `STALAGMIGHT_PRERELEASE`: an `rc.1` install that
 believed it was plain `0.5.2` would never be offered `0.5.2-rc.2` (lower) or
 the final (equal).
+
+Stable only moves forward on its own: the preflight refuses a final that is not
+newer than what `latest-stable.json` announces, before anything is public. A
+maintenance release below the current Stable (`v0.5.3` after `v0.6.0`) is
+therefore refused outright by this pipeline, its GitHub release included; to
+move Stable back on purpose, repoint it.
 
 Beta only moves forward on its own, for candidates and finals alike:
 

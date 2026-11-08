@@ -486,40 +486,48 @@ jobs:
             echo "::error::the rolling 'updater' GitHub release does not exist, but tag $TAG will publish an updater manifest. See docs/releasing.md (Updater manifests) to create it once, then re-run - before anything else in this job becomes public."
             exit 1
           fi
-          # Forward-only Beta (#650). A candidate must be newer than whatever
-          # latest-beta.json already announces: an rc.1 pushed after rc.2, or
-          # a candidate for a version whose final already shipped, would
-          # otherwise point Beta back at an older build - installs already
-          # past it are never offered it, and installs behind it are offered
-          # the older build instead of the newest one.
-          # Checked here, before the release is public. Only candidates: a
-          # final always publishes latest-stable.json, and the publish step
-          # decides whether it also takes Beta. A missing latest-beta.json (the first
-          # candidate ever) has nothing to compare against; a present one that
-          # cannot be read fails closed. Moving Beta backwards on purpose is
-          # what repoint-updater-manifest.yml is for.
-          if [ "$CHANNEL_KIND" = candidate ]; then
-            ASSETS="$(gh release view updater --json assets --jq '.assets[].name')"
-            if grep -qx 'latest-beta.json' <<<"$ASSETS"; then
-              mkdir -p "$RUNNER_TEMP/current-beta"
-              gh release download updater -p latest-beta.json -D "$RUNNER_TEMP/current-beta"
-              CURRENT="$(jq -r '.version' "$RUNNER_TEMP/current-beta/latest-beta.json")"
-              RC=0
-              bash scripts/release-channel.sh is-newer "$CHANNEL_MANIFEST_VERSION" "$CURRENT" || RC=$?
-              case "$RC" in
-                0) echo "latest-beta.json holds $CURRENT; $CHANNEL_MANIFEST_VERSION is newer." ;;
-                1)
-                  echo "::error::latest-beta.json already announces $CURRENT, which is not lower than $CHANNEL_MANIFEST_VERSION. Refusing to move Beta backwards. Cut a higher candidate, or repoint the beta track by hand (docs/releasing.md, Updater manifests) if that is really intended."
-                  exit 1
-                  ;;
-                *)
-                  echo "::error::could not compare $CHANNEL_MANIFEST_VERSION with the version in the current latest-beta.json ('$CURRENT'). Refusing to publish a candidate blind."
-                  exit 1
-                  ;;
-              esac
-            else
-              echo "No latest-beta.json on the 'updater' release yet; this candidate starts the Beta track."
+          # Forward-only tracks (#650), checked here, before the release is
+          # public. The tag must be newer than whatever its own track's
+          # manifest already announces:
+          #   - a candidate against latest-beta.json: an rc.1 pushed after
+          #     rc.2, or a candidate for a version whose final already
+          #     shipped, would point Beta back at an older build;
+          #   - a final against latest-stable.json: a v0.5.3 hotfix cut after
+          #     v0.6.0 would point every Stable install back at 0.5.3.
+          # Installs already past the older build are never offered it, and
+          # installs behind it would get it instead of the newest one. (Whether
+          # a final also takes Beta is decided in the publish step.) A missing
+          # manifest (the first publish to that track) has nothing to compare
+          # against; a present one that cannot be read fails closed. Moving a
+          # track backwards on purpose is what repoint-updater-manifest.yml is
+          # for.
+          require_newer() {
+            local name="$1" track="$2" dir="$RUNNER_TEMP/preflight-$2" current rc=0
+            if ! grep -qx "$name" <<<"$ASSETS"; then
+              echo "No $name on the 'updater' release yet; this tag starts the $track track."
+              return 0
             fi
+            mkdir -p "$dir"
+            gh release download updater -p "$name" -D "$dir"
+            current="$(jq -r '.version' "$dir/$name")"
+            bash scripts/release-channel.sh is-newer "$CHANNEL_MANIFEST_VERSION" "$current" || rc=$?
+            case "$rc" in
+              0) echo "$name holds $current; $CHANNEL_MANIFEST_VERSION is newer." ;;
+              1)
+                echo "::error::$name already announces $current, which is not lower than $CHANNEL_MANIFEST_VERSION. Refusing to move the $track track backwards. Cut a higher version, or roll the track back on purpose with the repoint-updater-manifest.yml workflow (docs/releasing.md, Rollback / repoint runbook)."
+                exit 1
+                ;;
+              *)
+                echo "::error::could not compare $CHANNEL_MANIFEST_VERSION with the version in the current $name ('$current'). Refusing to publish blind; check that file, or repoint the $track track (docs/releasing.md, Rollback / repoint runbook)."
+                exit 1
+                ;;
+            esac
+          }
+          ASSETS="$(gh release view updater --json assets --jq '.assets[].name')"
+          if [ "$CHANNEL_KIND" = candidate ]; then
+            require_newer latest-beta.json beta
+          else
+            require_newer latest-stable.json stable
           fi
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
