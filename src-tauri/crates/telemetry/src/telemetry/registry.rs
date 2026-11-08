@@ -66,6 +66,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.delete_section",
     "command.delete_shot",
     "command.delete_shot_and_split",
+    "command.discard_app_update_download",
     "command.download_app_update",
     "command.execute_batch",
     "command.execute_gpx_import",
@@ -1120,7 +1121,9 @@ mod tests {
         //       command.install_app_update_and_restart = 742. The arm/unarm
         //       pair is the backend's one-shot consent for the install, so a
         //       webview `invoke` cannot skip the exit guards.
-        assert_eq!(EVENT_NAMES.len(), 742);
+        //   + 1 turning "Update automatically" off abandons the automatic
+        //       download (#645): command.discard_app_update_download = 743.
+        assert_eq!(EVENT_NAMES.len(), 743);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

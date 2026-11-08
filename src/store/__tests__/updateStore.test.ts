@@ -238,3 +238,80 @@ describe('download events are pinned to the version they started for', () => {
     expect(useUpdateStore.getState().status).toBe('ready');
   });
 });
+
+/**
+ * [#645] Turning "Update automatically" off abandons the download a check
+ * started, and only that one. The origin is tracked on its own because
+ * `reveal()` clears `backgroundDownload`, so that flag cannot say who started a
+ * download that About has since put in view.
+ */
+describe('abandoning an automatic download', () => {
+  it('a running automatic download goes back to offering Download', () => {
+    seedAvailable();
+    useUpdateStore.getState().startDownloading(INFO.version, true);
+    useUpdateStore.getState().setProgress({ downloaded: 1, total: 2 });
+
+    expect(useUpdateStore.getState().abandonAutomaticDownload()).toBe(true);
+
+    const s = useUpdateStore.getState();
+    expect(s.status).toBe('available');
+    expect(s.info).toEqual(INFO);
+    expect(s.progress).toBeNull();
+    expect(s.downloadOrigin).toBeNull();
+  });
+
+  it('a finished automatic download goes back to offering Download', () => {
+    seedAvailable();
+    useUpdateStore.getState().startDownloading(INFO.version, true);
+    useUpdateStore.getState().setReady(INFO.version);
+
+    expect(useUpdateStore.getState().abandonAutomaticDownload()).toBe(true);
+    expect(useUpdateStore.getState().status).toBe('available');
+  });
+
+  it('a download About revealed is still automatic', () => {
+    seedAvailable();
+    useUpdateStore.getState().startDownloading(INFO.version, true);
+    useUpdateStore.getState().reveal();
+    expect(useUpdateStore.getState().backgroundDownload).toBe(false);
+
+    expect(useUpdateStore.getState().abandonAutomaticDownload()).toBe(true);
+  });
+
+  it('a visible download a check started (About, setting on) is automatic too', () => {
+    seedAvailable();
+    useUpdateStore.getState().startDownloading(INFO.version, false, 'check');
+
+    expect(useUpdateStore.getState().abandonAutomaticDownload()).toBe(true);
+  });
+
+  it('a download the user started keeps its promise, running or finished', () => {
+    seedAvailable();
+    useUpdateStore.getState().startDownloading(INFO.version, false, 'user');
+    expect(useUpdateStore.getState().abandonAutomaticDownload()).toBe(false);
+    expect(useUpdateStore.getState().status).toBe('downloading');
+
+    useUpdateStore.getState().setReady(INFO.version);
+    expect(useUpdateStore.getState().abandonAutomaticDownload()).toBe(false);
+    expect(useUpdateStore.getState().status).toBe('ready');
+  });
+
+  it('nothing to abandon once the download is no longer in hand', () => {
+    seedAvailable();
+    useUpdateStore.getState().startDownloading(INFO.version, true);
+    useUpdateStore.getState().setDownloadFailed();
+
+    expect(useUpdateStore.getState().abandonAutomaticDownload()).toBe(false);
+    expect(useUpdateStore.getState().status).toBe('available');
+  });
+
+  it('the abandoned download finishing later does not mark it ready', () => {
+    seedAvailable();
+    const seq = useUpdateStore.getState().startDownloading(INFO.version, true);
+    useUpdateStore.getState().abandonAutomaticDownload();
+
+    expect(useUpdateStore.getState().downloadSeq).not.toBe(seq);
+    useUpdateStore.getState().setReady(INFO.version);
+    expect(useUpdateStore.getState().status).toBe('available');
+  });
+});

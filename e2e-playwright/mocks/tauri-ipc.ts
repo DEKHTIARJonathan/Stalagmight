@@ -5564,6 +5564,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // exit guards; the refusal cases are covered in Rust.
             return null;
 
+          case 'discard_app_update_download':
+            // #645: idempotent in the backend, and the mock parks nothing to
+            // drop, so the store-side transition is all a spec can observe.
+            return null;
+
           case 'download_app_update':
           case 'install_app_update_and_restart':
             // Unreachable from the default state above (both refuse without a

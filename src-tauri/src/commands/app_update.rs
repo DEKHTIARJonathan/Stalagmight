@@ -232,6 +232,11 @@ struct Pending {
     /// cannot have its bytes paired with that later check's `Update` - both
     /// would be validly signed, and the user would silently install a version
     /// nobody offered them. See [`store_downloaded_bytes`].
+    ///
+    /// Also bumped by [`discard_download`] (#645), which keeps the parked
+    /// `Update` but not the bytes. The pairing still holds: bytes are only ever
+    /// installed under the generation they were stored for, and the `Update`
+    /// parked at that generation is the one they were downloaded from.
     generation: u64,
     update: Option<Update>,
     /// The verified bundle and the generation it was downloaded for.
@@ -468,7 +473,7 @@ fn download_abort_reason(downloaded: u64, content_length: Option<u64>) -> Option
 }
 
 const SUPERSEDED_MESSAGE: &str =
-    "A newer update check replaced this one while it was downloading; check again";
+    "A newer update check replaced this download, or it was cancelled; check again";
 
 /// Should the download for `generation` stop at this chunk?
 ///
@@ -875,6 +880,35 @@ pub fn arm_app_update_restart(update_state: State<AppUpdateState>) -> Result<(),
 #[tauri::command]
 pub fn unarm_app_update_restart(update_state: State<AppUpdateState>) -> Result<(), String> {
     update_state.with(|pending| pending.restart_armed = false)
+}
+
+/// Drop the download in hand, keeping the offer it was for (#645).
+///
+/// Bumping the generation is what reaches a download still IN FLIGHT: its
+/// next chunk sees the change and stops ([`chunk_abort_reason`]), and if the
+/// body ends first, [`store_downloaded_bytes`] refuses it. Finished bytes are
+/// dropped, so [`install_downloaded_update_on_exit`] finds nothing to install.
+/// The arm goes with them: it was consent for those bytes.
+///
+/// The parked `Update` stays, so a later [`download_app_update`] works without
+/// a new check - the frontend goes back to offering Download.
+fn discard_download(pending: &mut Pending) {
+    pending.generation = pending.generation.wrapping_add(1);
+    pending.bytes = None;
+    pending.restart_armed = false;
+}
+
+/// Abandon an automatic download because "Update automatically" was turned
+/// off (#645).
+///
+/// Unconditional on purpose: which download was automatic is the frontend's
+/// knowledge (the backend sees one `download_app_update` either way), and the
+/// frontend only calls this for a download a check started, never for one the
+/// user asked for. Idempotent, and harmless from a stray `invoke`: the worst
+/// it does is make the user download the update again.
+#[tauri::command]
+pub fn discard_app_update_download(update_state: State<AppUpdateState>) -> Result<(), String> {
+    update_state.with(discard_download)
 }
 
 /// Install the downloaded update and relaunch into it.
@@ -1598,6 +1632,60 @@ mod tests {
         assert!(state
             .with(|pending| pending.bytes.is_none())
             .expect("lockable"));
+    }
+
+    // ── Discarding an automatic download (#645) ─────────────────────────────
+
+    /// A finished download is dropped, so nothing installs at quit and the
+    /// restart cannot be armed for it.
+    #[test]
+    fn a_discard_drops_finished_bytes_so_nothing_installs_at_quit() {
+        let state = AppUpdateState::default();
+        seed_download(&state, 1);
+        arm_restart(&state).expect("arming a ready download should work");
+
+        state.with(discard_download).expect("lockable");
+
+        assert!(state
+            .with(|pending| pending.bytes.is_none() && !pending.restart_armed)
+            .expect("lockable"));
+        assert!(state.with(take_for_exit).expect("lockable").is_none());
+        let arm = refusal(arm_restart(&state));
+        assert!(arm.contains("download it first"), "{arm}");
+    }
+
+    /// A download still in flight stops at its next chunk, and if its body
+    /// ends first, its bytes are refused rather than stored.
+    #[test]
+    fn a_discard_stops_an_in_flight_download_and_refuses_its_bytes() {
+        let state = AppUpdateState::default();
+        let started = state.with(|pending| pending.generation).expect("lockable");
+
+        state.with(discard_download).expect("lockable");
+
+        assert_eq!(
+            chunk_abort_reason(&state, started, 1_000, Some(10_000)),
+            Some(DownloadAbort::Superseded)
+        );
+        let err = refusal(store_downloaded_bytes(&state, started, vec![0u8; 8]));
+        assert!(err.contains("cancelled"), "{err}");
+        assert!(state
+            .with(|pending| pending.bytes.is_none())
+            .expect("lockable"));
+    }
+
+    /// The offer survives: a download started AFTER the discard - the user
+    /// pressing Download on the banner - is stored and can be armed, so the
+    /// discard cannot leave the update unreachable until the next check.
+    #[test]
+    fn a_download_after_a_discard_is_stored_and_armable() {
+        let state = AppUpdateState::default();
+        seed_download(&state, 1);
+        state.with(discard_download).expect("lockable");
+
+        let restarted = state.with(|pending| pending.generation).expect("lockable");
+        store_downloaded_bytes(&state, restarted, vec![2u8; 4]).expect("should store");
+        arm_restart(&state).expect("a download after the discard should arm");
     }
 
     /// Put the state where a real check + download would leave it, without an

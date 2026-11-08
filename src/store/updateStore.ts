@@ -14,6 +14,13 @@ import type { AppUpdateProgress } from '../types/ipc/AppUpdateProgress';
  */
 export type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'error';
 
+/**
+ * Who started a download (#645): `check` for the automatic one a check starts
+ * while "Update automatically" is on - hidden or, from About, in view - and
+ * `user` for the banner's Download button.
+ */
+export type DownloadOrigin = 'check' | 'user';
+
 export interface UpdateInfo {
   version: string;
   notesUrl: string;
@@ -60,6 +67,13 @@ interface UpdateStore {
    */
   backgroundDownload: boolean;
   /**
+   * Who started the download in hand, running or finished (#645). Kept through
+   * `ready`, and NOT cleared by `reveal()` the way `backgroundDownload` is: that
+   * flag says whether the banner shows the download, this says whether turning
+   * "Update automatically" off may abandon it. A `user` download never is.
+   */
+  downloadOrigin: DownloadOrigin | null;
+  /**
    * Which download the store is willing to hear from, as `checkSeq` is for
    * checks. A version alone cannot tell two downloads apart: a re-check during
    * a download makes the backend refuse the first one's bytes, and its failure
@@ -74,12 +88,23 @@ interface UpdateStore {
   /** A background check failed - idle, silently (no toast/banner). */
   setCheckFailed: (seq: number) => void;
   setAvailable: (seq: number, info: UpdateInfo) => void;
-  /** Start a download; the returned sequence identifies it to its caller. */
-  startDownloading: (version: string, background?: boolean) => number;
+  /**
+   * Start a download; the returned sequence identifies it to its caller. A
+   * background download is always one a check started, so `origin` follows
+   * `background` unless given.
+   */
+  startDownloading: (version: string, background?: boolean, origin?: DownloadOrigin) => number;
   setProgress: (progress: AppUpdateProgress) => void;
   setReady: (version: string) => void;
   /** A download (or the install of one) failed - the banner re-offers the download it already knows about. */
   setDownloadFailed: () => void;
+  /**
+   * "Update automatically" was turned off (#645): abandon a download a check
+   * started, running or finished, and go back to offering Download - the offer
+   * itself stands. Returns whether there was one, so the caller knows to drop
+   * the backend's copy too. A download the user started is left alone.
+   */
+  abandonAutomaticDownload: () => boolean;
   dismiss: (version: string) => void;
   /**
    * Make the banner show what is in hand: clears a dismissal and turns a
@@ -100,6 +125,7 @@ const INITIAL_STATE: Pick<
   | 'checkSeq'
   | 'downloadVersion'
   | 'backgroundDownload'
+  | 'downloadOrigin'
   | 'downloadSeq'
 > = {
   status: 'idle',
@@ -109,6 +135,7 @@ const INITIAL_STATE: Pick<
   checkSeq: 0,
   downloadVersion: null,
   backgroundDownload: false,
+  downloadOrigin: null,
   downloadSeq: 0,
 };
 
@@ -140,6 +167,7 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
       progress: null,
       downloadVersion: null,
       backgroundDownload: false,
+      downloadOrigin: null,
       downloadSeq: state.downloadSeq + 1,
     }));
   },
@@ -164,15 +192,17 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
       progress: null,
       downloadVersion: null,
       backgroundDownload: false,
+      downloadOrigin: null,
       downloadSeq: state.downloadSeq + 1,
     }));
   },
-  startDownloading: (version, background = false) => {
+  startDownloading: (version, background = false, origin = background ? 'check' : 'user') => {
     const seq = get().downloadSeq + 1;
     set({
       status: 'downloading',
       downloadVersion: version,
       backgroundDownload: background,
+      downloadOrigin: origin,
       downloadSeq: seq,
     });
     return seq;
@@ -197,7 +227,25 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
       progress: null,
       downloadVersion: null,
       backgroundDownload: false,
+      downloadOrigin: null,
     })),
+  abandonAutomaticDownload: () => {
+    const { status, downloadOrigin } = get();
+    if (downloadOrigin !== 'check' || (status !== 'downloading' && status !== 'ready')) {
+      return false;
+    }
+    // Bumping `downloadSeq` makes the abandoned download's own completion or
+    // failure land nowhere, as for a download a check superseded.
+    set((state) => ({
+      status: state.info ? 'available' : 'idle',
+      progress: null,
+      downloadVersion: null,
+      backgroundDownload: false,
+      downloadOrigin: null,
+      downloadSeq: state.downloadSeq + 1,
+    }));
+    return true;
+  },
   dismiss: (version) => set({ dismissedVersion: version }),
   reveal: () => set({ dismissedVersion: null, backgroundDownload: false }),
   reset: () => set(INITIAL_STATE),

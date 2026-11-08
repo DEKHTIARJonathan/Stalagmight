@@ -476,3 +476,87 @@ describe('who may download without asking', () => {
     expect(useUpdateStore.getState().status).toBe('idle');
   });
 });
+
+/**
+ * [#645] The setting only gated whether a download STARTED, so turning it off
+ * left an automatic download running, or finished and waiting to install at
+ * quit. Now the on -> off transition abandons it, front and back.
+ */
+describe('turning automatic updates off', () => {
+  function discardCalls(): number {
+    return invokeIpcMock.mock.calls.filter((c) => c[0] === 'discard_app_update_download').length;
+  }
+
+  it('abandons a running automatic download and drops it in the backend', async () => {
+    let finish: ((v: unknown) => void) | undefined;
+    answer(AVAILABLE, () => new Promise((resolve) => (finish = resolve)));
+    useProjectStore.setState({ config: config() });
+    render(<Harness />);
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(useUpdateStore.getState().status).toBe('downloading');
+
+    useProjectStore.setState({ config: config({ update_check_enabled: false }) });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(discardCalls()).toBe(1);
+    expect(useUpdateStore.getState().status).toBe('available');
+    // The abandoned transfer finishing later is not taken as ready.
+    finish?.(null);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useUpdateStore.getState().status).toBe('available');
+  });
+
+  it('drops a finished automatic download, so nothing installs at quit', async () => {
+    answer(AVAILABLE);
+    useProjectStore.setState({ config: config() });
+    render(<Harness />);
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(useUpdateStore.getState().status).toBe('ready');
+
+    useProjectStore.setState({ config: config({ update_check_enabled: false }) });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(discardCalls()).toBe(1);
+    const s = useUpdateStore.getState();
+    expect(s.status).toBe('available');
+    expect(s.info?.version).toBe('1.2.3');
+  });
+
+  it('leaves a download the user started from the banner alone', async () => {
+    answer(AVAILABLE);
+    useProjectStore.setState({ config: config({ update_check_enabled: false }) });
+    await runAppUpdateCheck();
+    useProjectStore.setState({ config: config() });
+    render(<Harness />);
+    await downloadAppUpdate('1.2.3', false, 'user');
+    expect(useUpdateStore.getState().status).toBe('ready');
+
+    useProjectStore.setState({ config: config({ update_check_enabled: false }) });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(discardCalls()).toBe(0);
+    expect(useUpdateStore.getState().status).toBe('ready');
+  });
+
+  it('does nothing for a config that loads with the setting already off', async () => {
+    useProjectStore.setState({ config: config({ update_check_enabled: false }) });
+    render(<Harness />);
+    await vi.advanceTimersByTimeAsync(11_000);
+
+    expect(discardCalls()).toBe(0);
+  });
+
+  it('the update stays one click away: Download after abandoning works', async () => {
+    answer(AVAILABLE);
+    useProjectStore.setState({ config: config() });
+    render(<Harness />);
+    await vi.advanceTimersByTimeAsync(11_000);
+    useProjectStore.setState({ config: config({ update_check_enabled: false }) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useUpdateStore.getState().status).toBe('available');
+
+    await expect(downloadAppUpdate('1.2.3', false, 'user')).resolves.toBe('ready');
+    expect(useUpdateStore.getState().status).toBe('ready');
+    expect(useUpdateStore.getState().downloadOrigin).toBe('user');
+  });
+});
