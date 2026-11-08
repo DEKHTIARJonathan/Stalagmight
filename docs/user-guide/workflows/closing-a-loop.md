@@ -45,3 +45,16 @@ under **Display**.
 3. The station it closes to.
 4. **Remove Closure**
 5. Path length and error of the loop.
+
+## Removing a closure
+
+Right-click a station of the closure and pick **Remove Closure**. **Remove
+Closure** in **Details** (4 above) does the same.
+
+![Remove Closure in the station context menu](../images/remove-closure-menu.png)
+
+1. A station of the closure, right-clicked.
+2. **Remove Closure**
+3. The closure.
+
+A station with more than one closure asks which one to remove.
