@@ -4,7 +4,8 @@
    and pick the `.tml` or `.tmlu` file, or drop it onto the window.
 2. Name the project and click **Create & Continue**. Where it is saved and the
    cave location are optional.
-3. Untick any sections you do not want and click **Import**.
+3. Untick any sections you do not want. Scroll down to check where the survey
+   goes and the other options, then click **Import**.
 
 ## Step details
 
@@ -23,4 +24,12 @@
 
 - The outline (2) and the numbers (4) show what will be imported.
 - Untick sections (6) to leave them out.
-- See [Import Ariane Survey](../screens/ariane-import.md).
+
+![Import Ariane Survey options](../images/ariane-import-options.png)
+
+- The survey is placed at the zero datum in the file (9) unless you pick
+  otherwise.
+- Comments go on stations, as Ariane shows them, unless you tick 12.
+- Virtual shots (13) become jumps or references by Stalagmight's best guess.
+- See [Import Ariane Survey](../screens/ariane-import.md) for what each option
+  does.
