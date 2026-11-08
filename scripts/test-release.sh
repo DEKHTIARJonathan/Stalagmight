@@ -913,6 +913,50 @@ else
   fail "--dry-run exited non-zero on a releasable tree"
 fi
 
+echo "== release-channel.sh =="
+# The one definition of what a tag bakes and publishes (#650): release.yml's
+# build, preflight and publish steps and the repoint workflow all read it. The
+# whole six-line output is compared, so a missing or extra key fails too, and a
+# key that goes missing from $GITHUB_OUTPUT cannot pass as "empty".
+CHANNEL="$PROJECT_ROOT/scripts/release-channel.sh"
+classify_is() {
+  [ "$(bash "$CHANNEL" classify "$1")" = "$2" ]
+}
+assert "a candidate bakes rc.N and beta, and publishes Beta plus the weekly mirror" \
+  classify_is v0.5.2-rc.1 "$(printf '%s\n' kind=candidate base=0.5.2 prerelease=rc.1 channel=beta \
+    manifest_version=0.5.2-rc.1 'manifests=latest-beta.json latest-weekly.json')"
+assert "a final bakes nothing, and publishes Stable, Beta and the weekly mirror" \
+  classify_is v0.5.2 "$(printf '%s\n' kind=final base=0.5.2 prerelease= channel= \
+    manifest_version=0.5.2 'manifests=latest-stable.json latest-beta.json latest-weekly.json')"
+NONE="$(printf '%s\n' kind=none base= prerelease= channel= manifest_version= manifests=)"
+# The old undotted shape, the retired weekly shape, other suffixes, near
+# misses, a dispatch's branch name and an empty ref: none of them bakes the
+# Beta channel or publishes a manifest. The last one is a ref name trying to
+# smuggle a second line into $GITHUB_OUTPUT.
+for t in v0.5.2-rc1 v0.5.1-weekly.20260817 v0.5.2-beta.1 v0.5.2-rc.1.1 v0.5.2-RC.1 \
+  v0.5.2-rc. v0.5.2-rc.x 0.5.2 v0.5 master '' "$(printf 'v0.5.2\nkind=final')"; do
+  assert "'$t' bakes and publishes nothing" classify_is "$t" "$NONE"
+done
+refute "classify without a tag is a usage error" \
+  bash -c 'bash "$1" classify 2>/dev/null' _ "$CHANNEL"
+# The dotted rc number is a separate numeric identifier, which is the whole
+# reason for the shape: semver compares rc10 as text, below rc9.
+assert "rc.10 is newer than rc.9"           bash "$CHANNEL" is-newer 0.5.2-rc.10 0.5.2-rc.9
+assert "a final is newer than its candidates" bash "$CHANNEL" is-newer 0.5.2 0.5.2-rc.9
+assert "the next candidate is newer than the last final" \
+  bash "$CHANNEL" is-newer 0.5.3-rc.1 0.5.2
+assert "the core compares numerically, not as text" \
+  bash "$CHANNEL" is-newer 0.5.10-rc.1 0.5.9
+refute "a candidate is not newer than itself"  bash "$CHANNEL" is-newer 0.5.2-rc.1 0.5.2-rc.1
+refute "a candidate is not newer than its final" bash "$CHANNEL" is-newer 0.5.2-rc.3 0.5.2
+refute "an earlier candidate is not newer"     bash "$CHANNEL" is-newer 0.5.2-rc.1 0.5.2-rc.2
+# "Cannot tell" must not read as "not newer" or "newer": the preflight treats
+# it as its own failure. jq prints `null` for a manifest with no version.
+assert "an unrecognised version exits 2, distinct from 'not newer'" \
+  bash -c 'bash "$1" is-newer 0.5.2-rc.1 null 2>/dev/null; [ $? -eq 2 ]' _ "$CHANNEL"
+assert "a weekly-shaped version exits 2 too" \
+  bash -c 'bash "$1" is-newer 0.5.2-rc.1 0.5.1-weekly.20260817 2>/dev/null; [ $? -eq 2 ]' _ "$CHANNEL"
+
 echo
 echo "release tooling: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
