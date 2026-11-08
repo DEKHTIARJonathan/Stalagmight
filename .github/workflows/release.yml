@@ -486,48 +486,42 @@ jobs:
             echo "::error::the rolling 'updater' GitHub release does not exist, but tag $TAG will publish an updater manifest. See docs/releasing.md (Updater manifests) to create it once, then re-run - before anything else in this job becomes public."
             exit 1
           fi
-          # Forward-only tracks (#650), checked here, before the release is
-          # public. The tag must be newer than whatever its own track's
-          # manifest already announces:
-          #   - a candidate against latest-beta.json: an rc.1 pushed after
-          #     rc.2, or a candidate for a version whose final already
-          #     shipped, would point Beta back at an older build;
-          #   - a final against latest-stable.json: a v0.5.3 hotfix cut after
-          #     v0.6.0 would point every Stable install back at 0.5.3.
-          # Installs already past the older build are never offered it, and
-          # installs behind it would get it instead of the newest one. (Whether
-          # a final also takes Beta is decided in the publish step.) A missing
-          # manifest (the first publish to that track) has nothing to compare
-          # against; a present one that cannot be read fails closed. Moving a
-          # track backwards on purpose is what repoint-updater-manifest.yml is
-          # for.
-          require_newer() {
-            local name="$1" track="$2" dir="$RUNNER_TEMP/preflight-$2" current rc=0
-            if ! grep -qx "$name" <<<"$ASSETS"; then
-              echo "No $name on the 'updater' release yet; this tag starts the $track track."
-              return 0
-            fi
-            mkdir -p "$dir"
-            gh release download updater -p "$name" -D "$dir"
-            current="$(jq -r '.version' "$dir/$name")"
-            bash scripts/release-channel.sh is-newer "$CHANNEL_MANIFEST_VERSION" "$current" || rc=$?
-            case "$rc" in
-              0) echo "$name holds $current; $CHANNEL_MANIFEST_VERSION is newer." ;;
-              1)
-                echo "::error::$name already announces $current, which is not lower than $CHANNEL_MANIFEST_VERSION. Refusing to move the $track track backwards. Cut a higher version, or roll the track back on purpose with the repoint-updater-manifest.yml workflow (docs/releasing.md, Rollback / repoint runbook)."
-                exit 1
-                ;;
-              *)
-                echo "::error::could not compare $CHANNEL_MANIFEST_VERSION with the version in the current $name ('$current'). Refusing to publish blind; check that file, or repoint the $track track (docs/releasing.md, Rollback / repoint runbook)."
-                exit 1
-                ;;
-            esac
-          }
-          ASSETS="$(gh release view updater --json assets --jq '.assets[].name')"
+          # Forward-only Beta (#650), checked here, before the release is
+          # public: a candidate must be newer than whatever latest-beta.json
+          # already announces. An rc.1 pushed after rc.2, or a candidate for a
+          # version whose final already shipped, would otherwise point Beta
+          # back at an older build - installs already past it are never
+          # offered it, and installs behind it would get it instead of the
+          # newest one. A candidate has no other reason to exist, so it is
+          # refused outright. A final is not refused here: a maintenance
+          # release below the current Stable is legitimate, so the publish
+          # step instead leaves any track it would move backwards alone. A
+          # missing latest-beta.json (the first candidate ever) has nothing to
+          # compare against; a present one that cannot be read fails closed.
+          # Moving a track backwards on purpose is what
+          # repoint-updater-manifest.yml is for.
           if [ "$CHANNEL_KIND" = candidate ]; then
-            require_newer latest-beta.json beta
-          else
-            require_newer latest-stable.json stable
+            ASSETS="$(gh release view updater --json assets --jq '.assets[].name')"
+            if grep -qx 'latest-beta.json' <<<"$ASSETS"; then
+              mkdir -p "$RUNNER_TEMP/preflight-beta"
+              gh release download updater -p latest-beta.json -D "$RUNNER_TEMP/preflight-beta"
+              CURRENT="$(jq -r '.version' "$RUNNER_TEMP/preflight-beta/latest-beta.json")"
+              RC=0
+              bash scripts/release-channel.sh is-newer "$CHANNEL_MANIFEST_VERSION" "$CURRENT" || RC=$?
+              case "$RC" in
+                0) echo "latest-beta.json holds $CURRENT; $CHANNEL_MANIFEST_VERSION is newer." ;;
+                1)
+                  echo "::error::latest-beta.json already announces $CURRENT, which is not lower than $CHANNEL_MANIFEST_VERSION. Refusing to move Beta backwards. Cut a higher candidate, or roll the beta track back on purpose with the repoint-updater-manifest.yml workflow (docs/releasing.md, Rollback / repoint runbook)."
+                  exit 1
+                  ;;
+                *)
+                  echo "::error::could not compare $CHANNEL_MANIFEST_VERSION with the version in the current latest-beta.json ('$CURRENT'). Refusing to publish a candidate blind; check that file, or repoint the beta track (docs/releasing.md, Rollback / repoint runbook)."
+                  exit 1
+                  ;;
+              esac
+            else
+              echo "No latest-beta.json on the 'updater' release yet; this candidate starts the Beta track."
+            fi
           fi
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -635,8 +629,8 @@ jobs:
       # as a byte-for-byte mirror of the beta one (the weekly track is retired,
       # and 0.5.0/0.5.1 installs set to "Weekly" read that file). Each is
       # overwritten on every publish to it. scripts/release-channel.sh decides
-      # which: a final vX.Y.Z publishes Stable, plus Beta and the mirror
-      # unless Beta already holds something newer; a
+      # which: a final vX.Y.Z publishes Stable, Beta and the mirror, each
+      # only where it is newer than what that track holds; a
       # candidate vX.Y.Z-rc.N publishes Beta and the mirror; any other tag
       # (the old -rcN shape included) publishes none. See docs/releasing.md
       # (Updater manifests) for the full flow, including how to repoint or
@@ -716,7 +710,7 @@ jobs:
           # Generated once and copied, so every manifest this tag publishes is
           # byte-identical (pub_date included) - the weekly mirror and, for a
           # final, Stable and Beta alike.
-          OUT="release-artifacts/${MANIFESTS[0]}"
+          OUT="$RUNNER_TEMP/updater-manifest.json"
           node scripts/gen-updater-manifest.mjs \
             --version "$CHANNEL_MANIFEST_VERSION" \
             --tag "$TAG" \
@@ -734,58 +728,93 @@ jobs:
             echo "::error::the rolling 'updater' GitHub release does not exist. See docs/releasing.md (Updater manifests) to create it once, then re-run this job."
             exit 1
           fi
-          # A final must not move Beta backwards (#650). latest-stable.json is
-          # always written, but Beta and its weekly mirror only when the final
-          # is newer than what latest-beta.json announces now, or when there
-          # is no latest-beta.json yet: a 0.5.2 hotfix cut while 0.5.3-rc.1 is
-          # out would otherwise point every Beta install back at 0.5.2. Read
-          # here, just before the upload, so the window for another run to
-          # publish in between is as short as this step can make it. A version
-          # that cannot be read leaves Beta alone and fails the step loudly, as
-          # the candidate guard in the preflight does - after latest-stable.json
-          # is uploaded, since Stable takes every final regardless. A candidate
+          # A final must not move any track backwards (#650). Each track it
+          # would publish to takes it only when that track's manifest is
+          # missing or older than the final: a v0.5.3 maintenance release cut
+          # after v0.6.0 still publishes its GitHub release, but leaves
+          # latest-stable.json on 0.6.0 (a ::warning::, since Stable installs
+          # will not be offered it), and a 0.5.2 hotfix cut while 0.5.3-rc.1 is
+          # out leaves Beta and its weekly mirror on the candidate (a
+          # ::notice::, as that is Beta working as intended). Read here, just
+          # before the upload, so the window for another run to publish in
+          # between is as short as this step can make it. A version that
+          # cannot be read leaves its track alone and fails the step loudly,
+          # after whatever else could be published was uploaded. A candidate
           # needs nothing here: the preflight already refused one that is not
-          # newer.
-          BETA_UNREADABLE=""
+          # newer than Beta.
+          drop_manifests() {
+            local keep=() name x skip
+            for name in "${MANIFESTS[@]}"; do
+              skip=""
+              for x in "$@"; do [ "$name" = "$x" ] && skip=1; done
+              [ -n "$skip" ] || keep+=("$name")
+            done
+            MANIFESTS=("${keep[@]}")
+          }
+          # Sets CHECK (0: the final is newer or there is no manifest yet,
+          # 1: the manifest holds a version that is not older, 2: unreadable)
+          # and CURRENT (the version the manifest holds). Called as a plain
+          # statement so `-e` still applies inside it.
+          check_track() {
+            local name="$1" track="$2" dir="$RUNNER_TEMP/at-publish-$2"
+            CHECK=0
+            CURRENT=""
+            if ! grep -qx "$name" <<<"$ASSETS"; then
+              echo "No $name on the 'updater' release yet; $track takes this final."
+              return 0
+            fi
+            mkdir -p "$dir"
+            gh release download updater -p "$name" -D "$dir"
+            CURRENT="$(jq -r '.version' "$dir/$name")"
+            bash scripts/release-channel.sh is-newer "$CHANNEL_MANIFEST_VERSION" "$CURRENT" || CHECK=$?
+            if [ "$CHECK" -eq 0 ]; then
+              echo "$name holds $CURRENT; $CHANNEL_MANIFEST_VERSION is newer, so $track takes this final."
+            fi
+          }
+          UNREADABLE=()
           if [ "$CHANNEL_KIND" = final ]; then
             ASSETS="$(gh release view updater --json assets --jq '.assets[].name')"
-            if grep -qx 'latest-beta.json' <<<"$ASSETS"; then
-              mkdir -p "$RUNNER_TEMP/beta-at-publish"
-              gh release download updater -p latest-beta.json -D "$RUNNER_TEMP/beta-at-publish"
-              CURRENT="$(jq -r '.version' "$RUNNER_TEMP/beta-at-publish/latest-beta.json")"
-              RC=0
-              bash scripts/release-channel.sh is-newer "$CHANNEL_MANIFEST_VERSION" "$CURRENT" || RC=$?
-              case "$RC" in
-                0) echo "latest-beta.json holds $CURRENT; $CHANNEL_MANIFEST_VERSION is newer, so Beta gets the final too." ;;
-                1)
-                  if [ "$CURRENT" = "$CHANNEL_MANIFEST_VERSION" ]; then
-                    echo "::notice::beta already holds $CURRENT; leaving beta and its weekly mirror."
-                  else
-                    echo "::notice::beta holds $CURRENT, newer than $CHANNEL_MANIFEST_VERSION; leaving beta and its weekly mirror."
-                  fi
-                  ;;
-                *) BETA_UNREADABLE="$CURRENT" ;;
-              esac
-              if [ "$RC" -ne 0 ]; then
-                KEEP=()
-                for name in "${MANIFESTS[@]}"; do
-                  case "$name" in
-                    latest-beta.json|latest-weekly.json) ;;
-                    *) KEEP+=("$name") ;;
-                  esac
-                done
-                MANIFESTS=("${KEEP[@]}")
-              fi
-            fi
+            check_track latest-stable.json stable
+            case "$CHECK" in
+              0) ;;
+              1)
+                echo "::warning::stable holds $CURRENT, which is not older than $CHANNEL_MANIFEST_VERSION; leaving latest-stable.json alone. The GitHub release for $TAG is published, but Stable installs will not be offered it. To point Stable at it anyway, use the repoint-updater-manifest.yml workflow (docs/releasing.md, Rollback / repoint runbook)."
+                drop_manifests latest-stable.json
+                ;;
+              *)
+                UNREADABLE+=("latest-stable.json ('$CURRENT')")
+                drop_manifests latest-stable.json
+                ;;
+            esac
+            check_track latest-beta.json beta
+            case "$CHECK" in
+              0) ;;
+              1)
+                if [ "$CURRENT" = "$CHANNEL_MANIFEST_VERSION" ]; then
+                  echo "::notice::beta already holds $CURRENT; leaving beta and its weekly mirror."
+                else
+                  echo "::notice::beta holds $CURRENT, newer than $CHANNEL_MANIFEST_VERSION; leaving beta and its weekly mirror."
+                fi
+                drop_manifests latest-beta.json latest-weekly.json
+                ;;
+              *)
+                UNREADABLE+=("latest-beta.json ('$CURRENT')")
+                drop_manifests latest-beta.json latest-weekly.json
+                ;;
+            esac
           fi
-          FILES=("$OUT")
-          for name in "${MANIFESTS[@]:1}"; do
+          FILES=()
+          for name in "${MANIFESTS[@]}"; do
             cp "$OUT" "release-artifacts/$name"
             FILES+=("release-artifacts/$name")
           done
-          gh release upload updater "${FILES[@]}" --clobber
-          echo "Published ${MANIFESTS[*]} to the 'updater' release ($CHANNEL_KIND, manifest version $CHANNEL_MANIFEST_VERSION)."
-          if [ -n "$BETA_UNREADABLE" ]; then
-            echo "::error::published ${MANIFESTS[*]}, but could not compare $CHANNEL_MANIFEST_VERSION with the version in the current latest-beta.json ('$BETA_UNREADABLE'), so beta and its weekly mirror were left alone. Check latest-beta.json, then repoint the beta track by hand (docs/releasing.md, Rollback / repoint runbook) if it should take this final."
+          if [ "${#FILES[@]}" -gt 0 ]; then
+            gh release upload updater "${FILES[@]}" --clobber
+            echo "Published ${MANIFESTS[*]} to the 'updater' release ($CHANNEL_KIND, manifest version $CHANNEL_MANIFEST_VERSION)."
+          else
+            echo "No updater manifest written for $TAG: no track it could publish to would move forward."
+          fi
+          if [ "${#UNREADABLE[@]}" -gt 0 ]; then
+            echo "::error::could not compare $CHANNEL_MANIFEST_VERSION with the version in ${UNREADABLE[*]}, so that track was left alone. The GitHub release for $TAG is published${MANIFESTS[*]:+, and so is ${MANIFESTS[*]}}. Check the file, then repoint the track by hand (docs/releasing.md, Rollback / repoint runbook) if it should take this final."
             exit 1
           fi

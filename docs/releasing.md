@@ -530,7 +530,7 @@ Which tag publishes what:
 
 | Tag | Manifest version | Publishes | The build bakes |
 |-----|------------------|-----------|-----------------|
-| `vX.Y.Z` (final) | `X.Y.Z` | `latest-stable.json`; `latest-beta.json` and `latest-weekly.json` unless Beta already holds a version that is not older | nothing |
+| `vX.Y.Z` (final) | `X.Y.Z` | `latest-stable.json`, `latest-beta.json`, `latest-weekly.json`, each track only where it is missing or older than the final | nothing |
 | `vX.Y.Z-rc.N` (candidate) | `X.Y.Z-rc.N` | `latest-beta.json`, `latest-weekly.json` | `STALAGMIGHT_PRERELEASE=rc.N`, `STALAGMIGHT_CHANNEL=beta` |
 | anything else (`-rcN`, `-weekly.*`, any other suffix) | (none) | nothing, with a `::notice::` | nothing |
 
@@ -567,18 +567,17 @@ now-public release with no manifest update, and a re-run cannot recover by
 re-running the whole job - `gh release create` refuses a tag that already
 exists.
 
-The preflight also keeps each tag's own track **forward-only**: the manifest
-it would replace (`latest-beta.json` for a candidate, `latest-stable.json` for
-a final), when it already exists on `updater`, must hold a lower version
-(`scripts/release-channel.sh is-newer`), or the step fails before anything is
-public. That catches an `rc.1` pushed after `rc.2`, a candidate for a version
-whose final already shipped, and a final below the current Stable (a `v0.5.3`
-hotfix after `v0.6.0`). A missing manifest (the first publish to that track)
-passes; one whose version cannot be read fails closed. Both errors name the
-[repoint workflow](#rollback--repoint-runbook), the deliberate way to move a
-track backwards. Whether a final also takes Beta is decided later, in the
-publish step; see [Candidate versions and the forward-only Beta
-track](#candidate-versions-and-the-forward-only-beta-track).
+For a candidate the preflight also keeps **Beta forward-only**: when
+`latest-beta.json` already exists on `updater`, its `version` must be lower
+than the candidate's (`scripts/release-channel.sh is-newer`), or the step fails
+before anything is public. That catches an `rc.1` pushed after `rc.2`, and a
+candidate for a version whose final already shipped. A missing
+`latest-beta.json` (the first candidate ever) passes; one whose version cannot
+be read fails closed. The error names the [repoint
+workflow](#rollback--repoint-runbook), the deliberate way to move a track
+backwards. A final is not checked here: it always publishes its release, and
+the publish step decides which tracks it moves; see [Candidate versions and
+the forward-only Beta track](#candidate-versions-and-the-forward-only-beta-track).
 
 The `release` job's "Publish updater manifest" step (`.github/workflows/release.yml`)
 runs after `gh release create`, once the tag's own release and its artifacts
@@ -624,9 +623,10 @@ exist. It:
    create` already published as this release's notes. It then copies the
    result to every other file the tag publishes, so they are byte-identical,
    `pub_date` included. For a final it first reads the current
-   `latest-beta.json`: unless that is missing or older than the final, Beta
-   and the weekly mirror are left as they are, with a `::notice::` naming the
-   version Beta holds, and only `latest-stable.json` is written.
+   `latest-stable.json` and `latest-beta.json` and writes each track only when
+   its manifest is missing or older than the final. A skipped Stable gets a
+   `::warning::` naming both versions and the repoint workflow; a skipped Beta
+   (with its weekly mirror) a `::notice::`.
 6. Uploads them all to the `updater` release in one `gh release upload
    --clobber` - each publish fully replaces the previous content of every
    file it writes.
@@ -745,24 +745,26 @@ It is also why the build bakes `STALAGMIGHT_PRERELEASE`: an `rc.1` install that
 believed it was plain `0.5.2` would never be offered `0.5.2-rc.2` (lower) or
 the final (equal).
 
-Stable only moves forward on its own: the preflight refuses a final that is not
-newer than what `latest-stable.json` announces, before anything is public. A
-maintenance release below the current Stable (`v0.5.3` after `v0.6.0`) is
-therefore refused outright by this pipeline, its GitHub release included; to
-move Stable back on purpose, repoint it.
-
-Beta only moves forward on its own, for candidates and finals alike:
+Both tracks only move forward on their own:
 
 - **A candidate** that is not newer than what `latest-beta.json` already
-  announces is refused at preflight, before anything is public.
-- **A final** always publishes `latest-stable.json`, but takes Beta and the
-  weekly mirror only when `latest-beta.json` is missing or older than it. A
-  `0.5.2` hotfix cut while `0.5.3-rc.1` is out reaches Stable and leaves Beta
-  on the candidate, with a `::notice::` saying so; without that, Beta installs
-  behind the candidate would be pointed back at `0.5.2`. This check runs in
-  the publish step, just before the upload. If the current Beta version cannot
-  be read, Stable is still published and the step then fails, naming the file
-  to check.
+  announces is refused at preflight, before anything is public. A candidate
+  has no other purpose than reaching Beta, so there is nothing to publish
+  without it.
+- **A final** is never refused. Its GitHub release always publishes, and the
+  publish step then writes each track only where that moves it forward:
+  `latest-stable.json` when it is missing or older than the final, and
+  `latest-beta.json` plus the weekly mirror on the same rule. A `v0.5.3`
+  maintenance release cut after `v0.6.0` publishes as a release and leaves
+  Stable on `0.6.0`, with a `::warning::` naming both versions and the repoint
+  workflow (Stable installs are not offered it). A `0.5.2` hotfix cut while
+  `0.5.3-rc.1` is out reaches Stable and leaves Beta on the candidate, with a
+  `::notice::`. These checks run in the publish step, just before the upload.
+  A manifest whose version cannot be read leaves its track alone, the other
+  track is still published, and the step then fails, naming the file to check.
+
+To move either track backwards on purpose, use the [repoint
+workflow](#rollback--repoint-runbook).
 
 Not covered: **two release runs publishing at once.** Each check reads
 `latest-beta.json` before its own upload, so whichever run uploads last wins.

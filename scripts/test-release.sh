@@ -991,12 +991,13 @@ refute "an earlier candidate is not newer"     bash "$CHANNEL" is-newer 0.5.2-rc
 refute "a hotfix final is not newer than the next version's candidate" \
   bash "$CHANNEL" is-newer 0.5.2 0.5.3-rc.1
 refute "a final is not newer than itself" bash "$CHANNEL" is-newer 0.5.2 0.5.2
-# The preflight's Stable check: a v0.5.3 hotfix cut after v0.6.0 must be
-# refused rather than move every Stable install back.
-refute "a hotfix below the current stable is not newer" \
+# The publish step's Stable check for a final: a v0.5.3 maintenance release
+# cut after v0.6.0 still publishes as a release, but must leave Stable on
+# 0.6.0, so it has to read as not newer; a final above Stable takes it.
+refute "a maintenance final below the current stable is not newer" \
   bash "$CHANNEL" is-newer 0.5.3 0.6.0
-assert "the next patch is newer than the current stable" \
-  bash "$CHANNEL" is-newer 0.6.1 0.6.0
+assert "a final above the current stable is newer" \
+  bash "$CHANNEL" is-newer 0.5.2 0.5.1
 # "Cannot tell" must not read as "not newer" or "newer": the preflight treats
 # it as its own failure. jq prints `null` for a manifest with no version.
 assert "an unrecognised version exits 2, distinct from 'not newer'" \
