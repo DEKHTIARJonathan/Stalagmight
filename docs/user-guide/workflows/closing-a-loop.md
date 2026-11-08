@@ -11,6 +11,10 @@ are already connected another way, or both are fixed by a
    [Create Loop Closure dialog](../screens/closure-dialog.md) and click **Create
    Closure**.
 
+Right-clicking the first station and picking **Merge With...** does steps 1 and
+2 up to the second click. See the
+[station context menu](../screens/station-context-menu.md).
+
 The closure shows as a dashed line. The survey itself does not move. To see it
 adjusted to its closures, switch to **Plan**, or pick **Closures Computed View**
 under **Display**.

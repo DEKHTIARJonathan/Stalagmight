@@ -7,7 +7,8 @@ Right-click a station on the map.
 1. The station you right-clicked.
 2. **Edit Station**: opens the [Edit Station dialog](edit-station-dialog.md).
 3. **Merge With...**: then click the station to merge with. See
-   [Merging stations](../workflows/merging-stations.md).
+   [Merging stations](../workflows/merging-stations.md) and
+   [Closing a loop](../workflows/closing-a-loop.md).
 4. **Add Shot Before**: first station only. The last station has **Add Shot
    After** instead.
 5. **Set Zero Datum**: tie this station to a GPS position. See
