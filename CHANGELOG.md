@@ -9,7 +9,7 @@ Update this file every time a new version is tagged.
 
 ### Added
 
-- **Updates arrive on their own** - while the app is open it checks for an update every 4 hours, downloads one in the background, and on macOS and Linux installs it when you quit, so the next launch is current. Nothing restarts the app for you; "Restart now" is there if you want it sooner. Windows still installs through "Restart to update" ([#631](https://github.com/Stalagmight/Stalagmight/issues/631))
+- **Updates arrive on their own** - while the app is open it checks for an update every 4 hours, downloads one in the background, and on macOS and Linux installs it when you quit, so the next launch is current. Nothing restarts the app for you; "Restart now" is there if you want it sooner. Windows still installs through "Restart to update", as does a Mac where the app sits in a folder you cannot write to. Turn off "Update automatically" in Settings to check and download only when you ask ([#631](https://github.com/Stalagmight/Stalagmight/issues/631))
 
 ## [0.5.0] - 2026-11-07
 

@@ -437,7 +437,7 @@ export default function SettingsDialog() {
   const handleCheckUpdates = useCallback(async () => {
     const previous = checkUpdatesState;
     setCheckUpdatesState('checking');
-    const outcome = await runAppUpdateCheck();
+    const outcome = await runAppUpdateCheck({ userInitiated: true });
     // A newer check (a track switch, a second press) already owns the store, so
     // this reply was never applied to it. Rendering it anyway would put a line
     // on screen that contradicts the banner - keep whatever was there before.

@@ -178,6 +178,7 @@ describe('the check result reaches the store', () => {
   });
 
   it('carries the platform\'s install-on-quit answer through to the banner info', async () => {
+    useProjectStore.setState({ config: config() });
     answer({ ...AVAILABLE, installs_on_quit: false });
 
     await runAppUpdateCheck();
@@ -250,6 +251,7 @@ describe('the check result reaches the store', () => {
  */
 describe('the background download', () => {
   it('is marked as background while it runs, so the banner stays hidden', async () => {
+    useProjectStore.setState({ config: config() });
     let finish: ((v: unknown) => void) | undefined;
     answer(AVAILABLE, () => new Promise((resolve) => (finish = resolve)));
 
@@ -265,6 +267,7 @@ describe('the background download', () => {
   });
 
   it('a failure falls back to offering Download', async () => {
+    useProjectStore.setState({ config: config() });
     answer(AVAILABLE, () => Promise.reject(new Error('offline')));
 
     await runAppUpdateCheck();
@@ -331,13 +334,20 @@ describe('the periodic check', () => {
     expect(checkCalls()).toBe(2);
   });
 
-  it('does not run when the setting is off', async () => {
-    useProjectStore.setState({ config: config({ update_check_enabled: false }) });
+  /**
+   * Turned off AFTER the launch check ran, so the only thing standing between
+   * the poll and a second check is the setting itself.
+   */
+  it('stops when the setting is turned off', async () => {
+    useProjectStore.setState({ config: config() });
     render(<Harness />);
+    await vi.advanceTimersByTimeAsync(11_000);
+    expect(checkCalls()).toBe(1);
 
+    useProjectStore.setState({ config: config({ update_check_enabled: false }) });
     await vi.advanceTimersByTimeAsync(2 * PERIODIC_CHECK_INTERVAL_MS);
 
-    expect(checkCalls()).toBe(0);
+    expect(checkCalls()).toBe(1);
   });
 
   /**
@@ -370,5 +380,99 @@ describe('the periodic check', () => {
 
     expect(downloadCalls()).toBe(2);
     expect(useUpdateStore.getState().status).toBe('ready');
+  });
+});
+
+/**
+ * [#631 review] The setting is the user's opt-out, and About is a question,
+ * not a request to install. Neither may turn into a silent download.
+ */
+describe('who may download without asking', () => {
+  it('a track switch with automatic updates off checks but does not download', async () => {
+    answer(AVAILABLE);
+    useProjectStore.setState({ config: config({ update_check_enabled: false }) });
+    render(<Harness />);
+    await vi.advanceTimersByTimeAsync(11_000);
+
+    useProjectStore.setState({
+      config: config({ update_check_enabled: false, update_track: 'weekly' }),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(checkCalls()).toBe(1);
+    expect(downloadCalls()).toBe(0);
+    expect(useUpdateStore.getState().status).toBe('available');
+  });
+
+  it('About with automatic updates off leaves the download to the user', async () => {
+    answer(AVAILABLE);
+    useProjectStore.setState({ config: config({ update_check_enabled: false }) });
+
+    await runAppUpdateCheck({ userInitiated: true });
+
+    expect(downloadCalls()).toBe(0);
+  });
+
+  it('About with automatic updates on downloads in view, not in the background', async () => {
+    let finish: ((v: unknown) => void) | undefined;
+    answer(AVAILABLE, () => new Promise((resolve) => (finish = resolve)));
+    useProjectStore.setState({ config: config() });
+
+    await runAppUpdateCheck({ userInitiated: true });
+
+    expect(useUpdateStore.getState().status).toBe('downloading');
+    expect(useUpdateStore.getState().backgroundDownload).toBe(false);
+    finish?.(null);
+  });
+
+  it('About un-hides a banner dismissed earlier, since it points the user at it', async () => {
+    answer(AVAILABLE, () => Promise.reject(new Error('offline')));
+    useProjectStore.setState({ config: config({ update_check_enabled: false }) });
+    useUpdateStore.getState().dismiss('1.2.3');
+
+    await runAppUpdateCheck({ userInitiated: true });
+
+    expect(useUpdateStore.getState().dismissedVersion).toBeNull();
+  });
+
+  /**
+   * The backend drops the parked bytes on every successful check, so a
+   * re-check from About would throw a finished download away. About answers
+   * from what is in hand instead, and shows it.
+   */
+  it('About over a ready download answers without re-checking, and reveals it', async () => {
+    answer(AVAILABLE);
+    useProjectStore.setState({ config: config() });
+    await runAppUpdateCheck();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useUpdateStore.getState().status).toBe('ready');
+    useUpdateStore.getState().dismiss('1.2.3');
+
+    const outcome = await runAppUpdateCheck({ userInitiated: true });
+
+    expect(outcome).toEqual({ kind: 'available', currentVersion: '0.5.0', version: '1.2.3' });
+    expect(checkCalls()).toBe(1);
+    expect(downloadCalls()).toBe(1);
+    expect(useUpdateStore.getState().status).toBe('ready');
+    expect(useUpdateStore.getState().dismissedVersion).toBeNull();
+  });
+
+  /**
+   * A check that finds nothing while a background download is in flight makes
+   * the backend refuse that download's bytes; its failure must land nowhere.
+   */
+  it('a download failing after an up-to-date check leaves the store idle', async () => {
+    let fail: ((e: unknown) => void) | undefined;
+    answer(AVAILABLE, () => new Promise((_resolve, reject) => (fail = reject)));
+    useProjectStore.setState({ config: config() });
+    await runAppUpdateCheck();
+    expect(useUpdateStore.getState().status).toBe('downloading');
+
+    answer({ status: { kind: 'up_to_date' }, current_version: '0.5.0', installs_on_quit: true });
+    await runAppUpdateCheck();
+    fail?.(new Error('A newer update check replaced this one'));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(useUpdateStore.getState().status).toBe('idle');
   });
 });

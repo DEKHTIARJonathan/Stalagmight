@@ -25,6 +25,9 @@ const PERIODIC_TICK_MS = 5 * 60 * 1000;
 /** When the most recent check (of any kind) started; drives the periodic one. */
 let lastCheckStartedAt = 0;
 
+/** The running app's version, as the most recent successful check reported it. */
+let lastCurrentVersion: string | null = null;
+
 /**
  * Guards the automatic launch check to once per process - a module flag
  * (not a ref) because it must survive `useAppUpdate` being mounted more than
@@ -38,6 +41,7 @@ let launchCheckArmed = false;
 export function resetAppUpdateLaunchCheckForTests(): void {
   launchCheckArmed = false;
   lastCheckStartedAt = 0;
+  lastCurrentVersion = null;
 }
 
 /**
@@ -94,17 +98,38 @@ export async function downloadAppUpdate(
 /**
  * Run one update check and put the answer in the store.
  *
- * The SINGLE path for every caller - the launch hook, a track switch, and
- * About's manual button - because the alternative (About keeping its own local
- * result) makes the two disagree in both directions: About promising a banner
- * the store never learned to show, and the backend's check nulling the parked
- * download bytes underneath a banner still offering "Restart to update".
+ * The SINGLE path for every caller - the launch hook, the periodic check, a
+ * track switch, and About's manual button - because the alternative (About
+ * keeping its own local result) makes the two disagree in both directions:
+ * About promising a banner the store never learned to show, and the backend's
+ * check nulling the parked download bytes underneath a banner still offering
+ * "Restart to update".
+ *
+ * A found update is downloaded straight away only when automatic updates are
+ * on (#631) - the setting is the user's opt-out, so a track switch or a manual
+ * check with it off leaves the Download button to them. `userInitiated` (About)
+ * shows that download's progress instead of hiding it, and never re-checks
+ * over an update already downloading or downloaded: the backend drops the
+ * parked bytes on every successful check, so pressing "Check" would throw away
+ * a finished download only to fetch the same one again.
  *
  * A failed check is never surfaced as a toast or banner (docs/notifications.md)
  * - it goes quietly to idle. Callers who ASKED for the check say so themselves.
  */
-export async function runAppUpdateCheck(): Promise<AppUpdateCheckOutcome> {
+export async function runAppUpdateCheck(
+  opts: { userInitiated?: boolean } = {},
+): Promise<AppUpdateCheckOutcome> {
+  const userInitiated = opts.userInitiated === true;
   const store = useUpdateStore.getState();
+  if (
+    userInitiated &&
+    store.info &&
+    lastCurrentVersion !== null &&
+    (store.status === 'downloading' || store.status === 'ready')
+  ) {
+    store.reveal();
+    return { kind: 'available', currentVersion: lastCurrentVersion, version: store.info.version };
+  }
   // Every reply is matched against this, so a check overtaken by a later one
   // (a track switch, a second press of the About button) cannot land.
   const seq = store.beginCheck();
@@ -117,16 +142,20 @@ export async function runAppUpdateCheck(): Promise<AppUpdateCheckOutcome> {
     // the same fact. Returning the answer anyway let About render a result the
     // store had already rejected, so its line and the banner disagreed.
     if (useUpdateStore.getState().checkSeq !== seq) return { kind: 'stale' };
+    lastCurrentVersion = result.current_version;
     if (result.status.kind === 'available') {
       const { version, notes_url: notesUrl } = result.status;
       useUpdateStore
         .getState()
         .setAvailable(seq, { version, notesUrl, installsOnQuit: result.installs_on_quit });
+      // About says "see the update banner"; a dismissal from earlier this
+      // session must not make that a lie.
+      if (userInitiated) useUpdateStore.getState().reveal();
       // [#631] Fetch it straight away, so the banner's first appearance is
-      // already "ready" and an ordinary quit can install it. The backend
-      // dropped any earlier download when this check parked its offer, so
-      // there is never a finished download to lose here.
-      void downloadAppUpdate(version, true);
+      // already "ready" and an ordinary quit can install it.
+      if (useProjectStore.getState().config?.general.update_check_enabled) {
+        void downloadAppUpdate(version, !userInitiated);
+      }
       return { kind: 'available', currentVersion: result.current_version, version };
     }
     useUpdateStore.getState().setUpToDate(seq);

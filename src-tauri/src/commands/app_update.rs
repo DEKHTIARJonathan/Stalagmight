@@ -22,8 +22,8 @@
 //!
 //! A download nobody restarts into is installed as the app exits instead
 //! ([`install_downloaded_update_on_exit`], #631), so an ordinary quit is
-//! enough to update and nothing ever forces a restart. Not on Windows - see
-//! [`INSTALLS_ON_QUIT`].
+//! enough to update and nothing ever forces a restart. Not on Windows, nor
+//! where it would need an admin prompt - see [`installs_on_quit`].
 //!
 //! ## What is trusted, and where
 //!
@@ -130,18 +130,59 @@ pub struct AppUpdateCheck {
     /// without a second round trip.
     pub current_version: String,
     /// Whether a downloaded update is installed when the app quits
-    /// ([`INSTALLS_ON_QUIT`]), so the banner can promise it - or not.
+    /// ([`installs_on_quit`]), so the banner can promise it - or not.
     pub installs_on_quit: bool,
 }
 
-/// Whether [`install_downloaded_update_on_exit`] installs on this platform.
+/// Whether [`install_downloaded_update_on_exit`] can run on this platform.
 ///
-/// Not on Windows: the plugin's NSIS install always passes `/R` in passive mode
-/// (`WindowsUpdateInstallMode::nsis_args`, tauri-plugin-updater 2.9.0), so the
-/// installer reopens the app when it finishes. Installing on quit there would
-/// bring back the window the user just closed, which is a restart they never
-/// asked for. Windows keeps "Restart to update" until that can be suppressed.
-pub const INSTALLS_ON_QUIT: bool = !cfg!(windows);
+/// Not on Windows: the plugin's NSIS install passes `/R` in the passive mode
+/// this app uses (`WindowsUpdateInstallMode::nsis_args`, tauri-plugin-updater
+/// 2.9.0), so the installer reopens the app when it finishes. Installing on
+/// quit there would bring back the window the user just closed, which is a
+/// restart they never asked for. Windows keeps "Restart to update".
+const PLATFORM_INSTALLS_ON_QUIT: bool = !cfg!(windows);
+
+/// Whether an update downloaded now would be installed when the app quits.
+///
+/// On macOS this also asks whether the folder holding the app is writable.
+/// When it is not (a non-admin account, an app copied in by another user), the
+/// plugin falls back to an administrator password prompt, and raising that
+/// from an app whose window has already closed, on every quit, is not
+/// acceptable. Such installs keep "Restart to update", where the prompt follows
+/// a click.
+pub fn installs_on_quit() -> bool {
+    PLATFORM_INSTALLS_ON_QUIT && install_dir_is_writable()
+}
+
+/// Can the install replace the app without elevation? Probed by creating and
+/// removing a directory next to the bundle, since permission bits alone do not
+/// answer it (ACLs, group membership). Only macOS has an elevation fallback;
+/// elsewhere a failed write is just a logged failure.
+fn install_dir_is_writable() -> bool {
+    if !cfg!(target_os = "macos") {
+        return true;
+    }
+    let Ok(exe) = tauri::utils::platform::current_exe() else {
+        return false;
+    };
+    let Ok(bundle) = tauri_plugin_updater::extract_path_from_executable(&exe) else {
+        return false;
+    };
+    let Some(dir) = bundle.parent() else {
+        return false;
+    };
+    let probe = dir.join(format!(".stalagmight-update-probe-{}", std::process::id()));
+    match std::fs::create_dir(&probe) {
+        Ok(()) => {
+            if let Err(e) = std::fs::remove_dir(&probe) {
+                tracing::warn!(error = %e, path = %probe.display(), "Could not remove the update write probe");
+            }
+            true
+        }
+        Err(_) => false,
+    }
+}
 
 /// Whether an update is on offer.
 ///
@@ -589,7 +630,7 @@ pub async fn check_for_app_update(
         return Ok(AppUpdateCheck {
             status: AppUpdateStatus::UpToDate,
             current_version,
-            installs_on_quit: INSTALLS_ON_QUIT,
+            installs_on_quit: installs_on_quit(),
         });
     };
 
@@ -610,7 +651,7 @@ pub async fn check_for_app_update(
             version,
         },
         current_version,
-        installs_on_quit: INSTALLS_ON_QUIT,
+        installs_on_quit: installs_on_quit(),
     })
 }
 
@@ -823,11 +864,12 @@ fn take_for_exit(pending: &mut Pending) -> Option<(Update, Vec<u8>)> {
 /// the next launch starts the new version. Nothing is restarted.
 ///
 /// Best-effort: a failure is logged and the exit goes ahead. The next launch
-/// re-checks and downloads the update again. On macOS an install into a
-/// location the user cannot write raises the system's admin prompt (the
-/// plugin's own fallback), exactly as the restart path does.
+/// re-checks and downloads the update again. Skipped wherever
+/// [`installs_on_quit`] says no, which on macOS includes a location the user
+/// cannot write - the plugin would otherwise raise an admin password prompt
+/// after the window has gone.
 pub fn install_downloaded_update_on_exit(app: &AppHandle) {
-    if !INSTALLS_ON_QUIT {
+    if !installs_on_quit() {
         return;
     }
     let Some(update_state) = app.try_state::<AppUpdateState>() else {
@@ -1367,9 +1409,6 @@ mod tests {
         );
     }
 
-    /// Put the state where a real check + download would leave it, without an
-    /// `Update` (which needs a live plugin). Anything that needs the `Update`
-    /// itself is covered by the command-level paths, not here.
     // ── Install on quit (#631) ───────────────────────────────────────────────
 
     /// Bytes from a check a later one superseded must not be installed: they
@@ -1408,6 +1447,9 @@ mod tests {
             .expect("lockable"));
     }
 
+    /// Put the state where a real check + download would leave it, without an
+    /// `Update` (which needs a live plugin). Anything that needs the `Update`
+    /// itself is covered by the command-level paths, not here.
     fn seed_download(state: &AppUpdateState, generation: u64) {
         state
             .with(|pending| {

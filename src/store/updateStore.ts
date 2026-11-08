@@ -81,6 +81,12 @@ interface UpdateStore {
   /** A download (or the install of one) failed - the banner re-offers the download it already knows about. */
   setDownloadFailed: () => void;
   dismiss: (version: string) => void;
+  /**
+   * Make the banner show what is in hand: clears a dismissal and turns a
+   * background download into a visible one. For a caller that has just told
+   * the user to look at the banner (About's "Check for updates").
+   */
+  reveal: () => void;
   /** Test-only reset. */
   reset: () => void;
 }
@@ -126,7 +132,16 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
   },
   setUpToDate: (seq) => {
     if (get().checkSeq !== seq) return;
-    set({ status: 'idle', info: null, progress: null, downloadVersion: null, backgroundDownload: false });
+    // A download still in flight for the old offer is now refused by the
+    // backend; bumping `downloadSeq` makes its failure land nowhere.
+    set((state) => ({
+      status: 'idle',
+      info: null,
+      progress: null,
+      downloadVersion: null,
+      backgroundDownload: false,
+      downloadSeq: state.downloadSeq + 1,
+    }));
   },
   setCheckFailed: (seq) => {
     if (get().checkSeq !== seq) return;
@@ -143,7 +158,14 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
   },
   setAvailable: (seq, info) => {
     if (get().checkSeq !== seq) return;
-    set({ status: 'available', info, progress: null, downloadVersion: null, backgroundDownload: false });
+    set((state) => ({
+      status: 'available',
+      info,
+      progress: null,
+      downloadVersion: null,
+      backgroundDownload: false,
+      downloadSeq: state.downloadSeq + 1,
+    }));
   },
   startDownloading: (version, background = false) => {
     const seq = get().downloadSeq + 1;
@@ -177,5 +199,6 @@ export const useUpdateStore = create<UpdateStore>((set, get) => ({
       backgroundDownload: false,
     })),
   dismiss: (version) => set({ dismissedVersion: version }),
+  reveal: () => set({ dismissedVersion: null, backgroundDownload: false }),
   reset: () => set(INITIAL_STATE),
 }));
