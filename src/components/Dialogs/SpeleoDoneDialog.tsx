@@ -1,3 +1,5 @@
+import { useSpeleoStore } from '../../store/speleoStore';
+import { useProjectStore } from '../../store/projectStore';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
@@ -33,9 +35,13 @@ export default function SpeleoDoneDialog() {
   const mode = useUIStore((s) => s.dialogData.mode) === 'push' ? 'push' : 'release';
   const { busy, push, done } = useSpeleoActions();
   const [message, setMessage] = useState('');
+  const unpushed = useSpeleoStore((s) => s.link?.hasUnpushedEdits);
+  const unsaved = useProjectStore((s) => s.isDirty);
+  const needsMessage = mode === 'push' || unpushed || unsaved;
 
   const handleConfirm = async () => {
-    const text = message.trim() || null;
+    const text = message.trim();
+    if (needsMessage && !text) return;
     if (mode === 'push') {
       // Close only when the push actually LANDED. On divergence_needed /
       // push_unconfirmed the store records the outcome and the App-level effect
@@ -72,6 +78,7 @@ export default function SpeleoDoneDialog() {
           <textarea
             value={message}
             onChange={(e) => setMessage(e.target.value)}
+            required
             rows={3}
             className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
             placeholder={t('speleodb.done.messagePlaceholder')}
@@ -89,7 +96,7 @@ export default function SpeleoDoneDialog() {
           <Button
             variant="primary"
             onClick={() => void handleConfirm()}
-            disabled={busy}
+            disabled={busy || (needsMessage && !message.trim())}
             data-testid="speleodb-done-confirm"
           >
             {busy

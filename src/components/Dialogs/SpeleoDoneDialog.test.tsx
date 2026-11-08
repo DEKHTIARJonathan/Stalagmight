@@ -17,7 +17,7 @@
  * half of the contract lives in SpeleoBanner.test.tsx.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -46,6 +46,11 @@ const LINK: SpeleoLinkState = {
   serverError: null,
 };
 
+function fillCommitMessage() {
+  const input = screen.queryByTestId('speleodb-done-message') as HTMLTextAreaElement | null;
+  if (input && !input.value) fireEvent.change(input, { target: { value: 'Survey update' } });
+}
+
 beforeEach(() => {
   invokeIpcMock.mockReset();
   // A georeferenced zero datum keeps the unrelated `no_anchor` notice out of the
@@ -72,6 +77,7 @@ describe('SpeleoDoneDialog - a failed upload is surfaced inside the dialog (#260
     invokeIpcMock.mockRejectedValue(new Error('blackholed'));
     render(<SpeleoDoneDialog />);
 
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
 
     const notice = await screen.findByTestId('speleodb-push-failure-inline');
@@ -88,6 +94,7 @@ describe('SpeleoDoneDialog - a failed upload is surfaced inside the dialog (#260
     invokeIpcMock.mockRejectedValue(new Error('blackholed'));
     render(<SpeleoDoneDialog />);
 
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
     await screen.findByTestId('speleodb-push-failure-inline');
 
@@ -99,9 +106,11 @@ describe('SpeleoDoneDialog - a failed upload is surfaced inside the dialog (#260
     invokeIpcMock.mockRejectedValue(new Error('blackholed'));
     render(<SpeleoDoneDialog />);
     await userEvent.type(screen.getByTestId('speleodb-done-message'), 'sump survey');
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
     await screen.findByTestId('speleodb-push-failure-inline');
 
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
 
     await waitFor(() =>
@@ -119,10 +128,12 @@ describe('SpeleoDoneDialog - a failed upload is surfaced inside the dialog (#260
   it('a successful retry clears the inline notice and the banner slot, and closes', async () => {
     invokeIpcMock.mockRejectedValueOnce(new Error('blackholed'));
     render(<SpeleoDoneDialog />);
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
     await screen.findByTestId('speleodb-push-failure-inline');
 
     invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
 
     await waitFor(() => expect(useUIStore.getState().activeDialog).toBeNull());
@@ -137,6 +148,7 @@ describe('SpeleoDoneDialog - a failed upload is surfaced inside the dialog (#260
     invokeIpcMock.mockRejectedValue(new Error('blackholed'));
     render(<SpeleoDoneDialog />);
 
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
 
     await screen.findByTestId('speleodb-push-failure-inline');

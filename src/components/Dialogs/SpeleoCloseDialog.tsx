@@ -1,3 +1,4 @@
+import { confirmSpeleoFileOpen } from '../../utils/confirmSpeleoOpen';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
@@ -5,7 +6,7 @@ import { useSpeleoStore, isUnwoundNotEdited } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
-import { getErrorMessage } from '../../utils/ipc';
+import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { handBackProject, holdsWriteLock, type PendingExit } from '../../utils/quit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -61,6 +62,8 @@ export default function SpeleoCloseDialog() {
   const holdsLock = holdsWriteLock(link);
   const [saveLocally, setSaveLocally] = useState(isDirtyLocal);
   const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const needsMessage = isDirtyLocal || (link?.hasUnpushedEdits ?? false);
   const busyAny = busy || saving;
 
   // Persist the local .stalx first when there are unsaved changes and the user
@@ -102,10 +105,23 @@ export default function SpeleoCloseDialog() {
    */
   const closeIntent: PendingExit = { kind: 'close', pendingOpenPath, pendingNewProject };
   const closeThen = (opts?: { releaseLock?: boolean }) => handBackProject(closeIntent, opts);
+  const confirmDestination = async () => {
+    if (!pendingOpenPath) return true;
+    try {
+      if (!await confirmSpeleoFileOpen(pendingOpenPath)) return false;
+      closeIntent.accessConfirmed = true;
+      return true;
+    } catch (error) {
+      openDialog('error', { title: 'Open Failed', message: getErrorMessage(error) });
+      return false;
+    }
+  };
 
   const pushReleaseThenClose = async () => {
+    if (needsMessage && !message.trim()) return;
+    if (!await confirmDestination()) return;
     if (!(await maybeSaveLocally())) return;
-    // done(null) pushes (when dirty) and releases the lock. Only leave once the
+    // done(message) pushes (when dirty) and releases the lock. Only leave once the
     // lock is actually RELEASED - a divergence / unconfirmed push keeps us here so
     // the user resolves it rather than walking away still holding the lock (fix 2).
     //
@@ -113,21 +129,27 @@ export default function SpeleoCloseDialog() {
     // confirmation over this dialog and answers `null`. The close (and the Open / New
     // Project it may be standing in for) would be lost with this prompt, so the intent
     // goes with it and the confirmation completes it.
-    const resolved = await done(null, { pendingExit: closeIntent });
+    const resolved = await done(message.trim() || null, { pendingExit: closeIntent });
     if (resolved?.kind === 'released') {
       closeDialog();
       await closeThen();
     }
   };
 
-  const closeKeepingLock = async () => {
+  const closeWithoutUpload = async () => {
+    if (!await confirmDestination()) return;
     if (!(await maybeSaveLocally())) return;
+    if (holdsLock) {
+      setSaving(true);
+      try {
+        await invokeIpc<null>('speleodb_release_current_lock', { ownOnly: true });
+      } catch (e) {
+        openDialog('error', { title: t('speleodb.lock.releaseFailed'), message: getErrorMessage(e) });
+        return;
+      } finally { setSaving(false); }
+    }
     closeDialog();
-    // Explicitly retain the server lock: this is the one close path that opts out of
-    // the default lock-release (fix 1), so the user keeps their editing claim.
-    // Also the lock-less exit: there is no lock to release, and asking the backend
-    // to release one it does not hold is the only other option.
-    await closeThen({ releaseLock: false });
+    await closeThen();
   };
 
   return (
@@ -181,6 +203,12 @@ export default function SpeleoCloseDialog() {
         {/* #260: same problem as the Finish-editing dialog - this one also stays
             open when `done` throws, with the shell banner stranded behind its
             scrim. Show the failure here; "Push & release" below is the retry. */}
+        {holdsLock && needsMessage && (
+          <div>
+            <label className="block text-sm text-text-secondary mb-1">{t('speleodb.done.messageLabel')}</label>
+            <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} className="w-full px-2 py-1 bg-background border border-border rounded text-sm" data-testid="speleodb-close-message" />
+          </div>
+        )}
         <SpeleoPushFailureNotice />
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <Button onClick={closeDialog} disabled={busyAny} data-testid="speleodb-close-cancel">
@@ -190,17 +218,17 @@ export default function SpeleoCloseDialog() {
             <>
               <Button
                 variant={unwound ? 'primary' : 'secondary'}
-                onClick={() => void closeKeepingLock()}
+                onClick={() => void closeWithoutUpload()}
                 disabled={busyAny}
                 data-primary-action={unwound ? '' : undefined}
-                data-testid="speleodb-close-keep-lock"
+                data-testid="speleodb-close-release"
               >
-                {t('speleodb.close.keepLock')}
+                {t('speleodb.close.releaseWithoutUpload')}
               </Button>
               <Button
                 variant={unwound ? 'danger' : 'primary'}
                 onClick={() => void pushReleaseThenClose()}
-                disabled={busyAny}
+                disabled={busyAny || (needsMessage && !message.trim())}
                 data-testid="speleodb-close-push-release"
               >
                 {unwound
@@ -217,7 +245,7 @@ export default function SpeleoCloseDialog() {
             // SpeleoQuitDialog's "Quit anyway", and not `danger` - nothing is lost.
             <Button
               variant="primary"
-              onClick={() => void closeKeepingLock()}
+              onClick={() => void closeWithoutUpload()}
               disabled={busyAny}
               data-testid="speleodb-close-anyway"
             >

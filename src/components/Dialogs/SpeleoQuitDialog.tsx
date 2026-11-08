@@ -18,13 +18,8 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
  * or the OS window X - `guardQuit` is wired into all of them) while we still hold
  * the SpeleoDB write lock AND have edits the server has not seen.
  *
- * Sibling of {@link SpeleoCloseDialog} rather than a mode of it: the close flow
- * hands the project back and always ends with a decision about the lock, while
- * quitting has a genuinely different third option - walk away WITHOUT touching
- * the lock, which is now the safe default because the backend's exit-time release
- * vetoes itself when there are unpushed edits (aab5121d). Wording, the
- * save-locally checkbox and the failure surface are kept in lock-step with the
- * close dialog on purpose.
+ * Both exit choices release the held lock. Uploading requires a commit message;
+ * leaving without uploading keeps the local file and warns about unpublished work.
  *
  * `projectStore.isDirty` (unsaved to DISK) and `link.hasUnpushedEdits` (not on the
  * SERVER) are independent, so this dialog handles both: the checkbox flushes the
@@ -85,6 +80,8 @@ export default function SpeleoQuitDialog() {
 
   const [saveLocally, setSaveLocally] = useState(isDirtyLocal);
   const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState('');
+  const needsMessage = isDirtyLocal || (link?.hasUnpushedEdits ?? false);
   const [releasing, setReleasing] = useState(false);
   // The destructive option is two-step on purpose: the first press only arms it.
   const [discardArmed, setDiscardArmed] = useState(false);
@@ -122,25 +119,32 @@ export default function SpeleoQuitDialog() {
   // failure on screen (SpeleoPushFailureNotice) - quitting on a failed push would
   // be exactly the data loss this dialog exists to prevent.
   const pushReleaseThenQuit = async () => {
+    if (needsMessage && !message.trim()) return;
     if (!(await maybeSaveLocally())) return;
     // [#303] On an unwound copy `done` never pushes: it raises its own confirmation over
     // this dialog and answers `null`, so the quit below cannot run and this prompt is
     // already gone from the single dialog slot - the quit request evaporated. Hand the
     // intent to the confirmation, which finishes the quit once the push actually releases
     // and puts this prompt back on Cancel.
-    const resolved = await done(null, { pendingExit: { kind: 'quit' } });
+    const resolved = await done(message.trim() || null, { pendingExit: { kind: 'quit' } });
     if (resolved?.kind === 'released') {
       closeDialog();
       performQuit();
     }
   };
 
-  // 2. Keep the lock and quit: the safe default. NOTHING is released here - the
-  // edits stay local and the lock stays ours, so nobody else can start editing from
-  // the older server tip while our work is still on this computer. The backend's
-  // exit-time release sees the unpushed edits and stands down.
-  const keepLockAndQuit = async () => {
+  // Save locally if requested, release our lock, then quit. A failed release stays here.
+  const releaseWithoutUploadAndQuit = async () => {
     if (!(await maybeSaveLocally())) return;
+    if (holdsLock) {
+      setReleasing(true);
+      try {
+        await invokeIpc<null>('speleodb_release_current_lock', { ownOnly: true });
+      } catch (e) {
+        showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), TOAST_KEYS.SPELEODB_LOCK, 'error');
+        return;
+      } finally { setReleasing(false); }
+    }
     closeDialog();
     performQuit();
   };
@@ -153,7 +157,7 @@ export default function SpeleoQuitDialog() {
     if (!(await maybeSaveLocally())) return;
     setReleasing(true);
     try {
-      await invokeIpc<null>('speleodb_release_current_lock');
+      await invokeIpc<null>('speleodb_release_current_lock', { ownOnly: true });
     } catch (e) {
       showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), TOAST_KEYS.SPELEODB_LOCK, 'error');
       setReleasing(false);
@@ -209,7 +213,7 @@ export default function SpeleoQuitDialog() {
 
         {holdsLock && (
           <p className="text-xs text-text-secondary">
-            {unwound ? t('speleodb.quit.keepLockHintUnwound') : t('speleodb.quit.keepLockHint')}
+            {unwound ? t('speleodb.quit.releaseWithoutUploadHintUnwound') : t('speleodb.quit.releaseWithoutUploadHint')}
           </p>
         )}
 
@@ -228,6 +232,12 @@ export default function SpeleoQuitDialog() {
         {/* Same inline failure surface the Finish-editing / close dialogs use: a
             failed upload leaves this dialog open, and the shell banner would sit
             behind its scrim (#260). "Push, release & quit" below is the retry. */}
+        {holdsLock && needsMessage && (
+          <div>
+            <label className="block text-sm text-text-secondary mb-1">{t('speleodb.done.messageLabel')}</label>
+            <textarea value={message} onChange={(e) => setMessage(e.target.value)} rows={3} className="w-full px-2 py-1 bg-background border border-border rounded text-sm" data-testid="speleodb-quit-message" />
+          </div>
+        )}
         <SpeleoPushFailureNotice />
 
         <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-border">
@@ -252,27 +262,27 @@ export default function SpeleoQuitDialog() {
                   ? t('speleodb.quit.discardConfirm')
                   : t('speleodb.quit.discardRelease')}
               </Button>
-              {/* [#303] On an unwound copy the roles swap: keeping the lock and walking
-                  away changes nothing on the server, so THAT becomes the default a stray
+              {/* [#303] On an unwound copy the roles swap: leaving without uploading
+                  preserves the server survey, so THAT becomes the default a stray
                   Enter reaches. Same swap as SpeleoCloseDialog. */}
               <Button
                 variant={unwound ? 'primary' : 'secondary'}
-                onClick={() => void keepLockAndQuit()}
+                onClick={() => void releaseWithoutUploadAndQuit()}
                 disabled={busyAny}
                 data-primary-action={unwound ? '' : undefined}
-                data-testid="speleodb-quit-keep-lock"
+                data-testid="speleodb-quit-release"
               >
-                {t('speleodb.quit.keepLock')}
+                {t('speleodb.quit.releaseWithoutUpload')}
               </Button>
               {/* Primary + [data-primary-action]: DialogWrapper's initial-focus
                   heuristic lands here, so a stray Enter pushes - it can never
                   discard or release. Except on an unwound copy, where pushing IS the
                   destructive answer (it records the older survey over the newer one),
-                  so it hands the default to "keep the lock" above and turns danger. */}
+                  so it hands the default to "release without uploading" above and turns danger. */}
               <Button
                 variant={unwound ? 'danger' : 'primary'}
                 onClick={() => void pushReleaseThenQuit()}
-                disabled={busyAny}
+                disabled={busyAny || (needsMessage && !message.trim())}
                 data-primary-action={unwound ? undefined : ''}
                 data-testid="speleodb-quit-push-release"
               >
@@ -288,7 +298,7 @@ export default function SpeleoQuitDialog() {
             // still here on the next launch.
             <Button
               variant="primary"
-              onClick={() => void keepLockAndQuit()}
+              onClick={() => void releaseWithoutUploadAndQuit()}
               disabled={busyAny}
               data-primary-action=""
               data-testid="speleodb-quit-anyway"

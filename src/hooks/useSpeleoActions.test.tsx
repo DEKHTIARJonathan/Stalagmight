@@ -168,10 +168,7 @@ describe('useSpeleoActions - a failed push/unlock raises the persistent banner (
         loggedIn: true,
         userEmail: 'me@example.com',
         endpoint: 'https://cave.example.internal:8443/',
-        keychainBacked: true,
-        storage: 'keychain',
-        keychain: 'available',
-      },
+        },
     });
     invokeIpcMock.mockRejectedValue({
       message: 'Network error talking to SpeleoDB: Invalid argument',

@@ -15,7 +15,7 @@
  *     the two dirty states compose instead of one swallowing the other.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -66,6 +66,11 @@ const calledCommands = () => invokeIpcMock.mock.calls.map((c) => c[0] as string)
 
 let saveProject: ReturnType<typeof vi.fn>;
 
+function fillCommitMessage() {
+  const input = screen.queryByTestId('speleodb-quit-message') as HTMLTextAreaElement | null;
+  if (input && !input.value) fireEvent.change(input, { target: { value: 'Survey update' } });
+}
+
 beforeEach(() => {
   invokeIpcMock.mockReset();
   performQuitMock.mockReset();
@@ -90,6 +95,7 @@ describe('SpeleoQuitDialog - push, release & quit', () => {
     invokeIpcMock.mockResolvedValue({ kind: 'released' });
     render(<SpeleoQuitDialog />);
 
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-quit-push-release'));
 
     await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
@@ -101,6 +107,7 @@ describe('SpeleoQuitDialog - push, release & quit', () => {
     invokeIpcMock.mockRejectedValue(new Error('blackholed'));
     render(<SpeleoQuitDialog />);
 
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-quit-push-release'));
 
     const notice = await screen.findByTestId('speleodb-push-failure-inline');
@@ -116,6 +123,7 @@ describe('SpeleoQuitDialog - push, release & quit', () => {
     invokeIpcMock.mockResolvedValue({ kind: 'divergence_needed' });
     render(<SpeleoQuitDialog />);
 
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-quit-push-release'));
 
     await waitFor(() => expect(calledCommands()).toContain('speleodb_done'));
@@ -123,29 +131,28 @@ describe('SpeleoQuitDialog - push, release & quit', () => {
   });
 });
 
-describe('SpeleoQuitDialog - keep the lock & quit', () => {
-  // The negative assertion IS the feature: keeping the lock means no release.
-  it('quits without invoking ANY release IPC', async () => {
+describe('SpeleoQuitDialog - retain local edits and release on quit', () => {
+  // Leaving without an upload still releases the current project's lock.
+  it('releases the current lock before quitting', async () => {
     render(<SpeleoQuitDialog />);
 
-    await userEvent.click(screen.getByTestId('speleodb-quit-keep-lock'));
+    await userEvent.click(screen.getByTestId('speleodb-quit-release'));
 
     await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
-    for (const command of RELEASE_COMMANDS) {
-      expect(calledCommands()).not.toContain(command);
-    }
-    expect(invokeIpcMock).not.toHaveBeenCalled();
+    expect(calledCommands()).toEqual(['speleodb_release_current_lock']);
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_release_current_lock', { ownOnly: true });
   });
 
-  it('saves a disk-dirty project first, then quits, still without releasing', async () => {
+  it('saves locally and releases before quitting', async () => {
     useProjectStore.setState({ isDirty: true });
     render(<SpeleoQuitDialog />);
 
-    await userEvent.click(screen.getByTestId('speleodb-quit-keep-lock'));
+    await userEvent.click(screen.getByTestId('speleodb-quit-release'));
 
     await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
     expect(saveProject).toHaveBeenCalledTimes(1);
-    expect(invokeIpcMock).not.toHaveBeenCalled();
+    expect(calledCommands()).toEqual(['speleodb_release_current_lock']);
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_release_current_lock', { ownOnly: true });
   });
 });
 
@@ -169,6 +176,7 @@ describe('SpeleoQuitDialog - discard & release', () => {
 
     await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
     expect(calledCommands()).toEqual(['speleodb_release_current_lock']);
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_release_current_lock', { ownOnly: true });
     expect(calledCommands()).not.toContain('speleodb_done');
   });
 
@@ -215,6 +223,7 @@ describe('SpeleoQuitDialog - the disk-dirty half composes', () => {
     invokeIpcMock.mockResolvedValue({ kind: 'released' });
     render(<SpeleoQuitDialog />);
 
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-quit-push-release'));
 
     await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
@@ -231,6 +240,7 @@ describe('SpeleoQuitDialog - the disk-dirty half composes', () => {
     saveProject.mockResolvedValue({ success: false, error: 'disk full' } as never);
     render(<SpeleoQuitDialog />);
 
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-quit-push-release'));
 
     await waitFor(() => expect(saveProject).toHaveBeenCalled());
@@ -243,7 +253,7 @@ describe('SpeleoQuitDialog - the disk-dirty half composes', () => {
     render(<SpeleoQuitDialog />);
 
     await userEvent.click(screen.getByTestId('speleodb-quit-save-locally'));
-    await userEvent.click(screen.getByTestId('speleodb-quit-keep-lock'));
+    await userEvent.click(screen.getByTestId('speleodb-quit-release'));
 
     await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
     expect(saveProject).not.toHaveBeenCalled();
@@ -273,7 +283,7 @@ describe('SpeleoQuitDialog - reached without the write lock', () => {
 
     expect(screen.getByTestId('speleodb-quit-anyway')).toBeInTheDocument();
     expect(screen.queryByTestId('speleodb-quit-push-release')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('speleodb-quit-keep-lock')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-quit-release')).not.toBeInTheDocument();
     expect(screen.queryByTestId('speleodb-quit-discard-release')).not.toBeInTheDocument();
   });
 
@@ -315,6 +325,7 @@ describe('SpeleoQuitDialog - not dismissable mid-verb', () => {
     });
     render(<SpeleoQuitDialog />);
 
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-quit-push-release'));
     await waitFor(() => expect(calledCommands()).toContain('speleodb_done'));
 
@@ -374,6 +385,7 @@ describe('SpeleoQuitDialog - Cancel puts back the dialog it displaced', () => {
     invokeIpcMock.mockResolvedValue({ kind: 'released' });
     render(<SpeleoQuitDialog />);
 
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-quit-push-release'));
 
     await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
@@ -396,11 +408,11 @@ describe('SpeleoQuitDialog - unwound copy', () => {
   const unwind = () =>
     useSpeleoStore.setState({ link: { ...LINK, hasUnpushedEdits: true, unwound: true } });
 
-  it('hands the pre-focused default to "keep the lock" and marks pushing destructive', () => {
+  it('defaults to releasing without upload and marks pushing destructive', () => {
     unwind();
     render(<SpeleoQuitDialog />);
 
-    const keep = screen.getByTestId('speleodb-quit-keep-lock');
+    const keep = screen.getByTestId('speleodb-quit-release');
     const push = screen.getByTestId('speleodb-quit-push-release');
     expect(keep).toHaveAttribute('data-primary-action');
     expect(push).not.toHaveAttribute('data-primary-action');
@@ -425,7 +437,7 @@ describe('SpeleoQuitDialog - unwound copy', () => {
     render(<SpeleoQuitDialog />);
 
     expect(screen.getByTestId('speleodb-quit-push-release')).toHaveAttribute('data-primary-action');
-    expect(screen.getByTestId('speleodb-quit-keep-lock')).not.toHaveAttribute(
+    expect(screen.getByTestId('speleodb-quit-release')).not.toHaveAttribute(
       'data-primary-action',
     );
     expect(screen.getByTestId('speleodb-quit-dialog').textContent ?? '').toContain(
@@ -460,6 +472,7 @@ describe('SpeleoQuitDialog - the unwound-push confirmation carries the quit', ()
   const reachConfirmation = async () => {
     useSpeleoStore.setState({ link: { ...LINK, hasUnpushedEdits: true, unwound: true } });
     render(<DialogHost />);
+    fillCommitMessage();
     await userEvent.click(screen.getByTestId('speleodb-quit-push-release'));
     return screen.findByTestId('speleodb-unwound-push-dialog');
   };
@@ -521,6 +534,24 @@ describe('SpeleoQuitDialog - the unwound-push confirmation carries the quit', ()
 
     await waitFor(() => expect(useUIStore.getState().activeDialog).toBe('speleodb-quit'));
     expect(calledCommands()).toEqual(['speleodb_discard_changes']);
+    expect(performQuitMock).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('quit release safety', () => {
+  it('requires a commit message before uploading', () => {
+    render(<SpeleoQuitDialog />);
+    expect(screen.getByTestId('speleodb-quit-push-release')).toBeDisabled();
+    fillCommitMessage();
+    expect(screen.getByTestId('speleodb-quit-push-release')).toBeEnabled();
+  });
+
+  it('a failed release without upload keeps the app open', async () => {
+    invokeIpcMock.mockRejectedValue(new Error('offline'));
+    render(<SpeleoQuitDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-quit-release'));
+    await waitFor(() => expect(useUIStore.getState().showToast).toHaveBeenCalled());
     expect(performQuitMock).not.toHaveBeenCalled();
   });
 });

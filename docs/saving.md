@@ -4,6 +4,14 @@
 
 Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. Saves are triggered manually (Ctrl+S), automatically via a frontend debounced timer, or by the first import into a new project whose initial save was deferred (`finalize_deferred_import` in `src-tauri/src/commands/import.rs`). A failed deferred-import save degrades to a successful import carrying a warning, never a hard failure, so the imported data stays in memory under the close-guard. The save pipeline is optimized to return quickly by deferring non-critical work to background threads and avoiding unnecessary recomputation.
 
+For a linked SpeleoDB project being edited under its write lock, manual Save
+(Ctrl+S or the menu action) asks for a nonblank commit message, saves locally,
+and uploads the native SQLite `project.stalx` through the dedicated endpoint.
+Autosave still writes locally. Closing, switching projects or quitting warns
+about unsaved or unuploaded work and releases the held lock before continuing.
+A failed save, upload or release keeps the project open. See
+[SpeleoDB integration](SpeleoDB.md) for the transfer and lock contract.
+
 Every import-into-new-project flow now creates its project deferred, so the
 `.stalx` appears on the first import rather than at the moment the name is typed
 (#394 F14) - a wizard abandoned before then leaves no empty file and no Recent

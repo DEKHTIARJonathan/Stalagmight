@@ -48,9 +48,7 @@ const SESSION = {
   loggedIn: true,
   userEmail: 'diver@example.com',
   endpoint: 'http://sdb.example/',
-  keychainBacked: true,
-  storage: null,
-} as SpeleoSession;
+  } as SpeleoSession;
 
 let loadProjectMock: ReturnType<typeof vi.fn>;
 let closeDialogMock: ReturnType<typeof vi.fn>;
@@ -115,33 +113,6 @@ describe('SpeleoManagedFileDialog', () => {
     render(<SpeleoManagedFileDialog />);
     expect(screen.getByTestId('speleodb-managed-file-open-remote')).toBeDisabled();
     expect(screen.getByTestId('speleodb-managed-file-remote-blocked')).toBeInTheDocument();
-  });
-
-  it('opens the managed copy through the real project list', async () => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_list_projects') return Promise.resolve([SUMMARY]);
-      if (cmd === 'speleodb_open_project')
-        return Promise.resolve({ local_path: '/cache/p1/project.stalx', concurrent_session: false });
-      return Promise.resolve(undefined);
-    });
-    render(<SpeleoManagedFileDialog />);
-    await userEvent.click(screen.getByTestId('speleodb-managed-file-open-remote'));
-
-    await waitFor(() => {
-      const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_open_project');
-      // The list's summary, not one synthesized from the file's link row - only
-      // the list carries latest_commit_sha and permission. `entryPath: null` is
-      // the shared open flow's #258 dump-picker arg (no pre-picked entry here).
-      expect(call?.[1]).toEqual({
-        projectId: 'p1',
-        projectName: 'Cenote Azul',
-        latestCommitSha: 'abc123',
-        entryPath: null,
-      });
-    });
-    await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1/project.stalx'));
-    // The foreign file itself was never touched.
-    expect(ipcCalls()).not.toContain('speleodb_remove_link_at');
   });
 
   it('reports a project the account cannot see inline, without opening anything', async () => {

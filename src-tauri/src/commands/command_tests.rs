@@ -5571,7 +5571,12 @@ fn test_update_config_persists_and_reload_restores() {
             let updated = config::get_config(state(&app));
             assert_eq!(updated.general.auto_save, !original_auto_save);
 
-            let reloaded = config::reload_config(state(&app)).expect("reload config");
+            let (reloaded, auth_changed) =
+                config::reload_config(state(&app)).expect("reload config");
+            assert!(
+                !auth_changed,
+                "ordinary preference reload preserves the session"
+            );
             assert_eq!(reloaded.general.auto_save, !original_auto_save);
         });
     });
@@ -5586,7 +5591,12 @@ fn test_reload_config_syncs_undo_history_limit() {
             cfg.general.undo_history_limit = 42;
             config::update_config(state(&app), cfg).expect("update config");
 
-            let reloaded = config::reload_config(state(&app)).expect("reload config");
+            let (reloaded, auth_changed) =
+                config::reload_config(state(&app)).expect("reload config");
+            assert!(
+                !auth_changed,
+                "ordinary preference reload preserves the session"
+            );
             assert_eq!(reloaded.general.undo_history_limit, 42);
 
             // Verify the in-memory config also reflects the reloaded limit

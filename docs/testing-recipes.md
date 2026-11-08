@@ -1463,7 +1463,7 @@ mutex, which cost two distinct hazards:
 - While ANY test held the override, an unguarded test's save resolved **into
   that test's isolated dir**. That is #522: an unguarded test atomically renamed
   its own `config.toml` over an isolated test's file, between that test's save
-  and its read-back, and failed an assertion about keychain retry logic with an
+  and its read-back, and failed an assertion about credential persistence with an
   environment problem.
 
 | helper | what it does |

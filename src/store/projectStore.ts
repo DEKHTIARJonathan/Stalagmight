@@ -59,7 +59,7 @@ import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
-import { runProjectSwitch } from '../utils/projectTransition';
+import { runProjectSwitch, runConfirmedProjectSwitch } from '../utils/projectTransition';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
@@ -292,7 +292,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   cancelLoading: () => Promise<void>;
 
   /** Load a project using the consolidated load_project_full command */
-  loadProject: (path: string) => Promise<LoadProjectOutcome>;
+  loadProject: (path: string, opts?: { accessConfirmed?: boolean }) => Promise<LoadProjectOutcome>;
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
@@ -332,8 +332,8 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   /**
    * Close the open project. By default (`releaseLock` unset/true) the backend
    * best-effort releases a held SpeleoDB write lock first so the close can't strand
-   * the server mutex (fix 1); the close dialog's "Keep lock" path passes
-   * `{ releaseLock: false }` to retain it.
+   * the server mutex (fix 1). The release opt-out is reserved for internal tree
+   * replacements that retain the same project's edit session.
    */
   closeProject: (opts?: { releaseLock?: boolean }) => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
@@ -978,7 +978,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // discarded by the clientOpId race check. The thrown-away allocations
   // churn JSC's bmalloc slabs and leave committed (but unused) memory
   // behind. The dedup map ensures the heavy path runs exactly once.
-  loadProject: (path: string) => {
+  loadProject: (path: string, opts?: { accessConfirmed?: boolean }) => {
     const existing = inFlightLoads.get(path);
     if (existing) return existing;
 
@@ -994,7 +994,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (key !== path) inFlightLoads.delete(key);
     }
 
-    const promise: Promise<LoadProjectOutcome> = runProjectSwitch(async () => {
+    const promise: Promise<LoadProjectOutcome> = runConfirmedProjectSwitch(path, () => get().project?.file_path, opts?.accessConfirmed, async () => {
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
       // resolution, the Zustand set, the view switch / MapCanvas mount, or

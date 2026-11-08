@@ -19,6 +19,8 @@ import type { DisplaySettings } from '../../types/loading';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 const loadBinaryMock = vi.hoisted(() => vi.fn());
+const confirmMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
+vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
 
 vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
 vi.mock('../../utils/loadProjectBinary', () => ({ loadProjectFullBinary: loadBinaryMock }));
@@ -79,6 +81,7 @@ let hadLinkAtViewSwitch: boolean | null;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  confirmMock.mockResolvedValue(true);
   readOnlyAtViewSwitch = null;
   hadLinkAtViewSwitch = null;
 
@@ -150,5 +153,37 @@ describe('loadProject resolves the SpeleoDB gate before the view renders (#270)'
     expect(hadLinkAtViewSwitch).toBe(false);
     expect(selectSpeleoReadOnly(useSpeleoStore.getState())).toBe(false);
     expect(useSpeleoStore.getState().projectLinkKind).toBe('local');
+  });
+});
+
+
+describe('restricted native file preflight', () => {
+  it.each([
+    { permission: 'READ_ONLY', lock_holder: null },
+    { permission: 'READ_AND_WRITE', lock_holder: 'other@example.com' },
+  ])('warns on a cold direct open and preserves the current project on cancel: %o', async (access) => {
+    const current = { file_path: '/current.stalx', name: 'Current' };
+    useProjectStore.setState({ project: current as never });
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'speleodb_project_access_at') return { id: 'p', name: 'Restricted', ...access };
+      return [];
+    });
+    confirmMock.mockResolvedValue(false);
+    const first = useProjectStore.getState().loadProject('/cold.stalx');
+    const duplicate = useProjectStore.getState().loadProject('/cold.stalx');
+    expect(await first).toEqual({ success: false });
+    await duplicate;
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(loadBinaryMock).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().project).toBe(current);
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_project_access_at', { path: '/cold.stalx' });
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('cancel_loading', undefined, expect.anything());
+  });
+
+  it('does not repeat a remote-browser access confirmation', async () => {
+    mockLoad(true);
+    await useProjectStore.getState().loadProject('/confirmed.stalx', { accessConfirmed: true });
+    expect(invokeIpcMock.mock.calls.some(([command]) => command === 'speleodb_project_access_at')).toBe(false);
+    expect(confirmMock).not.toHaveBeenCalled();
   });
 });

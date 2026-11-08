@@ -22,7 +22,6 @@ mod recent_projects;
 mod speleodb;
 mod speleodb_admin;
 mod speleodb_cache;
-mod speleodb_credentials;
 mod speleodb_foreign;
 mod speleodb_local_state;
 mod speleodb_lock_release;
