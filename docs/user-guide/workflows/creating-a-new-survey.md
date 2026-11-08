@@ -10,6 +10,8 @@
    [Import / Create Section dialog](../screens/create-section-dialog.md), name
    the section and set the surveyor, date and color.
 5. Enter one row per shot and click **Create Section**.
+6. Click the map to [place the section](../screens/placement-mode.md). Rough
+   is fine, it can be moved later.
 
 Tick **Save project file immediately** to create the file right away. Otherwise
 it is saved once you add data.
@@ -64,3 +66,13 @@ for the project details.
 - LRUD, and azimuth or inclination at both ends of a shot, are extra columns
   under the eye icon. See the
   [dialog page](../screens/create-section-dialog.md).
+
+### 6. Place the section
+
+![Placement mode](../images/placement-mode.png)
+
+- The first station (1) follows the pointer. Click to drop the section.
+- Drag, scroll or zoom (3) the map to get to the right spot.
+- Placement does not need to be accurate. The section can be moved later or
+  anchored to a [zero datum](../concepts/sections-shots-stations.md).
+- **Esc** (2) goes back to the dialog with what you entered.

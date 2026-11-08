@@ -26,7 +26,8 @@ the [survey view](survey-view.md).
     [shot kinds](../concepts/sections-shots-stations.md).
 14. **Comment**
 15. **Cancel**: same as 1.
-16. **Create Section**: creates the section, then you place it on the map.
+16. **Create Section**: creates the section, then you place it on the map in
+    [placement mode](placement-mode.md).
 
 ## Details
 

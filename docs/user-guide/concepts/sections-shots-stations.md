@@ -12,6 +12,8 @@
 - **Section**: a run of shots, usually one linear stretch of surveyed line.
 - **Merging** two stations connects the sections they are on. That is how
   separate sections become one cave.
+- **Zero datum**: a station tied to a real-world GPS position. Every other
+  station is positioned relative to it.
 
 Add a section with **Add section** and merge stations with **Merge** in the
 [survey view](../screens/survey-view.md). The shot kind is the **J/R** column
