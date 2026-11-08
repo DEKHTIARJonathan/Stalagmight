@@ -216,6 +216,37 @@ test.describe('In-app update banner', () => {
     ).toBe(1);
   });
 
+  /**
+   * [#650] Beta installs release candidates, so switching to it is confirmed
+   * first; Cancel keeps the track, and Stable needs no confirmation.
+   */
+  test('switching the update track to Beta asks first', async ({ page }) => {
+    await openSettingsFromMenu(page);
+    const track = page.getByTestId('select-update-track');
+    await expect(track).toContainText('Stable');
+
+    await track.click();
+    await page.getByTestId('select-update-track-option-beta').click();
+    const warning = page.getByTestId('update-track-beta-dialog');
+    await expect(warning).toBeVisible();
+    await expect(warning).toContainText('release candidates');
+    await page.getByTestId('update-track-beta-cancel').click();
+    await expect(warning).toHaveCount(0);
+    await expect(track).toContainText('Stable');
+
+    await track.click();
+    await page.getByTestId('select-update-track-option-beta').click();
+    await page.getByTestId('update-track-beta-confirm').click();
+    await expect(track).toContainText('Beta');
+    // The settings dialog itself is still open: the warning closed alone.
+    await expect(page.getByTestId('settings-dialog')).toBeVisible();
+
+    await track.click();
+    await page.getByTestId('select-update-track-option-stable').click();
+    await expect(page.getByTestId('update-track-beta-dialog')).toHaveCount(0);
+    await expect(track).toContainText('Stable');
+  });
+
   test('Dismiss hides the banner for the session, for that version only', async ({ page }) => {
     await seedAvailable(page, '9.9.9');
     await expect(page.getByTestId('update-banner')).toBeVisible();
