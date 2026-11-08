@@ -271,6 +271,7 @@ export type PendingExit =
       pendingNewProject?: boolean;
       accessConfirmed?: boolean;
       request?: number;
+      sessionGeneration?: number;
     };
 
 /**
@@ -283,7 +284,7 @@ export type PendingExit =
 export function readPendingExit(data: Record<string, unknown>): PendingExit | null {
   const raw = data.pendingExit;
   if (typeof raw !== 'object' || raw === null) return null;
-  const { kind, pendingOpenPath, pendingNewProject, accessConfirmed, request } = raw as Record<string, unknown>;
+  const { kind, pendingOpenPath, pendingNewProject, accessConfirmed, request, sessionGeneration } = raw as Record<string, unknown>;
   if (kind === 'quit') return { kind: 'quit' };
   if (kind !== 'close') return null;
   return {
@@ -291,8 +292,14 @@ export function readPendingExit(data: Record<string, unknown>): PendingExit | nu
     pendingOpenPath: typeof pendingOpenPath === 'string' ? pendingOpenPath : null,
     pendingNewProject: pendingNewProject === true,
     ...(typeof request === 'number' ? { request } : {}),
+    ...(typeof sessionGeneration === 'number' ? { sessionGeneration } : {}),
     ...(accessConfirmed === true ? { accessConfirmed: true } : {}),
   };
+}
+
+export function closeExitStillCurrent(exit: { request?: number; sessionGeneration?: number }): boolean {
+  return (exit.request === undefined || isProjectRequestCurrent(exit.request)) &&
+    (exit.sessionGeneration === undefined || useSpeleoStore.getState().sessionGeneration === exit.sessionGeneration);
 }
 
 /**
@@ -308,11 +315,11 @@ export function readPendingExit(data: Record<string, unknown>): PendingExit | nu
  * growing a second copy of the ordering argument above.
  */
 export async function handBackProject(
-  exit: { pendingOpenPath?: string | null; pendingNewProject?: boolean; accessConfirmed?: boolean; request?: number },
+  exit: { pendingOpenPath?: string | null; pendingNewProject?: boolean; accessConfirmed?: boolean; request?: number; sessionGeneration?: number },
   opts?: { releaseLock?: boolean },
 ): Promise<void> {
   const request = exit.request ?? reserveProjectRequest();
-  const current = () => isProjectRequestCurrent(request);
+  const current = () => isProjectRequestCurrent(request) && closeExitStillCurrent(exit);
   if (!current()) return;
   const { closeProject, loadProject } = useProjectStore.getState();
   if (exit.pendingOpenPath && !exit.accessConfirmed) {

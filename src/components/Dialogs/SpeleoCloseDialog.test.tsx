@@ -361,7 +361,7 @@ describe('close destination probe ownership', () => {
     fireEvent.click(screen.getByTestId('speleodb-close-release'));
     if (replacement === 'dialog') useUIStore.setState({ dialogData: {} });
     if (replacement === 'project') useProjectStore.setState({ project: { file_path: '/other.stalx' } as never });
-    if (replacement === 'session') useSpeleoStore.setState({ session: { loggedIn: false, endpoint: null, userEmail: null } });
+    if (replacement === 'session') useSpeleoStore.getState().clearSession();
     if (replacement === 'unmount') view.unmount();
     await act(async () => { resolve(null); });
     expect(invokeIpcMock).toHaveBeenCalledOnce();
@@ -379,5 +379,20 @@ it('continues after an ordinary save refreshes the project object', async () => 
   });
   render(<SpeleoCloseDialog />);
   await userEvent.click(screen.getByTestId('speleodb-close-release'));
+  await waitFor(() => expect(closeProject).toHaveBeenCalledOnce());
+});
+
+
+it.each(['speleodb-close-release', 'speleodb-close-push-release'])('continues %s across a benign session refresh', async (button) => {
+  let resolve!: (value: unknown) => void;
+  const probe = new Promise((yes) => { resolve = yes; });
+  invokeIpcMock.mockImplementation((command) => command === 'speleodb_project_access_at' ? probe : Promise.resolve({ kind: 'released' }));
+  useSpeleoStore.getState().setSession({ logged_in: true, user_email: 'synthetic@example.com', endpoint: 'https://synthetic.example' });
+  useUIStore.setState({ dialogData: { pendingOpenPath: '/synthetic/destination.stalx' } });
+  render(<SpeleoCloseDialog />);
+  fillCommitMessage();
+  fireEvent.click(screen.getByTestId(button));
+  useSpeleoStore.getState().setSession({ logged_in: true, user_email: 'synthetic@example.com', endpoint: 'https://synthetic.example' });
+  await act(async () => { resolve(null); });
   await waitFor(() => expect(closeProject).toHaveBeenCalledOnce());
 });

@@ -80,14 +80,14 @@ export default function SpeleoCloseDialog() {
     const project = useProjectStore.getState();
     const path = project.project?.file_path;
     const op = project.loading.clientOpId;
-    const session = useSpeleoStore.getState().session;
+    const sessionGeneration = useSpeleoStore.getState().sessionGeneration;
     const request = reserveProjectRequest();
     const current = () => mounted.current && isProjectRequestCurrent(request) &&
       useUIStore.getState().activeDialog === 'speleodb-close' &&
       useUIStore.getState().dialogData === dialogData &&
       useProjectStore.getState().project?.file_path === path &&
       useProjectStore.getState().loading.clientOpId === op &&
-      useSpeleoStore.getState().session === session;
+      useSpeleoStore.getState().sessionGeneration === sessionGeneration;
     try { await work(current, request); }
     finally { attempt.current = false; if (mounted.current) setOperating(false); }
   };
@@ -149,6 +149,7 @@ export default function SpeleoCloseDialog() {
 
   const pushReleaseThenClose = () => runClose(async (current, request) => {
     closeIntent.request = request;
+    closeIntent.sessionGeneration = useSpeleoStore.getState().sessionGeneration;
     if (needsMessage && !message.trim()) return;
     if (!await confirmDestination(current) || !current()) return;
     if (!(await maybeSaveLocally(current)) || !current()) return;
@@ -169,6 +170,7 @@ export default function SpeleoCloseDialog() {
 
   const closeWithoutUpload = () => runClose(async (current, request) => {
     closeIntent.request = request;
+    closeIntent.sessionGeneration = useSpeleoStore.getState().sessionGeneration;
     if (!await confirmDestination(current) || !current()) return;
     if (!(await maybeSaveLocally(current)) || !current()) return;
     if (holdsLock) {
