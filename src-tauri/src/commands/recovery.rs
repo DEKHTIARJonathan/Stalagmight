@@ -54,6 +54,10 @@ pub fn restore_from_backup(project_path: PathBuf, backup_path: PathBuf) -> Resul
         return Err(format!("Backup file not found: {}", backup_path.display()));
     }
 
+    // Copying a backup over a project a newer Stalagmight saved would put an
+    // older file in its place (#649).
+    Database::check_not_newer_at(&project_path).map_err(|e| format!("Not restored: {e}"))?;
+
     // Create a safety backup of the current (corrupt) file before overwriting
     let safety = project_path.with_extension("stalx.pre-restore");
     if let Err(e) = std::fs::copy(&project_path, &safety) {
@@ -75,4 +79,71 @@ pub fn export_salvageable_data(path: PathBuf) -> Result<SalvagedData, String> {
     tracing::info!(path = ?path, "IPC: export_salvageable_data");
 
     Database::export_salvageable(&path).map_err(|e| format!("Salvage failed: {e}"))
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod tests {
+    use super::restore_from_backup;
+    use crate::models::Project;
+    use crate::persistence::{Database, SCHEMA_VERSION};
+    use std::path::{Path, PathBuf};
+
+    /// A saved synthetic project at `dir/name`, stamped `version`. The stamp is
+    /// written straight into the SQLite header's user-version field (bytes
+    /// 60..64, big-endian), which is what `PRAGMA user_version` sets.
+    fn project_file(dir: &Path, name: &str, version: i32) -> PathBuf {
+        let path = dir.join(name);
+        {
+            let mut db = Database::open(&path).unwrap();
+            db.save_project(&Project::new(name.to_string(), None))
+                .unwrap();
+        }
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes
+            .get_mut(60..64)
+            .unwrap()
+            .copy_from_slice(&version.to_be_bytes());
+        std::fs::write(&path, bytes).unwrap();
+        path
+    }
+
+    /// [#649] Restoring an older backup over a project a newer Stalagmight saved
+    /// would downgrade it; the restore refuses before it copies anything.
+    #[test]
+    fn a_restore_never_puts_a_backup_over_a_newer_project() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let project = project_file(dir.path(), "cave.stalx", SCHEMA_VERSION + 1);
+        let backup = project_file(dir.path(), "cave.stalx.backup", SCHEMA_VERSION);
+        let before = std::fs::read(&project).unwrap();
+
+        let err = restore_from_backup(project.clone(), backup).unwrap_err();
+
+        assert!(err.contains("newer version of Stalagmight"), "{err}");
+        assert_eq!(std::fs::read(&project).unwrap(), before);
+        assert!(
+            !project.with_extension("stalx.pre-restore").exists(),
+            "refused before the safety copy"
+        );
+    }
+
+    /// The restore is still for damaged files: one that is not even a database
+    /// is restored over as before.
+    #[test]
+    fn a_restore_over_a_damaged_project_still_runs() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let project = dir.path().join("cave.stalx");
+        std::fs::write(&project, b"damaged beyond reading").unwrap();
+        let backup = project_file(dir.path(), "cave.stalx.backup", SCHEMA_VERSION);
+
+        restore_from_backup(project.clone(), backup.clone()).unwrap();
+
+        assert_eq!(
+            std::fs::read(&project).unwrap(),
+            std::fs::read(&backup).unwrap()
+        );
+    }
 }
