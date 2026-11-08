@@ -31,3 +31,13 @@ under **Display**.
 - The two stations (3, 4) and the error (5): here the survey misses by 9.3 m
   (7) over 423.3 m (6), 2.2%.
 - **Create Closure** (9).
+
+### The closure
+
+![A loop closure on the map and in Details](../images/closure-indication.png)
+
+1. The closure, a dashed line between the two stations. Nothing moved.
+2. **Loop closures** in **Details**, for the selected station.
+3. The station it closes to.
+4. **Remove Closure**
+5. Path length and error of the loop.
