@@ -21,21 +21,16 @@ impl Database {
         let conn = Connection::open(path).context("Failed to open database")?;
         if file_existed {
             // An existing file may come from anywhere; refuse a hostile schema
-            // before init_schema or a migration touches it (#608).
+            // before init_schema or a migration touches it (#608), and a newer
+            // one before init_schema writes this build's tables into it (#649).
             super::check_schema(&conn)?;
+            super::newer_schema::check_not_newer(&conn)?;
         }
 
         let mut db = Self { conn };
         db.enable_foreign_keys()?;
 
         let prior_version = db.get_user_version().unwrap_or(0);
-        if prior_version > SCHEMA_VERSION {
-            tracing::warn!(
-                current = prior_version,
-                expected = SCHEMA_VERSION,
-                "Database schema version is newer than this app"
-            );
-        }
         db.init_schema()?;
 
         // A brand-new file (did not exist until Connection::open created it) was
@@ -54,8 +49,8 @@ impl Database {
         } else if prior_version < SCHEMA_VERSION {
             db.ensure_schema_version()?;
         }
-        // An existing file already at (or newer than) SCHEMA_VERSION is left
-        // untouched; a newer version was warned about above.
+        // An existing file already at SCHEMA_VERSION is left untouched; a newer
+        // one was refused above.
 
         tracing::debug!("Schema initialized");
 
@@ -125,6 +120,8 @@ impl Database {
     fn finish_open_existing(conn: Connection, untrusted: bool) -> Result<Self> {
         // Before the integrity check, which would connect any virtual table (#608).
         super::check_schema(&conn)?;
+        // Before the migrations, whose history cleanup writes into the file (#649).
+        super::newer_schema::check_not_newer(&conn)?;
         let db = Self { conn };
         db.enable_foreign_keys()?;
         if !untrusted {
@@ -205,6 +202,28 @@ impl Database {
         super::check_schema(&conn)
     }
 
+    /// Refuse the file at `path` with [`super::NewerSchema`] if a newer schema
+    /// wrote it (#649), without opening it as a project. For a file about to be
+    /// installed or rewritten wholesale (a SpeleoDB download about to replace
+    /// the local cache, a project about to be repaired or restored over), where
+    /// the openers' own refusal would come after the damage.
+    ///
+    /// Only that refusal is an `Err`. A file that cannot be opened or read, or
+    /// whose schema [`super::check_schema`] refuses, returns `Ok`: it may be
+    /// exactly the corrupt file being repaired, and the caller's own path
+    /// reports what is wrong with it.
+    pub fn check_not_newer_at(path: &Path) -> Result<()> {
+        let Ok(conn) =
+            Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        else {
+            return Ok(());
+        };
+        if super::check_schema(&conn).is_err() {
+            return Ok(());
+        }
+        super::newer_schema::check_not_newer(&conn)
+    }
+
     /// Open a database for read-only metadata extraction only.
     ///
     /// Skips the per-file integrity check, foreign-key validation, schema
@@ -279,6 +298,8 @@ impl Database {
         let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
             .context("Failed to open database read-only")?;
         super::check_schema(&conn)?;
+        // This build would read a newer file with only the columns it knows (#649).
+        super::newer_schema::check_not_newer(&conn)?;
 
         let db = Self { conn };
         db.enable_foreign_keys()?;
@@ -286,16 +307,6 @@ impl Database {
         // Run quick integrity check before reading any data (SPEC 14.4)
         db.validate_integrity()
             .context("Database file may be corrupted")?;
-
-        if let Ok(version) = db.get_user_version() {
-            if version > SCHEMA_VERSION {
-                tracing::warn!(
-                    current = version,
-                    expected = SCHEMA_VERSION,
-                    "Database schema version is newer than this app"
-                );
-            }
-        }
 
         // Verify project data exists
         if !db.has_project_data()? {
