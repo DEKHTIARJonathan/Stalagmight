@@ -139,9 +139,8 @@ fn the_path_check_refuses_only_a_newer_file() {
         let path = newer_file(&dir, "check.stalx", claim);
         let before = bytes(&path);
         let err = Database::check_not_newer_at(&path).unwrap_err();
-        let newer = err.downcast_ref::<NewerSchema>().unwrap();
-        assert_eq!(newer.file, "check.stalx");
-        assert_eq!(newer.found, SCHEMA_VERSION + 1);
+        assert_eq!(err.file, "check.stalx");
+        assert_eq!(err.found, SCHEMA_VERSION + 1);
         assert_eq!(bytes(&path), before);
         std::fs::remove_file(&path).unwrap();
     }

@@ -313,27 +313,22 @@ impl AppState {
                 // A file a newer Stalagmight saved must not replace the cache either:
                 // this build could neither open it nor save it without dropping what
                 // it does not know (#649). Same place, same clean-up.
-                if let Err(e) = crate::persistence::Database::check_not_newer_at(&staged) {
+                if let Err(newer) = crate::persistence::Database::check_not_newer_at(&staged) {
                     let _ = std::fs::remove_file(&staged);
                     if closed {
                         let _ = self.open_project(dest.to_path_buf());
                     }
-                    return Err(match e.downcast_ref::<crate::persistence::NewerSchema>() {
-                        // The check read the staged copy, whose name is ours; name
-                        // the file as it is on SpeleoDB.
-                        Some(newer) => {
-                            SpeleoDbError::NewerSchema(crate::persistence::NewerSchema {
-                                file: Path::new(entry)
-                                    .file_name()
-                                    .map(|name| name.to_string_lossy().into_owned())
-                                    .unwrap_or_default(),
-                                ..newer.clone()
-                            })
-                        }
-                        None => SpeleoDbError::Parse(format!(
-                            "the downloaded project file was refused: {e:#}"
-                        )),
-                    });
+                    // The check read the staged copy, whose name is ours; name the
+                    // file as it is on SpeleoDB.
+                    return Err(SpeleoDbError::NewerSchema(
+                        crate::persistence::NewerSchema {
+                            file: Path::new(entry)
+                                .file_name()
+                                .map(|name| name.to_string_lossy().into_owned())
+                                .unwrap_or_default(),
+                            ..newer
+                        },
+                    ));
                 }
                 // [#303] THE chokepoint. Every server `.stalx` that becomes the local
                 // cache file passes through here, so dropping the inherited history in

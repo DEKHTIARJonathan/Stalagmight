@@ -208,11 +208,12 @@ impl Database {
     /// the local cache, a project about to be repaired or restored over), where
     /// the openers' own refusal would come after the damage.
     ///
-    /// Only that refusal is an `Err`. A file that cannot be opened or read, or
+    /// Only that refusal is an `Err`, which is why the error type is
+    /// [`super::NewerSchema`] itself. A file that cannot be opened or read, or
     /// whose schema [`super::check_schema`] refuses, returns `Ok`: it may be
     /// exactly the corrupt file being repaired, and the caller's own path
     /// reports what is wrong with it.
-    pub fn check_not_newer_at(path: &Path) -> Result<()> {
+    pub fn check_not_newer_at(path: &Path) -> std::result::Result<(), super::NewerSchema> {
         let Ok(conn) =
             Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         else {
@@ -221,7 +222,7 @@ impl Database {
         if super::check_schema(&conn).is_err() {
             return Ok(());
         }
-        Ok(super::newer_schema::check_not_newer(&conn)?)
+        super::newer_schema::check_not_newer(&conn)
     }
 
     /// Open a database for read-only metadata extraction only.
