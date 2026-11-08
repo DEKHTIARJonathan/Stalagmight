@@ -20,6 +20,24 @@ fn file_path(config_path: &Path) -> PathBuf {
         .join("speleodb.conf")
 }
 
+/// Only genuine absence permits importing preferences from the old general file.
+pub(super) fn load_legacy(settings: &mut SpeleoDbConfig, config_path: &Path, legacy: Option<toml::Value>) {
+    if !std::fs::symlink_metadata(file_path(config_path))
+        .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) { return; }
+    let Some(mut legacy) = legacy else { return; };
+    // Import preferences only; obsolete password/keychain/token fields are ignored.
+    if let Some(table) = legacy.as_table_mut() {
+        table.retain(|key, _| matches!(key, "endpoint" | "email" | "insecure_http" | "allow_force_edit" | "poll_interval_seconds" | "undo_mode"));
+    }
+    match legacy.try_into::<SpeleoDbConfig>() {
+        Ok(migrated) => *settings = migrated,
+        Err(_) => {
+            settings.preserve_unreadable_file = true;
+            tracing::warn!("Malformed legacy SpeleoDB settings; preserving the legacy table for recovery");
+        }
+    }
+}
+
 pub(super) fn load(settings: &mut SpeleoDbConfig, config_path: &Path) -> Result<()> {
     let path = file_path(config_path);
     if let Some(parent) = path.parent() {
@@ -54,7 +72,15 @@ pub(super) fn save_with_general(
     general: &str,
 ) -> Result<()> {
     if settings.preserve_unreadable_file {
-        return super::atomic_write::write_atomically(config_path, general);
+        // Preserve recovery information in the old general document as well.
+        let mut document: toml::Value = toml::from_str(general)?;
+        if let Ok(old) = std::fs::read_to_string(config_path) {
+            let old: toml::Value = toml::from_str(&old)?;
+            if let Some(legacy) = old.get("speleodb") {
+                if let Some(table) = document.as_table_mut() { table.insert("speleodb".into(), legacy.clone()); }
+            }
+        }
+        return super::atomic_write::write_atomically(config_path, &toml::to_string_pretty(&document)?);
     }
     let path = file_path(config_path);
     let previous = match std::fs::read(&path) {
@@ -107,6 +133,44 @@ mod tests {
         config.speleodb.allow_force_edit = true;
         config.speleodb.poll_interval_seconds = 45;
         config
+    }
+
+    fn general_with_legacy(legacy: &str) -> String {
+        let mut general = toml::Value::try_from(Config::default()).unwrap();
+        general.as_table_mut().unwrap().remove("speleodb");
+        format!("{}\n{legacy}", toml::to_string_pretty(&general).unwrap())
+    }
+
+    #[test]
+    fn legacy_preferences_migrate_only_when_private_file_is_absent() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        let legacy = "[speleodb]\nendpoint = 'https://legacy.example.com'\nemail = 'legacy@example.com'\ninsecure_http = true\nallow_force_edit = true\npoll_interval_seconds = 2\nundo_mode = 'disabled'\npassword = 'obsolete'\n";
+        std::fs::write(&path, general_with_legacy(legacy)).unwrap();
+        let loaded = Config::load_from_path(&path).unwrap();
+        assert_eq!(loaded.speleodb.endpoint.as_deref(), Some("https://legacy.example.com"));
+        assert_eq!(loaded.speleodb.email.as_deref(), Some("legacy@example.com"));
+        assert!(loaded.speleodb.insecure_http && loaded.speleodb.allow_force_edit);
+        assert_eq!(loaded.speleodb.poll_interval_seconds, 30);
+        assert_eq!(loaded.speleodb.undo_mode, crate::models::UndoMode::Disabled);
+        assert!(loaded.speleodb.token.0.is_none());
+        loaded.save_to_path(&path).unwrap();
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("[speleodb]"));
+        std::fs::write(&path, general_with_legacy(legacy)).unwrap();
+        save(&signed_in_config().speleodb, &path).unwrap();
+        assert_eq!(Config::load_from_path(&path).unwrap().speleodb.email, signed_in_config().speleodb.email);
+    }
+
+    #[test]
+    fn malformed_legacy_survives_unrelated_save() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        std::fs::write(&path, general_with_legacy("[speleodb]\nundo_mode = 12\n")).unwrap();
+        let loaded = Config::load_from_path(&path).unwrap();
+        assert!(loaded.speleodb.preserve_unreadable_file);
+        loaded.save_to_path(&path).unwrap();
+        assert!(std::fs::read_to_string(&path).unwrap().contains("undo_mode = 12"));
+        assert!(!file_path(&path).exists());
     }
 
     #[test]

@@ -1462,10 +1462,9 @@ impl Config {
             let contents = std::fs::read_to_string(path).context("Failed to read config file")?;
             let mut document: toml::Value =
                 toml::from_str(&contents).context("Failed to parse config file")?;
-            if let Some(table) = document.as_table_mut() {
-                table.remove("speleodb");
-            }
+            let legacy = document.as_table_mut().and_then(|table| table.remove("speleodb"));
             let mut config: Config = document.try_into().context("Failed to parse config file")?;
+            super::speleodb_file::load_legacy(&mut config.speleodb, path, legacy);
             super::speleodb_file::load_or_preserve(&mut config.speleodb, path);
             config.migrate_legacy();
             config.normalize();
