@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use ts_rs::TS;
 
 use crate::core::events::EventSink;
-use crate::persistence::RefusedSchemaObject;
+use crate::persistence::{NewerSchema, RefusedSchemaObject};
 
 // ============================================================================
 // LoadError
@@ -120,6 +120,21 @@ impl LoadError {
                  projects are not affected.",
                 refused.what,
                 refused.display_name()
+            ),
+            path,
+        )
+    }
+
+    /// The open was refused because a newer Stalagmight saved the file (#649):
+    /// this build would read it with only the columns it knows and drop the
+    /// rest on the next save. `path` rides in `details`.
+    pub fn newer_schema(newer: &NewerSchema, path: &str) -> Self {
+        Self::with_details(
+            "NEWER_SCHEMA",
+            format!(
+                "This project was saved by a newer version of Stalagmight (file format {}, \
+                 this version reads up to {}). Update Stalagmight to open it.",
+                newer.found, newer.supported
             ),
             path,
         )
@@ -280,6 +295,12 @@ pub(crate) fn is_path_not_found(err: &anyhow::Error) -> bool {
 pub(crate) fn refused_schema(err: &anyhow::Error) -> Option<&RefusedSchemaObject> {
     err.chain()
         .find_map(|cause| cause.downcast_ref::<RefusedSchemaObject>())
+}
+
+/// The newer-schema refusal inside an open error, if that is why it failed.
+pub(crate) fn newer_schema(err: &anyhow::Error) -> Option<&NewerSchema> {
+    err.chain()
+        .find_map(|cause| cause.downcast_ref::<NewerSchema>())
 }
 
 /// True if any cause carries SQLite's errno-free `SQLITE_CANTOPEN` message -
