@@ -34,7 +34,7 @@ export function SpeleoWorkspace() {
         </div>
         <h2 className="text-xl font-semibold leading-snug text-text-primary">Build your survey together</h2>
         <p className="mt-3 text-sm leading-relaxed text-text-secondary">
-          Track how your survey evolves, revisit earlier versions, and bring your team's work together in one shared project.
+          Track how your survey evolves, revisit earlier versions, and bring your team&apos;s work together in one shared project.
         </p>
         <Button variant="primary" onClick={() => useUIStore.getState().openDialog('publish-to-speleodb')}
           className="mt-6 w-full px-3 py-3 text-sm leading-snug" disabled={busy}

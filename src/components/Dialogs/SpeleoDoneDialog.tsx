@@ -11,6 +11,7 @@ import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
+import { SpeleoProgressOverlay } from './SpeleoProgressOverlay';
 
 /**
  * Commit-message confirm for the action shell (#204), in two modes read off
@@ -56,14 +57,22 @@ export default function SpeleoDoneDialog() {
   const link = useSpeleoStore((s) => s.link);
   const loggedIn = useSpeleoStore((s) => s.session?.loggedIn);
   const uploadAllowed = link?.editState === 'editing' && !link.noAccess && loggedIn === true && permissionAtLeast(link.permission, 'READ_AND_WRITE');
-  const dismiss = () => { setUploadContinuation(null); closeDialog(); };
   const [submitting, setSubmitting] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgressExpired, setUploadProgressExpired] = useState(false);
+  useEffect(() => {
+    if (!uploading) return;
+    const timer = window.setTimeout(() => setUploadProgressExpired(true), 120_000);
+    return () => window.clearTimeout(timer);
+  }, [uploading]);
   const [saveFailure, setSaveFailure] = useState<string | null>(null);
   const attempt = useRef(false);
   const busyAny = busy || submitting;
+  const canDismiss = !busyAny || (uploading && uploadProgressExpired);
   const unpushed = useSpeleoStore((s) => s.link?.hasUnpushedEdits);
   const unsaved = useProjectStore((s) => s.isDirty);
   const needsMessage = mode === 'push' || unpushed || unsaved;
+  const dismiss = () => { if (!uploading) setUploadContinuation(null); closeDialog(); };
 
   const handleConfirm = async () => {
     const text = message.trim();
@@ -93,7 +102,10 @@ export default function SpeleoDoneDialog() {
           surfaceSaveFailure(saved?.error ?? 'Could not save the linked project', useUIStore.getState().openDialog);
           return;
         }
+        setUploadProgressExpired(false);
+        setUploading(true);
         const resolved = closeAfterSave ? await done(text, { isCurrent: current, pendingExit: { kind: 'close', sessionGeneration: generation } }) : await push(text, { isCurrent: current });
+        setUploading(false);
         if (!current()) return;
         if (resolved?.kind === 'released' && closeAfterSave) {
           const latest = useProjectStore.getState();
@@ -120,23 +132,32 @@ export default function SpeleoDoneDialog() {
           ? 'Saved locally; upload could not be confirmed.'
           : 'Saved locally, but not uploaded to SpeleoDB.');
       } else {
+        if (unpushed || unsaved) {
+          setUploadProgressExpired(false);
+          setUploading(true);
+        }
         const resolved = await done(text, { isCurrent: current });
+        setUploading(false);
         if (current() && resolved?.kind === 'released') closeDialog();
       }
-    } finally { attempt.current = false; setSubmitting(false); }
+    } finally { attempt.current = false; setUploading(false); setSubmitting(false); }
   };
 
   if (!ownerCurrent) return null;
 
   return (
+    <>
     <DialogWrapper
       title={mode === 'push' ? t('speleodb.done.pushTitle') : t('speleodb.done.title')}
-      onClose={busyAny ? () => {} : dismiss}
+      onClose={canDismiss ? dismiss : () => {}}
       size="md"
       data-testid="speleodb-done-dialog"
       data-mode={mode}
     >
       <div className="space-y-4">
+        {uploading && uploadProgressExpired && <p role="alert" className="text-sm text-warning" data-testid="speleodb-upload-timeout">
+          Upload has taken more than 120 seconds. It may still finish. Close this dialog to continue working.
+        </p>}
         {!uploadAllowed && <div className="space-y-3" data-testid="speleodb-upload-blocked">
           <p role="status">Upload requires sign-in, write permission and the editing lock. Your work remains on this computer.</p>
           {!loggedIn ? <Button onClick={() => useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })} data-testid="speleodb-upload-sign-in">Sign in in Settings</Button> : <Button onClick={() => void startEditing()} disabled={busyAny || link?.noAccess} data-testid="speleodb-upload-resume">Resume editing</Button>}
@@ -166,8 +187,8 @@ export default function SpeleoDoneDialog() {
         {saveFailure && <p role="alert" data-testid="speleodb-save-upload-failure">{saveFailure}</p>}
         <SpeleoPushFailureNotice />
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
-          <Button onClick={dismiss} disabled={busyAny} data-testid="speleodb-done-cancel">
-            {t('common.actions.cancel')}
+          <Button onClick={dismiss} disabled={!canDismiss} data-testid="speleodb-done-cancel">
+            {uploading && uploadProgressExpired ? t('common.actions.close') : t('common.actions.cancel')}
           </Button>
           <Button
             variant="primary"
@@ -184,5 +205,8 @@ export default function SpeleoDoneDialog() {
         </div>
       </div>
     </DialogWrapper>
+    {uploading && !uploadProgressExpired && <SpeleoProgressOverlay
+      title="Saving changes to SpeleoDB" description="Uploading your survey's latest version." testId="speleodb-upload-progress" />}
+    </>
   );
 }

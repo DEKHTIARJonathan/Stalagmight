@@ -193,7 +193,10 @@ project reports No changes to upload, without creating an empty revision.
 
 Uploading requires a nonblank change description, saves locally first, and verifies
 current permission and lock ownership against the server. Ordinary successful upload
-retains the lock. Offline, failed or uncertain uploads never report success; the
+retains the lock. The same centered progress surface blocks the app during explicit
+uploads from Save Changes, menu Save and Cmd/Ctrl+S. It expires after 120 seconds,
+allows closing the dialog, and preserves the description without resubmitting.
+Offline, failed or uncertain uploads never report success; the
 message and local work remain available for retry. Autosave and failed-autosave
 retry write only to the local SQLite file.
 

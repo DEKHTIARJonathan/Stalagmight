@@ -17,7 +17,7 @@
  * half of the contract lives in SpeleoBanner.test.tsx.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -27,6 +27,7 @@ vi.mock('../../utils/ipc', () => ({
 }));
 
 import SpeleoDoneDialog from './SpeleoDoneDialog';
+import { getUploadContinuation } from '../../utils/uploadContinuation';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -178,6 +179,7 @@ it('disk-save failure prevents upload', async () => {
   fillCommitMessage();
   await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
   expect(invokeIpcMock).not.toHaveBeenCalled();
+  expect(screen.queryByTestId('speleodb-upload-progress')).toBeNull();
 });
 it.each(['not_editing', 'divergence_needed', 'push_unconfirmed'])('retains the message after %s without reporting combined success', async (kind) => {
   useUIStore.setState({ dialogData: { mode: 'push' } });
@@ -241,4 +243,69 @@ it.each(['released', 'push_unconfirmed', 'release_failed', 'newer-edits'] as con
     expect(close).not.toHaveBeenCalled();
     expect(useUIStore.getState().activeDialog).toBe('speleodb-done');
   }
+});
+
+
+it('Save progress blocks the app only during upload after the local save completes', async () => {
+  useUIStore.setState({ dialogData: { mode: 'push' } });
+  let saved!: (value: { success: boolean }) => void;
+  let uploaded!: (value: { kind: 'pushed' }) => void;
+  const savedPromise = new Promise<{ success: boolean }>((resolve) => { saved = resolve; });
+  useProjectStore.setState({ saveProject: vi.fn(() => savedPromise) as never });
+  invokeIpcMock.mockImplementation((cmd) => cmd === 'speleodb_push' ? new Promise((resolve) => { uploaded = resolve; }) : Promise.resolve(null));
+  render(<SpeleoDoneDialog />);
+  fillCommitMessage();
+  fireEvent.click(screen.getByTestId('speleodb-done-confirm'));
+  expect(screen.queryByTestId('speleodb-upload-progress')).toBeNull();
+  await act(async () => saved({ success: true }));
+  const progress = screen.getByTestId('speleodb-upload-progress');
+  expect(progress).toHaveFocus();
+  expect(progress).toHaveAttribute('aria-busy', 'true');
+  expect(screen.getByTestId('speleodb-done-dialog').closest('[inert]')).not.toBeNull();
+  fireEvent.keyDown(progress, { key: 'Escape' });
+  expect(useUIStore.getState().activeDialog).toBe('speleodb-done');
+  await act(async () => uploaded({ kind: 'pushed' }));
+  expect(screen.queryByTestId('speleodb-upload-progress')).toBeNull();
+  expect(useUIStore.getState().activeDialog).toBeNull();
+});
+
+it('Save upload progress expires after 120 seconds and retains the description without retrying', async () => {
+  useProjectStore.setState({ project: { file_path: '/progress.stalx', zero_datums: [{}] } as never });
+  useUIStore.setState({ dialogData: { mode: 'push' } });
+  let uploaded!: (value: { kind: 'pushed' }) => void;
+  invokeIpcMock.mockImplementation((cmd) => cmd === 'speleodb_push' ? new Promise((resolve) => { uploaded = resolve; }) : Promise.resolve(null));
+  render(<SpeleoDoneDialog />);
+  fillCommitMessage();
+  vi.useFakeTimers();
+  try {
+    await act(async () => fireEvent.click(screen.getByTestId('speleodb-done-confirm')));
+    expect(screen.getByTestId('speleodb-upload-progress')).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(119_999));
+    expect(screen.getByTestId('speleodb-upload-progress')).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.queryByTestId('speleodb-upload-progress')).toBeNull();
+    expect(screen.getByTestId('speleodb-upload-timeout')).toHaveTextContent('120 seconds');
+    expect(screen.getByTestId('speleodb-done-confirm')).toBeDisabled();
+    expect(screen.getByTestId('speleodb-done-cancel')).toBeEnabled();
+    fireEvent.click(screen.getByTestId('speleodb-done-cancel'));
+    expect(getUploadContinuation('/progress.stalx')?.message).toBe('Survey update');
+    useUIStore.setState({ activeDialog: 'settings', dialogData: {} });
+    await act(async () => uploaded({ kind: 'pushed' }));
+    expect(useUIStore.getState().activeDialog).toBe('settings');
+    expect(invokeIpcMock.mock.calls.filter(([cmd]) => cmd === 'speleodb_push')).toHaveLength(1);
+  } finally { vi.useRealTimers(); }
+});
+
+it('Save upload progress disappears on failure while the description remains available for retry', async () => {
+  useUIStore.setState({ dialogData: { mode: 'push' } });
+  let fail!: (error: Error) => void;
+  invokeIpcMock.mockImplementation((cmd) => cmd === 'speleodb_push' ? new Promise((_resolve, reject) => { fail = reject; }) : Promise.resolve(null));
+  render(<SpeleoDoneDialog />);
+  fillCommitMessage();
+  await act(async () => fireEvent.click(screen.getByTestId('speleodb-done-confirm')));
+  expect(screen.getByTestId('speleodb-upload-progress')).toBeInTheDocument();
+  await act(async () => fail(new Error('Synthetic upload failure')));
+  expect(screen.queryByTestId('speleodb-upload-progress')).toBeNull();
+  expect(screen.getByTestId('speleodb-push-failure-inline')).toBeVisible();
+  expect(screen.getByTestId('speleodb-done-message')).toHaveValue('Survey update');
 });

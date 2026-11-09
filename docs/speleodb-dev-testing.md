@@ -207,3 +207,19 @@ targets passed. Node 24 and the pinned pnpm were used. Existing repository/toolc
 warnings remain; no full-suite or live-server acceptance is claimed. One overly
 broad Vitest rerun filter also matched one unchanged reload case, which passed;
 subsequent filters were narrowed. No external fixtures were used or committed.
+
+### Local conversion and transfer progress verification (2026-11-09)
+
+Selected new or modified cases passed: 25 Vitest cases, 7 headless Chromium cases,
+and one Rust integration test using a synthetic HTTP server and native SQLite
+files. Coverage includes local conversion, fresh server reopening, partial failures,
+Settings draft recovery, centered layouts at 1280px and 540px, and app-blocking
+progress for publishing and uploads from menu Save, Ctrl+S and Cmd+S. Fake-clock
+cases verify the exact 120-second expiration, preserved descriptions, and prevention
+of duplicate submission. Layout and progress screenshots were inspected.
+
+Main, agent and Playwright typechecks, all nine non-test lint gates, root and
+workspace-member formatting, and workspace Clippy with telemetry and all targets
+passed. Existing repository/toolchain warnings remain. No unchanged test cases,
+external fixtures or live-server tests were run for this change; these selected
+results do not claim full-suite acceptance.

@@ -10,7 +10,12 @@ projects collect a required change description, save locally, then upload only w
 fresh permission and editing-lock verification. Missing locks show an explanation
 and recovery controls; recovery never uploads automatically. A clean linked project
 reports No changes to upload. Offline and uncertain uploads never report success.
-Ordinary successful upload retains the editing lock.
+Ordinary successful upload retains the editing lock. Save Changes, menu Save and
+Cmd/Ctrl+S share a centered, app-blocking progress indicator during the upload,
+after the required description and successful local save. The indicator expires
+after 120 seconds and explains that the request may still finish. The dialog can
+then be closed; the description is retained and duplicate submission stays disabled
+while that request is pending. Failure removes the indicator and keeps retry details.
 
 Autosave and failed-autosave retry are always local-only, including while an upload
 dialog is open or cancelled. Save and Close releases and closes only after confirmed

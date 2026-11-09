@@ -2,7 +2,7 @@ import { publishProjectAndReopen } from '../../utils/publishProjectAndReopen';
 import { getPublishContinuation, setPublishContinuation } from '../../utils/publishContinuation';
 import { captureUploadOwner, uploadOwnerStillCurrent } from '../../utils/uploadContinuation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { PublishProgressOverlay } from './PublishProgressOverlay';
+import { SpeleoProgressOverlay } from './SpeleoProgressOverlay';
 import { useTranslation } from 'react-i18next';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
@@ -264,7 +264,7 @@ export default function PublishToSpeleoDbDialog() {
         </div>
       </div>
     </DialogWrapper>
-    {blocking && <PublishProgressOverlay />}
+    {blocking && <SpeleoProgressOverlay title="Publishing to SpeleoDB" description="Saving your survey and opening your shared project." testId="speleodb-publish-progress" />}
     </>
   );
 }
