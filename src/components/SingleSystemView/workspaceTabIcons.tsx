@@ -37,7 +37,7 @@ export function SpeleoTabIcon({ state }: { state: SpeleoTabState }) {
         testIdPrefix="workspace-tab-speleodb-icon"
         badge={state === 'unuploaded' ? <ExclamationGlyph size={10} />
           : state === 'read-only' ? <LockIcon size={10} /> : undefined}
-        badgeColor={state === 'unuploaded' ? 'text-warning' : 'text-text-primary'}
+        badgeColor={state === 'unuploaded' ? 'text-warning-text' : 'text-text-primary'}
       />
     </span>
   );

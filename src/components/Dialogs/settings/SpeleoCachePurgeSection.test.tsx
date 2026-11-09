@@ -80,7 +80,7 @@ describe('Purge all cached files', () => {
     await userEvent.click(screen.getByTestId('speleodb-purge-confirm'));
     const result = await screen.findByTestId('speleodb-purge-result');
     expect(result).toHaveTextContent('Could not hand back the editing lock of: Alpha.');
-    expect(result).toHaveClass('text-warning');
+    expect(result).toHaveClass('text-warning-text');
   });
 
   it('deletes un-uploaded changes only after the second confirmation', async () => {

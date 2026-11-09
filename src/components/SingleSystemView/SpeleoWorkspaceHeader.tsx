@@ -45,7 +45,7 @@ export function SpeleoWorkspaceHeader({ link }: { link: SpeleoLinkState }) {
       <p className="text-text-secondary">{!session?.loggedIn ? 'Signed out' : link.serverError ? link.serverError.message : link.remoteState === 'unknown' ? 'Connection unavailable' : 'Connected'}</p>
       {link.noAccess && <Button onClick={() => useUIStore.getState().openDialog('speleodb-no-permission')} icon={<LinkOffIcon size={16} />} data-testid="speleodb-workspace-no-access">Keep a local project</Button>}
       {link.remoteState === 'conflict' && <Button onClick={() => useUIStore.getState().openDialog('speleodb-divergence')} icon={<AlertTriangleIcon size={16} />} data-testid="speleodb-workspace-resolve">Resolve synchronization conflict</Button>}
-      {link.hasUnpushedEdits && <p className="text-warning">Changes on this computer have not been uploaded.</p>}
+      {link.hasUnpushedEdits && <p className="text-warning-text">Changes on this computer have not been uploaded.</p>}
     </div>
   );
 }

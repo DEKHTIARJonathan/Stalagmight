@@ -27,7 +27,7 @@ export function LeftWorkspace({ sections }: { sections: ReactNode }) {
           // Un-uploaded work tints the tab in the warning tokens (text, wash and a
           // bottom rule), selected or not; otherwise the usual selected/idle look.
           const look = warn
-            ? `text-warning shadow-[inset_0_-2px_0_var(--cc-warning)] ${selected ? 'bg-warning-20 font-medium' : 'bg-warning-10'}`
+            ? `text-warning-text shadow-[inset_0_-2px_0_var(--cc-warning)] ${selected ? 'bg-warning-20 font-medium' : 'bg-warning-10'}`
             : selected ? 'bg-accent-10 font-medium' : 'text-text-secondary';
           return <button key={id} ref={(el) => { refs.current[index] = el; }}
             id={`workspace-tab-${id}`} role="tab" type="button" aria-selected={selected}

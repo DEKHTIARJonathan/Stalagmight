@@ -291,7 +291,7 @@ export function SpeleoDbSettings({
         </SettingRow>
         {speleo.insecure_http && (
           <div
-            className="mb-2 p-3 bg-warning-20 text-warning rounded text-xs"
+            className="mb-2 p-3 bg-warning-20 text-warning-text rounded text-xs"
             data-testid="speleodb-insecure-http-warning"
           >
             {t('settings.speleodb.insecureHttp.warning')}

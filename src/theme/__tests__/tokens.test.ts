@@ -667,24 +667,25 @@ describe('index.html anti-flash cover', () => {
   });
 });
 
+/** `#rrggbb`, or `rgba(r, g, b, a)` composited over `under` (a `#rrggbb`). */
+function solid(value: string, under: string): string {
+  if (value.startsWith('#')) return value;
+  const m = /^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)$/.exec(value);
+  if (!m) throw new Error(`unparsed colour ${value}`);
+  const alpha = Number(m[4]);
+  const base = [1, 3, 5].map((i) => parseInt(under.slice(i, i + 2), 16));
+  return `#${[m[1], m[2], m[3]]
+    .map((c, i) => Math.round(alpha * Number(c) + (1 - alpha) * base[i]!))
+    .map((c) => c.toString(16).padStart(2, '0'))
+    .join('')}`;
+}
+
 /**
  * The `highlight` Button variant paints `--cc-warning` with `--cc-warning-on` text
  * (and `--cc-warning-90` on hover, composited over the panel it sits on). Every
  * theme must keep that text readable: WCAG AA for normal text, 4.5:1.
  */
 describe('highlight button (warning) contrast', () => {
-  /** `#rrggbb`, or `rgba(r, g, b, a)` composited over `under` (a `#rrggbb`). */
-  function solid(value: string, under: string): string {
-    if (value.startsWith('#')) return value;
-    const m = /^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)$/.exec(value);
-    if (!m) throw new Error(`unparsed colour ${value}`);
-    const alpha = Number(m[4]);
-    const base = [1, 3, 5].map((i) => parseInt(under.slice(i, i + 2), 16));
-    return `#${[m[1], m[2], m[3]]
-      .map((c, i) => Math.round(alpha * Number(c) + (1 - alpha) * base[i]!))
-      .map((c) => c.toString(16).padStart(2, '0'))
-      .join('')}`;
-  }
 
   for (const theme of ALL_THEME_NAMES) {
     it(`${theme}: warning-on reads at AA on warning and on its hover`, () => {
@@ -696,4 +697,35 @@ describe('highlight button (warning) contrast', () => {
       expect(contrast(solid(tokens['--cc-warning-90']!, panel), on)).toBeGreaterThanOrEqual(4.5);
     });
   }
+});
+
+/**
+ * Warning PROSE (`text-warning-text`) sits on the panel, on the page background and
+ * on the warning washes (`bg-warning-10` / `bg-warning-20`, composited over either):
+ * the SpeleoDB un-uploaded tab, the remove-copy and purge warnings, the insecure-HTTP
+ * note. Every theme must keep it at WCAG AA for normal text, 4.5:1, on all six.
+ * `--cc-warning` itself is a fill colour and is not held to this.
+ */
+describe('warning text contrast', () => {
+  for (const theme of ALL_THEME_NAMES) {
+    it(`${theme}: warning-text reads at AA on the panel, the background and both washes`, () => {
+      const tokens = themeTokens[theme] as Record<string, string>;
+      const text = tokens['--cc-warning-text']!;
+      expect(text).toMatch(/^#[0-9a-fA-F]{6}$/);
+      for (const surface of ['--cc-panel', '--cc-background']) {
+        const under = tokens[surface]!;
+        for (const bg of [under, solid(tokens['--cc-warning-10']!, under), solid(tokens['--cc-warning-20']!, under)]) {
+          const ratio = contrast(text, bg);
+          expect(ratio, `${theme}: --cc-warning-text ${text} on ${bg} (over ${surface}) is ${ratio.toFixed(2)}:1`)
+            .toBeGreaterThanOrEqual(4.5);
+        }
+      }
+    });
+  }
+
+  it('would reject the light theme\'s fill yellow as text on its own wash', () => {
+    const tokens = themeTokens.light as Record<string, string>;
+    // 2.64:1 - what the un-uploaded tab and the warning boxes used to show.
+    expect(contrast(tokens['--cc-warning']!, solid(tokens['--cc-warning-20']!, tokens['--cc-panel']!))).toBeLessThan(4.5);
+  });
 });

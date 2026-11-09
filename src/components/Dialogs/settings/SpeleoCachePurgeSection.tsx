@@ -90,7 +90,7 @@ export function SpeleoCachePurgeSection() {
       {message && (
         <div
           role="status"
-          className={`mt-3 space-y-1 text-sm ${message.tone === 'warning' ? 'text-warning' : 'text-text-secondary'}`}
+          className={`mt-3 space-y-1 text-sm ${message.tone === 'warning' ? 'text-warning-text' : 'text-text-secondary'}`}
           data-testid="speleodb-purge-result"
         >
           {message.lines.map((line) => <p key={line}>{line}</p>)}
@@ -166,7 +166,7 @@ function PurgeConfirmDialog({
         data-testid="speleodb-purge-lost-dialog"
       >
         <div className="space-y-4 text-sm">
-          <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning space-y-2">
+          <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning-text space-y-2">
             <p>{t('speleodb.cachedCopies.purge.lostBody')}</p>
             {names}
           </div>
@@ -203,7 +203,7 @@ function PurgeConfirmDialog({
         </p>
         {atRisk.length > 0 && (
           <div
-            className="p-3 bg-warning-10 border border-warning-20 rounded text-warning space-y-2"
+            className="p-3 bg-warning-10 border border-warning-20 rounded text-warning-text space-y-2"
             data-testid="speleodb-purge-at-risk"
           >
             <p>

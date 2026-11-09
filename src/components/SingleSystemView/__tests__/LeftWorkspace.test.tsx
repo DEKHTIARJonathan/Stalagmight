@@ -85,7 +85,7 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
     render(<LeftWorkspace sections={<div />} />);
     expect(speleoTab()).toHaveAttribute('data-state', 'read-only');
     expect(badge()).not.toBeNull();
-    expect(badge()).not.toHaveClass('text-warning');
+    expect(badge()).not.toHaveClass('text-warning-text');
     expect(speleoTab()).toHaveAccessibleDescription(/Read-only/);
     expect(speleoTab().className).not.toContain('text-warning');
   });
@@ -97,8 +97,8 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
     seed();
     render(<LeftWorkspace sections={<div />} />);
     expect(speleoTab()).toHaveAttribute('data-state', 'unuploaded');
-    expect(badge()).toHaveClass('text-warning');
-    expect(speleoTab()).toHaveClass('text-warning');
+    expect(badge()).toHaveClass('text-warning-text');
+    expect(speleoTab()).toHaveClass('text-warning-text');
     expect(speleoTab()).toHaveAccessibleDescription('Changes on this computer have not been uploaded to SpeleoDB yet.');
     expect(speleoTab()).toHaveAttribute('title', 'Changes on this computer have not been uploaded to SpeleoDB yet.');
   });
@@ -107,7 +107,7 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
     useSpeleoStore.setState({ link: { ...link, editState: 'read-only', hasUnpushedEdits: true } });
     render(<LeftWorkspace sections={<div />} />);
     expect(speleoTab()).toHaveAttribute('data-state', 'unuploaded');
-    expect(badge()).toHaveClass('text-warning');
+    expect(badge()).toHaveClass('text-warning-text');
     expect(speleoTab()).toHaveAccessibleDescription(/not been uploaded/);
   });
 

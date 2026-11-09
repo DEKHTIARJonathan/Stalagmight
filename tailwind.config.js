@@ -30,6 +30,8 @@ export default {
         overlay: 'var(--cc-overlay)',
         warning: 'var(--cc-warning)',
         'warning-on': 'var(--cc-warning-on)',
+        // Warning prose (text-warning-text): AA on the panel and the warning washes.
+        'warning-text': 'var(--cc-warning-text)',
         error: 'var(--cc-error)',
         success: 'var(--cc-success)',
 

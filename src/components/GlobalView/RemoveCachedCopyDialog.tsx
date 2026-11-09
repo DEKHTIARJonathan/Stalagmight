@@ -97,7 +97,7 @@ export function RemoveCachedCopyDialog({
         </p>
         {atRisk && (
           <div
-            className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm"
+            className="p-3 bg-warning-10 border border-warning-20 rounded text-warning-text text-sm"
             data-testid="speleodb-remove-copy-warning"
           >
             {t(current.state_unknown

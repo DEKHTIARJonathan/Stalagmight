@@ -6,6 +6,7 @@ This guide captures the current UI conventions and design tokens for Stalagmight
 - Source of truth: `src/theme/tokens.ts`, applied as CSS variables in `src/index.css`.
 - Use token-backed utility classes (examples): `bg-panel`, `bg-background`, `text-text-primary`, `text-text-secondary`, `border-border`, `bg-accent`, `text-accent-on`, `text-warning`, `text-error`, `text-success`.
 - Opacity variants are available as token utilities (examples): `bg-accent-10`, `bg-accent-20`, `bg-background-50`.
+- Warning prose takes `text-warning-text`, not `text-warning`: `--cc-warning` is tuned as a fill (highlight button, stripes) and is too pale for text on the light themes. `--cc-warning-text` reads at WCAG AA on the panel, the background and the `bg-warning-10` / `bg-warning-20` washes in every theme (pinned in `tokens.test.ts`).
 
 ## Colors
 - **No color value ships without a human seeing it rendered.** Measure and propose; do not merge. Covers `--cc-*` tokens on all 10 themes, display defaults in `src/types/config.ts`, section palettes, and renderer/export constants.
