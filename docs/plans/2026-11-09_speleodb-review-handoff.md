@@ -283,3 +283,32 @@ and `/pre-pr`.
 (test-only code). It runs only against a private SpeleoDB instance, never
 against speleodb.org. Its state at hand-off is in the branch's latest commit
 message. Findings it reproduced map onto the review ids above.
+
+Two NEW bugs found by the fuzzing track, both confirmed by probe tests, not in
+the review and not yet fixed:
+
+- **F1 (regression): opening offline never falls back to the local copy when
+  the server is down.**
+  - Cause: `client.rs:238-245` classifies every SDK send failure that is not a
+    timeout as an unknown error, including connection refused, reset before
+    reply, and DNS failure. `offline_open_result` (`speleodb_pull.rs:52-60`)
+    only accepts refused, timeout or DNS, so only timeouts fall back.
+  - Before the merge, Home opened a downloaded project's file directly.
+  - Fix direction: in `api_error`, unwrap the middleware error to its source
+    and reuse the existing `network_error` classification.
+  - Test it through the SDK client. Today's DNS test calls `network_error`
+    directly and bypasses the SDK.
+  - Related to decision 6 (http endpoints).
+- **F2: closing with "Discard changes" leaves the copy flagged as
+  un-uploaded.**
+  - Every edit writes `has_unpushed_edits=1` to the file immediately
+    (`app_state.rs:404-423`).
+  - Close with discard saves nothing and never resets the flag, although the
+    content still equals the server version. The next online open refuses with
+    the un-uploaded dialog.
+  - Reload-with-discard and `speleodb_discard_changes` do clear it.
+  - First check whether `feat/speleodb-exit-prompt` already covers this: its
+    discard path removes the cached copy. Also cover the plain unsaved-changes
+    Discard on a read-only or clean-lock project.
+  - Fix direction: persist the flag together with the content, or restore it
+    from the last save when closing without saving.
