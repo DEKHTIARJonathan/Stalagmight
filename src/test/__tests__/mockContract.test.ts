@@ -399,3 +399,12 @@ describe('mock contract tripwire (#275)', () => {
     expect(stale, 'these allowlist entries no longer need an exemption; remove them').toEqual([]);
   });
 });
+
+it('retired SpeleoDB workspace metadata commands are absent from IPC and browser mocks', () => {
+  for (const command of ['speleodb_patch_project', 'speleodb_set_exclude_geojson', 'speleodb_set_undo_mode']) {
+    expect(libRsSource).not.toContain(`commands::speleodb::${command},`);
+    expect(mockTsSource).not.toContain(`case '${command}':`);
+  }
+  const barrel = fs.readFileSync(path.join(REPO_ROOT, 'src/types/ipc.generated.ts'), 'utf8');
+  expect(barrel).not.toContain('SpeleoProjectMetadataPatch');
+});

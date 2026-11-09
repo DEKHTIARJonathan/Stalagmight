@@ -191,3 +191,19 @@ and safe failure. Direct read-only/reload calls and concurrent project/account/e
 changes must reject stale consent. Use only synthetic data. Run only newly created
 or modified cases with explicit file and test-name filters, plus static gates;
 selected acceptance does not imply full-suite acceptance.
+
+### Focused workspace verification (2026-11-09)
+
+Selected new or modified cases passed: 23 Rust backend tests, 24 Vitest cases and
+6 headless Chromium cases. The browser coverage includes the reduced workspace,
+Close Project cancellation and return to the listing, lock release/resume, Save,
+and Settings authentication preserving the description and close intent without
+uploading. Backend coverage includes live revision verification, safe replacement,
+pending-work guards and edits arriving during a reload's network request.
+
+Main, agent and Playwright typechecks, all nine non-test lint gates, root and
+workspace-member formatting checks, and workspace Clippy with telemetry and all
+targets passed. Node 24 and the pinned pnpm were used. Existing repository/toolchain
+warnings remain; no full-suite or live-server acceptance is claimed. One overly
+broad Vitest rerun filter also matched one unchanged reload case, which passed;
+subsequent filters were narrowed. No external fixtures were used or committed.

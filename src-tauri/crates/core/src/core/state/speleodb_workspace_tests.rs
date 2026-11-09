@@ -348,7 +348,11 @@ fn workspace_reload_rejects_edits_made_during_live_revision_verification() {
         write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).expect("reply");
     });
     std::thread::scope(|scope| {
-        let pending = scope.spawn(|| state.speleodb_reload(true, Some(expected)));
+        let pending = scope.spawn(|| {
+            state
+                .speleodb_reload(true, Some(expected))
+                .map_err(|error| error.message)
+        });
         started
             .recv_timeout(std::time::Duration::from_secs(2))
             .expect("verification started");
@@ -361,7 +365,7 @@ fn workspace_reload_rejects_edits_made_during_live_revision_verification() {
             .join()
             .expect("reload thread")
             .expect_err("newer edits invalidate discard consent");
-        assert!(error.message.contains("changed"));
+        assert!(error.contains("changed"));
     });
     server.join().expect("server");
     assert_eq!(
