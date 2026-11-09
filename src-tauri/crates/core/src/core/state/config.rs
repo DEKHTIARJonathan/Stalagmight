@@ -315,7 +315,12 @@ impl AppState {
                 lock_ops = Some(self.speleodb_lock_ops_guard());
                 continue;
             }
-            match self.reload_config_locked(&new_config, &previous, auth_changed, lock_ops.is_some()) {
+            match self.reload_config_locked(
+                &new_config,
+                &previous,
+                auth_changed,
+                lock_ops.is_some(),
+            ) {
                 Locked::Done(after) => {
                     drop(write);
                     self.finish_config_write(after);
