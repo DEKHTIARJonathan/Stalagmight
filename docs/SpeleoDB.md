@@ -53,8 +53,8 @@ Without a usable session the cached copy opens read-only, with no network call:
   valid, or a 404, means the server says this account may not have the project. No
   cached copy is opened. TLS and invalid-download errors do not fall back either.
 
-A copy opened without a session says "Read-only copy - log in to edit" on its home
-screen card or row, on the map's read-only pill (with a Log in action that opens the
+A copy opened without a session says "Read-only copy - sign in to edit" on its home
+screen card or row, on the map's read-only pill (with a Sign in action that opens the
 SpeleoDB settings) and in the SpeleoDB workspace header. Signing in later does not
 change an open project by itself; Resume editing then takes the lock as usual. A
 signed-in account whose permission is below read-and-write sees "Read-only - your
@@ -235,7 +235,11 @@ elsewhere unless explicitly configured otherwise. An `http://` hostname is resol
 first and allowed only if every address is loopback, private or link-local; a
 resolvable public host is refused. A host that does not resolve is never dialed and
 is reported as the DNS transport failure, not as an insecure endpoint, so offline
-handling matches `https://`. Redirects and implicit Reqwest
+handling matches `https://`. A refused endpoint crosses IPC with a typed
+`endpoint_refusal` (`PublicHttp`, or `InvalidAddress` for a missing or unknown scheme
+or no host), and the UI shows a translated line that names the server and says what to
+change: an `https://` address, or "Allow insecure HTTP" for a trusted public `http://`
+server. It never shows the backend's refusal text. Redirects and implicit Reqwest
 retries are disabled. Safe reads and token exchange retry transient transport/5xx
 failures twice, after 200 ms and 500 ms. Mutations are never automatically replayed.
 Metadata requests use 30 seconds and lock probes five seconds with no retries.
@@ -279,10 +283,15 @@ to the project listing. History includes inspection, restore/revert and
 Unwind/Rewind; revision editing remains Survey-only.
 
 Account sign-in, endpoint and connection management live exclusively in application
-Settings under SpeleoDB. Every sign-in link opens that category. "Log in now" uses
+Settings under SpeleoDB. Every sign-in link opens that category. The SpeleoDB
+screens say "sign in" and "sign out" throughout. "Sign in now" uses
 the endpoint and insecure-HTTP choice on screen and, on success, saves them with the
 session; Settings stays open when other tabs still hold unsaved edits (see
-[configuration](configuration.md)). A blocked save
+[configuration](configuration.md)). A failed sign-in (from Sign in now or from Save)
+shows its error under the account controls, right after the button, as an alert, and
+scrolls it into view; a transport error names the server on screen, which is the one
+that was tried. Editing the credentials, the server or the insecure-HTTP choice clears
+that error. A blocked save
 retains its project, validated description and Save-and-Close intent while Settings
 is open. Authentication returns to confirmation without saving or uploading.
 Changing project or account invalidates the continuation.

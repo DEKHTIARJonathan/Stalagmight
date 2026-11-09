@@ -63,7 +63,7 @@ untouched; cleanup failures are reported. No keychain access is restored.
 is restored only when the resolved instance matches its configured endpoint.
 Reloading configuration applies a changed endpoint, account or token to the live
 session and resets its edit gate; unrelated preference reloads retain the session.
-Projects refresh at startup and immediately after sign-in. "Log in now" in Settings
+Projects refresh at startup and immediately after sign-in. "Sign in now" in Settings
 signs in over the connection on screen, including its insecure-HTTP choice (never the
 saved one, so a public `http://` server stays refused unless the box on screen is
 ticked). On success the backend saves that endpoint and `insecure_http` with the

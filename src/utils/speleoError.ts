@@ -1,4 +1,5 @@
 import type {
+  EndpointRefusal,
   NewerSchema,
   SpeleoDbAction,
   SpeleoErrorDto,
@@ -51,12 +52,27 @@ const TRANSPORT_KEYS: Record<TransportCause, string> = {
  * mismatches); a transport failure reaches the backend log only where an
  * orchestration path logs the error it is degrading around.
  */
-function transportMessage(cause: TransportCause): string {
-  // The session endpoint is where we are actually authenticated (the config value
-  // only affects future logins), so it is the honest answer to "which server?".
-  const endpoint =
-    useSpeleoStore.getState().session?.endpoint?.trim() || i18n.t('speleodb.transport.thisServer');
-  return i18n.t(TRANSPORT_KEYS[cause], { endpoint });
+function transportMessage(cause: TransportCause, tried?: string | null): string {
+  return i18n.t(TRANSPORT_KEYS[cause], { endpoint: serverName(tried) });
+}
+
+/**
+ * The server to name in a message: the one the call was made to when the caller
+ * knows it (Settings' sign-in tries the address ON SCREEN, which may not be saved
+ * yet), else the session endpoint - where we are actually authenticated, since the
+ * config value only affects future sign-ins - else a neutral phrase.
+ */
+function serverName(tried?: string | null): string {
+  return tried?.trim()
+    || useSpeleoStore.getState().session?.endpoint?.trim()
+    || i18n.t('speleodb.transport.thisServer');
+}
+
+/** Why the endpoint policy refused the server address, read structurally off the DTO. */
+function endpointRefusalOf(e: unknown): EndpointRefusal | null {
+  if (!e || typeof e !== 'object' || !('endpoint_refusal' in e)) return null;
+  const refusal = (e as Partial<SpeleoErrorDto>).endpoint_refusal;
+  return refusal === 'PublicHttp' || refusal === 'InvalidAddress' ? refusal : null;
 }
 
 /**
@@ -64,14 +80,28 @@ function transportMessage(cause: TransportCause): string {
  *
  * The backend already provides a clean detail (auth failures parse
  * `non_field_errors`). This adds the operation frame the backend can't know -
- * e.g. `Login to SpeleoDB failed: …`, `Unable to open the project: …` - except on
+ * e.g. `Could not sign in to SpeleoDB: …`, `Unable to open the project: …` - except on
  * transport errors, which are replaced wholesale by the humanized #270 line (it
  * is already self-framed and would otherwise read as "Login failed: Network
- * error…").
+ * error…"), and on an endpoint the policy refused, which says which setting to
+ * change instead of the backend's "refusing to use an insecure SpeleoDB endpoint".
+ *
+ * `opts.endpoint` is the server the call was made to, when the caller knows it
+ * better than the session does (see {@link serverName}).
  */
-export function humanizeSpeleoError(e: unknown, contextPrefix?: string): string {
+export function humanizeSpeleoError(
+  e: unknown,
+  contextPrefix?: string,
+  opts: { endpoint?: string | null } = {},
+): string {
   const cause = transportCause(e);
-  if (cause) return transportMessage(cause);
+  if (cause) return transportMessage(cause, opts.endpoint);
+  const refusal = endpointRefusalOf(e);
+  if (refusal) {
+    return i18n.t(refusal === 'PublicHttp'
+      ? 'speleodb.endpointRefused.publicHttp'
+      : 'speleodb.endpointRefused.invalidAddress', { endpoint: serverName(opts.endpoint) });
+  }
   // #649: a download a newer Stalagmight saved. Self-framed like the transport
   // line, and worded exactly as the open dialog words it.
   const newer = newerSchemaOf(e);

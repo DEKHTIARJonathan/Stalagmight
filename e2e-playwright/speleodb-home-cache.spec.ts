@@ -1,7 +1,7 @@
 /**
  * E2E: cached SpeleoDB projects on the home screen.
  *
- * - Signed out, every cached copy is listed with "Read-only copy - log in to edit"
+ * - Signed out, every cached copy is listed with "Read-only copy - sign in to edit"
  *   and opens read-only without taking the lock; an expired session does the same
  *   and signs the app out.
  * - Signed in, only this account's copies (and pre-upgrade ones with no recorded
@@ -107,20 +107,20 @@ test('signed out: every cached copy is listed read-only and opens without taking
   const mine = page.getByTestId(`system-card-remote-${MINE}`);
   await expect(mine).toBeVisible();
   await expect(page.getByTestId(`system-card-remote-${THEIRS}`)).toBeVisible();
-  await expect(mine).toContainText('Read-only copy - log in to edit');
+  await expect(mine).toContainText('Read-only copy - sign in to edit');
   await expect(mine).not.toContainText('Permission:');
 
   await mine.click();
   await expect(page.getByTestId('single-system-view')).toBeVisible();
   await expect(page.getByTestId('toast')).toContainText('Opened a read-only copy');
   const pill = page.getByTestId('speleodb-readonly-banner');
-  await expect(pill.getByTestId('speleodb-readonly-reason')).toHaveText('Read-only copy - log in to edit');
+  await expect(pill.getByTestId('speleodb-readonly-reason')).toHaveText('Read-only copy - sign in to edit');
   await expect(pill.getByTestId('speleodb-readonly-login')).toBeVisible();
   await expect(pill.getByTestId('speleodb-readonly-resume')).toHaveCount(0);
   expect(commands.filter((c) => c.includes('Command: speleodb_start_editing'))).toHaveLength(0);
   expect((await calls(page, 'speleodb_open_project')).map((c) => c.args?.projectId)).toEqual([MINE]);
 
-  // "Log in" goes to the SpeleoDB settings.
+  // "Sign in" goes to the SpeleoDB settings.
   await pill.getByTestId('speleodb-readonly-login').click();
   await expect(page.getByTestId('settings-panel-speleodb')).toBeVisible();
 });
@@ -137,7 +137,7 @@ test('an expired session opens the cached copy read-only and signs the app out',
   await expect.poll(() => page.evaluate(() =>
     (window as unknown as { __E2E_TEST__: { speleoStore: { getState: () => { session: { loggedIn: boolean } | null } } } })
       .__E2E_TEST__.speleoStore.getState().session?.loggedIn ?? false)).toBe(false);
-  await expect(page.getByTestId('speleodb-readonly-reason')).toHaveText('Read-only copy - log in to edit');
+  await expect(page.getByTestId('speleodb-readonly-reason')).toHaveText('Read-only copy - sign in to edit');
   expect(commands.filter((c) => c.includes('Command: speleodb_start_editing'))).toHaveLength(0);
 });
 
@@ -153,7 +153,7 @@ test('signed in: only this account\'s copies and unknown-owner copies are listed
   await expect(page.getByTestId(`system-card-remote-${MINE}`)).toBeVisible();
   await expect(page.getByTestId(`system-card-remote-${LEGACY}`)).toBeVisible();
   await expect(page.getByTestId(`system-card-remote-${THEIRS}`)).toHaveCount(0);
-  await expect(page.getByTestId(`system-card-remote-${MINE}`)).not.toContainText('log in to edit');
+  await expect(page.getByTestId(`system-card-remote-${MINE}`)).not.toContainText('sign in to edit');
 });
 
 for (const signedIn of [false, true]) {

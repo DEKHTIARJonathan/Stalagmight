@@ -66,7 +66,7 @@ export function createProjectConfigActions(
           { config },
           { purpose: 'persist user settings' },
         );
-        // "Log in now" updates the live session before this settings snapshot is
+        // "Sign in now" updates the live session before this settings snapshot is
         // refreshed. Compare that identity, and do not erase a newer login when
         // an older settings request finishes after it.
         const speleo = useSpeleoStore.getState();

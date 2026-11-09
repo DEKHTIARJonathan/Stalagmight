@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 // [Track A] #186/D-B2: the typed action carried on the IPC error DTO.
-use super::contract::{SpeleoDbAction, TransportCause};
+use super::contract::{EndpointRefusal, SpeleoDbAction, TransportCause};
 
 /// Project permission level.
 ///
@@ -683,6 +683,12 @@ pub struct SpeleoErrorDto {
     pub unpushed_local: Option<UnpushedLocalEdits>,
     /// Present when a downloaded native file requires a newer schema.
     pub newer_schema: Option<crate::models::NewerSchema>,
+    /// Set ONLY when the endpoint policy refused the server address before any
+    /// request (a public `http://` server, or an unusable address), so the
+    /// frontend can say which setting to change. Absent on every other error.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub endpoint_refusal: Option<EndpointRefusal>,
 }
 
 /// The local work a refused re-pull would have destroyed, carried on
@@ -715,8 +721,7 @@ mod tests {
         DoneResult, Permission, Project, PushResult, RemoteState, RevisionCommit, RevisionHistory,
         SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
         SpeleoProjectSummary, SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoRevision,
-        SpeleoSessionStatus,
-        StartEditingResult, UpdateResult, Visibility,
+        SpeleoSessionStatus, StartEditingResult, UpdateResult, Visibility,
     };
 
     #[test]
@@ -763,6 +768,7 @@ mod tests {
             transport: None,
             unpushed_local: None,
             newer_schema: None,
+            endpoint_refusal: None,
         })
         .expect("serialize error dto");
         // The single-writer hand-off DTOs (#194/#197) must also never carry a token

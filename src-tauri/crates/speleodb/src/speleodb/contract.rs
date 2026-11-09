@@ -83,6 +83,20 @@ pub enum TransportCause {
     Unknown,
 }
 
+/// Why the endpoint policy (`tls::enforce`) refused a server address before any
+/// request was made. Crosses IPC on [`SpeleoErrorDto::endpoint_refusal`] so the
+/// frontend says what to change in a translated line (an `https://` address, or
+/// "Allow insecure HTTP" for a public `http://` server) instead of the backend's
+/// "refusing to use an insecure SpeleoDB endpoint".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../bindings/")]
+pub enum EndpointRefusal {
+    /// A plain `http://` server on a public address, with "Allow insecure HTTP" off.
+    PublicHttp,
+    /// Not a usable server address: no or an unknown scheme, or no host.
+    InvalidAddress,
+}
+
 /// The SpeleoDB endpoint a status came from, so [`map_status`] can apply the
 /// per-endpoint 403 semantics (D-B4): a 403 on a read endpoint means read-only
 /// access, a 403 on a write endpoint means a write fence.
@@ -216,6 +230,10 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         SpeleoDbError::NewerSchema(newer) => Some(newer.clone()),
         _ => None,
     };
+    let endpoint_refusal = match err {
+        SpeleoDbError::InsecureEndpoint { refusal, .. } => Some(*refusal),
+        _ => None,
+    };
     let (action, status, message) = match err {
         // Status: carry the parsed human detail WITHOUT the "SpeleoDB returned HTTP
         // N:" wrapper - the frontend frames it per operation ("Login to SpeleoDB
@@ -267,6 +285,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         transport,
         unpushed_local,
         newer_schema,
+        endpoint_refusal,
     }
 }
 
@@ -461,6 +480,30 @@ mod tests {
         assert_eq!(
             dto_for_error(Endpoint::User, &SpeleoDbError::NotAuthenticated).newer_schema,
             None
+        );
+    }
+
+    #[test]
+    fn an_endpoint_refusal_is_fatal_and_says_why() {
+        use super::EndpointRefusal;
+        for refusal in [EndpointRefusal::PublicHttp, EndpointRefusal::InvalidAddress] {
+            let dto = dto_for_error(
+                Endpoint::Login,
+                &SpeleoDbError::InsecureEndpoint {
+                    endpoint: "http://192.0.2.1/".to_owned(),
+                    refusal,
+                },
+            );
+            assert_eq!(dto.action, SpeleoDbAction::Fatal);
+            assert_eq!(dto.endpoint_refusal, Some(refusal));
+        }
+        // Only the policy's refusal carries it, so it is a sound discriminant.
+        let other = dto_for_error(Endpoint::Login, &SpeleoDbError::MissingCredentials);
+        assert_eq!(other.endpoint_refusal, None);
+        let json = serde_json::to_string(&other).expect("serialize dto");
+        assert!(
+            !json.contains("endpoint_refusal"),
+            "absent unless refused: {json}"
         );
     }
 

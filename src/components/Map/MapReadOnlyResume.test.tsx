@@ -72,10 +72,10 @@ describe('SpeleoDB read-only pill: Resume editing', () => {
 });
 
 describe('SpeleoDB read-only pill: why it cannot be edited', () => {
-  it('signed out, says it is a read-only copy and offers Log in, which opens SpeleoDB settings', async () => {
+  it('signed out, says it is a read-only copy and offers Sign in, which opens SpeleoDB settings', async () => {
     useSpeleoStore.setState({ session: { loggedIn: false, userEmail: null, endpoint: null } });
     render(<MapTopLeftOverlay {...base} showSpeleoReadOnly />);
-    expect(screen.getByTestId('speleodb-readonly-reason')).toHaveTextContent(/^Read-only copy - log in to edit$/);
+    expect(screen.getByTestId('speleodb-readonly-reason')).toHaveTextContent(/^Read-only copy - sign in to edit$/);
     const login = screen.getByTestId('speleodb-readonly-login');
     expect(screen.getByTestId('speleodb-readonly-banner')).toContainElement(login);
     await userEvent.click(login);

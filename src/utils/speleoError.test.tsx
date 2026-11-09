@@ -94,6 +94,17 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
     expect(new Set([refused, timeout, dns, tls, unknown]).size).toBe(5);
   });
 
+  it('names the server the call was made to when the caller knows it', () => {
+    // Settings' "Sign in now" tries the address on screen, not the session's.
+    const line = humanizeSpeleoError(dto({ transport: 'Refused' }), 'Could not sign in to SpeleoDB', {
+      endpoint: 'https://unsaved.example/',
+    });
+    expect(line).toContain('https://unsaved.example/');
+    expect(line).not.toContain(ENDPOINT);
+    // A blank one falls back to the session's.
+    expect(humanizeSpeleoError(dto({ transport: 'Refused' }), undefined, { endpoint: '  ' })).toContain(ENDPOINT);
+  });
+
   it('falls back to a neutral phrase when no session endpoint is known', () => {
     useSpeleoStore.setState({ session: null });
     const line = humanizeSpeleoError(dto({ transport: 'Refused' }));
@@ -106,9 +117,9 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
     // sound discriminant: a retryable 5xx is `Retry` too, but carries a status.
     const line = humanizeSpeleoError(
       dto({ message: 'Bad login.', action: 'Fatal', status: 400, transport: null }),
-      'Login to SpeleoDB failed',
+      'Could not sign in to SpeleoDB',
     );
-    expect(line).toBe('Login to SpeleoDB failed: Bad login');
+    expect(line).toBe('Could not sign in to SpeleoDB: Bad login');
   });
 
   it('does not treat a retryable 5xx as a transport failure', () => {
@@ -117,6 +128,33 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
       'Could not push changes',
     );
     expect(line).toBe('Could not push changes: Server error');
+  });
+});
+
+describe('humanizeSpeleoError - an endpoint the policy refused', () => {
+  const refused = (endpoint_refusal: 'PublicHttp' | 'InvalidAddress') => dto({
+    message: 'refusing to use an insecure SpeleoDB endpoint: http://192.0.2.1/',
+    action: 'Fatal', transport: null, endpoint_refusal,
+  });
+
+  it('points a public http:// server at "Allow insecure HTTP", never the backend text', () => {
+    const line = humanizeSpeleoError(refused('PublicHttp'), 'Could not sign in to SpeleoDB', { endpoint: 'http://192.0.2.1/' });
+    expect(line).toContain('http://192.0.2.1/');
+    expect(line).toContain('"Allow insecure HTTP"');
+    expect(line).toContain('https://');
+    expect(line).not.toContain('refusing');
+    expect(line).not.toContain('Could not sign in to SpeleoDB:');
+  });
+
+  it('asks for a full address when the address is unusable', () => {
+    const line = humanizeSpeleoError(refused('InvalidAddress'), undefined, { endpoint: 'speleodb.lan' });
+    expect(line).toMatch(/^speleodb\.lan is not a server address/);
+    expect(line).not.toContain('Allow insecure HTTP');
+  });
+
+  it('ignores a refusal field that is not one it knows', () => {
+    const line = humanizeSpeleoError({ ...refused('PublicHttp'), endpoint_refusal: 'Other' }, 'Prefix');
+    expect(line).toBe('Prefix: refusing to use an insecure SpeleoDB endpoint: http://192.0.2.1/');
   });
 });
 

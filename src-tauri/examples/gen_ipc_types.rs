@@ -68,12 +68,12 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    DoneResult, Permission, PushResult, RemoteState, SpeleoAccessVerification, SpeleoDbAction,
-    SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult,
-    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectSummary, SpeleoPublishParams,
-    SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoReleaseContext, SpeleoRevision,
-    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult,
-    TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
+    DoneResult, EndpointRefusal, Permission, PushResult, RemoteState, SpeleoAccessVerification,
+    SpeleoDbAction, SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState,
+    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectSummary,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoReleaseContext,
+    SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget,
+    StartEditingResult, TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_attribution::TileAttribution;
 use stalagmight_lib::tile_providers::TileProviderInfo;
@@ -421,6 +421,9 @@ fn main() {
     // #270: why a transport call never reached the server, so the FE can render a
     // translated line instead of a raw OS errno.
     export::<TransportCause>(&out_dir);
+    // Why the endpoint policy refused a server address, so the FE can point at the
+    // setting to change instead of showing the backend's refusal text.
+    export::<EndpointRefusal>(&out_dir);
     // The un-pushed local work a refused re-pull would have destroyed, carried on
     // SpeleoErrorDto so the FE can offer keep-local vs take-remote-and-discard.
     // [#258] Which ambiguity the candidates describe, so the picker offers the right
@@ -646,6 +649,7 @@ fn main() {
         "SpeleoDbAction",
         "SpeleoErrorDto",
         "TransportCause",
+        "EndpointRefusal",
         "UnpushedLocalEdits",
         "SpeleoLinkStatus",
         "RemoteState",

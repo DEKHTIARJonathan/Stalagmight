@@ -35,7 +35,7 @@ export function SpeleoResumeEditingButton() {
 
 /**
  * The SpeleoDB read-only pill's words: why the project cannot be edited when that
- * is a lasting reason (signed out: "Read-only copy - log in to edit"; view-only
+ * is a lasting reason (signed out: "Read-only copy - sign in to edit"; view-only
  * access), and the plain badge otherwise.
  */
 export function SpeleoReadOnlyLabel() {
@@ -51,7 +51,7 @@ export function SpeleoReadOnlyLabel() {
 }
 
 /**
- * "Log in" on the SpeleoDB read-only pill while signed out: opens the SpeleoDB
+ * "Sign in" on the SpeleoDB read-only pill while signed out: opens the SpeleoDB
  * settings, where signing in happens. Nothing is acquired here; once signed in,
  * "Resume editing" takes over.
  */

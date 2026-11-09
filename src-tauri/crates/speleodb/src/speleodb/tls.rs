@@ -34,7 +34,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use http::Uri;
 
-use super::{SpeleoDbError, TransportCause};
+use super::{EndpointRefusal, SpeleoDbError, TransportCause};
 
 /// Classification of a single resolved IP address for the http policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,10 +171,12 @@ fn enforce_with(
     insecure_http: bool,
     resolve: impl FnOnce(&str, u16) -> std::io::Result<Vec<IpAddr>>,
 ) -> Result<(), SpeleoDbError> {
-    let insecure = || SpeleoDbError::InsecureEndpoint {
+    let insecure = |refusal| SpeleoDbError::InsecureEndpoint {
         endpoint: endpoint.to_owned(),
+        refusal,
     };
-    let uri = Uri::from_str(endpoint).map_err(|_| insecure())?;
+    let invalid = || insecure(EndpointRefusal::InvalidAddress);
+    let uri = Uri::from_str(endpoint).map_err(|_| invalid())?;
 
     match uri.scheme_str() {
         // TLS protects the credentials regardless of peer address; never resolve.
@@ -189,7 +191,7 @@ fn enforce_with(
                 true
             } else {
                 // No host at all is a malformed endpoint: refuse (fail closed).
-                let host = uri.host().ok_or_else(insecure)?;
+                let host = uri.host().ok_or_else(invalid)?;
                 let host = host.trim_start_matches('[').trim_end_matches(']');
                 // A resolution failure is an offline host, reported as the DNS
                 // transport failure (see the module docs) - never allowed, never
@@ -205,11 +207,11 @@ fn enforce_with(
                 notice_unencrypted_once(endpoint);
                 Ok(())
             } else {
-                Err(insecure())
+                Err(insecure(EndpointRefusal::PublicHttp))
             }
         }
         // D-B19: require an explicit, known scheme - never silently rewrite.
-        _ => Err(insecure()),
+        _ => Err(invalid()),
     }
 }
 
@@ -221,7 +223,7 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     use super::{classify_addr, enforce, enforce_with, latch_once, AddrClass};
-    use crate::speleodb::{SpeleoDbError, TransportCause};
+    use crate::speleodb::{EndpointRefusal, SpeleoDbError, TransportCause};
 
     fn ip(s: &str) -> IpAddr {
         IpAddr::from_str(s).expect("test IP literal")
@@ -279,7 +281,13 @@ mod tests {
     #[test]
     fn enforce_http_public_blocked() {
         let err = enforce("http://8.8.8.8", false).expect_err("public http must be blocked");
-        assert!(matches!(err, SpeleoDbError::InsecureEndpoint { .. }));
+        assert!(matches!(
+            err,
+            SpeleoDbError::InsecureEndpoint {
+                refusal: EndpointRefusal::PublicHttp,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -320,11 +328,20 @@ mod tests {
     fn enforce_missing_scheme_rejected() {
         // No scheme: refuse rather than guess http/https (D-B19).
         let err = enforce("10.10.0.220:8000", false).expect_err("missing scheme must be rejected");
-        assert!(matches!(err, SpeleoDbError::InsecureEndpoint { .. }));
-        // An unknown scheme is likewise rejected.
+        assert!(matches!(
+            err,
+            SpeleoDbError::InsecureEndpoint {
+                refusal: EndpointRefusal::InvalidAddress,
+                ..
+            }
+        ));
+        // An unknown scheme is likewise rejected, as an unusable address.
         assert!(matches!(
             enforce("ftp://10.10.0.220", false),
-            Err(SpeleoDbError::InsecureEndpoint { .. })
+            Err(SpeleoDbError::InsecureEndpoint {
+                refusal: EndpointRefusal::InvalidAddress,
+                ..
+            })
         ));
     }
 
@@ -373,7 +390,10 @@ mod tests {
         };
         assert!(matches!(
             enforce_with("http://speleodb.example", false, public),
-            Err(SpeleoDbError::InsecureEndpoint { .. })
+            Err(SpeleoDbError::InsecureEndpoint {
+                refusal: EndpointRefusal::PublicHttp,
+                ..
+            })
         ));
         assert!(enforce_with("http://speleodb.lan:8000", false, |_, port| {
             assert_eq!(port, 8000);

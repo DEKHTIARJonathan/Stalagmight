@@ -37,7 +37,7 @@ pub mod sync;
 pub(crate) mod tls;
 
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
-pub use contract::{SpeleoDbAction, TransportCause};
+pub use contract::{EndpointRefusal, SpeleoDbAction, TransportCause};
 pub use models::{
     DoneResult, Permission, PushResult, RemoteState, SpeleoAccessVerification, SpeleoErrorDto,
     SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult,
@@ -102,8 +102,12 @@ pub enum SpeleoDbError {
     // unresolvable host is NOT this error: it is `Transport { cause: Dns }`
     // (offline, sdk#6). Non-retryable by construction - `tls::enforce` errors
     // before the SDK client exists, so `SdkClient::call` never loops on it.
+    // `refusal` says which rule refused it, for the frontend's translated line.
     #[error("refusing to use an insecure SpeleoDB endpoint: {endpoint}")]
-    InsecureEndpoint { endpoint: String },
+    InsecureEndpoint {
+        endpoint: String,
+        refusal: EndpointRefusal,
+    },
     /// sdk#3: the project file is larger than SpeleoDB accepts in one upload
     /// ([`client::SERVER_UPLOAD_LIMIT_BYTES`]), even with its undo history left
     /// out. Refused BEFORE any byte is sent: nothing was uploaded, and the local

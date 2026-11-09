@@ -1,5 +1,5 @@
 /**
- * security#4 - "Log in now" in Settings logs in over the connection ON SCREEN
+ * security#4 - "Sign in now" in Settings signs in over the connection ON SCREEN
  * (the staged endpoint and insecure-HTTP choice, never the saved one), applies the
  * SpeleoDB settings on success, and keeps Settings open when other tabs hold
  * staged edits so they are not discarded.
@@ -60,7 +60,7 @@ async function logInNow() {
 
 const loginCall = () => invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_login');
 
-describe('Settings "Log in now" (security#4)', () => {
+describe('Settings "Sign in now" (security#4)', () => {
   it('logs in with the on-screen insecure-HTTP choice, not the saved one, and closes', async () => {
     render(<SettingsDialog />);
     await userEvent.click(await screen.findByTestId('toggle-speleodb-insecure-http'));
@@ -119,5 +119,88 @@ describe('Settings "Log in now" (security#4)', () => {
     expect(closeDialog).not.toHaveBeenCalled();
     // The on-screen choice is still only staged.
     expect(screen.getByTestId('setting-speleodb-insecure-http')).toHaveClass('bg-accent-5');
+  });
+});
+
+/**
+ * The outcome of "Sign in now" must be visible and announced where the user acted:
+ * the panel may be scrolled down to Connection (to edit the server) when it arrives.
+ */
+describe('Settings "Sign in now" failure feedback', () => {
+  const failWith = (error: unknown) => invokeIpcMock.mockImplementation(async (cmd: string) => {
+    if (cmd === 'speleodb_login') throw error;
+    return null;
+  });
+
+  it('is announced, sits right after the button, and is scrolled into view', async () => {
+    const scrolled = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrolled;
+    try {
+      failWith(new Error('Invalid credentials'));
+      render(<SettingsDialog />);
+      await screen.findByTestId('speleodb-settings-try-login');
+      await logInNow();
+
+      const error = await screen.findByRole('alert');
+      expect(error).toHaveAttribute('data-testid', 'speleodb-account-settings-error');
+      expect(error).toHaveTextContent('Could not sign in to SpeleoDB: Invalid credentials');
+      const button = screen.getByTestId('speleodb-settings-try-login');
+      expect(button.compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(scrolled).toHaveBeenCalledWith({ block: 'nearest' });
+      expect(scrolled.mock.contexts).toContain(error);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
+  });
+
+  it('names the server on screen, not "the configured server", when it cannot be reached', async () => {
+    failWith({ message: 'Network error talking to SpeleoDB: refused', action: 'Retry', status: null, transport: 'Refused' });
+    render(<SettingsDialog />);
+    const endpoint = await screen.findByTestId('input-speleodb-endpoint');
+    await userEvent.clear(endpoint);
+    await userEvent.type(endpoint, 'https://unsaved.example/');
+    await logInNow();
+
+    const error = await screen.findByTestId('speleodb-account-settings-error');
+    expect(error).toHaveTextContent('Could not connect to SpeleoDB at https://unsaved.example/.');
+    expect(error).not.toHaveTextContent('configured server');
+  });
+
+  it('explains an insecure-endpoint refusal and points to "Allow insecure HTTP"', async () => {
+    failWith({
+      message: 'refusing to use an insecure SpeleoDB endpoint: http://192.0.2.1/',
+      action: 'Fatal', status: null, transport: null, endpoint_refusal: 'PublicHttp',
+    });
+    render(<SettingsDialog />);
+    const endpoint = await screen.findByTestId('input-speleodb-endpoint');
+    await userEvent.clear(endpoint);
+    await userEvent.type(endpoint, 'http://192.0.2.1/');
+    await logInNow();
+
+    const error = await screen.findByTestId('speleodb-account-settings-error');
+    expect(error).toHaveTextContent('http://192.0.2.1/');
+    expect(error).toHaveTextContent('"Allow insecure HTTP"');
+    expect(error).not.toHaveTextContent('refusing');
+  });
+
+  it('clears a stale error once the credentials, the server or the insecure choice change', async () => {
+    failWith({ message: 'Invalid credentials', action: 'Fatal', status: 400 });
+    render(<SettingsDialog />);
+    await screen.findByTestId('speleodb-settings-try-login');
+    await logInNow();
+    await screen.findByTestId('speleodb-account-settings-error');
+    await userEvent.type(screen.getByTestId('speleodb-settings-password'), 'x');
+    expect(screen.queryByTestId('speleodb-account-settings-error')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('speleodb-settings-try-login'));
+    await screen.findByTestId('speleodb-account-settings-error');
+    await userEvent.type(screen.getByTestId('input-speleodb-endpoint'), 'x');
+    expect(screen.queryByTestId('speleodb-account-settings-error')).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('speleodb-settings-try-login'));
+    await screen.findByTestId('speleodb-account-settings-error');
+    await userEvent.click(screen.getByTestId('toggle-speleodb-insecure-http'));
+    expect(screen.queryByTestId('speleodb-account-settings-error')).not.toBeInTheDocument();
   });
 });

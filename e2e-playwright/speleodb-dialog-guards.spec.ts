@@ -7,7 +7,7 @@ import { setIpcOverrides } from './helpers/ipcOverrides';
  *
  * - The Open from SpeleoDB browser cannot be dismissed while an open is in flight,
  *   and the open's 401 is shown (frontend#3).
- * - Settings' "Log in now" uses the connection on screen and keeps Settings open
+ * - Settings' "Sign in now" uses the connection on screen and keeps Settings open
  *   while other tabs hold staged edits (security#4).
  * - Unsent SpeleoDB input is asked about in-app before the app closes (frontend#10).
  */
@@ -78,7 +78,7 @@ test('the SpeleoDB browser stays open while an open is in flight, then shows its
   await expect(dialog).toBeHidden();
 });
 
-test.describe('Settings "Log in now"', () => {
+test.describe('Settings "Sign in now"', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await page.getByTestId('global-speleodb-button').click();
@@ -121,6 +121,44 @@ test.describe('Settings "Log in now"', () => {
     }).__TAURI_INTERNALS__.invoke('get_config'));
     expect(String(saved.general.auto_save)).not.toBe(before);
     expect(await calls(page, 'speleodb_login')).toHaveLength(1);
+  });
+
+  test('a failure shows next to the button, in view, with the panel scrolled to Connection', async ({ page }) => {
+    // The server on screen cannot be reached.
+    await page.evaluate(() => {
+      const w = window as unknown as { __MOCK_IPC_OVERRIDES__?: Record<string, unknown> };
+      const overrides = w.__MOCK_IPC_OVERRIDES__ ?? {};
+      Object.defineProperty(overrides, 'speleodb_login', {
+        enumerable: true,
+        configurable: true,
+        get: () => Promise.reject({
+          message: 'Network error talking to SpeleoDB: refused', action: 'Retry', status: null,
+          transport: 'Refused', unpushed_local: null, newer_schema: null,
+        }),
+      });
+      w.__MOCK_IPC_OVERRIDES__ = overrides;
+    });
+    await page.setViewportSize({ width: 1024, height: 560 });
+    await page.getByTestId('speleodb-settings-email').fill('test@example.com');
+    await page.getByTestId('speleodb-settings-password').fill('synthetic-secret');
+    // Scrolled down to edit the server: the Account section's top is out of view.
+    const endpoint = page.getByTestId('input-speleodb-endpoint');
+    await endpoint.scrollIntoViewIfNeeded();
+    await endpoint.fill('https://unsaved.example/');
+    await expect(page.getByTestId('section-speleodb-account').getByRole('heading')).not.toBeInViewport();
+    await page.getByTestId('speleodb-settings-try-login').click();
+
+    const error = page.getByRole('alert').filter({ hasText: 'Could not connect to SpeleoDB' });
+    await expect(error).toHaveAttribute('data-testid', 'speleodb-account-settings-error');
+    await expect(error).toBeInViewport({ ratio: 1 });
+    // Named for the server that was tried: the one on screen, not yet saved.
+    await expect(error).toContainText('https://unsaved.example/');
+    await expect(error).not.toContainText('configured server');
+    await expect(page.getByTestId('settings-dialog')).toBeVisible();
+
+    // Editing the server makes that error stale.
+    await endpoint.fill('https://other.example/');
+    await expect(page.getByTestId('speleodb-account-settings-error')).toHaveCount(0);
   });
 });
 

@@ -200,6 +200,7 @@ export * from './ipc/SpeleoSessionStatus';
 export * from './ipc/SpeleoDbAction';
 export * from './ipc/SpeleoErrorDto';
 export * from './ipc/TransportCause';
+export * from './ipc/EndpointRefusal';
 export * from './ipc/UnpushedLocalEdits';
 export * from './ipc/SpeleoLinkStatus';
 export * from './ipc/RemoteState';

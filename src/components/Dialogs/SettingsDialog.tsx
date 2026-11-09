@@ -560,11 +560,16 @@ export default function SettingsDialog() {
     }
     if (hasPendingAuth) {
       const kind = pendingAuth?.kind;
+      // A retry that fails the same way still re-announces and re-shows its error.
+      setAuthError(null);
       const auth = await applyPendingAuth(localConfig.speleodb.endpoint, localConfig.speleodb.insecure_http);
       if (auth.cancelled) return false;
       if (!auth.ok) {
         setAuthError(
-          humanizeSpeleoError(auth.error, kind === 'login' ? t('speleodb.errors.loginFailed') : undefined),
+          // Name the server this sign-in was sent to (the one on screen).
+          humanizeSpeleoError(auth.error, kind === 'login' ? t('speleodb.errors.loginFailed') : undefined, {
+            endpoint: kind === 'login' ? localConfig.speleodb.endpoint : null,
+          }),
         );
         setActiveCategory('speleodb');
         return false;
@@ -573,7 +578,7 @@ export default function SettingsDialog() {
     return true;
   }, [localConfig, isDirty, hasPendingAuth, pendingAuth, updateConfig, applyPendingAuth, setAuthError, t]);
 
-  // "Log in now" signed in over the SpeleoDB connection on screen, and the backend
+  // "Sign in now" signed in over the SpeleoDB connection on screen, and the backend
   // saved that connection (endpoint, insecure HTTP) with the session. Adopt the
   // saved section as both the baseline and the staged value, so the SpeleoDB tab is
   // applied and only edits made in the other tabs stay staged. True when nothing

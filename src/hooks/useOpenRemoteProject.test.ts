@@ -257,7 +257,7 @@ describe('useOpenRemoteProject (#218)', () => {
     // No server tip was confirmed, and the copy's un-uploaded edits are kept.
     expect(setLinkOnOpenMock).toHaveBeenCalledWith(expect.objectContaining({ hasUnpushedEdits: true, offline: true }));
     expect(useUIStore.getState().showToast).toHaveBeenCalledWith(
-      'Opened a read-only copy. Log in to SpeleoDB to edit it.', 'speleodb-read-only-open', 'info');
+      'Opened a read-only copy. Sign in to SpeleoDB to edit it.', 'speleodb-read-only-open', 'info');
     expect(useSpeleoStore.getState().sessionGeneration).toBe(generation);
   });
 
