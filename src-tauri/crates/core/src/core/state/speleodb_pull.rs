@@ -65,7 +65,6 @@ fn offline_open_result(
     }
     Some(SpeleoOpenResult {
         local_path: dest.to_string_lossy().into_owned(),
-        concurrent_session: false,
         offline: Some(true),
         has_unpushed_edits: Some(link.has_unpushed_edits),
     })
@@ -193,12 +192,6 @@ impl AppState {
             last_verify_at: None,
             undo_mode: None,
         };
-        let concurrent_session = {
-            let holder = self.speleodb_lock_holder(&endpoint, &token, insecure_http, &project_id);
-            self.speleodb_my_email()
-                .is_some_and(|me| sync::concurrent_session_notice(holder.as_deref(), &me))
-        };
-
         self.install_linked_download_with_limits(
             native.path(),
             &dest,
@@ -214,7 +207,6 @@ impl AppState {
 
         Ok(SpeleoOpenResult {
             local_path: dest.to_string_lossy().into_owned(),
-            concurrent_session,
             offline: None,
             has_unpushed_edits: None,
         })

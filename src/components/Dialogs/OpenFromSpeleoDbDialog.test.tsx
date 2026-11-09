@@ -35,7 +35,7 @@ function mockRoutes(overrides: Record<string, () => Promise<unknown>> = {}) {
       speleodb_session: () => Promise.resolve({ logged_in: true }),
       speleodb_list_projects: () => Promise.resolve([REMOTE_PROJECT]),
       speleodb_open_project: () =>
-        Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false }),
+        Promise.resolve({ local_path: '/cache/p1.stalx' }),
       ...overrides,
     };
     return (routes[cmd] ?? (() => Promise.resolve(undefined)))();
@@ -229,7 +229,7 @@ describe('OpenFromSpeleoDbDialog with work at risk in the open project (#270)', 
     // The pull would have SUCCEEDED, so an unguarded open runs all the way through.
     mockRoutes({
       speleodb_open_project: () =>
-        Promise.resolve({ local_path: '/cache/p1/project.stalx', concurrent_session: false }),
+        Promise.resolve({ local_path: '/cache/p1/project.stalx' }),
     });
     render(<OpenFromSpeleoDbDialog />);
 

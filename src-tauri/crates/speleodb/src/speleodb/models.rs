@@ -419,11 +419,6 @@ pub struct SpeleoPublishResult {
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct SpeleoOpenResult {
     pub local_path: String,
-    /// #193 b8: the server reports a write lock held by THIS account at open time,
-    /// i.e. a second same-account session is editing the project. The frontend
-    /// surfaces a notice (the ancestry self-heal assumes a single same-account
-    /// session - a concurrent one would misattribute its commits as ours).
-    pub concurrent_session: bool,
     /// Present only when a failed connection required opening a validated cache.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -732,7 +727,6 @@ mod tests {
         .expect("serialize project summary");
         let open = serde_json::to_string(&SpeleoOpenResult {
             local_path: "/cache/project.stalx".to_owned(),
-            concurrent_session: false,
             offline: None,
             has_unpushed_edits: None,
         })

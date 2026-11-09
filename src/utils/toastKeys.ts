@@ -86,7 +86,6 @@ export const TOAST_KEYS = {
   SPELEODB_REVERT: 'speleodb-revert',
   SPELEODB_WEB: 'speleodb-web',
   SPELEODB_PROJECT_SETTINGS: 'speleodb-project-settings',
-  SPELEODB_CONCURRENT_SESSION: 'speleodb-concurrent-session',
   SPELEODB_ACTION_ERROR: 'speleodb-action-error',
   SPELEODB_EDITING: 'speleodb-editing',
   SPELEODB_LOCKED_BY: 'speleodb-locked-by',

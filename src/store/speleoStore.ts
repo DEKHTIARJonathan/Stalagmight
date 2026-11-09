@@ -67,14 +67,13 @@ export type ProjectLinkKind = 'unknown' | 'local' | 'remote';
 export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push' | 'reverify';
 
 /** A banner the shell surfaces above the toolbar (#200/#204). `push_unconfirmed`
-    and `concurrent_session` are transient action feedback; `rendering_disabled`
+    is transient action feedback; `rendering_disabled`
     (server `exclude_geojson`) and `no_anchor` (no georeferenced zero datum on
     push/unlock) are the #200 non-blocking notices; `push_failed` (#260) is the
     durable surface for a push/unlock that threw (the toast alone auto-clears
     after 3 s, leaving a failed upload with no trace). */
 export type SpeleoBanner =
   | { kind: 'push_unconfirmed' }
-  | { kind: 'concurrent_session' }
   | { kind: 'rendering_disabled' }
   | { kind: 'no_anchor' }
   | PushFailedBanner;
@@ -1083,7 +1082,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // (rendering_disabled is actionable via Enable-rendering, and if both were true
       // no_anchor would otherwise mask the only way to reach that action), so claim
       // the slot when it is free OR held by no_anchor - but NEVER clobber transient
-      // action feedback (push_unconfirmed / concurrent_session). Clear it only when
+      // action feedback (push_unconfirmed / push_failed). Clear it only when
       // WE own the slot, so a routine refresh never wipes another banner.
       const prior = state.banner;
       let banner = prior;

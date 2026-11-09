@@ -41,7 +41,7 @@ const ARGS: RevertRevisionArgs = {
   message: 'undo the bad survey',
 };
 
-const RESTORED = { local_path: '/cache/p1.stalx', concurrent_session: false };
+const RESTORED = { local_path: '/cache/p1.stalx' };
 
 const UNPUSHED_REFUSAL = {
   message: 'local edits never pushed',

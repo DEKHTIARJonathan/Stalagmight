@@ -184,8 +184,7 @@ pub(crate) fn classify_ancestry(
         return AncestryOutcome::Diverged;
     }
     // Any commit not authored by us means someone else pushed. Compare case-
-    // INSENSITIVELY: the server may normalise email case (mirrors
-    // `concurrent_session_notice`; the live revision test asserts the same).
+    // INSENSITIVELY: the server may normalise email case.
     if new_commits
         .iter()
         .any(|c| !c.author_email.eq_ignore_ascii_case(my_email))
@@ -423,8 +422,7 @@ pub fn plan_push(
 /// optional. `author_email == my_email` is a proxy for "this session pushed it",
 /// and a second session signed in as the SAME account breaks the proxy exactly:
 /// its commit reads as ours, so the gap classifies as `Landed` and the mark keeps
-/// its resting state over a genuine conflict - the case
-/// [`concurrent_session_notice`] exists to warn about (#193 b8), ending in Done
+/// its resting state over a genuine conflict, ending in Done
 /// superseding the other session's revision with no prompt at any point. Our own
 /// landed-but-unrecorded push can only have been made while we held the
 /// single-writer lock, so requiring it costs the recovery nothing and denies the
@@ -697,19 +695,6 @@ pub fn display_history(commits: Vec<RevisionCommit>) -> Vec<RevisionCommit> {
     out
 }
 
-/// Whether opening a remote project should warn about a concurrent SAME-ACCOUNT
-/// session (#193 b8). [`classify_ancestry`] treats `author_email == my_email` as
-/// "this session's push"; a second session under the same account editing the same
-/// project breaks that proxy (its commit reads as "mine" and could wrongly clear
-/// the dirty bit). The single-writer lock makes this rare, but if the server
-/// already reports a lock held by our OWN account when we open, a second session is
-/// live - surface a notice. Case-insensitive (the server may normalise email case);
-/// a lock held by a DIFFERENT account is an ordinary contended-lock case, not this.
-#[must_use]
-pub fn concurrent_session_notice(active_mutex_user: Option<&str>, my_email: &str) -> bool {
-    active_mutex_user.is_some_and(|holder| holder.eq_ignore_ascii_case(my_email))
-}
-
 #[cfg(test)]
 // [#303] `expect` arrived with the `unwind_target` tests, which assert on an
 // `Option<(String, bool)>`: unwrapping it names the expectation at the assertion rather
@@ -717,10 +702,9 @@ pub fn concurrent_session_notice(active_mutex_user: Option<&str>, my_email: &str
 #[expect(clippy::expect_used, reason = "unit test fixtures fail loudly")]
 mod tests {
     use super::{
-        base_is_ancestor_of_tip, classify_ancestry, concurrent_session_notice, display_history,
-        edits_captured_by_push, fence, plan_push, reconcile_verdict, rewind_target, status_verdict,
-        tip_of, unwind_target, AncestryOutcome, FenceOutcome, PushPlan, ReconcileVerdict,
-        RemoteState, RevisionCommit,
+        base_is_ancestor_of_tip, classify_ancestry, display_history, edits_captured_by_push, fence,
+        plan_push, reconcile_verdict, rewind_target, status_verdict, tip_of, unwind_target,
+        AncestryOutcome, FenceOutcome, PushPlan, ReconcileVerdict, RemoteState, RevisionCommit,
     };
 
     /// Build a revision-history commit with the given parents and author.
@@ -988,7 +972,7 @@ mod tests {
     fn ancestry_landed_matches_author_case_insensitively() {
         // #197 review: the server may normalise email case. Our own landed commit
         // authored as "Me@Example.COM" must still classify as ours (Landed), not a
-        // stranger, mirroring concurrent_session_notice's case-insensitive match.
+        // stranger.
         let commits = [commit("c", &["b"], "Me@Example.COM")];
         assert_eq!(
             classify_ancestry(Some("b"), Some("c"), &commits, ME, Some(T1), Some(T2)),
@@ -1221,7 +1205,7 @@ mod tests {
 
     #[test]
     fn status_verdict_reports_a_same_account_second_session_as_a_conflict() {
-        // #193 b8, the case `concurrent_session_notice` warns about. The gap commit
+        // A second session under the same account can author the gap commit. It
         // carries OUR email but was pushed by our other session, so the authorship
         // proxy - "same email means this session pushed it" - is exactly wrong here.
         // We are not the lock holder, which is what says so: our own unrecorded push
@@ -1395,23 +1379,6 @@ mod tests {
         let shown = display_history(vec![creation_commit("root")]);
         assert!(shown.is_empty());
         assert!(display_history(vec![]).is_empty());
-    }
-
-    // ---- concurrent_session_notice (#193 b8) ----
-
-    #[test]
-    fn concurrent_session_flagged_only_for_a_same_account_lock_hold() {
-        // Our own account already holds the lock -> a second session is live.
-        assert!(concurrent_session_notice(Some(ME), ME));
-        // Case-insensitive (the server may normalise email case).
-        assert!(concurrent_session_notice(
-            Some("ME@Example.com"),
-            "me@example.com"
-        ));
-        // A different account's lock is an ordinary contended lock, not this notice.
-        assert!(!concurrent_session_notice(Some(OTHER), ME));
-        // No lock held -> nothing to warn about.
-        assert!(!concurrent_session_notice(None, ME));
     }
 
     // ---- edits_captured_by_push (direct, #197 dirty-clear timing) ----

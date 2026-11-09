@@ -34,7 +34,7 @@ const LINK: SpeleoLinkState = {
   serverError: null,
 };
 
-const RESTORED = { local_path: '/cache/p1.stalx', concurrent_session: false };
+const RESTORED = { local_path: '/cache/p1.stalx' };
 
 function ipc(routes: Record<string, () => unknown>): void {
   invokeIpcMock.mockImplementation(async (command: string) => routes[command]?.() ?? null);

@@ -3462,7 +3462,6 @@
     },
     "banner": {
       "pushUnconfirmed": "The upload could not be confirmed. Your changes are kept - click Done again to retry.",
-      "concurrentSession": "Your account holds the write lock on this project in another session. Editing from two sessions at once can lose edits.",
       "renderingDisabled": "Web-map rendering is turned off for this project on SpeleoDB, so the online map won't refresh (it may show older geometry).",
       "enableRendering": "Enable rendering",
       "enableRenderingConfirm": "Rendering refreshes on your NEXT push, not right now (this does not re-render the current version). Enable it?",
@@ -3541,7 +3540,6 @@
       "open": "Open",
       "refresh": "Refresh",
       "signedInAs": "Signed in as {{email}}",
-      "concurrentSession": "Your account holds the write lock on this project. If it is open in another session, close it there before editing here to avoid losing changes.",
       "listFailed": "Could not load projects",
       "openFailed": "Could not open project"
     },

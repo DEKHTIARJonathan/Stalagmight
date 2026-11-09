@@ -577,7 +577,7 @@ describe('speleoStore', () => {
   describe('clearLink', () => {
     it('drops link, divergence and banner', () => {
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
-      useSpeleoStore.setState({ divergence: 'update', banner: { kind: 'concurrent_session' } });
+      useSpeleoStore.setState({ divergence: 'update', banner: { kind: 'push_unconfirmed' } });
       useSpeleoStore.getState().clearLink();
       const s = useSpeleoStore.getState();
       expect(s.link).toBeNull();

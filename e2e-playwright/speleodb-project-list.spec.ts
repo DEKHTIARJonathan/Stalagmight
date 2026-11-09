@@ -69,7 +69,7 @@ async function setupRemoteAndLocal(page: Page, pendingDownload = false, remoteOn
       // The remote has never appeared in local recents, including after a failed first load.
       list_recent_projects: onMap ? [local, { ...local, name: 'Remote cave', file_path: path,
         is_remote: true, speleodb_project_id: id, gps_center: [-87.4631, 20.2137] }] : [local],
-      speleodb_open_project: pending ? new Promise(() => {}) : { local_path: path, concurrent_session: false },
+      speleodb_open_project: pending ? new Promise(() => {}) : { local_path: path },
     };
   }, { id: CACHED, path: CACHE_PATH, pending: pendingDownload, onMap: remoteOnMap });
   const commands: string[] = [];

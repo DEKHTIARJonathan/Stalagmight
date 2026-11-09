@@ -17,7 +17,6 @@ import {
   unpushedLocalEdits,
 } from '../utils/speleoError';
 import { confirm } from '@tauri-apps/plugin-dialog';
-import { TOAST_KEYS } from '../utils/toastKeys';
 import type {
   SpeleoProjectSummary,
   SpeleoOpenResult,
@@ -99,11 +98,6 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       const priorPath = useProjectStore.getState().project?.file_path ?? null;
 
       const alreadyOpen = priorPath === result.local_path;
-      // #193 b8: a lock held by THIS account at open time = a second same-account
-      // session; warn (keyed so repeat opens don't stack duplicate toasts).
-      if (result.concurrent_session) {
-        showToast(t('speleodb.browser.concurrentSession'), TOAST_KEYS.SPELEODB_CONCURRENT_SESSION, 'warning');
-      }
       // `forPath` is the exact string handed to `loadProject` below, so the
       // `syncProjectLink` inside that load recognises this seed as belonging to
       // the project being opened rather than to whatever was open before.

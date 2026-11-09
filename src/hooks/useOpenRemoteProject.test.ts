@@ -87,7 +87,7 @@ const hook = (opts: Parameters<typeof useOpenRemoteProject>[0] = {}) =>
 
 const openOfflineCopy = async () => {
   invokeIpcMock.mockResolvedValue({
-    local_path: '/cache/p1.stalx', concurrent_session: false,
+    local_path: '/cache/p1.stalx',
     offline: true, has_unpushed_edits: true,
   });
   return hook().openRemote(SUMMARY);
@@ -97,7 +97,7 @@ describe('useOpenRemoteProject (#218)', () => {
   it('opens a project: seeds the link, loads, and reports opened', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_open_project')
-        return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+        return Promise.resolve({ local_path: '/cache/p1.stalx' });
       return Promise.resolve(null);
     });
     const outcome = await hook().openRemote(SUMMARY);
@@ -132,7 +132,7 @@ describe('useOpenRemoteProject (#218)', () => {
     });
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_open_project')
-        return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+        return Promise.resolve({ local_path: '/cache/p1.stalx' });
       return Promise.resolve(null);
     });
 
@@ -166,7 +166,7 @@ describe('useOpenRemoteProject (#218)', () => {
     loadProjectMock.mockResolvedValue({ success: false });
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_open_project')
-        return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+        return Promise.resolve({ local_path: '/cache/p1.stalx' });
       return Promise.resolve(null);
     });
     const outcome = await hook().openRemote(SUMMARY);
@@ -324,7 +324,7 @@ describe('useOpenRemoteProject (#218)', () => {
   it('never claims an offline clean cache is up to date before the server responds', async () => {
     useSpeleoStore.setState({ setLinkOnOpen: realSetLinkOnOpen });
     invokeIpcMock.mockResolvedValue({
-      local_path: '/cache/p1.stalx', concurrent_session: false,
+      local_path: '/cache/p1.stalx',
       offline: true, has_unpushed_edits: false,
     });
     expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
@@ -368,7 +368,7 @@ describe('useOpenRemoteProject (#218)', () => {
     });
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_open_project')
-        return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+        return Promise.resolve({ local_path: '/cache/p1.stalx' });
       return Promise.resolve(null);
     });
 
@@ -383,7 +383,7 @@ describe('useOpenRemoteProject (#218)', () => {
     useProjectStore.setState({ project: { file_path: '/cache/p1.stalx' } as never });
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_open_project')
-        return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+        return Promise.resolve({ local_path: '/cache/p1.stalx' });
       return Promise.resolve(null);
     });
 
@@ -404,7 +404,7 @@ describe('useOpenRemoteProject (#218)', () => {
    */
   describe('discard confirmation before replacing a project', () => {
     beforeEach(() => {
-      invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', concurrent_session: false });
+      invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx' });
       useProjectStore.setState({ project: { file_path: '/cache/p9.stalx' } as never, isDirty: false });
     });
 
@@ -433,26 +433,26 @@ describe('useOpenRemoteProject (#218)', () => {
     });
 
     it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)('%s protects edits made during download', async (action) => {
-      const downloaded = deferredOpen<{ local_path: string; concurrent_session: boolean }>();
+      const downloaded = deferredOpen<{ local_path: string }>();
       const entered = deferredOpen<void>();
       invokeIpcMock.mockImplementation(() => { entered.resolve(); return downloaded.promise; });
       const pending = hook()[action](SUMMARY);
       await entered.promise;
       useProjectStore.setState({ project: { file_path: '/cache/p9.stalx', name: 'Edited' } as never, isDirty: true });
-      downloaded.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+      downloaded.resolve({ local_path: '/cache/p1.stalx' });
       expect((await pending).status).toBe('error');
       expect(loadProjectMock).not.toHaveBeenCalled();
     });
 
     it('does not treat edits made after a discard confirmation as acknowledged', async () => {
       useProjectStore.setState({ isDirty: true });
-      const downloaded = deferredOpen<{ local_path: string; concurrent_session: boolean }>();
+      const downloaded = deferredOpen<{ local_path: string }>();
       const entered = deferredOpen<void>();
       invokeIpcMock.mockImplementation(() => { entered.resolve(); return downloaded.promise; });
       const pending = hook().openRemote(SUMMARY);
       await entered.promise;
       useProjectStore.setState({ project: { file_path: '/cache/p9.stalx', name: 'New edit' } as never });
-      downloaded.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+      downloaded.resolve({ local_path: '/cache/p1.stalx' });
       expect((await pending).status).toBe('error');
       expect(loadProjectMock).not.toHaveBeenCalled();
     });
@@ -483,7 +483,7 @@ describe('useOpenRemoteProject (#218)', () => {
       useProjectStore.setState({ project: { file_path: '/cache/./p1.stalx' } as never });
       invokeIpcMock.mockImplementation((cmd: string) =>
         cmd === 'speleodb_open_project'
-          ? Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false })
+          ? Promise.resolve({ local_path: '/cache/p1.stalx' })
           : Promise.resolve(null),
       );
 
@@ -522,7 +522,7 @@ describe('access warnings follow acquisition instead of blocking opening', () =>
     { permission: 'READ_AND_WRITE' as const, lock_holder: 'other@example.com' },
     { permission: 'READ_ONLY' as const, lock_holder: 'other@example.com' },
   ])('opens $permission / $lock_holder without a pre-open warning', async (access) => {
-    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', concurrent_session: false });
+    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx' });
     expect(await hook().openRemote({ ...SUMMARY, ...access })).toEqual({ status: 'opened' });
     expect(confirmMock).not.toHaveBeenCalled();
   });
@@ -537,7 +537,7 @@ function deferredOpen<T>() {
 
 it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)(
   '%s cannot replay a slow remote download over a newer project selection', async (action) => {
-    const download = deferredOpen<{ local_path: string; concurrent_session: boolean }>();
+    const download = deferredOpen<{ local_path: string }>();
     const entered = deferredOpen<void>();
     invokeIpcMock.mockImplementation(() => { entered.resolve(); return download.promise; });
     const beforeLoad = vi.fn();
@@ -545,7 +545,7 @@ it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)(
     await entered.promise;
     const { runConfirmedProjectSwitch } = await import('../utils/projectTransition');
     await runConfirmedProjectSwitch('/newer.stalx', () => null, true, async () => ({ success: true }));
-    download.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+    download.resolve({ local_path: '/cache/p1.stalx' });
     expect(await pending).toEqual({ status: 'cancelled' });
     expect(setLinkOnOpenMock).not.toHaveBeenCalled();
     expect(loadProjectMock).not.toHaveBeenCalled();
@@ -579,13 +579,13 @@ it('does not download after a stale discard confirmation is accepted', async () 
 });
 
 it('does not continue a remote download across login/logout', async () => {
-  const download = deferredOpen<{ local_path: string; concurrent_session: boolean }>();
+  const download = deferredOpen<{ local_path: string }>();
   const entered = deferredOpen<void>();
   invokeIpcMock.mockImplementation(() => { entered.resolve(); return download.promise; });
   const pending = hook().openRemote(SUMMARY);
   await entered.promise;
   useSpeleoStore.setState((state) => ({ sessionGeneration: state.sessionGeneration + 1 }));
-  download.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+  download.resolve({ local_path: '/cache/p1.stalx' });
   expect(await pending).toEqual({ status: 'cancelled' });
   expect(loadProjectMock).not.toHaveBeenCalled();
 });

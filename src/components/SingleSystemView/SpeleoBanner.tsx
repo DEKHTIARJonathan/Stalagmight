@@ -54,14 +54,11 @@ export function SpeleoBanner() {
   // the same commit message (narrowed once here - the JSX callbacks close over it).
   const pushFailed = banner.kind === 'push_failed' ? banner : null;
 
-  // A total lookup rather than a ternary chain: the chain's final `else` was
-  // `concurrent_session`, so a new banner kind would have silently rendered THAT
-  // kind's message. Keyed on the union, so a new kind is a compile error here.
+  // Keyed on the banner union so every new kind requires its own message.
   const TEXT: Record<SpeleoBannerState['kind'], () => string> = {
     push_unconfirmed: () => t('speleodb.banner.pushUnconfirmed'),
     rendering_disabled: () => t('speleodb.banner.renderingDisabled'),
     no_anchor: () => t('speleodb.banner.noAnchor'),
-    concurrent_session: () => t('speleodb.banner.concurrentSession'),
     push_failed: () =>
       t('speleodb.banner.pushFailed', { message: pushFailed?.message ?? '' }),
   };

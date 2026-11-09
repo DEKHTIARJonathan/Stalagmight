@@ -14,15 +14,15 @@ blocking command boundary; frontend IPC and the core sync engine stay synchronou
 Core orchestration still owns cache paths, credentials, project identity, local
 edit protection, lock ownership, revision ancestry and undo policy.
 
-The frontend lists only `STALAGMIGHT` projects. It displays project name, SpeleoDB identity, permission and lock owner.
-It warns before opening a read-only project or one locked by another account.
-A lock held by the signed-in account is labeled as yours, independently of whether
-editing is enabled yet. This includes cold recents, file-picker, drag/drop and OS file opens: a
-read-only SQLite metadata preflight checks access before replacing the open project.
-Unavailable verification produces its own notice, distinct from verified read-only
-permission. Own-lock warnings are suppressed only for matching endpoint and normalized
-account email. Opening automatically attempts to acquire the server mutex and reconcile the local
-base. Only successful acquisition/reconciliation enables editing. Offline opening
+The frontend lists only `STALAGMIGHT` projects. It displays project name, SpeleoDB
+identity, permission and lock owner. A lock held by the signed-in account is labeled
+as yours, independently of whether editing is enabled yet, and opening requires no
+additional same-account session check or warning. A read-only SQLite metadata
+preflight checks access before replacing the open project, including cold recents,
+file-picker, drag/drop and OS file opens. Opening automatically attempts to acquire
+the server mutex and reconcile the local base. Only successful
+acquisition/reconciliation enables editing. A lock held by another account keeps
+the project read-only and the contention dialog identifies its current editor. Offline opening
 stays read-only; a transient connection failure after acquisition permits local
 editing. Confirmed lock loss, sign-out or permission loss closes the editing gate.
 
