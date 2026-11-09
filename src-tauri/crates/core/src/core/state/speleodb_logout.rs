@@ -100,8 +100,11 @@ impl AppState {
         // 5.8): the token an in-flight Start Editing would commit a claim over is
         // being forgotten, so the commit guard must see this. Bumped under a brief
         // `project` acquisition per the `speleodb_session` rule; taken and dropped
-        // before the gates/lock work below, none of which needs it. Bumped even on
-        // the read-only early return: the boundary is the LOGOUT, not the release.
+        // before the lock work below, none of which needs it.
+        //
+        // The bump is also what shuts the gate: it leaves the edit session's claim
+        // bound to a generation that is over (`speleodb_edit_gate`). An open LOCAL
+        // project is unmanaged and stays editable without being asked about.
         {
             let _proj_guard = self
                 .project
@@ -109,26 +112,11 @@ impl AppState {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             self.bump_speleodb_session();
         }
-        if !self.edit_enabled() {
-            return;
-        }
-        match self.speleodb_open_link() {
-            Ok(_) => {
-                self.speleodb_release_held_lock_best_effort();
-                self.set_edit_enabled(false);
-            }
-            // Local-only project (no hand-off link): no lock, nothing to push - keep
-            // it editable.
-            Err(SpeleoDbError::NoRemoteProject) => {}
-            // Couldn't determine locality (e.g. a poisoned database Mutex): the
-            // gate-drop is a SAFETY action, so it must not be skipped just because the
-            // link load failed - a logged-out session must not keep editing a project
-            // it may be unable to push. Fail safe to read-only. (#197 review; no
-            // project_id available here, so no lock release.)
-            Err(_) => {
-                self.set_edit_enabled(false);
-            }
-        }
+        // The open project's lock, if this account holds a claim on it - bound to
+        // the session that just ended or not: decided from the claim, never from
+        // the gate the bump has just shut. Silent (the un-pushed-edits veto keeps
+        // it) and holder-checked (lock#4); a no-op without a claim or a link.
+        self.speleodb_release_held_lock_best_effort();
     }
     /// [`Self::speleodb_logout_drop_gates`] for a caller that holds a lock the
     /// release POST must not be made under: a settings save that changes the
@@ -136,11 +124,16 @@ impl AppState {
     /// config command (panel sizes, column widths) also takes on the main thread.
     ///
     /// Everything but the network call happens here, in the original order - the
-    /// session boundary, the silent-release veto and claim clear, the gate - and the
-    /// release is returned for the caller to send once that lock is dropped, still
-    /// inside its lock-ops span, so no lock operation can land between this and the
-    /// POST. The gate closes before the POST rather than after it: nothing is edited
-    /// under a lock that is about to be handed back.
+    /// session boundary (which shuts the gate) and the silent-release veto - and
+    /// the release is returned for the caller to send once that lock is dropped,
+    /// still inside its lock-ops span, so no lock operation can land between this
+    /// and the POST. Nothing is edited under a lock that is about to be handed
+    /// back: the gate is shut from the bump on.
+    ///
+    /// The claim ends when the release is sent: it is matched to the account the
+    /// params were captured for, not the live session the instance switch is
+    /// about to forget, so a failed release can still put it back
+    /// (`speleodb_forget_claim_released_by`).
     pub(super) fn speleodb_logout_drop_gates_deferring_release(&self) -> Option<LockReleaseParams> {
         {
             let _proj_guard = self
@@ -149,26 +142,7 @@ impl AppState {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             self.bump_speleodb_session();
         }
-        if !self.edit_enabled() {
-            return None;
-        }
-        match self.speleodb_open_link() {
-            Ok(_) => {
-                // The claim ends when the release is sent: it is matched to the
-                // account the params were captured for, not the live session the
-                // instance switch is about to forget, so a failed release can
-                // still put it back (`speleodb_forget_claim_released_by`).
-                let release = self.speleodb_held_lock_release_params();
-                self.set_edit_enabled(false);
-                release
-            }
-            Err(SpeleoDbError::NoRemoteProject) => None,
-            // Fail safe to read-only, as the inline variant does.
-            Err(_) => {
-                self.set_edit_enabled(false);
-                None
-            }
-        }
+        self.speleodb_held_lock_release_params()
     }
 }
 

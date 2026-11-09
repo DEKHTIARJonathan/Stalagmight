@@ -253,9 +253,9 @@ impl AppState {
                 )
                 .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
                 let _project = self.speleodb_push_project_guard(generation)?;
-                self.set_edit_enabled(false);
                 // The lock this process took is back with the server; the edit session
-                // it licensed is over. This project's claim, not the account's whole
+                // it licensed is over, and ending the claim shuts the gate with it
+                // (`speleodb_edit_gate`). This project's claim, not the account's whole
                 // set - Done released one mutex.
                 self.speleodb_forget_lock_acquired_for(&link.project_id);
                 Ok(DoneResult::Released)
@@ -442,7 +442,7 @@ impl AppState {
             // Hand it back. `None` rather than a fabricated editing result, so no caller
             // can mistake a released project for one it may still write to.
             self.speleodb_release_held_lock_best_effort();
-            self.set_edit_enabled(false);
+            self.speleodb_shut_edit_gate();
             return Ok(None);
         }
         // Re-acquire through the ordinary verb rather than by hand, so the fence, the

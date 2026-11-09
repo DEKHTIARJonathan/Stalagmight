@@ -66,13 +66,14 @@ pub(super) struct LockReleaseParams {
 /// sees which act they are looking at instead of decoding a bare `bool`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReleaseIntent {
-    /// Logout keeps a lock protecting unpublished work.
+    /// Logout and the account switch: keep a lock protecting unpublished work.
     Silent,
     /// End the open editing session (close, switch, quit, update restart). Like
     /// `Silent`, it KEEPS a lock over un-pushed edits: releasing there is what used
     /// to strand the work - the next open downloaded, refused to overwrite the
-    /// local copy, and offered only "take the server copy and discard mine". Unlike
-    /// `Silent`, it may also finish an owned claim after the edit gate has shut.
+    /// local copy, and offered only "take the server copy and discard mine". Both
+    /// are decided from the claim, so both may finish an owned claim after the
+    /// edit gate has shut; they differ only in what the log says they were.
     Lifecycle,
     /// A DELIBERATE abandon of the project's SpeleoDB identity (`speleodb_unlink`,
     /// `speleodb_take_remote`): the user has said outright they are walking away
@@ -171,12 +172,16 @@ impl AppState {
         self.speleodb_lock_release_params(ReleaseIntent::Abandon)
     }
 
-    /// Shared body of the two snapshots above. `intent` is what separates a silent
+    /// Shared body of the snapshots above. `intent` is what separates a silent
     /// release from a deliberate one.
+    ///
+    /// Decided from the CLAIM, never from the edit gate. The gate is a function of
+    /// the claim (`speleodb_edit_gate`), so every open gate has one; and a session
+    /// whose gate a boundary (logout's bump) or a lost-lock signal has already shut
+    /// still holds the claim a release has to end. No claim, no release: a lock
+    /// this process cannot account for - another account's, or one this read-only
+    /// open never took - is not this path's to hand back.
     fn speleodb_lock_release_params(&self, intent: ReleaseIntent) -> Option<LockReleaseParams> {
-        if intent != ReleaseIntent::Lifecycle && !self.edit_enabled() {
-            return None;
-        }
         // A `.ok()?` here used to collapse REAL failures into the ordinary "nothing
         // to release" no-op with no trace at all: `speleodb_open_link` returns
         // `Io("database lock poisoned")` as readily as `NoRemoteProject`. A poisoned
@@ -198,10 +203,7 @@ impl AppState {
                 return None;
             }
         };
-        // A failed reconciliation can shut the edit gate while leaving an owned
-        // claim. Lifecycle cleanup still releases that claim; an ordinary read-only
-        // open without one never gains permission to release another user's lock.
-        if !self.edit_enabled() && !self.speleodb_lock_acquired_here(&link.project_id) {
+        if !self.speleodb_holds_claim(&link.project_id) {
             return None;
         }
         // The invariant (module doc): only an explicit abandon may release over
@@ -258,7 +260,7 @@ impl AppState {
     /// Record that the open project's lock is being kept on purpose (the exit
     /// prompt's "Keep the lock", and the update restart over un-uploaded work).
     ///
-    /// Not gated on the edit gate, unlike the release snapshots: a reconcile can
+    /// Not gated on the edit gate - like the release snapshots, it is about the claim: a reconcile can
     /// shut the gate while this process still owns the claim, and an unmarked
     /// claim with no project open is exactly what the stranded-claim janitor hands
     /// back on the next status refresh - undoing the user's choice. Marking a claim
@@ -347,23 +349,15 @@ impl AppState {
     /// divergence dialog, which is exactly the misreport the record was introduced to
     /// stop.
     ///
-    /// Comparing project ids is what closes THIS window, and that is not in tension
-    /// with `AppState::speleodb_forget_lock_acquired_if_gate_shut`, whose doc says at
-    /// length that an id comparison does NOT close ITS race. The races are different
-    /// and neither test substitutes for the other:
-    ///
-    /// - There, the refresh and the fast-forward that can be trampled are on the SAME
-    ///   project, so the ids always match and the clear fires regardless; only
-    ///   re-reading the edit GATE separates them.
-    /// - Here the interloper is by definition a DIFFERENT project - there is one
-    ///   `project` mutex and one open project, and the old one was torn down before
-    ///   this runs - so the id IS the signal. The gate is no use at all: after the
-    ///   delete it is shut for the project being released and OPEN for whatever
-    ///   session took its place, so a gate test would either never fire or fire on the
-    ///   wrong session's record.
-    ///
-    /// So: do not unify the two behind one condition. Doing so reintroduces one of the
-    /// two bugs, whichever condition loses.
+    /// Comparing project ids is what closes THIS window. The interloper is by
+    /// definition a DIFFERENT project - there is one `project` mutex and one open
+    /// project, and the old one was torn down before this runs - so the id IS the
+    /// signal. The gate is no use at all: after the delete it is shut for the project
+    /// being released and OPEN for whatever session took its place, so a gate test
+    /// would either never fire or fire on the wrong session's record. (The refresh's
+    /// old gate-keyed catch-all clear, which an id comparison could NOT have made
+    /// safe, is gone: the gate is now the claim bound to the session, see
+    /// `speleodb_edit_gate`.)
     ///
     /// The compare and the clear MUST share one guard. A
     /// `speleodb_lock_acquired_here` read followed by a separate
@@ -503,9 +497,9 @@ impl AppState {
     /// arbitrarily, and the project switch that spawned it is exactly the event
     /// that lets the user reopen that same remote project. A Start Editing on it
     /// INHERITS the still-held same-account mutex (a re-acquire is a server-side
-    /// no-op) and mints no claim, so an unguarded POST landing afterwards frees
+    /// no-op) and binds only an unauthored claim, so an unguarded POST landing afterwards frees
     /// the mutex out from under a live edit session - editable, with no server
-    /// lock behind it and nothing recording one. Going through
+    /// lock behind it. Going through
     /// [`AppState::speleodb_release_unless_reclaimed`] puts this thread in the
     /// same `speleodb_lock_ops` queue as every other lock operation, so it
     /// either completes before that acquire or sees the session it would have
@@ -531,15 +525,11 @@ impl AppState {
         // (`delete_project` snapshots its release params under this same guard,
         // for the same reason.)
         //
-        // What is NOT captured here is the GATE. It comes off inside the
-        // release's own lock-ops span, because shutting it here opens a window
-        // the status refresh walks straight into: a shut gate over a mutex the
-        // server still says this account holds is exactly what its
-        // inherited-lock reopen exists for, so the refresh takes the guard first,
-        // reopens the gate, and the release then stands down for a session that
-        // is about to be torn down anyway - lock stranded. Left open, there is
-        // nothing for the refresh to resurrect, and the release shuts it under the
-        // same guard that then decides (`speleodb_stand_down_and_release`).
+        // Taking the claim out here also shuts the gate (it IS the claim bound to
+        // the session, `speleodb_edit_gate`): nothing is edited under a lock that
+        // is about to be handed back, and no status refresh can reopen it - only
+        // Start Editing binds a claim. The release's own lock-ops span says so
+        // again before it decides (`speleodb_stand_down_and_release`).
         let (p, claim, entry_gen) = self.speleodb_capture_lifecycle_release()?;
         let (tx, rx) = std::sync::mpsc::channel();
         let sink = self.get_event_sink();

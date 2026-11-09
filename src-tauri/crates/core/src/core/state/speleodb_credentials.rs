@@ -10,22 +10,15 @@ impl AppState {
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Ends a SpeleoDB edit session by construction (`speleodb_edit_gate`): the
+        // bump leaves any claim's binding stale and the forgotten account matches no
+        // claim, so the gate of an open linked project shuts - while an open LOCAL
+        // project, which a dead token surfacing as a 401 on ANY SpeleoDB call (e.g. a
+        // background list_projects / refresh) reaches too, stays editable without
+        // this having to ask which one is open. The claims themselves survive: each
+        // is still the only pointer to a mutex the account may hold, for after the
+        // next sign-in.
         self.bump_speleodb_session();
-        // Drop the transient edit gate for a remote edit session. A dead token
-        // surfaces as a 401 on ANY SpeleoDB call (e.g. a background list_projects /
-        // refresh), and this is the auto-drop sink for all of them - so an
-        // unconditional drop would silently turn an open LOCAL project read-only.
-        // Mirror speleodb_logout's remote-gated, fail-SAFE drop exactly (#197
-        // review): only a confirmed local-only project (NoRemoteProject) keeps the
-        // gate; an undeterminable load (e.g. a poisoned database Mutex) fails safe to
-        // read-only rather than leaving a token-less session able to edit.
-        if self.edit_enabled() {
-            match self.speleodb_open_link() {
-                Ok(_) => self.set_edit_enabled(false),
-                Err(SpeleoDbError::NoRemoteProject) => {}
-                Err(_) => self.set_edit_enabled(false),
-            }
-        }
         if let Ok(mut session) = self.speleodb_session_lock() {
             session.forget();
         }
@@ -85,10 +78,6 @@ impl AppState {
         if self.speleodb_session_generation() != entry_generation {
             return Err(local_dto(SpeleoDbError::SessionMoved));
         }
-        let linked_project = !matches!(
-            self.speleodb_open_link(),
-            Err(SpeleoDbError::NoRemoteProject)
-        );
         // Persist before publishing a successful login. A failed write must be
         // visible, rather than silently losing the session on the next launch.
         let mut config = self
@@ -107,11 +96,10 @@ impl AppState {
             )));
         }
         let mut session = self.speleodb_session_lock().map_err(local_dto)?;
+        // A new identity/token must verify ownership before editing resumes: the
+        // bump leaves any claim's edit binding stale, which shuts a linked
+        // project's gate (`speleodb_edit_gate`) until Start Editing binds again.
         self.bump_speleodb_session();
-        if linked_project {
-            // A new identity/token must verify ownership before editing resumes.
-            self.set_edit_enabled(false);
-        }
         session.token_store.store(&endpoint, &email, &token);
         session.endpoint = Some(endpoint.clone());
         session.email = Some(email.clone());

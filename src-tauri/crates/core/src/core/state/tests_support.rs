@@ -39,7 +39,7 @@ impl AppState {
 /// spread across the family - a scan that stops seeing a file stops guarding it, and
 /// an absence assertion goes on passing while it does.
 #[cfg(test)]
-fn speleodb_prod_sources() -> [(&'static str, &'static str); 18] {
+fn speleodb_prod_sources() -> [(&'static str, &'static str); 19] {
     [
         ("speleodb.rs", include_str!("speleodb.rs")),
         ("speleodb_admin.rs", include_str!("speleodb_admin.rs")),
@@ -51,6 +51,10 @@ fn speleodb_prod_sources() -> [(&'static str, &'static str); 18] {
         (
             "speleodb_credentials.rs",
             include_str!("speleodb_credentials.rs"),
+        ),
+        (
+            "speleodb_edit_gate.rs",
+            include_str!("speleodb_edit_gate.rs"),
         ),
         ("speleodb_foreign.rs", include_str!("speleodb_foreign.rs")),
         (

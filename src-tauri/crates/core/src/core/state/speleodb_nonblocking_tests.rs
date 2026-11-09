@@ -484,9 +484,8 @@ fn a_failed_read_only_release_gives_the_session_its_gate_back() {
             });
             let _ = server.wait_for_held_request();
             assert!(!state.edit_enabled(), "shut while the POST is in flight");
-            // A status refresh landing now sees a shut gate and drops the open
-            // project's claim before it ever waits on lock-ops.
-            state.speleodb_forget_lock_acquired_if_gate_shut();
+            // (A status refresh landing now used to drop the open project's claim
+            // on seeing the shut gate; the refresh no longer touches claims.)
             server.let_it_answer();
             assert!(
                 switch.join().expect("switch thread").is_err(),
@@ -646,11 +645,19 @@ fn a_reverify_from_an_ended_session_is_ignored() {
         assert!(state.execute(an_edit("triggers the re-verify")).success);
         wait_for_reverify(&state);
         server.finish();
-        // A session boundary (open/close/logout) after the probe started.
+        // A session boundary after the probe started that keeps editing: an
+        // in-place reload carrying its edit session into the new generation, the
+        // way a fast-forward does. (Any other boundary ends the session and shuts
+        // the gate outright - `speleodb_edit_gate`.)
         {
             let _project = state.project.lock().expect("project");
+            let link = state.speleodb_open_link().expect("link");
+            let from = state.speleodb_session_generation();
+            let mut session = state.speleodb.lock().expect("session");
             state.bump_speleodb_session();
+            state.speleodb_commit_open_gate(&mut session, Some(&link), Some(from));
         }
+        assert!(state.edit_enabled(), "the reload carried the session");
         let next = state.execute(an_edit("new session"));
         assert!(
             next.success,

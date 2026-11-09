@@ -1,6 +1,7 @@
 //! Release the open linked project's write lock through its authenticated session.
 
 use super::speleodb::validate_project_id;
+use super::speleodb_session::LockClaim;
 use super::AppState;
 use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
@@ -170,9 +171,8 @@ impl AppState {
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
         // Clean check and gate transition under ONE `command_lock` + `project`
         // acquisition: mutations and session boundaries cannot slip between them.
-        // The claim comes off with the gate, so a status refresh during the POST
-        // (which drops the claim of a shut gate) has nothing to take, and a failed
-        // POST can put back exactly what was there.
+        // Taking the claim out IS shutting the gate (`speleodb_edit_gate`), and a
+        // failed POST can put back exactly what was there.
         let (gate_was_open, claim) = {
             let _commands = self
                 .command_lock
@@ -196,7 +196,6 @@ impl AppState {
                 .map_err(admin_dto)?;
             let open = self.edit_enabled();
             let claim = self.speleodb_forget_lock_acquired_for(&link.project_id);
-            self.set_edit_enabled(false);
             (open, claim)
         };
         if super::speleodb::lock_held_by_me(holder.as_deref(), Some(&email)) {
@@ -211,10 +210,18 @@ impl AppState {
                     .project
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                if gate_was_open && generation == self.speleodb_session_generation() {
-                    self.set_edit_enabled(true);
-                }
+                let authored = claim.as_ref().is_some_and(LockClaim::is_authored);
                 self.speleodb_restore_lock_claim(claim);
+                if gate_was_open && generation == self.speleodb_session_generation() {
+                    // Re-bound through the one way in, as the same kind of claim
+                    // it was; never recorded as a flow's fresh acquisition.
+                    let _ = self.speleodb_bind_edit_claim(
+                        &link.project_id,
+                        &link.endpoint,
+                        authored,
+                        false,
+                    );
+                }
                 return Err(dto_for_error(Endpoint::Release, &e));
             }
         }

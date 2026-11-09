@@ -276,8 +276,9 @@ impl AppState {
             db.save_speleo_link(Some(&link))
                 .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
             // Conversion has crossed into a managed project. Initial upload is
-            // internal; subsequent editing must acquire and reconcile the lock.
-            self.set_edit_enabled(false);
+            // internal; subsequent editing must acquire and reconcile the lock, so the
+            // gate is now the managed one, with no claim bound to it (read-only).
+            self.speleodb_set_open_gate(Some(&link));
         }
 
         // 4. Initial push (BEST-EFFORT): acquire the lock (we are the creator/ADMIN, so
