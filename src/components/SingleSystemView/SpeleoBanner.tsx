@@ -41,7 +41,6 @@ export function SpeleoBanner() {
   // Keyed on the banner union so every new kind requires its own message.
   const TEXT: Record<SpeleoBannerState['kind'], () => string> = {
     push_unconfirmed: () => t('speleodb.banner.pushUnconfirmed'),
-    rendering_disabled: () => t('speleodb.banner.renderingDisabled'),
     no_anchor: () => t('speleodb.banner.noAnchor'),
     push_failed: () =>
       t('speleodb.banner.pushFailed', { message: pushFailed?.message ?? '' }),
@@ -100,16 +99,14 @@ export function SpeleoBanner() {
               {t('speleodb.banner.startEditingToRetry')}
             </button>
           ))}
-        {banner.kind !== 'rendering_disabled' && (
-          <button
-            type="button"
-            onClick={dismissBanner}
-            className="text-xs underline"
-            data-testid="speleo-banner-dismiss"
-          >
-            {t('common.actions.dismiss')}
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={dismissBanner}
+          className="text-xs underline"
+          data-testid="speleo-banner-dismiss"
+        >
+          {t('common.actions.dismiss')}
+        </button>
       </div>
     </div>
   );

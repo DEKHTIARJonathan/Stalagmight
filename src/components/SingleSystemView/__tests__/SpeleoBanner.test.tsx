@@ -55,6 +55,17 @@ describe('SpeleoBanner read-only state', () => {
   });
 });
 
+describe('SpeleoBanner no_anchor notice', () => {
+  it('shows the no-zero-datum notice with a Dismiss that clears it', async () => {
+    seedLink();
+    useSpeleoStore.getState().raiseNoAnchorBanner();
+    render(<SpeleoBanner />);
+    expect(screen.getByTestId('speleo-banner')).toHaveAttribute('data-kind', 'no_anchor');
+    await userEvent.click(screen.getByTestId('speleo-banner-dismiss'));
+    expect(useSpeleoStore.getState().banner).toBeNull();
+  });
+});
+
 describe('SpeleoBanner push failure (#260)', () => {
   const seedFailure = (origin: 'push' | 'done', pushMessage: string | null = null) => {
     seedLink({ });

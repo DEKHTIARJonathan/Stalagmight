@@ -34,7 +34,7 @@ async function openRemoteProject(page: Page): Promise<void> {
       speleodb_start_editing: { kind: 'editing' },
       speleodb_link_status: { is_remote: true, edit_enabled: true, permission: 'READ_AND_WRITE', lock_holder: 'me@example.com',
         has_unpushed_edits: true, unwound: false, remote_state: 'up_to_date', access_denied: false, server_error: null,
-        exclude_geojson: false, undo_mode: 'full', project_id: 'remote' },
+        undo_mode: 'full', project_id: 'remote' },
     };
     await (w.__E2E_TEST__.speleoStore.getState().refreshSession as () => Promise<void>)();
     await (w.__E2E_TEST__.projectStore.getState().loadProject as (p: string) => Promise<unknown>)('/projects/cave-alpha.stalx');

@@ -5614,7 +5614,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               remote_state: 'unknown',
               access_denied: false,
               server_error: null,
-              exclude_geojson: false,
               // [#303] Dirty ONLY because a chain step walked this copy back to an older
               // revision - the user has edited nothing. Every consumer composes it with
               // has_unpushed_edits (`isUnwoundNotEdited`), and it is what makes the close

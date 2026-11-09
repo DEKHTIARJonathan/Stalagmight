@@ -439,7 +439,6 @@ impl AppState {
                     remote_state: RemoteState::Unknown,
                     access_denied: false,
                     server_error: None,
-                    exclude_geojson: false,
                     // [#303] A local project has no undo POLICY (the fixed window is
                     // unconditional there), so report the global default and leave the
                     // control - which only renders for a remote project - unbothered.
@@ -476,7 +475,7 @@ impl AppState {
         // validation as the edit verbs; on any miss (invalid id, no token,
         // transport/HTTP error) the fields degrade to None / Unknown - the local
         // truth still returns.
-        let (permission, lock_holder, remote_state, access_denied, server_error, exclude_geojson) =
+        let (permission, lock_holder, remote_state, access_denied, server_error) =
             if validate_project_id(&link.project_id).is_ok() {
                 match self.speleodb_active_token() {
                     Ok((endpoint, token)) => {
@@ -540,25 +539,18 @@ impl AppState {
                                     &link,
                                     lock_holder.as_deref(),
                                 );
-                                (
-                                    p.permission,
-                                    lock_holder,
-                                    remote_state,
-                                    false,
-                                    None,
-                                    p.exclude_geojson,
-                                )
+                                (p.permission, lock_holder, remote_state, false, None)
                             }
                             // A definitive 403 means we are logged in but not a
                             // collaborator on this managed project - flag it so the
                             // UI can offer converting to a local file (fix 10).
                             Err(SpeleoDbError::Status { status: 403, .. }) => {
-                                (None, None, RemoteState::Unknown, true, None, false)
+                                (None, None, RemoteState::Unknown, true, None)
                             }
                             // A 401 is a dead token (re-login) handled by the edit
                             // verbs; this passive probe must not nag about it.
                             Err(SpeleoDbError::Status { status: 401, .. }) => {
-                                (None, None, RemoteState::Unknown, false, None, false)
+                                (None, None, RemoteState::Unknown, false, None)
                             }
                             // Any OTHER status (a 404 for a deleted/renamed project,
                             // a 422, a 5xx, ...) is unexpected - surface the humanized
@@ -571,16 +563,15 @@ impl AppState {
                                 RemoteState::Unknown,
                                 false,
                                 Some(dto_for_error(Endpoint::GetProject, &e)),
-                                false,
                             ),
                             // Transport / local error is offline - stay quiet.
-                            Err(_) => (None, None, RemoteState::Unknown, false, None, false),
+                            Err(_) => (None, None, RemoteState::Unknown, false, None),
                         }
                     }
-                    Err(_) => (None, None, RemoteState::Unknown, false, None, false),
+                    Err(_) => (None, None, RemoteState::Unknown, false, None),
                 }
             } else {
-                (None, None, RemoteState::Unknown, false, None, false)
+                (None, None, RemoteState::Unknown, false, None)
             };
 
         if self.speleodb_session_generation() != status_generation {
@@ -609,7 +600,6 @@ impl AppState {
             remote_state,
             access_denied,
             server_error,
-            exclude_geojson,
             // [#303] Resolved from the explicit project value. The global default is
             // consulted only while initializing a legacy NULL on open.
             undo_mode: self.undo_policy_for(Some(&link)).mode,

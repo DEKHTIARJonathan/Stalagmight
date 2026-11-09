@@ -242,8 +242,8 @@ pub struct Project {
     pub kind: String,
     // [Track A] #185/D-A-methods: the server's GeoJSON-export toggle. Parsed (not
     // ignored) so the full v2 payload round-trips; defaults false when omitted.
-    // Consumed by #200 (surfaced via SpeleoLinkStatus to drive the rendering-disabled
-    // banner + Enable-rendering PATCH).
+    // Only the project metadata carries it now: the rendering-disabled banner it
+    // used to drive is retired.
     #[serde(default)]
     pub exclude_geojson: bool,
     // [#206] editable metadata, parsed so the Project Settings tab can prefill the
@@ -566,12 +566,6 @@ pub struct SpeleoLinkStatus {
     /// dialog explaining what SpeleoDB said, instead of silently degrading to
     /// `Unknown`. `None` on success / offline / the handled auth cases.
     pub server_error: Option<SpeleoErrorDto>,
-    /// The server's `exclude_geojson` flag for this project (#200): when true, the
-    /// server generates NO new web-viewer GeoJSON on push, so the map may be stale.
-    /// Drives the rendering-disabled banner + its Enable-rendering action. Best-effort
-    /// over the same `get_project` probe; `false` when logged out / offline / the
-    /// lookup failed (never nag on a transient miss).
-    pub exclude_geojson: bool,
     /// [#303] The project's undo-history policy - what its next push will carry.
     pub undo_mode: crate::models::UndoMode,
     /// [#218] The open remote project's SpeleoDB project id, so the in-project menu
@@ -755,7 +749,6 @@ mod tests {
             remote_state: RemoteState::RemoteAhead,
             access_denied: false,
             server_error: None,
-            exclude_geojson: false,
             undo_mode: crate::models::UndoMode::Full,
             project_id: Some("11111111-1111-1111-1111-111111111111".to_owned()),
         })

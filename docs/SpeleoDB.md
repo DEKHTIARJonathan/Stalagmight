@@ -172,7 +172,10 @@ Local settings retains project validation and elevation settings. Linked names a
 server-managed and cannot be renamed through local-settings IPC. There are no
 remote metadata, rendering, per-project undo-policy or administrative lock-recovery
 controls. Existing persisted undo-policy values remain respected. Creation and
-publishing retain their initial metadata inputs.
+publishing retain their initial metadata inputs. The server's web-rendering flag
+(`exclude_geojson`) is not surfaced: the former "Web rendering disabled" banner is
+retired, so the only informational banner left is the dismissable no-zero-datum
+notice.
 
 The left dock reuses Sections' saved width and pin/hover preferences. SpeleoDB has
 a 320px minimum and a 400px maximum; constrained layouts float the dock over the

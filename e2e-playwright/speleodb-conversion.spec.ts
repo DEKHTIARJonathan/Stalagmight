@@ -62,7 +62,7 @@ test('local conversion publishes, fetches the server copy and opens the remote w
     Object.defineProperty(overrides, 'speleodb_link_status', { get: () => ({
       is_remote: true, project_id: 'converted', edit_enabled: editing, permission: 'ADMIN',
       has_unpushed_edits: false, unwound: false, remote_state: 'up_to_date',
-      access_denied: false, server_error: null, exclude_geojson: false, undo_mode: 'full',
+      access_denied: false, server_error: null, undo_mode: 'full',
       lock_holder: editing ? 'test@example.com' : null,
     }) });
     Object.defineProperty(overrides, 'speleodb_open_project', { get: () => {

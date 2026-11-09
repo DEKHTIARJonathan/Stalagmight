@@ -3469,7 +3469,6 @@
     },
     "banner": {
       "pushUnconfirmed": "The upload could not be confirmed. Your changes are kept - click Done again to retry.",
-      "renderingDisabled": "Web-map rendering is turned off for this project on SpeleoDB, so the online map won't refresh (it may show older geometry).",
       "pushFailed": "Your changes were NOT uploaded and are still only on this computer. {{message}}",
       "retryPush": "Retry upload",
       "startEditingToRetry": "Start editing to upload",

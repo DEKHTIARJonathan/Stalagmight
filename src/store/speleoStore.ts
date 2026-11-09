@@ -68,14 +68,12 @@ export type ProjectLinkKind = 'unknown' | 'local' | 'remote';
 export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push' | 'reverify';
 
 /** A banner the shell surfaces above the toolbar (#200/#204). `push_unconfirmed`
-    is transient action feedback; `rendering_disabled`
-    (server `exclude_geojson`) and `no_anchor` (no georeferenced zero datum on
-    push/unlock) are the #200 non-blocking notices; `push_failed` (#260) is the
+    is transient action feedback; `no_anchor` (no georeferenced zero datum on
+    push/unlock) is the #200 non-blocking notice; `push_failed` (#260) is the
     durable surface for a push/unlock that threw (the toast alone auto-clears
     after 3 s, leaving a failed upload with no trace). */
 export type SpeleoBanner =
   | { kind: 'push_unconfirmed' }
-  | { kind: 'rendering_disabled' }
   | { kind: 'no_anchor' }
   | PushFailedBanner;
 
@@ -564,10 +562,6 @@ interface SpeleoStore {
       a successful push/release clears the whole slot anyway). No-op for other kinds,
       so it never wipes an unrelated banner. */
   clearPushFailedBanner: () => void;
-  /** #200 Enable-rendering: PATCH `exclude_geojson = false` so the server resumes
-      web-viewer GeoJSON on the NEXT push (not retroactively). Clears the
-      rendering-disabled banner and re-seeds link status. Throws on failure so the
-      banner can surface it. */
   /** [#303] Set the open project's explicit undo-history policy. LOCK-REQUIRED: the value
       lands in the `.stalx` and rides to the server on the next push, so it becomes
       every collaborator's. Throws on refusal (no lock, or a local project) so the
@@ -1083,20 +1077,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         };
       }
       const editState = s.edit_enabled ? 'editing' : 'read-only';
-      // #200: reflect the server's exclude_geojson as a persistent
-      // rendering-disabled banner. It outranks the informational `no_anchor` notice
-      // (rendering_disabled is actionable via Enable-rendering, and if both were true
-      // no_anchor would otherwise mask the only way to reach that action), so claim
-      // the slot when it is free OR held by no_anchor - but NEVER clobber transient
-      // action feedback (push_unconfirmed / push_failed). Clear it only when
-      // WE own the slot, so a routine refresh never wipes another banner.
-      const prior = state.banner;
-      let banner = prior;
-      if (s.exclude_geojson) {
-        if (!prior || prior.kind === 'no_anchor') banner = { kind: 'rendering_disabled' };
-      } else if (prior?.kind === 'rendering_disabled') {
-        banner = null;
-      }
+      // A routine status refresh never touches the banner slot: the banners are
+      // action feedback (push_unconfirmed / push_failed) and the no_anchor notice,
+      // none of which a status reply raises or resolves.
       const seeded: SpeleoLinkState = {
         editState,
         // The network fields degrade to null/unknown offline - keep the
@@ -1122,7 +1105,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // made each other's replies unusable and the fresher one was thrown away.
       seededLinks.add(seeded);
       return {
-        banner,
         projectLinkKind: 'remote' as const,
         link: seeded,
         // #218: the open remote project's id, for the in-project revision-history entry.

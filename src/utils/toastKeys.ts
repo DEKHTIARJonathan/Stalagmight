@@ -72,7 +72,6 @@ export const TOAST_KEYS = {
 
   // SpeleoDB
   SPELEODB_UNLINKED_COPY: 'speleodb-unlinked-copy',
-  SPELEODB_ENABLE_RENDERING_ERROR: 'speleodb-enable-rendering-error',
   SPELEODB_PROJECT_DIALOG_STALE: 'speleodb-project-dialog-stale',
   SPELEODB_RELEASE_ONE_ERROR: 'speleodb-release-one-error',
   SPELEODB_CONTINUE_EDITING_ERROR: 'speleodb-continue-editing-error',

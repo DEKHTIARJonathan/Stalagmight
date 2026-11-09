@@ -40,7 +40,7 @@ async function openRemote(page: Page, lockedByOther: boolean) {
       is_remote: true, edit_enabled: editing,
       permission: 'READ_AND_WRITE', lock_holder: contended ? 'editor@example.com' : editing ? 'me@example.com' : null,
       has_unpushed_edits: false, unwound: false, remote_state: 'up_to_date',
-      access_denied: false, server_error: null, exclude_geojson: false, undo_mode: 'full',
+      access_denied: false, server_error: null, undo_mode: 'full',
       project_id: 'remote',
     }) });
     w.__MOCK_IPC_OVERRIDES__ = overrides;

@@ -40,7 +40,6 @@ const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   remote_state: 'up_to_date',
   access_denied: false,
   server_error: null,
-  exclude_geojson: false,
   // [#303] The hybrid undo stack's policy pair: Full, from the global default.
   undo_mode: 'full',
 
@@ -692,21 +691,18 @@ describe('speleoStore', () => {
   });
 
   describe('#200 banners', () => {
-    it('seedFromStatus raises the rendering-disabled banner when exclude_geojson is set', () => {
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
-      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'rendering_disabled' });
-    });
-
-    it('seedFromStatus clears its own rendering-disabled banner once the flag is off', () => {
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: false }));
+    it('a status refresh never raises a banner of its own', () => {
+      useSpeleoStore.getState().seedFromStatus(status());
       expect(useSpeleoStore.getState().banner).toBeNull();
     });
 
-    it('a rendering-disabled refresh never clobbers transient push_unconfirmed feedback', () => {
-      useSpeleoStore.setState({ banner: { kind: 'push_unconfirmed' } });
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
-      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'push_unconfirmed' });
+    it.each([
+      { kind: 'push_unconfirmed' as const },
+      { kind: 'no_anchor' as const },
+    ])('a status refresh keeps the $kind banner', (banner) => {
+      useSpeleoStore.setState({ banner });
+      useSpeleoStore.getState().seedFromStatus(status());
+      expect(useSpeleoStore.getState().banner).toEqual(banner);
     });
 
     it('raiseNoAnchorBanner only claims a free banner slot', () => {
@@ -718,20 +714,12 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().banner).toEqual({ kind: 'push_unconfirmed' });
     });
 
-    it('rendering_disabled preempts a no_anchor banner (so Enable-rendering is reachable)', () => {
-      // Both conditions true: no_anchor holds the slot, then a refresh sees
-      // exclude_geojson. rendering_disabled must take over - otherwise its
-      // Enable-rendering action (gated on the banner kind) is unreachable.
-      useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
-      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'rendering_disabled' });
-    });
-
-    it('a no_anchor notice is never clobbered by a refresh when rendering is enabled', () => {
-      // exclude_geojson off: a no_anchor notice must survive routine refreshes (only a
-      // rendering_disabled banner that WE own is cleared when the flag goes off).
-      useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: false }));
+    it('the no_anchor notice survives the refreshes that follow it', () => {
+      // The retired rendering-disabled banner used to claim this slot from
+      // no_anchor on every refresh; nothing may mask the notice now.
+      useSpeleoStore.getState().seedFromStatus(status());
+      useSpeleoStore.getState().raiseNoAnchorBanner();
+      useSpeleoStore.getState().seedFromStatus(status());
       expect(useSpeleoStore.getState().banner).toEqual({ kind: 'no_anchor' });
     });
 

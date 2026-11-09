@@ -46,7 +46,7 @@ async function openEditingRemote(page: Page) {
       speleodb_link_status: {
         is_remote: true, edit_enabled: true, permission: 'READ_AND_WRITE', lock_holder: 'me@example.com',
         has_unpushed_edits: false, unwound: false, remote_state: 'up_to_date', access_denied: false,
-        server_error: null, exclude_geojson: false, undo_mode: 'full', project_id: 'busy-remote',
+        server_error: null, undo_mode: 'full', project_id: 'busy-remote',
       },
     };
     for (const [command, answer] of Object.entries(answers)) {
@@ -230,7 +230,7 @@ test('a slow status refresh shows the spinner but locks nothing', async ({ page 
   await answer(page, 'speleodb_link_status', {
     is_remote: true, edit_enabled: true, permission: 'READ_AND_WRITE', lock_holder: 'me@example.com',
     has_unpushed_edits: false, unwound: false, remote_state: 'up_to_date', access_denied: false,
-    server_error: null, exclude_geojson: false, undo_mode: 'full', project_id: 'busy-remote',
+    server_error: null, undo_mode: 'full', project_id: 'busy-remote',
   });
   await expect(page.getByTestId('speleodb-network-busy')).toHaveCount(0);
 });
