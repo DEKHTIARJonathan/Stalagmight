@@ -268,6 +268,8 @@ describe('Settings Disconnect runs the sign-out flow first', () => {
     await act(async () => useSpeleoSignOut.getState().request?.settle(true));
     await waitFor(() => expect(called('speleodb_logout')).toBe(true));
     expect(await screen.findByTestId('speleodb-account-login-form')).toBeVisible();
+    // The whole Disconnect has settled (its form is no longer busy).
+    await waitFor(() => expect(screen.getByTestId('speleodb-settings-email')).toBeEnabled());
     expect(closeDialog).not.toHaveBeenCalled();
   });
 });
