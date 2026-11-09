@@ -2900,9 +2900,140 @@ mod tests {
     }
 
     #[test]
+    fn confirmed_close_releases_or_keeps_the_project_open_for_retry() {
+        use std::io::{Read as _, Write as _};
+        use std::sync::{
+            atomic::{AtomicUsize, Ordering},
+            Arc,
+        };
+        for (fail_first_release, foreign_holder, no_op_first_release) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("server");
+            let base = format!("http://{}", listener.local_addr().expect("address"));
+            let releases = Arc::new(AtomicUsize::new(0));
+            let server_releases = Arc::clone(&releases);
+            let (_temp, state) = editing_fixture(&base);
+            let state = Arc::new(state);
+            let closing_state = Arc::clone(&state);
+            let server = std::thread::spawn(move || {
+                let requests = if foreign_holder {
+                    1
+                } else if fail_first_release || no_op_first_release {
+                    4
+                } else {
+                    2
+                };
+                for _ in 0..requests {
+                    let (mut stream, _) = listener.accept().expect("request");
+                    stream
+                        .set_read_timeout(Some(std::time::Duration::from_secs(3)))
+                        .expect("timeout");
+                    let mut bytes = Vec::new();
+                    let mut buffer = [0u8; 4096];
+                    while !bytes.windows(4).any(|part| part == b"\r\n\r\n") {
+                        let count = stream.read(&mut buffer).expect("headers");
+                        assert_ne!(count, 0);
+                        bytes.extend_from_slice(&buffer[..count]);
+                    }
+                    let request = String::from_utf8_lossy(&bytes);
+                    let release = request.starts_with("POST ") && request.contains("/release/");
+                    if release {
+                        assert!(
+                            closing_state.command_lock.try_lock().is_err(),
+                            "mutations are serialized through release"
+                        );
+                        assert!(
+                            closing_state.project.try_lock().is_err(),
+                            "project replacement cannot slip into close"
+                        );
+                    }
+                    let attempt = if release {
+                        server_releases.fetch_add(1, Ordering::SeqCst)
+                    } else {
+                        0
+                    };
+                    let failed = release && attempt == 0 && fail_first_release;
+                    let (status, body) = if failed {
+                        (503, r#"{"detail":"Synthetic release failure"}"#.to_owned())
+                    } else {
+                        let project = if foreign_holder {
+                            SAME_ACCOUNT_HOLDER_BODY.replace("u@x", "other@x")
+                        } else {
+                            SAME_ACCOUNT_HOLDER_BODY.to_owned()
+                        };
+                        let mut project: serde_json::Value =
+                            serde_json::from_str(&project).expect("project fixture");
+                        if release && !(no_op_first_release && attempt == 0) {
+                            project["active_mutex"] = serde_json::Value::Null;
+                        }
+                        (
+                            200,
+                            crate::core::state::tests_support::sdk_fixture(&project.to_string()),
+                        )
+                    };
+                    write!(stream, "HTTP/1.1 {status} Test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).expect("reply");
+                }
+            });
+            state.mark_remote_dirty();
+            if !fail_first_release && !foreign_holder && !no_op_first_release {
+                state.set_edit_enabled(false); // An owned claim still needs release after gate loss.
+            }
+            let path = state.open_project_path().expect("local project");
+            let before = std::fs::read(&path).expect("saved work");
+            let first = state.close_project_with_lock_release(true);
+            if fail_first_release || no_op_first_release {
+                assert!(!first.success);
+                assert!(first.error.expect("visible failure").contains("still open"));
+                assert!(state.get_project_state().is_some());
+                assert!(state.edit_enabled());
+                assert!(state.speleodb_lock_acquired_here(REMOTE_ID));
+                assert!(
+                    state.close_project_with_lock_release(true).success,
+                    "retry closes only after release succeeds"
+                );
+            } else {
+                assert!(first.success);
+            }
+            server.join().expect("HTTP server");
+            assert!(state.get_project_state().is_none());
+            assert_eq!(std::fs::read(&path).expect("file remains"), before);
+            assert_eq!(
+                releases.load(Ordering::SeqCst),
+                if foreign_holder {
+                    0
+                } else if fail_first_release || no_op_first_release {
+                    2
+                } else {
+                    1
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn confirmed_close_without_credentials_keeps_the_project_open() {
+        let (_temp, state) = editing_fixture("https://synthetic.example/");
+        state.speleodb.lock().expect("session").forget();
+        assert!(!state.close_project_with_lock_release(true).success);
+        assert!(state.get_project_state().is_some());
+        assert!(state.edit_enabled());
+    }
+
+    #[test]
+    fn confirmed_close_local_project_does_not_require_a_server() {
+        let state = AppState::new().expect("state");
+        state.set_project_for_tests(Project::new("Synthetic local".into(), None));
+        assert!(state.close_project_with_lock_release(true).success);
+        assert!(state.get_project_state().is_none());
+    }
+
+    #[test]
     fn lifecycle_release_preserves_saved_unpublished_files() {
         for release in [
-            AppState::speleodb_release_held_lock_on_close,
             AppState::speleodb_release_held_lock_detached,
             |state: &AppState| {
                 state.speleodb_release_held_lock_bounded(std::time::Duration::from_secs(2));
@@ -2928,18 +3059,6 @@ mod tests {
             );
             assert!(!state.speleodb_lock_acquired_here(REMOTE_ID));
         }
-    }
-
-    #[test]
-    fn lifecycle_release_can_finish_an_owned_claim_after_the_edit_gate_closes() {
-        let (base, handle) = release_stub(REMOTE_ID);
-        let (_temp, state) = editing_fixture(&base);
-        state.mark_remote_dirty();
-        state.set_edit_enabled(false);
-        state.speleodb_release_held_lock_on_close();
-        handle.join().expect("release reached server");
-        assert!(!state.speleodb_lock_acquired_here(REMOTE_ID));
-        assert!(state.speleodb_open_link().expect("link").has_unpushed_edits);
     }
 
     #[test]

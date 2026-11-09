@@ -205,8 +205,11 @@ retry write only to the local SQLite file.
 Save and Close carries its close intent through recovery and closes only after a
 confirmed upload and successful release, with no newer local changes. Cancellation,
 conflict, uncertainty and release failure leave the project open. Plain Close,
-project switching and Quit automatically release the session's lock without
-uploading. Unsaved survey work and form drafts require Discard changes / Cancel.
+including Hamburger Menu -> Close Project, verifies current ownership and confirms
+release before teardown. Failed verification, rejected release or a response still
+reporting this account as holder keeps the project open with a visible error and
+allows retry. Release and teardown serialize against mutations and new editing
+sessions. Project switching and Quit retain their separate cleanup policies. Unsaved survey work and form drafts require Discard changes / Cancel.
 Saved unuploaded work remains in the local file. Backend release consent remains
 scoped to the project, authenticated account and session generation. Another
 account's lock is never released by an ordinary exit.

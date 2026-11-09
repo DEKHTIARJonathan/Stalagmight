@@ -297,3 +297,20 @@ Settings dialog. No full test suite or browser suite was rerun for this review.
 All three typechecks, nine non-test lint gates, root/member Rust formatting and
 workspace Clippy with telemetry and all targets passed. Existing Clippy warnings
 remain.
+
+### Hamburger Close Project release verification (2026-11-09)
+
+Three selected headless Chromium cases exercise Hamburger Menu -> Close Project:
+clean close, unsaved-work cancellation/discard, and visible release failure with
+retry. They verify `close_project` is invoked with `releaseLock: true`. Four
+focused Rust cases exercise the shared close backend using synthetic HTTP: confirmed
+release, rejected release/retry, a 200 response still reporting the owned mutex,
+foreign ownership, closed editing gates, missing credentials, local close and
+unchanged detached/bounded cleanup. Project and command guards
+remain held through release; saved file bytes remain unchanged. One focused Vitest
+case verifies IPC rejection preserves project/export state and resets the close guard.
+Close failures must not navigate to the project listing or silently drop the session.
+
+One mistakenly broad Rust filter also ran 102 SpeleoDB module cases, all passing.
+The final confirmation used explicit `confirmed_close_` and
+`lifecycle_release_preserves_saved_unpublished_files` filters. No full suite ran.

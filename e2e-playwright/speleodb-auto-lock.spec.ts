@@ -1,5 +1,5 @@
 import { test, expect, type Page } from './fixtures/coverage';
-import { setupMockedPage } from './helpers/app';
+import { setupMockedPage, openAppMenu } from './helpers/app';
 import type { useUIStore } from '../src/store/uiStore';
 import type { useSpeleoStore } from '../src/store/speleoStore';
 import type { useProjectStore } from '../src/store/projectStore';
@@ -252,3 +252,56 @@ for (const theme of ['dark', 'light'] as const) {
     await expect.poll(() => page.getByTestId('speleodb-workspace-editing').evaluate((node) => getComputedStyle(node).backgroundColor)).not.toBe(styles[1].background);
   });
 }
+
+async function traceMenuClose(page: Page, failFirst: boolean) {
+  await page.evaluate((fail) => {
+    const w = window as unknown as TestWindow & {
+      __TAURI_INTERNALS__: { invoke: (command: string, args?: unknown) => Promise<unknown> };
+      __menuCloseRequests: unknown[];
+    };
+    w.__menuCloseRequests = [];
+    const invoke = w.__TAURI_INTERNALS__.invoke;
+    w.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      if (command === 'close_project') {
+        w.__menuCloseRequests.push(args);
+        if (fail && w.__menuCloseRequests.length === 1) return { success: false, error: 'Synthetic lock release failed. The project is still open.', warnings: [], section_ids: [] };
+      }
+      return invoke(command, args);
+    };
+  }, failFirst);
+}
+
+for (const dirty of [false, true]) {
+  test(`hamburger Close Project requires lock release with unsaved changes ${dirty}`, async ({ page }) => {
+    await openRemote(page, false);
+    await traceMenuClose(page, false);
+    await page.evaluate((isDirty) => (window as unknown as TestWindow).__E2E_TEST__.projectStore.setState({ isDirty }), dirty);
+    await openAppMenu(page);
+    await page.getByTestId('back-button').click();
+    if (dirty) {
+      await expect(page.getByTestId('speleodb-close-dialog')).toBeVisible();
+      await page.getByTestId('speleodb-close-cancel').click();
+      expect(await page.evaluate(() => (window as unknown as { __menuCloseRequests: unknown[] }).__menuCloseRequests)).toEqual([]);
+      await openAppMenu(page);
+      await page.getByTestId('back-button').click();
+      await page.getByTestId('speleodb-close-discard').click();
+    }
+    await expect(page.getByTestId('global-view')).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as { __menuCloseRequests: unknown[] }).__menuCloseRequests)).toEqual([{ releaseLock: true }]);
+  });
+}
+
+test('hamburger Close Project keeps the project open on lock release failure and supports retry', async ({ page }) => {
+  await openRemote(page, false);
+  await traceMenuClose(page, true);
+  await openAppMenu(page);
+  await page.getByTestId('back-button').click();
+  await expect(page.getByTestId('error-dialog')).toContainText('Synthetic lock release failed');
+  await expect(page.getByTestId('single-system-view')).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.getState().project?.file_path)).toBe('/projects/cave-alpha.stalx');
+  await page.getByTestId('error-dialog').getByRole('button', { name: 'OK', exact: true }).click();
+  await openAppMenu(page);
+  await page.getByTestId('back-button').click();
+  await expect(page.getByTestId('global-view')).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __menuCloseRequests: unknown[] }).__menuCloseRequests)).toEqual([{ releaseLock: true }, { releaseLock: true }]);
+});

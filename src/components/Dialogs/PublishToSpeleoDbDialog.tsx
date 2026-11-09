@@ -266,7 +266,7 @@ export default function PublishToSpeleoDbDialog() {
         </div>
       </div>
     </DialogWrapper>
-    {blocking && <SpeleoProgressOverlay title="Publishing to SpeleoDB" description="Saving your survey and opening your shared project." testId="speleodb-publish-progress" />}
+    {blocking && <SpeleoProgressOverlay title="Publishing to SpeleoDB" description="One sec, teaching your project some manners..." testId="speleodb-publish-progress" />}
     </>
   );
 }

@@ -50,4 +50,23 @@ describe('closeProject resets the Export-mode options', () => {
 
     expect(useExportStore.getState().dataFormat).toBe('tml');
   });
+  it('preserves the open project and export state when close IPC rejects', async () => {
+    const before = useProjectStore.getState().project;
+    const project = { name: 'Synthetic remote', file_path: '/synthetic/remote.stalx' } as never;
+    useProjectStore.setState({ project });
+    invokeIpcMock.mockRejectedValueOnce(new Error('Synthetic connection failure'));
+    useExportStore.getState().setDataFormat('tml');
+    try {
+      const result = await useProjectStore.getState().closeProject();
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Synthetic connection failure');
+      expect(invokeIpcMock).toHaveBeenCalledWith('close_project', { releaseLock: true }, expect.anything());
+      expect(useProjectStore.getState().project).toBe(project);
+      expect(useProjectStore.getState().isClosing).toBe(false);
+      expect(useExportStore.getState().dataFormat).toBe('tml');
+    } finally {
+      useProjectStore.setState({ project: before });
+    }
+  });
+
 });

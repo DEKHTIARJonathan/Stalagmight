@@ -50,6 +50,66 @@ enum ReleaseIntent {
 }
 
 impl AppState {
+    /// User-visible close is atomic with lock release. A failed ownership probe or
+    /// release leaves the project, editing gate and acquisition record available
+    /// for retry. Local project close and internal keep-lock transitions still work.
+    pub fn close_project_with_lock_release(
+        &self,
+        release_lock: bool,
+    ) -> crate::core::CommandResult {
+        let _lock_ops = self.speleodb_lock_ops_guard();
+        let _commands = self
+            .command_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut project = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if release_lock {
+            if let Err(error) = self.speleodb_release_for_confirmed_close() {
+                return crate::core::CommandResult::failure(format!("Could not release the SpeleoDB editing lock. The project is still open. {error}"));
+            }
+        } else {
+            self.speleodb_keep_open_lock_deliberately();
+        }
+        self.invalidate_adjusted_cache();
+        self.close_open_project_locked(&mut project)
+    }
+
+    // Caller holds project, command and lock-operation guards through teardown.
+    fn speleodb_release_for_confirmed_close(&self) -> Result<(), SpeleoDbError> {
+        let link = match self.speleodb_open_link() {
+            Ok(link) => link,
+            Err(SpeleoDbError::NoRemoteProject) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        if !self.edit_enabled() && !self.speleodb_lock_acquired_here(&link.project_id) {
+            return Ok(());
+        }
+        let (endpoint, token, email) = self.speleodb_active_account()?;
+        if crate::speleodb::auth::normalize_endpoint(&endpoint)
+            != crate::speleodb::auth::normalize_endpoint(&link.endpoint)
+        {
+            return Err(SpeleoDbError::SessionMoved);
+        }
+        let holder = self.speleodb_lock_holder_checked(&endpoint, &token, &link.project_id)?;
+        if super::speleodb::lock_held_by_me(holder.as_deref(), Some(&email)) {
+            let released = client::release_lock(&endpoint, &token, &link.project_id)?;
+            if released
+                .active_mutex
+                .as_ref()
+                .is_some_and(|mutex| mutex.user.eq_ignore_ascii_case(&email))
+            {
+                return Err(SpeleoDbError::Io(
+                    "SpeleoDB still reports this account holding the editing lock.".into(),
+                ));
+            }
+        }
+        self.speleodb_forget_lock_acquired_for(&link.project_id);
+        Ok(())
+    }
+
     /// Snapshot of what a best-effort lock release needs, or `None` when no held
     /// remote edit session is active - or when releasing would strand local work.
     /// Cheap + non-blocking (reads the open link + config, no network), so a caller
@@ -171,17 +231,6 @@ impl AppState {
     pub fn speleodb_release_held_lock_best_effort(&self) {
         if let Some(p) = self.speleodb_held_lock_release_params() {
             self.speleodb_release_best_effort(&p.endpoint, &p.token, &p.project_id);
-        }
-    }
-
-    /// Release on a normal project close without uploading or deleting local work.
-    /// Reclaim checks protect a newer session if another open wins the transition.
-    pub fn speleodb_release_held_lock_on_close(&self) {
-        let Some((params, claim, generation)) = self.speleodb_capture_lifecycle_release() else {
-            return;
-        };
-        if let Err(error) = self.speleodb_stand_down_and_release(&params, generation, claim) {
-            tracing::warn!(%error, project_id = %params.project_id, "SpeleoDB lock release on close failed");
         }
     }
 

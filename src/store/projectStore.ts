@@ -334,7 +334,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   saveAfterImport: () => Promise<boolean>;
   /**
    * Close the open project. By default (`releaseLock` unset/true) the backend
-   * best-effort releases a held SpeleoDB write lock first so the close can't strand
+   * confirms release of a held SpeleoDB write lock first so the close cannot strand
    * the server mutex (fix 1). The release opt-out is reserved for internal tree
    * replacements that retain the same project's edit session.
    */
@@ -1449,6 +1449,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           clearOpenProjectState(set);
         }
         return result;
+      } catch (error) {
+        return emptyCommandResult(false, String(error));
       } finally {
         set({ isClosing: false });
       }

@@ -288,3 +288,11 @@ missing schemes and malformed addresses are rejected. No DNS-based exception or
 insecure-HTTP override exists. Invalid endpoints produce an error modal when
 connecting or saving; existing legacy override fields are ignored and omitted
 from subsequent saves. Certificate verification and redirect restrictions remain.
+
+### Confirmed project close
+
+Hamburger Menu -> Close Project and the SpeleoDB workspace Close action share the
+same close command. A linked editing session remains open until the server confirms
+its lock is released. Ownership-probe or release errors are visible and retryable;
+no successful close is reported after an unsuccessful release. Local files and
+saved unpublished changes remain intact. Other accounts' locks are never released.
