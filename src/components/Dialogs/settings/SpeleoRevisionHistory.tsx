@@ -126,12 +126,11 @@ export function SpeleoRevisionHistory() {
       <div className="flex justify-end">
         <Button
           variant="external"
-          icon={<ExternalLinkIcon size={14} />}
-          size="sm"
+          icon={<ExternalLinkIcon size={16} />}
           disabled={web.url === null}
           title={web.url === null ? t('speleodb.web.unavailable') : undefined}
           onClick={web.open}
-          className="shadow-sm"
+          className="w-full h-11 px-3 py-2.5 shadow-sm"
           data-testid="speleodb-web-revisions"
         >
           {t('speleodb.web.openRevisions')}

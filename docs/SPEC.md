@@ -60,7 +60,7 @@ The dock retains resize/pin/hover behavior, uses a 320px SpeleoDB minimum within
 selected tab and exits fullscreen table mode while preserving table state.
 
 The persistent project header and everyday Save Changes, Switch to Read Only Mode/Resume editing, Reload Project
-and web controls sit above an expandable History section. Close Project sits below Reload Project and returns
+and web controls sit above an expandable Revision History section. Close Project sits below Reload Project and returns
 to the project listing after unsaved-work confirmation and lock release. Account and
 connection forms live exclusively in application Settings. Local settings retains
 validation and elevation editing; linked project names remain server-managed. Home retains its entry points. The
@@ -781,7 +781,7 @@ The Undo and Redo toolbar buttons feature dropdown menus showing recent actions 
 - **Hover**: Dropdown opens after 300ms delay when hovering over Undo/Redo buttons
 - **Chevron Indicator**: A small `▾` chevron appears next to the button text when history is available
 - **Click**: Single click on button performs standard undo/redo (one step)
-- **Empty State**: The button stays disabled and hover opens nothing. SpeleoDB Unwind/Rewind controls live in the left workspace History section.
+- **Empty State**: The button stays disabled and hover opens nothing. SpeleoDB revision inspection and restore actions live in the left workspace Revision History section.
 
 #### Dropdown Layout
 

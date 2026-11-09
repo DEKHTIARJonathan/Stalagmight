@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { SpeleoHistorySteps } from './SpeleoHistorySteps';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
@@ -16,7 +15,7 @@ import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 
 const actionClass = 'w-full h-11 px-3 py-2.5 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
 
-const areas = [['history', 'History']] as const;
+const areas = [['history', 'Revision History']] as const;
 
 /** Single persistent body: accordion navigation hides content without unmounting drafts. */
 export function SpeleoWorkspace() {
@@ -78,7 +77,7 @@ export function SpeleoWorkspace() {
           </button>
           <div id={`speleodb-area-${id}`} hidden={expanded !== id} className="space-y-3">
             {(visited.has(id) || expanded === id) && <>
-            {id === 'history' && <><SpeleoHistorySteps /><SpeleoRevisionHistory /></>}
+            {id === 'history' && <SpeleoRevisionHistory />}
             </>}
           </div>
         </section>

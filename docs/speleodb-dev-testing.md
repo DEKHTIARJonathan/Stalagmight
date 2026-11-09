@@ -296,6 +296,4 @@ Settings dialog. No full test suite or browser suite was rerun for this review.
 
 All three typechecks, nine non-test lint gates, root/member Rust formatting and
 workspace Clippy with telemetry and all targets passed. Existing Clippy warnings
-remain. `prek run -a` was attempted but exited with code 2 because this repository
-and its parent directories have neither `prek.toml` nor `.pre-commit-config.yaml`.
-The repository's existing validation commands were run directly instead.
+remain.

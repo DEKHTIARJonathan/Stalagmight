@@ -3549,7 +3549,7 @@
     },
     "web": {
       "openProject": "Open project on the web",
-      "openRevisions": "Open revision history on the web",
+      "openRevisions": "Revision History on SpeleoDB",
       "unavailable": "Sign in to SpeleoDB to open this project on the web.",
       "failed": "Could not open your browser"
     },

@@ -75,12 +75,20 @@ test('contended open shows one read-only modal naming the actual editor', async 
 });
 
 
-test('workspace contains everyday controls and History without project or settings tabs', async ({ page }) => {
+test('workspace contains everyday controls and Revision History without history-step controls', async ({ page }) => {
   await openRemote(page, false);
   await page.getByTestId('speleodb-status-button').click();
   await expect(page.getByTestId('speleodb-workspace-upload')).toHaveText('Save Changes');
   await expect(page.getByTestId('speleodb-workspace-latest')).toHaveText('Reload Project');
-  await expect(page.getByTestId('speleodb-workspace-section-history')).toBeVisible();
+  const history = page.getByTestId('speleodb-workspace-section-history');
+  await expect(history).toContainText('Revision History');
+  await history.click();
+  await expect(page.getByTestId('speleodb-history-back')).toHaveCount(0);
+  await expect(page.getByTestId('speleodb-history-forward')).toHaveCount(0);
+  const webHistory = page.getByTestId('speleodb-web-revisions');
+  await expect(webHistory).toHaveText('Revision History on SpeleoDB');
+  await expect(webHistory).toHaveCSS('height', '44px');
+  await expect(webHistory.locator('svg')).toBeVisible();
   await expect(page.getByTestId('speleodb-workspace-section-projects')).toHaveCount(0);
   await expect(page.getByTestId('speleodb-workspace-close')).toHaveText('Close Project');
   await expect(page.getByTestId('speleodb-workspace-section-settings')).toHaveCount(0);

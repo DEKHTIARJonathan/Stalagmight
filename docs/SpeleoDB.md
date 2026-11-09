@@ -142,10 +142,10 @@ selection or scroll. Navigation never acquires or releases a lock.
 
 For managed projects, the persistent header shows identity, editing access, lock owner and
 connection status. Everyday controls are Save Changes, Switch to Read Only Mode or
-Resume editing, Reload Project and Open on SpeleoDB. History is the only expandable section. Close Project sits below Reload Project,
+Resume editing, Reload Project and Open on SpeleoDB. Revision History is the only expandable section. Close Project sits below Reload Project,
 warns about unsaved work, releases the editing lock on confirmed close and returns
-to the project listing. History includes inspection, restore/revert and
-Unwind/Rewind; revision editing remains Survey-only.
+to the project listing. Revision History includes inspection and restore/revert
+actions; revision editing remains Survey-only. It has no Unwind/Rewind controls.
 
 Account sign-in, endpoint and connection management live exclusively in application
 Settings under SpeleoDB. Every sign-in link opens that category. A blocked save
