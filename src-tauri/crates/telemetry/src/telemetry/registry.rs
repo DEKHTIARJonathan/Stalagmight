@@ -627,20 +627,21 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.walls-import",
     "active-dwell.dialog.walls-import",
     // SpeleoDB per-endpoint traffic metrics (#210, F1). For each endpoint kind
-    // (`speleodb::metrics::Endpoint`) the client emits four outcome counters
-    // (`ok`/`client-error`/`server-error`/`network-error`, which sum to the call
-    // count) plus a latency histogram (`latency.<bucket>`) the backend
+    // (`speleodb::metrics::Endpoint`) the client emits five outcome counters
+    // (`ok`/`client-error`/`server-error`/`parse-error`/`network-error`, which
+    // sum to the call count) plus a latency histogram (`latency.<bucket>`) the backend
     // reconstructs p50/p95 from. NO PII: only the endpoint kind, the outcome
     // class, and a latency bucket ever leave the app - never a host, project id,
     // email, token, or file bytes. Recorded per HTTP attempt at the
-    // `client::with_retry` / `client::send_json_request` chokepoints (a retried
-    // 5xx re-hits the server, so counting per attempt is what makes a retry storm
-    // legible). `every_speleodb_endpoint_has_traffic_events` regenerates this
-    // exact set from `Endpoint::ALL` x `Outcome::ALL` x `LATENCY_BUCKETS`: add an
-    // endpoint kind and CI fails until its ten names are listed here.
+    // `client::SdkClient::call` chokepoint (a retried 5xx re-hits the server, so
+    // counting per attempt is what makes a retry storm legible).
+    // `every_speleodb_endpoint_has_traffic_events` regenerates this exact set from
+    // `Endpoint::ALL` x `Outcome::ALL` x `LATENCY_BUCKETS`: add an endpoint kind
+    // and CI fails until its eleven names are listed here.
     "speleodb-api.login.ok",
     "speleodb-api.login.client-error",
     "speleodb-api.login.server-error",
+    "speleodb-api.login.parse-error",
     "speleodb-api.login.network-error",
     "speleodb-api.login.latency.le-100",
     "speleodb-api.login.latency.le-500",
@@ -651,6 +652,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.list-projects.ok",
     "speleodb-api.list-projects.client-error",
     "speleodb-api.list-projects.server-error",
+    "speleodb-api.list-projects.parse-error",
     "speleodb-api.list-projects.network-error",
     "speleodb-api.list-projects.latency.le-100",
     "speleodb-api.list-projects.latency.le-500",
@@ -661,6 +663,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.get-project.ok",
     "speleodb-api.get-project.client-error",
     "speleodb-api.get-project.server-error",
+    "speleodb-api.get-project.parse-error",
     "speleodb-api.get-project.network-error",
     "speleodb-api.get-project.latency.le-100",
     "speleodb-api.get-project.latency.le-500",
@@ -671,6 +674,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.get-revisions.ok",
     "speleodb-api.get-revisions.client-error",
     "speleodb-api.get-revisions.server-error",
+    "speleodb-api.get-revisions.parse-error",
     "speleodb-api.get-revisions.network-error",
     "speleodb-api.get-revisions.latency.le-100",
     "speleodb-api.get-revisions.latency.le-500",
@@ -681,6 +685,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.fetch-user.ok",
     "speleodb-api.fetch-user.client-error",
     "speleodb-api.fetch-user.server-error",
+    "speleodb-api.fetch-user.parse-error",
     "speleodb-api.fetch-user.network-error",
     "speleodb-api.fetch-user.latency.le-100",
     "speleodb-api.fetch-user.latency.le-500",
@@ -691,6 +696,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.download-stalx.ok",
     "speleodb-api.download-stalx.client-error",
     "speleodb-api.download-stalx.server-error",
+    "speleodb-api.download-stalx.parse-error",
     "speleodb-api.download-stalx.network-error",
     "speleodb-api.download-stalx.latency.le-100",
     "speleodb-api.download-stalx.latency.le-500",
@@ -701,6 +707,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.upload.ok",
     "speleodb-api.upload.client-error",
     "speleodb-api.upload.server-error",
+    "speleodb-api.upload.parse-error",
     "speleodb-api.upload.network-error",
     "speleodb-api.upload.latency.le-100",
     "speleodb-api.upload.latency.le-500",
@@ -711,6 +718,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.acquire.ok",
     "speleodb-api.acquire.client-error",
     "speleodb-api.acquire.server-error",
+    "speleodb-api.acquire.parse-error",
     "speleodb-api.acquire.network-error",
     "speleodb-api.acquire.latency.le-100",
     "speleodb-api.acquire.latency.le-500",
@@ -721,6 +729,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.release.ok",
     "speleodb-api.release.client-error",
     "speleodb-api.release.server-error",
+    "speleodb-api.release.parse-error",
     "speleodb-api.release.network-error",
     "speleodb-api.release.latency.le-100",
     "speleodb-api.release.latency.le-500",
@@ -731,6 +740,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.patch-project.ok",
     "speleodb-api.patch-project.client-error",
     "speleodb-api.patch-project.server-error",
+    "speleodb-api.patch-project.parse-error",
     "speleodb-api.patch-project.network-error",
     "speleodb-api.patch-project.latency.le-100",
     "speleodb-api.patch-project.latency.le-500",
@@ -741,6 +751,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.create-project.ok",
     "speleodb-api.create-project.client-error",
     "speleodb-api.create-project.server-error",
+    "speleodb-api.create-project.parse-error",
     "speleodb-api.create-project.network-error",
     "speleodb-api.create-project.latency.le-100",
     "speleodb-api.create-project.latency.le-500",
@@ -1038,7 +1049,10 @@ mod tests {
         //       sessions: command.speleodb_discard_cached_copy = 654.
         //   The speleodb-close / speleodb-quit dialogs became one independent
         //   overlay (like held-lock-resume); their slots are retained.
-        assert_eq!(EVENT_NAMES.len(), 654);
+        //   + 11 SpeleoDB traffic outcome `parse-error`, one per endpoint kind
+        //       (sdk#8): a reply that does not match the SDK contract was
+        //       counted as `ok`, hiding every contract drift = 665.
+        assert_eq!(EVENT_NAMES.len(), 665);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

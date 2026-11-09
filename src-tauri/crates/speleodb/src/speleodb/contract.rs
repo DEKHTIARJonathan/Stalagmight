@@ -56,8 +56,10 @@ pub enum SpeleoDbAction {
 
 /// Why a transport attempt never reached (or never finished with) the server.
 ///
-/// [#270] Derived from the TYPED `ureq::Error` / `io::ErrorKind` at the point of
-/// failure (`client::classify_transport`), never from the error's Display text -
+/// [#270] Derived from the TYPED `reqwest::Error` / `io::ErrorKind` /
+/// `rustls::Error` at the point of failure (`client::network_error` /
+/// `client::api_error`, and `tls::enforce` for an unresolvable `http://` host),
+/// never from the error's Display text -
 /// `io::Error`'s message comes from `strerror`, so it is OS- and locale-
 /// dependent and unusable as a discriminant. Crosses IPC on
 /// [`SpeleoErrorDto::transport`] so the frontend renders a translated,

@@ -806,3 +806,114 @@ fn dns_failure_keeps_its_typed_cause_for_offline_open() {
         }
     ));
 }
+
+#[test]
+fn a_contract_mismatch_keeps_the_sdk_decoder_detail_without_response_text() {
+    // sdk#8: a 2xx the SDK cannot decode used to collapse to one fixed string, so
+    // a new server enum value was invisible in logs and diagnostics. The decoder
+    // detail now survives - naming the field / value that failed - while any
+    // quoted response string is redacted.
+    let mut unknown_country = project_json();
+    unknown_country["country"] = json!("ZZ");
+    let s = Server::json(unknown_country);
+    let err = acquire_lock(&s.base, "t", false, ID).unwrap_err();
+    assert_eq!(s.finish().len(), 1);
+    assert!(
+        matches!(&err, SpeleoDbError::Parse(_)),
+        "a contract mismatch is a Parse error, got {err:?}"
+    );
+    let detail = err.to_string();
+    assert!(
+        detail.contains("response does not match the SpeleoDB SDK contract: "),
+        "{detail}"
+    );
+    assert!(detail.contains("unknown variant `ZZ`"), "{detail}");
+    assert!(
+        detail.chars().count() <= 340,
+        "the accepted-values list is capped: {detail}"
+    );
+
+    let mut wrong_type = project_json();
+    wrong_type["commit_count"] = json!("sensitive response text");
+    let s = Server::json(wrong_type);
+    let err = acquire_lock(&s.base, "t", false, ID).unwrap_err();
+    s.finish();
+    assert!(
+        matches!(&err, SpeleoDbError::Parse(_)),
+        "a contract mismatch is a Parse error, got {err:?}"
+    );
+    let detail = err.to_string();
+    assert!(detail.contains("invalid type: string \"...\""), "{detail}");
+    assert!(!detail.contains("sensitive"), "{detail}");
+}
+
+#[test]
+fn contract_mismatch_detail_is_redacted_and_bounded() {
+    assert_eq!(
+        contract_mismatch(None),
+        "response does not match the SpeleoDB SDK contract"
+    );
+    assert_eq!(
+        contract_mismatch(Some(
+            r#"failed to deserialize 2xx response body: invalid value: string "a \"quoted\" name", expected x at line 1 column 9"#
+                .into()
+        )),
+        r#"response does not match the SpeleoDB SDK contract: invalid value: string "...", expected x at line 1 column 9"#
+    );
+    let long = format!("unknown variant `ZZ`, expected one of {}", "`AA`, ".repeat(400));
+    let capped = contract_mismatch(Some(long));
+    assert!(capped.ends_with("..."));
+    assert!(capped.chars().count() < 320, "{capped}");
+}
+
+#[test]
+fn a_parse_failure_is_its_own_metrics_outcome() {
+    // sdk#8: Parse used to count as `ok`, so contract drift never showed in the
+    // traffic metrics.
+    use super::super::metrics::Outcome;
+    let ok: Result<(), SpeleoDbError> = Ok(());
+    assert_eq!(attempt_outcome(&ok), Outcome::Ok);
+    let parse: Result<(), _> = Err(SpeleoDbError::Parse("drift".into()));
+    assert_eq!(attempt_outcome(&parse), Outcome::ParseError);
+    let status: Result<(), _> = Err(SpeleoDbError::Status {
+        status: 404,
+        message: "gone".into(),
+    });
+    assert_eq!(attempt_outcome(&status), Outcome::ClientError);
+    let transport: Result<(), _> = Err(SpeleoDbError::Transport {
+        cause: TransportCause::Tls,
+        detail: "handshake".into(),
+    });
+    assert_eq!(attempt_outcome(&transport), Outcome::NetworkError);
+}
+
+#[test]
+fn a_tls_handshake_failure_is_classified_as_tls() {
+    // sdk#8: TransportCause::Tls was never produced, so a certificate or
+    // handshake failure read as "could not reach the server". An https request
+    // to a peer that answers in plaintext fails inside rustls.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
+    let base = format!("https://{}", listener.local_addr().expect("address"));
+    let worker = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let _ = stream.write_all(
+                b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            let _ = stream.flush();
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    });
+    // Acquire never retries, so exactly one connection is made.
+    let err = acquire_lock(&base, "t", false, ID).unwrap_err();
+    worker.join().expect("server");
+    assert!(
+        matches!(
+            err,
+            SpeleoDbError::Transport {
+                cause: TransportCause::Tls,
+                ..
+            }
+        ),
+        "got {err:?}"
+    );
+}
