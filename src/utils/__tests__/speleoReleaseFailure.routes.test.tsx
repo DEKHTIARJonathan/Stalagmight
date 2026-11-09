@@ -47,7 +47,7 @@ import {
   resetUpdateRestartForTests,
 } from '../quit';
 import { QUIT_SETTLE_MS, resetQuitWaitForTests } from '../quitAfterWork';
-import { resetSpeleoExitPromptForTests } from '../speleoExit';
+import { closeAfterUpload, resetSpeleoExitPromptForTests } from '../speleoExit';
 import { resetReleaseFailurePromptForTests, useReleaseFailurePrompt } from '../speleoReleaseFailure';
 
 const ok: CommandResult = { success: true, warnings: [], error: null, section_ids: [] };
@@ -159,6 +159,16 @@ describe('Close', () => {
     expect(useProjectStore.getState().project).not.toBeNull();
     expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
     expect(useProjectStore.getState().isClosing).toBe(false);
+  });
+
+  it('an exit-prompt close the user stays at says the project is still open, not "Cancelled"', async () => {
+    replies.close_project = [failed()];
+    const outcome = closeAfterUpload();
+    (await waitForPrompt()).settle('cancel');
+    expect(await outcome).toEqual({
+      ok: false,
+      error: 'The SpeleoDB lock was not handed back, so the project is still open.',
+    });
   });
 
   it('the Close Project menu shows no error for Cancel, and a proper one for any other failure', async () => {
