@@ -37,13 +37,15 @@ describe('SpeleoDB workspace lock-state copy', () => {
   it('stays "Read-only" when project access is gone', () => {
     expect(lockLine({ noAccess: true })).toHaveTextContent(/^Read-only$/);
   });
-  it('says "Read-only copy - sign in to edit" while signed out', () => {
+  it('says "Read-only copy - connect to SpeleoDB to edit" while signed out', () => {
     useSpeleoStore.setState({ session: { loggedIn: false, userEmail: null, endpoint: null } });
-    expect(lockLine({})).toHaveTextContent(/^Read-only copy - sign in to edit$/);
+    expect(lockLine({})).toHaveTextContent(/^Read-only copy - connect to SpeleoDB to edit$/);
+    // The connection line uses the Settings words (Connect / Disconnect) too.
+    expect(screen.getByTestId('speleodb-workspace-project-header')).toHaveTextContent('Not connected');
   });
-  it('says "Read-only copy - sign in to edit" after the session was cleared', () => {
+  it('says "Read-only copy - connect to SpeleoDB to edit" after the session was cleared', () => {
     useSpeleoStore.setState({ session: null });
     expect(lockLine({ lockHolder: 'editor@example.com', lockedByOther: true }))
-      .toHaveTextContent(/^Read-only copy - sign in to edit$/);
+      .toHaveTextContent(/^Read-only copy - connect to SpeleoDB to edit$/);
   });
 });

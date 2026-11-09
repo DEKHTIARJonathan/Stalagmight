@@ -1,7 +1,7 @@
 /**
  * E2E: cached SpeleoDB projects on the home screen.
  *
- * - Signed out, every cached copy is listed with "Read-only copy - sign in to edit"
+ * - Signed out, every cached copy is listed with "Read-only copy - connect to SpeleoDB to edit"
  *   and opens read-only without taking the lock; an expired session does the same
  *   and signs the app out.
  * - Signed in, only this account's copies (and pre-upgrade ones with no recorded
@@ -108,29 +108,29 @@ test('signed out: every cached copy is listed read-only and opens without taking
   const mine = page.getByTestId(`system-card-remote-${MINE}`);
   await expect(mine).toBeVisible();
   await expect(page.getByTestId(`system-card-remote-${THEIRS}`)).toBeVisible();
-  await expect(mine).toContainText('Read-only copy - sign in to edit');
+  await expect(mine).toContainText('Read-only copy - connect to SpeleoDB to edit');
   await expect(mine).not.toContainText('Permission:');
 
   await mine.click();
   await expect(page.getByTestId('single-system-view')).toBeVisible();
   await expect(page.getByTestId('toast')).toContainText('Opened a read-only copy');
   const pill = page.getByTestId('speleodb-readonly-banner');
-  await expect(pill.getByTestId('speleodb-readonly-reason')).toHaveText('Read-only copy - sign in to edit');
-  await expect(pill.getByTestId('speleodb-readonly-login')).toBeVisible();
+  await expect(pill.getByTestId('speleodb-readonly-reason')).toHaveText('Read-only copy - connect to SpeleoDB to edit');
+  await expect(pill.getByTestId('speleodb-readonly-login')).toHaveText('Connect');
   await expect(pill.getByTestId('speleodb-readonly-resume')).toHaveCount(0);
   expect(commands.filter((c) => c.includes('Command: speleodb_start_editing'))).toHaveLength(0);
   expect((await calls(page, 'speleodb_open_project')).map((c) => c.args?.projectId)).toEqual([MINE]);
 
-  // The SpeleoDB tab: signing in again is the way forward, and what cannot run
+  // The SpeleoDB tab: connecting again is the way forward, and what cannot run
   // says why. (Which button is filled follows the one-filled-button follow-up.)
   await openSpeleoTab(page);
-  await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Sign in to resume editing');
+  await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Connect to resume editing');
   await expect(page.getByTestId('speleodb-workspace-editing')).toBeEnabled();
   await expect(page.getByTestId('speleodb-workspace-latest')).toBeDisabled();
-  await expect(page.getByTestId('speleodb-workspace-latest')).toHaveAttribute('title', /Sign in to SpeleoDB/);
-  await expect(page.getByTestId('speleodb-workspace-open-web')).toHaveAttribute('title', /Sign in to SpeleoDB/);
+  await expect(page.getByTestId('speleodb-workspace-latest')).toHaveAttribute('title', /Connect to SpeleoDB/);
+  await expect(page.getByTestId('speleodb-workspace-open-web')).toHaveAttribute('title', /Connect to SpeleoDB/);
 
-  // "Sign in" goes to the SpeleoDB settings.
+  // "Connect" goes to the SpeleoDB settings.
   await pill.getByTestId('speleodb-readonly-login').click();
   await expect(page.getByTestId('settings-panel-speleodb')).toBeVisible();
 });
@@ -162,7 +162,7 @@ test('an expired session opens the cached copy read-only and signs the app out',
   await expect.poll(() => page.evaluate(() =>
     (window as unknown as { __E2E_TEST__: { speleoStore: { getState: () => { session: { loggedIn: boolean } | null } } } })
       .__E2E_TEST__.speleoStore.getState().session?.loggedIn ?? false)).toBe(false);
-  await expect(page.getByTestId('speleodb-readonly-reason')).toHaveText('Read-only copy - sign in to edit');
+  await expect(page.getByTestId('speleodb-readonly-reason')).toHaveText('Read-only copy - connect to SpeleoDB to edit');
   expect(commands.filter((c) => c.includes('Command: speleodb_start_editing'))).toHaveLength(0);
 });
 
@@ -178,7 +178,7 @@ test('signed in: only this account\'s copies and unknown-owner copies are listed
   await expect(page.getByTestId(`system-card-remote-${MINE}`)).toBeVisible();
   await expect(page.getByTestId(`system-card-remote-${LEGACY}`)).toBeVisible();
   await expect(page.getByTestId(`system-card-remote-${THEIRS}`)).toHaveCount(0);
-  await expect(page.getByTestId(`system-card-remote-${MINE}`)).not.toContainText('sign in to edit');
+  await expect(page.getByTestId(`system-card-remote-${MINE}`)).not.toContainText('connect to SpeleoDB to edit');
 });
 
 for (const signedIn of [false, true]) {
@@ -220,7 +220,7 @@ for (const density of ['cards', 'table'] as const) {
     await expect(dialog).toBeVisible();
     await expect(dialog.getByTestId('speleodb-remove-copy-warning')).toContainText('never uploaded');
     // Signed out, no lock is handed back, and the dialog says where it stays.
-    await expect(dialog.getByTestId('speleodb-remove-copy-lock')).toContainText('You are signed out, so no editing lock is handed back');
+    await expect(dialog.getByTestId('speleodb-remove-copy-lock')).toContainText('You are not connected to SpeleoDB, so no editing lock is handed back');
     const confirm = dialog.getByTestId('speleodb-remove-copy-confirm');
     await expect(confirm).toHaveText('Remove copy and lose my changes');
     // Cancel removes nothing.

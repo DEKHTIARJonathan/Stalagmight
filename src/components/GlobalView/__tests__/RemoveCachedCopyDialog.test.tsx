@@ -85,7 +85,7 @@ describe('RemoveCachedCopyDialog', () => {
     render(<RemoveCachedCopyDialog copy={COPY} onClose={vi.fn()} onRemoved={vi.fn()} />);
     await waitFor(() => expect(screen.getByTestId('speleodb-remove-copy-confirm')).toBeEnabled());
     expect(screen.getByTestId('speleodb-remove-copy-lock'))
-      .toHaveTextContent('it stays until your next sign-in offers to release it, or until it is released on the SpeleoDB website');
+      .toHaveTextContent('it stays until you next connect (which offers to release it), or until it is released on the SpeleoDB website');
   });
 
   it('cannot confirm while another SpeleoDB operation runs', async () => {

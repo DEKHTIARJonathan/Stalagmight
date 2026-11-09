@@ -235,7 +235,7 @@ export default function SpeleoDoneDialog() {
           <p role="status" data-testid="speleodb-upload-blocked-reason">{acquiring ? t('speleodb.saveLocal.acquiring') : t('speleodb.saveLocal.blocked')}</p>
           <div className="flex flex-wrap gap-2">
             <Button onClick={() => void saveLocally()} disabled={busyAny || acquiring} data-testid="speleodb-upload-save-local">{t('speleodb.saveLocal.button')}</Button>
-            {!loggedIn ? <Button onClick={() => useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })} data-testid="speleodb-upload-sign-in">Sign in in Settings</Button> : <Button onClick={() => void startEditing()} disabled={busyAny || acquiring || link?.noAccess} data-testid="speleodb-upload-resume">Resume editing</Button>}
+            {!loggedIn ? <Button onClick={() => useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })} data-testid="speleodb-upload-sign-in">Connect in Settings</Button> : <Button onClick={() => void startEditing()} disabled={busyAny || acquiring || link?.noAccess} data-testid="speleodb-upload-resume">Resume editing</Button>}
           </div>
         </div>}
         <p className="text-sm text-text-secondary">

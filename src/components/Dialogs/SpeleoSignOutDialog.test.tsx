@@ -234,7 +234,7 @@ describe('SpeleoSignOutDialog', () => {
     const failed = await screen.findByTestId('speleodb-signout-release-failed');
     expect(failed).toHaveTextContent('Cave b');
     expect(failed).not.toHaveTextContent('Cave a');
-    expect(failed).toHaveTextContent('until you sign in again');
+    expect(failed).toHaveTextContent('until you connect again');
     failB = false;
     await userEvent.click(screen.getByTestId('speleodb-signout-retry'));
     expect(await answer).toBe(true);

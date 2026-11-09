@@ -121,7 +121,7 @@ export function SpeleoWorkspace() {
           title={!editingDisabled ? undefined : busy ? why.busy : why.editing}
           icon={editing ? <LockIcon size={ICON} /> : signedIn ? <PencilIcon size={ICON} /> : <SignInIcon size={ICON} />}
           data-testid="speleodb-workspace-editing">
-          {editing ? 'Switch to Read Only Mode' : signedIn ? 'Resume editing' : 'Sign in to resume editing'}
+          {editing ? 'Switch to Read Only Mode' : signedIn ? 'Resume editing' : 'Connect to resume editing'}
         </Button>
         <Button variant="info" className={actionClass} onClick={() => void update()} disabled={reloadDisabled}
           title={!reloadDisabled ? undefined : why.reload ?? why.busy}

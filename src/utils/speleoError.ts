@@ -80,7 +80,7 @@ function endpointRefusalOf(e: unknown): EndpointRefusal | null {
  *
  * The backend already provides a clean detail (auth failures parse
  * `non_field_errors`). This adds the operation frame the backend can't know -
- * e.g. `Could not sign in to SpeleoDB: …`, `Unable to open the project: …` - except on
+ * e.g. `Could not connect to SpeleoDB: …`, `Unable to open the project: …` - except on
  * transport errors, which are replaced wholesale by the humanized #270 line (it
  * is already self-framed and would otherwise read as "Login failed: Network
  * error…"), and on an endpoint the policy refused, which says what to change

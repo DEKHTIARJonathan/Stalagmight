@@ -76,7 +76,7 @@ describe('Purge all cached files', () => {
       { removed: 1, kept_unpushed: [], kept_open: [], failed: [], locks_released: [], locks_unchecked: ['Alpha'] });
     render(<SpeleoCachePurgeSection />);
     await userEvent.click(screen.getByTestId('speleodb-purge-cache'));
-    expect(await screen.findByTestId('speleodb-purge-locks')).toHaveTextContent('You are signed out, so no editing lock is handed back.');
+    expect(await screen.findByTestId('speleodb-purge-locks')).toHaveTextContent('You are not connected to SpeleoDB, so no editing lock is handed back.');
     await userEvent.click(screen.getByTestId('speleodb-purge-confirm'));
     const result = await screen.findByTestId('speleodb-purge-result');
     expect(result).toHaveTextContent('Could not hand back the editing lock of: Alpha.');

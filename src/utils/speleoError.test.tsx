@@ -96,7 +96,7 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
 
   it('names the server the call was made to when the caller knows it', () => {
     // Settings' Connect tries the address on screen, not the session's.
-    const line = humanizeSpeleoError(dto({ transport: 'Refused' }), 'Could not sign in to SpeleoDB', {
+    const line = humanizeSpeleoError(dto({ transport: 'Refused' }), 'Could not connect to SpeleoDB', {
       endpoint: 'https://unsaved.example/',
     });
     expect(line).toContain('https://unsaved.example/');
@@ -117,9 +117,9 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
     // sound discriminant: a retryable 5xx is `Retry` too, but carries a status.
     const line = humanizeSpeleoError(
       dto({ message: 'Bad login.', action: 'Fatal', status: 400, transport: null }),
-      'Could not sign in to SpeleoDB',
+      'Could not connect to SpeleoDB',
     );
-    expect(line).toBe('Could not sign in to SpeleoDB: Bad login');
+    expect(line).toBe('Could not connect to SpeleoDB: Bad login');
   });
 
   it('does not treat a retryable 5xx as a transport failure', () => {
@@ -138,12 +138,14 @@ describe('humanizeSpeleoError - an endpoint the policy refused', () => {
   });
 
   it('names the automatic HTTP exceptions for a plain http:// server, never the backend text', () => {
-    const line = humanizeSpeleoError(refused('PlainHttp'), 'Could not sign in to SpeleoDB', { endpoint: 'http://192.0.2.1/' });
+    const line = humanizeSpeleoError(refused('PlainHttp'), 'Could not connect to SpeleoDB', { endpoint: 'http://192.0.2.1/' });
     expect(line).toContain('http://192.0.2.1/');
-    expect(line).toContain('192.168.x.x');
+    // The one description of the exception set (`speleodb.httpExceptions`), nested in.
+    expect(line).toContain('allowed only for localhost, 127.0.0.1 and 192.168.x.x addresses');
+    expect(line).not.toContain('$t(');
     expect(line).toContain('https://');
     expect(line).not.toContain('Rejected endpoint');
-    expect(line).not.toContain('Could not sign in to SpeleoDB:');
+    expect(line).not.toContain('Could not connect to SpeleoDB:');
   });
 
   it('asks for a full address when the address is unusable', () => {

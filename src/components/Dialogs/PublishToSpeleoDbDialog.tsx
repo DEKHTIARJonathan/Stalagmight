@@ -180,7 +180,7 @@ export default function PublishToSpeleoDbDialog() {
         {progressExpired && publishing && <p role="alert" className="text-sm text-warning" data-testid="speleodb-publish-timeout">
           Publishing has taken more than 120 seconds. Your request may still finish. Close this dialog to continue working.
         </p>}
-        {!loggedIn && <Button onClick={signIn} data-testid="publish-to-speleodb-dialog-sign-in">Sign in in Settings</Button>}
+        {!loggedIn && <Button onClick={signIn} data-testid="publish-to-speleodb-dialog-sign-in">Connect in Settings</Button>}
 
         <div>
           <label className="block text-sm font-medium text-text-primary mb-1">

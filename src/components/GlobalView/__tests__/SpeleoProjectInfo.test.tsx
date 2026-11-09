@@ -46,7 +46,7 @@ describe('SpeleoDB listing information', () => {
       project_id: summary.id, project_name: 'Cave', local_path: '/cache/project.stalx',
       ownership: 'signed_out', has_unpushed_edits: false, state_unknown: false, is_open: false,
     }} />);
-    expect(screen.getByTestId('project-lock')).toHaveTextContent(/^Read-only copy - sign in to edit$/);
+    expect(screen.getByTestId('project-lock')).toHaveTextContent(/^Read-only copy - connect to SpeleoDB to edit$/);
     expect(screen.queryByTestId('project-permission')).toBeNull();
   });
 });

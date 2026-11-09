@@ -45,7 +45,7 @@ export function SpeleoWorkspaceHeader({ link }: { link: SpeleoLinkState }) {
     <div className="shrink-0 border-b border-border pb-3 space-y-1" data-testid="speleodb-workspace-project-header">
       <h2 className="font-semibold break-words">{projectName}</h2>
       <p data-testid="speleodb-workspace-lock-state">{speleoLockStateLabel(link, t, session)}</p>
-      <p className="text-text-secondary">{!session?.loggedIn ? 'Signed out' : link.serverError ? link.serverError.message : link.remoteState === 'unknown' ? 'Connection unavailable' : 'Connected'}</p>
+      <p className="text-text-secondary">{!session?.loggedIn ? 'Not connected' : link.serverError ? link.serverError.message : link.remoteState === 'unknown' ? 'Connection unavailable' : 'Connected'}</p>
       {link.noAccess && <Button variant="warning" className={workspaceActionClass} onClick={() => useUIStore.getState().openDialog('speleodb-no-permission')} icon={<LinkOffIcon size={16} />} data-testid="speleodb-workspace-no-access">Keep a local project</Button>}
       {link.remoteState === 'conflict' && <Button variant="warning" className={workspaceActionClass} onClick={() => useUIStore.getState().openDialog('speleodb-divergence')} icon={<AlertTriangleIcon size={16} />} data-testid="speleodb-workspace-resolve">Resolve synchronization conflict</Button>}
       {link.hasUnpushedEdits && <p className="text-warning-text">Changes on this computer have not been uploaded.</p>}

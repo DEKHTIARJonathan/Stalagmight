@@ -50,7 +50,7 @@ it('without the lock but able to take it: saves locally first, then opens Save C
   expect(useUIStore.getState().openDialog).toHaveBeenCalledWith('speleodb-done', { mode: 'push', closeAfterSave: true, acquire: true });
 });
 it.each([
-  ['signed out', { session: null }, 'Sign in'],
+  ['signed out', { session: null }, 'Connect to SpeleoDB'],
   ['locked by someone else', { link: { ...link, editState: 'read-only', lockedByOther: true, lockHolder: 'other@example.com' } }, 'other@example.com'],
   ['read-only permission', { link: { ...link, editState: 'read-only', permission: 'READ_ONLY' } }, 'cannot upload'],
   ['no access', { link: { ...link, editState: 'editing', noAccess: true } }, 'cannot upload'],

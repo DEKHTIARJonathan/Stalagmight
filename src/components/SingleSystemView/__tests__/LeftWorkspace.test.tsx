@@ -91,7 +91,7 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
   });
 
   it.each([
-    ['signed out', null, 'READ_AND_WRITE', 'Read-only copy - sign in to edit'],
+    ['signed out', null, 'READ_AND_WRITE', 'Read-only copy - connect to SpeleoDB to edit'],
     ['view-only access', { loggedIn: true, userEmail: 'me@example.com', endpoint: 'https://example.com' }, 'READ_ONLY',
       'Read-only - your SpeleoDB access does not allow editing'],
     ['not editing', { loggedIn: true, userEmail: 'me@example.com', endpoint: 'https://example.com' }, 'READ_AND_WRITE',

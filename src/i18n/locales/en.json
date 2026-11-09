@@ -658,21 +658,21 @@
       },
       "endpoint": {
         "label": "Server endpoint",
-        "help": "HTTPS is required except for localhost, 127.0.0.1 and 192.168.x.x.",
+        "help": "HTTPS is required except for $t(speleodb.httpExceptions).",
         "disconnectFirst": "Disconnect before changing servers.",
         "aria": "SpeleoDB server endpoint"
       },
       "insecureHttp": {
         "label": "Allow insecure HTTP",
-        "help": "By default HTTPS is required, except for localhost, 127.0.0.1 and 192.168.x.x.",
+        "help": "Development builds only. Without it, HTTPS is required except for $t(speleodb.httpExceptions).",
         "aria": "Allow insecure HTTP endpoints",
         "warning": "Allowing plain HTTP to another address sends your token unencrypted. Only enable this for a trusted local server."
       },
       "account": {
-        "signedInAs": "Signed in as {{email}}",
-        "signedInAsAt": "Signed in as {{email}} at {{endpoint}}",
+        "signedInAs": "Connected as {{email}}",
+        "signedInAsAt": "Connected to {{endpoint}} as {{email}}",
         "logout": "Disconnect",
-        "replacesSession": "This will replace your current session ({{email}}).",
+        "replacesSession": "This replaces your current connection ({{email}}).",
         "email": "Email",
         "password": "Password",
         "token": "Token",
@@ -3196,7 +3196,7 @@
       "viewOnly": "Read-only access - open SpeleoDB menu",
       "noPermission": "You do not have access to this SpeleoDB project - open SpeleoDB menu",
       "unknownError": "SpeleoDB reported an unexpected error - open SpeleoDB menu",
-      "loggedOut": "Sign in to SpeleoDB to edit this project"
+      "loggedOut": "Connect to SpeleoDB to edit this project"
     },
     "serverError": {
       "title": "SpeleoDB error",
@@ -3270,7 +3270,7 @@
       }
     },
     "errors": {
-      "loginFailed": "Could not sign in to SpeleoDB",
+      "loginFailed": "Could not connect to SpeleoDB",
       "openFailed": "Unable to open the project",
       "listFailed": "Could not load projects",
       "openBlockedUnpushed": "Hand the open project back to SpeleoDB first - it still has work that has not been uploaded, and opening {{name}} would close it and leave that work only on this computer.",
@@ -3391,7 +3391,7 @@
         "lockStillHeld": "The write lock was kept, because releasing it would leave your unpushed changes unprotected.",
         "pushFailed": "Revision {{sha}} is in your working copy and you still hold the write lock, but it could not be uploaded. That upload is all that is left, so retry it below.",
         "pushUnconfirmed": "The upload could not be confirmed, so the revert may or may not have reached SpeleoDB. Your working copy and the write lock are both kept, so retry it below - a revert that did land is recognised as yours rather than uploaded a second time.",
-        "notEditing": "Revision {{sha}} is in your working copy, but your SpeleoDB session ended before it could be uploaded, so nothing was published and no write lock is held. Close this dialog, sign in again, then start editing to upload it."
+        "notEditing": "Revision {{sha}} is in your working copy, but your SpeleoDB session ended before it could be uploaded, so nothing was published and no write lock is held. Close this dialog, connect to SpeleoDB again, then start editing to upload it."
       }
     },
     "editBar": {
@@ -3411,7 +3411,7 @@
         "pushFailed": "Could not push changes",
         "tookRemote": "Reset to the SpeleoDB version.",
         "takeRemoteFailed": "Could not take the SpeleoDB version",
-        "notEditing": "Nothing was uploaded - you are not editing this project right now. Start editing again (signing in first if needed) to upload your changes.",
+        "notEditing": "Nothing was uploaded - you are not editing this project right now. Start editing again (connecting to SpeleoDB first if needed) to upload your changes.",
         "lateUploadFailed": "The upload you left running did not reach SpeleoDB. Your changes are still on this computer."
       },
       "push": "Save Changes",
@@ -3431,13 +3431,13 @@
       "retryHint": "They are still only on this computer. Fix the problem, then press the button again to retry."
     },
     "saveLocal": {
-      "signedOut": "Saved on this computer. Sign in to SpeleoDB to upload it.",
+      "signedOut": "Saved on this computer. Connect to SpeleoDB to upload it.",
       "lockedBy": "Saved on this computer. {{email}} is editing this project, so it was not uploaded.",
       "noAccess": "Saved on this computer. You cannot upload this project to SpeleoDB.",
       "saved": "Saved on this computer. Not uploaded to SpeleoDB yet.",
       "button": "Save on this computer",
       "acquiring": "Taking the editing lock so you can upload…",
-      "blocked": "Upload needs sign-in, write permission and the editing lock. You can save your work on this computer and upload it later."
+      "blocked": "Upload needs a SpeleoDB connection, write permission and the editing lock. You can save your work on this computer and upload it later."
     },
     "commitMessage": {
       "count": "{{length}} / {{max}} characters",
@@ -3454,12 +3454,12 @@
       "message": "\"{{fileName}}\" is a copy of the SpeleoDB project \"{{name}}\". A managed project has one working copy on this computer, so this file cannot be opened directly.",
       "hint": "Open the project from SpeleoDB to work on the managed copy, or remove this file's SpeleoDB link to open it as an independent local project. Removing the link changes only this file - the SpeleoDB project is untouched.",
       "openRemote": "Open from SpeleoDB",
-      "openRemoteDisabledLoggedOut": "Sign in to SpeleoDB to open the managed copy. Removing the link works offline.",
+      "openRemoteDisabledLoggedOut": "Connect to SpeleoDB to open the managed copy. Removing the link works offline.",
       "openRemoteDisabledBadId": "This file's SpeleoDB project id is not readable, so it cannot be opened from the server.",
       "removeLink": "Remove link & open as local",
       "removeFailed": "Could not remove the SpeleoDB link",
       "notOnAccount": "\"{{name}}\" is not available on your SpeleoDB account.",
-      "endpointMismatch": "This file is linked to {{endpoint}}, which is not the server you are signed in to.",
+      "endpointMismatch": "This file is linked to {{endpoint}}, which is not the server you are connected to.",
       "copySaved": "Saved an unlinked copy to {{path}}. You are still working on the SpeleoDB-managed project."
     },
     "unpushedLocal": {
@@ -3484,8 +3484,9 @@
       "unreachable": "Could not reach SpeleoDB at {{endpoint}}. Check your network connection and that the server is running.",
       "thisServer": "the configured server"
     },
+    "httpExceptions": "localhost, 127.0.0.1 and 192.168.x.x addresses",
     "endpointRefused": {
-      "plainHttp": "Did not connect to {{endpoint}}: HTTPS is required. Plain HTTP is allowed only on localhost, 127.0.0.1 or a 192.168.x.x address, because it would send your sign-in unencrypted. Use an https:// address.",
+      "plainHttp": "Did not connect to {{endpoint}}: HTTPS is required. Plain HTTP is allowed only for $t(speleodb.httpExceptions), because it would send your credentials unencrypted. Use an https:// address.",
       "invalidAddress": "{{endpoint}} is not a server address Stalagmight can use. Enter the full address, starting with https:// (or http:// for a server on your own network)."
     },
     "banner": {
@@ -3525,7 +3526,7 @@
         "busy": "Wait for the current SpeleoDB operation to finish.",
         "noAccess": "Your SpeleoDB account has no access to this project.",
         "permissionUnknown": "SpeleoDB has not said yet whether your account can edit this project.",
-        "reloadSignedOut": "Sign in to SpeleoDB to reload this project from the server."
+        "reloadSignedOut": "Connect to SpeleoDB to reload this project from the server."
       }
     },
     "workspaceTab": {
@@ -3575,12 +3576,12 @@
       "lockedByOther": "Currently being edited by {{email}}"
     },
     "cachedCopies": {
-      "readOnlySignedOut": "Read-only copy - sign in to edit",
+      "readOnlySignedOut": "Read-only copy - connect to SpeleoDB to edit",
       "viewOnly": "Read-only - your SpeleoDB access does not allow editing",
-      "logIn": "Sign in",
-      "logInTitle": "Open the SpeleoDB settings to sign in",
-      "openedSignedOut": "Opened a read-only copy. Sign in to SpeleoDB to edit it.",
-      "openedSessionExpired": "Your SpeleoDB session has expired. Opened a read-only copy; sign in again to edit it.",
+      "logIn": "Connect",
+      "logInTitle": "Open the SpeleoDB settings to connect",
+      "openedSignedOut": "Opened a read-only copy. Connect to SpeleoDB to edit it.",
+      "openedSessionExpired": "Your SpeleoDB session has expired. Opened a read-only copy; connect again to edit it.",
       "openedOtherAccount": "Opened a read-only copy. It holds changes {{owner}} made that were never uploaded: only {{owner}} can edit and upload them. You can still save a copy.",
       "menu": {
         "aria": "SpeleoDB project actions",
@@ -3594,8 +3595,8 @@
         "unpushed": "This copy has changes that were never uploaded to SpeleoDB. Removing it deletes them for good.",
         "unknown": "Stalagmight could not read this copy, so it may hold changes that were never uploaded to SpeleoDB. Removing it may delete them for good.",
         "lockHandedBack": "If you hold this project's editing lock on SpeleoDB, it is handed back once the copy is removed.",
-        "lockStaysSignedOut": "You are signed out, so no editing lock is handed back. If one is held on SpeleoDB, it stays until your next sign-in offers to release it, or until it is released on the SpeleoDB website.",
-        "lockStaysOtherAccount": "This copy belongs to another SpeleoDB account. If that account holds the project's editing lock, it stays until its next sign-in offers to release it, or until it is released on the SpeleoDB website.",
+        "lockStaysSignedOut": "You are not connected to SpeleoDB, so no editing lock is handed back. If one is held on SpeleoDB, it stays until you next connect (which offers to release it), or until it is released on the SpeleoDB website.",
+        "lockStaysOtherAccount": "This copy belongs to another SpeleoDB account. If that account holds the project's editing lock, it stays until that account next connects (which offers to release it), or until it is released on the SpeleoDB website.",
         "confirm": "Remove copy",
         "confirmLosingChanges": "Remove copy and lose my changes",
         "removing": "Removing…",
@@ -3605,7 +3606,7 @@
       },
       "purge": {
         "title": "Downloaded projects",
-        "help": "Copies of SpeleoDB projects downloaded to this computer: your account's while you are signed in, every account's while you are signed out. Projects stay on SpeleoDB and download again when you open them.",
+        "help": "Copies of SpeleoDB projects downloaded to this computer: your account's while you are connected, every account's while you are not. Projects stay on SpeleoDB and download again when you open them.",
         "button": "Purge all cached files",
         "working": "Purging…",
         "empty": "There are no downloaded copies to remove.",
@@ -3613,10 +3614,10 @@
         "confirmBody_one": "Remove {{countFormatted}} downloaded copy from this computer? It stays on SpeleoDB and can be downloaded again.",
         "confirmBody_other": "Remove {{countFormatted}} downloaded copies from this computer? They stay on SpeleoDB and can be downloaded again.",
         "openKept": "The copy of the project that is open now is kept.",
-        "locksSignedIn": "Your editing locks on these projects are handed back. Locks held by other accounts, or that cannot be checked because SpeleoDB is unreachable, stay until that account's next sign-in offers to release them, or until they are released on the SpeleoDB website.",
-        "locksSignedOut": "You are signed out, so no editing lock is handed back. Locks held on SpeleoDB stay until the next sign-in offers to release them, or until they are released on the SpeleoDB website.",
+        "locksSignedIn": "Your editing locks on these projects are handed back. Locks held by other accounts, or that cannot be checked because SpeleoDB is unreachable, stay until that account next connects (which offers to release them), or until they are released on the SpeleoDB website.",
+        "locksSignedOut": "You are not connected to SpeleoDB, so no editing lock is handed back. Locks held on SpeleoDB stay until the next connection offers to release them, or until they are released on the SpeleoDB website.",
         "locksReleased": "Handed back the editing lock of: {{names}}",
-        "locksUnchecked": "Could not hand back the editing lock of: {{names}}. If you hold it, it stays until your next sign-in offers to release it, or until you release it on the SpeleoDB website.",
+        "locksUnchecked": "Could not hand back the editing lock of: {{names}}. If you hold it, it stays until you next connect (which offers to release it), or until you release it on the SpeleoDB website.",
         "atRisk_one": "{{countFormatted}} copy has changes that were never uploaded to SpeleoDB, or could not be read:",
         "atRisk_other": "{{countFormatted}} copies have changes that were never uploaded to SpeleoDB, or could not be read:",
         "keepAtRisk": "Keep those, remove the rest",
@@ -3637,7 +3638,7 @@
     "browser": {
       "title": "Open from SpeleoDB",
       "checking": "Checking session…",
-      "loginPrompt": "You're not signed in to SpeleoDB. Sign in from Settings to browse your projects.",
+      "loginPrompt": "You're not connected to SpeleoDB. Connect from Settings to browse your projects.",
       "goToSettings": "Open Settings",
       "filterPlaceholder": "Filter projects…",
       "noProjects": "No projects visible to this account.",
@@ -3650,7 +3651,7 @@
       "lockedWarning": "This project is currently being edited by {{email}}. It will open read-only.",
       "open": "Open",
       "refresh": "Refresh",
-      "signedInAs": "Signed in as {{email}}",
+      "signedInAs": "Connected as {{email}}",
       "listFailed": "Could not load projects",
       "openFailed": "Could not open project"
     },
@@ -3673,7 +3674,7 @@
     "web": {
       "openProject": "Open project on the web",
       "openRevisions": "Revision History on SpeleoDB",
-      "unavailable": "Sign in to SpeleoDB to open this project on the web.",
+      "unavailable": "Connect to SpeleoDB to open this project on the web.",
       "failed": "Could not open your browser"
     },
     "publish": {
@@ -3815,36 +3816,36 @@
       "unavailableKeepsChanges": "The editing lock could not be taken, so this project is open read-only. Your changes are kept on this computer, and you can upload them later."
     },
     "signOut": {
-      "title": "Before you sign out",
+      "title": "Before you disconnect",
       "switchTitle": "Before you switch accounts",
-      "intro": "Signing out hands back every project you are editing on SpeleoDB, so others can edit them. Some of them need your attention first.",
+      "intro": "Disconnecting hands back every project you are editing on SpeleoDB, so others can edit them. Some of them need your attention first.",
       "checking": "Checking your SpeleoDB projects…",
       "checkFailedTitle": "Could not check your projects",
-      "checkFailedBody": "SpeleoDB could not be reached, so Stalagmight cannot tell which projects you are editing. If you sign out anyway, any project you are editing stays reserved for you until you sign in again and hand it back. Changes on this computer are kept.",
+      "checkFailedBody": "SpeleoDB could not be reached, so Stalagmight cannot tell which projects you are editing. If you disconnect anyway, any project you are editing stays reserved for you until you connect again and hand it back. Changes on this computer are kept.",
       "openProject": "Open project: {{name}}",
       "openProjectBody": "This project has changes that are not on SpeleoDB yet.",
       "uploaded": "Uploaded and handed back.",
       "discarded": "Changes discarded.",
       "otherChanges": "Other projects with changes on this computer",
-      "otherChangesBody": "These projects have changes that are not on SpeleoDB yet. To upload them, open the project (this stops signing out). Or keep them on this computer for later, or discard them.",
+      "otherChangesBody": "These projects have changes that are not on SpeleoDB yet. To upload them, open the project (this cancels the disconnect). Or keep them on this computer for later, or discard them.",
       "openToUpload": "Open to upload",
       "keep": "Keep my changes on this computer",
-      "keepHint": "The changes stay in the copy on this computer and the project is handed back. After you sign in again, open it to upload them.",
-      "kept": "Kept on this computer. The project is handed back when you sign out.",
+      "keepHint": "The changes stay in the copy on this computer and the project is handed back. After you connect again, open it to upload them.",
+      "kept": "Kept on this computer. The project is handed back when you disconnect.",
       "keepFailed": "Your changes could not be saved on this computer, so they were not kept.",
       "lastEdited": "last edited {{when}}",
       "discardBody": "Your changes to \"{{name}}\" will be lost forever.",
       "discardFailed": "The changes to \"{{name}}\" could not be discarded.",
       "willRelease": "These projects will be handed back so others can edit them:",
-      "signOut": "Sign out",
+      "signOut": "Disconnect",
       "switch": "Switch account",
       "releasing": "Handing projects back to SpeleoDB…",
       "releasingShort": "Handing back…",
       "releaseFailedTitle": "Some projects could not be handed back",
       "releaseFailedBody": "SpeleoDB could not be reached, so these projects are still reserved for you: {{names}}.",
-      "signOutAnywayHint": "If you sign out anyway, these projects stay reserved for you, and nobody else can edit them until you sign in again and hand them back.",
+      "signOutAnywayHint": "If you disconnect anyway, these projects stay reserved for you, and nobody else can edit them until you connect again and hand them back.",
       "retry": "Try again",
-      "signOutAnyway": "Sign out anyway",
+      "signOutAnyway": "Disconnect anyway",
       "unnamed": "Unnamed project"
     }
   }

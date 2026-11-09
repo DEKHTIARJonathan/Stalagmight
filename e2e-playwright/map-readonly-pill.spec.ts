@@ -104,7 +104,7 @@ test.describe('Closures Computed View pill', () => {
     await expect(closure).toBeVisible();
     await expectClearOfZoomControl(page, closure, closure.getByTestId('geometry-readonly-resume'));
 
-    // The SpeleoDB pill (signed out: the longest wording, with Sign in) in the same row.
+    // The SpeleoDB pill (signed out: the longest wording, with Connect) in the same row.
     await page.evaluate(() => {
       const w = window as unknown as { __E2E_TEST__: { speleoStore: { setState: (s: unknown) => void } } };
       w.__E2E_TEST__.speleoStore.setState({ session: null, link: {

@@ -526,7 +526,7 @@ impl AppState {
                     "speleodb: could not read the session; nothing removed"
                 );
                 Err(format!(
-                    "Could not tell which account is signed in ({e}). Nothing was removed."
+                    "Could not tell which account is connected ({e}). Nothing was removed."
                 ))
             }
         }

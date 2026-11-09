@@ -55,11 +55,11 @@ describe('SpeleoDB tab everyday actions', () => {
   it('signed out on a read-only copy: the disabled ones say why', () => {
     useSpeleoStore.setState({ session: null });
     render(<SpeleoWorkspace />);
-    expect(editing()).toHaveTextContent('Sign in to resume editing');
+    expect(editing()).toHaveTextContent('Connect to resume editing');
     expect(reload()).toBeDisabled();
-    expect(reload()).toHaveAttribute('title', 'Sign in to SpeleoDB to reload this project from the server.');
+    expect(reload()).toHaveAttribute('title', 'Connect to SpeleoDB to reload this project from the server.');
     expect(web()).toBeDisabled();
-    expect(web()).toHaveAttribute('title', 'Sign in to SpeleoDB to open this project on the web.');
+    expect(web()).toHaveAttribute('title', 'Connect to SpeleoDB to open this project on the web.');
   });
 
   it('editing: nothing carries a reason', () => {
