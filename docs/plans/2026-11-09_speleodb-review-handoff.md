@@ -1,5 +1,27 @@
 # SpeleoDB review and fixes - handoff (2026-11-09)
 
+## Status (integrated, 2026-11-09)
+
+Everything below has since been merged into one branch, `speleodb/review-fixes`,
+in the suggested order. The owner's numbered decisions under "To implement" are
+implemented there, except:
+
+- decision 13's upstream report and the other "Upstream SpeleoDB reports to file"
+  (reproduced on a private instance; drafted, not yet filed);
+- decision 15, filed as #670.
+
+The two fuzzing-track bugs (F1, F2) and a third one the fuzzer found on the
+integration (F3, Save-a-copy debris overwritten) are deliberately not in this
+batch: #669. The "Follow-ups found during the fixes", the "Not yet decided" items
+and the bugs found while implementing and testing the fixes are collected in #671.
+`docs/SpeleoDB.md` describes the resulting behaviour (edit gate derived from the
+lock claim, holder-checked releases, quit-after-work, cached copies on Home,
+upload limits). The fuzzer port stays on its own test-only branch.
+
+The rest of this document is the original hand-off, kept as the design record.
+
+## Original hand-off
+
 Pick-up notes for the follow-up work on the SpeleoDB integration that landed in
 master `0977878a2` (external PRs #633 SDK migration, #663 live-test timeout,
 #635 workspace UX). Everything below is on separate, unmerged branches. None of
