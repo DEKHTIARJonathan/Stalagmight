@@ -47,6 +47,16 @@ pub struct ExitWait {
 }
 
 impl ExitWait {
+    fn phase(&self) -> WaitPhase {
+        if self.drained.load(Ordering::SeqCst) {
+            WaitPhase::Drained
+        } else if self.waiting.load(Ordering::SeqCst) {
+            WaitPhase::Waiting
+        } else {
+            WaitPhase::Idle
+        }
+    }
+
     fn forced(&self) -> bool {
         self.forced_until
             .lock()
@@ -68,23 +78,24 @@ pub(crate) enum ExitStep {
     KeepWaiting,
 }
 
-/// The decision, kept pure so it is testable without a running app.
-pub(crate) fn exit_step(
-    drained: bool,
-    forced: bool,
-    restart: bool,
-    in_flight: bool,
-    already_waiting: bool,
-) -> ExitStep {
-    if drained {
-        ExitStep::Proceed
-    } else if forced || restart || !in_flight {
-        // A restart cannot be prevented (Tauri ignores `prevent_exit` for it).
-        ExitStep::ReleaseAndExit
-    } else if already_waiting {
-        ExitStep::KeepWaiting
-    } else {
-        ExitStep::WaitThenExit
+/// Where this process's exit wait stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WaitPhase {
+    Idle,
+    Waiting,
+    /// The wait finished and released; the exit it re-issued goes on.
+    Drained,
+}
+
+/// The decision, kept pure so it is testable without a running app. `may_cut`:
+/// the user chose "Quit now", or this is a restart (Tauri ignores
+/// `prevent_exit` for one).
+pub(crate) fn exit_step(phase: WaitPhase, may_cut: bool, in_flight: bool) -> ExitStep {
+    match phase {
+        WaitPhase::Drained => ExitStep::Proceed,
+        _ if may_cut || !in_flight => ExitStep::ReleaseAndExit,
+        WaitPhase::Waiting => ExitStep::KeepWaiting,
+        WaitPhase::Idle => ExitStep::WaitThenExit,
     }
 }
 
@@ -95,11 +106,9 @@ pub fn on_exit_requested(app: &AppHandle, code: Option<i32>, api: &tauri::ExitRe
     };
     let wait = app.state::<ExitWait>();
     let step = exit_step(
-        wait.drained.load(Ordering::SeqCst),
-        wait.forced(),
-        code == Some(tauri::RESTART_EXIT_CODE),
+        wait.phase(),
+        wait.forced() || code == Some(tauri::RESTART_EXIT_CODE),
         state.speleodb_operation_in_flight(),
-        wait.waiting.load(Ordering::SeqCst),
     );
     match step {
         ExitStep::Proceed => {}
@@ -155,22 +164,25 @@ mod tests {
     #[test]
     fn an_operation_in_flight_holds_the_exit_until_it_has_finished() {
         assert_eq!(
-            exit_step(false, false, false, true, false),
+            exit_step(WaitPhase::Idle, false, true),
             ExitStep::WaitThenExit
         );
         // A second request while waiting keeps waiting; it never spawns a second wait.
         assert_eq!(
-            exit_step(false, false, false, true, true),
+            exit_step(WaitPhase::Waiting, false, true),
             ExitStep::KeepWaiting
         );
         // The exit the wait re-issues goes straight through.
-        assert_eq!(exit_step(true, false, false, true, true), ExitStep::Proceed);
+        assert_eq!(
+            exit_step(WaitPhase::Drained, false, true),
+            ExitStep::Proceed
+        );
     }
 
     #[test]
     fn nothing_in_flight_releases_and_exits_as_before() {
         assert_eq!(
-            exit_step(false, false, false, false, false),
+            exit_step(WaitPhase::Idle, false, false),
             ExitStep::ReleaseAndExit
         );
     }
@@ -178,11 +190,7 @@ mod tests {
     #[test]
     fn only_the_users_explicit_quit_now_or_a_restart_cuts_the_operation() {
         assert_eq!(
-            exit_step(false, true, false, true, false),
-            ExitStep::ReleaseAndExit
-        );
-        assert_eq!(
-            exit_step(false, false, true, true, false),
+            exit_step(WaitPhase::Idle, true, true),
             ExitStep::ReleaseAndExit
         );
     }
@@ -193,7 +201,7 @@ mod tests {
         assert!(!wait.forced());
         *wait.forced_until.lock().expect("lock") = Some(Instant::now() + FORCED_EXIT_TTL);
         assert!(wait.forced());
-        *wait.forced_until.lock().expect("lock") = Some(Instant::now() - Duration::from_millis(1));
+        *wait.forced_until.lock().expect("lock") = Some(Instant::now());
         assert!(!wait.forced());
     }
 }
