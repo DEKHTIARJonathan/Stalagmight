@@ -1852,6 +1852,11 @@ pub fn run() {
             // SpeleoDB per-project LOCAL state (cached copy + un-pushed edits), the
             // local half of the held-lock / GlobalView project joins
             commands::speleodb::speleodb_local_project_states,
+            // Cached SpeleoDB copies on the home screen: owner-aware listing,
+            // removing one copy, and Settings' "Purge all cached files"
+            commands::speleodb_cache::speleodb_cached_projects,
+            commands::speleodb_cache::speleodb_remove_cached_copy,
+            commands::speleodb_cache::speleodb_purge_cached_copies,
             // SpeleoDB revision-history read + restore (#218)
             commands::speleodb::speleodb_get_revisions,
             commands::speleodb::speleodb_restore_revision,

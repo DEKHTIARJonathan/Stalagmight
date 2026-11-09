@@ -411,6 +411,23 @@ pub struct SpeleoOpenResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub has_unpushed_edits: Option<bool>,
+    /// Present only when the cached copy opened read-only because there is no
+    /// usable SpeleoDB session. The frontend must not try to take the lock.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub read_only: Option<SpeleoReadOnlyOpen>,
+}
+
+/// Why an open returned the cached copy read-only, without the server's say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SpeleoReadOnlyOpen {
+    /// Nobody is signed in: the copy opened with no network call at all.
+    SignedOut,
+    /// The server rejected the saved token during this open. The token was dropped,
+    /// so the app is now signed out, and the copy opened as for a signed-out user.
+    SessionExpired,
 }
 
 /// Outcome of `speleodb_start_editing` (#194): the result of acquiring the write
@@ -679,8 +696,8 @@ mod tests {
     use super::{
         DoneResult, Permission, Project, PushResult, RemoteState, RevisionCommit, RevisionHistory,
         SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
-        SpeleoProjectSummary, SpeleoRevision, SpeleoSessionStatus, StartEditingResult,
-        UpdateResult, Visibility,
+        SpeleoProjectSummary, SpeleoReadOnlyOpen, SpeleoRevision, SpeleoSessionStatus,
+        StartEditingResult, UpdateResult, Visibility,
     };
 
     #[test]
@@ -713,6 +730,7 @@ mod tests {
             local_path: "/cache/project.stalx".to_owned(),
             offline: None,
             has_unpushed_edits: None,
+            read_only: Some(SpeleoReadOnlyOpen::SessionExpired),
         })
         .expect("serialize open result");
         // [Track A] #186/D-B2: the structured error DTO must also never carry a

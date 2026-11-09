@@ -1,0 +1,429 @@
+//! The SpeleoDB copies cached on this machine: which account each one belongs
+//! to, the listing the home screen shows, and removing copies (one, or all).
+//!
+//! Every project opened from SpeleoDB lives at
+//! `<cache>/speleodb/<project_id>/project.stalx` (see `speleodb_local_state`). The
+//! `.stalx` records the SpeleoDB instance it came from, but not the ACCOUNT: the
+//! file rides to the server on every upload, so an account email stamped into it
+//! would leak to every collaborator who downloads the project. The account is
+//! therefore recorded beside the copy, in `owner.json`, which never leaves this
+//! machine and goes away with the copy's directory.
+//!
+//! Ownership rules (relative to the session at the time of the listing):
+//!
+//! - **Signed out**: every copy is listed. None of them can be edited, and opening
+//!   one is a read-only, network-free open of the cached file.
+//! - **Signed in, owner recorded**: listed only when the record names the signed-in
+//!   account on the signed-in instance.
+//! - **Signed in, no owner record** (copies downloaded before the record existed):
+//!   listed when the copy's own link names the signed-in instance, hidden when it
+//!   names another one. Nothing tells whose it is, and hiding a pre-upgrade copy
+//!   from the account that downloaded it would hide the way back to any work it
+//!   holds; the next successful online open records the owner.
+//!
+//! Removal never reaches un-uploaded work without the caller's explicit consent
+//! (`discard_unpushed`), and never touches the project that is open.
+
+use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+use super::speleodb_local_state::{cache_path_in, cache_root, read_cached_link, CachedLink};
+use super::AppState;
+use crate::core::{CommandResult, ValidationWarning, WarningSeverity};
+use crate::speleodb::auth::normalize_endpoint;
+
+/// The ownership record beside each cached copy.
+const OWNER_FILE: &str = "owner.json";
+
+/// Refusal text when a removal would discard work SpeleoDB does not have. The
+/// frontend asks before it calls, so reaching this means the copy changed (or could
+/// not be read) between the question and the removal.
+const UNPUSHED_REFUSAL: &str = "This copy has changes that were never uploaded to SpeleoDB, \
+or its state could not be read. Nothing was removed.";
+
+/// Which account a cached copy belongs to, relative to the signed-in session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SpeleoCacheOwnership {
+    /// No SpeleoDB session: every copy is listed, and none can be edited.
+    SignedOut,
+    /// Downloaded by the signed-in account on the signed-in instance.
+    Mine,
+    /// A copy from before owners were recorded, from the signed-in instance.
+    Unknown,
+    /// Another account, or another SpeleoDB instance. Not listed while signed in.
+    OtherAccount,
+}
+
+impl SpeleoCacheOwnership {
+    /// Whether the home screen lists a copy with this ownership.
+    pub fn listed(self) -> bool {
+        !matches!(self, Self::OtherAccount)
+    }
+}
+
+/// One cached copy, as the home screen and the cache purge see it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+pub struct SpeleoCachedProject {
+    /// SpeleoDB project UUID (the cache directory name).
+    pub project_id: String,
+    /// The SpeleoDB name captured when the copy was downloaded.
+    pub project_name: String,
+    /// The cached `.stalx`.
+    pub local_path: String,
+    pub ownership: SpeleoCacheOwnership,
+    /// The copy holds edits SpeleoDB does not have.
+    pub has_unpushed_edits: bool,
+    /// The copy is there but could not be read: NOT a claim that it is clean.
+    pub state_unknown: bool,
+    /// The copy is the project open right now.
+    pub is_open: bool,
+}
+
+/// What "Purge all cached files" did.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, TS)]
+pub struct SpeleoPurgeReport {
+    /// Copies removed.
+    pub removed: u32,
+    /// Names of copies kept because they hold un-uploaded (or unreadable) work.
+    pub kept_unpushed: Vec<String>,
+    /// Names of copies kept because they are open.
+    pub kept_open: Vec<String>,
+    /// `name: reason` for copies whose removal failed.
+    pub failed: Vec<String>,
+}
+
+/// The `owner.json` record.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct CacheOwner {
+    endpoint: String,
+    email: String,
+    /// Display fallback for a copy whose `.stalx` cannot be read.
+    #[serde(default)]
+    project_name: String,
+}
+
+/// The owner record beside the cached copy at `copy`.
+fn owner_path_for(copy: &Path) -> PathBuf {
+    copy.with_file_name(OWNER_FILE)
+}
+
+/// The recorded owner of the copy at `copy`, or `None` when there is no record or
+/// it cannot be read (an unreadable record is treated exactly like a missing one:
+/// unknown owner).
+fn read_owner_for(copy: &Path) -> Option<CacheOwner> {
+    let bytes = std::fs::read(owner_path_for(copy)).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Write the owner record through a temporary file and a rename, so a crash never
+/// leaves a half-written record (which would read as unknown anyway).
+fn write_owner_for(copy: &Path, owner: &CacheOwner) -> std::io::Result<()> {
+    let path = owner_path_for(copy);
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec(owner)?)?;
+    std::fs::rename(&tmp, &path)
+}
+
+/// Classify one copy against the session (`(endpoint, email)`, `None` = signed out).
+fn ownership_of(
+    session: Option<(&str, &str)>,
+    owner: Option<&CacheOwner>,
+    link_endpoint: Option<&str>,
+) -> SpeleoCacheOwnership {
+    let Some((endpoint, email)) = session else {
+        return SpeleoCacheOwnership::SignedOut;
+    };
+    let same_instance = |other: &str| normalize_endpoint(other) == normalize_endpoint(endpoint);
+    match owner {
+        Some(owner)
+            if same_instance(&owner.endpoint) && owner.email.eq_ignore_ascii_case(email) =>
+        {
+            SpeleoCacheOwnership::Mine
+        }
+        Some(_) => SpeleoCacheOwnership::OtherAccount,
+        // No record: only the copy's own instance can rule it out.
+        None if link_endpoint.is_some_and(|linked| !same_instance(linked)) => {
+            SpeleoCacheOwnership::OtherAccount
+        }
+        None => SpeleoCacheOwnership::Unknown,
+    }
+}
+
+/// Every directory under the cache root named like a project id.
+fn cached_ids(root: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|id| super::speleodb::validate_project_id(id).is_ok())
+        .collect();
+    ids.sort();
+    ids
+}
+
+impl AppState {
+    /// Record that the cached copy at `copy` was opened online by the account
+    /// `email` on `endpoint`. Best effort: a failure only leaves the owner unknown,
+    /// which lists the copy for every account of that instance.
+    pub(super) fn speleodb_record_cache_owner(
+        &self,
+        copy: &Path,
+        endpoint: &str,
+        email: &str,
+        project_name: &str,
+    ) {
+        let owner = CacheOwner {
+            endpoint: endpoint.to_owned(),
+            email: email.to_owned(),
+            project_name: project_name.to_owned(),
+        };
+        if let Err(e) = write_owner_for(copy, &owner) {
+            tracing::warn!(
+                path = %copy.display(),
+                error = %e,
+                purpose = "record which account a cached SpeleoDB copy belongs to",
+                "speleodb: could not record the cached copy's owner"
+            );
+        }
+    }
+
+    /// The cached SpeleoDB copies on this machine, every one of them, classified
+    /// against the current session. Purely local: no token is sent anywhere.
+    pub fn speleodb_cached_projects(&self) -> Vec<SpeleoCachedProject> {
+        cache_root()
+            .map(|root| self.speleodb_cached_projects_in(&root))
+            .unwrap_or_default()
+    }
+
+    /// [`Self::speleodb_cached_projects`] against an explicit cache root.
+    pub(super) fn speleodb_cached_projects_in(&self, root: &Path) -> Vec<SpeleoCachedProject> {
+        let account = self
+            .speleodb_active_account()
+            .ok()
+            .map(|(endpoint, _token, email)| (endpoint, email));
+        let session = account
+            .as_ref()
+            .map(|(endpoint, email)| (endpoint.as_str(), email.as_str()));
+        let open_path = self.open_project_path();
+        let live = self.speleodb_open_link().ok();
+        cached_ids(root)
+            .into_iter()
+            .filter_map(|id| {
+                let path = cache_path_in(root, &id);
+                let owner = read_owner_for(&path);
+                let is_open = open_path
+                    .as_deref()
+                    .is_some_and(|open| super::project_io::same_file(open, &path));
+                // The open project's dirty bit is stamped into its live database on
+                // every edit, so it is at least as fresh as the file: fold it in when
+                // (and only when) the open project IS this file.
+                let live = live
+                    .as_ref()
+                    .filter(|link| is_open && link.project_id == id);
+                let (name, endpoint, dirty, state_unknown) = match (read_cached_link(&path), live) {
+                    (CachedLink::NotManaged, _) => return None,
+                    (CachedLink::Linked(link), live) => (
+                        link.project_name,
+                        Some(link.endpoint),
+                        link.has_unpushed_edits || live.is_some_and(|l| l.has_unpushed_edits),
+                        false,
+                    ),
+                    (CachedLink::Unreadable, Some(live)) => (
+                        live.project_name.clone(),
+                        Some(live.endpoint.clone()),
+                        live.has_unpushed_edits,
+                        false,
+                    ),
+                    (CachedLink::Unreadable, None) => (
+                        owner
+                            .as_ref()
+                            .map(|o| o.project_name.clone())
+                            .unwrap_or_default(),
+                        None,
+                        false,
+                        true,
+                    ),
+                };
+                let ownership = ownership_of(session, owner.as_ref(), endpoint.as_deref());
+                Some(SpeleoCachedProject {
+                    project_name: if name.trim().is_empty() {
+                        id.clone()
+                    } else {
+                        name
+                    },
+                    project_id: id,
+                    local_path: path.to_string_lossy().into_owned(),
+                    ownership,
+                    has_unpushed_edits: dirty,
+                    state_unknown,
+                    is_open,
+                })
+            })
+            .collect()
+    }
+
+    /// Remove the cached copy of `project_id`: the `.stalx` goes to the OS trash
+    /// where there is one (through `delete_project`, which also drops its recents
+    /// row), then the rest of its directory goes. Releases no lock.
+    ///
+    /// Refuses the open project, and - unless `discard_unpushed` carries the user's
+    /// explicit consent - a copy with un-uploaded edits or an unreadable state.
+    pub fn speleodb_remove_cached_copy(
+        &self,
+        project_id: &str,
+        discard_unpushed: bool,
+    ) -> CommandResult {
+        match cache_root() {
+            Some(root) => self.speleodb_remove_cached_copy_in(&root, project_id, discard_unpushed),
+            None => CommandResult::failure(
+                "Could not find Stalagmight's SpeleoDB storage. Nothing was changed.".to_owned(),
+            ),
+        }
+    }
+
+    /// [`Self::speleodb_remove_cached_copy`] against an explicit cache root.
+    pub(super) fn speleodb_remove_cached_copy_in(
+        &self,
+        root: &Path,
+        project_id: &str,
+        discard_unpushed: bool,
+    ) -> CommandResult {
+        if let Err(e) = super::speleodb::validate_project_id(project_id) {
+            return CommandResult::failure(e.to_string());
+        }
+        match self.cached_copy_removal(root, project_id, discard_unpushed) {
+            Removal::Open => CommandResult::failure(
+                "This project is open. Close it first, then remove its copy.".to_owned(),
+            ),
+            Removal::AtRisk => CommandResult::failure(UNPUSHED_REFUSAL.to_owned()),
+            Removal::Allowed => {
+                tracing::info!(
+                    project_id = %project_id,
+                    discard_unpushed,
+                    purpose = "remove a cached SpeleoDB copy (user confirmed)",
+                    "speleodb: removing a cached copy"
+                );
+                self.remove_cached_copy_files(root, project_id)
+            }
+        }
+    }
+
+    /// "Purge all cached files": remove every cached copy except the open one, and
+    /// except those with un-uploaded (or unreadable) work unless `discard_unpushed`.
+    pub fn speleodb_purge_cached_copies(&self, discard_unpushed: bool) -> SpeleoPurgeReport {
+        cache_root()
+            .map(|root| self.speleodb_purge_cached_copies_in(&root, discard_unpushed))
+            .unwrap_or_default()
+    }
+
+    /// [`Self::speleodb_purge_cached_copies`] against an explicit cache root.
+    pub(super) fn speleodb_purge_cached_copies_in(
+        &self,
+        root: &Path,
+        discard_unpushed: bool,
+    ) -> SpeleoPurgeReport {
+        let names: std::collections::HashMap<String, String> = self
+            .speleodb_cached_projects_in(root)
+            .into_iter()
+            .map(|copy| (copy.project_id, copy.project_name))
+            .collect();
+        let mut report = SpeleoPurgeReport::default();
+        for id in cached_ids(root) {
+            let name = names.get(&id).cloned().unwrap_or_else(|| id.clone());
+            match self.cached_copy_removal(root, &id, discard_unpushed) {
+                Removal::Open => report.kept_open.push(name),
+                Removal::AtRisk => report.kept_unpushed.push(name),
+                Removal::Allowed => {
+                    let result = self.remove_cached_copy_files(root, &id);
+                    if result.success {
+                        report.removed += 1;
+                    } else {
+                        report
+                            .failed
+                            .push(format!("{name}: {}", result.error.unwrap_or_default()));
+                    }
+                }
+            }
+        }
+        tracing::info!(
+            removed = report.removed,
+            kept_unpushed = report.kept_unpushed.len(),
+            kept_open = report.kept_open.len(),
+            failed = report.failed.len(),
+            discard_unpushed,
+            purpose = "purge the SpeleoDB cache (user confirmed)",
+            "speleodb: purged cached copies"
+        );
+        report
+    }
+
+    /// May the copy of `project_id` be removed now?
+    fn cached_copy_removal(
+        &self,
+        root: &Path,
+        project_id: &str,
+        discard_unpushed: bool,
+    ) -> Removal {
+        let path = cache_path_in(root, project_id);
+        if self
+            .open_project_path()
+            .is_some_and(|open| super::project_io::same_file(&open, &path))
+        {
+            return Removal::Open;
+        }
+        if discard_unpushed {
+            return Removal::Allowed;
+        }
+        // The same reader the download guard uses: unreadable fails closed.
+        match self.local_copy_state(project_id, &path) {
+            Some(state) if !state.has_unpushed_edits && !state.state_unknown => Removal::Allowed,
+            _ => Removal::AtRisk,
+        }
+    }
+
+    /// Trash the `.stalx` (dropping its recents row), then remove what is left of
+    /// its directory: the owner record and any SQLite sidecars, which must not
+    /// outlive the file they belong to (a later download into the same directory
+    /// would otherwise replay them).
+    fn remove_cached_copy_files(&self, root: &Path, project_id: &str) -> CommandResult {
+        let result = self.delete_project(cache_path_in(root, project_id));
+        if !result.success {
+            return result;
+        }
+        match std::fs::remove_dir_all(root.join(project_id)) {
+            Ok(()) => result,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => result,
+            Err(e) => {
+                tracing::warn!(
+                    project_id = %project_id,
+                    error = %e,
+                    purpose = "remove a cached SpeleoDB copy",
+                    "speleodb: the copy is gone but its directory could not be removed"
+                );
+                let mut warnings = result.warnings.clone();
+                warnings.push(ValidationWarning {
+                    code: "speleodb_cache_leftovers".to_owned(),
+                    message: format!(
+                        "The copy was removed, but some of its files could not be ({e})."
+                    ),
+                    severity: WarningSeverity::Warning,
+                });
+                result.with_warnings(warnings)
+            }
+        }
+    }
+}
+
+/// The removal verdict for one copy.
+enum Removal {
+    Allowed,
+    Open,
+    AtRisk,
+}

@@ -164,6 +164,9 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.speleodb_rewind_target",
     "command.speleodb_discard_changes",
     "command.speleodb_discard_cached_copy",
+    "command.speleodb_cached_projects",
+    "command.speleodb_remove_cached_copy",
+    "command.speleodb_purge_cached_copies",
     "command.speleodb_update",
     "command.split_shot_at_distance",
     "command.suggest_all_import_placements",
@@ -1038,7 +1041,11 @@ mod tests {
         //       sessions: command.speleodb_discard_cached_copy = 654.
         //   The speleodb-close / speleodb-quit dialogs became one independent
         //   overlay (like held-lock-resume); their slots are retained.
-        assert_eq!(EVENT_NAMES.len(), 654);
+        //   + 3 cached SpeleoDB copies on the home screen: the owner-aware
+        //       listing, removing one copy, and Settings' purge:
+        //       command.speleodb_cached_projects, command.speleodb_remove_cached_copy,
+        //       command.speleodb_purge_cached_copies = 657.
+        assert_eq!(EVENT_NAMES.len(), 657);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

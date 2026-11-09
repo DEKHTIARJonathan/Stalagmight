@@ -279,6 +279,10 @@ impl AppState {
             // internal; subsequent editing must acquire and reconcile the lock.
             self.set_edit_enabled(false);
         }
+        // The new cached copy belongs to the account that created the project.
+        if let Some(email) = self.speleodb_my_email() {
+            self.speleodb_record_cache_owner(&dest, &endpoint, &email, &params.name);
+        }
 
         // 4. Initial push (BEST-EFFORT): acquire the lock (we are the creator/ADMIN, so
         //    it is free), upload the snapshot + `.tml` render, then release. No fence -

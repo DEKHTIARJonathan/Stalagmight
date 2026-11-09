@@ -664,6 +664,7 @@ impl AppState {
             local_path,
             offline: None,
             has_unpushed_edits: None,
+            read_only: None,
         })
     }
 }

@@ -34,7 +34,9 @@ use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
     SpeleoManagedFile,
 };
-use stalagmight_lib::core::state::VirtualShotMode;
+use stalagmight_lib::core::state::{
+    SpeleoCacheOwnership, SpeleoCachedProject, SpeleoPurgeReport, VirtualShotMode,
+};
 use stalagmight_lib::export::{ColorMode, ExportImageOptions, ImageFormat};
 use stalagmight_lib::logging::{LogsSince, RingLogEntry};
 use stalagmight_lib::models::placement_suggest::{
@@ -69,9 +71,9 @@ use stalagmight_lib::speleodb::{
     DoneResult, Permission, PushResult, RemoteState, SpeleoAccessVerification, SpeleoDbAction,
     SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult,
     SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectSummary, SpeleoPublishParams,
-    SpeleoPublishResult, SpeleoReleaseContext, SpeleoRevision, SpeleoRewindTarget,
-    SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult, TransportCause,
-    UnpushedLocalEdits, UpdateResult, Visibility,
+    SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoReleaseContext, SpeleoRevision,
+    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult,
+    TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_attribution::TileAttribution;
 use stalagmight_lib::tile_providers::TileProviderInfo;
@@ -397,6 +399,12 @@ fn main() {
     export::<SpeleoReleaseContext>(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bindings"));
     export::<SpeleoLoginResult>(&out_dir);
     export::<SpeleoOpenResult>(&out_dir);
+    // Why an open returned the cached copy read-only without a session.
+    export::<SpeleoReadOnlyOpen>(&out_dir);
+    // Cached SpeleoDB copies on the home screen (owner-aware) and the cache purge.
+    export::<SpeleoCacheOwnership>(&out_dir);
+    export::<SpeleoCachedProject>(&out_dir);
+    export::<SpeleoPurgeReport>(&out_dir);
     // #214 adopt-Ariane result (import + link + type-flip outcome), and what the
     // adoption's own hand-over to the server managed to do
     // #218 revision-history view: one projected commit
@@ -626,6 +634,10 @@ fn main() {
         "SpeleoReleaseContext",
         "SpeleoLoginResult",
         "SpeleoOpenResult",
+        "SpeleoReadOnlyOpen",
+        "SpeleoCacheOwnership",
+        "SpeleoCachedProject",
+        "SpeleoPurgeReport",
         "SpeleoRevision",
         "SpeleoUnwindTarget",
         "SpeleoRewindTarget",
