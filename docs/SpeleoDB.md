@@ -317,6 +317,11 @@ invalidates the operation. Older-version upload confirmation carries request/ses
 ownership with the pending exit and checks it before upload/release or hand-back,
 while retaining its cancel-return flow.
 
+The Open from SpeleoDB browser cannot be dismissed (Escape, the X, a backdrop click
+or Close) while an open it started is in flight, like the unpushed-local prompt. The
+open's error is shown inline; a 401 signs out and its message stays on the login
+prompt. If something else takes the dialog slot mid-open, the error is toasted
+instead and a 401 still ends the session.
 Cancelling read-only or locked-project warnings in the browser or managed-file prompt
 restores retry and dismissal without an error. A replaced managed-file prompt retains
 ownership of its own controls. A superseded discard-and-open in the unpushed-local
