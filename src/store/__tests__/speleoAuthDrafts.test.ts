@@ -148,3 +148,38 @@ describe('one question for unsaved edits and unsent SpeleoDB input', () => {
     expect(useExitConfirm.getState().request).toBeNull();
   });
 });
+
+describe('applyPendingAuth beforeApply (Settings saves its staged settings there)', () => {
+  const save = vi.fn(async () => { order.push('save'); return true; });
+  beforeEach(() => { save.mockClear(); });
+
+  it('runs after the sign-out guard and the drafts question, before the login', async () => {
+    signedInAs('writer@example.com');
+    parkDescription();
+    stageLogin('other@example.com');
+    const pending = useSpeleoStore.getState().applyPendingAuth(ENDPOINT, false, { beforeApply: save });
+    await answerDrafts(true);
+    expect(await pending).toEqual({ ok: true });
+    expect(order.slice(0, 4)).toEqual(['sign-out guard', 'drafts question', 'save', 'speleodb_login']);
+  });
+
+  it('a cancelled question never runs it', async () => {
+    signedInAs('writer@example.com');
+    parkDescription();
+    stageLogin('other@example.com');
+    const pending = useSpeleoStore.getState().applyPendingAuth(ENDPOINT, false, { beforeApply: save });
+    await answerDrafts(false);
+    expect(await pending).toEqual({ ok: false, cancelled: true });
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('answering false cancels the account change and keeps the staged credentials', async () => {
+    useSpeleoStore.setState({ session: null });
+    stageLogin('other@example.com');
+    const staged = useSpeleoStore.getState().pendingAuth;
+    const result = await useSpeleoStore.getState().applyPendingAuth(ENDPOINT, false, { beforeApply: async () => false });
+    expect(result).toEqual({ ok: false, cancelled: true });
+    expect(order).not.toContain('speleodb_login');
+    expect(useSpeleoStore.getState().pendingAuth).toBe(staged);
+  });
+});

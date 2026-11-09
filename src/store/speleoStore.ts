@@ -420,8 +420,20 @@ interface SpeleoStore {
   /** Apply the staged login/logout (A2). ok=false carries the raw error.
       `endpoint` and `insecureHttp` are the connection to log in over - the values
       on screen in Settings, which the backend saves with the session on success
-      (`insecureHttp` omitted = the saved choice). */
-  applyPendingAuth: (endpoint: string | null, insecureHttp?: boolean) => Promise<{ ok: boolean; error?: unknown; cancelled?: boolean }>;
+      (`insecureHttp` omitted = the saved choice; only a development build offers
+      one, and only a development build's backend honours it).
+
+      Order: the sign-out flow (when an account is signed out or replaced), then
+      the one question about what the change drops (unsent drafts, unsaved
+      edits), then `opts.beforeApply` (Settings' Connect saves its staged
+      settings there), then the account change itself. A cancelled question, or
+      `beforeApply` answering `false`, changes nothing: `{ ok: false,
+      cancelled: true }`. */
+  applyPendingAuth: (
+    endpoint: string | null,
+    insecureHttp?: boolean,
+    opts?: { beforeApply?: () => Promise<boolean> },
+  ) => Promise<{ ok: boolean; error?: unknown; cancelled?: boolean }>;
 
   // --- link/edit (action shell #204) ---
   /**
@@ -697,7 +709,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   clearPendingAuth: () => set({ pendingAuth: null, authError: null }),
   setAuthError: (authError) => set({ authError }),
 
-  applyPendingAuth: async (endpoint, insecureHttp) => {
+  applyPendingAuth: async (endpoint, insecureHttp, opts = {}) => {
     const p = get().pendingAuth;
     if (!p) return { ok: true };
     const request = ++authRequestSeq;
@@ -728,6 +740,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         ? { signedOut: true }
         : { email: p.useToken ? null : p.email.trim(), endpoint: (endpoint ?? '').trim() || previousEndpoint || null },
     })) return { ok: false, cancelled: true };
+    if (!current()) return { ok: false, cancelled: true };
+    // Only once every question is answered: a cancelled one must leave the
+    // caller's staged settings unsaved too.
+    if (opts.beforeApply && !await opts.beforeApply()) return { ok: false, cancelled: true };
     if (!current()) return { ok: false, cancelled: true };
     try {
       if (p.kind === 'logout') {

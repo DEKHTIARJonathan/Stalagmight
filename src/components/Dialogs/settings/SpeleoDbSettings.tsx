@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertDialog } from '../AlertDialog';
 import { Button } from '../../common/Button';
+import { Toggle } from '../../common/Toggle';
 import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
 import { SpeleoCachePurgeSection } from './SpeleoCachePurgeSection';
@@ -64,7 +65,17 @@ export function SpeleoDbSettings({
 
   const showLoginForm = pendingAuth?.kind === 'login' || !session?.loggedIn;
 
-  // Persist preferences first, then authenticate only the request this form issued.
+  // The insecure-HTTP option exists only in a development build (docs/debug-gates.md);
+  // there the box on screen is what Connect uses. A release build sends no choice,
+  // and its backend ignores the stored one.
+  const insecureHttpOption = import.meta.env.DEV;
+  // Connected (or about to be), the connection is fixed: changing it is a
+  // Disconnect and a fresh Connect.
+  const connectionLocked = busy || loggingIn || session?.loggedIn === true;
+
+  // The account-change questions first (the sign-out flow when an account is
+  // replaced, unsent drafts the change would drop), then the staged settings are
+  // saved, then only the request this form issued authenticates.
   const canTryLogin = login.useToken ? login.token.trim().length > 0 : login.email.trim().length > 0;
   const handleTryLogin = async () => {
     // Ensure the typed credentials are staged before applyPendingAuth reads them
@@ -73,14 +84,17 @@ export function SpeleoDbSettings({
     const issuedDialog = useUIStore.getState().dialogData;
     const issuedAuth = useSpeleoStore.getState().pendingAuth;
     const issuedGeneration = useSpeleoStore.getState().sessionGeneration;
+    const ownsConnect = () => {
+      const dialog = useUIStore.getState();
+      const account = useSpeleoStore.getState();
+      return mounted.current && dialog.activeDialog === 'settings' && dialog.dialogData === issuedDialog &&
+        account.pendingAuth === issuedAuth && account.sessionGeneration === issuedGeneration;
+    };
     setLoggingIn(true);
     try {
-      if (saveBeforeConnect && !await saveBeforeConnect()) return;
-      const beforeAuth = useUIStore.getState();
-      const account = useSpeleoStore.getState();
-      if (!mounted.current || beforeAuth.activeDialog !== 'settings' || beforeAuth.dialogData !== issuedDialog ||
-          account.pendingAuth !== issuedAuth || account.sessionGeneration !== issuedGeneration) return;
-      const result = await applyPendingAuth(speleo.endpoint, speleo.insecure_http);
+      const result = await applyPendingAuth(speleo.endpoint, insecureHttpOption ? speleo.insecure_http : undefined, {
+        beforeApply: async () => (!saveBeforeConnect || await saveBeforeConnect()) && ownsConnect(),
+      });
       if (result.cancelled) return;
       // A slow login may finish after Settings was dismissed or replaced.
       // Its session still applies, but it must not close or edit the new dialog.
@@ -141,10 +155,18 @@ export function SpeleoDbSettings({
               variant="danger"
               disabled={busy || loggingIn}
               onClick={() => {
+                // Never a direct logout: applyPendingAuth runs the sign-out flow
+                // first (un-uploaded work, locks handed back). Cancelling it leaves
+                // the session, and Settings, as they were.
                 setLoggingIn(true);
-                setPendingAuth({ kind: 'logout' });
+                const logout = { kind: 'logout' } as const;
+                setPendingAuth(logout);
                 void applyPendingAuth(speleo.endpoint).then((result) => {
-                  if (!result.ok && !result.cancelled) setFailure(humanizeSpeleoError(result.error));
+                  if (result.cancelled) {
+                    if (useSpeleoStore.getState().pendingAuth === logout) setPendingAuth(null);
+                  } else if (!result.ok) {
+                    setFailure(humanizeSpeleoError(result.error));
+                  }
                 }).finally(() => setLoggingIn(false));
               }}
               data-testid="speleodb-settings-logout"
@@ -244,7 +266,7 @@ export function SpeleoDbSettings({
           isChanged={isFieldChanged(changedFields, 'speleodb.endpoint')}
           onReset={() => onChange({ speleodb: { ...speleo, endpoint: defaultConfig.speleodb.endpoint } })}
           resetLabel={t('common.actions.reset')}
-          isDefault={busy || loggingIn || session?.loggedIn === true || speleo.endpoint === defaultConfig.speleodb.endpoint}
+          isDefault={connectionLocked || speleo.endpoint === defaultConfig.speleodb.endpoint}
           data-testid="setting-speleodb-endpoint"
         >
           <input
@@ -253,7 +275,7 @@ export function SpeleoDbSettings({
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
-            disabled={busy || loggingIn || session?.loggedIn === true}
+            disabled={connectionLocked}
             value={(session?.loggedIn ? session.endpoint : speleo.endpoint) ?? ''}
             onChange={(e) => handleEndpointChange(e.target.value)}
             className="w-full max-w-64 px-2 py-1 bg-background border border-border rounded text-sm"
@@ -263,7 +285,32 @@ export function SpeleoDbSettings({
           />
         </SettingRow>
 
-
+        {insecureHttpOption && (
+          <>
+            <SettingRow
+              label={t('settings.speleodb.insecureHttp.label')}
+              helpText={t('settings.speleodb.insecureHttp.help')}
+              isChanged={isFieldChanged(changedFields, 'speleodb.insecure_http')}
+              onReset={() => onChange({ speleodb: { ...speleo, insecure_http: defaultConfig.speleodb.insecure_http } })}
+              resetLabel={t('common.actions.reset')}
+              isDefault={connectionLocked || speleo.insecure_http === defaultConfig.speleodb.insecure_http}
+              data-testid="setting-speleodb-insecure-http"
+            >
+              <Toggle
+                disabled={connectionLocked}
+                checked={speleo.insecure_http}
+                onChange={(insecure_http) => onChange({ speleodb: { ...speleo, insecure_http } })}
+                aria-label={t('settings.speleodb.insecureHttp.aria')}
+                data-testid="toggle-speleodb-insecure-http"
+              />
+            </SettingRow>
+            {speleo.insecure_http && (
+              <div className="mb-2 p-3 bg-warning-20 text-warning-text rounded text-xs" data-testid="speleodb-insecure-http-warning">
+                {t('settings.speleodb.insecureHttp.warning')}
+              </div>
+            )}
+          </>
+        )}
       </SettingsSection>
 
       <SpeleoCachePurgeSection />
