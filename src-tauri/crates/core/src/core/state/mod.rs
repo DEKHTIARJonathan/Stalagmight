@@ -59,6 +59,7 @@ mod crash_property_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
+    clippy::panic,
     clippy::print_stderr,
     reason = "live check: fails loudly, and reports each step it proved"
 )]
