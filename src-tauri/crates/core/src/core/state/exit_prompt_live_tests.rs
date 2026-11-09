@@ -188,7 +188,7 @@ fn close_release(state: &AppState) {
 
 fn done(state: &AppState, message: &str) {
     match state.speleodb_done_acknowledged(Some(message.to_owned()), false) {
-        Ok(DoneResult::Released) => {}
+        Ok(DoneResult::Released { .. }) => {}
         other => std::panic::panic_any(format!("upload did not release: {other:?}")),
     }
 }

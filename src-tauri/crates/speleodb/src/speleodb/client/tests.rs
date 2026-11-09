@@ -917,3 +917,32 @@ fn a_tls_handshake_failure_is_classified_as_tls() {
         "got {err:?}"
     );
 }
+
+#[test]
+fn an_upload_over_the_server_limit_is_refused_before_any_request() {
+    // sdk#3: the server reads the whole body before refusing an oversized file,
+    // so the client refuses it first - no connection, no body. The limit is
+    // lowered for the test; the production value is the server's 24,657,920.
+    assert_eq!(SERVER_UPLOAD_LIMIT_BYTES, 24_657_920);
+    let _settings = TestSettings::install(Settings {
+        upload_limit: 16,
+        ..Settings::default()
+    });
+    let f = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(f.path(), b"SQLite format 3\0over the limit").unwrap();
+    let s = Server::replies(Vec::new());
+    let err = upload_stalx(&s.base, "t", false, ID, f.path(), "Too large").unwrap_err();
+    assert!(
+        matches!(err, SpeleoDbError::UploadTooLarge { size: 30, limit: 16 }),
+        "got {err:?}"
+    );
+    assert!(s.finish().is_empty(), "nothing may reach the server");
+
+    // At the limit the upload proceeds.
+    std::fs::write(f.path(), b"SQLite format 3\0").unwrap();
+    let s = Server::json(
+        json!({"project":project_json(),"hexsha":SHA,"files":["project.stalx"],"geojson_status":"skipped","message":"Saved","browser_url":null}),
+    );
+    upload_stalx(&s.base, "t", false, ID, f.path(), "Fits").unwrap();
+    assert_eq!(s.finish().len(), 1);
+}

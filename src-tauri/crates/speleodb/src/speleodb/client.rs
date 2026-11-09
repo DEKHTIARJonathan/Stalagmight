@@ -27,11 +27,24 @@ fn upload_timeout(bytes: usize) -> Duration {
 const JSON_LIMIT: usize = 10 * 1024 * 1024;
 pub(crate) const NATIVE_LIMIT: u64 = 512 * 1024 * 1024;
 
+/// The largest project file SpeleoDB accepts in one upload, in bytes. A larger
+/// file is refused with a 400 only AFTER its whole body has been sent, so the
+/// push path checks against this first (sdk#3).
+///
+/// The value is an upstream bug, not a design limit. The server compares the
+/// upload against `DJANGO_UPLOAD_TOTAL_FILES_LIMIT * 1024 * 1204`: that setting is
+/// the maximum file COUNT (20), not the intended
+/// `DJANGO_UPLOAD_TOTAL_FILESIZE_MB_LIMIT` (150 MB), and `1204` is a typo for
+/// `1024`. 20 * 1024 * 1204 = 24,657,920 bytes (about 23.5 MiB). Raise this to the
+/// real limit once the server is fixed.
+pub const SERVER_UPLOAD_LIMIT_BYTES: u64 = 24_657_920;
+
 #[derive(Clone, Copy)]
 struct Settings {
     timeout: Option<Duration>,
     retries: u32,
     native_limit: u64,
+    upload_limit: u64,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -39,6 +52,7 @@ impl Default for Settings {
             timeout: None,
             retries: 2,
             native_limit: NATIVE_LIMIT,
+            upload_limit: SERVER_UPLOAD_LIMIT_BYTES,
         }
     }
 }
@@ -412,10 +426,15 @@ fn client(
     insecure: bool,
     timeout: Duration,
 ) -> Result<SdkClient, SpeleoDbError> {
-    let settings = Settings::default();
+    SdkClient::new(base, token, insecure, timeout, settings())
+}
+/// The transport settings in force: the defaults, or a test's override.
+fn settings() -> Settings {
     #[cfg(test)]
-    let settings = TEST_SETTINGS.with(|value| value.get()).unwrap_or(settings);
-    SdkClient::new(base, token, insecure, timeout, settings)
+    if let Some(settings) = TEST_SETTINGS.with(std::cell::Cell::get) {
+        return settings;
+    }
+    Settings::default()
 }
 
 pub fn login(
@@ -700,6 +719,15 @@ pub fn upload_stalx(
         return Err(SpeleoDbError::Parse(
             "commit message must not be empty".into(),
         ));
+    }
+    // sdk#3: the server reads the whole body before it refuses an oversized file,
+    // so refuse it here, before reading it or opening a connection. The push path
+    // shrinks the snapshot first (`core::state::speleodb_upload_limit`); this is the
+    // backstop that keeps every caller from sending a body that cannot land.
+    let size = std::fs::metadata(path).map_err(io_error)?.len();
+    let limit = settings().upload_limit;
+    if size > limit {
+        return Err(SpeleoDbError::UploadTooLarge { size, limit });
     }
     let content = std::fs::read(path).map_err(io_error)?;
     let c = client(base, Some(token), insecure, upload_timeout(content.len()))?;

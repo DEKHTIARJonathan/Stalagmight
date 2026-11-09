@@ -39,7 +39,11 @@ pub(super) enum PushOutcome {
     /// The push landed (200 → BASE advanced; or 304 → already at the tip). The dirty
     /// bit was cleared UNLESS an edit landed after push_start (then it is retained for
     /// the next push), so the caller must re-check it before releasing the lock.
-    Confirmed,
+    ///
+    /// `undo_history_omitted` (sdk#3): the uploaded copy left its undo history out
+    /// to fit under the server's upload limit (see
+    /// [`fit_snapshot_to_upload_limit`]); a new revision landed without it.
+    Confirmed { undo_history_omitted: bool },
     /// A stranger commit sits between our BASE and the server tip - never pushed.
     /// Stay locked + dirty for the user to reconcile (#198).
     Diverged,
@@ -75,6 +79,58 @@ pub(super) fn clear_snapshot_dirty(
 ) -> Result<(), SpeleoDbError> {
     crate::persistence::Database::sanitize_push_snapshot(snapshot, keep_undo, inherited_through)
         .map_err(|e| SpeleoDbError::Io(format!("could not sanitize the push snapshot: {e}")))
+}
+
+/// sdk#3: make the sanitized push SNAPSHOT fit SpeleoDB's upload limit before a
+/// byte is sent. The server only refuses an oversized file after receiving all of
+/// it (a Fatal 400 that keeps every later push failing the same way), so the size
+/// is checked here, against `limit` ([`client::SERVER_UPLOAD_LIMIT_BYTES`]).
+///
+/// - Within the limit: unchanged, `Ok(false)`.
+/// - Over it, with the undo history in the copy (`history_included`, Full mode):
+///   the copy is re-sanitized on the upload-without-history path every other undo
+///   mode takes (`keep_undo = false`: `undo_stack` emptied, file compacted). If that
+///   fits, `Ok(true)`: the survey data uploads in full, the revision just carries no
+///   history to unwind.
+/// - Still over (or no history to drop): `Err(UploadTooLarge)`, and nothing is sent.
+///
+/// Only the copy is touched. The live project, its undo stack and its dirty bit
+/// stay as they are; what happens to the local stack after a landed push is the
+/// same per-push rule as in every mode (`speleodb_clear_undo_after_push`).
+pub(super) fn fit_snapshot_to_upload_limit(
+    snapshot: &Path,
+    history_included: bool,
+    limit: u64,
+) -> Result<bool, SpeleoDbError> {
+    let size_of = |path: &Path| {
+        std::fs::metadata(path).map(|m| m.len()).map_err(|e| {
+            SpeleoDbError::Io(format!("could not read the push snapshot size: {e}"))
+        })
+    };
+    let size = size_of(snapshot)?;
+    if size <= limit {
+        return Ok(false);
+    }
+    if !history_included {
+        return Err(SpeleoDbError::UploadTooLarge { size, limit });
+    }
+    // `inherited_through` only narrows a KEPT history; with none kept it is moot.
+    clear_snapshot_dirty(snapshot, false, None)?;
+    let without_history = size_of(snapshot)?;
+    if without_history > limit {
+        return Err(SpeleoDbError::UploadTooLarge {
+            size: without_history,
+            limit,
+        });
+    }
+    tracing::info!(
+        size,
+        without_history,
+        limit,
+        purpose = "fit the upload under the server size limit (sdk#3)",
+        "left the undo history out of the uploaded copy; the live project is untouched"
+    );
+    Ok(true)
 }
 
 /// Read the undo-sharing inputs from the snapshot that will actually be uploaded.
@@ -210,11 +266,15 @@ impl AppState {
         let outcome = if link.has_unpushed_edits {
             self.speleodb_push(&endpoint, &token, insecure_http, &link, message, generation)?
         } else {
-            PushOutcome::Confirmed
+            PushOutcome::Confirmed {
+                undo_history_omitted: false,
+            }
         };
 
         match outcome {
-            PushOutcome::Confirmed => {
+            PushOutcome::Confirmed {
+                undo_history_omitted,
+            } => {
                 // A 200 push advances BASE but RETAINS the dirty bit when an edit
                 // landed after push_start (edits_captured_by_push == false): that edit
                 // is not on the server yet. Re-read the link and, if it is still dirty,
@@ -258,7 +318,9 @@ impl AppState {
                 // it licensed is over. This project's claim, not the account's whole
                 // set - Done released one mutex.
                 self.speleodb_forget_lock_acquired_for(&link.project_id);
-                Ok(DoneResult::Released)
+                Ok(DoneResult::Released {
+                    undo_history_omitted: undo_history_omitted.then_some(true),
+                })
             }
             // Stay locked + dirty so the user can reconcile / a retry can recover.
             PushOutcome::Diverged => Ok(DoneResult::DivergenceNeeded),
@@ -302,14 +364,18 @@ impl AppState {
         }
         self.speleodb_guard_older_version_push(&link, accept_older_version)?;
         if !link.has_unpushed_edits {
-            return Ok(PushResult::Pushed);
+            return Ok(PushResult::Pushed {
+                undo_history_omitted: None,
+            });
         }
 
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
         match self.speleodb_push(&endpoint, &token, insecure_http, &link, message, generation)? {
-            PushOutcome::Confirmed => {
+            PushOutcome::Confirmed {
+                undo_history_omitted,
+            } => {
                 // A late edit after push_start leaves the dirty bit set (not yet on
                 // the server); report PushUnconfirmed so a retry re-pushes it. The
                 // lock is retained either way.
@@ -321,7 +387,9 @@ impl AppState {
                 if still_dirty {
                     Ok(PushResult::PushUnconfirmed)
                 } else {
-                    Ok(PushResult::Pushed)
+                    Ok(PushResult::Pushed {
+                        undo_history_omitted: undo_history_omitted.then_some(true),
+                    })
                 }
             }
             PushOutcome::Diverged => Ok(PushResult::DivergenceNeeded),
@@ -661,7 +729,9 @@ impl AppState {
                 // ahead of the fallible link write, like the 200 and 304 arms: the
                 // recall went stale when that upload landed, so a failure to record
                 // the adoption locally must not be what leaves it standing.
-                let landed = PushOutcome::Confirmed;
+                let landed = PushOutcome::Confirmed {
+                    undo_history_omitted: false,
+                };
                 let _project = self.speleodb_push_project_guard(generation)?;
                 self.speleodb_mutate_link(|l| {
                     l.base_commit_sha = tip.clone();
@@ -816,6 +886,13 @@ impl AppState {
         clear_snapshot_dirty(&snapshot, keep_undo, inherited_through.as_deref())
             .map_err(local_dto)?;
 
+        // sdk#3: SpeleoDB refuses a file over its upload limit only after the whole
+        // body has arrived. Fit the COPY first - leaving its undo history out when
+        // that is enough - and refuse before sending anything when nothing fits.
+        let undo_history_omitted =
+            fit_snapshot_to_upload_limit(&snapshot, keep_undo, client::SERVER_UPLOAD_LIMIT_BYTES)
+                .map_err(|e| dto_for_error(Endpoint::UploadStalx, &e))?;
+
         {
             let _project = self.speleodb_push_project_guard(generation)?;
         }
@@ -846,7 +923,9 @@ impl AppState {
                 // with the new tip, which is the exact rollback the recall drop is
                 // here to prevent. The outcome is held and returned unchanged, so the
                 // "landed" conclusion and the invalidation still cannot drift apart.
-                let landed = PushOutcome::Confirmed;
+                let landed = PushOutcome::Confirmed {
+                    undo_history_omitted,
+                };
                 self.speleodb_heal_managed_type(
                     endpoint,
                     token,
@@ -902,7 +981,10 @@ impl AppState {
                     // identical content - and it is THAT upload which made the recall
                     // stale, whatever this attempt returns. Concluded ahead of the
                     // fallible link write for the same reason as the 200 arm.
-                    let landed = PushOutcome::Confirmed;
+                    // A 304 made no new revision, so nothing landed without history.
+                    let landed = PushOutcome::Confirmed {
+                        undo_history_omitted: false,
+                    };
                     self.speleodb_heal_managed_type(
                         endpoint,
                         token,

@@ -33,6 +33,9 @@ connection-unavailable or timeout failure allows opening an existing cache, whos
 stored project ID and endpoint must match. The UI announces that offline fallback
 and preserves the cached unsynced-edit state. Authentication, permission, missing
 remote project, TLS and invalid-download errors do not fall back to the cache.
+An `http://` hostname endpoint that does not resolve is offline, not insecure: the
+endpoint policy reports it as the same DNS failure, so it falls back exactly as an
+`https://` endpoint does (see Authentication and transport).
 If a successful download would overwrite unsynced edits, the user can cancel or
 explicitly confirm replacing them; the prompt offers no online local-copy shortcut.
 
@@ -90,6 +93,24 @@ snapshot remains independent of subsequent local edits. The authoritative upload
 result is its top-level `hexsha`; an HTTP 304 remains the existing no-change outcome.
 An uncertain upload does not clear dirty state or automatically release the lock.
 
+The server accepts at most 24,657,920 bytes per upload and refuses a larger file
+only after receiving all of it. That figure is an upstream bug (the check
+multiplies the maximum file COUNT by `1024 * 1204`, a typo for `1024`); it lives in
+one constant, `client::SERVER_UPLOAD_LIMIT_BYTES`, to raise once the server is
+fixed. The sanitized snapshot is measured before anything is sent:
+
+- within the limit, it uploads unchanged;
+- over it with the undo history included (Full mode), the copy is re-sanitized on
+  the upload-without-history path the other undo modes take. If that fits, the
+  survey data uploads in full and the success toast becomes a warning that the
+  revision was uploaded without undo history (`undo_history_omitted` on the
+  `released` / `pushed` result). Only the copy changes; after the landed push the
+  local undo stack follows the same per-push rule as in every mode;
+- still over, the push is refused before any request with a clear "too large"
+  error naming both sizes. Nothing is uploaded, and the project stays dirty and
+  locked. `upload_stalx` itself refuses an over-limit file the same way, so no
+  caller can send one.
+
 Downloads stream to an owned temporary file, with a 512 MiB limit. The cache
 installer and downloaded-revision policy probes open private copies through
 `open_existing_untrusted`, with a 64 MiB SQLite value limit and a 30-second
@@ -131,7 +152,11 @@ cross the frontend as profile data. Session generations
 and per-account lock claims continue to guard late responses and account changes.
 
 The existing HTTP policy permits loopback/private deployments and requires HTTPS
-elsewhere unless explicitly configured otherwise. Redirects and implicit Reqwest
+elsewhere unless explicitly configured otherwise. An `http://` hostname is resolved
+first and allowed only if every address is loopback, private or link-local; a
+resolvable public host is refused. A host that does not resolve is never dialed and
+is reported as the DNS transport failure, not as an insecure endpoint, so offline
+handling matches `https://`. Redirects and implicit Reqwest
 retries are disabled. Safe reads and token exchange retry transient transport/5xx
 failures twice, after 200 ms and 500 ms. Mutations are never automatically replayed.
 Metadata requests use 30 seconds and lock probes five seconds with no retries.
@@ -144,7 +169,19 @@ do not read the live-test environment variables.
 HTTP statuses retain their existing typed frontend actions: re-login on an expired
 session, read/fence handling for permissions, retryable read errors, and dirty-state
 retention for failed writes. Error text is for display; it does not determine sync
-or ownership decisions. Diagnostic transport errors omit request URLs.
+or ownership decisions. Diagnostic transport errors omit request URLs. A TLS
+handshake or certificate failure is classified as TLS from the typed `rustls`
+error. A 2xx body that does not match the SDK contract (for example a new server
+enum value) is a parse error: it keeps the SDK decoder detail, with quoted
+response strings redacted and the length capped, is logged with the endpoint
+kind, and is counted as its own `parse-error` traffic outcome (docs/telemetry.md).
+
+Revision times arrive as New York wall time with no zone (`YYYY/MM/DD HH:MM`).
+The backend passes them through; the revision history converts them to an
+instant with the webview's time-zone data (DST-aware) and shows the viewer's
+local time with its GMT offset, e.g. `Nov 9, 2026, 10:15 AM GMT+1`, with the
+relative time as the tooltip. An ISO-8601 time with an explicit offset is taken
+as sent.
 
 ## Project workspace
 

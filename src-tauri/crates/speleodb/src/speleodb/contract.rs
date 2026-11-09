@@ -257,6 +257,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         | SpeleoDbError::InvalidProjectId
         | SpeleoDbError::InvalidRevision
         | SpeleoDbError::InsecureEndpoint { .. }
+        | SpeleoDbError::UploadTooLarge { .. }
         | SpeleoDbError::NoRemoteProject => (SpeleoDbAction::Fatal, None, err.to_string()),
     };
     SpeleoErrorDto {

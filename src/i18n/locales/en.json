@@ -3406,6 +3406,8 @@
         "released": "Changes uploaded and the write lock released.",
         "releasedNothingToUpload": "Write lock released. Nothing to upload.",
         "pushed": "Changes pushed to SpeleoDB.",
+        "pushedWithoutHistory": "Changes pushed without undo history: the project is over the SpeleoDB size limit.",
+        "releasedWithoutHistory": "Changes uploaded without undo history (the project is over the SpeleoDB size limit) and the write lock released.",
         "startFailed": "Could not start editing",
         "updateFailed": "Could not update",
         "doneFailed": "Could not finish editing",

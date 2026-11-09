@@ -454,7 +454,16 @@ pub enum DoneResult {
     /// This is the ONLY arm that means "the local work is on the server", so it is
     /// the only one the frontend may clear its `hasUnpushedEdits` on. See
     /// [`Self::NotEditing`] for the case that used to be folded in here.
-    Released,
+    Released {
+        /// `Some(true)` when the uploaded copy left out the undo history to fit
+        /// under the server's size limit (sdk#3; see
+        /// [`super::client::SERVER_UPLOAD_LIMIT_BYTES`]). The survey data was
+        /// uploaded in full; the new revision just cannot be unwound step by step.
+        /// Absent otherwise.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        undo_history_omitted: Option<bool>,
+    },
     /// There was no edit session to finish: the backend's edit gate was already
     /// closed, so no lock was held, nothing was pushed and nothing was released.
     ///
@@ -611,7 +620,13 @@ pub enum PushResult {
     ///
     /// The ONLY arm that means "the local work is on the server" - see
     /// [`DoneResult::Released`] for the same distinction on the release verb.
-    Pushed,
+    Pushed {
+        /// As on [`DoneResult::Released`]: `Some(true)` when the upload left out
+        /// the undo history to fit under the server's size limit (sdk#3).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        undo_history_omitted: Option<bool>,
+    },
     /// There was no edit session to push from: the backend's edit gate was already
     /// closed, so no lock was held and nothing was uploaded. See
     /// [`DoneResult::NotEditing`] - same hazard, same frontend obligation (leave
@@ -741,7 +756,10 @@ mod tests {
             email: Some("holder@example.com".to_owned()),
         })
         .expect("serialize locked-by result");
-        let done = serde_json::to_string(&DoneResult::Released).expect("serialize done result");
+        let done = serde_json::to_string(&DoneResult::Released {
+            undo_history_omitted: Some(true),
+        })
+        .expect("serialize done result");
         let update = serde_json::to_string(&UpdateResult::FastForwarded {
             local_path: "/cache/project.stalx".to_owned(),
         })
@@ -948,5 +966,25 @@ mod tests {
         })
         .expect("serialize revision");
         assert!(!json.to_lowercase().contains("token"));
+    }
+
+    #[test]
+    fn a_landed_push_names_an_omitted_undo_history_only_when_it_happened() {
+        // sdk#3: the frontend keys on `kind` alone, so the ordinary success keeps
+        // its exact wire shape; the notice field appears only when set.
+        let plain = |v: &serde_json::Value| v.to_string();
+        let released = serde_json::to_value(DoneResult::Released {
+            undo_history_omitted: None,
+        })
+        .expect("serialize");
+        assert_eq!(plain(&released), r#"{"kind":"released"}"#);
+        let pushed = serde_json::to_value(PushResult::Pushed {
+            undo_history_omitted: Some(true),
+        })
+        .expect("serialize");
+        assert_eq!(
+            plain(&pushed),
+            r#"{"kind":"pushed","undo_history_omitted":true}"#
+        );
     }
 }
