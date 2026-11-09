@@ -60,7 +60,9 @@
 //!    (close, which delete and project-switch route through), and logout
 //!    (which ends the edit session without touching the slot - footgun 5.8).
 //!    Cancelling native loading also invalidates older cache-writing downloads,
-//!    including when the newly confirmed file fails to open.
+//!    including when the newly confirmed file fails to open. Authentication
+//!    publication/rejection and download reservations also invalidate old work;
+//!    installing a cache consumes its reservation before another can replace it.
 //! 3. NOT a bump: an undo rollback (`restore_snapshot_into` restores the SAME
 //!    open project - footgun 5.7), and every save (`save_project` never
 //!    replaces the slot; a Save a Copy does not even move `file_path`).
@@ -1711,6 +1713,8 @@ mod tests {
                 "project_create.rs",
                 "project_io.rs",
                 "project_load.rs",
+                "speleodb_cache_install.rs",
+                "speleodb_credentials.rs",
                 "speleodb_logout.rs",
             ],
             "the bump-site inventory moved; re-derive the session-boundary \

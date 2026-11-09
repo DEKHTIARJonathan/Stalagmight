@@ -87,14 +87,8 @@ impl AppState {
         latest_commit_sha: Option<String>,
         policy: LocalEditsPolicy,
     ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
-        let generation = {
-            let _project = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            self.speleodb_session_generation()
-        };
         validate_project_id(&project_id).map_err(local_dto)?;
+        let generation = self.reserve_download_generation();
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
@@ -294,6 +288,89 @@ mod tests {
             last_verify_at: None,
             undo_mode: None,
         }
+    }
+
+    #[test]
+    fn authentication_rejection_invalidates_downloads_without_closing_the_project() {
+        crate::test_helpers::with_isolated_config(|| {
+            let dir = tempfile::tempdir().expect("temp");
+            let source = dir.path().join("download.stalx");
+            let dest = dir.path().join("working.stalx");
+            for (path, name) in [(&source, "Remote"), (&dest, "Local")] {
+                let mut db = Database::open(path).expect("database");
+                db.save_project(&Project::new(name.into(), None))
+                    .expect("project");
+                db.save_speleo_link(Some(&link())).expect("link");
+            }
+            let state = AppState::new().expect("state");
+            assert!(state.open_project(dest.clone()).success);
+            let generation = state.reserve_download_generation();
+            state.speleodb_forget();
+            let before = std::fs::read(&dest).expect("cache");
+            assert!(matches!(
+                state.install_linked_download_with_limits(
+                    &source,
+                    &dest,
+                    link(),
+                    LocalEditsPolicy::Protect,
+                    InheritedUndo::Drop,
+                    DownloadOptions {
+                        generation: Some(generation),
+                        ..DownloadOptions::default()
+                    }
+                ),
+                Err(SpeleoDbError::SessionMoved)
+            ));
+            assert_eq!(std::fs::read(&dest).expect("cache"), before);
+            assert_eq!(state.get_project_state().expect("open").name, "Local");
+        });
+    }
+
+    #[test]
+    fn a_newer_download_reservation_excludes_older_cache_installations() {
+        crate::test_helpers::with_isolated_config(|| {
+            let dir = tempfile::tempdir().expect("temp");
+            let source = dir.path().join("download.stalx");
+            let dest = dir.path().join("working.stalx");
+            Database::open(&source)
+                .expect("db")
+                .save_project(&Project::new("New remote".into(), None))
+                .expect("project");
+            let state = AppState::new().expect("state");
+            let older = state.reserve_download_generation();
+            let newer = state.reserve_download_generation();
+            state
+                .install_linked_download_with_limits(
+                    &source,
+                    &dest,
+                    link(),
+                    LocalEditsPolicy::Protect,
+                    InheritedUndo::Drop,
+                    DownloadOptions {
+                        generation: Some(newer),
+                        ..DownloadOptions::default()
+                    },
+                )
+                .expect("newer installs");
+            let before = std::fs::read(&dest).expect("cache");
+            for generation in [older, newer] {
+                assert!(matches!(
+                    state.install_linked_download_with_limits(
+                        &source,
+                        &dest,
+                        link(),
+                        LocalEditsPolicy::Protect,
+                        InheritedUndo::Drop,
+                        DownloadOptions {
+                            generation: Some(generation),
+                            ..DownloadOptions::default()
+                        }
+                    ),
+                    Err(SpeleoDbError::SessionMoved)
+                ));
+                assert_eq!(std::fs::read(&dest).expect("cache"), before);
+            }
+        });
     }
 
     #[test]

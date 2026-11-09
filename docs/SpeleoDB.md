@@ -166,7 +166,8 @@ load hidden behind an indefinite loading overlay. Same-path opens share executio
 only while current; A-B-A selects the final A. Tree replacement retains its ordering
 contract while independent access probes can proceed concurrently.
 Remote opens carry ownership through warning, download and file load. A newer
-confirmed native transition invalidates the backend download's cache-write authority
+confirmed native transition, successful login, rejected authentication, or newer
+download reservation invalidates the backend download's cache-write authority
 as well as its frontend continuation, so a late pull cannot close the newer cache.
 Create-project operations distinguish preflight cancellation from dispatched-work
 reconciliation in the same way.

@@ -99,16 +99,6 @@ pub(super) fn drop_inherited_undo(dest: &Path) -> Result<(), SpeleoDbError> {
     })
 }
 
-#[cfg(test)]
-fn sanitized_download_path(dest: &Path) -> std::path::PathBuf {
-    let mut name = dest
-        .file_name()
-        .unwrap_or_else(|| std::ffi::OsStr::new("project.stalx"))
-        .to_os_string();
-    name.push(".sanitize.tmp");
-    dest.with_file_name(name)
-}
-
 /// Re-apply preserved local `display_settings` into a freshly-downloaded cache file
 /// (companion to [`preserved_display_settings`]). Best-effort per key - a failed
 /// restore only means that one view toggle falls back to its default.
@@ -578,9 +568,14 @@ mod tests {
             "{err}"
         );
         assert_eq!(std::fs::read(&dest).expect("read destination"), before);
-        assert!(
-            !sanitized_download_path(&dest).exists(),
-            "failed staged download must be cleaned up"
+        let remaining: Vec<_> = std::fs::read_dir(temp.path())
+            .expect("directory")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect();
+        assert_eq!(
+            remaining,
+            vec![std::ffi::OsString::from("project.stalx")],
+            "schema rejection must remove every actual staging file"
         );
     }
 

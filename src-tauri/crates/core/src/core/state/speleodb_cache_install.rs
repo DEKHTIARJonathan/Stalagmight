@@ -61,6 +61,15 @@ pub(super) fn stage_download(
 }
 
 impl AppState {
+    pub(super) fn reserve_download_generation(&self) -> u64 {
+        let _project = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.bump_speleodb_session();
+        self.speleodb_session_generation()
+    }
+
     /// Network and validation happen before this commit. A newer open or login
     /// invalidates the download; pending native readers exclude replacement too.
     pub(super) fn replace_cache_for_session(
@@ -131,6 +140,9 @@ impl AppState {
         }
         if replaces_open {
             self.close_open_project_locked(&mut project);
+        } else {
+            // Installing a cache is itself a completed mutation, even from home.
+            self.bump_speleodb_session();
         }
         sync_cache_directory(dest);
         Ok(view)
@@ -144,7 +156,7 @@ mod tests {
     use crate::models::Project;
 
     #[test]
-    fn failed_stage_sync_never_replaces_or_closes_the_working_cache() {
+    fn failed_stage_sync_preserves_the_cache_and_cleans_the_stage() {
         let dir = tempfile::tempdir().expect("temp");
         let source = dir.path().join("source.stalx");
         let dest = dir.path().join("working.stalx");
