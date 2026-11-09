@@ -87,7 +87,7 @@ place, recorded in Recent Projects, and the function returns with
 `CommandResult.unlinked_copy_path` set - steps 7, 8 and 9 are skipped on
 purpose, because the session stays on the managed file.
 
-### Frontend (`saveProject` in `projectStore.ts`)
+### Frontend (`saveProject` in `projectSaveActions.ts`)
 
 ```
 1. invoke('save_project', { path })
@@ -96,8 +96,11 @@ purpose, because the session stays on the managed file.
    file_path and isDirty are left untouched
 3. If saved_path in result, update project.file_path in store
 4. refreshUndoState() - lightweight, just fetches can_undo/can_redo booleans
-5. Set isDirty: false
+5. Clear isDirty only if no newer edits arrived during the save
 ```
+
+Save completion checks the original project identity and load generation before
+updating paths or dirty state. A late result cannot repaint a replacement project.
 
 The frontend calls `refreshProjectState()` after a save ONLY when the project entered the save with integrity issues (the backend's save-time heals mutate the live project). A clean save skips it: it changes no computed data (stations, stats, warnings), so recomputing everything would be wasted work. The only state that changes is `file_path` (on first save or save-as), which the backend returns via `CommandResult.saved_path`. When the save produced a detached copy instead (see Save a Copy below), the path comes back in `unlinked_copy_path` and `saved_path` is absent.
 
@@ -229,7 +232,7 @@ The `save_project` backend command returns the save path as a string in `Command
 |------|---------|
 | `src-tauri/crates/core/src/core/state/project_io.rs` | Backend `save_project`, atomic save logic (`open_project` lives in `project_load.rs`) |
 | `src-tauri/crates/core/src/core/command.rs` | `CommandResult` with `saved_path` field |
-| `src/store/projectStore.ts` | Frontend `saveProject()` action |
+| `src/store/projectSaveActions.ts` | Frontend `saveProject()` action and completion ownership |
 | `src/hooks/useAutoSave.ts` | Debounced auto-save hook |
 | `src-tauri/crates/persistence/src/persistence/sqlite.rs` | SQLite database operations |
 | `docs/undo-redo.md` | Undo/redo stack persistence details |

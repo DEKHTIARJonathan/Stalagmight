@@ -55,7 +55,7 @@ export interface SpeleoActions {
       worked. */
   forceEdit: () => Promise<boolean>;
   update: () => Promise<void>;
-  /** Push edits without releasing the lock (T2d) - collects an optional message.
+  /** Push edits without releasing the lock (T2d); uploading UI requires a message.
       Returns the backend outcome (or `null` if the call threw) so callers can keep
       a dialog open on a `divergence_needed` / `push_unconfirmed` result. */
   push: (
@@ -338,6 +338,7 @@ export function useSpeleoActions(): SpeleoActions {
       }
       const issuedFor = speleoProjectSessionIssuedFor(useSpeleoStore.getState().remoteProjectId);
       const current = () => speleoProjectSessionStillCurrent(issuedFor) && (opts?.isCurrent?.() ?? true);
+      const treeGeneration = useProjectStore.getState().projectTreeGeneration;
       const busyToken = beginBusy();
       // A fresh attempt supersedes the previous failure banner (#260); a landed
       // push clears the whole slot via applyPush, and any outcome that leaves the
@@ -345,11 +346,16 @@ export function useSpeleoActions(): SpeleoActions {
       // arm, which neither lands nor throws.
       clearPushFailedBanner();
       try {
-        const result = await invokeIpc<PushResult>('speleodb_push', {
+        let result = await invokeIpc<PushResult>('speleodb_push', {
           message: message ?? null,
           acceptOlderVersion: opts?.acceptOlderVersion ?? false,
         });
         if (!current()) return null;
+        // An edit can land after the backend decides the snapshot is clean but
+        // before this reply arrives. Keep those edits pending in the frontend too.
+        if (result.kind === 'pushed' && useProjectStore.getState().projectTreeGeneration !== treeGeneration) {
+          result = { kind: 'push_unconfirmed' };
+        }
         applyPush(result);
         const kind = asPushKind(result.kind);
         if (kind === 'pushed') {

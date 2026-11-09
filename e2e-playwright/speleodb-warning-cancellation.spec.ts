@@ -93,3 +93,57 @@ for (const button of ['speleodb-close-release', 'speleodb-close-push-release']) 
     await expect(page.getByTestId('speleodb-close-dialog')).toBeHidden();
   });
 }
+
+for (const outcome of ['pushed', 'push_unconfirmed', 'disk_failure'] as const) {
+  test(`Save + Push reports ${outcome} and retains the lock`, async ({ page }) => {
+    await setupMockedPage(page);
+    await createProject(page, 'Synthetic Save + Push');
+    await page.evaluate((outcome) => {
+      const w = window as unknown as {
+        __MOCK_IPC_OVERRIDES__: Record<string, unknown>;
+        __savePushCalls: string[];
+        __E2E_TEST__: {
+          projectStore: { setState: (state: unknown) => void };
+          speleoStore: { setState: (state: unknown) => void };
+          uiStore: { getState: () => { openDialog: (name: string, data?: unknown) => void } };
+        };
+      };
+      w.__savePushCalls = [];
+      w.__MOCK_IPC_OVERRIDES__ = { speleodb_session: { logged_in: true, user_email: 'synthetic@example.com', endpoint: 'https://synthetic.example' } };
+      for (const command of ['save_project', 'speleodb_push', 'speleodb_done', 'speleodb_release_current_lock']) {
+        Object.defineProperty(w.__MOCK_IPC_OVERRIDES__, command, {
+          get: () => {
+            w.__savePushCalls.push(command);
+            return command === 'save_project'
+              ? { success: outcome !== 'disk_failure', error: outcome === 'disk_failure' ? 'Synthetic disk failure' : null }
+              : { kind: outcome };
+          },
+        });
+      }
+      w.__E2E_TEST__.projectStore.setState({ isDirty: true });
+      w.__E2E_TEST__.speleoStore.setState({ busy: false, remoteProjectId: 'synthetic', session: { loggedIn: true, userEmail: 'synthetic@example.com', endpoint: 'https://synthetic.example' }, link: {
+        permission: 'READ_AND_WRITE', editState: 'editing', lockedByOther: false,
+        lockHolder: null, hasUnpushedEdits: true, unwound: false, forceEditing: false,
+        forceEditAllowed: false, remoteState: 'up_to_date', noAccess: false, serverError: null,
+      } });
+      w.__E2E_TEST__.uiStore.getState().openDialog('speleodb-done', { mode: 'push' });
+    }, outcome);
+    const confirm = page.getByTestId('speleodb-done-confirm');
+    await expect(confirm).toBeDisabled();
+    await page.getByLabel('Commit message').fill('Synthetic survey update');
+    await confirm.focus();
+    await page.keyboard.press('Enter');
+    if (outcome === 'pushed') {
+      await expect(page.getByTestId('speleodb-done-dialog')).toBeHidden();
+    } else if (outcome === 'push_unconfirmed') {
+      await expect(page.getByTestId('speleodb-save-upload-failure')).toContainText('upload could not be confirmed');
+      await expect(page.getByLabel('Commit message')).toHaveValue('Synthetic survey update');
+    } else {
+      await expect(page.getByTestId('error-dialog')).toBeVisible();
+    }
+    const calls = await page.evaluate(() => (window as unknown as { __savePushCalls: string[] }).__savePushCalls);
+    expect(calls.slice(0, 2)).toEqual(outcome === 'disk_failure' ? ['save_project'] : ['save_project', 'speleodb_push']);
+    expect(calls).not.toContain('speleodb_done');
+    expect(calls).not.toContain('speleodb_release_current_lock');
+  });
+}
