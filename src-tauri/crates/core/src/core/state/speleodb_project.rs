@@ -411,12 +411,12 @@ mod tests {
         // sdk#3: the publish result tells the webview the first revision went up
         // without its undo history, exactly when the upload landed that way.
         let landed = |undo_history_omitted| {
-            Ok(PushOutcome::Confirmed {
+            publish_undo_history_omitted(&Ok(PushOutcome::Confirmed {
                 undo_history_omitted,
-            })
+            }))
         };
-        assert_eq!(publish_undo_history_omitted(&landed(true)), Some(true));
-        assert_eq!(publish_undo_history_omitted(&landed(false)), None);
+        assert_eq!(landed(true), Some(true));
+        assert_eq!(landed(false), None);
         assert_eq!(
             publish_undo_history_omitted(&Ok(PushOutcome::Unconfirmed)),
             None
