@@ -77,11 +77,10 @@ impl AppState {
     pub fn speleodb_get_project_metadata(&self) -> Result<SpeleoProjectMetadata, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
         let project = self
             .speleodb_handle_auth(
                 Endpoint::GetProject,
-                client::get_project(&endpoint, &token, insecure_http, &link.project_id),
+                client::get_project(&endpoint, &token, &link.project_id),
             )
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
         Ok(SpeleoProjectMetadata::from_project(&project))
@@ -147,7 +146,6 @@ impl AppState {
     ) -> Result<SpeleoPublishResult, SpeleoErrorDto> {
         let _lock_ops = self.speleodb_lock_ops_guard();
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
 
         // Guard rails BEFORE the irreversible create POST. The create is
         // non-idempotent, so any deterministic failure AFTER it would leak an empty
@@ -205,7 +203,7 @@ impl AppState {
         let created = self
             .speleodb_handle_auth(
                 Endpoint::CreateProject,
-                client::create_project_with(&endpoint, &token, insecure_http, &payload),
+                client::create_project_with(&endpoint, &token, &payload),
             )
             .map_err(|e| dto_for_error(Endpoint::CreateProject, &e))?;
 
@@ -295,13 +293,12 @@ impl AppState {
         //    editing → Done (which surfaces a genuine push error, in context, if any).
         match self.speleodb_handle_auth(
             Endpoint::Acquire,
-            client::acquire_lock(&endpoint, &token, insecure_http, &project_id),
+            client::acquire_lock(&endpoint, &token, &project_id),
         ) {
             Ok(_) => {
                 let upload = self.speleodb_upload(
                     &endpoint,
                     &token,
-                    insecure_http,
                     &link,
                     params.message.clone(),
                     // Skip the #216 name fold: the project was just created with this
@@ -310,7 +307,7 @@ impl AppState {
                     generation,
                 );
                 // Release the lock regardless of the push outcome (best-effort).
-                self.speleodb_release_best_effort(&endpoint, &token, insecure_http, &project_id);
+                self.speleodb_release_best_effort(&endpoint, &token, &project_id);
                 if let Err(e) = upload {
                     tracing::warn!(
                         error = ?e,
@@ -345,7 +342,7 @@ impl AppState {
             .speleodb_open_link()
             .is_ok_and(|l| l.base_commit_sha.is_none())
         {
-            match self.speleodb_server_head(&endpoint, &token, insecure_http, &project_id) {
+            match self.speleodb_server_head(&endpoint, &token, &project_id) {
                 Ok((tip, _)) if tip.is_some() => {
                     let _project = self
                         .project

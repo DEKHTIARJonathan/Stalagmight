@@ -204,11 +204,10 @@ impl AppState {
         self.speleodb_guard_older_version_push(&link, accept_older_version)?;
 
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
 
         // Dirty-bit gate: only push when there are un-pushed edits.
         let outcome = if link.has_unpushed_edits {
-            self.speleodb_push(&endpoint, &token, insecure_http, &link, message, generation)?
+            self.speleodb_push(&endpoint, &token, &link, message, generation)?
         } else {
             PushOutcome::Confirmed
         };
@@ -249,7 +248,7 @@ impl AppState {
                 // (now a no-op push, dirty already cleared) re-attempts it.
                 self.speleodb_handle_auth(
                     Endpoint::Release,
-                    client::release_lock(&endpoint, &token, insecure_http, &link.project_id),
+                    client::release_lock(&endpoint, &token, &link.project_id),
                 )
                 .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
                 let _project = self.speleodb_push_project_guard(generation)?;
@@ -306,9 +305,8 @@ impl AppState {
         }
 
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
 
-        match self.speleodb_push(&endpoint, &token, insecure_http, &link, message, generation)? {
+        match self.speleodb_push(&endpoint, &token, &link, message, generation)? {
             PushOutcome::Confirmed => {
                 // A late edit after push_start leaves the dirty bit set (not yet on
                 // the server); report PushUnconfirmed so a retry re-pushes it. The
@@ -357,14 +355,12 @@ impl AppState {
         &self,
         endpoint: &str,
         token: &str,
-        insecure_http: bool,
         link: &crate::models::SpeleoLink,
         tip: Option<&str>,
     ) -> Result<String, SpeleoErrorDto> {
         self.speleodb_fast_forward(
             endpoint,
             token,
-            insecure_http,
             link,
             tip,
             (
@@ -417,10 +413,9 @@ impl AppState {
         }
         let link = self.speleodb_validated_link()?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
 
         let (tip, _) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
-            self.speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
+            self.speleodb_server_head(&endpoint, &token, &link.project_id)
         })
         .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
 
@@ -430,13 +425,7 @@ impl AppState {
             purpose = "discard the local copy (#303)",
             "discarding local changes and returning to the server tip"
         );
-        self.speleodb_return_to_tip_discarding(
-            &endpoint,
-            &token,
-            insecure_http,
-            &link,
-            tip.as_deref(),
-        )?;
+        self.speleodb_return_to_tip_discarding(&endpoint, &token, &link, tip.as_deref())?;
 
         if !keep_lock {
             // Hand it back. `None` rather than a fabricated editing result, so no caller
@@ -511,9 +500,8 @@ impl AppState {
             )));
         }
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
         let (tip, commits) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
-            self.speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
+            self.speleodb_server_head(&endpoint, &token, &link.project_id)
         })
         .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
         {
@@ -548,7 +536,6 @@ impl AppState {
             .speleodb_fast_forward(
                 &endpoint,
                 &token,
-                insecure_http,
                 &link,
                 tip.as_deref(),
                 (
@@ -576,13 +563,12 @@ impl AppState {
         &self,
         endpoint: &str,
         token: &str,
-        insecure_http: bool,
         project_id: &str,
     ) -> Result<(Option<String>, Vec<crate::speleodb::models::RevisionCommit>), SpeleoDbError> {
         // No GetRevisions endpoint exists; reuse GetProject for the auth/error map.
         let history = self.speleodb_handle_auth(
             Endpoint::GetProject,
-            client::get_revisions(endpoint, token, insecure_http, project_id),
+            client::get_revisions(endpoint, token, project_id),
         )?;
         let tip = sync::tip_of(&history.commits).map(str::to_owned);
         Ok((tip, history.commits))
@@ -595,7 +581,6 @@ impl AppState {
         &self,
         endpoint: &str,
         token: &str,
-        insecure_http: bool,
         link: &crate::models::SpeleoLink,
         message: Option<String>,
         generation: u64,
@@ -613,7 +598,7 @@ impl AppState {
         // latest_commit field (see speleodb_server_head). The fetched history is
         // reused for ancestry recovery below, so this is the only revisions GET.
         let (tip, commits) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
-            self.speleodb_server_head(endpoint, token, insecure_http, project_id)
+            self.speleodb_server_head(endpoint, token, project_id)
         })
         .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
 
@@ -678,15 +663,7 @@ impl AppState {
         }
 
         // Normal push (Done / Push): fold the SDB-authoritative name pre-push (#216).
-        self.speleodb_upload(
-            endpoint,
-            token,
-            insecure_http,
-            link,
-            message,
-            true,
-            generation,
-        )
+        self.speleodb_upload(endpoint, token, link, message, true, generation)
     }
 
     /// Build the upload (VACUUM snapshot with the dirty bit cleared in the copy +
@@ -696,7 +673,6 @@ impl AppState {
         &self,
         endpoint: &str,
         token: &str,
-        insecure_http: bool,
         link: &crate::models::SpeleoLink,
         message: Option<String>,
         fold_metadata: bool,
@@ -736,7 +712,7 @@ impl AppState {
             // tree is cheaper than teaching it to parse Rust, and far cheaper than the
             // session-boundary bug it exists to catch. (Which is also why this comment
             // describes the needle rather than quoting it.)
-            match client::get_project(endpoint, token, insecure_http, project_id) {
+            match client::get_project(endpoint, token, project_id) {
                 Ok(fetched) => {
                     self.speleodb_fold_local_name(&fetched.name, project_id, generation);
                     server_kind = Some(fetched.kind);
@@ -821,14 +797,7 @@ impl AppState {
         }
         let result = self.speleodb_handle_auth(
             Endpoint::UploadStalx,
-            client::upload_stalx(
-                endpoint,
-                token,
-                insecure_http,
-                project_id,
-                &snapshot,
-                &commit_message,
-            ),
+            client::upload_stalx(endpoint, token, project_id, &snapshot, &commit_message),
         );
         match result {
             // 200: BASE advances to the adopted hexsha. Clear the dirty bit ONLY if
@@ -850,7 +819,6 @@ impl AppState {
                 self.speleodb_heal_managed_type(
                     endpoint,
                     token,
-                    insecure_http,
                     project_id,
                     server_kind.as_deref(),
                 );
@@ -906,7 +874,6 @@ impl AppState {
                     self.speleodb_heal_managed_type(
                         endpoint,
                         token,
-                        insecure_http,
                         project_id,
                         server_kind.as_deref(),
                     );
@@ -987,20 +954,13 @@ impl AppState {
         &self,
         endpoint: &str,
         token: &str,
-        insecure_http: bool,
         project_id: &str,
         server_kind: Option<&str>,
     ) {
         if !type_needs_managed_label(server_kind) {
             return;
         }
-        match client::patch_project(
-            endpoint,
-            token,
-            insecure_http,
-            project_id,
-            &managed_type_patch(),
-        ) {
+        match client::patch_project(endpoint, token, project_id, &managed_type_patch()) {
             Ok(_) => tracing::info!(
                 project_id,
                 from = server_kind.unwrap_or_default(),

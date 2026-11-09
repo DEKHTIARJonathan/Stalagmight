@@ -87,7 +87,7 @@ struct RewindCandidate {
     target: SpeleoRewindTarget,
     endpoint: String,
     token: String,
-    insecure_http: bool,
+
     project_id: String,
 }
 
@@ -407,9 +407,8 @@ impl AppState {
             return Ok(None);
         }
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
         let (_, commits) = self
-            .speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
+            .speleodb_server_head(&endpoint, &token, &link.project_id)
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
 
         let unwound_from = self.speleodb_unwound_from();
@@ -435,9 +434,8 @@ impl AppState {
     fn speleodb_rewind_candidate(&self) -> Result<Option<RewindCandidate>, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
         let (_, commits) = self
-            .speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
+            .speleodb_server_head(&endpoint, &token, &link.project_id)
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
         Ok(sync::rewind_target(
             self.speleodb_unwound_from().as_deref(),
@@ -448,7 +446,7 @@ impl AppState {
             target: SpeleoRewindTarget { hexsha, is_latest },
             endpoint,
             token,
-            insecure_http,
+
             project_id: link.project_id,
         }))
     }
@@ -478,7 +476,6 @@ impl AppState {
                 client::download_stalx_at_hash(
                     &candidate.endpoint,
                     &candidate.token,
-                    candidate.insecure_http,
                     &candidate.project_id,
                     &candidate.target.hexsha,
                 ),
@@ -510,9 +507,8 @@ impl AppState {
     ) -> Result<Vec<SpeleoRevision>, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
         let (_, commits) = self
-            .speleodb_server_head(&endpoint, &token, insecure_http, &project_id)
+            .speleodb_server_head(&endpoint, &token, &project_id)
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
         // Display ordering + the creation-commit filter live in `sync` so they are
         // unit-tested offline, and so it is obvious they touch ONLY this view: every
@@ -558,18 +554,11 @@ impl AppState {
         }
 
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
 
         let native = self
             .speleodb_handle_auth(
                 Endpoint::DownloadStalx,
-                client::download_stalx_at_hash(
-                    &endpoint,
-                    &token,
-                    insecure_http,
-                    &project_id,
-                    &hexsha,
-                ),
+                client::download_stalx_at_hash(&endpoint, &token, &project_id, &hexsha),
             )
             .map_err(|e| dto_for_error(Endpoint::DownloadStalx, &e))?;
 
@@ -592,7 +581,7 @@ impl AppState {
         };
 
         let server_tip = if restore {
-            match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
+            match client::get_revisions(&endpoint, &token, &project_id) {
                 Ok(history) => sync::tip_of(&history.commits)
                     .map(str::to_owned)
                     .or_else(|| open_link.base_commit_sha.clone()),

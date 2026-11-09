@@ -356,7 +356,6 @@ export const defaultConfig: Config = {
   "speleodb": {
     "endpoint": null,
     "email": null,
-    "insecure_http": false,
     "undo_mode": "full"
   }
 };

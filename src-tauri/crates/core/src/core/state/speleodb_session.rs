@@ -321,18 +321,17 @@ impl AppState {
         &self,
         endpoint: &str,
         token: &str,
-        insecure_http: bool,
         project_id: &str,
         entry_gen: u64,
     ) {
         if self.speleodb_session_generation() == entry_gen {
-            self.speleodb_release_best_effort(endpoint, token, insecure_http, project_id);
+            self.speleodb_release_best_effort(endpoint, token, project_id);
             return;
         }
         let params = LockReleaseParams {
             endpoint: endpoint.to_owned(),
             token: token.to_owned(),
-            insecure_http,
+
             project_id: project_id.to_owned(),
         };
         if let Err(e) = self.speleodb_release_unless_reclaimed_locked(&params) {
@@ -418,13 +417,7 @@ impl AppState {
             );
             return Ok(());
         }
-        client::release_lock(
-            &params.endpoint,
-            &params.token,
-            params.insecure_http,
-            &params.project_id,
-        )
-        .map(|_| ())
+        client::release_lock(&params.endpoint, &params.token, &params.project_id).map(|_| ())
     }
 
     /// A deferred release, from the moment it can finally be decided: stand the
@@ -638,7 +631,7 @@ impl AppState {
                 LockReleaseParams {
                     endpoint,
                     token,
-                    insecure_http: self.speleodb_insecure_http(),
+
                     project_id: claim.project_id.clone(),
                 },
                 claim,
@@ -969,7 +962,7 @@ mod tests {
         state.speleodb_note_lock_acquired(Some(ID));
 
         // The POST fails fast (nothing listens); best-effort is the contract.
-        state.speleodb_unwind_release("http://127.0.0.1:1/", "token", true, ID, entry_gen);
+        state.speleodb_unwind_release("http://127.0.0.1:1/", "token", ID, entry_gen);
 
         assert!(
             !state.speleodb_lock_acquired_here(ID),
@@ -990,7 +983,7 @@ mod tests {
         // The successor's claim, minted by ITS Start Editing.
         state.speleodb_note_lock_acquired(Some(ID));
 
-        state.speleodb_unwind_release("http://127.0.0.1:1/", "token", true, ID, entry_gen);
+        state.speleodb_unwind_release("http://127.0.0.1:1/", "token", ID, entry_gen);
 
         assert!(
             state.speleodb_lock_acquired_here(ID),
@@ -1236,7 +1229,7 @@ mod tests {
         let elsewhere = super::LockReleaseParams {
             endpoint: "http://127.0.0.1:2/".to_owned(),
             token: "tok".to_owned(),
-            insecure_http: true,
+
             project_id: ID.to_owned(),
         };
         assert!(
@@ -1250,7 +1243,7 @@ mod tests {
         let here = super::LockReleaseParams {
             endpoint: UNREACHABLE.to_owned(),
             token: "tok".to_owned(),
-            insecure_http: true,
+
             project_id: ID.to_owned(),
         };
         state
@@ -1474,7 +1467,7 @@ mod tests {
         let params = super::LockReleaseParams {
             endpoint: UNREACHABLE.to_owned(),
             token: "tok".to_owned(),
-            insecure_http: true,
+
             project_id: ID.to_owned(),
         };
         state
@@ -1492,7 +1485,7 @@ mod tests {
         let params = super::LockReleaseParams {
             endpoint: UNREACHABLE.to_owned(),
             token: "tok".to_owned(),
-            insecure_http: true,
+
             project_id: ID.to_owned(),
         };
 

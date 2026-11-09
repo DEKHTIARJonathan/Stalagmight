@@ -27,7 +27,7 @@ pub(super) struct LockReleaseParams {
     /// The bearer token for that endpoint.
     pub(super) token: String,
     /// The persisted public-`http://` allowance, threaded to `tls::enforce`.
-    pub(super) insecure_http: bool,
+
     /// The project whose write lock is being released.
     pub(super) project_id: String,
 }
@@ -147,7 +147,7 @@ impl AppState {
         Some(LockReleaseParams {
             endpoint,
             token,
-            insecure_http: self.speleodb_insecure_http(),
+
             project_id: link.project_id,
         })
     }
@@ -170,12 +170,7 @@ impl AppState {
     /// lifecycle transitions instead call the close/detached/bounded variants.
     pub fn speleodb_release_held_lock_best_effort(&self) {
         if let Some(p) = self.speleodb_held_lock_release_params() {
-            self.speleodb_release_best_effort(
-                &p.endpoint,
-                &p.token,
-                p.insecure_http,
-                &p.project_id,
-            );
+            self.speleodb_release_best_effort(&p.endpoint, &p.token, &p.project_id);
         }
     }
 
@@ -215,12 +210,7 @@ impl AppState {
     /// no future push for the veto to protect.
     pub(crate) fn speleodb_release_held_lock_abandoning(&self) {
         if let Some(p) = self.speleodb_abandon_lock_release_params() {
-            self.speleodb_release_best_effort(
-                &p.endpoint,
-                &p.token,
-                p.insecure_http,
-                &p.project_id,
-            );
+            self.speleodb_release_best_effort(&p.endpoint, &p.token, &p.project_id);
         }
     }
 
@@ -444,10 +434,8 @@ impl AppState {
             if !ran {
                 // No managed state to consult (unit tests, pre-`setup`): the raw
                 // POST this always did.
-                let _ = tx.send(
-                    client::release_lock(&p.endpoint, &p.token, p.insecure_http, &p.project_id)
-                        .map(|_| ()),
-                );
+                let _ =
+                    tx.send(client::release_lock(&p.endpoint, &p.token, &p.project_id).map(|_| ()));
             }
         });
         Some(rx)

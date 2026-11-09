@@ -69,6 +69,12 @@ impl AppState {
             };
             normalize(&existing.speleodb.endpoint) != normalize(&config.speleodb.endpoint)
         };
+        if instance_changed && self.speleodb_session_status().is_ok_and(|s| s.logged_in) {
+            anyhow::bail!("Disconnect from SpeleoDB before changing servers.");
+        }
+        if let Some(endpoint) = config.speleodb.endpoint.as_deref() {
+            crate::speleodb::validate_endpoint(endpoint)?;
+        }
         // Hold the config lock through persistence so login cannot update the token
         // between this restore and the settings write.
         let mut existing = self
@@ -160,6 +166,14 @@ impl AppState {
                 .as_deref()
                 .map(crate::speleodb::auth::normalize_endpoint)
         };
+        if normalize(&previous.speleodb.endpoint) != normalize(&new_config.speleodb.endpoint)
+            && self.speleodb_session_status().is_ok_and(|s| s.logged_in)
+        {
+            anyhow::bail!("Disconnect from SpeleoDB before changing servers.");
+        }
+        if let Some(endpoint) = new_config.speleodb.endpoint.as_deref() {
+            crate::speleodb::validate_endpoint(endpoint)?;
+        }
         let auth_changed = normalize(&previous.speleodb.endpoint)
             != normalize(&new_config.speleodb.endpoint)
             || previous.speleodb.email != new_config.speleodb.email
@@ -257,19 +271,19 @@ mod tests {
     }
 
     #[test]
-    fn changing_instance_clears_saved_and_live_credentials() {
+    fn changing_instance_requires_disconnect_without_mutating_credentials() {
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_state();
             let mut settings = state.get_config();
             settings.speleodb.endpoint = Some("https://other.example.com".to_owned());
-            state.update_config(settings).unwrap();
-            assert!(!state.speleodb_session_status().unwrap().logged_in);
+            assert!(state.update_config(settings).is_err());
+            assert!(state.speleodb_session_status().unwrap().logged_in);
             let loaded = Config::load().unwrap();
             assert_eq!(
                 loaded.speleodb.endpoint.as_deref(),
-                Some("https://other.example.com")
+                Some("https://sdb.example.com")
             );
-            assert!(loaded.speleodb.token.0.is_none());
+            assert!(loaded.speleodb.token.0.is_some());
         });
     }
 
@@ -365,33 +379,57 @@ mod tests {
             assert!(state.speleodb_session_status().unwrap().logged_in);
             for (endpoint, email, token) in [
                 (
-                    "https://other.example.com",
+                    "https://sdb.example.com",
                     "diver@example.com",
                     "synthetic-test-token",
                 ),
                 (
-                    "https://other.example.com",
+                    "https://sdb.example.com",
                     "another@example.com",
                     "synthetic-test-token",
                 ),
                 (
-                    "https://other.example.com",
+                    "https://sdb.example.com",
                     "another@example.com",
                     "replacement-token",
                 ),
             ] {
                 let mut changed = state.get_config();
+                let expected_change = changed.speleodb.email.as_deref() != Some(email)
+                    || changed.speleodb.token.0.as_deref() != Some(token);
                 changed.speleodb.endpoint = Some(endpoint.to_owned());
                 changed.speleodb.email = Some(email.to_owned());
                 changed.speleodb.token.0 = Some(token.to_owned());
                 changed.save().unwrap();
-                assert!(state.reload_config().unwrap().1);
+                assert_eq!(state.reload_config().unwrap().1, expected_change);
                 let actual = state.speleodb_active_account().unwrap();
                 assert_eq!(
                     actual,
                     (endpoint.to_owned(), token.to_owned(), email.to_owned())
                 );
             }
+        });
+    }
+    #[test]
+    fn direct_login_and_reload_cannot_switch_a_connected_instance() {
+        crate::test_helpers::with_isolated_config(|| {
+            let state = signed_in_state();
+            assert!(state
+                .speleodb_login(
+                    Some("https://other.example.com".into()),
+                    None,
+                    None,
+                    Some("synthetic-token".into())
+                )
+                .is_err());
+            let mut changed = state.get_config();
+            changed.speleodb.endpoint = Some("https://other.example.com".into());
+            changed.save().unwrap();
+            assert!(state.reload_config().is_err());
+            assert_eq!(
+                state.speleodb_session_status().unwrap().endpoint.as_deref(),
+                Some("https://sdb.example.com")
+            );
         });
     }
 }
