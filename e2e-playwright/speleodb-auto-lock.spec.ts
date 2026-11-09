@@ -339,7 +339,8 @@ for (const theme of Object.keys(themeTokens)) {
       const style = getComputedStyle(node);
       const box = node.getBoundingClientRect();
       return { id: node.getAttribute('data-testid'), filled: node.hasAttribute('data-filled'), background: style.backgroundColor,
-        border: style.borderTopColor, color: style.color, height: box.height, width: box.width };
+        border: style.borderTopColor, borderLine: `${style.borderTopWidth} ${style.borderTopStyle}`, color: style.color,
+        height: box.height, width: box.width };
     }));
     for (const style of styles) {
       expect(style.height).toBe(styles[0]!.height);
@@ -356,7 +357,11 @@ for (const theme of Object.keys(themeTokens)) {
       ['speleodb-workspace-close', '--cc-neutral-text'],
       ['speleodb-workspace-open-web', '--cc-external-text'],
     ];
-    for (const [id, token] of expectations) expect(byId[id]!.color, `${id} label`).toBe(await tokenRgb(page, token));
+    for (const [id, token] of expectations) {
+      expect(byId[id]!.color, `${id} label`).toBe(await tokenRgb(page, token));
+      // The outline is really drawn (the global button reset sets border: none).
+      expect(byId[id]!.borderLine, `${id} border`).toBe('1px solid');
+    }
     expect(byId['speleodb-workspace-close']!.border).toBe(await tokenRgb(page, '--cc-neutral-border'));
     // Save, Reload and the browser link each keep their own colour; Close and the
     // step down to read-only share the neutral look.

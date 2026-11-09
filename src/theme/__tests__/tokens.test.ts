@@ -758,7 +758,7 @@ describe('button tone contrast', async () => {
     const out: Partial<Paint> = {};
     for (const cls of classes.split(/\s+/)) {
       const m = /^(hover:)?(bg|text|border)-(.+)$/.exec(cls);
-      if (!m) continue;
+      if (!m || /^border-(solid|dashed|dotted|none|\d+)$/.test(cls)) continue;
       const token = twToken[m[3]!];
       if (!token) throw new Error(`${cls} is not a theme token (tailwind.config.js has no var(--cc-*) for ${m[3]})`);
       const slot = m[1] ? 'hover' : m[2] === 'bg' ? 'rest' : m[2] === 'text' ? 'text' : 'border';
@@ -778,6 +778,12 @@ describe('button tone contrast', async () => {
       .toEqual(['danger', 'external', 'info', 'neutral', 'primary', 'success', 'warning']);
     expect(forms.filter((f) => f.form === 'filled').map((f) => f.variant).sort())
       .toEqual(['danger', 'external', 'info', 'primary', 'success', 'warning']);
+  });
+
+  it('every outline form draws its border: index.css resets button borders to none', () => {
+    for (const f of forms.filter((x) => x.form === 'outline')) {
+      expect(f.classes.split(/\s+/), `${f.variant} outline`).toEqual(expect.arrayContaining(['border', 'border-solid']));
+    }
   });
 
   it('paints only with theme tokens (no raw palette classes like bg-sky-100)', () => {

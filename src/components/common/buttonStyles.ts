@@ -21,37 +21,39 @@ export type ButtonVariant =
 /**
  * The tone variants, each in two forms built the same way from its tokens:
  * - outline (tint): the tone's `-text` colour as label and border, on its `-10`
- *   wash, `-20` on hover;
+ *   wash, `-20` on hover. `border-solid` is load-bearing: index.css's button
+ *   reset (`button { border: none }`) leaves `border` alone with no style, so a
+ *   1px width would render as no border at all;
  * - filled: the tone itself under its `-on` text, `-90` on hover.
  * `neutral` is an outline only: it is never the one filled action of a view.
  */
 export const toneForms = {
   primary: {
     filled: 'bg-accent text-accent-on hover:bg-accent-90',
-    outline: 'border border-accent-text bg-accent-10 text-accent-text hover:bg-accent-20',
+    outline: 'border border-solid border-accent-text bg-accent-10 text-accent-text hover:bg-accent-20',
   },
   danger: {
     filled: 'bg-error text-error-on hover:bg-error-90',
-    outline: 'border border-error-text bg-error-10 text-error-text hover:bg-error-20',
+    outline: 'border border-solid border-error-text bg-error-10 text-error-text hover:bg-error-20',
   },
   warning: {
     filled: 'bg-warning text-warning-on hover:bg-warning-90',
-    outline: 'border border-warning-text bg-warning-10 text-warning-text hover:bg-warning-20',
+    outline: 'border border-solid border-warning-text bg-warning-10 text-warning-text hover:bg-warning-20',
   },
   success: {
     filled: 'bg-success text-success-on hover:bg-success-90',
-    outline: 'border border-success-text bg-success-10 text-success-text hover:bg-success-20',
+    outline: 'border border-solid border-success-text bg-success-10 text-success-text hover:bg-success-20',
   },
   info: {
     filled: 'bg-info text-info-on hover:bg-info-90',
-    outline: 'border border-info-text bg-info-10 text-info-text hover:bg-info-20',
+    outline: 'border border-solid border-info-text bg-info-10 text-info-text hover:bg-info-20',
   },
   external: {
     filled: 'bg-external text-external-on hover:bg-external-90',
-    outline: 'border border-external-text bg-external-10 text-external-text hover:bg-external-20',
+    outline: 'border border-solid border-external-text bg-external-10 text-external-text hover:bg-external-20',
   },
   neutral: {
-    outline: 'border border-neutral-border bg-neutral-10 text-neutral-text hover:bg-neutral-20',
+    outline: 'border border-solid border-neutral-border bg-neutral-10 text-neutral-text hover:bg-neutral-20',
   },
 } as const satisfies Partial<Record<ButtonVariant, { filled?: string; outline: string }>>;
 
