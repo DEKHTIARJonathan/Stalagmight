@@ -649,8 +649,11 @@ mod tests {
         // tip and BEFORE the download - and only under the protecting policy, so
         // "take the server copy" still replaces.
         let src = include_str!("speleodb_pull.rs");
+        // The body lives in `speleodb_pull_project_to` (the cache path is injected
+        // so tests can use a temporary cache); `speleodb_pull_project` only resolves
+        // that path and delegates.
         let start = src
-            .find("fn speleodb_pull_project(")
+            .find("fn speleodb_pull_project_to(")
             .expect("the pull is present");
         let body = &src[start..];
         let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
