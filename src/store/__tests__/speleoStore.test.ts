@@ -9,6 +9,12 @@ import {
 import { useProjectStore } from '../projectStore';
 import type { SpeleoLinkStatus } from '../../types/ipc.generated';
 
+// The sign-out guard (uploads / discards / hands back locks before a sign-out) has
+// its own suite; here it only has to say "go ahead", or "cancelled" where a case
+// asks it to.
+const guardSignOutMock = vi.hoisted(() => vi.fn(async (_kind: string) => true));
+vi.mock('../../utils/speleoSignOut', () => ({ guardSpeleoSignOut: guardSignOutMock }));
+
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,
@@ -180,6 +186,26 @@ describe('speleoStore', () => {
         recent.mockRestore();
         config.mockRestore();
       }
+    });
+
+    it('a sign-out the guard cancels never reaches the backend logout', async () => {
+      useSpeleoStore.getState().setSessionFromLogin({ user_email: 'u@x', endpoint: 'https://x/' });
+      useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
+      invokeIpcMock.mockReset();
+      guardSignOutMock.mockResolvedValueOnce(false);
+      expect(await useSpeleoStore.getState().applyPendingAuth('https://x/')).toEqual({ ok: false, cancelled: true });
+      expect(guardSignOutMock).toHaveBeenCalledWith('signOut');
+      expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_logout');
+      expect(useSpeleoStore.getState().session?.userEmail).toBe('u@x');
+    });
+
+    it('logging in as SOMEONE ELSE signs the previous account out through the guard first', async () => {
+      useSpeleoStore.getState().setSessionFromLogin({ user_email: 'u@x', endpoint: 'https://x/' });
+      useSpeleoStore.getState().setPendingAuth({ kind: 'login', email: 'other@x', password: 'pw', token: '', useToken: false } as never);
+      guardSignOutMock.mockResolvedValueOnce(false);
+      expect(await useSpeleoStore.getState().applyPendingAuth('https://x/')).toEqual({ ok: false, cancelled: true });
+      expect(guardSignOutMock).toHaveBeenCalledWith('switch');
+      expect(invokeIpcMock.mock.calls.map((c) => c[0])).not.toContain('speleodb_login');
     });
 
     it('applyPendingAuth clears the session even when the logout command rejects', async () => {

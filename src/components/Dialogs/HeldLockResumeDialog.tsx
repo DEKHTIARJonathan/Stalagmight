@@ -7,7 +7,7 @@ import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { useSpeleoLocalStates } from '../../hooks/useSpeleoLocalStates';
 import { hasUnpushedEdits, localStateUnknown, UNPUSHED_ACCENT } from '../../utils/speleoLocalState';
 import { humanizeSpeleoError } from '../../utils/speleoError';
-import { needsSpeleoHandBackPrompt } from '../../utils/quit';
+import { needsSpeleoExitPrompt } from '../../utils/speleoExit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { TOAST_KEYS } from '../../utils/toastKeys';
@@ -178,7 +178,7 @@ export default function HeldLockResumeDialog() {
         // resolvable, and nothing is lost.
         //
         // BOTH kinds of work at risk, in the guards' own order. Disk-dirty is the
-        // obvious one. The other is the reason `needsSpeleoHandBackPrompt` exists:
+        // obvious one. The other is the reason `needsSpeleoExitPrompt` exists:
         // the open project can be perfectly clean on disk and still hold un-pushed
         // edits or our write lock, and closing it backend-side hands neither back -
         // it just hides the local copy and drops the lock this very prompt is about.
@@ -193,7 +193,7 @@ export default function HeldLockResumeDialog() {
           );
           return;
         }
-        if (needsSpeleoHandBackPrompt(openLink)) {
+        if (needsSpeleoExitPrompt(openLink, false)) {
           showToast(
             t('speleodb.localEdits.heldLocks.unpushedWork', { name: lock.projectName }),
             TOAST_KEYS.SPELEODB_CONTINUE_EDITING_UNPUSHED,

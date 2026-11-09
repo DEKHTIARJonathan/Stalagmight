@@ -223,7 +223,7 @@ it('reconciles a dispatched close after a newer file preflight fails', async () 
   });
   const closing = useProjectStore.getState().closeProject({ releaseLock: false });
   await vi.waitFor(() => expect(invokeIpcMock).toHaveBeenCalledWith(
-    'close_project', { releaseLock: false }, expect.anything(),
+    'close_project', { releaseLock: false, discardLocal: false }, expect.anything(),
   ));
   confirmMock.mockResolvedValue(false);
   expect(await useProjectStore.getState().loadProject('/restricted.stalx')).toEqual({ success: false });
@@ -247,7 +247,7 @@ it('carries pending New through a dispatched close and a failed newer preflight'
   });
   const closing = handBackProject({ pendingNewProject: true }, { releaseLock: false });
   await vi.waitFor(() => expect(invokeIpcMock).toHaveBeenCalledWith(
-    'close_project', { releaseLock: false }, expect.anything(),
+    'close_project', { releaseLock: false, discardLocal: false }, expect.anything(),
   ));
   confirmMock.mockResolvedValue(false);
   await useProjectStore.getState().loadProject('/restricted.stalx');

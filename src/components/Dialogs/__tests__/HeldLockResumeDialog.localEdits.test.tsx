@@ -196,13 +196,27 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
     expect(useSpeleoStore.getState().heldLocks).toHaveLength(2);
   });
 
-  it.each([true, false])('opens another project when current work is saved (unpushed: %s)', async (hasUnpushedEdits) => {
+  it('opens another project when the open one holds a clean lock', async () => {
     useProjectStore.setState({ project: { file_path: '/other/open.stalx' } as never, isDirty: false });
-    useSpeleoStore.setState({ link: { editState: 'editing', hasUnpushedEdits } as never });
+    useSpeleoStore.setState({ link: { editState: 'editing', hasUnpushedEdits: false } as never });
     wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
     render(<HeldLockResumeDialog />);
     await userEvent.click(await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`));
     await waitFor(() => expect(loadProjectMock).toHaveBeenCalled());
+  });
+
+  // Saved but un-uploaded work under our lock is exactly what the exit prompt exists
+  // for; this overlay refuses (with a toast) rather than switching projects over it.
+  it('refuses to switch away from saved but un-uploaded work under our lock', async () => {
+    useProjectStore.setState({ project: { file_path: '/other/open.stalx' } as never, isDirty: false });
+    useSpeleoStore.setState({ link: { editState: 'editing', hasUnpushedEdits: true } as never });
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
+    render(<HeldLockResumeDialog />);
+    await userEvent.click(await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`));
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+    expect(loadProjectMock).not.toHaveBeenCalled();
   });
 
   // DO-NOT-REGRESS. The hand-back guard must stay INSIDE the same-project branch.

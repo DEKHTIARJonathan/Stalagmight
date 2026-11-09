@@ -68,6 +68,12 @@ impl AppState {
 
     /// Forget only confirmed SpeleoDB references. Metadata reads never modify the
     /// project files; unreadable/missing entries are retained rather than guessed.
+    ///
+    /// A reference whose copy still holds un-uploaded edits is KEPT: the recents
+    /// row is the way back to that work, and dropping it on sign-out left the
+    /// changes on disk with nothing in the app that could reach them. The user's
+    /// discard removes such a copy (and its row) before signing out; anything still
+    /// dirty here is work they chose to come back to.
     fn speleodb_forget_recent_projects(&self) -> Result<(), SpeleoErrorDto> {
         let mut recent = self
             .recent_projects
@@ -76,7 +82,7 @@ impl AppState {
         recent.retain(|path| {
             !crate::persistence::Database::open_for_metadata(path)
                 .and_then(|db| db.load_speleo_link())
-                .is_ok_and(|link| link.is_some())
+                .is_ok_and(|link| link.is_some_and(|link| !link.has_unpushed_edits))
         });
         let mut config = self
             .config
@@ -133,7 +139,7 @@ impl AppState {
 mod tests {
     use super::*;
     #[test]
-    fn logout_forgets_only_speleodb_references_and_preserves_files() {
+    fn logout_forgets_only_clean_speleodb_references_and_preserves_files() {
         crate::test_helpers::with_isolated_config(|| {
             let dir = tempfile::tempdir().expect("temp");
             let state = AppState::new().expect("state");
@@ -142,10 +148,12 @@ mod tests {
             let unreadable = dir.path().join("unreadable.stalx");
             std::fs::write(&unreadable, b"synthetic invalid database").expect("write");
             let mut paths = vec![local.clone(), missing, unreadable];
-            for (name, endpoint) in [
-                ("local", None),
-                ("remote-a", Some("https://a.example/")),
-                ("remote-b", Some("https://b.example/")),
+            // remote-a still holds un-uploaded edits, remote-b is clean: only the
+            // clean reference may be forgotten.
+            for (name, endpoint, dirty) in [
+                ("local", None, false),
+                ("remote-a", Some("https://a.example/"), true),
+                ("remote-b", Some("https://b.example/"), false),
             ] {
                 let path = dir.path().join(format!("{name}.stalx"));
                 let mut db = crate::persistence::Database::open(&path).expect("db");
@@ -157,7 +165,7 @@ mod tests {
                         project_id: uuid::Uuid::new_v4().to_string(),
                         project_name: name.into(),
                         base_commit_sha: None,
-                        has_unpushed_edits: true,
+                        has_unpushed_edits: dirty,
                         last_edit_at: None,
                         last_verify_at: None,
                         undo_mode: None,
@@ -169,16 +177,17 @@ mod tests {
             let preserved: Vec<_> = paths.iter().map(|path| std::fs::read(path).ok()).collect();
             *state.recent_projects.lock().expect("recents") = paths.clone();
             state.config.lock().expect("config").general.recent_projects = paths.clone();
+            let kept: Vec<_> = paths[..4].to_vec();
             assert!(state.open_project(local).success);
             state.speleodb_logout().expect("logout");
-            assert_eq!(*state.recent_projects.lock().expect("recents"), paths[..3]);
-            assert_eq!(state.get_config().general.recent_projects, paths[..3]);
+            assert_eq!(*state.recent_projects.lock().expect("recents"), kept);
+            assert_eq!(state.get_config().general.recent_projects, kept);
             assert_eq!(
                 crate::config::Config::load()
                     .expect("reload")
                     .general
                     .recent_projects,
-                paths[..3]
+                kept
             );
             assert!(state.get_project_state().is_some());
             assert!(state.edit_enabled());
@@ -186,7 +195,7 @@ mod tests {
                 assert_eq!(std::fs::read(path).ok(), before, "{}", path.display());
             }
             state.speleodb_logout().expect("repeated logout");
-            assert_eq!(*state.recent_projects.lock().expect("recents"), paths[..3]);
+            assert_eq!(*state.recent_projects.lock().expect("recents"), kept);
         });
     }
 

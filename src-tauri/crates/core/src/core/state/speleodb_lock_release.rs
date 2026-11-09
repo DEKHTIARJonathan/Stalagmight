@@ -1,14 +1,27 @@
 //! Lock release for project close, switch, app exit, and logout.
 //!
-//! Closing, switching, and quitting release the editing lock without uploading or
-//! deleting saved local changes. The frontend confirms discarding unsaved work
-//! before those transitions. Logout retains its separate unpushed-edit veto.
+//! THE INVARIANT: no silent or lifecycle release ever hands the lock back while
+//! the open project still has edits SpeleoDB has not seen (`has_unpushed_edits`).
+//! Close, switch, quit, the update restart and logout all keep the lock (and mark
+//! it kept, so the stranded-claim janitor leaves it alone) - the next open then
+//! resumes editing under the same lock instead of meeting a "the server copy
+//! differs" prompt. The frontend asks the user first (upload / keep / discard),
+//! but this module does not rely on that: a path that skipped the prompt, or
+//! cannot show one (an OS-forced exit), lands on the data-safe answer.
+//!
+//! The one exception is a release that CARRIES the user's discard decision:
+//! [`AppState::speleodb_close_discarding_local`] (close with `discard_local`) and
+//! the other explicit-abandon verbs (delete, unlink, take-remote), which destroy
+//! the local work before the lock goes back.
+//!
 //! Deferred releases remain scoped to the account, project, and session that
 //! initiated them, so they cannot release a successor editing session's lock.
 
+use std::path::Path;
 use std::time::Duration;
 
 use super::AppState;
+use crate::core::{CommandResult, ValidationWarning, WarningSeverity};
 use crate::speleodb::client;
 use crate::speleodb::SpeleoDbError;
 
@@ -41,7 +54,11 @@ pub(super) struct LockReleaseParams {
 enum ReleaseIntent {
     /// Logout keeps a lock protecting unpublished work.
     Silent,
-    /// End the open editing session, retaining saved unpublished work locally.
+    /// End the open editing session (close, switch, quit, update restart). Like
+    /// `Silent`, it KEEPS a lock over un-pushed edits: releasing there is what used
+    /// to strand the work - the next open downloaded, refused to overwrite the
+    /// local copy, and offered only "take the server copy and discard mine". Unlike
+    /// `Silent`, it may also finish an owned claim after the edit gate has shut.
     Lifecycle,
     /// A DELIBERATE abandon of the project's SpeleoDB identity (`speleodb_unlink`,
     /// `speleodb_take_remote`): the user has said outright they are walking away
@@ -104,13 +121,15 @@ impl AppState {
         if !self.edit_enabled() && !self.speleodb_lock_acquired_here(&link.project_id) {
             return None;
         }
-        // Logout keeps its existing unpublished-work protection. Close/switch/exit
-        // intentionally release while keeping the saved local file and its dirty bit.
-        if intent == ReleaseIntent::Silent && link.has_unpushed_edits {
+        // The invariant (module doc): only an explicit abandon may release over
+        // edits the server has not seen. Logout, close, switch, quit and the update
+        // restart all keep the lock, so the next open resumes instead of conflicting.
+        if intent != ReleaseIntent::Abandon && link.has_unpushed_edits {
             tracing::info!(
                 project_id = %link.project_id,
+                ?intent,
                 purpose = "avoid stranding un-pushed local edits behind a freed lock",
-                "speleodb: skipping the silent lock release; the project has un-pushed edits"
+                "speleodb: keeping the write lock; the project has un-pushed edits"
             );
             // A DECISION, not an accident, and the record has to say so: once
             // this project closes, a claim with no project open is exactly what
@@ -152,10 +171,15 @@ impl AppState {
         })
     }
 
+    /// Record that the open project's lock is being kept on purpose (the exit
+    /// prompt's "Keep the lock", and the update restart over un-uploaded work).
+    ///
+    /// Not gated on the edit gate, unlike the release snapshots: a reconcile can
+    /// shut the gate while this process still owns the claim, and an unmarked
+    /// claim with no project open is exactly what the stranded-claim janitor hands
+    /// back on the next status refresh - undoing the user's choice. Marking a claim
+    /// that does not exist is a no-op, so there is nothing for the gate to protect.
     pub fn speleodb_keep_open_lock_deliberately(&self) {
-        if !self.edit_enabled() {
-            return;
-        }
         if let Ok(link) = self.speleodb_open_link() {
             tracing::info!(
                 project_id = %link.project_id,
@@ -466,8 +490,12 @@ impl AppState {
     /// Release a held write lock with a hard deadline, for the app-exit path: run
     /// the network release on a detached thread and wait at most `deadline`. A hung
     /// / unreachable server must not freeze quit for the full HTTP timeout; on
-    /// timeout we return and let the process exit (the server lock times out on its
-    /// own). (fix M2). No-op when no lock is held.
+    /// timeout we return and let the process exit. (fix M2). No-op when no lock is
+    /// held, and - the invariant - when the open project has un-pushed edits.
+    ///
+    /// Also the update restart's release (`install_app_update_and_restart`):
+    /// `app.restart()` and the Windows installer's own exit never raise
+    /// `RunEvent::ExitRequested`, so that path calls this BEFORE installing.
     pub fn speleodb_release_held_lock_bounded(&self, deadline: Duration) {
         let Some(rx) = self.speleodb_spawn_lock_release() else {
             return;
@@ -485,6 +513,121 @@ impl AppState {
             ),
         }
     }
+
+    /// The exit prompt's confirmed "Discard changes": throw the local copy away,
+    /// hand the lock back, and close - the one lifecycle exit that may release
+    /// over un-pushed edits, because the caller carries the user's decision
+    /// (`close_project`'s `discard_local`).
+    ///
+    /// Goes through [`AppState::delete_project`] rather than a release of its own:
+    /// that verb closes the session, removes the `.stalx`, and only THEN hands the
+    /// lock back under the explicit-abandon policy - so a removal that fails can
+    /// never leave un-pushed work behind a freed lock. The next open finds no local
+    /// copy and downloads the server's current revision with nothing to refuse.
+    ///
+    /// Refuses before touching anything unless the open project is a SpeleoDB
+    /// project at its canonical cache path: "discard" means "the next open gets the
+    /// server copy", which is only true of the copy the app manages.
+    pub fn speleodb_close_discarding_local(&self) -> CommandResult {
+        match super::speleodb_local_state::cache_root() {
+            Some(root) => self.speleodb_close_discarding_local_in(&root),
+            None => CommandResult::failure(
+                "Could not find Stalagmight's SpeleoDB storage. Nothing was changed.".to_owned(),
+            ),
+        }
+    }
+
+    /// [`AppState::speleodb_close_discarding_local`] against an explicit cache root,
+    /// so tests can stand a managed copy up in a temp directory.
+    pub(super) fn speleodb_close_discarding_local_in(&self, root: &Path) -> CommandResult {
+        let Some(path) = self.open_project_path() else {
+            return CommandResult::failure("No project is open.".to_owned());
+        };
+        let link = match self.speleodb_open_link() {
+            Ok(link) => link,
+            Err(e) => {
+                return CommandResult::failure(format!(
+                    "This project is not a SpeleoDB project, so there is nothing to discard: {e}"
+                ))
+            }
+        };
+        if !super::speleodb_local_state::is_the_cached_copy(root, &link.project_id, &path) {
+            return CommandResult::failure(
+                "Only the SpeleoDB copy that Stalagmight manages can be discarded. Nothing was changed."
+                    .to_owned(),
+            );
+        }
+        tracing::info!(
+            project_id = %link.project_id,
+            purpose = "discard un-uploaded local changes on exit (user confirmed)",
+            "speleodb: discarding the local copy and releasing the write lock"
+        );
+        let result = self.delete_project(path);
+        if result.success || result.session_closed != Some(true) {
+            return result;
+        }
+        // The session is gone but the file (and its edits) is not, and
+        // `delete_project` put the lock claim back without releasing. That is the
+        // "Keep the lock" end state, so say so on the claim - otherwise the janitor
+        // would hand the lock back over the very edits that survived - and report a
+        // CLOSE that succeeded, with the discard failure as a warning: the frontend
+        // must follow the backend to "no project open".
+        self.speleodb_keep_lock_deliberately(&link.project_id);
+        let reason = result.error.unwrap_or_default();
+        CommandResult::success()
+            .with_warnings(vec![ValidationWarning {
+                code: "speleodb_discard_failed".to_owned(),
+                message: format!(
+                    "Your changes could not be removed from this computer ({reason}). They are \
+                     still there, and the project stays reserved for you on SpeleoDB."
+                ),
+                severity: WarningSeverity::Warning,
+            }])
+            .with_session_closed(true)
+    }
+
+    /// Sign-out's per-project "Discard" for a cached copy that is NOT open: remove
+    /// the managed copy of `project_id` (and its recents row) so no un-uploaded
+    /// work is left behind a sign-out the user confirmed.
+    ///
+    /// Releases nothing itself: the copy is not open, so there is no session to
+    /// end, and the sign-out releases every remaining lock of the account
+    /// explicitly once the user's choices are done. Refuses the OPEN project - its
+    /// discard is the close-with-discard (`close_project`'s `discard_local`).
+    pub fn speleodb_discard_cached_copy(&self, project_id: &str) -> CommandResult {
+        match super::speleodb_local_state::cache_root() {
+            Some(root) => self.speleodb_discard_cached_copy_in(&root, project_id),
+            None => CommandResult::failure(
+                "Could not find Stalagmight's SpeleoDB storage. Nothing was changed.".to_owned(),
+            ),
+        }
+    }
+
+    /// [`AppState::speleodb_discard_cached_copy`] against an explicit cache root.
+    pub(super) fn speleodb_discard_cached_copy_in(
+        &self,
+        root: &Path,
+        project_id: &str,
+    ) -> CommandResult {
+        if let Err(e) = super::speleodb::validate_project_id(project_id) {
+            return CommandResult::failure(e.to_string());
+        }
+        let path = super::speleodb_local_state::cache_path_in(root, project_id);
+        if self
+            .open_project_path()
+            .is_some_and(|open| super::project_io::same_file(&open, &path))
+        {
+            return CommandResult::failure(
+                "This project is open. Close it first, then discard its changes.".to_owned(),
+            );
+        }
+        tracing::info!(
+            project_id = %project_id,
+            purpose = "discard un-uploaded changes before signing out (user confirmed)",
+            "speleodb: discarding a cached copy"
+        );
+        self.delete_project(path)
+    }
 }
 
 #[cfg(test)]
@@ -495,6 +638,334 @@ impl AppState {
 )]
 mod tests {
     use super::AppState;
+    use crate::models::{Project, SpeleoLink};
+    use crate::persistence::Database;
+    use crate::speleodb::auth::TokenStore;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+
+    const PID: &str = "22222222-2222-2222-2222-222222222222";
+
+    /// A loopback SpeleoDB that answers EVERY request 200 with a minimal project
+    /// body and records each request line, so a test can assert that a release
+    /// did - or did not - reach the server. Never blocks a test that expects no
+    /// traffic, unlike a one-shot stub whose `join` would wait forever.
+    fn recording_server() -> (String, Arc<Mutex<Vec<String>>>) {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let log = Arc::clone(&seen);
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
+                let mut req = Vec::new();
+                let mut chunk = vec![0u8; 8 * 1024];
+                while let Ok(n) = stream.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    req.extend_from_slice(&chunk[..n]);
+                }
+                let line = String::from_utf8_lossy(&req)
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
+                log.lock().expect("log").push(line);
+                let body = crate::core::state::tests_support::sdk_fixture(&format!(
+                    r#"{{"id":"{PID}","name":"Remote"}}"#
+                ));
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), seen)
+    }
+
+    fn release_requests(seen: &Arc<Mutex<Vec<String>>>) -> usize {
+        seen.lock()
+            .expect("log")
+            .iter()
+            .filter(|line| line.contains("/release"))
+            .count()
+    }
+
+    /// An editing session on SpeleoDB project [`PID`] whose copy lives at the
+    /// managed cache path `<root>/<PID>/project.stalx`, signed in against
+    /// `endpoint`, with this process holding the lock claim.
+    fn managed_editing_session(endpoint: &str) -> (tempfile::TempDir, PathBuf, PathBuf, AppState) {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let root = temp.path().join("speleodb");
+        let path = super::super::speleodb_local_state::cache_path_in(&root, PID);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("cache dir");
+        let mut db = Database::open(&path).expect("open db");
+        db.save_project(&Project::new("Remote".to_owned(), None))
+            .expect("save project");
+        db.save_speleo_link(Some(&SpeleoLink {
+            endpoint: endpoint.to_owned(),
+            project_id: PID.to_owned(),
+            project_name: "Remote".to_owned(),
+            base_commit_sha: Some("abc123".to_owned()),
+            has_unpushed_edits: false,
+            last_edit_at: None,
+            last_verify_at: None,
+            undo_mode: None,
+        }))
+        .expect("save link");
+        drop(db);
+        let state = AppState::new().expect("state");
+        assert!(
+            state.open_project(path.clone()).success,
+            "open managed copy"
+        );
+        let mut token_store = TokenStore::default();
+        token_store.store(endpoint, "u@x", "tok-1");
+        *state.speleodb.lock().expect("session") = super::super::speleodb::SpeleoDbSession {
+            endpoint: Some(endpoint.to_owned()),
+            email: Some("u@x".to_owned()),
+            token_store,
+            rehydrate_attempted: true,
+            locks_acquired_here: Vec::new(),
+            acquired_by_this_flow: None,
+        };
+        state.set_edit_enabled(true);
+        state.speleodb_note_lock_acquired(Some(PID));
+        (temp, root, path, state)
+    }
+
+    /// Stamp the open copy's dirty bit directly, as a fixture: the forward-edit
+    /// tripwire (`speleodb_revisions`) keeps production writers on
+    /// `mark_remote_forward_edit`, and this is setup, not a writer.
+    fn set_unpushed_edits(state: &AppState) {
+        state
+            .database
+            .lock()
+            .expect("database")
+            .as_ref()
+            .expect("open")
+            .touch_speleo_link_dirty("2026-11-09T10:00:00Z")
+            .expect("stamp the dirty bit");
+    }
+
+    fn claim_is_kept(state: &AppState) -> bool {
+        state
+            .speleodb
+            .lock()
+            .expect("session")
+            .locks_acquired_here
+            .iter()
+            .any(|claim| claim.project_id == PID && claim.is_kept())
+    }
+
+    /// Give a detached / bounded release thread time to reach the server, so an
+    /// absence assertion is not just a race the release had not run yet.
+    fn settle() {
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+
+    type Release = fn(&AppState);
+
+    fn every_lifecycle_release() -> [(&'static str, Release); 4] {
+        [
+            ("close", AppState::speleodb_release_held_lock_on_close),
+            ("switch", AppState::speleodb_release_held_lock_detached),
+            ("exit / update restart", |state| {
+                state.speleodb_release_held_lock_bounded(std::time::Duration::from_secs(2));
+            }),
+            ("logout", AppState::speleodb_release_held_lock_best_effort),
+        ]
+    }
+
+    #[test]
+    fn no_lifecycle_release_hands_the_lock_back_over_unpushed_edits() {
+        // THE invariant. Each of these used to release (all but logout) while the
+        // copy still held edits SpeleoDB had never seen; the next open then
+        // downloaded, refused to overwrite the local copy, and offered only "take
+        // the server copy and discard mine". Every one must now keep the lock AND
+        // mark the claim kept, or the stranded-claim janitor hands it back later.
+        for (name, release) in every_lifecycle_release() {
+            let (server, seen) = recording_server();
+            let (_temp, _root, path, state) = managed_editing_session(&server);
+            set_unpushed_edits(&state);
+            let before = std::fs::read(&path).expect("bytes");
+            release(&state);
+            settle();
+            assert_eq!(
+                release_requests(&seen),
+                0,
+                "{name}: no release reached the server"
+            );
+            assert!(
+                state.speleodb_lock_acquired_here(PID),
+                "{name}: the claim survives"
+            );
+            assert!(
+                claim_is_kept(&state),
+                "{name}: and is marked kept for the janitor"
+            );
+            assert_eq!(
+                std::fs::read(&path).expect("bytes"),
+                before,
+                "{name}: copy untouched"
+            );
+            assert!(
+                state.speleodb_open_link().expect("link").has_unpushed_edits,
+                "{name}: the edits are still marked un-uploaded"
+            );
+        }
+    }
+
+    #[test]
+    fn a_clean_session_is_still_released_on_every_lifecycle_path() {
+        // The invariant must not turn into "never release": with nothing
+        // un-uploaded, close / switch / exit / logout hand the lock back as before.
+        for (name, release) in every_lifecycle_release() {
+            let (server, seen) = recording_server();
+            let (_temp, _root, _path, state) = managed_editing_session(&server);
+            release(&state);
+            settle();
+            assert_eq!(
+                release_requests(&seen),
+                1,
+                "{name}: one release reached the server"
+            );
+            assert!(
+                !state.speleodb_lock_acquired_here(PID),
+                "{name}: the claim is over"
+            );
+        }
+    }
+
+    #[test]
+    fn a_shut_gate_does_not_unlock_the_veto_for_an_owned_claim() {
+        // Lifecycle may finish an owned claim after a reconcile shut the edit gate -
+        // but the un-pushed-edits veto applies there too.
+        let (server, seen) = recording_server();
+        let (_temp, _root, _path, state) = managed_editing_session(&server);
+        set_unpushed_edits(&state);
+        state.set_edit_enabled(false);
+        state.speleodb_release_held_lock_on_close();
+        assert_eq!(release_requests(&seen), 0);
+        assert!(claim_is_kept(&state));
+    }
+
+    #[test]
+    fn keeping_the_lock_marks_the_claim_even_with_the_edit_gate_shut() {
+        // The exit prompt's "Keep the lock" (close_project with release_lock=false).
+        // It used to return early on a shut gate, leaving the claim unmarked - and
+        // an unmarked claim with no project open is what the janitor releases.
+        let (server, seen) = recording_server();
+        let (_temp, _root, _path, state) = managed_editing_session(&server);
+        state.set_edit_enabled(false);
+        state.speleodb_keep_open_lock_deliberately();
+        assert!(claim_is_kept(&state));
+        assert!(state.close_project().success);
+        assert!(claim_is_kept(&state), "the mark survives the close");
+        assert_eq!(release_requests(&seen), 0);
+    }
+
+    #[test]
+    fn discarding_on_exit_removes_the_managed_copy_then_releases_the_lock() {
+        // The exit prompt's confirmed "Discard changes": the one lifecycle exit
+        // allowed past the veto, because it carries the user's decision. The copy
+        // goes, the session closes, the lock is released, and the next open finds
+        // nothing local to protect - so it gets the server copy with no prompt.
+        let (server, seen) = recording_server();
+        let (_temp, root, path, state) = managed_editing_session(&server);
+        set_unpushed_edits(&state);
+        let result = state.speleodb_close_discarding_local_in(&root);
+        assert!(result.success, "discard closes: {:?}", result.error);
+        assert_eq!(result.session_closed, Some(true));
+        assert!(!path.exists(), "the local copy is gone");
+        assert!(state.get_project_state().is_none(), "the project is closed");
+        assert_eq!(release_requests(&seen), 1, "the lock was handed back");
+        assert!(!state.speleodb_lock_acquired_here(PID));
+        let row = state
+            .local_copy_state(PID, &path)
+            .expect("a missing copy is known-absent");
+        assert!(
+            !row.has_local_copy && !row.has_unpushed_edits,
+            "nothing left to refuse"
+        );
+        assert!(
+            state.guard_local_edits(PID, &path).is_ok(),
+            "the next pull may install"
+        );
+    }
+
+    #[test]
+    fn discard_refuses_a_copy_outside_the_managed_cache_and_changes_nothing() {
+        let (server, seen) = recording_server();
+        let (temp, _root, path, state) = managed_editing_session(&server);
+        set_unpushed_edits(&state);
+        let elsewhere: &Path = &temp.path().join("not-the-cache");
+        let result = state.speleodb_close_discarding_local_in(elsewhere);
+        assert!(!result.success);
+        assert!(path.exists());
+        assert!(state.get_project_state().is_some(), "still open");
+        assert!(state.edit_enabled(), "still editing");
+        assert_eq!(release_requests(&seen), 0);
+    }
+
+    #[test]
+    fn sign_out_discards_a_cached_copy_that_is_not_open_without_releasing_anything() {
+        let (server, seen) = recording_server();
+        let (_temp, root, path, state) = managed_editing_session(&server);
+        set_unpushed_edits(&state);
+        let refused = state.speleodb_discard_cached_copy_in(&root, PID);
+        assert!(
+            !refused.success,
+            "the OPEN project goes through close-with-discard"
+        );
+        assert!(path.exists());
+        assert!(state.close_project().success);
+        let result = state.speleodb_discard_cached_copy_in(&root, PID);
+        assert!(result.success, "{:?}", result.error);
+        assert!(!path.exists(), "the un-uploaded copy is gone");
+        settle();
+        assert_eq!(
+            release_requests(&seen),
+            0,
+            "the sign-out releases locks itself, explicitly"
+        );
+        let bad = state.speleodb_discard_cached_copy_in(&root, "../escape");
+        assert!(!bad.success, "ids are validated before they become paths");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_discard_that_cannot_remove_the_copy_keeps_the_lock_and_reports_the_close() {
+        // The session is torn down before the file goes. If the removal then
+        // fails, the edits are still on disk - so the lock must stay held (and
+        // marked kept), and the result must still say "closed" so the frontend
+        // follows the backend to no open project.
+        use std::os::unix::fs::PermissionsExt as _;
+        let (server, seen) = recording_server();
+        let (_temp, root, path, state) = managed_editing_session(&server);
+        set_unpushed_edits(&state);
+        let dir = path.parent().expect("dir").to_path_buf();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).expect("chmod");
+        let result = state.speleodb_close_discarding_local_in(&root);
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        assert!(result.success, "the close itself happened");
+        assert_eq!(result.session_closed, Some(true));
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.code == "speleodb_discard_failed"),
+            "the failed discard is reported"
+        );
+        assert!(path.exists(), "the copy and its edits survive");
+        assert_eq!(release_requests(&seen), 0, "and the lock was not released");
+        assert!(claim_is_kept(&state));
+    }
 
     #[test]
     fn a_poisoned_database_lock_declines_the_release_without_panicking() {

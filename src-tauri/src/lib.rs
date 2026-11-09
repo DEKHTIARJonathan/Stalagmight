@@ -1479,7 +1479,7 @@ pub(crate) fn tile_fetch_impl(
 /// before exiting anyway (fix M2). Long enough for a healthy round trip, short
 /// enough that a hung / unreachable server can't noticeably freeze quit; the
 /// server-side mutex times out on its own if the release doesn't land.
-const EXIT_LOCK_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const EXIT_LOCK_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn run() {
     // Export the WebKit memory-pressure environment as the FIRST thing `run()`
@@ -1812,6 +1812,7 @@ pub fn run() {
             commands::project::set_surface_elevation,
             commands::project::save_project,
             commands::project::close_project,
+            commands::project::speleodb_discard_cached_copy,
             commands::project::take_unrecognised_shot_kinds,
             commands::project::history_discarded,
             commands::project::get_project_state,

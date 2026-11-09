@@ -1,11 +1,19 @@
-import { confirm } from '@tauri-apps/plugin-dialog';
+import i18n from '../i18n';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import { isProjectRequestCurrent, reserveProjectRequest } from './projectTransition';
 import { discardWorkspaceDrafts, hasWorkspaceDrafts } from './workspaceDrafts';
+import { askExitConfirm } from './exitConfirm';
 
-/** Account replacement protects both forms and the unsaved survey snapshot. */
+/**
+ * Account replacement protects both forms and the unsaved survey snapshot.
+ *
+ * SpeleoDB locks and un-uploaded work are NOT this guard's business: the sign-out
+ * guard (`utils/speleoSignOut`) runs first and resolves them (upload / discard /
+ * hand back). What is left here is form drafts and unsaved edits outside a held
+ * lock, which the account change discards - asked in-app, like every exit prompt.
+ */
 export async function protectAccountTransition(): Promise<boolean> {
   const before = useProjectStore.getState();
   const project = before.project;
@@ -15,8 +23,11 @@ export async function protectAccountTransition(): Promise<boolean> {
   const current = () => isProjectRequestCurrent(request) &&
     useSpeleoStore.getState().sessionGeneration === generation;
   const ownsProject = () => current() && useProjectStore.getState().project === project;
-  const accepted = await confirm('Discard unsaved form and survey changes before changing the account or server?', {
-    kind: 'warning', okLabel: 'Discard changes', cancelLabel: 'Cancel',
+  const accepted = await askExitConfirm({
+    title: i18n.t('speleoExitPrompt.account.title'),
+    message: i18n.t('speleoExitPrompt.account.message'),
+    confirmLabel: i18n.t('speleoExitPrompt.account.confirm'),
+    cancelLabel: i18n.t('common.actions.cancel'),
   });
   if (!accepted || !ownsProject()) return false;
   discardWorkspaceDrafts();

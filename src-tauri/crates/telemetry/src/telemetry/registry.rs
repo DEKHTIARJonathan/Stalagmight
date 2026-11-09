@@ -163,6 +163,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.speleodb_unwind_target",
     "command.speleodb_rewind_target",
     "command.speleodb_discard_changes",
+    "command.speleodb_discard_cached_copy",
     "command.speleodb_update",
     "command.split_shot_at_distance",
     "command.suggest_all_import_placements",
@@ -1031,7 +1032,13 @@ mod tests {
         // Native SDK migration removes retired commands and picker events.
         // Removed force-edit command/dialog (5) and project settings dialog (4).
         // Retired workspace metadata mutation commands (3).
-        assert_eq!(EVENT_NAMES.len(), 653);
+        //   + 1 sign-out's discard of a cached copy that is not open (the exit
+        //       prompt work): how often a sign-out has to throw un-uploaded work
+        //       away says whether people are leaving work stranded between
+        //       sessions: command.speleodb_discard_cached_copy = 654.
+        //   The speleodb-close / speleodb-quit dialogs became one independent
+        //   overlay (like held-lock-resume); their slots are retained.
+        assert_eq!(EVENT_NAMES.len(), 654);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

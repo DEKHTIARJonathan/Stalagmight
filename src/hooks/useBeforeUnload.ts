@@ -1,13 +1,14 @@
 import { confirmWorkspaceDrafts } from '../utils/workspaceDrafts';
 import { useEffect, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import { confirm } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
+import { askExitConfirm } from '../utils/exitConfirm';
 import { debugLog } from '../utils/debugLog';
 import { consumeQuitConfirmation, consumeUpdateRestartArmed, abandonUpdateRestart } from '../utils/quit';
 import { invokeIpc } from '../utils/ipc';
 import { useUIStore } from '../store/uiStore';
 import { useUpdateStore } from '../store/updateStore';
+import { useSpeleoStore } from '../store/speleoStore';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import i18n from '../i18n';
 
@@ -136,11 +137,13 @@ export function useBeforeUnload(
             isShowingDialog.current = true;
             let proceed = false;
             try {
-              proceed = await confirm(message, {
-                title: 'Close Application',
-                kind: 'warning',
-                okLabel: 'Discard and Close',
-                cancelLabel: 'Cancel',
+              // In-app, not the native `confirm`: it is one of the exit prompts and
+              // must look and behave like the others (`utils/exitConfirm`).
+              proceed = await askExitConfirm({
+                title: i18n.t('speleoExitPrompt.closeApp.title'),
+                message,
+                confirmLabel: i18n.t('speleoExitPrompt.closeApp.confirm'),
+                cancelLabel: i18n.t('common.actions.cancel'),
               });
             } catch (e) {
               console.error('Close confirmation error:', e);
@@ -206,6 +209,9 @@ export function useBeforeUnload(
               // which is the only action that can recover - the bytes may well
               // be the reason the install failed.
               useUpdateStore.getState().setDownloadFailed();
+              // The backend released a clean project's lock before it tried to
+              // install; re-read the link so the shell stops claiming the lock.
+              void useSpeleoStore.getState().refreshLinkStatus();
               useUIStore
                 .getState()
                 .showToast(

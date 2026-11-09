@@ -59,31 +59,91 @@ pub(crate) fn save_project_impl(state: &AppState, path: Option<PathBuf>) -> Comm
     state.execute(Command::SaveProject { path })
 }
 
-/// Close the current project. `release_lock` (default `true`) best-effort releases
-/// a held SpeleoDB write lock first so a close doesn't strand the server mutex
-/// (fix 1); internal transitions that retain the session may pass `false`.
-///
-/// A release is best-effort: an unavailable server can leave its lock held.
-/// Saved unpublished changes remain in the local project file.
-#[tauri::command]
-pub fn close_project(state: State<AppState>, release_lock: Option<bool>) -> CommandResult {
-    close_project_impl(state.inner(), release_lock.unwrap_or(true))
+/// What a close does with a held SpeleoDB write lock - the exit prompt's three
+/// answers, plus the silent default for a project with nothing un-uploaded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CloseLock {
+    /// Hand the lock back (best-effort) - unless the project still has un-pushed
+    /// edits, in which case the backend keeps it (see `speleodb_lock_release`).
+    Release,
+    /// "Keep the lock": close, leave the lock held for the next open to resume.
+    Keep,
+    /// "Discard changes", confirmed: remove the local copy, then release.
+    Discard,
 }
 
-pub(crate) fn close_project_impl(state: &AppState, release_lock: bool) -> CommandResult {
-    // Release a held SpeleoDB lock BEFORE the close tears down the database (the
-    // link row lives there). Best-effort + gated so the keep-lock path can opt out.
-    if release_lock {
-        state.speleodb_release_held_lock_on_close();
-    } else {
-        // Internal transition: retain the server mutex past this close.
-        // Recorded on the claim BEFORE the teardown, while the link row is still
-        // readable - and recorded at all because the stranded-claim janitor
-        // cannot otherwise tell a deliberate keep from a session that died
-        // holding a lock, and would hand this one back on the next status refresh.
-        state.speleodb_keep_open_lock_deliberately();
+impl CloseLock {
+    /// `discard_local` wins: it is the one answer that must never be downgraded,
+    /// because the user confirmed it and the frontend then continues the exit as
+    /// though the copy is gone. `release_lock` defaults to `true`.
+    fn from_args(release_lock: Option<bool>, discard_local: Option<bool>) -> Self {
+        if discard_local == Some(true) {
+            Self::Discard
+        } else if release_lock == Some(false) {
+            Self::Keep
+        } else {
+            Self::Release
+        }
+    }
+}
+
+/// Close the current project. `release_lock` (default `true`) best-effort releases
+/// a held SpeleoDB write lock first so a close doesn't strand the server mutex
+/// (fix 1) - never over un-pushed edits, which keep it. `false` keeps the lock on
+/// purpose (the exit prompt's "Keep the lock"). `discard_local: true` is the exit
+/// prompt's confirmed "Discard changes": the local copy is removed, then the lock
+/// is released.
+///
+/// Async + `spawn_blocking`: the release is a network round trip, and a sync
+/// command runs on the main thread - a slow or unreachable server froze the whole
+/// UI for the HTTP timeout on every close.
+#[tauri::command]
+pub async fn close_project(
+    app: tauri::AppHandle,
+    release_lock: Option<bool>,
+    discard_local: Option<bool>,
+) -> CommandResult {
+    let lock = CloseLock::from_args(release_lock, discard_local);
+    tauri::async_runtime::spawn_blocking(move || {
+        close_project_impl(app.state::<AppState>().inner(), lock)
+    })
+    .await
+    .unwrap_or_else(|e| CommandResult::failure(format!("Closing the project failed: {e}")))
+}
+
+pub(crate) fn close_project_impl(state: &AppState, lock: CloseLock) -> CommandResult {
+    match lock {
+        // Release a held SpeleoDB lock BEFORE the close tears down the database
+        // (the link row lives there).
+        CloseLock::Release => state.speleodb_release_held_lock_on_close(),
+        // Retain the server mutex past this close. Recorded on the claim BEFORE
+        // the teardown, while the link row is still readable - and recorded at
+        // all because the stranded-claim janitor cannot otherwise tell a
+        // deliberate keep from a session that died holding a lock, and would hand
+        // this one back on the next status refresh.
+        CloseLock::Keep => state.speleodb_keep_open_lock_deliberately(),
+        // Closes (and releases) itself, in the only order that cannot strand the
+        // work: the copy goes first, the lock after.
+        CloseLock::Discard => return state.speleodb_close_discarding_local(),
     }
     state.execute(Command::CloseProject)
+}
+
+/// Sign-out's "Discard" for a SpeleoDB project's cached copy that is NOT open:
+/// remove it so the sign-out leaves no un-uploaded work behind. Releases nothing;
+/// the sign-out releases the account's remaining locks explicitly afterwards.
+#[tauri::command]
+pub async fn speleodb_discard_cached_copy(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> CommandResult {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppState>()
+            .inner()
+            .speleodb_discard_cached_copy(&project_id)
+    })
+    .await
+    .unwrap_or_else(|e| CommandResult::failure(format!("Discarding the copy failed: {e}")))
 }
 
 /// Get the full project state for the frontend
@@ -476,5 +536,26 @@ pub async fn create_project_full(
             // Task panicked or was cancelled
             Err(LoadError::internal(join_error.to_string()))
         }
+    }
+}
+
+#[cfg(test)]
+mod close_lock_tests {
+    use super::CloseLock;
+
+    #[test]
+    fn close_lock_reads_the_exit_prompt_answer_from_the_ipc_arguments() {
+        // Omitted entirely: the ordinary close, which releases (never over
+        // un-pushed edits - that veto lives in the backend, not here).
+        assert_eq!(CloseLock::from_args(None, None), CloseLock::Release);
+        assert_eq!(CloseLock::from_args(Some(true), None), CloseLock::Release);
+        assert_eq!(CloseLock::from_args(Some(false), None), CloseLock::Keep);
+        assert_eq!(CloseLock::from_args(None, Some(false)), CloseLock::Release);
+        // The user's confirmed discard is never downgraded by a stray release_lock.
+        assert_eq!(CloseLock::from_args(None, Some(true)), CloseLock::Discard);
+        assert_eq!(
+            CloseLock::from_args(Some(false), Some(true)),
+            CloseLock::Discard
+        );
     }
 }
