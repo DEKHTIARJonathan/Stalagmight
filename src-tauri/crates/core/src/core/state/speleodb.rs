@@ -81,6 +81,9 @@ pub(crate) struct SpeleoDbSession {
     /// already held mints nothing and leaves this alone, which is what makes the
     /// unwind's promised no-op on an inherited lock real.
     pub(super) acquired_by_this_flow: Option<super::speleodb_session::LockClaim>,
+    /// Retry context for an uncertain close-release response. This is never
+    /// acquisition provenance and cannot authorize revision ancestry recovery.
+    pub(super) pending_close_release: Option<(u64, super::speleodb_session::LockClaim)>,
 }
 
 /// Pure endpoint-precedence resolver (extracted so it is unit-testable without
@@ -236,6 +239,7 @@ impl SpeleoDbSession {
         self.endpoint = None;
         self.email = None;
         self.rehydrate_attempted = true;
+        self.pending_close_release = None;
     }
 
     pub(super) fn reload_credentials(&mut self) {
@@ -2845,6 +2849,7 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
+            pending_close_release: None,
         }
     }
 
@@ -2906,22 +2911,29 @@ mod tests {
             atomic::{AtomicUsize, Ordering},
             Arc,
         };
-        for (fail_first_release, foreign_holder, no_op_first_release) in [
-            (false, false, false),
-            (true, false, false),
-            (false, true, false),
-            (false, false, true),
+        for (fail_first_release, foreign_holder, no_op_first_release, lost_response) in [
+            (false, false, false, false),
+            (true, false, false, false),
+            (false, true, false, false),
+            (false, false, true, false),
+            (false, false, false, true),
         ] {
             let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("server");
             let base = format!("http://{}", listener.local_addr().expect("address"));
             let releases = Arc::new(AtomicUsize::new(0));
             let server_releases = Arc::clone(&releases);
             let (_temp, state) = editing_fixture(&base);
+            let inherited = fail_first_release || no_op_first_release || lost_response;
+            if inherited {
+                state.speleodb_forget_lock_acquired_for(REMOTE_ID);
+            }
             let state = Arc::new(state);
             let closing_state = Arc::clone(&state);
             let server = std::thread::spawn(move || {
                 let requests = if foreign_holder {
                     1
+                } else if lost_response {
+                    3
                 } else if fail_first_release || no_op_first_release {
                     4
                 } else {
@@ -2956,11 +2968,18 @@ mod tests {
                     } else {
                         0
                     };
+                    if release && attempt == 0 && lost_response {
+                        // The release committed, but its response was lost. A new
+                        // owner takes over before our retry's fresh ownership probe.
+                        drop(stream);
+                        continue;
+                    }
+                    let successor = lost_response && server_releases.load(Ordering::SeqCst) > 0;
                     let failed = release && attempt == 0 && fail_first_release;
                     let (status, body) = if failed {
                         (503, r#"{"detail":"Synthetic release failure"}"#.to_owned())
                     } else {
-                        let project = if foreign_holder {
+                        let project = if foreign_holder || successor {
                             SAME_ACCOUNT_HOLDER_BODY.replace("u@x", "other@x")
                         } else {
                             SAME_ACCOUNT_HOLDER_BODY.to_owned()
@@ -2979,18 +2998,29 @@ mod tests {
                 }
             });
             state.mark_remote_dirty();
-            if !fail_first_release && !foreign_holder && !no_op_first_release {
+            if !fail_first_release && !foreign_holder && !no_op_first_release && !lost_response {
                 state.set_edit_enabled(false); // An owned claim still needs release after gate loss.
             }
             let path = state.open_project_path().expect("local project");
             let before = std::fs::read(&path).expect("saved work");
             let first = state.close_project_with_lock_release(true);
-            if fail_first_release || no_op_first_release {
+            if fail_first_release || no_op_first_release || lost_response {
                 assert!(!first.success);
                 assert!(first.error.expect("visible failure").contains("still open"));
                 assert!(state.get_project_state().is_some());
-                assert!(state.edit_enabled());
-                assert!(state.speleodb_lock_acquired_here(REMOTE_ID));
+                assert!(
+                    !state.edit_enabled(),
+                    "an uncertain release must stop local editing"
+                );
+                assert!(
+                    !state.speleodb_lock_acquired_here(REMOTE_ID),
+                    "inherited ownership is not acquisition provenance"
+                );
+                state.speleodb_forget_lock_acquired_if_gate_shut();
+                assert!(
+                    state.speleodb_lifecycle_lock_release_params().is_some(),
+                    "quit/switch retain pending release context"
+                );
                 assert!(
                     state.close_project_with_lock_release(true).success,
                     "retry closes only after release succeeds"
@@ -3012,6 +3042,104 @@ mod tests {
                 }
             );
         }
+    }
+
+    #[test]
+    fn pending_close_release_poisoned_session_refuses_teardown() {
+        let endpoint = "http://127.0.0.1:1/";
+        let (_temp, state) = editing_fixture(endpoint);
+        state.speleodb_forget_lock_acquired_for(REMOTE_ID);
+        state.set_edit_enabled(false);
+        state
+            .speleodb
+            .lock()
+            .expect("session")
+            .pending_close_release = Some((
+            state.speleodb_session_generation(),
+            crate::core::state::speleodb_session::LockClaim::taken(
+                REMOTE_ID,
+                endpoint.into(),
+                "u@x".into(),
+            ),
+        ));
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = state.speleodb.lock().expect("session");
+            panic!("synthetic poisoned pending-close context");
+        }));
+        let result = state.close_project_with_lock_release(true);
+        assert!(
+            !result.success,
+            "unreadable retry ownership cannot authorize teardown"
+        );
+        assert!(result
+            .error
+            .expect("visible failure")
+            .contains("session lock poisoned"));
+        assert!(state.get_project_state().is_some());
+        assert!(!state.edit_enabled());
+        assert!(state.speleodb_lifecycle_lock_release_params().is_none());
+    }
+
+    #[test]
+    fn pending_close_release_rejects_other_project_account_or_generation() {
+        for (project_id, email, generation_offset) in [
+            ("22222222-2222-2222-2222-222222222222", "u@x", 0),
+            (REMOTE_ID, "other@x", 0),
+            (REMOTE_ID, "u@x", 1),
+        ] {
+            let endpoint = "http://127.0.0.1:1/";
+            let (_temp, state) = editing_fixture(endpoint);
+            state.set_edit_enabled(false);
+            state.speleodb_forget_lock_acquired_for(REMOTE_ID);
+            state
+                .speleodb
+                .lock()
+                .expect("session")
+                .pending_close_release = Some((
+                state.speleodb_session_generation() + generation_offset,
+                crate::core::state::speleodb_session::LockClaim::taken(
+                    project_id,
+                    endpoint.into(),
+                    email.into(),
+                ),
+            ));
+            assert!(state.speleodb_lifecycle_lock_release_params().is_none());
+            assert!(
+                state.close_project_with_lock_release(true).success,
+                "a stale retry context cannot authorize a network release"
+            );
+        }
+    }
+
+    #[test]
+    fn pending_close_release_is_cleared_by_verified_resume_without_minting_provenance() {
+        let endpoint = "http://127.0.0.1:1/";
+        let (_temp, state) = editing_fixture(endpoint);
+        state.speleodb_forget_lock_acquired_for(REMOTE_ID);
+        state.set_edit_enabled(false);
+        state
+            .speleodb
+            .lock()
+            .expect("session")
+            .pending_close_release = Some((
+            state.speleodb_session_generation(),
+            crate::core::state::speleodb_session::LockClaim::taken(
+                REMOTE_ID,
+                endpoint.into(),
+                "u@x".into(),
+            ),
+        ));
+        state
+            .speleodb_commit_editing(Some(state.speleodb_session_generation()), REMOTE_ID, false)
+            .expect("verified inherited-lock resume");
+        assert!(state.edit_enabled());
+        assert!(state
+            .speleodb
+            .lock()
+            .expect("session")
+            .pending_close_release
+            .is_none());
+        assert!(!state.speleodb_lock_acquired_here(REMOTE_ID));
     }
 
     #[test]
@@ -4974,6 +5102,7 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
+            pending_close_release: None,
         }
     }
 
@@ -5163,6 +5292,7 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
+            pending_close_release: None,
         };
         let (endpoint, token) = session.active_token().expect("authenticated session");
         assert_eq!(endpoint, "https://x/");
@@ -5175,6 +5305,7 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
+            pending_close_release: None,
         };
         assert!(matches!(
             no_token.active_token(),
@@ -5188,6 +5319,7 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
+            pending_close_release: None,
         };
         assert!(matches!(
             no_email.active_token(),
@@ -5201,6 +5333,7 @@ mod tests {
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
             acquired_by_this_flow: None,
+            pending_close_release: None,
         };
         assert!(matches!(
             no_endpoint.active_token(),

@@ -234,6 +234,10 @@ impl AppState {
         if open.project_id != project_id {
             return Err(SpeleoDbError::SessionMoved);
         }
+        self.speleodb
+            .lock()
+            .map_err(|_| SpeleoDbError::Io("SpeleoDB session lock poisoned".into()))?
+            .pending_close_release = None;
         self.set_edit_enabled(true);
         // AFTER the gate opens, never before - a status refresh landing in between
         // would see a shut gate and clear the record again

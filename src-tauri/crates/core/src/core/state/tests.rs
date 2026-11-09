@@ -6934,6 +6934,45 @@ fn test_remove_recent_project_removes_present_entry() {
 }
 
 #[test]
+fn test_remove_recent_project_failed_save_preserves_retry_and_original_file() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("synthetic-local.stalx");
+        std::fs::write(&local, b"synthetic original survey file").unwrap();
+        let state = AppState::new().unwrap();
+        *state.recent_projects.lock().unwrap() = vec![local.clone()];
+        {
+            let mut config = state.config.lock().unwrap();
+            config.general.recent_projects = vec![local.clone()];
+            config.save().unwrap();
+        }
+        let config_path = crate::config::Config::config_path().unwrap();
+        let before = std::fs::read(&config_path).unwrap();
+        // A directory at the destination makes atomic replacement fail on every OS.
+        std::fs::remove_file(&config_path).unwrap();
+        std::fs::create_dir(&config_path).unwrap();
+        assert!(!state.remove_from_recent_projects(local.clone()).success);
+        assert_eq!(*state.recent_projects.lock().unwrap(), vec![local.clone()]);
+        assert_eq!(
+            state.get_config().general.recent_projects,
+            vec![local.clone()]
+        );
+        std::fs::remove_dir(&config_path).unwrap();
+        std::fs::write(&config_path, before).unwrap();
+        assert!(state.remove_from_recent_projects(local.clone()).success);
+        assert!(crate::config::Config::load()
+            .unwrap()
+            .general
+            .recent_projects
+            .is_empty());
+        assert_eq!(
+            std::fs::read(&local).unwrap(),
+            b"synthetic original survey file"
+        );
+    });
+}
+
+#[test]
 fn test_remove_recent_project_absent_is_idempotent_success() {
     // A path that is not in the list is a NO-OP SUCCESS, not a failure: "remove from
     // recent" means "ensure it's absent". Returning a failure used to strand a zombie

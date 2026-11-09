@@ -294,5 +294,9 @@ from subsequent saves. Certificate verification and redirect restrictions remain
 Hamburger Menu -> Close Project and the SpeleoDB workspace Close action share the
 same close command. A linked editing session remains open until the server confirms
 its lock is released. Ownership-probe or release errors are visible and retryable;
-no successful close is reported after an unsuccessful release. Local files and
-saved unpublished changes remain intact. Other accounts' locks are never released.
+no successful close is reported after an unsuccessful release. An uncertain release
+attempt leaves the project read-only with an ownership-checked retry available.
+Resuming editing requires the usual verified acquisition. Local files and saved
+unpublished changes remain intact. A fresh ownership check precedes release;
+the API has no atomic compare-and-release, so a server-side ownership change
+between that check and the POST remains a protocol limitation.

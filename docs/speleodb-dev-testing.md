@@ -314,3 +314,22 @@ Close failures must not navigate to the project listing or silently drop the ses
 One mistakenly broad Rust filter also ran 102 SpeleoDB module cases, all passing.
 The final confirmation used explicit `confirmed_close_` and
 `lifecycle_release_preserves_saved_unpublished_files` filters. No full suite ran.
+
+### Twelve-commit adversarial review (2026-11-09)
+
+Reviewed the twelve commits above master. Uncertain close-release responses now
+pause editing and retain a project/account/session-bound retry context, including
+inherited locks without acquisition provenance. Resume verifies ownership before
+editing reopens; unreadable retry state refuses teardown. Failed recent-reference
+persistence leaves both in-memory lists unchanged so manual retry persists the
+removal without touching the original project file.
+
+Five focused Rust cases and three focused Vitest cases passed. They cover lost
+release responses, foreign successors, inherited ownership, retry-context identity
+and poisoned session guards, verified resume, failed recent-save/retry, immediate
+frontend read-only state, and stale account replies. No full suites were rerun.
+All three typechecks, nine non-test lint gates, root/member formatting and workspace
+Clippy with telemetry and all targets passed; existing repository warnings remain.
+`prek run -a` was attempted and exited 2 because neither this repository nor its
+parents contains a prek/pre-commit configuration. Existing validation commands
+were executed directly.

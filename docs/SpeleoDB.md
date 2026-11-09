@@ -181,7 +181,9 @@ On confirmation, the project is saved and its first revision uploaded, then a fr
 server copy is downloaded and opened as a managed project. After successful
 reopening, its original local Recent Projects reference is removed. The original
 `.stalx` file is retained; unsuccessful conversions keep their original recent
-reference. Editing is acquired once through the shared verified acquisition flow. Unconfirmed uploads preserve the
+reference. If removing the recent reference cannot be persisted, the reference
+remains available for a later manual retry and the original file stays intact.
+Editing is acquired once through the shared verified acquisition flow. Unconfirmed uploads preserve the
 linked working copy for Save Changes; failed downloads preserve the remote identity
 and offer Reload Project. Retrying recovery never creates a second server project.
 
@@ -208,8 +210,10 @@ conflict, uncertainty and release failure leave the project open. Plain Close,
 including Hamburger Menu -> Close Project, verifies current ownership and confirms
 release before teardown. Failed verification, rejected release or a response still
 reporting this account as holder keeps the project open with a visible error and
-allows retry. Release and teardown serialize against mutations and new editing
-sessions. Project switching and Quit retain their separate cleanup policies. Unsaved survey work and form drafts require Discard changes / Cancel.
+allows retry. An uncertain release attempt pauses editing and retains a retry
+context scoped to the project, account and session. Retry checks current ownership;
+it never treats that context as acquisition provenance. Release and teardown
+serialize against mutations and new editing sessions. Project switching and Quit retain their separate cleanup policies. Unsaved survey work and form drafts require Discard changes / Cancel.
 Saved unuploaded work remains in the local file. Backend release consent remains
 scoped to the project, authenticated account and session generation. Another
 account's lock is never released by an ordinary exit.

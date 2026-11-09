@@ -51,8 +51,8 @@ enum ReleaseIntent {
 
 impl AppState {
     /// User-visible close is atomic with lock release. A failed ownership probe or
-    /// release leaves the project, editing gate and acquisition record available
-    /// for retry. Local project close and internal keep-lock transitions still work.
+    /// release leaves the project open for retry. Once release is attempted, an
+    /// uncertain response keeps editing disabled until ownership is reconciled.
     pub fn close_project_with_lock_release(
         &self,
         release_lock: bool,
@@ -73,7 +73,6 @@ impl AppState {
         } else {
             self.speleodb_keep_open_lock_deliberately();
         }
-        self.invalidate_adjusted_cache();
         self.close_open_project_locked(&mut project)
     }
 
@@ -84,7 +83,11 @@ impl AppState {
             Err(SpeleoDbError::NoRemoteProject) => return Ok(()),
             Err(error) => return Err(error),
         };
-        if !self.edit_enabled() && !self.speleodb_lock_acquired_here(&link.project_id) {
+        let generation = self.speleodb_session_generation();
+        if !self.edit_enabled()
+            && !self.speleodb_lock_acquired_here(&link.project_id)
+            && !self.speleodb_has_pending_close_release(&link.project_id)?
+        {
             return Ok(());
         }
         let (endpoint, token, email) = self.speleodb_active_account()?;
@@ -95,6 +98,21 @@ impl AppState {
         }
         let holder = self.speleodb_lock_holder_checked(&endpoint, &token, &link.project_id)?;
         if super::speleodb::lock_held_by_me(holder.as_deref(), Some(&email)) {
+            // The server can release the lock even if its response never arrives.
+            // Preserve retry ownership separately from acquisition provenance, including
+            // when this editing session inherited a lock from an earlier process.
+            self.speleodb
+                .lock()
+                .map_err(|_| SpeleoDbError::Io("SpeleoDB session lock poisoned".into()))?
+                .pending_close_release = Some((
+                generation,
+                super::speleodb_session::LockClaim::taken(
+                    &link.project_id,
+                    endpoint.clone(),
+                    email.clone(),
+                ),
+            ));
+            self.set_edit_enabled(false);
             let released = client::release_lock(&endpoint, &token, &link.project_id)?;
             if released
                 .active_mutex
@@ -106,8 +124,24 @@ impl AppState {
                 ));
             }
         }
+        self.speleodb
+            .lock()
+            .map_err(|_| SpeleoDbError::Io("SpeleoDB session lock poisoned".into()))?
+            .pending_close_release = None;
         self.speleodb_forget_lock_acquired_for(&link.project_id);
         Ok(())
+    }
+
+    fn speleodb_has_pending_close_release(&self, project_id: &str) -> Result<bool, SpeleoDbError> {
+        let session = self.speleodb_session_lock()?;
+        Ok(session
+            .pending_close_release
+            .as_ref()
+            .is_some_and(|(generation, claim)| {
+                *generation == self.speleodb_session_generation()
+                    && claim.project_id == project_id
+                    && claim.taken_by(session.endpoint.as_deref(), session.email.as_deref())
+            }))
     }
 
     /// Snapshot of what a best-effort lock release needs, or `None` when no held
@@ -161,7 +195,13 @@ impl AppState {
         // A failed reconciliation can shut the edit gate while leaving an owned
         // claim. Lifecycle cleanup still releases that claim; an ordinary read-only
         // open without one never gains permission to release another user's lock.
-        if !self.edit_enabled() && !self.speleodb_lock_acquired_here(&link.project_id) {
+        if !self.edit_enabled()
+            && !self.speleodb_lock_acquired_here(&link.project_id)
+            && !self.speleodb_has_pending_close_release(&link.project_id).unwrap_or_else(|error| {
+                tracing::warn!(%error, project_id = %link.project_id, "speleodb: cannot inspect pending close release; leaving lock held");
+                false
+            })
+        {
             return None;
         }
         // Logout keeps its existing unpublished-work protection. Close/switch/exit
