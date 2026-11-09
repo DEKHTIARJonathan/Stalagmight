@@ -253,7 +253,65 @@ continue local editing through transient disconnection. Offline opening remains
 read-only. In-place frontend reconciliation suppresses automatic acquisition.
 
 An unreachable server or forcibly terminated process cannot guarantee server-side
-release. Close, Quit and Save-and-Close retain their separate lifecycle behavior.
+release, and SpeleoDB never expires a lock on its own: a lock left held stays held
+until the next sign-in's held-lock prompt or the SpeleoDB website releases it.
+Close, Quit and Save-and-Close retain their separate lifecycle behavior.
+
+## Edit gate and lock claims
+
+The edit gate is not a stored flag. It is derived, on every read, from what is
+open and from the lock claims this process holds
+(`core/state/speleodb_edit_gate.rs`):
+
+- A local project, or no project, is always editable.
+- A SpeleoDB project is editable only while the signed-in account holds a claim
+  on that project that is bound to the current session generation. Editing a
+  SpeleoDB project without a held lock is therefore not a representable state.
+
+A claim records which project this process holds the lock on, under which
+account and deployment. It is authored when Start Editing's probe found the
+mutex free (this process took it, which licenses the authorship recovery of a
+landed push), and unauthored when the account already held the lock and Start
+Editing inherited it.
+
+- Opening the gate: only Start Editing's commit binds a claim to the session
+  (Switch to Read Only re-binds the claim it took out when its release fails).
+  An in-place reload (fast-forward, Reload, Restore) carries an existing binding
+  into the generation it moves to and cannot create one. Status refresh never
+  opens the gate and never drops a claim.
+- Shutting the gate: releasing or dropping the claim, or unbinding it after a
+  confirmed or unverifiable loss of the lock or permission. Every session
+  boundary (close, open, create, logout, sign-in, a rejected token) moves the
+  generation on, which leaves any binding stale, so the gate shuts without the
+  boundary having to remember it.
+- Take remote shuts the gate and releases the lock before it reloads the server
+  version, so the project comes back read-only; the frontend reopens it without
+  re-acquiring and offers Resume editing.
+- A claim whose release failed is kept as an unbound pointer for a later retry.
+  It opens nothing.
+
+Every automatic release (close, project switch, quit, restart-to-update, logout,
+account switch, unlink, Take remote, delete, Start Editing's unwind and the
+stranded-claim cleanup) first reads the lock holder, capped at 2 seconds so it
+fits inside the 5-second exit and update-restart wait, and sends the release only
+when the server names the signed-in account. Another account's lock is never
+released, even when that account is an administrator's. When someone else or
+nobody holds the lock, the local claim ends and nothing is sent. When the holder
+cannot be read, nothing is sent: the claim is kept, the stranded-claim cleanup
+retries it on a later status refresh with no project open, and on quit or update
+the lock stays held for the next sign-in's held-lock prompt. These releases are
+decided from the claim, never from the gate, so a session whose gate a lost lock
+or a sign-out already shut still ends its claim. The un-uploaded-work rule above
+applies to all of them except the explicit discard paths.
+
+An acquire that fails with a transport error, a 5xx or an unreadable reply may
+still have taken the lock. Start Editing then reads the holder again. If it is
+the signed-in account, the acquire is adopted and editing opens normally. If it
+is someone else, the contention dialog names them. If nobody holds it, the
+original error is shown. If the holder still cannot be read, the error is shown
+and a provisional, unbound claim is kept where the lock would otherwise have been
+handed back, so the next close or the stranded-claim cleanup releases it after
+reading the holder.
 
 ## Network activity and responsiveness
 
