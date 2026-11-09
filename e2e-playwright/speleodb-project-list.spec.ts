@@ -50,8 +50,14 @@ for (const density of ['cards', 'table'] as const) {
     await cached.click({ button: 'right' });
     await expect(page.getByTestId('metadata-panel')).toHaveCount(0);
     await expect(page.getByText('Delete Project', { exact: true })).toHaveCount(0);
-    await page.getByTestId(`${prefix}-remote-open-${CACHED}`).click();
-    await expect(page.getByTestId(`${prefix}-remote-open-${CACHED}`)).toBeDisabled();
+    // The entry itself is the Open action (no separate Open button): a click pulls
+    // the project, and the entry stays disabled while that pull is in flight.
+    await expect(page.getByTestId(`${prefix}-remote-open-${CACHED}`)).toHaveCount(0);
+    await cached.click();
+    await expect(cached).toHaveAttribute('aria-disabled', 'true');
+    // A second click while busy must not start a concurrent pull (forced: the
+    // entry is aria-disabled, which Playwright would otherwise wait out).
+    await cached.click({ force: true });
     expect(commands.filter((c) => c.includes('Command: speleodb_open_project'))).toHaveLength(1);
     expect(commands.filter((c) => /Command: load_project(?:_full(?:_binary)?)?\b/.test(c))).toHaveLength(0);
     await expect(page.getByTestId('metadata-panel')).toHaveCount(0);
@@ -90,7 +96,7 @@ for (const density of ['cards', 'table'] as const) {
     const prefix = density === 'cards' ? 'system-card' : 'system-row';
     await page.getByTestId(`${prefix}-remote-${CACHED}`).focus();
     await page.keyboard.press('Enter');
-    await expect(page.getByTestId(`${prefix}-remote-open-${CACHED}`)).toBeDisabled();
+    await expect(page.getByTestId(`${prefix}-remote-${CACHED}`)).toHaveAttribute('aria-disabled', 'true');
     expect(commands.filter((c) => c.includes('Command: speleodb_open_project'))).toHaveLength(1);
     expect(commands.filter((c) => /Command: load_project(?:_full(?:_binary)?)?\b/.test(c))).toHaveLength(0);
     await expect(page.getByTestId('metadata-panel')).toHaveCount(0);
@@ -104,7 +110,7 @@ test('retry keeps a failed first remote open remote, then forgets it after dismi
     load_project_full: { __throw: 'Synthetic load failed' },
     load_project: { __throw: 'Synthetic load failed' },
   });
-  await page.getByTestId(`system-card-remote-open-${CACHED}`).click();
+  await page.getByTestId(`system-card-remote-${CACHED}`).click();
   await expect(page.getByTestId('loading-progress')).toContainText('Synthetic load failed');
   await page.getByTestId('loading-error-retry').click();
   await expect.poll(() => commands.filter((c) => c.includes('Command: speleodb_open_project')).length).toBe(2);

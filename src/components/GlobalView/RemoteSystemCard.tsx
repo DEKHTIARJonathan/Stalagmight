@@ -1,9 +1,6 @@
 import { RemoteUpdatedTime } from './RemoteUpdatedTime';
-import { type MouseEvent } from 'react';
-import { useTranslation } from 'react-i18next';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 import { SpeleoProjectInfo } from './SpeleoProjectInfo';
-import { Button } from '../common/Button';
 import {
   recentAccent,
   recentAccentStyle,
@@ -21,10 +18,10 @@ interface RemoteSystemCardProps {
 }
 
 /**
- * Card for a SpeleoDB project, whether or not it has been downloaded before. It carries no local file/stats, so it shows the SpeleoDB name
- * + lock badge and a single Open action that pulls it (like the browser dialog). The
- * whole card is clickable for discoverability; the Open button stops propagation so
- * it doesn't double-fire.
+ * Card for a SpeleoDB project, whether or not it has been downloaded before. It
+ * carries no local file/stats, so it shows the SpeleoDB name + lock badge. The card
+ * itself is the Open action (click, or Enter/Space when focused), which pulls the
+ * project like the browser dialog does; there is no separate Open button.
  */
 export default function RemoteSystemCard({
   summary,
@@ -32,12 +29,10 @@ export default function RemoteSystemCard({
   onOpen,
   busy = false,
 }: RemoteSystemCardProps) {
-  const { t } = useTranslation();
   const displayLock = { ...lock, hasLocalEdits: false };
   const testId = `system-card-remote-${summary.id}`;
-  // Gate the whole-card click on `busy` too, not just the Open button - otherwise a
-  // click on the card body (or Enter/Space) bypasses the disabled button and fires a
-  // concurrent open.
+  // Gate every open on `busy`: a click (or Enter/Space) while a pull is in flight
+  // must not fire a concurrent open.
   const open = () => {
     if (!busy) onOpen(summary);
   };
@@ -70,17 +65,6 @@ export default function RemoteSystemCard({
 
       <div className="mt-3 pt-3 border-t border-border flex items-center justify-between gap-2">
         <RemoteUpdatedTime date={summary.modified_date} />
-        <Button
-          variant="primary"
-          onClick={(e: MouseEvent) => {
-            e.stopPropagation();
-            open();
-          }}
-          disabled={busy}
-          data-testid={`system-card-remote-open-${summary.id}`}
-        >
-          {t('speleodb.browser.open')}
-        </Button>
       </div>
     </div>
   );
