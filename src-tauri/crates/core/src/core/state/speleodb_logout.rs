@@ -63,27 +63,46 @@ impl AppState {
             .forget();
         // Attempt both cleanups even when credential persistence fails.
         let token_result = self.speleodb_clear_saved_token();
-        let recent_result = self.speleodb_forget_recent_projects();
+        let recent_result = self
+            .speleodb_forget_recent_projects(super::speleodb_local_state::cache_root().as_deref());
         token_result.and(recent_result)
     }
 
     /// Forget only confirmed SpeleoDB references. Metadata reads never modify the
     /// project files; unreadable/missing entries are retained rather than guessed.
     ///
-    /// A reference whose copy still holds un-uploaded edits is KEPT: the recents
-    /// row is the way back to that work, and dropping it on sign-out left the
-    /// changes on disk with nothing in the app that could reach them. The user's
-    /// discard removes such a copy (and its row) before signing out; anything still
-    /// dirty here is work they chose to come back to.
-    fn speleodb_forget_recent_projects(&self) -> Result<(), SpeleoErrorDto> {
+    /// Two kinds of reference are KEPT:
+    ///
+    /// - A cached copy (`<cache>/speleodb/<id>/project.stalx`, the one place a managed
+    ///   project lives). Signed out, the home screen shows every cached copy - list and
+    ///   map - and opens it read-only; the map is built from recents, so forgetting the
+    ///   row would take the copy off the map for exactly the user it is shown to.
+    /// - A reference whose copy still holds un-uploaded edits: the recents row is the
+    ///   way back to that work, and dropping it on sign-out left the changes on disk
+    ///   with nothing in the app that could reach them. The user's discard removes such
+    ///   a copy (and its row) before signing out; anything still dirty here is work
+    ///   they chose to come back to.
+    ///
+    /// `cache_root` is passed in so tests can use a temporary cache; `None` (the app
+    /// dirs are not resolved) recognises no cached copy.
+    fn speleodb_forget_recent_projects(
+        &self,
+        cache_root: Option<&std::path::Path>,
+    ) -> Result<(), SpeleoErrorDto> {
         let mut recent = self
             .recent_projects
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         recent.retain(|path| {
-            !crate::persistence::Database::open_for_metadata(path)
+            let Ok(Some(link)) = crate::persistence::Database::open_for_metadata(path)
                 .and_then(|db| db.load_speleo_link())
-                .is_ok_and(|link| link.is_some_and(|link| !link.has_unpushed_edits))
+            else {
+                return true;
+            };
+            link.has_unpushed_edits
+                || cache_root.is_some_and(|root| {
+                    super::speleodb_local_state::is_the_cached_copy(root, &link.project_id, path)
+                })
         });
         let mut config = self
             .config
@@ -211,6 +230,49 @@ mod tests {
             }
             state.speleodb_logout().expect("repeated logout");
             assert_eq!(*state.recent_projects.lock().expect("recents"), kept);
+        });
+    }
+
+    /// Signed out, the home screen lists every cached copy on the list AND the map,
+    /// and the map is built from recents: a clean cached copy keeps its row. A clean
+    /// linked file outside the cache is still forgotten.
+    #[test]
+    fn logout_keeps_the_recents_rows_of_cached_copies() {
+        crate::test_helpers::with_isolated_config(|| {
+            let dir = tempfile::tempdir().expect("temp");
+            let root = dir.path().join("speleodb");
+            let id = uuid::Uuid::new_v4().to_string();
+            let cached = super::super::speleodb_local_state::cache_path_in(&root, &id);
+            let stray = dir.path().join("stray-linked-copy.stalx");
+            std::fs::create_dir_all(cached.parent().expect("parent")).expect("cache dir");
+            for path in [&cached, &stray] {
+                let mut db = crate::persistence::Database::open(path).expect("db");
+                db.save_project(&crate::models::Project::new("Synthetic".into(), None))
+                    .expect("project");
+                db.save_speleo_link(Some(&crate::models::SpeleoLink {
+                    endpoint: "https://a.example/".into(),
+                    project_id: id.clone(),
+                    project_name: "Synthetic".into(),
+                    base_commit_sha: None,
+                    has_unpushed_edits: false,
+                    last_edit_at: None,
+                    last_verify_at: None,
+                    undo_mode: None,
+                }))
+                .expect("link");
+            }
+            let state = AppState::new().expect("state");
+            let paths = vec![cached.clone(), stray];
+            *state.recent_projects.lock().expect("recents") = paths.clone();
+            state.config.lock().expect("config").general.recent_projects = paths;
+            state
+                .speleodb_forget_recent_projects(Some(&root))
+                .expect("forget");
+            assert_eq!(
+                *state.recent_projects.lock().expect("recents"),
+                vec![cached.clone()]
+            );
+            assert_eq!(state.get_config().general.recent_projects, vec![cached]);
         });
     }
 

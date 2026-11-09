@@ -3,7 +3,8 @@ import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { canResumeSpeleoEditing } from '../../utils/speleoPermission';
-import { PencilIcon } from '../common/icons';
+import { speleoReadOnlyReason, speleoReadOnlyReasonKey } from '../../utils/speleoReadOnlyReason';
+import { PencilIcon, SignInIcon } from '../common/icons';
 
 const RESUME_CLS =
   'ml-1 inline-flex items-center gap-1 rounded bg-accent px-2 py-0.5 font-medium text-accent-on hover:bg-accent-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
@@ -28,6 +29,43 @@ export function SpeleoResumeEditingButton() {
       data-testid="speleodb-readonly-resume">
       <PencilIcon size={12} />
       {t('map.readOnlyPill.resume')}
+    </button>
+  );
+}
+
+/**
+ * The SpeleoDB read-only pill's words: why the project cannot be edited when that
+ * is a lasting reason (signed out: "Read-only copy - log in to edit"; view-only
+ * access), and the plain badge otherwise.
+ */
+export function SpeleoReadOnlyLabel() {
+  const { t } = useTranslation();
+  const link = useSpeleoStore((s) => s.link);
+  const session = useSpeleoStore((s) => s.session);
+  const reason = speleoReadOnlyReason(link, session);
+  return (
+    <span className="text-accent font-medium" data-testid="speleodb-readonly-reason" data-reason={reason ?? 'none'}>
+      {reason ? t(speleoReadOnlyReasonKey(reason)) : t('speleodb.map.readOnlyBadge')}
+    </span>
+  );
+}
+
+/**
+ * "Log in" on the SpeleoDB read-only pill while signed out: opens the SpeleoDB
+ * settings, where signing in happens. Nothing is acquired here; once signed in,
+ * "Resume editing" takes over.
+ */
+export function SpeleoLogInButton() {
+  const { t } = useTranslation();
+  const session = useSpeleoStore((s) => s.session);
+  if (session?.loggedIn === true) return null;
+  return (
+    <button type="button" className={RESUME_CLS}
+      onClick={() => useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })}
+      title={t('speleodb.cachedCopies.logInTitle')}
+      data-testid="speleodb-readonly-login">
+      <SignInIcon size={12} />
+      {t('speleodb.cachedCopies.logIn')}
     </button>
   );
 }

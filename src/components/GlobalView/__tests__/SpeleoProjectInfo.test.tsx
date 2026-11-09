@@ -35,4 +35,18 @@ describe('SpeleoDB listing information', () => {
     expect(screen.getByTestId('project-permission')).toHaveTextContent('Permission: Unknown');
     expect(screen.getByTestId('project-lock')).toHaveTextContent('Editing status unknown');
   });
+  it('says why an account without write access cannot edit, whoever holds the lock', () => {
+    show('other@example.com', 'READ_ONLY');
+    expect(screen.getByTestId('project-lock'))
+      .toHaveTextContent(/^Read-only - your SpeleoDB access does not allow editing$/);
+  });
+  it('signed out, a cached copy says it is a read-only copy and claims no permission', () => {
+    const lock = resolveSpeleoLock({ is_remote: true, speleodb_project_id: summary.id }, {}, null);
+    render(<SpeleoProjectInfo summary={{ ...summary, permission: null }} lock={lock} testIdPrefix="project" cached={{
+      project_id: summary.id, project_name: 'Cave', local_path: '/cache/project.stalx',
+      ownership: 'signed_out', has_unpushed_edits: false, state_unknown: false, is_open: false,
+    }} />);
+    expect(screen.getByTestId('project-lock')).toHaveTextContent(/^Read-only copy - log in to edit$/);
+    expect(screen.queryByTestId('project-permission')).toBeNull();
+  });
 });

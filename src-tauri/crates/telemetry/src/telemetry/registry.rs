@@ -165,6 +165,9 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.speleodb_rewind_target",
     "command.speleodb_discard_changes",
     "command.speleodb_discard_cached_copy",
+    "command.speleodb_cached_projects",
+    "command.speleodb_remove_cached_copy",
+    "command.speleodb_purge_cached_copies",
     "command.speleodb_update",
     "command.split_shot_at_distance",
     "command.suggest_all_import_placements",
@@ -1057,7 +1060,11 @@ mod tests {
         //       running (lock#6): how often people refuse to wait says whether the
         //       quit-after-work wait is too long to bear:
         //       command.arm_forced_exit = 666.
-        assert_eq!(EVENT_NAMES.len(), 666);
+        //   + 3 cached SpeleoDB copies on the home screen: the owner-aware
+        //       listing, removing one copy, and Settings' purge:
+        //       command.speleodb_cached_projects, command.speleodb_remove_cached_copy,
+        //       command.speleodb_purge_cached_copies = 669.
+        assert_eq!(EVENT_NAMES.len(), 669);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

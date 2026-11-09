@@ -71,6 +71,35 @@ describe('SpeleoDB read-only pill: Resume editing', () => {
   });
 });
 
+describe('SpeleoDB read-only pill: why it cannot be edited', () => {
+  it('signed out, says it is a read-only copy and offers Log in, which opens SpeleoDB settings', async () => {
+    useSpeleoStore.setState({ session: { loggedIn: false, userEmail: null, endpoint: null } });
+    render(<MapTopLeftOverlay {...base} showSpeleoReadOnly />);
+    expect(screen.getByTestId('speleodb-readonly-reason')).toHaveTextContent(/^Read-only copy - log in to edit$/);
+    const login = screen.getByTestId('speleodb-readonly-login');
+    expect(screen.getByTestId('speleodb-readonly-banner')).toContainElement(login);
+    await userEvent.click(login);
+    expect(useUIStore.getState().activeDialog).toBe('settings');
+    expect(useUIStore.getState().dialogData).toMatchObject({ initialCategory: 'speleodb' });
+    expect(ipc).not.toHaveBeenCalledWith('speleodb_start_editing');
+  });
+
+  it('signed in without write access, says so and offers neither action', () => {
+    useSpeleoStore.setState({ link: { ...LINK, permission: 'READ_ONLY' } });
+    render(<MapTopLeftOverlay {...base} showSpeleoReadOnly />);
+    expect(screen.getByTestId('speleodb-readonly-reason'))
+      .toHaveTextContent(/^Read-only - your SpeleoDB access does not allow editing$/);
+    expect(screen.queryByTestId('speleodb-readonly-login')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-readonly-resume')).not.toBeInTheDocument();
+  });
+
+  it('signed in with write access, keeps the plain badge and Resume editing', () => {
+    render(<MapTopLeftOverlay {...base} showSpeleoReadOnly />);
+    expect(screen.getByTestId('speleodb-readonly-reason')).toHaveTextContent(/^SpeleoDB · read-only$/);
+    expect(screen.queryByTestId('speleodb-readonly-login')).not.toBeInTheDocument();
+  });
+});
+
 describe('Closures Computed View pill: Resume editing', () => {
   it('switches back to the Raw Data View', async () => {
     render(<MapTopLeftOverlay {...base} showClosureReadOnly />);

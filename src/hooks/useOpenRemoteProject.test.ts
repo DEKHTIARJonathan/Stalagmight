@@ -243,6 +243,37 @@ describe('useOpenRemoteProject (#218)', () => {
     expect(openDialogMock).not.toHaveBeenCalled();
   });
 
+  it('signed out: opens the cached copy read-only, without taking the lock, and says so', async () => {
+    useSpeleoStore.setState({ session: { loggedIn: false, userEmail: null, endpoint: null } });
+    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', read_only: 'signed_out', has_unpushed_edits: true });
+    const generation = useSpeleoStore.getState().sessionGeneration;
+    expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', {
+      accessConfirmed: true, request: expect.any(Number), acquireLock: false,
+    });
+    // No server tip was confirmed, and the copy's un-uploaded edits are kept.
+    expect(setLinkOnOpenMock).toHaveBeenCalledWith(expect.objectContaining({ hasUnpushedEdits: true, offline: true }));
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(
+      'Opened a read-only copy. Log in to SpeleoDB to edit it.', 'speleodb-read-only-open', 'info');
+    expect(useSpeleoStore.getState().sessionGeneration).toBe(generation);
+  });
+
+  it('expired session: ends the session here, still opens read-only, and warns', async () => {
+    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', read_only: 'session_expired' });
+    const generation = useSpeleoStore.getState().sessionGeneration;
+    // A status refresh landing during the load must not supersede the open.
+    loadProjectMock.mockImplementation(async () => {
+      useSpeleoStore.getState().setSession({ logged_in: false, user_email: null, endpoint: null });
+      return { success: true };
+    });
+    expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+    expect(useSpeleoStore.getState().session).toEqual({ loggedIn: false, userEmail: null, endpoint: null });
+    expect(useSpeleoStore.getState().sessionGeneration).toBe(generation + 1);
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', expect.objectContaining({ acquireLock: false }));
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(
+      expect.stringContaining('session has expired'), 'speleodb-read-only-open', 'warning');
+  });
+
   it('offline fallback opens the cached path only after the remote open command', async () => {
     const outcome = await openOfflineCopy();
     expect(outcome).toEqual({ status: 'opened' });

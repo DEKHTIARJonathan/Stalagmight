@@ -1,0 +1,677 @@
+//! Cached SpeleoDB copies: owner-aware listing, removal and purge
+//! (`speleodb_cached`), and opening a cached copy read-only without a session
+//! (`speleodb_pull`).
+//!
+//! All data is synthetic: every copy is a `.stalx` built here, every server a
+//! loopback listener.
+
+use std::io::{Read as _, Write as _};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+use super::speleodb_cache::LocalEditsPolicy;
+use super::speleodb_cached::SpeleoCacheOwnership;
+use super::speleodb_local_state::cache_path_in;
+use super::AppState;
+use crate::models::{Project, SpeleoLink};
+use crate::persistence::Database;
+use crate::speleodb::{SpeleoDbAction, SpeleoReadOnlyOpen};
+
+const MINE: &str = "11111111-1111-1111-1111-111111111111";
+const THEIRS: &str = "22222222-2222-2222-2222-222222222222";
+const LEGACY: &str = "33333333-3333-3333-3333-333333333333";
+const ELSEWHERE: &str = "44444444-4444-4444-4444-444444444444";
+
+const SERVER: &str = "https://sdb.example";
+const OTHER_SERVER: &str = "https://other.example";
+const ME: &str = "diver@example.com";
+
+/// A cached copy of `id` under `root`, linked to `endpoint`.
+fn seed(root: &Path, id: &str, endpoint: &str, dirty: bool) -> PathBuf {
+    let path = cache_path_in(root, id);
+    std::fs::create_dir_all(path.parent().expect("parent")).expect("cache dir");
+    let mut db = Database::open(&path).expect("open db");
+    db.save_project(&Project::new(format!("Cave {id}"), None))
+        .expect("save project");
+    db.save_speleo_link(Some(&SpeleoLink {
+        endpoint: endpoint.to_owned(),
+        project_id: id.to_owned(),
+        project_name: format!("Remote {}", id.get(..4).unwrap_or(id)),
+        base_commit_sha: Some("abc1234".to_owned()),
+        has_unpushed_edits: dirty,
+        last_edit_at: dirty.then(|| "2026-11-09T10:00:00Z".to_owned()),
+        last_verify_at: None,
+        undo_mode: None,
+    }))
+    .expect("save link");
+    path
+}
+
+fn sign_in(state: &AppState, endpoint: &str, email: &str) {
+    let mut session = state.speleodb_session_lock().expect("session lock");
+    session.endpoint = Some(endpoint.to_owned());
+    session.email = Some(email.to_owned());
+    session.token_store = crate::speleodb::auth::TokenStore::from_in_memory_token("tok");
+    session.rehydrate_attempted = true;
+}
+
+/// A signed-out state that never rehydrates a saved token from the test config.
+fn signed_out() -> AppState {
+    let state = AppState::new().expect("state");
+    state.speleodb_session_lock().expect("session").forget();
+    state
+}
+
+fn ownership(state: &AppState, root: &Path, id: &str) -> Option<SpeleoCacheOwnership> {
+    state
+        .speleodb_cached_projects_in(root)
+        .into_iter()
+        .find(|copy| copy.project_id == id)
+        .map(|copy| copy.ownership)
+}
+
+/// Four copies: mine, another account's, a pre-upgrade one from this instance,
+/// and a pre-upgrade one from another instance.
+fn four_copies(root: &Path) {
+    let state = AppState::new().expect("state");
+    let mine = seed(root, MINE, SERVER, false);
+    state.speleodb_record_cache_owner(&mine, SERVER, ME, "Mine");
+    let theirs = seed(root, THEIRS, SERVER, false);
+    state.speleodb_record_cache_owner(&theirs, SERVER, "someone@example.com", "Theirs");
+    seed(root, LEGACY, SERVER, false);
+    seed(root, ELSEWHERE, OTHER_SERVER, false);
+}
+
+#[test]
+fn signed_out_lists_every_cached_copy() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        four_copies(temp.path());
+        let state = signed_out();
+        let copies = state.speleodb_cached_projects_in(temp.path());
+        assert_eq!(copies.len(), 4);
+        assert!(copies.iter().all(
+            |copy| copy.ownership == SpeleoCacheOwnership::SignedOut && copy.ownership.listed()
+        ));
+    });
+}
+
+#[test]
+fn signed_in_lists_only_this_accounts_copies_and_unknown_ones_from_this_instance() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        four_copies(root);
+        let state = AppState::new().expect("state");
+        sign_in(&state, SERVER, ME);
+        assert_eq!(
+            ownership(&state, root, MINE),
+            Some(SpeleoCacheOwnership::Mine)
+        );
+        assert_eq!(
+            ownership(&state, root, THEIRS),
+            Some(SpeleoCacheOwnership::OtherAccount)
+        );
+        assert_eq!(
+            ownership(&state, root, LEGACY),
+            Some(SpeleoCacheOwnership::Unknown)
+        );
+        assert_eq!(
+            ownership(&state, root, ELSEWHERE),
+            Some(SpeleoCacheOwnership::OtherAccount)
+        );
+        let listed: Vec<String> = state
+            .speleodb_cached_projects_in(root)
+            .into_iter()
+            .filter(|copy| copy.ownership.listed())
+            .map(|copy| copy.project_id)
+            .collect();
+        assert_eq!(listed, vec![MINE.to_owned(), LEGACY.to_owned()]);
+    });
+}
+
+#[test]
+fn the_same_account_on_another_instance_is_another_account() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        four_copies(temp.path());
+        let state = AppState::new().expect("state");
+        sign_in(&state, OTHER_SERVER, ME);
+        assert_eq!(
+            ownership(&state, temp.path(), MINE),
+            Some(SpeleoCacheOwnership::OtherAccount)
+        );
+        assert_eq!(
+            ownership(&state, temp.path(), ELSEWHERE),
+            Some(SpeleoCacheOwnership::Unknown)
+        );
+    });
+}
+
+#[test]
+fn owner_matching_ignores_email_case_and_endpoint_spelling() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        four_copies(temp.path());
+        let state = AppState::new().expect("state");
+        sign_in(&state, "HTTPS://SDB.example:443/", "Diver@Example.COM");
+        assert_eq!(
+            ownership(&state, temp.path(), MINE),
+            Some(SpeleoCacheOwnership::Mine)
+        );
+    });
+}
+
+#[test]
+fn a_successful_online_open_by_another_account_takes_the_copy_over() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        four_copies(temp.path());
+        let state = AppState::new().expect("state");
+        state.speleodb_record_cache_owner(
+            &cache_path_in(temp.path(), THEIRS),
+            SERVER,
+            ME,
+            "Theirs",
+        );
+        sign_in(&state, SERVER, ME);
+        assert_eq!(
+            ownership(&state, temp.path(), THEIRS),
+            Some(SpeleoCacheOwnership::Mine)
+        );
+    });
+}
+
+#[test]
+fn listing_reports_un_uploaded_and_unreadable_copies() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        seed(root, MINE, SERVER, true);
+        let unreadable = cache_path_in(root, THEIRS);
+        std::fs::create_dir_all(unreadable.parent().expect("parent")).expect("dir");
+        std::fs::write(&unreadable, b"not a database").expect("garbage");
+        let state = signed_out();
+        state.speleodb_record_cache_owner(&unreadable, SERVER, ME, "Named by the owner record");
+        let copies = state.speleodb_cached_projects_in(root);
+        let dirty = copies
+            .iter()
+            .find(|c| c.project_id == MINE)
+            .expect("dirty row");
+        assert!(dirty.has_unpushed_edits && !dirty.state_unknown);
+        assert_eq!(dirty.project_name, "Remote 1111");
+        let unknown = copies
+            .iter()
+            .find(|c| c.project_id == THEIRS)
+            .expect("unknown row");
+        assert!(
+            unknown.state_unknown,
+            "an unreadable copy is never reported clean"
+        );
+        assert_eq!(unknown.project_name, "Named by the owner record");
+    });
+}
+
+#[test]
+fn removing_a_copy_with_un_uploaded_edits_needs_explicit_consent() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        let path = seed(root, MINE, SERVER, true);
+        let state = signed_out();
+        let refused = state.speleodb_remove_cached_copy_in(root, MINE, false);
+        assert!(!refused.success);
+        assert!(path.exists(), "un-uploaded work is never removed unasked");
+        let removed = state.speleodb_remove_cached_copy_in(root, MINE, true);
+        assert!(removed.success, "{:?}", removed.error);
+        assert!(!root.join(MINE).exists(), "the whole copy directory goes");
+    });
+}
+
+#[test]
+fn an_unreadable_copy_is_treated_as_holding_un_uploaded_work() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        let path = cache_path_in(root, MINE);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("dir");
+        std::fs::write(&path, b"not a database").expect("garbage");
+        let state = signed_out();
+        assert!(
+            !state
+                .speleodb_remove_cached_copy_in(root, MINE, false)
+                .success
+        );
+        assert!(path.exists());
+    });
+}
+
+#[test]
+fn removing_a_clean_copy_takes_its_owner_record_and_sidecars_with_it() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        let path = seed(root, MINE, SERVER, false);
+        let state = signed_out();
+        state.speleodb_record_cache_owner(&path, SERVER, ME, "Mine");
+        std::fs::write(path.with_file_name("project.stalx-wal"), b"").expect("stale wal");
+        let removed = state.speleodb_remove_cached_copy_in(root, MINE, false);
+        assert!(removed.success, "{:?}", removed.error);
+        assert!(!root.join(MINE).exists());
+        assert!(state.speleodb_cached_projects_in(root).is_empty());
+    });
+}
+
+#[test]
+fn the_open_project_and_invalid_ids_are_never_removed() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        let path = seed(root, MINE, SERVER, false);
+        let state = signed_out();
+        assert!(state.open_project(path.clone()).success, "open the copy");
+        let refused = state.speleodb_remove_cached_copy_in(root, MINE, true);
+        assert!(!refused.success);
+        assert!(path.exists());
+        let open = state
+            .speleodb_cached_projects_in(root)
+            .into_iter()
+            .find(|copy| copy.project_id == MINE)
+            .expect("row");
+        assert!(open.is_open);
+        assert!(
+            !state
+                .speleodb_remove_cached_copy_in(root, "../escape", true)
+                .success
+        );
+    });
+}
+
+#[test]
+fn purge_keeps_un_uploaded_and_open_copies_unless_told_otherwise() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        seed(root, MINE, SERVER, false);
+        seed(root, THEIRS, SERVER, true);
+        let open = seed(root, LEGACY, SERVER, false);
+        let state = signed_out();
+        assert!(state.open_project(open.clone()).success, "open one copy");
+
+        let kept = state.speleodb_purge_cached_copies_in(root, false);
+        assert_eq!(kept.removed, 1);
+        assert_eq!(kept.kept_unpushed, vec!["Remote 2222".to_owned()]);
+        assert_eq!(kept.kept_open, vec!["Remote 3333".to_owned()]);
+        assert!(kept.failed.is_empty());
+        assert!(!root.join(MINE).exists());
+        assert!(cache_path_in(root, THEIRS).exists());
+
+        let all = state.speleodb_purge_cached_copies_in(root, true);
+        assert_eq!(all.removed, 1);
+        assert!(all.kept_unpushed.is_empty());
+        assert_eq!(all.kept_open, vec!["Remote 3333".to_owned()]);
+        assert!(!root.join(THEIRS).exists());
+        assert!(open.exists(), "the open project is never purged");
+    });
+}
+
+// --- opening a cached copy without a session ---------------------------------
+
+#[test]
+fn signed_out_opens_the_cached_copy_read_only_without_any_network_call() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        // The copy names an unreachable endpoint: any call would fail loudly.
+        let path = seed(temp.path(), MINE, "http://127.0.0.1:1", true);
+        let state = signed_out();
+        let opened = state
+            .speleodb_pull_project_to(
+                &path,
+                MINE.to_owned(),
+                "Remote".to_owned(),
+                None,
+                LocalEditsPolicy::Protect,
+            )
+            .expect("read-only open");
+        assert_eq!(opened.read_only, Some(SpeleoReadOnlyOpen::SignedOut));
+        assert_eq!(
+            opened.has_unpushed_edits,
+            Some(true),
+            "un-uploaded work is kept"
+        );
+        assert_eq!(opened.local_path, path.to_string_lossy());
+        assert_eq!(opened.offline, None);
+    });
+}
+
+#[test]
+fn signed_out_without_a_cached_copy_still_asks_to_sign_in() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let state = signed_out();
+        let err = state
+            .speleodb_pull_project_to(
+                &cache_path_in(temp.path(), MINE),
+                MINE.to_owned(),
+                "Remote".to_owned(),
+                None,
+                LocalEditsPolicy::Protect,
+            )
+            .expect_err("nothing to open");
+        assert_eq!(err.action, SpeleoDbAction::ReLogin);
+        // A copy of a DIFFERENT project at that path is no fallback either.
+        let foreign = seed(temp.path(), THEIRS, SERVER, false);
+        assert!(state
+            .speleodb_pull_project_to(
+                &foreign,
+                MINE.to_owned(),
+                "Remote".to_owned(),
+                None,
+                LocalEditsPolicy::Protect,
+            )
+            .is_err());
+    });
+}
+
+#[test]
+fn signed_out_discard_never_falls_back_to_the_copy() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let path = seed(temp.path(), MINE, SERVER, true);
+        let state = signed_out();
+        assert!(state
+            .speleodb_pull_project_to(
+                &path,
+                MINE.to_owned(),
+                "Remote".to_owned(),
+                None,
+                LocalEditsPolicy::Discard,
+            )
+            .is_err());
+    });
+}
+
+/// A loopback SpeleoDB answering every request with `reply(request_line)`, and
+/// recording the request lines.
+fn loopback(reply: fn(&str) -> (u16, String)) -> (String, Arc<Mutex<Vec<String>>>) {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&seen);
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 4096];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => request.extend_from_slice(chunk.get(..n).unwrap_or_default()),
+                }
+            }
+            let line = String::from_utf8_lossy(&request)
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            let (status, body) = reply(&line);
+            log.lock().expect("log").push(line);
+            let response = format!(
+                "HTTP/1.1 {status} Reply\r\nContent-Type: application/json\r\n\
+                 Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), seen)
+}
+
+fn denied_detail() -> String {
+    r#"{"detail":"denied"}"#.to_owned()
+}
+
+#[test]
+fn an_expired_token_opens_the_cached_copy_read_only_and_signs_out() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = loopback(|_| (401, denied_detail()));
+        let temp = tempfile::tempdir().expect("temp");
+        let path = seed(temp.path(), MINE, &url, false);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        let opened = state
+            .speleodb_pull_project_to(
+                &path,
+                MINE.to_owned(),
+                "Remote".to_owned(),
+                None,
+                LocalEditsPolicy::Protect,
+            )
+            .expect("read-only open");
+        assert_eq!(opened.read_only, Some(SpeleoReadOnlyOpen::SessionExpired));
+        assert!(
+            state.speleodb_active_token().is_err(),
+            "the rejected token is dropped"
+        );
+        assert_eq!(
+            seen.lock().expect("log").len(),
+            1,
+            "nothing is asked after the rejection"
+        );
+    });
+}
+
+#[test]
+fn a_dead_token_reported_as_403_is_an_expired_session_too() {
+    crate::test_helpers::with_isolated_config(|| {
+        // The DRF downgrade: a dead token gets 403 everywhere, whoami included.
+        let (url, _) = loopback(|_| (403, denied_detail()));
+        let temp = tempfile::tempdir().expect("temp");
+        let path = seed(temp.path(), MINE, &url, false);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        let opened = state
+            .speleodb_pull_project_to(
+                &path,
+                MINE.to_owned(),
+                "Remote".to_owned(),
+                None,
+                LocalEditsPolicy::Protect,
+            )
+            .expect("read-only open");
+        assert_eq!(opened.read_only, Some(SpeleoReadOnlyOpen::SessionExpired));
+    });
+}
+
+#[test]
+fn a_server_denial_with_a_valid_session_never_falls_back_to_the_copy() {
+    crate::test_helpers::with_isolated_config(|| {
+        // whoami succeeds, so the 403 is a real "this account may not have it".
+        let (url, _) = loopback(|line| {
+            if line.contains("/api/v2/user/") {
+                (
+                    200,
+                    super::tests_support::sdk_fixture(r#"{"email":"diver@example.com"}"#),
+                )
+            } else {
+                (403, denied_detail())
+            }
+        });
+        let temp = tempfile::tempdir().expect("temp");
+        let path = seed(temp.path(), MINE, &url, true);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        let refused = state.speleodb_pull_project_to(
+            &path,
+            MINE.to_owned(),
+            "Remote".to_owned(),
+            None,
+            LocalEditsPolicy::Protect,
+        );
+        assert!(
+            refused.is_err(),
+            "403 with a live session keeps the no-fallback rule"
+        );
+        assert!(state.speleodb_active_token().is_ok(), "the session is kept");
+    });
+}
+
+#[test]
+fn a_missing_project_never_falls_back_to_the_copy() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, _) = loopback(|_| (404, denied_detail()));
+        let temp = tempfile::tempdir().expect("temp");
+        let path = seed(temp.path(), MINE, &url, false);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        assert!(state
+            .speleodb_pull_project_to(
+                &path,
+                MINE.to_owned(),
+                "Remote".to_owned(),
+                None,
+                LocalEditsPolicy::Protect,
+            )
+            .is_err());
+        assert!(state.speleodb_active_token().is_ok());
+    });
+}
+
+// --- removing a copy hands back this account's lock ---------------------------
+
+/// A project body whose lock `holder` holds, for every request (probe and release).
+fn held_by(holder: &str) -> (u16, String) {
+    (
+        200,
+        super::tests_support::sdk_fixture(&format!(
+            r#"{{"id":"{MINE}","name":"Remote","permission":"READ_AND_WRITE","active_mutex":{{"user":"{holder}"}}}}"#
+        )),
+    )
+}
+
+fn releases(seen: &Arc<Mutex<Vec<String>>>) -> usize {
+    seen.lock()
+        .expect("log")
+        .iter()
+        .filter(|line| line.contains("/release"))
+        .count()
+}
+
+/// A clean cached copy of [`MINE`] on `url`, recorded as `owner`'s.
+fn owned_copy(root: &Path, url: &str, owner: &str) -> PathBuf {
+    let path = seed(root, MINE, url, false);
+    AppState::new()
+        .expect("state")
+        .speleodb_record_cache_owner(&path, url, owner, "Remote 1111");
+    path
+}
+
+#[test]
+fn removing_my_copy_hands_back_the_lock_the_server_says_i_hold() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = loopback(|_| held_by(ME));
+        let temp = tempfile::tempdir().expect("temp");
+        owned_copy(temp.path(), &url, ME);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        let removed = state.speleodb_remove_cached_copy_in(temp.path(), MINE, false);
+        assert!(removed.success, "{:?}", removed.error);
+        assert!(removed.warnings.is_empty(), "{:?}", removed.warnings);
+        assert_eq!(releases(&seen), 1, "the lock is handed back");
+        assert!(!temp.path().join(MINE).exists());
+    });
+}
+
+#[test]
+fn removing_my_copy_never_releases_someone_elses_lock() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = loopback(|_| held_by("someone@example.com"));
+        let temp = tempfile::tempdir().expect("temp");
+        owned_copy(temp.path(), &url, ME);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        assert!(
+            state
+                .speleodb_remove_cached_copy_in(temp.path(), MINE, false)
+                .success
+        );
+        assert_eq!(seen.lock().expect("log").len(), 1, "only the holder probe");
+        assert_eq!(releases(&seen), 0);
+    });
+}
+
+#[test]
+fn another_accounts_copy_or_no_session_asks_the_server_nothing() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = loopback(|_| held_by(ME));
+        let temp = tempfile::tempdir().expect("temp");
+        owned_copy(temp.path(), &url, "someone@example.com");
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        let report = state.speleodb_purge_cached_copies_in(temp.path(), false);
+        assert_eq!(report.removed, 1);
+        assert!(report.locks_released.is_empty() && report.locks_unchecked.is_empty());
+
+        owned_copy(temp.path(), &url, ME);
+        let signed_out = signed_out();
+        assert!(
+            signed_out
+                .speleodb_remove_cached_copy_in(temp.path(), MINE, false)
+                .success
+        );
+        assert!(seen.lock().expect("log").is_empty(), "no request at all");
+    });
+}
+
+#[test]
+fn an_unreachable_server_removes_the_copy_and_says_the_lock_may_stay() {
+    crate::test_helpers::with_isolated_config(|| {
+        let url = "http://127.0.0.1:1";
+        let temp = tempfile::tempdir().expect("temp");
+        owned_copy(temp.path(), url, ME);
+        let state = AppState::new().expect("state");
+        sign_in(&state, url, ME);
+        let removed = state.speleodb_remove_cached_copy_in(temp.path(), MINE, false);
+        assert!(removed.success, "{:?}", removed.error);
+        assert!(!temp.path().join(MINE).exists(), "the copy is gone");
+        assert!(removed
+            .warnings
+            .iter()
+            .any(|w| w.code == "speleodb_lock_not_handed_back"));
+        assert!(state.speleodb_active_token().is_ok(), "the session is kept");
+    });
+}
+
+#[test]
+fn purge_reports_the_locks_it_handed_back() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = loopback(|_| held_by(ME));
+        let temp = tempfile::tempdir().expect("temp");
+        owned_copy(temp.path(), &url, ME);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        let report = state.speleodb_purge_cached_copies_in(temp.path(), false);
+        assert_eq!(report.removed, 1);
+        assert_eq!(report.locks_released, vec!["Remote 1111".to_owned()]);
+        assert_eq!(releases(&seen), 1);
+    });
+}
+
+#[test]
+fn a_copy_that_could_not_be_removed_keeps_its_lock() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = loopback(|_| held_by(ME));
+        let temp = tempfile::tempdir().expect("temp");
+        let path = owned_copy(temp.path(), &url, ME);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        assert!(state.open_project(path).success, "open the copy");
+        assert!(
+            !state
+                .speleodb_remove_cached_copy_in(temp.path(), MINE, true)
+                .success
+        );
+        assert!(seen.lock().expect("log").is_empty());
+    });
+}

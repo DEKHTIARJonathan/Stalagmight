@@ -5,10 +5,18 @@ import {
   deriveRemoteItems,
   buildRecentListItems,
   filterRecentListItems,
+  hideOtherAccountsCopies,
   type RecentListItem,
 } from '../recentListItems';
 import type { ProjectMetadata } from '../../../types/project';
-import type { SpeleoProjectSummary } from '../../../types/ipc.generated';
+import type { SpeleoCachedProject, SpeleoCacheOwnership, SpeleoProjectSummary } from '../../../types/ipc.generated';
+
+function copy(id: string, name: string, ownership: SpeleoCacheOwnership): SpeleoCachedProject {
+  return {
+    project_id: id, project_name: name, local_path: `/cache/${id}/project.stalx`, ownership,
+    has_unpushed_edits: false, state_unknown: false, is_open: false,
+  };
+}
 
 function summary(partial: Partial<SpeleoProjectSummary> & { id: string }): SpeleoProjectSummary {
   return {
@@ -98,6 +106,55 @@ describe('deriveRemoteItems', () => {
 
   it('returns nothing when there are no scanned summaries', () => {
     expect(deriveRemoteItems({}, [project({ file_path: '/a' })])).toEqual([]);
+  });
+
+  it('lists every cached copy the session may see, even one that is not in recents', () => {
+    const items = deriveRemoteItems({}, [], [
+      copy('p1', 'Mine', 'mine'),
+      copy('p2', 'Unknown owner', 'unknown'),
+      copy('p3', 'Signed out', 'signed_out'),
+      copy('p4', 'Theirs', 'other_account'),
+    ]);
+    expect(items.map((i) => (i.kind === 'remote' ? i.projectId : ''))).toEqual(['p1', 'p3', 'p2']);
+    expect(items.every((i) => i.kind === 'remote' && i.cached?.project_id === i.projectId)).toBe(true);
+    expect(items[0]).toMatchObject({ summary: { name: 'Mine', permission: null } });
+  });
+
+  it('keeps the server summary for a cached copy the listing knows', () => {
+    const summaries = { p1: summary({ id: 'p1', name: 'Server name' }) };
+    const [item] = deriveRemoteItems(summaries, [], [copy('p1', 'Downloaded name', 'mine')]);
+    expect(item).toMatchObject({ kind: 'remote', summary: summaries.p1, cached: { project_id: 'p1' } });
+  });
+
+  it('never attaches another account\'s copy to the server row', () => {
+    const summaries = { p1: summary({ id: 'p1' }) };
+    expect(deriveRemoteItems(summaries, [], [copy('p1', 'Theirs', 'other_account')]))
+      .toEqual([{ kind: 'remote', projectId: 'p1', summary: summaries.p1 }]);
+  });
+});
+
+describe('hideOtherAccountsCopies', () => {
+  const P1 = '11111111-1111-1111-1111-111111111111';
+  const P2 = '22222222-2222-2222-2222-222222222222';
+  const cachePath = (id: string) => `/home/u/.cache/app/speleodb/${id}/project.stalx`;
+  const recents = [
+    project({ file_path: '/local.stalx' }),
+    project({ file_path: cachePath(P1), is_remote: true, speleodb_project_id: P1 }),
+    project({ file_path: cachePath(P2), is_remote: true, speleodb_project_id: P2 }),
+    // A stray linked copy of the hidden project, outside the cache: not a cached copy.
+    project({ file_path: '/elsewhere.stalx', is_remote: true, speleodb_project_id: P2 }),
+  ];
+
+  it('drops only the cached files that belong to another account', () => {
+    const kept = hideOtherAccountsCopies(recents, [copy(P1, 'Mine', 'mine'), copy(P2, 'Theirs', 'other_account')]);
+    expect(kept.map((p) => p.file_path)).toEqual(['/local.stalx', cachePath(P1), '/elsewhere.stalx']);
+    // ...and the hidden cache path never resurfaces as an "unavailable" row.
+    expect(deriveMissingPaths(recents.map((p) => p.file_path), kept)).toEqual([]);
+  });
+
+  it('keeps everything when nothing is hidden (signed out)', () => {
+    expect(hideOtherAccountsCopies(recents, [copy(P1, 'A', 'signed_out'), copy(P2, 'B', 'signed_out')]))
+      .toBe(recents);
   });
 });
 

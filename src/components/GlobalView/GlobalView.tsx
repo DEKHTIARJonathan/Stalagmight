@@ -36,15 +36,20 @@ import RemoteSystemCard from './RemoteSystemCard';
 import {
   deriveMissingPaths,
   deriveRemoteItems,
+  hideOtherAccountsCopies,
   remoteSummaryForProject,
   buildRecentListItems,
   filterRecentListItems,
 } from './recentListItems';
+import { useSpeleoCacheStore } from '../../store/speleoCacheStore';
+import { isListedCachedCopy } from '../../utils/speleoCachedCopies';
+import { SpeleoProjectContextMenu, type SpeleoMenuTarget } from './SpeleoProjectContextMenu';
+import { RemoveCachedCopyDialog } from './RemoveCachedCopyDialog';
 import { canPublishRecent, publishRecentToSpeleoDb } from './publishRecentToSpeleoDb';
 import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
 import { useSpeleoLocalStates } from '../../hooks/useSpeleoLocalStates';
 import type { ProjectMetadata } from '../../types/project';
-import type { SpeleoProjectSummary } from '../../types/ipc.generated';
+import type { SpeleoCachedProject, SpeleoProjectSummary } from '../../types/ipc.generated';
 import { formatNumber } from '../../i18n/format';
 import { debugLog } from '../../utils/debugLog';
 import { TOAST_KEYS } from '../../utils/toastKeys';
@@ -80,10 +85,18 @@ export default function GlobalView() {
   }, []);
 
   const {
-    recentProjects,
+    recentProjects: allRecentProjects,
     handleNewProject,
     handleOpenOrImport,
   } = useProject();
+  // Signed in, the cached copies of OTHER SpeleoDB accounts (or instances) are not
+  // listed anywhere on this screen, map included; signed out, every copy is.
+  const cachedCopies = useSpeleoCacheStore((s) => s.copies);
+  const refreshCachedCopies = useSpeleoCacheStore((s) => s.refresh);
+  const recentProjects = useMemo(
+    () => hideOtherAccountsCopies(allRecentProjects, cachedCopies),
+    [allRecentProjects, cachedCopies],
+  );
 
   const { loading, loadRecentProjects, loadProject, resetLoading, cancelLoading, removeFromRecentProjects, config } = useProjectStore();
 
@@ -129,6 +142,12 @@ export default function GlobalView() {
   const remoteSummaries = useSpeleoStore((s) => s.remoteSummaries);
   const speleoEmail = useSpeleoStore((s) => s.session?.userEmail ?? null);
   const speleoLoggedIn = useSpeleoStore((s) => s.session?.loggedIn ?? false);
+  const speleoSessionGeneration = useSpeleoStore((s) => s.sessionGeneration);
+  // Which cached copies this screen lists depends on who is signed in, so re-read
+  // them whenever the session changes (login, logout, a dropped token).
+  useEffect(() => {
+    void refreshCachedCopies();
+  }, [refreshCachedCopies, speleoSessionGeneration, speleoLoggedIn, speleoEmail]);
 
   // Remote rows share the browser's access warning and native open flow.
   const { openRemote } = useOpenRemoteProject();
@@ -281,6 +300,7 @@ export default function GlobalView() {
       setSelectedProjectId(filePath);
       setMultiSelectedIds(new Set([filePath]));
     }
+    setSpeleoMenu(null);
     setContextMenu({
       visible: true,
       x: e.clientX,
@@ -289,22 +309,42 @@ export default function GlobalView() {
     });
   }, [multiSelectedIds, recentProjects]);
 
+  // The SpeleoDB project context menu (cards, table rows, map markers) and the
+  // remove-copy prompt it can raise. Separate from the local menu above: a SpeleoDB
+  // project has no local file actions.
+  const [speleoMenu, setSpeleoMenu] = useState<SpeleoMenuTarget | null>(null);
+  const [removeCopyTarget, setRemoveCopyTarget] = useState<SpeleoCachedProject | null>(null);
+  const closeSpeleoMenu = useCallback(() => setSpeleoMenu(null), []);
+  const openSpeleoMenu = useCallback((x: number, y: number, summary: SpeleoProjectSummary) => {
+    setContextMenu((prev) => ({ ...prev, visible: false }));
+    const cached = cachedCopies.find((copy) => copy.project_id === summary.id && isListedCachedCopy(copy));
+    const mapPath = recentProjects.find((p) =>
+      p.is_remote && p.speleodb_project_id === summary.id && p.gps_center !== null)?.file_path ?? null;
+    setSpeleoMenu({ x, y, summary, cached, mapPath });
+  }, [cachedCopies, recentProjects]);
+
   // Handle context menu from map (called with coordinates instead of MouseEvent)
   const handleMapContextMenu = useCallback((filePath: string, x: number, y: number) => {
-    if (recentProjects.some((p) => p.file_path === filePath && p.is_remote)) return;
+    const remote = recentProjects.find((p) => p.file_path === filePath && p.is_remote);
+    if (remote) {
+      const summary = remoteSummaryForProject(remote, remoteSummaries);
+      if (summary) openSpeleoMenu(x, y, summary);
+      return;
+    }
     setRemoteSelectionActive(false);
     // If right-clicked project isn't selected, select it
     if (!multiSelectedIds.has(filePath)) {
       setSelectedProjectId(filePath);
       setMultiSelectedIds(new Set([filePath]));
     }
+    setSpeleoMenu(null);
     setContextMenu({
       visible: true,
       x,
       y,
       projectPath: filePath,
     });
-  }, [multiSelectedIds, recentProjects]);
+  }, [multiSelectedIds, recentProjects, remoteSummaries, openSpeleoMenu]);
 
   // Handle project open (double-click on map, list row, context menu, or from
   // metadata panel). Routed through the shared open/import router (#450) for
@@ -611,8 +651,8 @@ export default function GlobalView() {
   );
   // Cached and uncached SpeleoDB projects share one remote entry and open flow.
   const remoteItems = useMemo(
-    () => deriveRemoteItems(remoteSummaries, recentProjects),
-    [remoteSummaries, recentProjects]
+    () => deriveRemoteItems(remoteSummaries, recentProjects, cachedCopies),
+    [remoteSummaries, recentProjects, cachedCopies]
   );
   // Combined, then filtered by the search term (name / location / path).
   const listItems = useMemo(
@@ -654,8 +694,31 @@ export default function GlobalView() {
   const refreshingLocks = refreshingProjects || !localStatesLoaded;
   const handleRefreshLocks = useCallback(async () => {
     reloadLocalStates();
+    void refreshCachedCopies();
     await scanLocksOnOpen();
-  }, [scanLocksOnOpen, reloadLocalStates]);
+  }, [scanLocksOnOpen, reloadLocalStates, refreshCachedCopies]);
+
+  // A removed copy leaves recents (the backend drops its row), the cached listing
+  // and the local-state accents at once.
+  const handleCachedCopyRemoved = useCallback((copy: SpeleoCachedProject, warnings: string[]) => {
+    setRemoveCopyTarget(null);
+    showToast(
+      t('speleodb.cachedCopies.remove.done', { name: copy.project_name }),
+      TOAST_KEYS.SPELEODB_CACHED_COPY,
+      'success',
+    );
+    if (warnings.length > 0) showToast(warnings.join(' '), TOAST_KEYS.DELETE_PROJECT_WARNING, 'warning');
+    void loadRecentProjects();
+    void refreshCachedCopies();
+    reloadLocalStates();
+    // The backend may have handed back this account's lock on the project.
+    if (copy.ownership === 'mine' || copy.ownership === 'unknown') void scanLocksOnOpen();
+  }, [showToast, t, loadRecentProjects, refreshCachedCopies, reloadLocalStates, scanLocksOnOpen]);
+
+  const handleSpeleoZoom = useCallback((path: string) => {
+    if (activeTab !== 'map') handleSwitchTab('map');
+    setZoomToSystem(path);
+  }, [activeTab, handleSwitchTab]);
 
   const isSearching = searchTerm.trim().length > 0;
   // Gate the tabs and content area on the combined count (loaded + missing) so
@@ -1063,6 +1126,7 @@ export default function GlobalView() {
                   onContextMenu={handleContextMenu}
                   onRemoveMissing={handleRemoveFromRecent}
                   onOpenRemote={(summary) => void handleOpenRemote(summary)}
+                  onContextMenuRemote={(e, item) => openSpeleoMenu(e.clientX, e.clientY, item.summary)}
                   busy={remoteBusy}
                 />
               ) : (
@@ -1095,8 +1159,10 @@ export default function GlobalView() {
                           localStates,
                           remoteSummaries,
                         )}
+                        cached={item.cached}
                         busy={remoteBusy}
                         onOpen={(summary) => void handleOpenRemote(summary)}
+                        onContextMenu={(e) => openSpeleoMenu(e.clientX, e.clientY, item.summary)}
                       />
                     ) : (
                       <MissingSystemCard
@@ -1141,6 +1207,23 @@ export default function GlobalView() {
         </span>
         <span>{t('globalView.status.ready')}</span>
       </footer>
+
+      {speleoMenu && (
+        <SpeleoProjectContextMenu
+          target={speleoMenu}
+          onClose={closeSpeleoMenu}
+          onOpen={(summary) => void handleOpenRemote(summary)}
+          onZoom={handleSpeleoZoom}
+          onRemoveCopy={setRemoveCopyTarget}
+        />
+      )}
+      {removeCopyTarget && (
+        <RemoveCachedCopyDialog
+          copy={removeCopyTarget}
+          onClose={() => setRemoveCopyTarget(null)}
+          onRemoved={handleCachedCopyRemoved}
+        />
+      )}
 
       {/* Context Menu */}
       {contextMenu.visible && (

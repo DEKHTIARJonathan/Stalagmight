@@ -23,6 +23,7 @@ mod speleodb;
 mod speleodb_admin;
 mod speleodb_cache;
 mod speleodb_cache_install;
+mod speleodb_cached;
 mod speleodb_credentials;
 mod speleodb_edit_gate;
 mod speleodb_foreign;
@@ -135,6 +136,12 @@ mod shot_uuid_tests;
     clippy::expect_used,
     reason = "test module: panics on a failed assumption are the point"
 )]
+mod speleodb_cached_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
 mod speleodb_acquire_tests;
 #[cfg(test)]
 #[expect(
@@ -187,3 +194,4 @@ mod tests_support;
 
 pub use app_state::AppState;
 pub use command_import::VirtualShotMode;
+pub use speleodb_cached::{SpeleoCacheOwnership, SpeleoCachedProject, SpeleoPurgeReport};

@@ -944,6 +944,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         'close_project', 'save_project', 'speleodb_done', 'speleodb_release_lock',
         'speleodb_discard_cached_copy', 'speleodb_logout', 'speleodb_login',
         'install_app_update_and_restart',
+        // Home's remove-copy prompt and Settings' purge: specs assert the consent
+        // flag each one carried.
+        'speleodb_remove_cached_copy', 'speleodb_purge_cached_copies', 'speleodb_open_project',
       ]);
 
       return function mockCommand(
@@ -5675,6 +5678,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // invocation (via __MOCK_EXIT_CALLS__); the reply is a plain success.
           case 'speleodb_discard_cached_copy':
             return { success: true, warnings: [], error: null, section_ids: [] };
+          // Cached SpeleoDB copies on the home screen. Nothing is cached in a mocked
+          // run; specs that need copies (owner-classified) override the listing.
+          case 'speleodb_cached_projects':
+            return [];
+          case 'speleodb_remove_cached_copy':
+            return { success: true, warnings: [], error: null, section_ids: [] };
+          case 'speleodb_purge_cached_copies':
+            return { removed: 0, kept_unpushed: [], kept_open: [], failed: [], locks_released: [], locks_unchecked: [] };
           case 'speleodb_get_project_metadata':
             return { name: 'Mock Cave', description: '', country: 'US', visibility: 'PRIVATE', latitude: null, longitude: null, exclude_geojson: false };
           case 'speleodb_publish':
