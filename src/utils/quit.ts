@@ -1,4 +1,4 @@
-import { isProjectRequestCurrent, reserveProjectRequest } from './projectTransition';
+import { isProjectMutationCurrent, isProjectRequestCurrent, reserveProjectRequest } from './projectTransition';
 import { confirmSpeleoFileOpen } from './confirmSpeleoOpen';
 /**
  * Quit entry point, shared by every affordance (GlobalView menu, in-project
@@ -297,8 +297,8 @@ export function readPendingExit(data: Record<string, unknown>): PendingExit | nu
   };
 }
 
-export function closeExitStillCurrent(exit: { request?: number; sessionGeneration?: number }): boolean {
-  return (exit.request === undefined || isProjectRequestCurrent(exit.request)) &&
+export function closeExitStillCurrent(exit: { request?: number; sessionGeneration?: number }, dispatched = false): boolean {
+  return (exit.request === undefined || isProjectRequestCurrent(exit.request) || (dispatched && isProjectMutationCurrent(exit.request))) &&
     (exit.sessionGeneration === undefined || useSpeleoStore.getState().sessionGeneration === exit.sessionGeneration);
 }
 
@@ -319,7 +319,8 @@ export async function handBackProject(
   opts?: { releaseLock?: boolean },
 ): Promise<void> {
   const request = exit.request ?? reserveProjectRequest();
-  const current = () => isProjectRequestCurrent(request) && closeExitStillCurrent(exit);
+  let dispatched = false;
+  const current = () => (isProjectRequestCurrent(request) || (dispatched && isProjectMutationCurrent(request))) && closeExitStillCurrent(exit, dispatched);
   if (!current()) return;
   const { closeProject, loadProject } = useProjectStore.getState();
   if (exit.pendingOpenPath && !exit.accessConfirmed) {
@@ -332,6 +333,7 @@ export async function handBackProject(
     }
   }
   if (!current()) return;
+  dispatched = true;
   const result = await closeProject({ ...opts, request });
   if (!current() || !result.success) return;
   // loadProject switches the view and surfaces its own failures.

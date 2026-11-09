@@ -13,6 +13,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
+import { handBackProject } from '../../utils/quit';
 import { useUIStore } from '../uiStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../speleoStore';
 import type { DisplaySettings } from '../../types/loading';
@@ -210,4 +211,57 @@ it('settles an already-dispatched load when a newer restricted-file warning is c
   expect(useProjectStore.getState().loading.isLoading).toBe(false);
   expect(useProjectStore.getState().project?.file_path).toBe('/mock/loaded.stalx');
   expect(loadBinaryMock).toHaveBeenCalledExactlyOnceWith('/mock/loaded.stalx');
+});
+
+
+it('reconciles a dispatched close after a newer file warning is cancelled', async () => {
+  const current = { file_path: '/current.stalx', name: 'Current' };
+  useProjectStore.setState({ project: current as never, isClosing: false });
+  let finishClose!: (result: { success: boolean }) => void;
+  const closeResult = new Promise<{ success: boolean }>((resolve) => { finishClose = resolve; });
+  invokeIpcMock.mockImplementation(async (command: string) => {
+    if (command === 'close_project') return closeResult;
+    if (command === 'speleodb_project_access_at') return {
+      project: { id: 'p', name: 'Restricted', permission: 'READ_ONLY', lock_holder: null },
+      endpoint: 'https://example.com', verification: 'verified',
+    };
+    return [];
+  });
+  const closing = useProjectStore.getState().closeProject({ releaseLock: false });
+  await vi.waitFor(() => expect(invokeIpcMock).toHaveBeenCalledWith(
+    'close_project', { releaseLock: false }, expect.anything(),
+  ));
+  confirmMock.mockResolvedValue(false);
+  expect(await useProjectStore.getState().loadProject('/restricted.stalx')).toEqual({ success: false });
+  expect(useProjectStore.getState().project).toBe(current);
+  finishClose({ success: true });
+  await closing;
+  expect(useProjectStore.getState().project).toBeNull();
+  expect(useProjectStore.getState().isClosing).toBe(false);
+  expect(loadBinaryMock).not.toHaveBeenCalled();
+});
+
+
+it('carries pending New through a dispatched close and a cancelled newer warning', async () => {
+  useProjectStore.setState({ project: { file_path: '/current.stalx', name: 'Current' } as never, isClosing: false });
+  let finishClose!: (result: { success: boolean }) => void;
+  const closeResult = new Promise<{ success: boolean }>((resolve) => { finishClose = resolve; });
+  invokeIpcMock.mockImplementation(async (command: string) => {
+    if (command === 'close_project') return closeResult;
+    if (command === 'speleodb_project_access_at') return {
+      project: { id: 'p', name: 'Restricted', permission: 'READ_ONLY', lock_holder: null },
+      endpoint: 'https://example.com', verification: 'verified',
+    };
+    return [];
+  });
+  const closing = handBackProject({ pendingNewProject: true }, { releaseLock: false });
+  await vi.waitFor(() => expect(invokeIpcMock).toHaveBeenCalledWith(
+    'close_project', { releaseLock: false }, expect.anything(),
+  ));
+  confirmMock.mockResolvedValue(false);
+  await useProjectStore.getState().loadProject('/restricted.stalx');
+  finishClose({ success: true });
+  await closing;
+  expect(useProjectStore.getState().project).toBeNull();
+  expect(useUIStore.getState().activeDialog).toBe('new-project');
 });

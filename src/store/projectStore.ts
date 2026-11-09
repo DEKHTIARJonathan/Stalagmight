@@ -1428,7 +1428,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           { releaseLock: opts?.releaseLock ?? true },
           { purpose: 'close project and release resources' },
         );
-        if (result.success && isProjectRequestCurrent(request)) {
+        if (result.success && isProjectMutationCurrent(request)) {
           clearOpenProjectState(set);
         }
         return result;
