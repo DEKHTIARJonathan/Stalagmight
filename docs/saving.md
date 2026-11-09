@@ -33,6 +33,14 @@ description and Save-and-Close intent survive recovery for the originating proje
 and account. Returning from Settings reopens confirmation; it never saves or uploads
 automatically. Local settings has no SpeleoDB metadata or account controls.
 
+Converting a local project through its SpeleoDB tab opens the creation form. Once
+confirmed, publishing saves the latest survey into its managed cache and uploads
+it. Only a clean confirmed upload is downloaded again from SpeleoDB and reopened;
+newer edits and unconfirmed uploads remain protected for Save Changes. A failed
+fresh download retains the already-created managed project for Reload Project,
+so recovery does not repeat the server creation. The original local file remains
+a separate local copy. Account recovery returns to the form without publishing.
+
 Every import-into-new-project flow now creates its project deferred, so the
 `.stalx` appears on the first import rather than at the moment the name is typed
 (#394 F14) - a wizard abandoned before then leaves no empty file and no Recent

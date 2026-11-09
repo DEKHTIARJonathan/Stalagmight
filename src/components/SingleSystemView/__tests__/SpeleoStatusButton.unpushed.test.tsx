@@ -14,9 +14,11 @@ beforeEach(() => {
   useSpeleoStore.setState({ link, session: null, busy: false });
 });
 describe('SpeleoDB workspace button', () => {
-  it('is absent for local projects', () => {
+  it('opens the conversion workspace for local projects without a pending-work badge', () => {
     useSpeleoStore.setState({ link: null }); render(<SpeleoStatusButton />);
-    expect(screen.queryByRole('button')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'SpeleoDB' }));
+    expect(useUIStore.getState().leftWorkspace).toBe('speleodb');
+    expect(screen.queryByTestId('speleodb-status-unpushed-badge')).toBeNull();
   });
   it.each(['survey', 'plan', 'export'] as const)('opens from %s while signed out and read-only without changing panel preferences', (appMode) => {
     useUIStore.setState({ appMode }); render(<SpeleoStatusButton />);

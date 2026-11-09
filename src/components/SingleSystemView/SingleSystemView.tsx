@@ -96,11 +96,10 @@ export default function SingleSystemView() {
   // stub and hides the bottom table. The carousel owns enter/exit; setView()/setColorMode
   // reset it. The left Sections Dock is survey-only (Plan/Export are read-only).
   const appMode = useUIStore((s) => s.appMode);
-  const linked = useSpeleoStore((s) => s.link !== null);
   const workspace = useUIStore((s) => s.leftWorkspace);
   const outsideSurvey = useUIStore((s) => s.speleoOutsideSurvey);
   const revealNonce = useUIStore((s) => s.speleoRevealNonce);
-  const workspaceMin = linked && workspace === 'speleodb' ? 320 : PANEL_SIZE_BOUNDS.sections.min;
+  const workspaceMin = workspace === 'speleodb' ? 320 : PANEL_SIZE_BOUNDS.sections.min;
   const openPath = project?.file_path;
   const previousPath = useRef(openPath);
   useLayoutEffect(() => {
@@ -232,7 +231,7 @@ export default function SingleSystemView() {
   const detailPinnedOpen = useUIStore((s) => s.detailPanelMode === 'pin' && s.detailPanelOpen);
   // Sections is survey-only; Plan/Export don't render it at all, so it costs
   // nothing there (not even an opener bar).
-  const sectionsPresent = appMode === 'survey' || (linked && outsideSurvey);
+  const sectionsPresent = appMode === 'survey' || outsideSurvey;
   const squeezeSections = useMemo(
     () => ({
       width: Math.max(workspaceMin, sectionsPanelWidth),
@@ -770,7 +769,6 @@ export default function SingleSystemView() {
       <div ref={setMainEl} className="relative flex-1 flex overflow-hidden">
         {/* Sections (left) - survey-only; Plan/Export show the read-only closure map
             with no section-editing affordances. */}
-        {(appMode === 'survey' || linked) && (
         <div className="contents" style={!sectionsPresent ? { display: 'none' } : undefined}>
         <Dock
           reveal={sectionsReveal}
@@ -783,7 +781,7 @@ export default function SingleSystemView() {
           maxSize={PANEL_SIZE_BOUNDS.sections.max}
           onResize={applySectionsWidth}
           onResizeEnd={handleSectionsResizeEnd}
-          label={linked && workspace === 'speleodb' ? 'SpeleoDB' : panelLabels.name.sections}
+          label={workspace === 'speleodb' ? 'SpeleoDB' : panelLabels.name.sections}
           openArrow={CHEVRON_RIGHT}
           closeArrow={CHEVRON_LEFT}
           keepMounted
@@ -800,7 +798,6 @@ export default function SingleSystemView() {
           <LeftWorkspace key={openPath} sections={sectionsContent} />
         </Dock>
         </div>
-        )}
 
         {/* Map + data table. `min-w-0` lets this column shrink when both side
             panels dock (otherwise flex refuses and push behavior breaks). */}

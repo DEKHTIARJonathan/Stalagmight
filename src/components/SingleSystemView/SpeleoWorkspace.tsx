@@ -11,6 +11,7 @@ import { dispatchProjectSave } from '../../utils/dispatchProjectSave';
 import { SpeleoRevisionHistory } from '../Dialogs/settings/SpeleoRevisionHistory';
 import { useProject } from '../../hooks/useProject';
 import { Button } from '../common/Button';
+import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 
 const areas = [['history', 'History']] as const;
 
@@ -25,7 +26,22 @@ export function SpeleoWorkspace() {
   const { busy, startEditing, update } = useSpeleoActions();
   const { handleCloseProject } = useProject();
   const web = useSpeleoWebLink();
-  if (!link) return null;
+  if (!link) return (
+    <div className="flex h-full min-h-0 flex-col items-center overflow-y-auto px-5 py-8" data-testid="speleodb-workspace-local">
+      <div className="my-auto flex w-full max-w-[16rem] flex-col items-center text-center" data-testid="speleodb-workspace-conversion-prompt">
+        <div className="mb-5 flex h-20 w-20 shrink-0 items-center justify-center rounded-full border border-accent-20 bg-accent-10 text-accent">
+          <SpeleoDbLogo size={56} />
+        </div>
+        <h2 className="text-xl font-semibold leading-snug text-text-primary">Build your survey together</h2>
+        <p className="mt-3 text-sm leading-relaxed text-text-secondary">
+          Track how your survey evolves, revisit earlier versions, and bring your team's work together in one shared project.
+        </p>
+        <Button variant="primary" onClick={() => useUIStore.getState().openDialog('publish-to-speleodb')}
+          className="mt-6 w-full px-3 py-3 text-sm leading-snug" disabled={busy}
+          data-testid="speleodb-workspace-convert">Convert to a SpeleoDB project</Button>
+      </div>
+    </div>
+  );
   const editing = link.editState === 'editing';
   const canResume = session?.loggedIn && !link.noAccess && permissionAtLeast(link.permission, 'READ_AND_WRITE');
   return (

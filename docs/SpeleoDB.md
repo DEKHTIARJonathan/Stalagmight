@@ -133,14 +133,14 @@ or ownership decisions. Diagnostic transport errors omit request URLs.
 
 ## Project workspace
 
-The full **SpeleoDB logo + SpeleoDB** toolbar button opens the left dock for linked
+The full **SpeleoDB logo + SpeleoDB** toolbar button opens the left dock for local and managed
 projects, including signed-out and read-only projects. Survey starts on Sections;
 Sections and SpeleoDB use accessible tabs with arrow-key navigation. Plan and Export
 retain SpeleoDB on request, and returning to Survey restores its previous tab.
 Opening SpeleoDB from the fullscreen table exits fullscreen without clearing table
 selection or scroll. Navigation never acquires or releases a lock.
 
-The persistent header shows project identity, editing access, lock owner and
+For managed projects, the persistent header shows identity, editing access, lock owner and
 connection status. Everyday controls are Save Changes, Switch to Read Only Mode or
 Resume editing, Reload Project and Open on SpeleoDB. History is the only expandable section. Close Project sits below Reload Project,
 warns about unsaved work, releases the editing lock on confirmed close and returns
@@ -169,7 +169,19 @@ Home retains local-project rename.
 
 Project-editor SpeleoDB menus and the old settings dialog are replaced by this
 workspace. Home retains sign-in, browsing, creation and local-project publishing.
-Local project editors have no SpeleoDB tab.
+Local projects expose the SpeleoDB tab with one centered conversion action and a
+short explanation focused on version history and team collaboration. Conversion
+opens the existing project creation form. Account forms remain in application
+Settings; returning from sign-in restores the creation draft without submitting it.
+Publishing shows a centered, app-blocking progress overlay through completion.
+The overlay expires after 120 seconds with a timeout explanation and an enabled
+Close action; an in-flight request cannot be submitted again. Account/project
+changes and newer edits still invalidate stale results.
+On confirmation, the project is saved and its first revision uploaded, then a fresh
+server copy is downloaded and opened as a managed project. Editing is acquired once
+through the shared verified acquisition flow. Unconfirmed uploads preserve the
+linked working copy for Save Changes; failed downloads preserve the remote identity
+and offer Reload Project. Retrying recovery never creates a second server project.
 
 ## Save, switching and exit
 

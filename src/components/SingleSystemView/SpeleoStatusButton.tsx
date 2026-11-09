@@ -9,8 +9,7 @@ export function SpeleoStatusButton() {
   const { t } = useTranslation();
   const link = useSpeleoStore((s) => s.link);
   const openWorkspace = useUIStore((s) => s.openSpeleoWorkspace);
-  if (!link) return null;
-  const unpushed = link.hasUnpushedEdits && !isUnwoundNotEdited(link);
+  const unpushed = link !== null && link.hasUnpushedEdits && !isUnwoundNotEdited(link);
   return (
     <button
       type="button"

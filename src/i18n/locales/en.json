@@ -3576,8 +3576,12 @@
       "submitting": "Publishing…",
       "success": "Project published to SpeleoDB.",
       "failed": "Could not publish to SpeleoDB",
-      "reloadFailed": "Published to SpeleoDB, but the project could not be reopened. Reopen it from SpeleoDB.",
-      "descriptionRequired": "A description is required to publish."
+      "reloadFailed": "The project was created on SpeleoDB, but a fresh server copy could not be reopened. Use Reload Project to retry.",
+      "descriptionRequired": "A description is required to publish.",
+      "name": "Name",
+      "descriptionLabel": "Description",
+      "coordinatesHint": "Enter both latitude and longitude, within their valid ranges.",
+      "uploadPending": "The project was created on SpeleoDB. Changes remain on this computer; use Save Changes to finish uploading."
     },
     "lock": {
       "title": "Write lock",

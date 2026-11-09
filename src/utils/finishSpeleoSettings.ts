@@ -1,3 +1,4 @@
+import { getPublishContinuation } from './publishContinuation';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { getUploadContinuation } from './uploadContinuation';
@@ -9,4 +10,5 @@ export function finishSpeleoSettings(): void {
   if (pending) useUIStore.getState().openDialog('speleodb-done', {
     mode: 'push', closeAfterSave: pending.closeAfterSave,
   });
+  else if (getPublishContinuation()) useUIStore.getState().openDialog('publish-to-speleodb');
 }

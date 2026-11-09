@@ -1,5 +1,8 @@
-import { autoAcquireSpeleoLock } from '../../utils/autoAcquireSpeleoLock';
-import { useCallback, useMemo, useState } from 'react';
+import { publishProjectAndReopen } from '../../utils/publishProjectAndReopen';
+import { getPublishContinuation, setPublishContinuation } from '../../utils/publishContinuation';
+import { captureUploadOwner, uploadOwnerStillCurrent } from '../../utils/uploadContinuation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { PublishProgressOverlay } from './PublishProgressOverlay';
 import { useTranslation } from 'react-i18next';
 import { DialogWrapper } from './DialogWrapper';
 import { Button } from '../common/Button';
@@ -7,15 +10,13 @@ import { Select } from '../common/Select';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
-import { invokeIpc } from '../../utils/ipc';
-import { humanizeSpeleoError, speleoErrorAction } from '../../utils/speleoError';
+import { humanizeSpeleoError } from '../../utils/speleoError';
 import { validateCoordinates } from '../../utils/gps';
 import { reverseGeocodeCountry } from '../../utils/reverseGeocodeCountry';
 import { COUNTRIES } from '../../data/countries';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import type {
   SpeleoPublishParams,
-  SpeleoPublishResult,
 } from '../../types/ipc.generated';
 
 const inputClass = 'w-full px-2 py-1 bg-background border border-border rounded text-sm';
@@ -34,19 +35,32 @@ export default function PublishToSpeleoDbDialog() {
   const project = useProjectStore((s) => s.project);
 
   const [name] = useState(project?.name ?? '');
-  const [description, setDescription] = useState('');
+  const [owner] = useState(captureUploadOwner);
+  const [draft] = useState(getPublishContinuation);
+  const loggedIn = useSpeleoStore((s) => s.session?.loggedIn === true);
+  const busy = useSpeleoStore((s) => s.busy);
+  const [description, setDescription] = useState(draft?.description ?? '');
   // Best-effort prefill from the first georeferenced zero datum, if any.
   const firstGps = useMemo(() => project?.zero_datums?.[0]?.gps ?? null, [project]);
   // Offline reverse-geocode the required country from that datum (#217). Lazy
   // initializer so it runs once at mount; empty when there is no GPS or the point
   // resolves to no country. Always user-editable via the <select> below.
   const [country, setCountry] = useState(() => {
+    if (draft) return draft.country;
     const gps = project?.zero_datums?.[0]?.gps ?? null;
     return gps ? (reverseGeocodeCountry(gps.latitude, gps.longitude) ?? '') : '';
   });
-  const [latitude, setLatitude] = useState(firstGps ? String(firstGps.latitude) : '');
-  const [longitude, setLongitude] = useState(firstGps ? String(firstGps.longitude) : '');
+  const [latitude, setLatitude] = useState(draft?.latitude ?? (firstGps ? String(firstGps.latitude) : ''));
+  const [longitude, setLongitude] = useState(draft?.longitude ?? (firstGps ? String(firstGps.longitude) : ''));
   const [publishing, setPublishing] = useState(false);
+  const [progressExpired, setProgressExpired] = useState(false);
+  const attempt = useRef(false);
+  useEffect(() => {
+    if (!publishing) return;
+    const timer = window.setTimeout(() => setProgressExpired(true), 120_000);
+    return () => window.clearTimeout(timer);
+  }, [publishing]);
+  const blocking = publishing && !progressExpired;
 
   const latTrim = latitude.trim();
   const lonTrim = longitude.trim();
@@ -68,12 +82,15 @@ export default function PublishToSpeleoDbDialog() {
     description.trim().length > 0 &&
     country !== '' &&
     coordsValid &&
-    !publishing;
+    !publishing && !busy && loggedIn;
 
   const handlePublish = useCallback(async () => {
-    if (!canPublish) return;
-    const issuedProject = useProjectStore.getState().project;
-    const session = useSpeleoStore.getState().sessionGeneration;
+    if (!canPublish || attempt.current || !uploadOwnerStillCurrent(owner)) return;
+    attempt.current = true;
+    const issuedDialog = useUIStore.getState().dialogData;
+    const ownsDialog = () => useUIStore.getState().activeDialog === 'publish-to-speleodb' &&
+      useUIStore.getState().dialogData === issuedDialog;
+    setProgressExpired(false);
     setPublishing(true);
     // Both-or-neither: only send numbers when both are present and valid.
     const bothCoords = latTrim !== '' && lonTrim !== '';
@@ -87,52 +104,24 @@ export default function PublishToSpeleoDbDialog() {
       longitude: bothCoords ? lonNum : null,
     };
     try {
-      const result = await invokeIpc<SpeleoPublishResult>('speleodb_publish', { params });
-      if (useSpeleoStore.getState().sessionGeneration !== session || useProjectStore.getState().project !== issuedProject) return;
-      // The project now EXISTS on the server and is linked. Reload its cache copy so the
-      // app converges on the now-remote project. loadProject reports failure via
-      // {success:false} (it never throws - it may have opened a recovery dialog), so a
-      // failed reload must NOT claim success or close over a stale/local view.
-      const { success } = await useProjectStore.getState().loadProject(result.local_path);
-      if (!success) {
-        showToast(
-          t('speleodb.publish.reloadFailed'),
-          TOAST_KEYS.SPELEODB_PUBLISH,
-          'error',
-        );
-        return;
+      const result = await publishProjectAndReopen(params);
+      if (result === 'stale') return;
+      setPublishContinuation(null);
+      if (ownsDialog()) closeDialog();
+      if (result === 'upload_pending') {
+        showToast(t('speleodb.publish.uploadPending'), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
+      } else if (result === 'reload_failed') {
+        showToast(t('speleodb.publish.reloadFailed'), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
       }
-      if (useSpeleoStore.getState().sessionGeneration !== session) return;
-      const project = useProjectStore.getState().project;
-      if (!project || (project !== issuedProject && project.file_path !== result.local_path)) return;
-      // Publishing relocates the live backend file before loadProject, which may
-      // answer ALREADY_OPEN. Reconcile that relocation in the frontend as well.
-      useProjectStore.setState({ project: { ...project, file_path: result.local_path } });
-      useSpeleoStore.getState().syncProjectLink(true, result.local_path);
-      // UI-convergence only: a failure refreshing the link status must NOT flip a
-      // succeeded publish into the error path (the link is already stamped on the
-      // reloaded project), so swallow it.
-      try {
-        await useSpeleoStore.getState().refreshLinkStatus();
-      } catch {
-        // non-fatal; leave the status to the next refresh.
-      }
-      if (useSpeleoStore.getState().sessionGeneration !== session) return;
-      await autoAcquireSpeleoLock(result.local_path, () =>
-        useSpeleoStore.getState().sessionGeneration === session &&
-        useProjectStore.getState().project?.file_path === result.local_path);
-      if (useSpeleoStore.getState().sessionGeneration === session &&
-          useProjectStore.getState().project?.file_path === result.local_path) closeDialog();
     } catch (e) {
       showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
-      if (speleoErrorAction(e) === 'ReLogin') {
-        useSpeleoStore.getState().clearSession();
-      }
     } finally {
+      attempt.current = false;
       setPublishing(false);
     }
   }, [
     canPublish,
+    owner,
     name,
     description,
     country,
@@ -152,41 +141,53 @@ export default function PublishToSpeleoDbDialog() {
     latTrim !== '' ||
     lonTrim !== '';
 
+  const dismiss = () => { setPublishContinuation(null); closeDialog(); };
+  const signIn = () => {
+    if (!uploadOwnerStillCurrent(owner)) return;
+    setPublishContinuation({ description, country, latitude, longitude }, owner);
+    useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' });
+  };
+
   return (
+    <>
     <DialogWrapper
       title={t('speleodb.publish.title')}
-      onClose={closeDialog}
+      onClose={blocking ? () => {} : dismiss}
       size="md"
-      isDirty={isDirty}
+      isDirty={isDirty && !publishing}
       data-testid="publish-to-speleodb-dialog"
     >
       <div className="space-y-4">
         <p className="text-text-secondary text-sm">{t('speleodb.publish.description')}</p>
+        {progressExpired && publishing && <p role="alert" className="text-sm text-warning" data-testid="speleodb-publish-timeout">
+          Publishing has taken more than 120 seconds. Your request may still finish. Close this dialog to continue working.
+        </p>}
+        {!loggedIn && <Button onClick={signIn} data-testid="publish-to-speleodb-dialog-sign-in">Sign in in Settings</Button>}
 
         <div>
           <label className="block text-sm font-medium text-text-primary mb-1">
-            {t('speleodb.projectSettings.fields.name')}
+            {t('speleodb.publish.name')}
           </label>
           <input
             type="text"
             value={name}
             disabled
             className={`${inputClass} opacity-50 cursor-not-allowed`}
-            aria-label={t('speleodb.projectSettings.fields.name')}
+            aria-label={t('speleodb.publish.name')}
             data-testid="publish-to-speleodb-dialog-name"
           />
         </div>
 
         <div>
           <label className="block text-sm font-medium text-text-primary mb-1">
-            {t('speleodb.projectSettings.fields.description')} <span className="text-error">*</span>
+            {t('speleodb.publish.descriptionLabel')} <span className="text-error">*</span>
           </label>
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             rows={3}
             className={inputClass}
-            aria-label={t('speleodb.projectSettings.fields.description')}
+            aria-label={t('speleodb.publish.descriptionLabel')}
             data-testid="publish-to-speleodb-dialog-description"
           />
           {description.trim() === '' && (
@@ -244,12 +245,12 @@ export default function PublishToSpeleoDbDialog() {
         </div>
         {!coordsValid && (
           <p className="text-error text-xs" data-testid="publish-to-speleodb-dialog-coords-error">
-            {t('speleodb.projectSettings.coordinatesHint')}
+            {t('speleodb.publish.coordinatesHint')}
           </p>
         )}
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
-          <Button onClick={closeDialog} disabled={publishing} data-testid="publish-to-speleodb-dialog-cancel">
+          <Button onClick={dismiss} disabled={blocking} data-testid="publish-to-speleodb-dialog-cancel">
             {t('common.actions.cancel')}
           </Button>
           <Button
@@ -263,5 +264,7 @@ export default function PublishToSpeleoDbDialog() {
         </div>
       </div>
     </DialogWrapper>
+    {blocking && <PublishProgressOverlay />}
+    </>
   );
 }

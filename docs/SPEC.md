@@ -39,11 +39,22 @@ rather than restating it, because a copy here rots silently.
 
 ## SpeleoDB project workspace
 
-Linked project editors expose a full logo + SpeleoDB toolbar button in every mode.
+All project editors expose a full logo + SpeleoDB toolbar button in every mode.
 Survey opens on Sections and offers Sections | SpeleoDB tabs in one left dock.
 Plan and Export reveal SpeleoDB only on request unless it was already selected;
 returning to Survey restores its tab. Tab navigation preserves map, selection,
 section expansion, scroll and unfinished drafts, without changing lock ownership.
+A local project's SpeleoDB tab contains a centered explanation of version history
+and team collaboration and one Convert to a SpeleoDB project action. It opens the
+creation form; confirmation saves and uploads, then downloads and opens the fresh
+server version. The project becomes managed. Failed upload/download recovery keeps
+that managed identity and pending work without creating duplicate server projects.
+Signed-out users authenticate in Settings and return to their creation draft.
+Publishing blocks the app with a centered progress indicator for up to 120 seconds.
+After that limit the indicator expires, a timeout explanation appears, and the
+dialog can be closed while the original request finishes; duplicate submission
+remains disabled.
+
 The dock retains resize/pin/hover behavior, uses a 320px SpeleoDB minimum within the
 400px maximum, and floats at constrained widths. Programmatic opening focuses the
 selected tab and exits fullscreen table mode while preserving table state.
