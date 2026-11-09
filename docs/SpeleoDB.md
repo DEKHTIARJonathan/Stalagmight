@@ -90,6 +90,11 @@ The home screen lists the cached copies by owner:
   is built from recents). It still forgets clean SpeleoDB references outside the
   cache, and keeps any reference whose copy holds un-uploaded edits.
 
+A cached copy with un-uploaded edits carries the yellow leading edge on its card and
+on its table row alike (from the copy's own state, so a copy that is in neither
+recents nor the server listing is marked too). SpeleoDB cards and rows open on a
+single click; the list hint says so whenever one is listed.
+
 Right-click on a SpeleoDB card, table row or map marker opens the SpeleoDB project
 menu: Open project, Zoom to system (when the project is on the map) and Remove local
 copy. Removing a copy goes through an in-app confirmation that first re-reads the
@@ -117,7 +122,9 @@ account except the open project. Copies with un-uploaded or unreadable state are
 listed in the confirmation and kept by default ("Keep those, remove the rest").
 Deleting them too takes a second confirmation. The backend re-checks every copy when
 it removes it. Each removed copy's lock is handled as above, and the result lists the
-locks that were handed back and those that could not be checked.
+locks that were handed back and those that could not be checked. The result is
+announced (a live region) and scrolled into view. With nothing to remove (no copy, or
+only the open project's), the button is disabled and says so.
 
 ## Operations used by the app
 

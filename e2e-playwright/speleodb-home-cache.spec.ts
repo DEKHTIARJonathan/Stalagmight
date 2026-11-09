@@ -125,6 +125,21 @@ test('signed out: every cached copy is listed read-only and opens without taking
   await expect(page.getByTestId('settings-panel-speleodb')).toBeVisible();
 });
 
+test('a copy with un-uploaded edits is marked alike on its card and its table row', async ({ page }) => {
+  await seed(page, {
+    signedIn: false,
+    copies: [copy(MINE, 'Synthetic mine', 'signed_out', true), copy(THEIRS, 'Synthetic theirs', 'signed_out')],
+  });
+  await expect(page.getByTestId(`system-card-remote-${MINE}`)).toHaveAttribute('data-recent-accent', 'unpushed');
+  await expect(page.getByTestId(`system-card-remote-${THEIRS}`)).toHaveAttribute('data-recent-accent', 'none');
+  // SpeleoDB entries open on a single click, and the hint says so.
+  await expect(page.getByTestId('globalview-list-status')).toContainText('A SpeleoDB project opens with a single click.');
+
+  await page.getByTestId('recent-density-table').click();
+  await expect(page.getByTestId(`system-row-remote-${MINE}`)).toHaveAttribute('data-recent-accent', 'unpushed');
+  await expect(page.getByTestId(`system-row-remote-${THEIRS}`)).toHaveAttribute('data-recent-accent', 'none');
+});
+
 test('an expired session opens the cached copy read-only and signs the app out', async ({ page }) => {
   const commands = await seed(page, {
     signedIn: true,
@@ -247,6 +262,8 @@ test('purge keeps copies with un-uploaded changes unless deleting them is confir
   await expect(section.getByTestId('speleodb-purge-result')).toContainText('Removed 1 downloaded copy.');
   await expect(section.getByTestId('speleodb-purge-result')).toContainText('Synthetic mine');
   await expect(section.getByTestId('speleodb-purge-result')).toContainText('Handed back the editing lock of: Synthetic legacy');
+  // The last section of the panel: its result is brought into view, every line of it.
+  await expect(section.getByTestId('speleodb-purge-result')).toBeInViewport({ ratio: 1 });
 
   await section.getByTestId('speleodb-purge-cache').click();
   await page.getByTestId('speleodb-purge-delete-all').click();
@@ -263,4 +280,16 @@ test('purge keeps copies with un-uploaded changes unless deleting them is confir
     { discardUnpushed: false },
     { discardUnpushed: true },
   ]);
+});
+
+test('purge is disabled, and says why, when nothing is downloaded', async ({ page }) => {
+  await seed(page, { signedIn: false, copies: [] });
+  await page.evaluate(() => {
+    (window as unknown as { __E2E_TEST__: { uiStore: { getState: () => { openDialog: (d: string, data?: unknown) => void } } } })
+      .__E2E_TEST__.uiStore.getState().openDialog('settings', { initialCategory: 'speleodb' });
+  });
+  const section = page.getByTestId('section-speleodb-cache');
+  await expect(section.getByTestId('speleodb-purge-empty')).toHaveText('There are no downloaded copies to remove.');
+  await expect(section.getByTestId('speleodb-purge-cache')).toBeDisabled();
+  expect(await calls(page, 'speleodb_purge_cached_copies')).toEqual([]);
 });

@@ -1,4 +1,4 @@
-import type { SpeleoProjectSummary } from '../../types/ipc.generated';
+import type { SpeleoCachedProject, SpeleoProjectSummary } from '../../types/ipc.generated';
 import { useTranslation } from 'react-i18next';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { SpeleoBadgedIcon, HourglassGlyph, PenGlyph } from '../common/SpeleoBadgedIcon';
@@ -58,6 +58,19 @@ export function resolveSpeleoLock(
     speleoName,
     hasLocalEdits: hasUnpushedEdits(localStates, pid),
   };
+}
+
+/**
+ * A SpeleoDB card or row with a cached copy: the copy's own un-uploaded flag marks
+ * it too. The local-state scan only covers projects in recents or the server
+ * listing, and a signed-out cached copy may be in neither. Card and table row both
+ * go through here, so they always agree.
+ */
+export function withCachedCopyEdits(
+  lock: SpeleoLockInfo,
+  cached: Pick<SpeleoCachedProject, 'has_unpushed_edits'> | undefined,
+): SpeleoLockInfo {
+  return cached?.has_unpushed_edits && !lock.hasLocalEdits ? { ...lock, hasLocalEdits: true } : lock;
 }
 
 /**

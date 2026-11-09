@@ -5,6 +5,7 @@ import { SpeleoProjectInfo } from './SpeleoProjectInfo';
 import {
   recentAccent,
   recentAccentStyle,
+  withCachedCopyEdits,
   type SpeleoLockInfo,
 } from './SpeleoLockBadge';
 
@@ -36,7 +37,8 @@ export default function RemoteSystemCard({
   onContextMenu,
   busy = false,
 }: RemoteSystemCardProps) {
-  const displayLock = { ...lock, hasLocalEdits: false };
+  // The same leading-edge accent as the table row, un-uploaded work included.
+  const displayLock = withCachedCopyEdits(lock, cached);
   const testId = `system-card-remote-${summary.id}`;
   // Gate every open on `busy`: a click (or Enter/Space) while a pull is in flight
   // must not fire a concurrent open.

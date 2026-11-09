@@ -1050,7 +1050,9 @@ export default function GlobalView() {
                     })
                   ) : (
                     <>
-                      {t('globalView.recent.hintPrefix')}{' '}
+                      {/* A SpeleoDB card or row opens on a single click (it has
+                          nothing to select), so the hint says so when one is listed. */}
+                      {t(remoteItems.length > 0 ? 'globalView.recent.hintPrefixWithSpeleo' : 'globalView.recent.hintPrefix')}{' '}
                       {t('globalView.recent.hintFindPrefix')}{' '}
                       <button
                         type="button"

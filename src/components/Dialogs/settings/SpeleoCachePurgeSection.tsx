@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../common/Button';
 import { DialogWrapper } from '../DialogWrapper';
@@ -41,17 +41,27 @@ export function SpeleoCachePurgeSection() {
   const { t } = useTranslation();
   const busy = useSpeleoOperationBusy();
   const refresh = useSpeleoCacheStore((s) => s.refresh);
+  // Nothing to purge once the listing says so (no copy, or only the open project's):
+  // the button is disabled and says why, instead of a red button that does nothing.
+  const nothingToPurge = useSpeleoCacheStore((s) => s.loaded && s.copies.every((copy) => copy.is_open));
   const [step, setStep] = useState<PurgeStep | null>(null);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState<PurgeMessage | null>(null);
+  const resultRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+  // The section is the panel's last, so its result lands below the fold: bring it
+  // into view when it arrives.
+  useEffect(() => {
+    if (message) resultRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [message]);
 
   const start = async () => {
     setMessage(null);
     const copies = await refresh();
-    if (copies.every((copy) => copy.is_open)) {
-      setMessage({ lines: [t('speleodb.cachedCopies.purge.empty')], tone: 'info' });
-      return;
-    }
+    // Re-checked at click time: the refreshed listing disables the button if empty.
+    if (copies.every((copy) => copy.is_open)) return;
     setStep({ kind: 'confirm', copies });
   };
 
@@ -81,21 +91,30 @@ export function SpeleoCachePurgeSection() {
       <p className="mb-3 text-xs text-text-secondary">{t('speleodb.cachedCopies.purge.help')}</p>
       <Button
         variant="danger"
-        disabled={busy || working}
+        disabled={busy || working || nothingToPurge}
         onClick={() => void start()}
+        aria-describedby={nothingToPurge ? 'speleodb-purge-empty' : undefined}
         data-testid="speleodb-purge-cache"
       >
         {working ? t('speleodb.cachedCopies.purge.working') : t('speleodb.cachedCopies.purge.button')}
       </Button>
-      {message && (
-        <div
-          role="status"
-          className={`mt-3 space-y-1 text-sm ${message.tone === 'warning' ? 'text-warning-text' : 'text-text-secondary'}`}
-          data-testid="speleodb-purge-result"
-        >
-          {message.lines.map((line) => <p key={line}>{line}</p>)}
-        </div>
+      {nothingToPurge && (
+        <p id="speleodb-purge-empty" className="mt-3 text-sm text-text-secondary" data-testid="speleodb-purge-empty">
+          {t('speleodb.cachedCopies.purge.empty')}
+        </p>
       )}
+      {/* Mounted before any result: a live region inserted together with its text
+          is unreliably announced. */}
+      <div ref={resultRef} role="status" aria-live="polite" data-testid="speleodb-purge-status">
+        {message && (
+          <div
+            className={`mt-3 space-y-1 text-sm ${message.tone === 'warning' ? 'text-warning-text' : 'text-text-secondary'}`}
+            data-testid="speleodb-purge-result"
+          >
+            {message.lines.map((line) => <p key={line}>{line}</p>)}
+          </div>
+        )}
+      </div>
       {step && (
         <PurgeConfirmDialog
           step={step}

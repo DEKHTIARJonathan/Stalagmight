@@ -17,6 +17,7 @@ import {
   resolveSpeleoLock,
   recentAccent,
   recentAccentStyle,
+  withCachedCopyEdits,
 } from './SpeleoLockBadge';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 import type { SpeleoLocalStateMap } from '../../utils/speleoLocalState';
@@ -203,14 +204,14 @@ export function SystemTable({
             // #218: a purely-remote SpeleoDB project (not in local recents). No local
             // file/stats - show the SpeleoDB name + lock badge, and open (pull) it on
             // row click. Reuses resolveSpeleoLock via a synthetic project id.
-            const remoteLock = resolveSpeleoLock(
+            const remoteLock = withCachedCopyEdits(resolveSpeleoLock(
               { is_remote: true, speleodb_project_id: item.projectId },
               remoteLocks,
               myEmail,
               remoteProjects,
               localStates,
               { ...remoteSummaries, [item.projectId]: item.summary },
-            );
+            ), item.cached);
             return (
               <tr
                 key={`remote-${item.projectId}`}

@@ -4,7 +4,7 @@
  * with un-uploaded changes, and never touches the open project's copy.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const ipc = vi.hoisted(() => vi.fn());
@@ -97,12 +97,47 @@ describe('Purge all cached files', () => {
     expect(purges()).toEqual([{ discardUnpushed: true }]);
   });
 
-  it('says there is nothing to remove when only the open project is cached', async () => {
-    answer([copy('a', 'Alpha', { is_open: true })]);
+  it.each([
+    ['no copy at all', []],
+    ['only the open project', [copy('a', 'Alpha', { is_open: true })]],
+  ])('is disabled, and says why, with %s cached', async (_label, listing) => {
+    answer(listing);
     render(<SpeleoCachePurgeSection />);
-    await userEvent.click(screen.getByTestId('speleodb-purge-cache'));
-    expect(await screen.findByTestId('speleodb-purge-result')).toHaveTextContent('There are no downloaded copies to remove.');
+    const button = screen.getByTestId('speleodb-purge-cache');
+    const empty = await screen.findByTestId('speleodb-purge-empty');
+    expect(empty).toHaveTextContent('There are no downloaded copies to remove.');
+    expect(button).toBeDisabled();
+    expect(button).toHaveAccessibleDescription('There are no downloaded copies to remove.');
+    await userEvent.click(button);
     expect(screen.queryByTestId('speleodb-purge-dialog')).toBeNull();
+  });
+
+  it('is enabled once the listing has a copy to remove', async () => {
+    answer([copy('a', 'Alpha')]);
+    render(<SpeleoCachePurgeSection />);
+    await waitFor(() => expect(useSpeleoCacheStore.getState().loaded).toBe(true));
+    expect(screen.getByTestId('speleodb-purge-cache')).toBeEnabled();
+    expect(screen.queryByTestId('speleodb-purge-empty')).toBeNull();
+  });
+
+  it('announces the result in a live region mounted beforehand, and scrolls it into view', async () => {
+    const scrolled = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scrolled;
+    try {
+      answer([copy('a', 'Alpha'), copy('b', 'Beta')]);
+      render(<SpeleoCachePurgeSection />);
+      const region = screen.getByRole('status');
+      expect(region).toHaveAttribute('data-testid', 'speleodb-purge-status');
+      expect(region).toBeEmptyDOMElement();
+      await userEvent.click(screen.getByTestId('speleodb-purge-cache'));
+      await userEvent.click(await screen.findByTestId('speleodb-purge-confirm'));
+      await waitFor(() => expect(region).toHaveTextContent('Removed 2 downloaded copies.'));
+      expect(scrolled).toHaveBeenCalledWith({ block: 'nearest' });
+      expect(scrolled.mock.contexts).toContain(region);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
   });
 
   it('is disabled while a SpeleoDB operation runs', () => {

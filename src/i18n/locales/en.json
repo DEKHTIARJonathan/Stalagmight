@@ -2153,6 +2153,7 @@
     "recent": {
       "title": "Recent projects",
       "hintPrefix": "Click to select, double-click to open, right-click for options.",
+      "hintPrefixWithSpeleo": "Click to select, double-click to open, right-click for options. A SpeleoDB project opens with a single click.",
       "hintFindPrefix": "Don't see your project?",
       "hintFindLink": "Click here",
       "hintFindSuffix": " to open it from file.",

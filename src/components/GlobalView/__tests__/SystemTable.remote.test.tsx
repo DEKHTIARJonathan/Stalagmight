@@ -86,3 +86,29 @@ it.each(['READ_ONLY', 'READ_AND_WRITE'] as const)('uses the remote row permissio
     permission === 'READ_ONLY' ? 'Permission: Read-only' : 'Permission: Read and write',
   );
 });
+
+it('marks a cached copy with un-uploaded edits even when the local-state scan does not list it', () => {
+  useSpeleoStore.setState({ remoteSummaries: {} });
+  render(
+    <SystemTable
+      items={[{ ...REMOTE_ITEM, cached: {
+        project_id: 'p1', project_name: 'Remote Cave', local_path: '/cache/speleodb/p1/project.stalx',
+        ownership: 'signed_out', has_unpushed_edits: true, state_unknown: false, is_open: false,
+      } }]}
+      selectedProjectId={null}
+      multiSelectedIds={new Set()}
+      sortField="name"
+      sortDirection="asc"
+      remoteLocks={{}}
+      remoteProjects={{}}
+      myEmail={null}
+      onSort={vi.fn()}
+      onSelect={vi.fn()}
+      onOpen={vi.fn()}
+      onContextMenu={vi.fn()}
+      onRemoveMissing={vi.fn()}
+      onOpenRemote={vi.fn()}
+    />,
+  );
+  expect(screen.getByTestId('system-row-remote-p1')).toHaveAttribute('data-recent-accent', 'unpushed');
+});
