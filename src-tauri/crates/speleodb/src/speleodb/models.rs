@@ -73,8 +73,10 @@ pub struct RevisionCommit {
     /// landed" from "someone else pushed".
     #[serde(default)]
     pub author_email: String,
-    /// [#218] Commit timestamp (RFC-3339), for the history view. `None` if the
-    /// server omits it.
+    /// [#218] Commit timestamp, for the history view, exactly as the server sent
+    /// it: `YYYY/MM/DD HH:MM` wall time in the instance's zone (America/New_York)
+    /// with NO offset (sdk#7). The frontend converts it to an instant
+    /// (`src/utils/speleoRevisionTime.ts`). `None` if the server omits it.
     #[serde(default)]
     pub authored_date: Option<String>,
     /// [#218] Commit message, for the history view. `None` if the server omits it.
@@ -147,7 +149,8 @@ pub struct SpeleoRevision {
     pub parent_ids: Vec<String>,
     /// Commit author's email (may be empty if the server omitted it).
     pub author_email: String,
-    /// Commit timestamp (RFC-3339), or `None` if the server omitted it.
+    /// Commit timestamp as the server sent it - New York wall time with no zone
+    /// (see [`RevisionCommit::authored_date`]) - or `None` if the server omitted it.
     pub authored_date: Option<String>,
     /// Commit message, or `None` if the server omitted it.
     pub message: Option<String>,
@@ -396,6 +399,12 @@ pub struct SpeleoPublishResult {
     /// The SpeleoDB cache path the freshly-published project now lives at; the
     /// webview reloads it through the normal `open_project` flow (read-only-remote).
     pub local_path: String,
+    /// As on [`DoneResult::Released`]: `Some(true)` when the first upload left the
+    /// undo history out to fit under the server's size limit (sdk#3). Absent
+    /// otherwise, including when that upload did not land.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub undo_history_omitted: Option<bool>,
 }
 
 /// Result of pulling + extracting a project, returned to the webview. The
@@ -411,6 +420,23 @@ pub struct SpeleoOpenResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub has_unpushed_edits: Option<bool>,
+    /// Present only when the cached copy opened read-only because there is no
+    /// usable SpeleoDB session. The frontend must not try to take the lock.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub read_only: Option<SpeleoReadOnlyOpen>,
+}
+
+/// Why an open returned the cached copy read-only, without the server's say.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+pub enum SpeleoReadOnlyOpen {
+    /// Nobody is signed in: the copy opened with no network call at all.
+    SignedOut,
+    /// The server rejected the saved token during this open. The token was dropped,
+    /// so the app is now signed out, and the copy opened as for a signed-out user.
+    SessionExpired,
 }
 
 /// Outcome of `speleodb_start_editing` (#194): the result of acquiring the write
@@ -451,7 +477,16 @@ pub enum DoneResult {
     /// This is the ONLY arm that means "the local work is on the server", so it is
     /// the only one the frontend may clear its `hasUnpushedEdits` on. See
     /// [`Self::NotEditing`] for the case that used to be folded in here.
-    Released,
+    Released {
+        /// `Some(true)` when the uploaded copy left out the undo history to fit
+        /// under the server's size limit (sdk#3; see
+        /// [`super::client::SERVER_UPLOAD_LIMIT_BYTES`]). The survey data was
+        /// uploaded in full; the new revision just cannot be unwound step by step.
+        /// Absent otherwise.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        undo_history_omitted: Option<bool>,
+    },
     /// There was no edit session to finish: the backend's edit gate was already
     /// closed, so no lock was held, nothing was pushed and nothing was released.
     ///
@@ -602,7 +637,13 @@ pub enum PushResult {
     ///
     /// The ONLY arm that means "the local work is on the server" - see
     /// [`DoneResult::Released`] for the same distinction on the release verb.
-    Pushed,
+    Pushed {
+        /// As on [`DoneResult::Released`]: `Some(true)` when the upload left out
+        /// the undo history to fit under the server's size limit (sdk#3).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        undo_history_omitted: Option<bool>,
+    },
     /// There was no edit session to push from: the backend's edit gate was already
     /// closed, so no lock was held and nothing was uploaded. See
     /// [`DoneResult::NotEditing`] - same hazard, same frontend obligation (leave
@@ -673,8 +714,9 @@ mod tests {
     use super::{
         DoneResult, Permission, Project, PushResult, RemoteState, RevisionCommit, RevisionHistory,
         SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
-        SpeleoProjectSummary, SpeleoRevision, SpeleoSessionStatus, StartEditingResult,
-        UpdateResult, Visibility,
+        SpeleoProjectSummary, SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoRevision,
+        SpeleoSessionStatus,
+        StartEditingResult, UpdateResult, Visibility,
     };
 
     #[test]
@@ -707,6 +749,7 @@ mod tests {
             local_path: "/cache/project.stalx".to_owned(),
             offline: None,
             has_unpushed_edits: None,
+            read_only: Some(SpeleoReadOnlyOpen::SessionExpired),
         })
         .expect("serialize open result");
         // [Track A] #186/D-B2: the structured error DTO must also never carry a
@@ -732,7 +775,10 @@ mod tests {
             email: Some("holder@example.com".to_owned()),
         })
         .expect("serialize locked-by result");
-        let done = serde_json::to_string(&DoneResult::Released).expect("serialize done result");
+        let done = serde_json::to_string(&DoneResult::Released {
+            undo_history_omitted: Some(true),
+        })
+        .expect("serialize done result");
         let update = serde_json::to_string(&UpdateResult::FastForwarded {
             local_path: "/cache/project.stalx".to_owned(),
         })
@@ -938,5 +984,35 @@ mod tests {
         })
         .expect("serialize revision");
         assert!(!json.to_lowercase().contains("token"));
+    }
+
+    #[test]
+    fn a_landed_push_names_an_omitted_undo_history_only_when_it_happened() {
+        // sdk#3: the frontend keys on `kind` alone, so the ordinary success keeps
+        // its exact wire shape; the notice field appears only when set.
+        let plain = |v: &serde_json::Value| v.to_string();
+        let released = serde_json::to_value(DoneResult::Released {
+            undo_history_omitted: None,
+        })
+        .expect("serialize");
+        assert_eq!(plain(&released), r#"{"kind":"released"}"#);
+        let pushed = serde_json::to_value(PushResult::Pushed {
+            undo_history_omitted: Some(true),
+        })
+        .expect("serialize");
+        assert_eq!(
+            plain(&pushed),
+            r#"{"kind":"pushed","undo_history_omitted":true}"#
+        );
+        let publish = |undo_history_omitted| SpeleoPublishResult {
+            project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
+            endpoint: "https://speleodb.example".to_owned(),
+            local_path: "/cache/project.stalx".to_owned(),
+            undo_history_omitted,
+        };
+        let quiet = serde_json::to_value(publish(None)).expect("serialize");
+        assert!(quiet.get("undo_history_omitted").is_none());
+        let noted = serde_json::to_value(publish(Some(true))).expect("serialize");
+        assert_eq!(noted["undo_history_omitted"], serde_json::json!(true));
     }
 }

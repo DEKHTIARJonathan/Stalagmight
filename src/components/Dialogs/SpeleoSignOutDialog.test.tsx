@@ -141,6 +141,61 @@ describe('SpeleoSignOutDialog', () => {
     expect(released).toEqual(['x']);
   });
 
+  // Decision 10: when the upload is not possible, the edits are never discard-only.
+  it('Keep my changes on this computer saves the open project locally, then hands its lock back on sign-out', async () => {
+    const saveProject = vi.fn(async () => { useProjectStore.setState({ isDirty: false }); return ok; });
+    useProjectStore.setState({ isDirty: true, saveProject } as never);
+    const answer = show({ openProject: entry('open'), releasable: [entry('a')], unuploaded: [] });
+    const go = screen.getByTestId('speleodb-signout-go');
+    expect(go).toBeDisabled();
+    await userEvent.click(screen.getByTestId('speleodb-signout-open-keep'));
+    expect(await screen.findByTestId('speleodb-signout-open-kept')).toBeVisible();
+    expect(saveProject).toHaveBeenCalledOnce();
+    // Kept, not closed, discarded or uploaded.
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(doneMock).not.toHaveBeenCalled();
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_discard_cached_copy', expect.anything(), expect.anything());
+    await waitFor(() => expect(go).toBeEnabled());
+    await userEvent.click(go);
+    expect(await answer).toBe(true);
+    expect(released).toEqual(['a', 'open']);
+  });
+
+  it('Keep stays unanswered when the local save fails, and says why', async () => {
+    const saveProject = vi.fn(async () => ({ success: false, error: 'Synthetic disk failure' }));
+    useProjectStore.setState({ isDirty: true, saveProject } as never);
+    void show({ openProject: entry('open'), releasable: [], unuploaded: [] });
+    await userEvent.click(screen.getByTestId('speleodb-signout-open-keep'));
+    expect(await screen.findByTestId('speleodb-signout-error')).toHaveTextContent('could not be saved');
+    expect(screen.queryByTestId('speleodb-signout-open-kept')).toBeNull();
+    expect(screen.getByTestId('speleodb-signout-go')).toBeDisabled();
+  });
+
+  it('another project with changes can be kept on this computer; a lock it holds is handed back, its copy kept', async () => {
+    const answer = show({ openProject: null, releasable: [], unuploaded: [entry('x'), entry('y', false)] });
+    for (const id of ['x', 'y']) {
+      await userEvent.click(screen.getByTestId(`speleodb-signout-row-${id}-keep`));
+      expect(screen.getByTestId(`speleodb-signout-row-${id}-kept`)).toBeVisible();
+    }
+    await userEvent.click(screen.getByTestId('speleodb-signout-go'));
+    expect(await answer).toBe(true);
+    expect(released).toEqual(['x']);
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_discard_cached_copy', expect.anything(), expect.anything());
+  });
+
+  it('a kept project whose hand-back fails gets the usual Try again / Sign out anyway', async () => {
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'speleodb_release_lock') throw new Error('Synthetic offline');
+      return null;
+    });
+    const answer = show({ openProject: entry('open'), releasable: [], unuploaded: [] });
+    await userEvent.click(screen.getByTestId('speleodb-signout-open-keep'));
+    await userEvent.click(await screen.findByTestId('speleodb-signout-go'));
+    expect(await screen.findByTestId('speleodb-signout-release-failed')).toHaveTextContent('Cave open');
+    await userEvent.click(screen.getByTestId('speleodb-signout-anyway'));
+    expect(await answer).toBe(true);
+  });
+
   it('"Open to upload" cancels the sign-out and opens that project', async () => {
     const answer = show({ openProject: null, releasable: [entry('a')], unuploaded: [entry('x')] });
     await userEvent.click(screen.getByTestId('speleodb-signout-row-x-open'));

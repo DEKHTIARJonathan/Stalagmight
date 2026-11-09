@@ -86,7 +86,7 @@ impl AppState {
             .is_some_and(|permission| permission >= Permission::ReadAndWrite)
             || !lock_held_by_me(holder, Some(email.as_str()))
         {
-            self.set_edit_enabled(false);
+            self.speleodb_shut_edit_gate();
             return Err(local_dto(SpeleoDbError::Io(
                 "write permission or the editing lock was lost; resume editing before uploading"
                     .to_owned(),
@@ -104,7 +104,7 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if self.speleodb_session_generation() == generation {
-            self.set_edit_enabled(false);
+            self.speleodb_shut_edit_gate();
         }
     }
 }

@@ -1,9 +1,10 @@
 /**
- * frontend#10 - an account change asks, in-app and FIRST, about the unsent SpeleoDB
- * input it would drop (here: an upload description parked while Settings is open
- * for sign-in), before the sign-out guard can upload or hand anything back. A
- * sign-out, a same-account recovery and a draft not yet tied to an account keep
- * the input, so they ask nothing.
+ * frontend#10 - an account change asks, in-app, about the unsent SpeleoDB input it
+ * would drop (here: an upload description parked while Settings is open for
+ * sign-in), in the ONE question it asks after the sign-out guard - together with
+ * unsaved edits, when there are any (protectAccountTransition). A sign-out, a
+ * same-account recovery and a draft not yet tied to an account keep the input, so
+ * they ask nothing.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -64,14 +65,14 @@ async function answerDrafts(yes: boolean) {
 }
 
 describe('applyPendingAuth and unsent SpeleoDB input', () => {
-  it('switching account asks first; declining cancels before anything else ran', async () => {
+  it('switching account asks after the sign-out guard; declining cancels the login', async () => {
     signedInAs('writer@example.com');
     parkDescription();
     stageLogin('other@example.com');
     const pending = useSpeleoStore.getState().applyPendingAuth(ENDPOINT, false);
     await answerDrafts(false);
     expect(await pending).toEqual({ ok: false, cancelled: true });
-    expect(order).toEqual(['drafts question']);
+    expect(order).toEqual(['sign-out guard', 'drafts question']);
     expect(getUploadContinuation(PATH)?.message).toBe('Synthetic description');
   });
 
@@ -82,7 +83,7 @@ describe('applyPendingAuth and unsent SpeleoDB input', () => {
     const pending = useSpeleoStore.getState().applyPendingAuth(ENDPOINT, false);
     await answerDrafts(true);
     expect(await pending).toEqual({ ok: true });
-    expect(order.slice(0, 3)).toEqual(['drafts question', 'sign-out guard', 'speleodb_login']);
+    expect(order.slice(0, 3)).toEqual(['sign-out guard', 'drafts question', 'speleodb_login']);
     expect(getUploadContinuation(PATH)).toBeNull();
   });
 
@@ -121,5 +122,29 @@ describe('applyPendingAuth and unsent SpeleoDB input', () => {
     await useSpeleoStore.getState().applyPendingAuth(ENDPOINT, false);
     expect(useExitConfirm.getState().request).toBeNull();
     expect(getUploadContinuation(PATH)?.message).toBe('Synthetic description');
+  });
+});
+
+describe('one question for unsaved edits and unsent SpeleoDB input', () => {
+  it('lists the drafts in the unsaved-changes question, and Save keeps the edits but drops the drafts', async () => {
+    signedInAs('writer@example.com');
+    parkDescription();
+    const saveProject = vi.fn(async () => {
+      useProjectStore.setState({ isDirty: false });
+      return { success: true, warnings: [], error: null, section_ids: [] };
+    });
+    useProjectStore.setState({ isDirty: true, saveProject: saveProject as never });
+    stageLogin('other@example.com');
+    const pending = useSpeleoStore.getState().applyPendingAuth(ENDPOINT, false);
+    await vi.waitFor(() => expect(useExitConfirm.getState().request).not.toBeNull());
+    const request = useExitConfirm.getState().request;
+    expect(request?.message).toContain('the description of your upload');
+    expect(request?.saveLabel).toBeTruthy();
+    request?.answer('save');
+    expect(await pending).toEqual({ ok: true });
+    expect(saveProject).toHaveBeenCalledOnce();
+    expect(getUploadContinuation(PATH)).toBeNull();
+    // ONE question: nothing else was asked.
+    expect(useExitConfirm.getState().request).toBeNull();
   });
 });

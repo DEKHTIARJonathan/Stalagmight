@@ -17,6 +17,7 @@ import { validateCoordinates } from '../../utils/gps';
 import { reverseGeocodeCountry } from '../../utils/reverseGeocodeCountry';
 import { COUNTRIES } from '../../data/countries';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { holdQuitDuring } from '../../utils/quitAfterWork';
 import type {
   SpeleoPublishParams,
 } from '../../types/ipc.generated';
@@ -111,14 +112,22 @@ export default function PublishToSpeleoDbDialog() {
       longitude: bothCoords ? lonNum : null,
     };
     try {
-      const result = await publishProjectAndReopen(params);
-      if (result === 'stale') return;
+      // lock#6: a quit meanwhile waits for the whole publish, not just its calls.
+      const { outcome, undoHistoryOmitted } = await holdQuitDuring(() => publishProjectAndReopen(params));
+      if (outcome === 'stale') return;
       setPublishContinuation(null);
       if (ownsDialog()) closeDialog();
-      if (result === 'upload_pending') {
-        showToast(t('speleodb.publish.uploadPending'), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
-      } else if (result === 'reload_failed') {
-        showToast(t('speleodb.publish.reloadFailed'), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
+      // sdk#3: the first revision went up without its undo history to fit the server's
+      // size limit. One event, one surface: the note rides the outcome's own toast,
+      // and stands alone (as a warning) when the outcome has none.
+      const historyNote = undoHistoryOmitted ? t('speleodb.publish.withoutHistory') : null;
+      const withNote = (message: string) => (historyNote ? `${message} ${historyNote}` : message);
+      if (outcome === 'upload_pending') {
+        showToast(withNote(t('speleodb.publish.uploadPending')), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
+      } else if (outcome === 'reload_failed') {
+        showToast(withNote(t('speleodb.publish.reloadFailed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
+      } else if (historyNote) {
+        showToast(historyNote, TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
       }
     } catch (e) {
       showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');

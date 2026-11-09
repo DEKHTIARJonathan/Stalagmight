@@ -16,6 +16,18 @@
 //!
 //! Deferred releases remain scoped to the account, project, and session that
 //! initiated them, so they cannot release a successor editing session's lock.
+//!
+//! THE HOLDER CHECK (lock#4): no release - close, switch, quit, the update
+//! restart, logout, an account switch, the explicit-abandon verbs, Start Editing's
+//! unwind, the stranded-claim janitor, and the explicit verbs too (Done with
+//! nothing to upload, the per-project Release, the stale-context unwind; Switch to
+//! Read Only reads the holder itself) - is sent unless SpeleoDB first names this
+//! account as the lock's holder ([`release_if_held_by_us`]). Another
+//! account's lock, or no lock at all, just ends the local claim. An unreadable
+//! holder sends nothing and keeps the claim for a later holder-checked retry;
+//! there is no blind fallback. The server lets an admin release anybody's lock,
+//! so this check is the only thing standing between an admin's ordinary exit
+//! and a colleague's live edit session.
 
 use std::path::Path;
 use std::time::Duration;
@@ -39,6 +51,10 @@ pub(super) struct LockReleaseParams {
     pub(super) endpoint: String,
     /// The bearer token for that endpoint.
     pub(super) token: String,
+    /// The account `token` belongs to: the holder the server must name before
+    /// the release is sent (see [`release_if_held_by_us`]). Read in the same
+    /// session acquisition as the token, so the two describe one account.
+    pub(super) email: String,
     /// The persisted public-`http://` allowance, threaded to `tls::enforce`.
     pub(super) insecure_http: bool,
     /// The project whose write lock is being released.
@@ -52,18 +68,88 @@ pub(super) struct LockReleaseParams {
 /// sees which act they are looking at instead of decoding a bare `bool`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReleaseIntent {
-    /// Logout keeps a lock protecting unpublished work.
+    /// Logout and the account switch: keep a lock protecting unpublished work.
     Silent,
     /// End the open editing session (close, switch, quit, update restart). Like
     /// `Silent`, it KEEPS a lock over un-pushed edits: releasing there is what used
     /// to strand the work - the next open downloaded, refused to overwrite the
-    /// local copy, and offered only "take the server copy and discard mine". Unlike
-    /// `Silent`, it may also finish an owned claim after the edit gate has shut.
+    /// local copy, and offered only "take the server copy and discard mine". Both
+    /// are decided from the claim, so both may finish an owned claim after the
+    /// edit gate has shut; they differ only in what the log says they were.
     Lifecycle,
     /// A DELIBERATE abandon of the project's SpeleoDB identity (`speleodb_unlink`,
     /// `speleodb_take_remote`): the user has said outright they are walking away
     /// from the local work, so there is no future push for the veto to protect.
     Abandon,
+}
+
+/// How long a release may spend asking SpeleoDB who holds the lock before it
+/// gives up WITHOUT releasing.
+///
+/// The holder check runs inside the callers' existing deadlines, never on top of
+/// them. The tightest is the app-exit / update-restart wait
+/// (`EXIT_LOCK_RELEASE_TIMEOUT`, 5 s, in the app crate): this leaves the release
+/// POST the rest of it. A healthy round trip takes a fraction of either.
+pub(super) const HOLDER_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// What a holder-checked release did. Both are successes: either way this
+/// account holds no lock on the project any more, so its claim is over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum HolderCheckedRelease {
+    /// SpeleoDB named this account as the holder, and the release was sent.
+    Released,
+    /// SpeleoDB named another account, or nobody (including a project it no
+    /// longer has): nothing was sent.
+    NotHeldByUs,
+}
+
+/// Release `params.project_id`'s write lock ONLY if SpeleoDB says the account
+/// in `params` holds it (lock#4).
+///
+/// The server lets an ADMIN release anybody's mutex, so a bare release from a
+/// session whose lock was force-unlocked on the web and taken by someone else
+/// frees that someone's live lock - and the next writer can lock and push over
+/// their work. Asking first is the only defence the client has: SpeleoDB has no
+/// compare-and-release, so a change between the probe and the POST remains a
+/// protocol limitation, over a window of one round trip.
+///
+/// A holder that cannot be read is an `Err`, and NOTHING is sent: a release that
+/// cannot be shown to be ours is never sent blind. Callers keep their claim on
+/// the error (it is the only local pointer to a mutex that may still be ours),
+/// so a later holder-checked release can retry it - the no-project janitor on
+/// the next status refresh, or the held-lock prompt after the next sign-in when
+/// the process is exiting. A 404 is not an error here: a project the server no
+/// longer has holds no lock to hand back.
+pub(super) fn release_if_held_by_us(
+    params: &LockReleaseParams,
+) -> Result<HolderCheckedRelease, SpeleoDbError> {
+    let holder = match client::get_project_probe_within(
+        &params.endpoint,
+        &params.token,
+        params.insecure_http,
+        &params.project_id,
+        HOLDER_CHECK_TIMEOUT,
+    ) {
+        Ok(project) => project.active_mutex.map(|mutex| mutex.user),
+        Err(SpeleoDbError::Status { status: 404, .. }) => None,
+        Err(e) => return Err(e),
+    };
+    if !super::speleodb::lock_held_by_me(holder.as_deref(), Some(&params.email)) {
+        tracing::info!(
+            project_id = %params.project_id,
+            held = holder.is_some(),
+            purpose = "never release another account's lock (lock#4)",
+            "speleodb: not releasing; the server says this account does not hold the lock"
+        );
+        return Ok(HolderCheckedRelease::NotHeldByUs);
+    }
+    client::release_lock(
+        &params.endpoint,
+        &params.token,
+        params.insecure_http,
+        &params.project_id,
+    )
+    .map(|_| HolderCheckedRelease::Released)
 }
 
 impl AppState {
@@ -88,12 +174,16 @@ impl AppState {
         self.speleodb_lock_release_params(ReleaseIntent::Abandon)
     }
 
-    /// Shared body of the two snapshots above. `intent` is what separates a silent
+    /// Shared body of the snapshots above. `intent` is what separates a silent
     /// release from a deliberate one.
+    ///
+    /// Decided from the CLAIM, never from the edit gate. The gate is a function of
+    /// the claim (`speleodb_edit_gate`), so every open gate has one; and a session
+    /// whose gate a boundary (logout's bump) or a lost-lock signal has already shut
+    /// still holds the claim a release has to end. No claim, no release: a lock
+    /// this process cannot account for - another account's, or one this read-only
+    /// open never took - is not this path's to hand back.
     fn speleodb_lock_release_params(&self, intent: ReleaseIntent) -> Option<LockReleaseParams> {
-        if intent != ReleaseIntent::Lifecycle && !self.edit_enabled() {
-            return None;
-        }
         // A `.ok()?` here used to collapse REAL failures into the ordinary "nothing
         // to release" no-op with no trace at all: `speleodb_open_link` returns
         // `Io("database lock poisoned")` as readily as `NoRemoteProject`. A poisoned
@@ -115,10 +205,21 @@ impl AppState {
                 return None;
             }
         };
-        // A failed reconciliation can shut the edit gate while leaving an owned
-        // claim. Lifecycle cleanup still releases that claim; an ordinary read-only
-        // open without one never gains permission to release another user's lock.
-        if !self.edit_enabled() && !self.speleodb_lock_acquired_here(&link.project_id) {
+        if !self.speleodb_holds_claim(&link.project_id) {
+            return None;
+        }
+        // A lock already held back on purpose stays held: an earlier veto, the exit
+        // prompt's "Keep the lock", or Start Editing keeping a lock it took because
+        // the cache copy holds un-uploaded work the open copy does not show. The
+        // open copy being clean says nothing about that work. Only an explicit
+        // abandon (or Release, or a new edit session's binding) ends a kept claim.
+        if intent != ReleaseIntent::Abandon && self.speleodb_claim_is_kept(&link.project_id) {
+            tracing::info!(
+                project_id = %link.project_id,
+                ?intent,
+                purpose = "honour a lock deliberately kept back",
+                "speleodb: keeping the write lock; it was deliberately kept"
+            );
             return None;
         }
         // The invariant (module doc): only an explicit abandon may release over
@@ -143,8 +244,8 @@ impl AppState {
         // `Io("SpeleoDB session lock poisoned")` alongside the ordinary
         // `NotAuthenticated`, and a silently-dropped poisoned mutex here strands the
         // lock just as thoroughly.
-        let (endpoint, token) = match self.speleodb_active_token() {
-            Ok(pair) => pair,
+        let (endpoint, token, email) = match self.speleodb_active_account() {
+            Ok(account) => account,
             Err(SpeleoDbError::NotAuthenticated) => return None,
             Err(e) => {
                 tracing::warn!(
@@ -166,6 +267,7 @@ impl AppState {
         Some(LockReleaseParams {
             endpoint,
             token,
+            email,
             insecure_http: self.speleodb_insecure_http(),
             project_id: link.project_id,
         })
@@ -174,7 +276,7 @@ impl AppState {
     /// Record that the open project's lock is being kept on purpose (the exit
     /// prompt's "Keep the lock", and the update restart over un-uploaded work).
     ///
-    /// Not gated on the edit gate, unlike the release snapshots: a reconcile can
+    /// Not gated on the edit gate - like the release snapshots, it is about the claim: a reconcile can
     /// shut the gate while this process still owns the claim, and an unmarked
     /// claim with no project open is exactly what the stranded-claim janitor hands
     /// back on the next status refresh - undoing the user's choice. Marking a claim
@@ -194,12 +296,7 @@ impl AppState {
     /// lifecycle transitions instead call the close/detached/bounded variants.
     pub fn speleodb_release_held_lock_best_effort(&self) {
         if let Some(p) = self.speleodb_held_lock_release_params() {
-            self.speleodb_release_best_effort(
-                &p.endpoint,
-                &p.token,
-                p.insecure_http,
-                &p.project_id,
-            );
+            self.speleodb_release_best_effort(&p);
         }
     }
 
@@ -239,12 +336,7 @@ impl AppState {
     /// no future push for the veto to protect.
     pub(crate) fn speleodb_release_held_lock_abandoning(&self) {
         if let Some(p) = self.speleodb_abandon_lock_release_params() {
-            self.speleodb_release_best_effort(
-                &p.endpoint,
-                &p.token,
-                p.insecure_http,
-                &p.project_id,
-            );
+            self.speleodb_release_best_effort(&p);
         }
     }
 
@@ -273,23 +365,15 @@ impl AppState {
     /// divergence dialog, which is exactly the misreport the record was introduced to
     /// stop.
     ///
-    /// Comparing project ids is what closes THIS window, and that is not in tension
-    /// with `AppState::speleodb_forget_lock_acquired_if_gate_shut`, whose doc says at
-    /// length that an id comparison does NOT close ITS race. The races are different
-    /// and neither test substitutes for the other:
-    ///
-    /// - There, the refresh and the fast-forward that can be trampled are on the SAME
-    ///   project, so the ids always match and the clear fires regardless; only
-    ///   re-reading the edit GATE separates them.
-    /// - Here the interloper is by definition a DIFFERENT project - there is one
-    ///   `project` mutex and one open project, and the old one was torn down before
-    ///   this runs - so the id IS the signal. The gate is no use at all: after the
-    ///   delete it is shut for the project being released and OPEN for whatever
-    ///   session took its place, so a gate test would either never fire or fire on the
-    ///   wrong session's record.
-    ///
-    /// So: do not unify the two behind one condition. Doing so reintroduces one of the
-    /// two bugs, whichever condition loses.
+    /// Comparing project ids is what closes THIS window. The interloper is by
+    /// definition a DIFFERENT project - there is one `project` mutex and one open
+    /// project, and the old one was torn down before this runs - so the id IS the
+    /// signal. The gate is no use at all: after the delete it is shut for the project
+    /// being released and OPEN for whatever session took its place, so a gate test
+    /// would either never fire or fire on the wrong session's record. (The refresh's
+    /// old gate-keyed catch-all clear, which an id comparison could NOT have made
+    /// safe, is gone: the gate is now the claim bound to the session, see
+    /// `speleodb_edit_gate`.)
     ///
     /// The compare and the clear MUST share one guard. A
     /// `speleodb_lock_acquired_here` read followed by a separate
@@ -311,6 +395,21 @@ impl AppState {
         project_id: &str,
     ) -> Option<super::speleodb_session::LockClaim> {
         self.speleodb_forget_lock_acquired_inner(project_id, None)
+    }
+
+    /// [`AppState::speleodb_forget_lock_acquired_for`] for the account a release
+    /// was captured for, which is not necessarily the one signed in by the time
+    /// it runs: an instance switch captures the release, forgets the session,
+    /// and only then sends it. Matching the live session there found nothing, so
+    /// the claim could neither end on success nor come back on failure.
+    pub(super) fn speleodb_forget_claim_released_by(
+        &self,
+        params: &LockReleaseParams,
+    ) -> Option<super::speleodb_session::LockClaim> {
+        self.speleodb_forget_lock_acquired_inner(
+            &params.project_id,
+            Some((&params.endpoint, &params.email)),
+        )
     }
 
     /// Shared body of the two above. `as_account` overrides the identity the claim
@@ -414,9 +513,9 @@ impl AppState {
     /// arbitrarily, and the project switch that spawned it is exactly the event
     /// that lets the user reopen that same remote project. A Start Editing on it
     /// INHERITS the still-held same-account mutex (a re-acquire is a server-side
-    /// no-op) and mints no claim, so an unguarded POST landing afterwards frees
+    /// no-op) and binds only an unauthored claim, so an unguarded POST landing afterwards frees
     /// the mutex out from under a live edit session - editable, with no server
-    /// lock behind it and nothing recording one. Going through
+    /// lock behind it. Going through
     /// [`AppState::speleodb_release_unless_reclaimed`] puts this thread in the
     /// same `speleodb_lock_ops` queue as every other lock operation, so it
     /// either completes before that acquire or sees the session it would have
@@ -442,15 +541,11 @@ impl AppState {
         // (`delete_project` snapshots its release params under this same guard,
         // for the same reason.)
         //
-        // What is NOT captured here is the GATE. It comes off inside the
-        // release's own lock-ops span, because shutting it here opens a window
-        // the status refresh walks straight into: a shut gate over a mutex the
-        // server still says this account holds is exactly what its
-        // inherited-lock reopen exists for, so the refresh takes the guard first,
-        // reopens the gate, and the release then stands down for a session that
-        // is about to be torn down anyway - lock stranded. Left open, there is
-        // nothing for the refresh to resurrect, and the release shuts it under the
-        // same guard that then decides (`speleodb_stand_down_and_release`).
+        // Taking the claim out here also shuts the gate (it IS the claim bound to
+        // the session, `speleodb_edit_gate`): nothing is edited under a lock that
+        // is about to be handed back, and no status refresh can reopen it - only
+        // Start Editing binds a claim. The release's own lock-ops span says so
+        // again before it decides (`speleodb_stand_down_and_release`).
         let (p, claim, entry_gen) = self.speleodb_capture_lifecycle_release()?;
         let (tx, rx) = std::sync::mpsc::channel();
         let sink = self.get_event_sink();
@@ -466,12 +561,10 @@ impl AppState {
                 }))
             });
             if !ran {
-                // No managed state to consult (unit tests, pre-`setup`): the raw
-                // POST this always did.
-                let _ = tx.send(
-                    client::release_lock(&p.endpoint, &p.token, p.insecure_http, &p.project_id)
-                        .map(|_| ()),
-                );
+                // No managed state to consult (unit tests, pre-`setup`): no
+                // reclaim check is possible, but the holder check still is - a
+                // release is never sent for a lock the server does not say is ours.
+                let _ = tx.send(release_if_held_by_us(&p).map(|_| ()));
             }
         });
         Some(rx)
@@ -646,54 +739,21 @@ mod tests {
 
     const PID: &str = "22222222-2222-2222-2222-222222222222";
 
-    /// A loopback SpeleoDB that answers EVERY request 200 with a minimal project
-    /// body and records each request line, so a test can assert that a release
-    /// did - or did not - reach the server. Never blocks a test that expects no
-    /// traffic, unlike a one-shot stub whose `join` would wait forever.
+    /// A loopback SpeleoDB on which the fixture account (`u@x`) holds [`PID`]'s
+    /// lock, recording each request line so a test can assert whether a release
+    /// reached the server. Never blocks a test that expects no traffic, unlike a
+    /// one-shot stub whose `join` would wait forever.
     fn recording_server() -> (String, Arc<Mutex<Vec<String>>>) {
-        use std::io::{Read as _, Write as _};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let port = listener.local_addr().expect("addr").port();
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let log = Arc::clone(&seen);
-        std::thread::spawn(move || {
-            while let Ok((mut stream, _)) = listener.accept() {
-                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
-                let mut req = Vec::new();
-                let mut chunk = vec![0u8; 8 * 1024];
-                while let Ok(n) = stream.read(&mut chunk) {
-                    if n == 0 {
-                        break;
-                    }
-                    req.extend_from_slice(&chunk[..n]);
-                }
-                let line = String::from_utf8_lossy(&req)
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .to_owned();
-                log.lock().expect("log").push(line);
-                let body = crate::core::state::tests_support::sdk_fixture(&format!(
-                    r#"{{"id":"{PID}","name":"Remote"}}"#
-                ));
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(resp.as_bytes());
-                let _ = stream.flush();
-            }
-        });
-        (format!("http://127.0.0.1:{port}"), seen)
+        holder_server(Some("u@x"))
+    }
+
+    /// [`recording_server`] with the lock held by `holder` instead (or by nobody).
+    fn holder_server(holder: Option<&'static str>) -> (String, Arc<Mutex<Vec<String>>>) {
+        crate::core::state::tests_support::lock_server(PID, holder.map(str::to_owned))
     }
 
     fn release_requests(seen: &Arc<Mutex<Vec<String>>>) -> usize {
-        seen.lock()
-            .expect("log")
-            .iter()
-            .filter(|line| line.contains("/release"))
-            .count()
+        crate::core::state::tests_support::release_posts(seen)
     }
 
     /// An editing session on SpeleoDB project [`PID`] whose copy lives at the
@@ -771,15 +831,112 @@ mod tests {
 
     type Release = fn(&AppState);
 
-    fn every_lifecycle_release() -> [(&'static str, Release); 4] {
+    fn every_lifecycle_release() -> [(&'static str, Release); 5] {
         [
             ("close", AppState::speleodb_release_held_lock_on_close),
             ("switch", AppState::speleodb_release_held_lock_detached),
             ("exit / update restart", |state| {
-                state.speleodb_release_held_lock_bounded(std::time::Duration::from_secs(2));
+                state.speleodb_release_held_lock_bounded(std::time::Duration::from_secs(5));
             }),
             ("logout", AppState::speleodb_release_held_lock_best_effort),
+            // A settings save or reload that moves to another account or instance:
+            // the release is captured under the settings lock and sent after it.
+            ("account switch", |state| {
+                if let Some(params) = state.speleodb_logout_drop_gates_deferring_release() {
+                    state.speleodb_release_best_effort(&params);
+                }
+            }),
         ]
+    }
+
+    /// Whether the server was asked who holds the lock.
+    fn holder_reads(seen: &Arc<Mutex<Vec<String>>>) -> usize {
+        seen.lock()
+            .expect("log")
+            .iter()
+            .filter(|line| line.starts_with("GET") && line.contains(PID))
+            .count()
+    }
+
+    #[test]
+    fn no_lifecycle_release_frees_a_lock_this_account_does_not_hold() {
+        // lock#4: the server lets an ADMIN release anybody's mutex. A session whose
+        // lock was force-unlocked on the web and then taken by someone else used to
+        // POST the release anyway on close / quit / switch / logout - freeing the
+        // new holder's live lock for the next writer to lock and push over. Every
+        // lifecycle path now asks first, and sends nothing for a lock held by
+        // another account or by nobody; the local claim simply ends.
+        for (name, release) in every_lifecycle_release() {
+            for holder in [Some("someone.else@x"), None] {
+                let (server, seen) = holder_server(holder);
+                let (_temp, _root, _path, state) = managed_editing_session(&server);
+                release(&state);
+                settle();
+                assert!(
+                    holder_reads(&seen) >= 1,
+                    "{name} / {holder:?}: the holder was asked first"
+                );
+                assert_eq!(
+                    release_requests(&seen),
+                    0,
+                    "{name} / {holder:?}: nothing was released"
+                );
+                assert!(
+                    !state.speleodb_lock_acquired_here(PID),
+                    "{name} / {holder:?}: the local claim is over"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_unreadable_holder_is_never_released_blind() {
+        // When the holder cannot be read, the release is NOT sent - never a blind
+        // fallback. Where the caller is still around to keep it (close, logout,
+        // account switch), the claim survives as the pointer a later
+        // holder-checked retry needs: the no-project janitor, or the held-lock
+        // prompt after the next sign-in.
+        for (name, release) in every_lifecycle_release() {
+            let (server, seen) = crate::core::state::tests_support::lock_server_unreadable(PID);
+            let (_temp, _root, _path, state) = managed_editing_session(&server);
+            release(&state);
+            settle();
+            assert!(holder_reads(&seen) >= 1, "{name}: the holder was asked");
+            assert_eq!(release_requests(&seen), 0, "{name}: nothing sent blind");
+            if !matches!(name, "switch" | "exit / update restart") {
+                assert!(
+                    state.speleodb_lock_acquired_here(PID),
+                    "{name}: the claim is kept for a later retry"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_exit_holder_check_fits_inside_the_exit_budget() {
+        // A server that accepts the connection and never answers: the holder read
+        // must give up inside the exit wait (5 s) rather than eat all of it, and
+        // giving up must not turn into a release.
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let server = format!(
+            "http://127.0.0.1:{}",
+            silent.local_addr().expect("addr").port()
+        );
+        let (_temp, _root, _path, state) = managed_editing_session(&server);
+        let started = std::time::Instant::now();
+        state.speleodb_release_held_lock_bounded(std::time::Duration::from_secs(5));
+        let waited = started.elapsed();
+        assert!(
+            waited < std::time::Duration::from_millis(4_500),
+            "the holder read is bounded by HOLDER_CHECK_TIMEOUT, not the exit wait: {waited:?}"
+        );
+        assert!(
+            waited
+                >= super::HOLDER_CHECK_TIMEOUT
+                    .saturating_sub(std::time::Duration::from_millis(200)),
+            "and it really waited for the read rather than skipping it: {waited:?}"
+        );
+        drop(silent);
     }
 
     #[test]
@@ -1035,5 +1192,83 @@ mod tests {
             2,
             "both the link read and the token read must warn on an unexpected failure"
         );
+    }
+
+    #[test]
+    fn sign_out_keep_my_changes_releases_over_unpushed_edits_only_as_the_explicit_choice() {
+        // Silent: signing out without an answer for the open project's
+        // un-uploaded work (the logout's own gate drop) keeps the lock, as every
+        // lifecycle release does.
+        let (server, seen) = recording_server();
+        let (_temp, _root, _path, state) = managed_editing_session(&server);
+        set_unpushed_edits(&state);
+        state.speleodb_logout_drop_gates();
+        settle();
+        assert_eq!(release_requests(&seen), 0, "no silent release");
+        assert!(
+            claim_is_kept(&state),
+            "the lock is kept for the next sign-in"
+        );
+
+        // Explicit: "Keep my changes on this computer" hands the lock back through
+        // the per-project release the sign-out uses for every lock it returns; the
+        // copy keeps its edits and its un-uploaded mark for the next sign-in.
+        let (server, seen) = recording_server();
+        let (_temp, _root, path, state) = managed_editing_session(&server);
+        set_unpushed_edits(&state);
+        state
+            .speleodb_release_lock(PID.to_owned())
+            .expect("the explicit release goes through");
+        assert_eq!(release_requests(&seen), 1, "handed back once");
+        assert!(!state.speleodb_lock_acquired_here(PID), "the claim is over");
+        assert!(!state.edit_enabled(), "the open copy is read-only now");
+        assert!(
+            state.speleodb_open_link().expect("link").has_unpushed_edits,
+            "the edits are still marked un-uploaded"
+        );
+        assert!(path.exists(), "the cached copy is kept");
+        // The logout that follows has nothing left to release.
+        state.speleodb_logout_drop_gates();
+        settle();
+        assert_eq!(release_requests(&seen), 1, "no second release");
+    }
+
+    /// A sink that gives the release thread this process's managed state, as the
+    /// app does - so the exit release really queues behind the lock-ops span.
+    struct ManagedSink(&'static AppState);
+
+    impl crate::core::events::EventSink for ManagedSink {
+        fn emit(&self, _event: &str, _payload: serde_json::Value) {}
+
+        fn with_app_state(&self, f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
+            f(self.0);
+            true
+        }
+    }
+
+    #[test]
+    fn an_exit_release_behind_backend_internal_work_gives_up_on_its_budget() {
+        // Backend-internal work the quit gate never sees (the background re-verify,
+        // the stranded-claim cleanup) may hold the lock-ops span when the app
+        // exits. It must not keep a windowless process alive: the exit release
+        // waits at most its own budget behind it, then returns so the app exits.
+        let (server, seen) = recording_server();
+        let (_temp, _root, _path, state) = managed_editing_session(&server);
+        let state: &'static AppState = Box::leak(Box::new(state));
+        state.set_event_sink(Arc::new(ManagedSink(state)));
+        let background = state.speleodb_lock_ops_guard();
+        let budget = std::time::Duration::from_millis(300);
+        let started = std::time::Instant::now();
+        state.speleodb_release_held_lock_bounded(budget);
+        let took = started.elapsed();
+        drop(background);
+        assert!(took >= budget, "it did wait behind the span ({took:?})");
+        assert!(
+            took < std::time::Duration::from_secs(3),
+            "and gave up on its budget ({took:?})"
+        );
+        // The release still lands once the span frees, if the process lives on.
+        settle();
+        assert_eq!(release_requests(&seen), 1);
     }
 }

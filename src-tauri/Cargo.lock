@@ -4722,6 +4722,7 @@ dependencies = [
  "futures-util",
  "http",
  "reqwest 0.13.5",
+ "rustls",
  "serde",
  "serde_json",
  "speleodb-api",

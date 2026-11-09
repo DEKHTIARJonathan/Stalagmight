@@ -5,6 +5,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { askExitConfirm } from '../utils/exitConfirm';
 import { debugLog } from '../utils/debugLog';
 import { consumeQuitConfirmation, consumeUpdateRestartArmed, abandonUpdateRestart } from '../utils/quit';
+import { abandonForcedQuit, armForcedExit, consumeForcedQuit, deferQuitUntilWorkDone } from '../utils/quitAfterWork';
 import { invokeIpc } from '../utils/ipc';
 import { useUIStore } from '../store/uiStore';
 import { useUpdateStore } from '../store/updateStore';
@@ -112,11 +113,30 @@ export function useBeforeUnload(
             return;
           }
 
-          // Unsent SpeleoDB input first, before any tier below can upload,
-          // release or discard. Declining abandons the quit, and with it an
-          // update restart riding on it, exactly like declining tier 1.
+          // Tier 0 (lock#6, frontend#4): a SpeleoDB transfer or exit answer in
+          // flight is never cut by a quit. Ahead of every question, so nothing
+          // is asked - or done - against a state that is about to change: the
+          // gate keeps the window, toasts, shows the waiting prompt and re-issues
+          // the quit, UN-confirmed, once the work has finished. A pre-confirmed
+          // answer is dropped with it, so every guard sees the settled state;
+          // the attempt that resumes is a fresh one.
+          if (deferQuitUntilWorkDone()) {
+            consumeQuitConfirmation();
+            tier1Confirmed.current = false;
+            debugLog('[useBeforeUnload] Work in flight, quitting when it finishes');
+            return;
+          }
+
+          // Unsent SpeleoDB input (frontend#10) next - after the tier-0 wait, so a
+          // re-issued quit asks it against the settled state, and before any tier
+          // below can upload, release or discard. Declining abandons the quit
+          // outright, like declining tier 1: an update restart or a forced quit
+          // riding on it goes too, and so does a pre-confirmed answer.
           if (!await confirmWorkspaceDrafts()) {
+            consumeQuitConfirmation();
+            tier1Confirmed.current = false;
             abandonUpdateRestart();
+            abandonForcedQuit();
             return;
           }
 
@@ -162,6 +182,7 @@ export function useBeforeUnload(
               // [#579] The user declined the exit outright, so an update
               // restart that was riding on it is abandoned - on both sides.
               abandonUpdateRestart();
+              abandonForcedQuit();
               return;
             }
             tier1Confirmed.current = true;
@@ -173,6 +194,13 @@ export function useBeforeUnload(
           // which arms `preConfirmed` so we land past this branch next time.
           if (!preConfirmed && guardRef.current?.()) {
             debugLog('[useBeforeUnload] In-app guard opened a dialog, aborting close');
+            return;
+          }
+
+          // Tier 0 again: work that started while a question above was on screen
+          // is waited for the same way, before anything one-way happens below.
+          if (deferQuitUntilWorkDone()) {
+            tier1Confirmed.current = false;
             return;
           }
 
@@ -194,6 +222,11 @@ export function useBeforeUnload(
           // Mark that we're closing, so a close request arriving while `destroy()`
           // is in flight is ignored rather than running this whole flow again.
           isClosing.current = true;
+
+          // lock#6: the user chose "Quit now" over a running transfer. Tell the
+          // backend right before the window goes, so its exit hook cuts the
+          // operation instead of holding the exit until it finishes.
+          if (consumeForcedQuit()) await armForcedExit();
 
           // [#579] An update restart armed by `requestUpdateRestart` has now
           // passed every guard exactly like a plain quit would - swap the

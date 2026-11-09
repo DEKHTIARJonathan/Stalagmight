@@ -10,10 +10,13 @@ import { renderHook } from '@testing-library/react';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 const confirmMock = vi.hoisted(() => vi.fn());
-// The unsaved-changes question before a remote open is asked in-app.
+// The unsaved-edits question before a switch is in-app (`askExitChoice`); answer it
+// through `confirmMock`: true = discard, false = cancel, 'save' = save on this
+// computer first. The rest of the module (the drafts question) stays real.
 vi.mock('../utils/exitConfirm', async (importOriginal) => ({
   ...await importOriginal<typeof import('../utils/exitConfirm')>(),
-  askExitConfirm: confirmMock,
+  askExitChoice: (options: unknown) => Promise.resolve(confirmMock(options))
+    .then((answer: unknown) => (answer === 'save' ? 'save' : answer ? 'confirm' : 'cancel')),
 }));
 vi.mock('../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,
@@ -29,6 +32,8 @@ import { useSpeleoStore, selectSpeleoReadOnly, type SpeleoLinkState } from '../s
 import { useUIStore } from '../store/uiStore';
 import { guardQuit } from '../utils/quit';
 import { resetSpeleoExitPromptForTests, useSpeleoExitPrompt } from '../utils/speleoExit';
+import { useExitConfirm } from '../utils/exitConfirm';
+import { registerWorkspaceDraft } from '../utils/workspaceDrafts';
 import type { SpeleoProjectSummary } from '../types/ipc.generated';
 
 // The genuine store action, captured before `beforeEach` swaps in the spy - so one
@@ -239,6 +244,37 @@ describe('useOpenRemoteProject (#218)', () => {
     const outcome = await hook().openRemote(SUMMARY);
     expect(outcome.status).toBe('error');
     expect(openDialogMock).not.toHaveBeenCalled();
+  });
+
+  it('signed out: opens the cached copy read-only, without taking the lock, and says so', async () => {
+    useSpeleoStore.setState({ session: { loggedIn: false, userEmail: null, endpoint: null } });
+    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', read_only: 'signed_out', has_unpushed_edits: true });
+    const generation = useSpeleoStore.getState().sessionGeneration;
+    expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', {
+      accessConfirmed: true, request: expect.any(Number), acquireLock: false,
+    });
+    // No server tip was confirmed, and the copy's un-uploaded edits are kept.
+    expect(setLinkOnOpenMock).toHaveBeenCalledWith(expect.objectContaining({ hasUnpushedEdits: true, offline: true }));
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(
+      'Opened a read-only copy. Log in to SpeleoDB to edit it.', 'speleodb-read-only-open', 'info');
+    expect(useSpeleoStore.getState().sessionGeneration).toBe(generation);
+  });
+
+  it('expired session: ends the session here, still opens read-only, and warns', async () => {
+    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', read_only: 'session_expired' });
+    const generation = useSpeleoStore.getState().sessionGeneration;
+    // A status refresh landing during the load must not supersede the open.
+    loadProjectMock.mockImplementation(async () => {
+      useSpeleoStore.getState().setSession({ logged_in: false, user_email: null, endpoint: null });
+      return { success: true };
+    });
+    expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+    expect(useSpeleoStore.getState().session).toEqual({ loggedIn: false, userEmail: null, endpoint: null });
+    expect(useSpeleoStore.getState().sessionGeneration).toBe(generation + 1);
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx', expect.objectContaining({ acquireLock: false }));
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(
+      expect.stringContaining('session has expired'), 'speleodb-read-only-open', 'warning');
   });
 
   it('offline fallback opens the cached path only after the remote open command', async () => {
@@ -468,6 +504,58 @@ describe('useOpenRemoteProject (#218)', () => {
       expect(confirmMock).toHaveBeenCalledOnce();
       expect(invokeIpcMock.mock.calls.map(call => call[0])).not.toContain('save_project');
       expect(invokeIpcMock.mock.calls.map(call => call[0])).not.toContain('speleodb_push');
+    });
+
+    it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)('%s can save the edits on this computer instead of discarding them (frontend#6)', async (action) => {
+      const saveProject = vi.fn(async () => {
+        useProjectStore.setState({ isDirty: false });
+        return { success: true };
+      });
+      useProjectStore.setState({ isDirty: true, saveProject: saveProject as never });
+      confirmMock.mockResolvedValue('save');
+      expect(await hook()[action](SUMMARY)).toEqual({ status: 'opened' });
+      expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ saveLabel: expect.any(String) }));
+      expect(saveProject).toHaveBeenCalledOnce();
+      expect(invokeIpcMock.mock.calls.map(call => call[0])).not.toContain('speleodb_push');
+    });
+
+    // frontend#10: unsent SpeleoDB input the switch drops is listed in that SAME
+    // question - one question, not two - and is dropped by either answer that goes on.
+    it.each([true, 'save'] as const)('lists unsent SpeleoDB input in the one unsaved-changes question (answer %s)', async (answer) => {
+      const discard = vi.fn();
+      const unregister = registerWorkspaceDraft({ label: () => 'the synthetic form', dirty: () => discard.mock.calls.length === 0, discard });
+      useProjectStore.setState({
+        isDirty: true,
+        saveProject: vi.fn(async () => { useProjectStore.setState({ isDirty: false }); return { success: true }; }) as never,
+      });
+      confirmMock.mockResolvedValue(answer);
+      expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+      unregister();
+      expect(confirmMock).toHaveBeenCalledOnce();
+      expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('the synthetic form') }));
+      expect(useExitConfirm.getState().request).toBeNull();
+      expect(discard).toHaveBeenCalledOnce();
+    });
+
+    it('asks about unsent SpeleoDB input alone when there are no unsaved edits; declining stops the open', async () => {
+      const discard = vi.fn();
+      const unregister = registerWorkspaceDraft({ label: () => 'the synthetic form', dirty: () => true, discard });
+      const pending = hook().openRemote(SUMMARY);
+      await vi.waitFor(() => expect(useExitConfirm.getState().request?.message).toContain('the synthetic form'));
+      useExitConfirm.getState().request?.answer(false);
+      expect(await pending).toEqual({ status: 'cancelled' });
+      unregister();
+      expect(discard).not.toHaveBeenCalled();
+      expect(confirmMock).not.toHaveBeenCalled();
+      expect(invokeIpcMock).not.toHaveBeenCalled();
+    });
+
+    it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)('%s stays put when saving the edits fails', async (action) => {
+      useProjectStore.setState({ isDirty: true, saveProject: vi.fn(async () => ({ success: false, error: 'Synthetic disk failure' })) as never });
+      useUIStore.setState({ openDialog: vi.fn() });
+      confirmMock.mockResolvedValue('save');
+      expect(await hook()[action](SUMMARY)).toEqual({ status: 'cancelled' });
+      expect(loadProjectMock).not.toHaveBeenCalled();
     });
 
     it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)('%s protects edits made during download', async (action) => {

@@ -23,7 +23,9 @@ mod speleodb;
 mod speleodb_admin;
 mod speleodb_cache;
 mod speleodb_cache_install;
+mod speleodb_cached;
 mod speleodb_credentials;
+mod speleodb_edit_gate;
 mod speleodb_foreign;
 mod speleodb_local_state;
 mod speleodb_lock_release;
@@ -132,6 +134,30 @@ mod shot_uuid_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_acquire_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_cached_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_edit_gate_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_explicit_release_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
     clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]
@@ -143,6 +169,12 @@ mod speleodb_install_sidecar_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod speleodb_nonblocking_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_upload_limit_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,
@@ -162,3 +194,4 @@ mod tests_support;
 
 pub use app_state::AppState;
 pub use command_import::VirtualShotMode;
+pub use speleodb_cached::{SpeleoCacheOwnership, SpeleoCachedProject, SpeleoPurgeReport};

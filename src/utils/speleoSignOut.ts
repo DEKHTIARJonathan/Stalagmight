@@ -8,12 +8,22 @@
  * account still holds:
  *
  * (a) the OPEN project, when we hold its lock over un-uploaded work: Upload (the
- *     normal upload, which releases) or Discard (second "lost forever" confirm);
+ *     normal upload, which releases), Keep my changes on this computer, or
+ *     Discard (second "lost forever" confirm);
  * (b) every lock the account holds on the server with nothing un-uploaded behind
  *     it: handed back as part of the sign-out, no question asked;
  * (c) every OTHER cached project of the account with un-uploaded work: it cannot
- *     be uploaded without opening it, so "Open to upload" (cancels the sign-out)
- *     or Discard (confirmed).
+ *     be uploaded without opening it, so "Open to upload" (cancels the sign-out),
+ *     Keep my changes on this computer, or Discard (confirmed).
+ *
+ * "Keep my changes on this computer" is the non-destructive answer when the upload
+ * is not possible (decision 10: edits are never discard-only). The copy keeps its
+ * edits, its un-uploaded mark and its recents row, and its lock is handed back
+ * with the others through the explicit per-project release: the user's choice is
+ * the consent a silent lifecycle release never has (that one still keeps the lock
+ * over un-uploaded edits). After the next sign-in the ordinary open takes over:
+ * the local copy opens and resumes when SpeleoDB has not moved, and a divergence
+ * offers "Open my local copy".
  *
  * There is deliberately no "keep the lock" here: a lock kept across a sign-out is
  * exactly a stranded lock. Nothing to do -> sign out directly, as before. The

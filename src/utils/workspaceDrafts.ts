@@ -4,15 +4,19 @@
  * (publish) form - including a draft parked while Settings is open for sign-in.
  *
  * Each draft registers itself where it lives (`uploadContinuation`,
- * `publishContinuation`, the publish dialog). Every way out that would drop one -
- * close, switch, quit, and a sign-in or account switch that the draft cannot
- * follow - asks {@link confirmWorkspaceDrafts} FIRST, before the SpeleoDB exit
- * prompt, the sign-out guard or the unsaved-changes question, so nothing
- * irreversible (an upload, a lock hand-back, a close) has happened when the user
- * cancels. The question is the shared in-app exit confirm (`utils/exitConfirm`),
- * never a native dialog. Once confirmed the drafts are discarded, so the later
- * store-level checks (`loadProject`, `createProject`, `closeProject`) find none
- * and do not ask again.
+ * `publishContinuation`, the publish dialog). Every way out that would drop one
+ * asks about it in-app (`utils/exitConfirm`), never in a native dialog, and ONE
+ * question per step:
+ *
+ * - close, switch and quit ask {@link confirmWorkspaceDrafts} first, before the
+ *   SpeleoDB exit prompt can upload, release or close anything;
+ * - where the way out also asks about unsaved survey edits (the open from
+ *   SpeleoDB, an account change), the drafts are folded into THAT question
+ *   ({@link workspaceDraftNotice}) instead of a second one; its answers that go
+ *   on - save on this computer, or discard - drop them.
+ *
+ * Once answered the drafts are discarded, so the later store-level checks
+ * (`loadProject`, `createProject`, `closeProject`) find none and do not ask again.
  */
 import i18n from '../i18n';
 import { askExitConfirm } from './exitConfirm';
@@ -55,8 +59,24 @@ export function hasWorkspaceDrafts(account?: AccountTarget): boolean {
   return pendingDrafts(account).length > 0;
 }
 
-export function discardWorkspaceDrafts(): void {
-  for (const draft of pendingDrafts()) draft.discard();
+/** Discard the drafts this way out drops (every draft without an `account`). */
+export function discardWorkspaceDrafts(account?: AccountTarget): void {
+  for (const draft of pendingDrafts(account)) draft.discard();
+}
+
+function draftItems(pending: WorkspaceDraft[]): string {
+  return [...new Set(pending.map((draft) => draft.label()))].join(', ');
+}
+
+/**
+ * The sentence another exit question appends when this way out also drops unsent
+ * SpeleoDB input, or `null` when it drops none. Whatever that question's answer,
+ * if the way out goes on, call {@link discardWorkspaceDrafts} with the same
+ * `account`.
+ */
+export function workspaceDraftNotice(account?: AccountTarget): string | null {
+  const pending = pendingDrafts(account);
+  return pending.length ? i18n.t('speleoExitPrompt.drafts.alsoLost', { items: draftItems(pending) }) : null;
 }
 
 /**
@@ -71,7 +91,7 @@ export async function confirmWorkspaceDrafts(
   if (!isCurrent()) return false;
   const pending = pendingDrafts(account);
   if (!pending.length) return true;
-  const items = [...new Set(pending.map((draft) => draft.label()))].join(', ');
+  const items = draftItems(pending);
   const discard = await askExitConfirm({
     title: i18n.t('speleoExitPrompt.drafts.title'),
     message: i18n.t('speleoExitPrompt.drafts.message', { items }),

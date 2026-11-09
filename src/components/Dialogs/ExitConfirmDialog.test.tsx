@@ -7,7 +7,7 @@ const nativeConfirm = vi.hoisted(() => vi.fn(async () => true));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: nativeConfirm }));
 
 import ExitConfirmDialog from './ExitConfirmDialog';
-import { askExitConfirm, useExitConfirm } from '../../utils/exitConfirm';
+import { askExitChoice, askExitConfirm, useExitConfirm } from '../../utils/exitConfirm';
 import { protectAccountTransition } from '../../utils/protectAccountTransition';
 import { useProjectStore } from '../../store/projectStore';
 
@@ -57,5 +57,44 @@ describe('protectAccountTransition', () => {
     await userEvent.click(screen.getByTestId('exit-confirm-cancel'));
     expect(await answer).toBe(false);
     expect(nativeConfirm).not.toHaveBeenCalled();
+  });
+
+  it('offers to save unsaved edits on this computer instead of discarding them (frontend#6)', async () => {
+    const saveProject = vi.fn(async () => {
+      useProjectStore.setState({ isDirty: false });
+      return { success: true };
+    });
+    const closeProject = vi.fn(async () => ({ success: true }));
+    useProjectStore.setState({ project: { file_path: '/synthetic/project.stalx' } as never, isDirty: true, saveProject, closeProject } as never);
+    const answer = protectAccountTransition();
+    render(<ExitConfirmDialog />);
+    await userEvent.click(await screen.findByTestId('exit-confirm-save'));
+    expect(await answer).toBe(true);
+    expect(saveProject).toHaveBeenCalledOnce();
+    // Nothing unsaved is left to drop, so the project is not closed and reopened.
+    expect(closeProject).not.toHaveBeenCalled();
+  });
+
+  it('a project with no file of its own has nothing to save to: only discard or cancel', async () => {
+    useProjectStore.setState({ project: { file_path: null } as never, isDirty: true });
+    const answer = protectAccountTransition();
+    render(<ExitConfirmDialog />);
+    await screen.findByTestId('exit-confirm-dialog');
+    expect(screen.queryByTestId('exit-confirm-save')).toBeNull();
+    await userEvent.click(screen.getByTestId('exit-confirm-cancel'));
+    expect(await answer).toBe(false);
+  });
+});
+
+describe('askExitChoice', () => {
+  it('answers save, and the plain confirm question shows no save button', async () => {
+    const choice = askExitChoice({ title: 'T', message: 'M', confirmLabel: 'Discard', cancelLabel: 'Cancel', saveLabel: 'Save on this computer' });
+    const { rerender } = render(<ExitConfirmDialog />);
+    expect(screen.getByTestId('exit-confirm-save')).toHaveAttribute('data-primary-action', '');
+    await userEvent.click(screen.getByTestId('exit-confirm-save'));
+    expect(await choice).toBe('save');
+    void ask();
+    rerender(<ExitConfirmDialog />);
+    expect(screen.queryByTestId('exit-confirm-save')).toBeNull();
   });
 });

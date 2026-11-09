@@ -8,8 +8,24 @@ import { speleoErrorAction } from './speleoError';
 
 export type PublishReopenOutcome = 'opened' | 'upload_pending' | 'reload_failed' | 'stale';
 
+/** The outcome, plus whether the first upload left the undo history out to fit the
+ *  server's size limit (sdk#3) - orthogonal to the outcome, so reported beside it. */
+export interface PublishReopen {
+  outcome: PublishReopenOutcome;
+  undoHistoryOmitted: boolean;
+}
+
 /** Creation saves and uploads; only a clean confirmed upload may be downloaded again. */
-export async function publishProjectAndReopen(params: SpeleoPublishParams): Promise<PublishReopenOutcome> {
+export async function publishProjectAndReopen(params: SpeleoPublishParams): Promise<PublishReopen> {
+  const notes = { undoHistoryOmitted: false };
+  const outcome = await publishAndReopen(params, notes);
+  return { outcome, undoHistoryOmitted: notes.undoHistoryOmitted };
+}
+
+async function publishAndReopen(
+  params: SpeleoPublishParams,
+  notes: { undoHistoryOmitted: boolean },
+): Promise<PublishReopenOutcome> {
   const initial = useProjectStore.getState();
   if (!initial.project || useSpeleoStore.getState().link) return 'stale';
   let path = initial.project.file_path;
@@ -29,6 +45,7 @@ export async function publishProjectAndReopen(params: SpeleoPublishParams): Prom
     const published = await invokeIpc<SpeleoPublishResult>('speleodb_publish', { params });
     if (!current()) return 'stale';
     created = true;
+    notes.undoHistoryOmitted = published.undo_history_omitted === true;
     // Creation is irreversible. Converge on the linked cache immediately, even
     // when upload or the following network download needs a later retry.
     path = published.local_path;

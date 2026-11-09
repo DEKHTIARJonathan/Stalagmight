@@ -30,10 +30,20 @@ describe('SpeleoDB workspace lock-state copy', () => {
   it('says "Ready for editing" when the lock is free and we may take it', () => {
     expect(lockLine({})).toHaveTextContent(/^Ready for editing$/);
   });
-  it('stays "Read-only" for a read-only account or a lost project access', () => {
-    expect(lockLine({ permission: 'READ_ONLY' })).toHaveTextContent(/^Read-only$/);
+  it('says why a read-only account cannot edit', () => {
+    expect(lockLine({ permission: 'READ_ONLY' }))
+      .toHaveTextContent(/^Read-only - your SpeleoDB access does not allow editing$/);
   });
   it('stays "Read-only" when project access is gone', () => {
     expect(lockLine({ noAccess: true })).toHaveTextContent(/^Read-only$/);
+  });
+  it('says "Read-only copy - log in to edit" while signed out', () => {
+    useSpeleoStore.setState({ session: { loggedIn: false, userEmail: null, endpoint: null } });
+    expect(lockLine({})).toHaveTextContent(/^Read-only copy - log in to edit$/);
+  });
+  it('says "Read-only copy - log in to edit" after the session was cleared', () => {
+    useSpeleoStore.setState({ session: null });
+    expect(lockLine({ lockHolder: 'editor@example.com', lockedByOther: true }))
+      .toHaveTextContent(/^Read-only copy - log in to edit$/);
   });
 });

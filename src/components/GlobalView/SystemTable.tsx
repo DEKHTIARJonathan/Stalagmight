@@ -45,6 +45,8 @@ interface SystemTableProps {
   onRemoveMissing: (filePath: string) => void;
   /** Pull + open a purely-remote SpeleoDB project row (#218). */
   onOpenRemote: (summary: SpeleoProjectSummary) => void;
+  /** Right-click on a SpeleoDB row: the SpeleoDB project context menu. */
+  onContextMenuRemote?: (e: MouseEvent, item: Extract<RecentListItem, { kind: 'remote' }>) => void;
   /** True while a remote open/adopt is in flight - gates the remote rows so a second
       click can't issue a concurrent open (mirrors RemoteSystemCard's `busy`). */
   busy?: boolean;
@@ -113,6 +115,7 @@ export function SystemTable({
   onContextMenu,
   onRemoveMissing,
   onOpenRemote,
+  onContextMenuRemote,
   busy = false,
 }: SystemTableProps) {
   const { t } = useTranslation();
@@ -223,6 +226,10 @@ export function SystemTable({
                 onClick={() => {
                   if (!busy) onOpenRemote(item.summary);
                 }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  if (!busy) onContextMenuRemote?.(e, item);
+                }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
@@ -245,6 +252,7 @@ export function SystemTable({
                   <SpeleoProjectInfo
                     lock={remoteLock}
                     summary={item.summary}
+                    cached={item.cached}
                     testIdPrefix={`system-row-remote-${item.projectId}-speleo`}
                   />
                 </td>

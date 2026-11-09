@@ -8,7 +8,8 @@ use super::AppState;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::models::SpeleoProjectSummary;
 use crate::speleodb::{
-    client, sync, SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult, TransportCause,
+    client, sync, SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult, SpeleoReadOnlyOpen,
+    TransportCause,
 };
 pub(super) fn usable_tip(tip: Option<String>, project_id: &str) -> Option<String> {
     let sha = tip?;
@@ -67,6 +68,33 @@ fn offline_open_result(
         local_path: dest.to_string_lossy().into_owned(),
         offline: Some(true),
         has_unpushed_edits: Some(link.has_unpushed_edits),
+        read_only: None,
+    })
+}
+
+/// Without a usable session the server cannot be asked anything, and nothing it
+/// could say would make the copy editable, so the cached copy of `project_id` opens
+/// read-only as it is: no network call, nothing written, un-uploaded edits kept.
+///
+/// Only the cached copy of THIS project qualifies (any instance: with no session
+/// there is no instance to compare against, and nothing is sent anywhere). No copy,
+/// or a copy that cannot be read, is no fallback - the caller reports the original
+/// error.
+fn signed_out_open_result(
+    dest: &std::path::Path,
+    project_id: &str,
+    reason: SpeleoReadOnlyOpen,
+) -> Option<SpeleoOpenResult> {
+    let db = crate::persistence::Database::open_for_metadata(dest).ok()?;
+    let link = db.load_speleo_link().ok()??;
+    if link.project_id != project_id {
+        return None;
+    }
+    Some(SpeleoOpenResult {
+        local_path: dest.to_string_lossy().into_owned(),
+        offline: None,
+        has_unpushed_edits: Some(link.has_unpushed_edits),
+        read_only: Some(reason),
     })
 }
 
@@ -119,11 +147,34 @@ impl AppState {
         policy: LocalEditsPolicy,
     ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
+        let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
+        self.speleodb_pull_project_to(&dest, project_id, project_name, latest_commit_sha, policy)
+    }
+
+    /// [`Self::speleodb_pull_project`] into an explicit cache path (`project_id`
+    /// already validated), so tests can point it at a temporary cache.
+    pub(super) fn speleodb_pull_project_to(
+        &self,
+        dest: &std::path::Path,
+        project_id: String,
+        project_name: String,
+        latest_commit_sha: Option<String>,
+        policy: LocalEditsPolicy,
+    ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         let generation = self.reserve_download_generation();
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let dest = dest.to_path_buf();
+        // Endpoint, token and email from ONE session read, so the owner recorded
+        // below is the account whose token did the download.
+        let (endpoint, token, email) = match self.speleodb_active_account() {
+            Ok(account) => account,
+            Err(SpeleoDbError::NotAuthenticated) if policy == LocalEditsPolicy::Protect => {
+                return signed_out_open_result(&dest, &project_id, SpeleoReadOnlyOpen::SignedOut)
+                    .ok_or_else(|| local_dto(SpeleoDbError::NotAuthenticated));
+            }
+            Err(e) => return Err(local_dto(e)),
+        };
         let insecure_http = self.speleodb_insecure_http();
 
-        let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
         // Download first so offline opens can recover unsynced cached work too.
         // install_linked_download_with_limits still refuses to replace unpushed edits.
 
@@ -141,6 +192,9 @@ impl AppState {
                     ..
                 },
             ) => {
+                if let Some(expired) = self.session_expired_open(&dest, &project_id, &e, policy) {
+                    return Ok(expired);
+                }
                 return Err(dto_for_error(Endpoint::GetProject, &e));
             }
             Err(e) => {
@@ -160,6 +214,9 @@ impl AppState {
             if let Some(local) =
                 self.speleodb_local_fast_forward_open(&project_id, &dest, &endpoint, tip.as_deref())
             {
+                // The server just showed this account the project's history, so the
+                // copy is this account's to work on from now on.
+                self.speleodb_record_cache_owner(&dest, &endpoint, &email, &project_name);
                 return Ok(local);
             }
         }
@@ -185,6 +242,10 @@ impl AppState {
                         return Ok(cached);
                     }
                 }
+                if let Some(expired) = self.session_expired_open(&dest, &project_id, &error, policy)
+                {
+                    return Ok(expired);
+                }
                 return Err(dto_for_error(Endpoint::DownloadStalx, &error));
             }
         };
@@ -194,7 +255,7 @@ impl AppState {
         let link = crate::models::SpeleoLink {
             endpoint: endpoint.clone(),
             project_id: project_id.clone(),
-            project_name,
+            project_name: project_name.clone(),
             base_commit_sha: base_sha,
             has_unpushed_edits: false,
             last_edit_at: None,
@@ -213,12 +274,43 @@ impl AppState {
             },
         )
         .map_err(local_dto)?;
+        self.speleodb_record_cache_owner(&dest, &endpoint, &email, &project_name);
 
         Ok(SpeleoOpenResult {
             local_path: dest.to_string_lossy().into_owned(),
             offline: None,
             has_unpushed_edits: None,
+            read_only: None,
         })
+    }
+
+    /// An open the server refused for the SESSION rather than for the project: a
+    /// 401, or a 403 the whoami probe confirmed is a dead token. `speleodb_handle_auth`
+    /// has already dropped the token, so the app is signed out now and the open
+    /// continues as a signed-out one (read-only cached copy, no further calls).
+    ///
+    /// A 403 or 404 while the token is still good is the server saying this account
+    /// may not have the project, and keeps the no-fallback rule: `None`.
+    fn session_expired_open(
+        &self,
+        dest: &std::path::Path,
+        project_id: &str,
+        error: &SpeleoDbError,
+        policy: LocalEditsPolicy,
+    ) -> Option<SpeleoOpenResult> {
+        if policy != LocalEditsPolicy::Protect
+            || !matches!(
+                error,
+                SpeleoDbError::Status {
+                    status: 401 | 403,
+                    ..
+                }
+            )
+            || self.speleodb_active_token().is_ok()
+        {
+            return None;
+        }
+        signed_out_open_result(dest, project_id, SpeleoReadOnlyOpen::SessionExpired)
     }
     pub(super) fn speleodb_fast_forward(
         &self,
@@ -778,6 +870,43 @@ mod tests {
             }
         )
         .is_none());
+    }
+
+    #[test]
+    fn an_offline_http_hostname_endpoint_opens_its_cached_copy() {
+        // sdk#6: an `http://` hostname endpoint whose host does not resolve (an
+        // internal deployment seen from an offline laptop) used to fail the
+        // endpoint policy with a fatal InsecureEndpoint before any request, so the
+        // cached copy never opened. The real client path now reports the DNS
+        // transport failure, which is offline-eligible exactly as it is for https.
+        // `.invalid` never resolves (RFC 6761), so this is offline by construction.
+        let endpoint = "http://speleodb-offline.invalid:8000";
+        let mut cached_link = link();
+        cached_link.endpoint = endpoint.into();
+        let dir = tempfile::tempdir().expect("temp");
+        let dest = dir.path().join("project.stalx");
+        let mut db = Database::open(&dest).expect("cache");
+        db.save_project(&Project::new("Cached".into(), None))
+            .expect("project");
+        db.save_speleo_link(Some(&cached_link)).expect("link");
+        drop(db);
+
+        let error = client::download_stalx(endpoint, "token", false, &cached_link.project_id)
+            .expect_err("an unresolvable host cannot be downloaded from");
+        assert!(
+            matches!(
+                error,
+                SpeleoDbError::Transport {
+                    cause: TransportCause::Dns,
+                    ..
+                }
+            ),
+            "an unresolvable http host must be an offline DNS failure, got {error:?}"
+        );
+        let opened = offline_open_result(&dest, endpoint, &cached_link.project_id, &error)
+            .expect("the cached copy opens offline");
+        assert_eq!(opened.offline, Some(true));
+        assert_eq!(opened.local_path, dest.to_string_lossy());
     }
 
     #[test]

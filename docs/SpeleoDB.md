@@ -23,21 +23,101 @@ file-picker, drag/drop and OS file opens. Opening automatically attempts to acqu
 the server mutex and reconcile the local base. Only successful
 acquisition/reconciliation enables editing. A lock held by another account keeps
 the project read-only and the contention dialog identifies its current editor. Offline opening
-stays read-only; a transient connection failure after acquisition permits local
-editing. Confirmed lock loss, sign-out or permission loss closes the editing gate.
+and opening without a session stay read-only; a transient connection failure after
+acquisition permits local editing. Confirmed lock loss, sign-out or permission loss
+closes the editing gate.
 
 The home screen uses the same card or table row for downloaded and undownloaded
 SpeleoDB projects. Selecting one never exposes local Project Details, local open,
-or local deletion actions. Opening always attempts a fresh download. Only a DNS,
-connection-unavailable or timeout failure allows opening an existing cache, whose
-stored project ID and endpoint must match. The UI announces that offline fallback
-and preserves the cached unsynced-edit state. Authentication, permission, missing
-remote project, TLS and invalid-download errors do not fall back to the cache.
-If a successful download would overwrite unsynced edits, the user can cancel or
-explicitly confirm replacing them; the prompt offers no online local-copy shortcut.
+or local deletion actions. Opening while signed in always attempts a fresh download.
+Only a DNS, connection-unavailable or timeout failure allows opening an existing
+cache, whose stored project ID and endpoint must match. The UI announces that
+offline fallback and preserves the cached unsynced-edit state. Authentication,
+permission, missing remote project, TLS and invalid-download errors do not fall
+back to the cache (but see the no-session rules below). An `http://` hostname
+endpoint that does not resolve is offline, not insecure: the endpoint policy
+reports it as the same DNS failure, so it falls back exactly as an `https://`
+endpoint does (see Authentication and transport). If a successful download would
+overwrite unsynced edits, the user can cancel or explicitly confirm replacing
+them; the prompt offers no online local-copy shortcut.
+
+Without a usable session the cached copy opens read-only, with no network call:
+
+- **Signed out** (no saved token): the cached copy of that project opens as it is,
+  un-uploaded edits kept, without a lock attempt. Any instance's copy qualifies,
+  since nothing is sent anywhere.
+- **Expired token**: a 401, or a 403 that the whoami probe confirms is a dead token,
+  drops the token (as on every authenticated call). The open then continues as a
+  signed-out one, and the app shows the user as signed out.
+- **Server-side denial keeps the no-fallback rule**: a 403 while the token is still
+  valid, or a 404, means the server says this account may not have the project. No
+  cached copy is opened. TLS and invalid-download errors do not fall back either.
+
+A copy opened without a session says "Read-only copy - log in to edit" on its home
+screen card or row, on the map's read-only pill (with a Log in action that opens the
+SpeleoDB settings) and in the SpeleoDB workspace header. Signing in later does not
+change an open project by itself; Resume editing then takes the lock as usual. A
+signed-in account whose permission is below read-and-write sees "Read-only - your
+SpeleoDB access does not allow editing" in the same three places.
 
 Collaborator/team management and remote project deletion are absent. Local file
 management, local imports and local exports remain separate application features.
+
+## Cached copies on this computer
+
+Every project opened from SpeleoDB lives at
+`<cache>/speleodb/<project_id>/project.stalx`. The `.stalx` records its instance,
+but not the account: the file rides to the server on every upload, so an account
+email inside it would reach every collaborator. The account is recorded beside the
+copy instead, in `owner.json`, which never leaves the machine. It is written when a
+signed-in account opens the copy online (download, or the fast-forward local open
+after the server showed that account the history) and when a project is published.
+It is not written for offline or signed-out opens.
+
+The home screen lists the cached copies by owner:
+
+- **Signed in**: the copies of the signed-in account on the signed-in instance.
+  Copies with no owner record, downloaded before the record existed, are listed
+  when their own link names the signed-in instance and hidden when it names another.
+  Nothing tells whose they are, and hiding a pre-upgrade copy from the account that
+  downloaded it would hide the way back to its work. The next online open records
+  the owner. Other accounts' copies are hidden everywhere on the home screen,
+  including the map. A project the account can see on the server is still listed
+  from the server listing, and opening it downloads as that account (guarded against
+  replacing un-uploaded edits).
+- **Signed out**: every cached copy, of every account and instance, on the list and
+  on the map. Signing out does not forget the recents rows of cached copies (the map
+  is built from recents). It still forgets clean SpeleoDB references outside the
+  cache, and keeps any reference whose copy holds un-uploaded edits.
+
+Right-click on a SpeleoDB card, table row or map marker opens the SpeleoDB project
+menu: Open project, Zoom to system (when the project is on the map) and Remove local
+copy. Removing a copy goes through an in-app confirmation that first re-reads the
+copy. A copy with un-uploaded edits, or one whose state cannot be read, gets a
+warning and a "Remove copy and lose my changes" button. Only that confirmation tells
+the backend to remove such a copy; without it the backend refuses. The project open
+right now is never removed. Removal sends the `.stalx` to the OS trash where there is
+one, drops its recents row, and deletes the rest of its directory (owner record and
+SQLite sidecars).
+
+Removing a copy does not strand a lock. After a successful removal, when the session
+is the copy's account on its instance (owner recorded as this account, or no owner
+recorded and the copy is from this instance), the short lock probe asks who holds
+the project's lock. If the server says this account, the normal lock release hands
+it back. The probe never drops the session. Signed out, for another account's copy,
+or when the server cannot be asked, nothing else happens: a lock held on the server
+stays until that account's next sign-in (whose held-lock prompt offers to release
+it) or the SpeleoDB website. The confirmation says which of the two applies. A
+probe or release that fails returns a warning saying so. Removal and the purge count
+as exclusive SpeleoDB operations: their confirm buttons are disabled while another
+lock, upload or account call runs, and the spinner shows while they run.
+
+SpeleoDB settings has "Purge all cached files". It removes every cached copy of every
+account except the open project. Copies with un-uploaded or unreadable state are
+listed in the confirmation and kept by default ("Keep those, remove the rest").
+Deleting them too takes a second confirmation. The backend re-checks every copy when
+it removes it. Each removed copy's lock is handled as above, and the result lists the
+locks that were handed back and those that could not be checked.
 
 ## Operations used by the app
 
@@ -90,6 +170,26 @@ snapshot remains independent of subsequent local edits. The authoritative upload
 result is its top-level `hexsha`; an HTTP 304 remains the existing no-change outcome.
 An uncertain upload does not clear dirty state or automatically release the lock.
 
+The server accepts at most 24,657,920 bytes per upload and refuses a larger file
+only after receiving all of it. That figure is an upstream bug (the check
+multiplies the maximum file COUNT by `1024 * 1204`, a typo for `1024`); it lives in
+one constant, `client::SERVER_UPLOAD_LIMIT_BYTES`, to raise once the server is
+fixed. The sanitized snapshot is measured before anything is sent:
+
+- within the limit, it uploads unchanged;
+- over it with the undo history included (Full mode), the copy is re-sanitized on
+  the upload-without-history path the other undo modes take. If that fits, the
+  survey data uploads in full and the success toast becomes a warning that the
+  revision was uploaded without undo history (`undo_history_omitted` on the
+  `released` / `pushed` result, and on the publish result for the first upload,
+  where the note rides the publish outcome's own toast or stands alone as a
+  warning). Only the copy changes; after the landed push the
+  local undo stack follows the same per-push rule as in every mode;
+- still over, the push is refused before any request with a clear "too large"
+  error naming both sizes. Nothing is uploaded, and the project stays dirty and
+  locked. `upload_stalx` itself refuses an over-limit file the same way, so no
+  caller can send one.
+
 Downloads stream to an owned temporary file, with a 512 MiB limit. The cache
 installer and downloaded-revision policy probes open private copies through
 `open_existing_untrusted`, with a 64 MiB SQLite value limit and a 30-second
@@ -131,7 +231,11 @@ cross the frontend as profile data. Session generations
 and per-account lock claims continue to guard late responses and account changes.
 
 The existing HTTP policy permits loopback/private deployments and requires HTTPS
-elsewhere unless explicitly configured otherwise. Redirects and implicit Reqwest
+elsewhere unless explicitly configured otherwise. An `http://` hostname is resolved
+first and allowed only if every address is loopback, private or link-local; a
+resolvable public host is refused. A host that does not resolve is never dialed and
+is reported as the DNS transport failure, not as an insecure endpoint, so offline
+handling matches `https://`. Redirects and implicit Reqwest
 retries are disabled. Safe reads and token exchange retry transient transport/5xx
 failures twice, after 200 ms and 500 ms. Mutations are never automatically replayed.
 Metadata requests use 30 seconds and lock probes five seconds with no retries.
@@ -144,7 +248,19 @@ do not read the live-test environment variables.
 HTTP statuses retain their existing typed frontend actions: re-login on an expired
 session, read/fence handling for permissions, retryable read errors, and dirty-state
 retention for failed writes. Error text is for display; it does not determine sync
-or ownership decisions. Diagnostic transport errors omit request URLs.
+or ownership decisions. Diagnostic transport errors omit request URLs. A TLS
+handshake or certificate failure is classified as TLS from the typed `rustls`
+error. A 2xx body that does not match the SDK contract (for example a new server
+enum value) is a parse error: it keeps the SDK decoder detail, with quoted
+response strings redacted and the length capped, is logged with the endpoint
+kind, and is counted as its own `parse-error` traffic outcome (docs/telemetry.md).
+
+Revision times arrive as New York wall time with no zone (`YYYY/MM/DD HH:MM`).
+The backend passes them through; the revision history converts them to an
+instant with the webview's time-zone data (DST-aware) and shows the viewer's
+local time with its GMT offset, e.g. `Nov 9, 2026, 10:15 AM GMT+1`, with the
+relative time as the tooltip. An ISO-8601 time with an explicit offset is taken
+as sent.
 
 ## Project workspace
 
@@ -206,39 +322,139 @@ and offer Reload Project. Retrying recovery never creates a second server projec
 
 ## Save, switching and exit
 
-Menu Save, Cmd/Ctrl+S and Save Changes share one dispatcher. Local projects retain
-local Save. Linked projects open the upload dialog, including a blocked explanation
-when the editing lock is missing. Sign-in and Resume editing recover access without
-uploading automatically; the user confirms the upload afterward. A clean linked
-project reports No changes to upload, without creating an empty revision.
+Menu Save, Cmd/Ctrl+S and Save Changes share one dispatcher (`dispatchProjectSave`).
+Local projects retain local Save. A linked project we are editing opens the upload
+dialog. A linked project that cannot be uploaded right now is never left with
+discard-only edits: the work is first saved to the local copy (the backend
+`save_project` has no edit gate), then
+- when the lock can be taken (signed in, write permission, nobody else holding
+  it), the upload dialog opens and takes it, and the user uploads with a
+  description as usual;
+- otherwise a warning toast says the work is on this computer and why it was not
+  uploaded (signed out, someone else editing, no write access), and Save and
+  Close goes on to close.
+
+The upload dialog's blocked panel (shown whenever upload is not allowed) offers
+Save on this computer beside Sign in / Resume editing. Sign-in and Resume editing
+recover access without uploading automatically; the user confirms the upload
+afterward. A clean linked project reports No changes to upload, without creating
+an empty revision.
+
+Every exit, close or switch question about unsaved edits offers a non-destructive
+answer as well as Discard: the unsaved-changes dialog (quit, close, open another
+project, New Project) saves a SpeleoDB project's edits on this computer instead of
+routing to the upload dialog; the open-from-SpeleoDB and account-change questions
+(in-app, `askExitChoice`) offer Save on this computer whenever the project has a
+file of its own. Saved edits keep the copy's un-uploaded flag, so the next open
+offers to open the local copy.
 
 Uploading requires a nonblank change description, saves locally first, and verifies
 current permission and lock ownership against the server. Ordinary successful upload
 retains the lock. The same centered progress surface blocks the app during explicit
 uploads from Save Changes, menu Save and Cmd/Ctrl+S. It expires after 120 seconds,
 allows closing the dialog, and preserves the description without resubmitting.
+An upload whose dialog (Save Changes, Finish editing or the exit prompt) was closed
+after that notice is still applied when it ends, for as long as the same project
+and SpeleoDB session are open: a success updates the link and shows its usual
+toast; a failure raises the push-failure banner and an error toast, and keeps the
+description for the retry. Only the dialog's own follow-ups (closing it, Save and
+Close) need it to still be open.
 Offline, failed or uncertain uploads never report success; the
 message and local work remain available for retry. Autosave and failed-autosave
 retry write only to the local SQLite file.
 
+The change description is limited to 1000 characters as SpeleoDB stores it. The
+server strips it and turns every run of line breaks (with the whitespace around
+them) into ". ", then stores it in a 1024-character column only after committing
+the upload; a longer description commits, fails to store (HTTP 500), and breaks
+every later upload of the project. The upload dialogs count the stored length (a
+line break counts as two characters), show the count under the field, and refuse
+a longer description with an inline message. The backend refuses it too, both at
+the `speleodb_done` / `speleodb_push` / `speleodb_publish` IPC boundary (before
+any work) and in `client::upload_stalx`, so no caller can send one
+(`speleodb/commit_message.rs`, mirrored by `src/utils/commitMessage.ts`).
+
 Save and Close carries its close intent through recovery and closes only after a
 confirmed upload and successful release, with no newer local changes. Cancellation,
 conflict, uncertainty and release failure leave the project open. Plain Close,
-project switching and Quit automatically release the session's lock without
-uploading. Unsaved survey work and form drafts require Discard changes / Cancel.
+project switching and Quit release a clean session's lock silently. When the lock
+is held over work SpeleoDB has not seen, they ask the one in-app exit prompt
+(Upload / Keep the lock / Discard / Cancel, `utils/speleoExit`); the backend never
+releases over un-uploaded edits unless the close carries the confirmed discard.
+Without the lock, unsaved survey work gets the unsaved-changes dialog with Save on
+this computer / Discard / Cancel (see above). Saved unuploaded work remains in the
+local file.
+
 Form drafts are unsent SpeleoDB input: an upload description (in the upload dialog,
 or kept while Settings is open for sign-in or an error replaced the dialog) and the
-project creation form. Close, project switching (file open, New Project, open from
-SpeleoDB) and Quit ask about them first, in the shared in-app confirm, before the
-exit prompt or anything that uploads, releases or closes; Cancel stops the exit with
-nothing done. A sign-in as another account (or on another server) asks the same
-question before the sign-out guard, because a draft stays bound to the account it
-was written for; a sign-out or the same account keeps it. A description with nothing
-left to upload, or one being uploaded, is not a draft. No guard or SpeleoDB flow uses
-a native dialog.
-Saved unuploaded work remains in the local file. Backend release consent remains
-scoped to the project, authenticated account and session generation. Another
-account's lock is never released by an ordinary exit.
+project creation form. A description with nothing left to upload, or one being
+uploaded, is not a draft. Every way out that would drop one asks about it in-app,
+ONE question per step: Close, project switching (file open, New Project, open from
+SpeleoDB) and Quit ask first, in the shared in-app confirm, before the exit prompt
+or anything that uploads, releases or closes, and Cancel stops the exit with nothing
+done. Where the way out also asks about unsaved survey edits (the open from SpeleoDB
+over a read-only or local project, an account change) the drafts are listed in that
+question instead, and either answer that goes on (Save on this computer, or Discard)
+drops them. Quit asks after the quit-after-work gate below, so a re-issued quit asks
+it against the settled state; declining abandons the quit and any update restart or
+forced quit riding on it. An account change drops only drafts written for another
+account or server: a sign-out or the same account keeps them, and the question comes
+after the sign-out guard, together with the unsaved-changes one. No guard or SpeleoDB
+flow uses a native dialog. Backend release consent remains scoped to the project, authenticated
+account and session generation. Another account's lock is never released by an
+ordinary exit.
+
+### Quitting while a transfer is in flight
+
+Quitting never cuts a SpeleoDB upload, acquire, download or release that is still
+running, so a slow connection does not lose work (lock#6, frontend#4). Menu Quit,
+Ctrl+Q, the window X, an OS window close and restart-to-update all request a
+window close, and the close listener's first gate (`utils/quitAfterWork`) runs
+before any question:
+
+- With nothing in flight the quit goes on as before.
+- With an exclusive SpeleoDB call, a hand-off verb, or an exit-prompt answer in
+  flight, the window stays. An info toast says the save or upload is in progress
+  and that Stalagmight will close when it finishes, and the waiting prompt
+  (`QuitWaitDialog`, layered over the upload progress) shows a spinner with Keep
+  Stalagmight open (the default; also Escape) and Quit now. Once the work has
+  drained and stayed drained for 300 ms, the quit is re-issued un-confirmed, so
+  every guard sees the settled state: a successful upload quits; a failed one
+  raises the exit prompt.
+- Quit now is an explicit choice behind a warning (the transfer is cut off and may
+  or may not reach SpeleoDB; the project can stay locked until it is opened
+  again). It saves unsaved edits on this computer first (a failed save stops it),
+  then quits without waiting, and right before the window goes it calls
+  `arm_forced_exit` so the backend may cut the operation.
+
+The backend exit hook (`commands/exit_wait.rs`, from `RunEvent::ExitRequested`) is
+the backstop for a user-visible transfer still running when the exit arrives anyway.
+Only the transfers the frontend gate waits on can hold it: every IPC command the
+gate counts as `exclusive` (`speleoNetworkCommands.ts`; they run through
+`run_transfer`) plus `close_project` and the cached-copy discard. While one runs and
+no forced exit is armed (10-second arm), the hook prevents the exit, waits for it on
+a background thread, runs the bounded lock release (5 s) and then exits.
+Backend-internal work the user never sees (the background lock re-verify, the
+stranded-claim cleanup, a detached release from a project switch) never keeps a
+process alive without a window: the exit keeps the bounded behaviour for it, the
+release waiting at most 5 s behind it before the app exits. Tauri cannot prevent an
+`app.restart()`; the update restart only runs after the frontend gate has let the
+quit through.
+
+### Signing out
+
+Signing out first resolves what the account still holds (`utils/speleoSignOut`): the
+open project's un-uploaded work under our lock (Upload / Keep my changes on this
+computer / Discard), other cached copies with un-uploaded work (Open to upload /
+Keep my changes on this computer / Discard), and the remaining locks, handed back
+with Try again / Sign out anyway when a release fails. There is no keep-the-lock
+answer. "Keep my changes on this computer" is the non-destructive one when the
+upload is not possible: unsaved edits of the open project are saved first, the copy
+keeps its edits, its un-uploaded mark and its recents row, and its lock is handed
+back through the explicit per-project release (`speleodb_release_lock`). The user's
+choice is the consent: the logout's own silent release still keeps the lock over
+un-uploaded edits. After the next sign-in the ordinary open takes over (base equals
+tip: the local copy opens and resumes; a divergence offers "Open my local copy").
 
 Switch to Read Only Mode refuses unsaved or unuploaded work, including direct IPC
 calls: "Save your changes using Save Changes before switching to read-only mode."
@@ -269,7 +485,76 @@ continue local editing through transient disconnection. Offline opening remains
 read-only. In-place frontend reconciliation suppresses automatic acquisition.
 
 An unreachable server or forcibly terminated process cannot guarantee server-side
-release. Close, Quit and Save-and-Close retain their separate lifecycle behavior.
+release, and SpeleoDB never expires a lock on its own: a lock left held stays held
+until the next sign-in's held-lock prompt or the SpeleoDB website releases it.
+Close, Quit and Save-and-Close retain their separate lifecycle behavior.
+
+## Edit gate and lock claims
+
+The edit gate is not a stored flag. It is derived, on every read, from what is
+open and from the lock claims this process holds
+(`core/state/speleodb_edit_gate.rs`):
+
+- A local project, or no project, is always editable.
+- A SpeleoDB project is editable only while the signed-in account holds a claim
+  on that project that is bound to the current session generation. Editing a
+  SpeleoDB project without a held lock is therefore not a representable state.
+
+A claim records which project this process holds the lock on, under which
+account and deployment. It is authored when Start Editing's probe found the
+mutex free (this process took it, which licenses the authorship recovery of a
+landed push), and unauthored when the account already held the lock and Start
+Editing inherited it.
+
+- Opening the gate: only Start Editing's commit binds a claim to the session
+  (Switch to Read Only re-binds the claim it took out when its release fails).
+  An in-place reload (fast-forward, Reload, Restore) carries an existing binding
+  into the generation it moves to and cannot create one. Status refresh never
+  opens the gate and never drops a claim.
+- Shutting the gate: releasing or dropping the claim, or unbinding it after a
+  confirmed or unverifiable loss of the lock or permission. Every session
+  boundary (close, open, create, logout, sign-in, a rejected token) moves the
+  generation on, which leaves any binding stale, so the gate shuts without the
+  boundary having to remember it.
+- Take remote shuts the gate and releases the lock before it reloads the server
+  version, so the project comes back read-only; the frontend reopens it without
+  re-acquiring and offers Resume editing.
+- A claim whose release failed is kept as an unbound pointer for a later retry.
+  It opens nothing.
+
+Every release - automatic (close, project switch, quit, restart-to-update, logout,
+account switch, unlink, Take remote, delete, Start Editing's unwind, the
+stranded-claim cleanup) or explicit (Save Changes and release with nothing to
+upload, the held-lock prompt's Release, Switch to Read Only) - first reads the lock
+holder and sends the release only when the server names the signed-in account.
+The automatic paths cap that read at 2 seconds so it fits inside the 5-second exit
+and update-restart wait. Another account's lock is never released, even when the
+signed-in account is an administrator, whom the server would let release anybody's.
+When someone else or nobody holds the lock, the local claim ends, the gate shuts
+and nothing is sent. When the holder cannot be read, nothing is sent and the claim
+is kept: an explicit verb reports the failure (Save Changes stays in editing), the
+stranded-claim cleanup retries on a later status refresh with no project open, and
+on quit or update the lock stays held for the next sign-in's held-lock prompt.
+Automatic releases are decided from the claim, never from the gate, so a session
+whose gate a lost lock or a sign-out already shut still ends its claim. The
+un-uploaded-work rule above applies to all of them except the explicit discard
+paths, and a claim deliberately kept (an earlier veto, Keep the lock, or the case
+below) is left alone by every automatic release.
+
+When Start Editing's fast-forward refuses to overwrite the managed cache copy
+because it holds un-uploaded work the open copy does not show, the lock it just
+took is kept, as before, and now also recorded as a kept claim, so it is no longer
+held with nothing local pointing at it. Only an explicit Release, an abandon or a
+new edit session ends it.
+
+An acquire that fails with a transport error, a 5xx or an unreadable reply may
+still have taken the lock. Start Editing then reads the holder again. If it is
+the signed-in account, the acquire is adopted and editing opens normally. If it
+is someone else, the contention dialog names them. If nobody holds it, the
+original error is shown. If the holder still cannot be read, the error is shown
+and a provisional, unbound claim is kept where the lock would otherwise have been
+handed back, so the next close or the stranded-claim cleanup releases it after
+reading the holder.
 
 ## Network activity and responsiveness
 
@@ -288,8 +573,9 @@ size. While a lock, upload, download or account call runs, the controls that wou
 start another one are disabled: the workspace's Save Changes, Resume editing /
 Switch to Read Only Mode, Reload Project, Close Project and conversion, History's
 Unwind/Rewind, revision View/Restore/Revert, opening from SpeleoDB, the held-lock
-prompt's Resume and Release, publishing, and the SpeleoDB endpoint, connection and
-sign-in/sign-out controls in Settings. Reads such as the status refresh show the
+prompt's Resume and Release, publishing, removing a cached copy, "Purge all cached
+files", and the SpeleoDB endpoint, connection and sign-in/sign-out controls in
+Settings. Reads such as the status refresh show the
 spinner but lock nothing. The map, panels, other settings and editing stay
 available. Explicit uploads and publishing keep their app-blocking progress.
 

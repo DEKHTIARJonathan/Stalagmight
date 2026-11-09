@@ -127,7 +127,7 @@ test('a narrow window reaches the SpeleoDB tab from the menu, and a narrow saved
   await expect.poll(async () => (await panel.boundingBox())?.width ?? 0).toBeGreaterThan(initial!.width + 20);
 });
 
-test('upload saves locally, retains the lock, and a released lock blocks a subsequent upload', async ({ page }) => {
+test('upload saves locally, retains the lock; after a release Save saves locally and takes the lock back to upload', async ({ page }) => {
   await openRemote(page, false);
   await page.evaluate(() => {
     const w = window as unknown as TestWindow;
@@ -142,9 +142,38 @@ test('upload saves locally, retains the lock, and a released lock blocks a subse
   await expect(page.getByTestId('speleodb-done-dialog')).toHaveCount(0);
   await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Switch to Read Only Mode');
   await page.getByTestId('speleodb-workspace-editing').click();
+  await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Resume editing');
+  // frontend#6: new work without the lock. Save puts it on disk first, then takes
+  // the lock back so the upload can go ahead.
+  await page.evaluate(() => {
+    const w = window as unknown as TestWindow;
+    w.__E2E_TEST__.projectStore.setState({ isDirty: true });
+    const store = w.__E2E_TEST__.speleoStore;
+    store.setState({ link: { ...store.getState().link!, hasUnpushedEdits: true } });
+  });
   await page.getByTestId('speleodb-workspace-upload').click();
-  await expect(page.getByTestId('speleodb-upload-blocked')).toBeVisible();
-  await expect(page.getByTestId('speleodb-done-confirm')).toBeDisabled();
+  await expect(page.getByTestId('speleodb-done-dialog')).toBeVisible();
+  await page.getByTestId('speleodb-done-message').fill('Synthetic second update');
+  await expect(page.getByTestId('speleodb-done-confirm')).toBeEnabled();
+  expect(await page.evaluate(() => (window as unknown as { __lockCalls: string[] }).__lockCalls)).toEqual(['acquire', 'release', 'acquire']);
+  expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.getState().isDirty)).toBe(false);
+});
+
+test('Save while someone else holds the lock saves on this computer and says why it was not uploaded', async ({ page }) => {
+  await openRemote(page, true);
+  await page.getByTestId('speleodb-read-only-continue').click();
+  await page.evaluate(() => {
+    const w = window as unknown as TestWindow;
+    w.__E2E_TEST__.projectStore.setState({ isDirty: true });
+    const store = w.__E2E_TEST__.speleoStore;
+    store.setState({ link: { ...store.getState().link!, hasUnpushedEdits: true } });
+  });
+  await openSpeleoTab(page);
+  await page.getByTestId('speleodb-workspace-upload').click();
+  await expect(page.getByTestId('toast').filter({ hasText: 'Saved on this computer' })).toContainText('editor@example.com');
+  await expect(page.getByTestId('speleodb-done-dialog')).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.getState().isDirty)).toBe(false);
+  expect(await page.evaluate(() => (window as unknown as { __lockCalls: string[] }).__lockCalls)).toEqual(['acquire']);
 });
 
 test('read-only switching refuses unuploaded work and sign-in opens application Settings', async ({ page }) => {

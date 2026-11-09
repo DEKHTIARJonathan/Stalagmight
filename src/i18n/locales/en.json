@@ -3406,13 +3406,16 @@
         "released": "Changes uploaded and the write lock released.",
         "releasedNothingToUpload": "Write lock released. Nothing to upload.",
         "pushed": "Changes pushed to SpeleoDB.",
+        "pushedWithoutHistory": "Changes pushed without undo history: the project is over the SpeleoDB size limit.",
+        "releasedWithoutHistory": "Changes uploaded without undo history (the project is over the SpeleoDB size limit) and the write lock released.",
         "startFailed": "Could not start editing",
         "updateFailed": "Could not update",
         "doneFailed": "Could not finish editing",
         "pushFailed": "Could not push changes",
         "tookRemote": "Reset to the SpeleoDB version.",
         "takeRemoteFailed": "Could not take the SpeleoDB version",
-        "notEditing": "Nothing was uploaded - you are not editing this project right now. Start editing again (signing in first if needed) to upload your changes."
+        "notEditing": "Nothing was uploaded - you are not editing this project right now. Start editing again (signing in first if needed) to upload your changes.",
+        "lateUploadFailed": "The upload you left running did not reach SpeleoDB. Your changes are still on this computer."
       },
       "push": "Save Changes",
       "unlock": "Switch to Read Only Mode"
@@ -3429,6 +3432,19 @@
       "pushing": "Uploading…",
       "failedHeading": "Your changes were NOT uploaded",
       "retryHint": "They are still only on this computer. Fix the problem, then press the button again to retry."
+    },
+    "saveLocal": {
+      "signedOut": "Saved on this computer. Sign in to SpeleoDB to upload it.",
+      "lockedBy": "Saved on this computer. {{email}} is editing this project, so it was not uploaded.",
+      "noAccess": "Saved on this computer. You cannot upload this project to SpeleoDB.",
+      "saved": "Saved on this computer. Not uploaded to SpeleoDB yet.",
+      "button": "Save on this computer",
+      "acquiring": "Taking the editing lock so you can upload…",
+      "blocked": "Upload needs sign-in, write permission and the editing lock. You can save your work on this computer and upload it later."
+    },
+    "commitMessage": {
+      "count": "{{length}} / {{max}} characters",
+      "tooLong": "This description is too long for SpeleoDB ({{length}} characters). Shorten it to {{max}} characters or fewer. Each line break counts as two characters."
     },
     "noPermission": {
       "title": "No SpeleoDB access",
@@ -3541,6 +3557,65 @@
       "lockedByYou": "You are editing",
       "lockedByOther": "Currently being edited by {{email}}"
     },
+    "cachedCopies": {
+      "readOnlySignedOut": "Read-only copy - log in to edit",
+      "viewOnly": "Read-only - your SpeleoDB access does not allow editing",
+      "logIn": "Log in",
+      "logInTitle": "Open the SpeleoDB settings to log in",
+      "openedSignedOut": "Opened a read-only copy. Log in to SpeleoDB to edit it.",
+      "openedSessionExpired": "Your SpeleoDB session has expired. Opened a read-only copy; log in again to edit it.",
+      "menu": {
+        "aria": "SpeleoDB project actions",
+        "open": "Open project",
+        "zoom": "Zoom to system",
+        "removeCopy": "Remove local copy…"
+      },
+      "remove": {
+        "title": "Remove local copy?",
+        "body": "This removes the copy of {{name}} downloaded to this computer. The project stays on SpeleoDB and can be downloaded again.",
+        "unpushed": "This copy has changes that were never uploaded to SpeleoDB. Removing it deletes them for good.",
+        "unknown": "Stalagmight could not read this copy, so it may hold changes that were never uploaded to SpeleoDB. Removing it may delete them for good.",
+        "lockHandedBack": "If you hold this project's editing lock on SpeleoDB, it is handed back once the copy is removed.",
+        "lockStaysSignedOut": "You are signed out, so no editing lock is handed back. If one is held on SpeleoDB, it stays until your next sign-in offers to release it, or until it is released on the SpeleoDB website.",
+        "lockStaysOtherAccount": "This copy belongs to another SpeleoDB account. If that account holds the project's editing lock, it stays until its next sign-in offers to release it, or until it is released on the SpeleoDB website.",
+        "confirm": "Remove copy",
+        "confirmLosingChanges": "Remove copy and lose my changes",
+        "removing": "Removing…",
+        "cancel": "Cancel",
+        "done": "Removed the local copy of {{name}}.",
+        "failed": "The copy could not be removed."
+      },
+      "purge": {
+        "title": "Downloaded projects",
+        "help": "Copies of SpeleoDB projects downloaded to this computer, for every account. Projects stay on SpeleoDB and download again when you open them.",
+        "button": "Purge all cached files",
+        "working": "Purging…",
+        "empty": "There are no downloaded copies to remove.",
+        "confirmTitle": "Purge all cached files?",
+        "confirmBody_one": "Remove {{countFormatted}} downloaded copy from this computer? It stays on SpeleoDB and can be downloaded again.",
+        "confirmBody_other": "Remove {{countFormatted}} downloaded copies from this computer? They stay on SpeleoDB and can be downloaded again.",
+        "openKept": "The copy of the project that is open now is kept.",
+        "locksSignedIn": "Your editing locks on these projects are handed back. Locks held by other accounts, or that cannot be checked because SpeleoDB is unreachable, stay until that account's next sign-in offers to release them, or until they are released on the SpeleoDB website.",
+        "locksSignedOut": "You are signed out, so no editing lock is handed back. Locks held on SpeleoDB stay until the next sign-in offers to release them, or until they are released on the SpeleoDB website.",
+        "locksReleased": "Handed back the editing lock of: {{names}}",
+        "locksUnchecked": "Could not hand back the editing lock of: {{names}}. If you hold it, it stays until your next sign-in offers to release it, or until you release it on the SpeleoDB website.",
+        "atRisk_one": "{{countFormatted}} copy has changes that were never uploaded to SpeleoDB, or could not be read:",
+        "atRisk_other": "{{countFormatted}} copies have changes that were never uploaded to SpeleoDB, or could not be read:",
+        "keepAtRisk": "Keep those, remove the rest",
+        "deleteAll": "Delete everything",
+        "purge": "Purge",
+        "cancel": "Cancel",
+        "lostTitle": "Delete changes that were never uploaded?",
+        "lostBody": "The changes in these copies exist only on this computer. They will be lost for good. This cannot be undone.",
+        "lostConfirm": "Delete them",
+        "back": "Back",
+        "result_one": "Removed {{countFormatted}} downloaded copy.",
+        "result_other": "Removed {{countFormatted}} downloaded copies.",
+        "keptUnpushed": "Kept, with changes that were never uploaded: {{names}}",
+        "keptOpen": "Kept because it is open: {{names}}",
+        "failed": "Could not remove: {{details}}"
+      }
+    },
     "browser": {
       "title": "Open from SpeleoDB",
       "checking": "Checking session…",
@@ -3602,7 +3677,8 @@
       "name": "Name",
       "descriptionLabel": "Description",
       "coordinatesHint": "Enter both latitude and longitude, within their valid ranges.",
-      "uploadPending": "The project was created on SpeleoDB. Changes remain on this computer; use Save Changes to finish uploading."
+      "uploadPending": "The project was created on SpeleoDB. Changes remain on this computer; use Save Changes to finish uploading.",
+      "withoutHistory": "The project's first revision was uploaded without undo history: it is over the SpeleoDB size limit."
     },
     "lock": {
       "title": "Write lock",
@@ -3640,6 +3716,20 @@
     "jump": "Jump",
     "reference": "Reference"
   },
+  "quitWait": {
+    "toast": "An upload or save is in progress. Stalagmight will close when it finishes.",
+    "title": "Waiting to quit",
+    "body": "A SpeleoDB transfer is still running. Stalagmight will close as soon as it finishes, so nothing is lost on a slow connection.",
+    "cancel": "Keep Stalagmight open",
+    "force": "Quit now",
+    "forceTitle": "Quit without waiting?",
+    "forceBody": "The transfer will be cut off, and SpeleoDB may or may not receive it.",
+    "forceDetail": "Your changes stay saved on this computer. If an upload or an editing-lock request is cut off, the project can stay locked to you until you open it again in Stalagmight.",
+    "back": "Back",
+    "forceConfirm": "Quit without waiting",
+    "forcing": "Quitting…",
+    "saveFailed": "Your changes could not be saved on this computer, so Stalagmight did not quit."
+  },
   "speleoExitPrompt": {
     "title": "Your changes are not on SpeleoDB yet",
     "body": "You are editing \"{{name}}\", and some of your changes have not been uploaded to SpeleoDB. What should happen to them before {{action}}?",
@@ -3655,6 +3745,7 @@
     "discard": "Discard changes",
     "discardHint": "Throw away the changes that are not on SpeleoDB and hand the project back.",
     "back": "Back",
+    "saveLocally": "Save on this computer",
     "uploadBody": "Describe what you changed. Other cavers will see this note in the project history.",
     "messageLabel": "What did you change?",
     "messagePlaceholder": "For example: surveyed the north passage",
@@ -3690,6 +3781,7 @@
       "title": "Discard what you typed?",
       "message": "You have not sent {{items}} to SpeleoDB yet. If you continue, it is lost.",
       "confirm": "Discard and continue",
+      "alsoLost": "You have also not sent {{items}} to SpeleoDB yet. If you continue, it is lost, whichever you choose.",
       "upload": "the description of your upload",
       "publish": "the SpeleoDB project form"
     },
@@ -3713,8 +3805,12 @@
       "uploaded": "Uploaded and handed back.",
       "discarded": "Changes discarded.",
       "otherChanges": "Other projects with changes on this computer",
-      "otherChangesBody": "These projects have changes that are not on SpeleoDB yet. To upload them, open the project (this stops signing out). Or discard the changes.",
+      "otherChangesBody": "These projects have changes that are not on SpeleoDB yet. To upload them, open the project (this stops signing out). Or keep them on this computer for later, or discard them.",
       "openToUpload": "Open to upload",
+      "keep": "Keep my changes on this computer",
+      "keepHint": "The changes stay in the copy on this computer and the project is handed back. After you sign in again, open it to upload them.",
+      "kept": "Kept on this computer. The project is handed back when you sign out.",
+      "keepFailed": "Your changes could not be saved on this computer, so they were not kept.",
       "lastEdited": "last edited {{when}}",
       "discardBody": "Your changes to \"{{name}}\" will be lost forever.",
       "discardFailed": "The changes to \"{{name}}\" could not be discarded.",

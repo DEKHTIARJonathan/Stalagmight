@@ -104,6 +104,9 @@ pub async fn close_project(
     discard_local: Option<bool>,
 ) -> CommandResult {
     let lock = CloseLock::from_args(release_lock, discard_local);
+    // The exit prompt's answers end here (keep / discard / release): the app's
+    // exit waits for one in flight instead of cutting it (lock#6).
+    let _transfer = super::exit_wait::user_transfer(&app);
     tauri::async_runtime::spawn_blocking(move || {
         close_project_impl(app.state::<AppState>().inner(), lock)
     })
@@ -137,6 +140,8 @@ pub async fn speleodb_discard_cached_copy(
     app: tauri::AppHandle,
     project_id: String,
 ) -> CommandResult {
+    // A sign-out action: the app's exit waits for it (lock#6).
+    let _transfer = super::exit_wait::user_transfer(&app);
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<AppState>()
             .inner()

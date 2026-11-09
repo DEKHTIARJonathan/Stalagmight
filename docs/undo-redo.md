@@ -764,7 +764,7 @@ One lock sits OUTSIDE even that: `speleodb_lock_ops`
 operation** against every other and is deliberately held across network calls.
 Start Editing takes it before its first read (generation, link, token, holder)
 and holds it through the commit; so do the reclaim-checked releases, the status
-refresh's inherited-lock gate reopen, logout, and a settings save or reload that
+refresh's short lock-holder probe, logout, and a settings save or reload that
 moves to another SpeleoDB instance (taken before `config_write_lock`) - each of
 which can invalidate a fact another one of them is mid-way through acting on.
 Nothing holding `project` / `database` / `undo_stack` / `config_write_lock` may
@@ -775,6 +775,20 @@ config writes never take it, and Switch to Read Only Mode drops `command_lock`
 and `project` before its release request. The SpeleoDB session generation (`speleodb_session_generation`) is
 likewise only ever bumped while holding `project`; see the module doc in
 `speleodb_session.rs` for the rules.
+
+The read-only edit gate that every mutation entry (`guard_mutation`) checks is
+not a stored flag but a function of the lock claim bound to the editing session
+(`core/state/speleodb_edit_gate.rs`): a local project is always editable, a
+SpeleoDB project only while the signed-in account holds a claim on it bound to the
+current session generation. Reading it takes the open-project gate record (the
+innermost lock of all) and then, separately, the SpeleoDB session mutex, under
+which nothing but that record is ever taken - so `edit_enabled()` must never be
+called while holding the session mutex. An in-place reload bumps the generation and carries the binding in one
+acquisition of the session mutex, so a reader never sees the gate of a session
+that kept editing flicker shut. Undo and redo on a SpeleoDB project are therefore
+refused exactly when there is no edit session, including right after Take remote,
+whose reload carries no claim. A Restore that loads a revision's undo history keeps
+its edit session by carrying the claim through the swap; a View carries none.
 
 ## History UI
 

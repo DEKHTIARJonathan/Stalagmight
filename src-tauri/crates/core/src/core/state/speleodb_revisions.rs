@@ -628,10 +628,12 @@ impl AppState {
         };
 
         let local_path = dest.to_string_lossy().into_owned();
-        let had_lock_record = self.speleodb_lock_acquired_here(&project_id);
         // Replace the cache file and reopen it in ONE commit, and only while the
-        // bound project is still the open one; a Restore keeps its edit gate open
-        // through that same commit (`restore` is the gate it lands with).
+        // bound project is still the open one. A Restore keeps its edit session
+        // through that same commit (`restore` asks to carry it): the claim bound to
+        // the generation the swap was bound to moves to the new one, provenance and
+        // all, and nothing else can (`speleodb_edit_gate`). A View carries nothing,
+        // so it lands read-only whatever was open before.
         self.speleodb_swap_in_revision(
             native.path(),
             &dest,
@@ -648,9 +650,6 @@ impl AppState {
             restore,
         )?;
         self.while_swapped_in_project_is_open(&dest, &project_id, || {
-            if restore && had_lock_record {
-                self.speleodb_note_lock_acquired(Some(&project_id));
-            }
             if keep_undo_history {
                 self.speleodb_set_unwound_from(Some(&hexsha));
                 self.speleodb_stamp_inherited_watermark();
@@ -664,6 +663,7 @@ impl AppState {
             local_path,
             offline: None,
             has_unpushed_edits: None,
+            read_only: None,
         })
     }
 }
@@ -692,7 +692,7 @@ mod tests {
         let mut db = Database::open(&path).expect("open fixture .stalx");
         db.save_project(&Project::new("Linked".to_owned(), None))
             .expect("save fixture project");
-        db.save_speleo_link(Some(&SpeleoLink {
+        let link = SpeleoLink {
             endpoint: "https://example.invalid".to_owned(),
             project_id: FIXTURE_PROJECT_ID.to_owned(),
             project_name: "Linked".to_owned(),
@@ -701,10 +701,13 @@ mod tests {
             last_edit_at: None,
             last_verify_at: None,
             undo_mode,
-        }))
-        .expect("stamp the fixture link");
+        };
+        db.save_speleo_link(Some(&link))
+            .expect("stamp the fixture link");
 
         let state = AppState::new().expect("construct AppState");
+        // Installed without an open; the fixture setter derives the edit gate from
+        // the link the way an open would (read-only until a claim is bound).
         state.set_database_for_tests(db);
         (state, temp)
     }
@@ -1196,40 +1199,29 @@ mod tests {
     }
 
     #[test]
-    fn restore_hands_the_acquisition_record_back_across_its_reload() {
+    fn restore_carries_its_edit_session_through_the_swap_and_mints_nothing() {
+        // data#3: the edit gate is the claim bound to the session, so a Restore
+        // keeps editing by asking the swap's commit to CARRY the binding (the
+        // `restore` argument), which moves an existing claim - provenance and all -
+        // and cannot create one. The old shape re-recorded the acquisition record
+        // after the reload from a capture taken before it; that is gone, and with
+        // it any way for a Restore to mint a claim it did not have.
         let restore = prod_source()
             .split_once("fn speleodb_restore_revision")
             .map(|(_, rest)| rest)
             .and_then(|rest| rest.split("\n    /// ").next())
             .expect("speleodb_restore_revision body precedes the next item's doc");
         assert!(
-            restore.contains("let had_lock_record = self.speleodb_lock_acquired_here("),
-            "Restore must capture the acquisition record before its reload"
+            !restore.contains("speleodb_note_lock_acquired"),
+            "a Restore must not record a claim of its own"
         );
         assert!(
-            restore.contains("self.speleodb_note_lock_acquired(Some(&project_id));"),
-            "and hand it back afterwards - reopening the gate alone leaves a lock we \
-             still hold with no provenance for the push we are about to make"
-        );
-        let capture = restore
-            .find("let had_lock_record")
-            .expect("capture present (asserted above)");
-        let reload = restore
-            .find("self.speleodb_swap_in_revision(")
-            .expect("the in-place reload is what replaces the open project");
-        let restore_back = restore
-            .find("self.speleodb_note_lock_acquired(Some(&project_id));")
-            .expect("re-record present (asserted above)");
-        assert!(
-            capture < reload && reload < restore_back,
-            "capture BEFORE the reload (it is the last point the pre-reload truth \
-             exists) and re-record AFTER it (a record written before the reload is \
-             what the refresh in that window drops)"
+            restore.contains("            restore,\n        )?;"),
+            "the swap carries the edit session exactly when this is a Restore"
         );
         assert!(
-            restore.contains("if restore && had_lock_record {"),
-            "and gate the hand-back on the captured record - re-recording \
-             unconditionally would MINT provenance for an inherited lock"
+            restore.contains("if restore && !self.edit_enabled()"),
+            "and a Restore is refused without an edit session to carry"
         );
     }
 

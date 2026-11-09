@@ -99,19 +99,49 @@ enum LocalRead {
 /// `speleodb_sidecars`). A read-only open trips over the same journal today, but
 /// the guard's answer must not hang on that.
 fn read_local_state_at(path: &Path) -> LocalRead {
+    match read_cached_link(path) {
+        CachedLink::Linked(link) => LocalRead::Known(SpeleoLocalProjectState {
+            has_local_copy: true,
+            has_unpushed_edits: link.has_unpushed_edits,
+            last_edit_at: link.last_edit_at,
+            is_open: false,
+            state_unknown: false,
+        }),
+        CachedLink::NotManaged => LocalRead::Known(SpeleoLocalProjectState::default()),
+        CachedLink::Unreadable => LocalRead::Unreadable,
+    }
+}
+
+/// The link row of one cached `.stalx`, read with the degradation rules every
+/// reader of the cache shares (see [`read_local_state_at`]).
+pub(super) enum CachedLink {
+    /// The file was read and carries a SpeleoDB link.
+    Linked(crate::models::SpeleoLink),
+    /// Nothing managed is there: no file at all, or a `.stalx` with no link row.
+    NotManaged,
+    /// The file EXISTS but its committed state could not be read (a hot journal,
+    /// a corrupt or locked file): nothing is known about it, in particular NOT
+    /// that it is free of un-uploaded edits.
+    Unreadable,
+}
+
+/// Read one cached `.stalx`'s link row, read-only. The single reader behind both
+/// the local-state listing and the cached-copies listing, so the two cannot
+/// disagree about what counts as unreadable.
+pub(super) fn read_cached_link(path: &Path) -> CachedLink {
     if super::speleodb_sidecars::has_hot_journal(path) && path.try_exists().unwrap_or(true) {
         tracing::debug!(
             path = %path.display(),
             purpose = "never read an interrupted write as the copy's state",
             "speleodb: cached .stalx has a hot rollback journal"
         );
-        return LocalRead::Unreadable;
+        return CachedLink::Unreadable;
     }
-    let link = match Database::open_for_metadata(path).and_then(|db| db.load_speleo_link()) {
-        Ok(Some(link)) => link,
+    match Database::open_for_metadata(path).and_then(|db| db.load_speleo_link()) {
+        Ok(Some(link)) => CachedLink::Linked(link),
         // No link row: a `.stalx` sitting in the cache that is not a managed
         // project. Nothing to report, and nothing to push.
-        Ok(None) => return LocalRead::Known(SpeleoLocalProjectState::default()),
+        Ok(None) => CachedLink::NotManaged,
         Err(e) => {
             // `try_exists` rather than `exists`: an Err there (a permission denial
             // on a parent component) is itself "cannot tell", and must not be
@@ -124,20 +154,13 @@ fn read_local_state_at(path: &Path) -> LocalRead {
                 purpose = "report local SpeleoDB state for a project list",
                 "speleodb: cached .stalx could not be read"
             );
-            return if present {
-                LocalRead::Unreadable
+            if present {
+                CachedLink::Unreadable
             } else {
-                LocalRead::Known(SpeleoLocalProjectState::default())
-            };
+                CachedLink::NotManaged
+            }
         }
-    };
-    LocalRead::Known(SpeleoLocalProjectState {
-        has_local_copy: true,
-        has_unpushed_edits: link.has_unpushed_edits,
-        last_edit_at: link.last_edit_at,
-        is_open: false,
-        state_unknown: false,
-    })
+    }
 }
 
 /// The row an unreadable file degrades to: nothing is claimed about it, and
@@ -414,6 +437,7 @@ impl AppState {
             local_path: dest.to_string_lossy().into_owned(),
             offline: None,
             has_unpushed_edits: Some(true),
+            read_only: None,
         })
     }
 
@@ -625,8 +649,11 @@ mod tests {
         // tip and BEFORE the download - and only under the protecting policy, so
         // "take the server copy" still replaces.
         let src = include_str!("speleodb_pull.rs");
+        // The body lives in `speleodb_pull_project_to` (the cache path is injected
+        // so tests can use a temporary cache); `speleodb_pull_project` only resolves
+        // that path and delegates.
         let start = src
-            .find("fn speleodb_pull_project(")
+            .find("fn speleodb_pull_project_to(")
             .expect("the pull is present");
         let body = &src[start..];
         let body = &body[..body.find("\n    }\n").expect("fn body terminates")];

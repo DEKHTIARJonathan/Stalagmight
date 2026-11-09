@@ -1,8 +1,7 @@
 import { test, expect } from './fixtures/coverage';
 import { createProject, setupMockedPage } from './helpers/app';
 
-// Synthetic projects only. The unsaved-changes question is the in-app exit confirm,
-// never a native dialog.
+// Synthetic projects only. The unsaved-edits question is the in-app exit confirm.
 for (const dialog of ['open-from-speleodb', 'speleodb-managed-file'] as const) {
   for (const warning of ['read-only', 'locked'] as const) {
     test(`${dialog} preserves unsaved work when cancelling a switch to a ${warning} project`, async ({ page }) => {
@@ -22,6 +21,7 @@ for (const dialog of ['open-from-speleodb', 'speleodb-managed-file'] as const) {
           speleodb_list_projects: [{ id: 'synthetic', name: 'Synthetic cave', type_tag: 'stalx',
             latest_commit_sha: null, permission: warning === 'read-only' ? 'READ_ONLY' : 'READ_AND_WRITE',
             lock_holder: warning === 'locked' ? 'other@example.com' : null }],
+          'plugin:dialog|confirm': false,
         };
         w.__E2E_TEST__.projectStore.setState({ isDirty: true });
         w.__E2E_TEST__.speleoStore.setState({ session: {
@@ -35,11 +35,13 @@ for (const dialog of ['open-from-speleodb', 'speleodb-managed-file'] as const) {
       const managed = dialog === 'speleodb-managed-file';
       const open = page.getByTestId(managed ? 'speleodb-managed-file-open-remote' : 'open-from-speleodb-open-synthetic');
       await expect(open).toBeEnabled();
+      // The unsaved-edits question is in-app (never the native confirm); Cancel
+      // keeps the work and the browser.
       for (let attempt = 0; attempt < 2; attempt += 1) {
         await open.click();
         await expect(page.getByTestId('exit-confirm-dialog')).toBeVisible();
         await page.getByTestId('exit-confirm-cancel').click();
-        await expect(page.getByTestId('exit-confirm-dialog')).toBeHidden();
+        await expect(page.getByTestId('exit-confirm-dialog')).toHaveCount(0);
         await expect(open).toBeEnabled();
       }
       await page.getByTestId(managed ? 'speleodb-managed-file-cancel' : 'open-from-speleodb-close').click();

@@ -56,8 +56,10 @@ pub enum SpeleoDbAction {
 
 /// Why a transport attempt never reached (or never finished with) the server.
 ///
-/// [#270] Derived from the TYPED `ureq::Error` / `io::ErrorKind` at the point of
-/// failure (`client::classify_transport`), never from the error's Display text -
+/// [#270] Derived from the TYPED `reqwest::Error` / `io::ErrorKind` /
+/// `rustls::Error` at the point of failure (`client::network_error` /
+/// `client::api_error`, and `tls::enforce` for an unresolvable `http://` host),
+/// never from the error's Display text -
 /// `io::Error`'s message comes from `strerror`, so it is OS- and locale-
 /// dependent and unusable as a discriminant. Crosses IPC on
 /// [`SpeleoErrorDto::transport`] so the frontend renders a translated,
@@ -255,6 +257,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         | SpeleoDbError::InvalidProjectId
         | SpeleoDbError::InvalidRevision
         | SpeleoDbError::InsecureEndpoint { .. }
+        | SpeleoDbError::UploadTooLarge { .. }
         | SpeleoDbError::NoRemoteProject => (SpeleoDbAction::Fatal, None, err.to_string()),
     };
     SpeleoErrorDto {

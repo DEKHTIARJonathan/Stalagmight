@@ -1,5 +1,6 @@
+import type { MouseEvent } from 'react';
 import { RemoteUpdatedTime } from './RemoteUpdatedTime';
-import type { SpeleoProjectSummary } from '../../types/ipc.generated';
+import type { SpeleoCachedProject, SpeleoProjectSummary } from '../../types/ipc.generated';
 import { SpeleoProjectInfo } from './SpeleoProjectInfo';
 import {
   recentAccent,
@@ -11,8 +12,12 @@ interface RemoteSystemCardProps {
   summary: SpeleoProjectSummary;
   /** Lock state for the badge, resolved from the scan for this project id (#218). */
   lock: SpeleoLockInfo;
+  /** This computer's cached copy, when the session may see one. */
+  cached?: SpeleoCachedProject | undefined;
   /** Pull + open this remote project (shared `useOpenRemoteProject` flow). */
   onOpen: (summary: SpeleoProjectSummary) => void;
+  /** Right-click: the SpeleoDB project context menu. */
+  onContextMenu?: (e: MouseEvent) => void;
   /** Disable actions while an open/adopt is in flight. */
   busy?: boolean;
 }
@@ -26,7 +31,9 @@ interface RemoteSystemCardProps {
 export default function RemoteSystemCard({
   summary,
   lock,
+  cached,
   onOpen,
+  onContextMenu,
   busy = false,
 }: RemoteSystemCardProps) {
   const displayLock = { ...lock, hasLocalEdits: false };
@@ -50,6 +57,10 @@ export default function RemoteSystemCard({
       aria-disabled={busy || undefined}
       tabIndex={0}
       onClick={open}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        if (!busy) onContextMenu?.(e);
+      }}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
@@ -60,7 +71,7 @@ export default function RemoteSystemCard({
     >
       <h3 className="text-lg font-medium mb-1">{summary.name}</h3>
       <div className="mb-3" data-testid={`${testId}-path`}>
-        <SpeleoProjectInfo lock={displayLock} summary={summary} testIdPrefix={`${testId}-speleo`} />
+        <SpeleoProjectInfo lock={displayLock} summary={summary} cached={cached} testIdPrefix={`${testId}-speleo`} />
       </div>
 
       {/* The footer held the Open button too; with only the time left, draw it

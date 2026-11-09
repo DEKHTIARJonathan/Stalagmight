@@ -5,6 +5,8 @@ import { isUnwoundNotEdited, useSpeleoStore } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { SpeleoProgressOverlay } from './SpeleoProgressOverlay';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
+import { CommitMessageLimit } from './CommitMessageLimit';
+import { toastLateUploadOutcome } from '../../utils/lateUploadOutcome';
 
 /** Same bound the Save / Finish editing upload uses before it lets the user walk away. */
 export const UPLOAD_PROGRESS_LIMIT_MS = 120_000;
@@ -34,7 +36,13 @@ export function useSpeleoExitUpload() {
     return () => window.clearTimeout(timer);
   }, [uploading]);
 
-  const upload = async (message: string, isCurrent: () => boolean): Promise<ExitUploadResult> => {
+  /**
+   * `isCurrent` is the PROJECT check (still the project the upload was started
+   * for); it gates applying the result. `isShown` is the prompt's own identity:
+   * once the user walks away from a slow upload it is false, and the result that
+   * lands later is still applied and toasted (frontend#2), not dropped.
+   */
+  const upload = async (message: string, isCurrent: () => boolean, isShown?: () => boolean): Promise<ExitUploadResult> => {
     setSlow(false);
     setUploading(true);
     try {
@@ -45,6 +53,7 @@ export function useSpeleoExitUpload() {
         // for in a dialog of its own - which would land behind this prompt.
         ...(unwound ? { acceptOlderVersion: true } : {}),
       });
+      if (isShown && !isShown() && isCurrent()) toastLateUploadOutcome(resolved);
       if (resolved?.kind === 'divergence_needed') return 'diverged';
       if (resolved?.kind !== 'released') return 'failed';
       if (useProjectStore.getState().isDirty || useSpeleoStore.getState().link?.hasUnpushedEdits) return 'newer';
@@ -92,7 +101,9 @@ export function SpeleoExitUploadFields({
           className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
           placeholder={t('speleoExitPrompt.messagePlaceholder')}
           data-testid={id}
+          aria-describedby={`${id}-limit`}
         />
+        <CommitMessageLimit message={message} id={`${id}-limit`} testIdPrefix={id} />
       </div>
       {uploading && slow && (
         <p role="alert" className="text-sm text-warning" data-testid={`${testIdPrefix}-upload-slow`}>

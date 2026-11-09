@@ -1,7 +1,6 @@
-import { confirmWorkspaceDrafts } from '../utils/workspaceDrafts';
+import { confirmWorkspaceDrafts, discardWorkspaceDrafts, workspaceDraftNotice } from '../utils/workspaceDrafts';
 import { isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent, reserveProjectRequest } from '../utils/projectTransition';
 import { useCallback } from 'react';
-import { askExitConfirm } from '../utils/exitConfirm';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type ToastKind } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
@@ -16,7 +15,10 @@ import {
   humanizeSpeleoError,
   unpushedLocalEdits,
 } from '../utils/speleoError';
+import { askExitChoice } from '../utils/exitConfirm';
+import { saveOpenProjectLocally } from '../utils/saveOpenProjectLocally';
 import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from '../utils/speleoExit';
+import { TOAST_KEYS } from '../utils/toastKeys';
 import type {
   SpeleoProjectSummary,
   SpeleoOpenResult,
@@ -51,27 +53,38 @@ interface UseOpenRemoteProjectOpts {
  * goes through the exit prompt first - BEFORE the open reserves its ownership,
  * because the prompt's own close reserves a project request of its own and would
  * otherwise supersede this open. Unsent SpeleoDB input is asked about before that
- * prompt, which can upload or release. Reopening the project already on screen is
- * not leaving it, so it asks nothing. `false` = the user cancelled; nothing happened.
+ * prompt, which can upload or release; without the prompt it is folded into the
+ * unsaved-changes question that follows (`confirmUnsavedHandBack`). Reopening the
+ * project already on screen is not leaving it, so it asks nothing. `false` = the
+ * user cancelled; nothing happened.
  */
 async function leaveOpenProjectFor(targetProjectId: string): Promise<boolean> {
-  if (!useProjectStore.getState().project) return true;
+  if (!openProjectNeedsSpeleoExitPrompt()) return true;
   if (useSpeleoStore.getState().remoteProjectId === targetProjectId) return true;
   if (!await confirmWorkspaceDrafts()) return false;
-  if (!openProjectNeedsSpeleoExitPrompt()) return true;
   return askSpeleoExit('switch');
 }
 
 /** One ownership token covers the warning, download, seed, and file load. */
 function reserveRemoteOpen() {
   const request = reserveProjectRequest();
-  const sessionGeneration = useSpeleoStore.getState().sessionGeneration;
+  let sessionGeneration = useSpeleoStore.getState().sessionGeneration;
   let dispatched = false;
   return { request,
     latest: () => isProjectRequestCurrent(request) && useSpeleoStore.getState().sessionGeneration === sessionGeneration,
     dispatch: () => { dispatched = beginProjectMutation(request); return dispatched; },
     current: () => (dispatched ? isProjectMutationCurrent(request) : isProjectRequestCurrent(request)) &&
-      useSpeleoStore.getState().sessionGeneration === sessionGeneration };
+      useSpeleoStore.getState().sessionGeneration === sessionGeneration,
+    /**
+     * The backend ended the session as part of THIS open (the server rejected the
+     * saved token, and the open fell back to the read-only cached copy). Mirror the
+     * sign-out and carry on under the signed-out generation: the open is not
+     * superseded by a session change it caused itself.
+     */
+    endSessionHere: () => {
+      useSpeleoStore.getState().clearSession();
+      sessionGeneration = useSpeleoStore.getState().sessionGeneration;
+    } };
 
 }
 
@@ -134,12 +147,19 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           permission,
           forPath: result.local_path,
           hasUnpushedEdits: hasUnpushedEdits === true,
-          ...(result.offline ? { offline: true } : {}),
+          // A copy opened without the server's say has no confirmed server tip.
+          ...(result.offline || result.read_only ? { offline: true } : {}),
           projectId,
         });
       }
       onBeforeLoad?.();
-      const loaded = await loadProject(result.local_path, { accessConfirmed: true, request: ownership.request });
+      // Without a session (signed out, or the token was just rejected) there is no
+      // lock to take: the copy stays read-only and nothing is sent to SpeleoDB.
+      const loaded = await loadProject(result.local_path, {
+        accessConfirmed: true,
+        request: ownership.request,
+        ...(result.read_only ? { acquireLock: false } : {}),
+      });
       if (!ownership.current()) return { status: 'load_failed', localPath: result.local_path };
       if (!loaded.success) {
         // Nothing to roll back when we never seeded: the link on screen is still
@@ -185,7 +205,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // already-open fast path. The backend may still have replaced the whole tree, so
       // run the same post-replacement cleanup as fast-forward, discard, and restore.
       if (
-        alreadyOpen && !result.offline &&
+        alreadyOpen && !result.offline && !result.read_only &&
         !(await applySpeleoTreeReplacement(speleoProjectSessionIssuedFor(projectId), true))
       ) {
         return { status: 'load_failed', localPath: result.local_path };
@@ -200,18 +220,29 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   // Only unsaved memory changes need confirmation before a remote open. Saved
   // local edits remain on disk, and the backend releases the old project's lock.
   // The acknowledgement belongs to this exact project snapshot and request. Asked
-  // in-app, like every other exit question (`utils/exitConfirm`).
+  // in-app, like every other exit question (`utils/exitConfirm`), as ONE question
+  // that also lists any unsent SpeleoDB input the switch drops (frontend#10).
   const confirmUnsavedHandBack = useCallback(async (current: () => boolean) => {
     if (!current()) return null;
     const { project, isDirty } = useProjectStore.getState();
-    if (!project || !isDirty) return { project: null };
-    const accepted = await askExitConfirm({
+    if (!project) return { project: null };
+    if (!isDirty) return await confirmWorkspaceDrafts(current) && current() ? { project: null } : null;
+    const drafts = workspaceDraftNotice();
+    // Never discard-only (frontend#6): a project with a file of its own can save
+    // its edits on this computer first, then the open goes on.
+    const choice = await askExitChoice({
       title: t('speleodb.exit.unsavedTitle'),
-      message: t('speleodb.exit.unsavedMessage'),
+      message: drafts ? `${t('speleodb.exit.unsavedMessage')} ${drafts}` : t('speleodb.exit.unsavedMessage'),
       confirmLabel: t('speleodb.exit.discardChanges'),
       cancelLabel: t('common.actions.cancel'),
+      ...(project.file_path ? { saveLabel: t('speleoExitPrompt.saveLocally') } : {}),
     });
-    if (!accepted || !current() || useProjectStore.getState().project !== project) return null;
+    if (choice === 'cancel' || !current() || useProjectStore.getState().project !== project) return null;
+    if (choice === 'save') {
+      const saved = await saveOpenProjectLocally();
+      if (!saved?.success || !current() || useProjectStore.getState().isDirty) return null;
+    }
+    discardWorkspaceDrafts();
     return { project };
   }, [t]);
 
@@ -284,8 +315,15 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           reLogin: speleoErrorAction(e) === 'ReLogin',
         };
       }
+      // The backend dropped a token the server rejected during this open: the app is
+      // signed out now, whatever happens next.
+      const sessionExpired = result.read_only === 'session_expired';
       // A new edit during the download invalidates the earlier discard consent.
-      if (!ownership.current()) return { status: 'cancelled' };
+      if (!ownership.current()) {
+        if (sessionExpired) useSpeleoStore.getState().clearSession();
+        return { status: 'cancelled' };
+      }
+      if (sessionExpired) ownership.endSessionHere();
       const landed = handBackRefusalAfterPull(summary, result.local_path, acknowledged.project);
       if (landed) return { status: 'error', message: landed, reLogin: false };
       return finishOpen(result, summary.permission, summary.id, ownership, {
@@ -294,6 +332,13 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           message: t('speleodb.projectListing.offlineCopy'),
           key: 'speleodb-offline-open',
           kind: 'warning' as const,
+        } } : {}),
+        ...(result.read_only ? { successToast: {
+          message: t(sessionExpired
+            ? 'speleodb.cachedCopies.openedSessionExpired'
+            : 'speleodb.cachedCopies.openedSignedOut'),
+          key: TOAST_KEYS.SPELEODB_READ_ONLY_OPEN,
+          kind: sessionExpired ? 'warning' as const : 'info' as const,
         } } : {}),
       });
     },
