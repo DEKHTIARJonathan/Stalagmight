@@ -6,8 +6,9 @@
  *
  * Parallel-safe: all state is per-page (mocked IPC + `window.__E2E_TEST__` stores).
  */
-import { test, expect, type Page } from './fixtures/coverage';
+import { test, expect, type Locator, type Page } from './fixtures/coverage';
 import { setupMockedPage, createProject, seedProjectWithSections, waitForMapIdle } from './helpers/app';
+import { MAP_MIN_WIDTH } from '../src/components/SingleSystemView/layoutConstants';
 
 type Stores = {
   __E2E_TEST__: {
@@ -33,6 +34,41 @@ async function enterClosureView(page: Page): Promise<void> {
 
 const geometryMode = (page: Page) => page.evaluate(() => (window as unknown as Stores).__E2E_TEST__.uiStore.getState().geometryMode);
 
+/**
+ * A narrow window with a wide pinned Sections panel: the panel yields until the map
+ * column is exactly MAP_MIN_WIDTH.
+ */
+async function squeezeMapToMinimum(page: Page): Promise<void> {
+  await page.setViewportSize({ width: 806, height: 551 });
+  await page.evaluate(() => {
+    (window as unknown as { __E2E_TEST__: { uiStore: { setState: (s: unknown) => void } } }).__E2E_TEST__.uiStore
+      .setState({ sectionsPanelMode: 'pin', sectionsPanelOpen: true, sectionsPanelWidth: 700 });
+  });
+  await expect.poll(async () => Math.round((await page.getByTestId('map-canvas').boundingBox())!.width))
+    .toBe(MAP_MIN_WIDTH);
+}
+
+type Box = { x: number; y: number; width: number; height: number };
+const intersects = (a: Box, b: Box) =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
+
+/** The pill does not overlap the +/- control, and its action is whole, inside the map and on top. */
+async function expectClearOfZoomControl(page: Page, pill: Locator, action: Locator): Promise<void> {
+  const zoom = (await page.getByTestId('map-canvas').locator('.maplibregl-ctrl-top-right .maplibregl-ctrl-group').boundingBox())!;
+  const map = (await page.getByTestId('map-canvas').boundingBox())!;
+  const pillBox = (await pill.boundingBox())!;
+  const actionBox = (await action.boundingBox())!;
+  expect(intersects(pillBox, zoom), `pill ${JSON.stringify(pillBox)} vs zoom ${JSON.stringify(zoom)}`).toBe(false);
+  expect(actionBox.x).toBeGreaterThanOrEqual(map.x);
+  expect(actionBox.x + actionBox.width).toBeLessThanOrEqual(zoom.x);
+  // Whole: as wide as its own content, not clipped by the pill.
+  expect(await action.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  // On top at its centre (nothing covers it), so a click lands on it.
+  const hit = await page.evaluate(([x, y]) => document.elementFromPoint(x!, y!)?.closest('button')?.dataset.testid ?? null,
+    [actionBox.x + actionBox.width / 2, actionBox.y + actionBox.height / 2]);
+  expect(hit).toBe(await action.getAttribute('data-testid'));
+}
+
 test.describe('Closures Computed View pill', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
@@ -56,6 +92,38 @@ test.describe('Closures Computed View pill', () => {
     await resume.click();
     await expect.poll(() => geometryMode(page)).toBe('measured');
     await expect(pill).toHaveCount(0);
+  });
+
+  test('at the minimum map width the pills stay clear of the zoom control, actions whole', async ({ page }) => {
+    // The map floor is in CSS px, so this one layout stands for every UI zoom: a
+    // larger zoom only shrinks the CSS viewport, and the side panels yield until the
+    // map is at MAP_MIN_WIDTH (what 1024x700 at 127% or 1280x720 at 150% produced).
+    await squeezeMapToMinimum(page);
+    await enterClosureView(page);
+    const closure = page.getByTestId('geometry-readonly-banner');
+    await expect(closure).toBeVisible();
+    await expectClearOfZoomControl(page, closure, closure.getByTestId('geometry-readonly-resume'));
+
+    // The SpeleoDB pill (signed out: the longest wording, with Sign in) in the same row.
+    await page.evaluate(() => {
+      const w = window as unknown as { __E2E_TEST__: { speleoStore: { setState: (s: unknown) => void } } };
+      w.__E2E_TEST__.speleoStore.setState({ session: null, link: {
+        permission: 'READ_AND_WRITE', editState: 'read-only', lockHolder: null, lockedByOther: false,
+        hasUnpushedEdits: false, unwound: false, undoMode: 'full', remoteState: 'up_to_date',
+        noAccess: false, serverError: null,
+      } });
+    });
+    const speleo = page.getByTestId('speleodb-readonly-banner');
+    await expect(speleo).toBeVisible();
+    await expectClearOfZoomControl(page, speleo, speleo.getByTestId('speleodb-readonly-login'));
+
+    // Back to the closure pill: its action is not just visible but the thing clicked.
+    await page.evaluate(() => {
+      const w = window as unknown as { __E2E_TEST__: { speleoStore: { setState: (s: unknown) => void } } };
+      w.__E2E_TEST__.speleoStore.setState({ link: null, projectLinkKind: 'local' });
+    });
+    await closure.getByTestId('geometry-readonly-resume').click();
+    await expect.poll(() => geometryMode(page)).toBe('measured');
   });
 
   test('no Resume where the computed view is forced (Plan)', async ({ page }) => {

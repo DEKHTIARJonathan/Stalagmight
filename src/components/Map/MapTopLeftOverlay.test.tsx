@@ -86,4 +86,16 @@ describe('MapTopLeftOverlay', () => {
     expect(screen.queryByTestId('geometry-readonly-banner')).not.toBeInTheDocument();
     expect(screen.queryByTestId('geometry-computing-banner')).not.toBeInTheDocument();
   });
+
+  // jsdom has no layout: this pins the class contract, and
+  // e2e-playwright/map-readonly-pill.spec.ts measures the real thing at MAP_MIN_WIDTH.
+  it('bounds the row clear of the zoom control, lets the notices wrap, and passes clicks through', () => {
+    render(<MapTopLeftOverlay {...baseProps} showClosureReadOnly />);
+
+    const row = screen.getByTestId('map-top-left-overlay');
+    expect(row).toHaveClass('right-14', 'pointer-events-none');
+    expect(screen.getByTestId('fit-to-view-button')).toHaveClass('pointer-events-auto', 'shrink-0');
+    expect(screen.getByTestId('geometry-readonly-banner')).toHaveClass('pointer-events-auto', 'min-w-0', 'flex-wrap');
+    expect(screen.getByTestId('geometry-readonly-resume')).toHaveClass('shrink-0', 'whitespace-nowrap');
+  });
 });

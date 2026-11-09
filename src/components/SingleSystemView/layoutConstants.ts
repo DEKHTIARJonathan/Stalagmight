@@ -104,7 +104,10 @@ export const LEFT_WORKSPACE_MIN_WIDTH = 230;
  *   - top row: the fit-to-view / exit-focus button (left: 8, up to ~150 wide with
  *     its focus label) against the MapLibre NavigationControl (right, ~40) with
  *     the offline indicator inboard of it at `right-14` (56) - ~300px before they
- *     touch.
+ *     touch. The read-only notices beside the fit button (SpeleoDB, Closures
+ *     Computed View) are NOT sized into this floor: they are longer than the row
+ *     at this width, so `MapTopLeftOverlay` bounds the row at `right-14` and lets
+ *     them wrap, keeping their actions whole and clear of the zoom control.
  *   - bottom row: the depth/distance/gas legend (left: 10, ~120 wide) above the
  *     MapLibre ScaleControl (maxWidth 100) against the bottom-right attribution
  *     (~140) - also ~300px.

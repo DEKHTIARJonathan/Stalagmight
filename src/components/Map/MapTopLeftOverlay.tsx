@@ -24,6 +24,13 @@ import {
  * comparison is not spelled out literally anywhere below. That lint scans
  * source text, comments included.
  */
+/**
+ * A read-only notice. `min-w-0` lets it shrink inside the bounded row and
+ * `flex-wrap` lets its action drop under the words instead of being cut off.
+ */
+const NOTICE_CLS =
+  'pointer-events-auto min-w-0 bg-panel border border-accent rounded px-3 py-1.5 text-xs flex flex-wrap items-center gap-x-1.5 gap-y-1';
+
 export function MapTopLeftOverlay({
   focused,
   onFitOrExitFocus,
@@ -46,8 +53,20 @@ export function MapTopLeftOverlay({
 }) {
   const { t } = useTranslation();
 
+  // Bounded on the right at `right-14` (56px), the column of the top-right map
+  // chrome: the MapLibre +/- control is ~43px in from the edge (10px margin, 31px
+  // box, 2px ring) and the offline indicator sits at `right-14` too. Unbounded,
+  // an absolutely positioned row grows to the map's right edge and the notices ran
+  // UNDER the zoom control on a narrow map (MAP_MIN_WIDTH, i.e. a small window or
+  // a large UI zoom). Inside the bound the fit button keeps its size, the notices
+  // shrink and wrap (text first, then the action onto its own line), and an action
+  // never shrinks. The row spans the map's width, so it lets clicks through where
+  // nothing is drawn.
   return (
-    <div className="absolute top-2 left-2 flex items-center gap-2">
+    <div
+      className="pointer-events-none absolute top-2 left-2 right-14 flex items-start gap-2"
+      data-testid="map-top-left-overlay"
+    >
       {/* The solve's announcement channel, and the ONLY thing that speaks it.
           Mounted unconditionally and empty until the solve starts, because a live
           region injected at the same moment as its text is unreliably announced -
@@ -67,7 +86,7 @@ export function MapTopLeftOverlay({
 
       <button
         onClick={onFitOrExitFocus}
-        className="flex items-center gap-1.5 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
+        className="pointer-events-auto shrink-0 flex items-center gap-1.5 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
         title={focused ? t('sections.focus.exit') : t('map.fitToViewTitle')}
         aria-label={focused ? t('sections.focus.exit') : t('map.fitToViewTitle')}
         data-testid="fit-to-view-button"
@@ -79,10 +98,10 @@ export function MapTopLeftOverlay({
 
       {showSpeleoReadOnly && (
         <div
-          className="bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-1.5"
+          className={NOTICE_CLS}
           data-testid="speleodb-readonly-banner"
         >
-          <LockIcon size={13} />
+          <LockIcon size={13} className="shrink-0" />
           <SpeleoReadOnlyLabel />
           <SpeleoResumeEditingButton />
           <SpeleoLogInButton />
@@ -98,12 +117,12 @@ export function MapTopLeftOverlay({
           for it. */}
       {(showClosureReadOnly || showClosureComputing) && (
         <div
-          className="bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-2"
+          className={NOTICE_CLS}
           data-testid={showClosureReadOnly ? 'geometry-readonly-banner' : 'geometry-computing-banner'}
         >
           {showClosureComputing && (
             <span
-              className="w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin"
+              className="shrink-0 w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin"
               aria-hidden="true"
               data-testid="geometry-computing-spinner"
             />
@@ -115,12 +134,12 @@ export function MapTopLeftOverlay({
               a solve in progress is not itself the reason editing is off. */}
           {showClosureReadOnly && !showClosureComputing && (
             <>
-              <LockIcon size={13} />
-              <span className="text-accent font-medium">{t('map.geometry.adjustedBadge')}</span>
+              <LockIcon size={13} className="shrink-0" />
+              <span className="min-w-0 text-accent font-medium">{t('map.geometry.adjustedBadge')}</span>
             </>
           )}
           {showClosureComputing && (
-            <span className="text-accent font-medium" data-testid="geometry-computing">
+            <span className="min-w-0 text-accent font-medium" data-testid="geometry-computing">
               {t(
                 showClosureReadOnly
                   ? 'map.geometry.computingReadOnly'

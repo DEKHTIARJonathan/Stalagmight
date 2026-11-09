@@ -7,7 +7,7 @@ import { speleoReadOnlyReason, speleoReadOnlyReasonKey } from '../../utils/spele
 import { PencilIcon, SignInIcon } from '../common/icons';
 
 const RESUME_CLS =
-  'ml-1 inline-flex items-center gap-1 rounded bg-accent px-2 py-0.5 font-medium text-accent-on hover:bg-accent-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
+  'ml-1 shrink-0 whitespace-nowrap inline-flex items-center gap-1 rounded bg-accent px-2 py-0.5 font-medium text-accent-on hover:bg-accent-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
 
 /**
  * "Resume editing" on the SpeleoDB read-only pill: takes the write lock again
@@ -44,7 +44,7 @@ export function SpeleoReadOnlyLabel() {
   const session = useSpeleoStore((s) => s.session);
   const reason = speleoReadOnlyReason(link, session);
   return (
-    <span className="text-accent font-medium" data-testid="speleodb-readonly-reason" data-reason={reason ?? 'none'}>
+    <span className="min-w-0 text-accent font-medium" data-testid="speleodb-readonly-reason" data-reason={reason ?? 'none'}>
       {reason ? t(speleoReadOnlyReasonKey(reason)) : t('speleodb.map.readOnlyBadge')}
     </span>
   );
