@@ -866,3 +866,22 @@ export function PinIcon(props: IconProps) {
     </BaseIcon>
   );
 }
+
+/**
+ * Survey sections: a short survey line (three shots between four stations), the
+ * thing the Sections panel lists. Filled bars and discs, never strokes, so it
+ * keeps its weight under the WebKit UI zoom.
+ */
+export function SectionsIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <Bar x1={3.5} y1={15} x2={8} y2={7} />
+      <Bar x1={8} y1={7} x2={12.5} y2={12} />
+      <Bar x1={12.5} y1={12} x2={16.5} y2={4.5} />
+      <circle cx="3.5" cy="15" r="2.2" fill="currentColor" stroke="none" />
+      <circle cx="8" cy="7" r="2.2" fill="currentColor" stroke="none" />
+      <circle cx="12.5" cy="12" r="2.2" fill="currentColor" stroke="none" />
+      <circle cx="16.5" cy="4.5" r="2.2" fill="currentColor" stroke="none" />
+    </BaseIcon>
+  );
+}
