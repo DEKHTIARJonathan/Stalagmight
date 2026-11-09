@@ -800,11 +800,15 @@ fn my_own_un_uploaded_work_on_the_tip_still_fast_forwards() {
 fn offline_another_accounts_un_uploaded_work_opens_read_only_and_names_them() {
     crate::test_helpers::with_isolated_config(|| {
         // Never resolves (RFC 6761): a DNS failure, so the open falls back to the
-        // cached copy (a refused connection is not offline-eligible today).
+        // cached copy (a refused connection is not offline-eligible today). A
+        // hostname is outside the automatic HTTP exceptions, so it reaches DNS only
+        // through the development-build insecure-HTTP override (tests are debug
+        // builds); without it the policy refuses it, which is not offline.
         let url = "http://speleodb-offline.invalid:8000";
         let temp = tempfile::tempdir().expect("temp");
         let copy = seed(temp.path(), MINE, url, true);
         let state = AppState::new().expect("state");
+        state.config.lock().expect("config").speleodb.insecure_http = true;
         state.speleodb_record_cache_owner(&copy, url, "someone@example.com", "Theirs");
         sign_in(&state, url, ME);
         let opened = open_online(&state, &copy).expect("offline open");

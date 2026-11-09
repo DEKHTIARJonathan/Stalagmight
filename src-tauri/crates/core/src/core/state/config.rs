@@ -679,7 +679,7 @@ mod tests {
                     None,
                     Some("<your_token_here>".into()),
                 )
-                .expect_err("a connected session is bound to its server");
+                .unwrap_err(); // a connected session is bound to its server
             assert_eq!(
                 refused.message,
                 "Disconnect from SpeleoDB before changing servers"
@@ -691,7 +691,7 @@ mod tests {
             );
             let mut settings = state.get_config();
             settings.speleodb.endpoint = Some("https://other.example.com".into());
-            let refused = state.update_config(settings).expect_err("refused");
+            let refused = state.update_config(settings).unwrap_err();
             assert_eq!(
                 refused.to_string(),
                 "Disconnect from SpeleoDB before changing servers"
@@ -723,7 +723,7 @@ mod tests {
                 None,
             );
             assert_eq!(
-                refused.expect_err("no password").message,
+                refused.unwrap_err().message,
                 "an email and a password are required to connect"
             );
             for saved in [state.get_config(), Config::load().unwrap()] {
