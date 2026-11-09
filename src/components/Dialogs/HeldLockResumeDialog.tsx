@@ -38,14 +38,14 @@ import { useScreenOccupant } from '../../hooks/useScreenOccupant';
  *   agreement rather than having the UI offer what the backend would refuse.
  *
  * Dialog-wide:
- * - **Keep working** - dismiss and leave the locks held.
+ * - **Not now** - dismiss and leave the locks held.
  *
  * There is deliberately NO bulk release. The server verb is all-or-nothing and this
  * prompt is exactly where locks sitting over un-pushed work show up, so a single
  * button that frees every lock is the one action most likely to strand the work the
  * per-row rules exist to protect. Releasing is per project, and only where there is
  * nothing local to lose.
- * - Closing the dialog (X) is the "do nothing" exit - same as Keep working.
+ * - Closing the dialog (X) is the "do nothing" exit - same as Not now.
  */
 export default function HeldLockResumeDialog() {
   const { t } = useTranslation();
@@ -98,7 +98,7 @@ export default function HeldLockResumeDialog() {
    *     every row to Release. Continue editing is the safe read of "unknown": it
    *     KEEPS the lock and opens the project so the user can look for themselves.
    *     A genuinely abandoned lock is still releasable from Project Settings, and
-   *     Keep working leaves everything as it was.
+   *     Not now leaves everything as it was.
    */
   const actionFor = (projectId: string): 'release' | 'continue' | 'checking' => {
     if (!loaded) return 'checking';

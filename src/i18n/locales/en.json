@@ -3474,7 +3474,7 @@
       "title": "You hold SpeleoDB write locks",
       "description_one": "You still hold the write lock on this SpeleoDB project (perhaps from a session that did not exit cleanly). Others cannot edit it until it is released.",
       "description_other": "You still hold the write lock on {{count}} SpeleoDB projects (perhaps from a session that did not exit cleanly). Others cannot edit them until they are released.",
-      "keep": "Keep working",
+      "keep": "Not now",
       "release": "Release",
       "releaseOneAria": "Release the write lock on {{name}}",
       "releasing": "Releasing…",

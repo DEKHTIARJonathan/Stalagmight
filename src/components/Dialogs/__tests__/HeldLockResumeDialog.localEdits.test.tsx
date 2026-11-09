@@ -106,6 +106,17 @@ beforeEach(() => {
 const row = (id: string) => screen.getByTestId(`speleodb-held-lock-${id}`);
 
 describe('HeldLockResumeDialog local-edit join (#270)', () => {
+  it('labels the do-nothing exit "Not now" and dismisses without a server call', async () => {
+    wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
+    render(<HeldLockResumeDialog />);
+
+    const notNow = await screen.findByTestId('speleodb-held-lock-keep');
+    expect(notNow).toHaveTextContent('Not now');
+    await userEvent.click(notNow);
+    expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(false);
+    expect(invokeIpcMock.mock.calls.some((c) => String(c[0]).startsWith('speleodb_release'))).toBe(false);
+  });
+
   it('offers Continue editing (and no Release) for a project with local changes', async () => {
     wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
     render(<HeldLockResumeDialog />);
