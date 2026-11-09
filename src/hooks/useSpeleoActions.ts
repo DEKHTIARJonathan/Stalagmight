@@ -348,7 +348,13 @@ export function useSpeleoActions(): SpeleoActions {
         applyPush(result);
         const kind = asPushKind(result.kind);
         if (kind === 'pushed') {
-          showToast(t('speleodb.editBar.toasts.pushed'), TOAST_KEYS.SPELEODB_PUSHED, 'success');
+          // sdk#3: the upload left its undo history out to fit the server's size
+          // limit. Same event, one surface: the success toast becomes a caveat.
+          if (result.kind === 'pushed' && result.undo_history_omitted) {
+            showToast(t('speleodb.editBar.toasts.pushedWithoutHistory'), TOAST_KEYS.SPELEODB_PUSHED, 'warning');
+          } else {
+            showToast(t('speleodb.editBar.toasts.pushed'), TOAST_KEYS.SPELEODB_PUSHED, 'success');
+          }
           noteNoAnchorIfNeeded();
           await flushToDiskAfterPush();
         } else if (kind === 'not_editing') {
@@ -473,13 +479,18 @@ export function useSpeleoActions(): SpeleoActions {
         applyDone(result);
         switch (asDoneKind(result.kind)) {
           case 'released':
-            showToast(
-              hadUnpushedEdits
-                ? t('speleodb.editBar.toasts.released')
-                : t('speleodb.editBar.toasts.releasedNothingToUpload'),
-              TOAST_KEYS.SPELEODB_RELEASED,
-              'success',
-            );
+            // sdk#3: see `push` - an upload that left its undo history out says so.
+            if (result.kind === 'released' && result.undo_history_omitted) {
+              showToast(t('speleodb.editBar.toasts.releasedWithoutHistory'), TOAST_KEYS.SPELEODB_RELEASED, 'warning');
+            } else {
+              showToast(
+                hadUnpushedEdits
+                  ? t('speleodb.editBar.toasts.released')
+                  : t('speleodb.editBar.toasts.releasedNothingToUpload'),
+                TOAST_KEYS.SPELEODB_RELEASED,
+                'success',
+              );
+            }
             noteNoAnchorIfNeeded();
             await flushToDiskAfterPush();
             break;

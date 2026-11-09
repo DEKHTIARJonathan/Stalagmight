@@ -27,11 +27,24 @@ fn upload_timeout(bytes: usize) -> Duration {
 const JSON_LIMIT: usize = 10 * 1024 * 1024;
 pub(crate) const NATIVE_LIMIT: u64 = 512 * 1024 * 1024;
 
+/// The largest project file SpeleoDB accepts in one upload, in bytes. A larger
+/// file is refused with a 400 only AFTER its whole body has been sent, so the
+/// push path checks against this first (sdk#3).
+///
+/// The value is an upstream bug, not a design limit. The server compares the
+/// upload against `DJANGO_UPLOAD_TOTAL_FILES_LIMIT * 1024 * 1204`: that setting is
+/// the maximum file COUNT (20), not the intended
+/// `DJANGO_UPLOAD_TOTAL_FILESIZE_MB_LIMIT` (150 MB), and `1204` is a typo for
+/// `1024`. 20 * 1024 * 1204 = 24,657,920 bytes (about 23.5 MiB). Raise this to the
+/// real limit once the server is fixed.
+pub const SERVER_UPLOAD_LIMIT_BYTES: u64 = 24_657_920;
+
 #[derive(Clone, Copy)]
 struct Settings {
     timeout: Option<Duration>,
     retries: u32,
     native_limit: u64,
+    upload_limit: u64,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -39,6 +52,7 @@ impl Default for Settings {
             timeout: None,
             retries: 2,
             native_limit: NATIVE_LIMIT,
+            upload_limit: SERVER_UPLOAD_LIMIT_BYTES,
         }
     }
 }
@@ -113,12 +127,17 @@ impl SdkClient {
                 }
                 let started = Instant::now();
                 let result = operation().await;
-                let outcome = match &result {
-                    Ok(_) | Err(SpeleoDbError::Parse(_)) => Outcome::Ok,
-                    Err(SpeleoDbError::Status { status, .. }) => Outcome::from_status(*status),
-                    Err(_) => Outcome::NetworkError,
-                };
-                super::metrics::record(endpoint, outcome, started.elapsed());
+                // sdk#8: a contract mismatch is the failure most likely to need a
+                // bug report (a new server enum value fails every call that
+                // decodes it), so name the call and the field in the log.
+                if let Err(SpeleoDbError::Parse(detail)) = &result {
+                    tracing::warn!(
+                        endpoint = endpoint.kind(),
+                        detail = %detail,
+                        "SpeleoDB reply does not match the expected contract"
+                    );
+                }
+                super::metrics::record(endpoint, attempt_outcome(&result), started.elapsed());
                 let transient = matches!(&result, Err(SpeleoDbError::Transport { .. }))
                     || matches!(
                         &result,
@@ -185,6 +204,17 @@ impl SdkClient {
     }
 }
 
+/// The traffic-metrics outcome of one attempt. A [`SpeleoDbError::Parse`] is its
+/// own error kind, never `Ok` (sdk#8): the server answered, but not in a shape
+/// the app can use.
+fn attempt_outcome<T>(result: &Result<T, SpeleoDbError>) -> Outcome {
+    match result {
+        Ok(_) => Outcome::Ok,
+        Err(SpeleoDbError::Parse(_)) => Outcome::ParseError,
+        Err(SpeleoDbError::Status { status, .. }) => Outcome::from_status(*status),
+        Err(_) => Outcome::NetworkError,
+    }
+}
 fn unreachable_result<T>() -> Result<T, SpeleoDbError> {
     Err(SpeleoDbError::Io(
         "invalid SpeleoDB retry configuration".into(),
@@ -193,12 +223,35 @@ fn unreachable_result<T>() -> Result<T, SpeleoDbError> {
 fn io_error(error: std::io::Error) -> SpeleoDbError {
     SpeleoDbError::Io(error.to_string())
 }
+/// `true` when a TLS handshake or certificate check is what failed: a typed
+/// `rustls::Error` anywhere in the error tree. tokio-rustls reports it inside an
+/// `io::Error`, which hyper-rustls wraps in a second one, and `io::Error::source`
+/// skips the error it wraps - so every `io::Error` is also opened with
+/// `get_ref`. Typed, never text-matched.
+fn is_tls_failure(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut pending = vec![error];
+    while let Some(link) = pending.pop() {
+        if link.is::<rustls::Error>() {
+            return true;
+        }
+        if let Some(wrapped) = link
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+        {
+            pending.push(wrapped);
+        }
+        pending.extend(link.source());
+    }
+    false
+}
 fn network_error(error: reqwest::Error) -> SpeleoDbError {
     use std::error::Error;
     let mut cause = if error.is_timeout() {
         TransportCause::Timeout
     } else if error.is_dns() {
         TransportCause::Dns
+    } else if is_tls_failure(&error) {
+        TransportCause::Tls
     } else {
         TransportCause::Unknown
     };
@@ -224,10 +277,56 @@ fn network_error(error: reqwest::Error) -> SpeleoDbError {
         detail: error.without_url().to_string(),
     }
 }
+/// The longest SDK decoder detail kept on a contract-mismatch error. serde's
+/// "unknown variant" message lists every accepted value (about 250 for a
+/// country), which would bury the one that failed.
+const CONTRACT_DETAIL_LIMIT: usize = 240;
+
+/// The [`SpeleoDbError::Parse`] text for a 2xx reply the SDK could not decode.
+///
+/// Keeps the SDK's decoder detail (which field or enum value failed, and where)
+/// so the log and the error dialog can name the mismatch (sdk#8). Quoted
+/// response strings are redacted - serde quotes the offending VALUE for a type
+/// mismatch, and that can be user text such as a project description - and the
+/// detail is capped at [`CONTRACT_DETAIL_LIMIT`] characters.
+fn contract_mismatch(detail: Option<String>) -> String {
+    const MISMATCH: &str = "response does not match the SpeleoDB SDK contract";
+    let Some(detail) = detail else {
+        return MISMATCH.into();
+    };
+    let mut redacted = String::with_capacity(detail.len());
+    let mut chars = detail.chars();
+    let mut quoted = false;
+    while let Some(c) = chars.next() {
+        match (quoted, c) {
+            (false, '"') => {
+                quoted = true;
+                redacted.push_str("\"...\"");
+            }
+            (true, '"') => quoted = false,
+            (true, '\\') => {
+                chars.next();
+            }
+            (true, _) => {}
+            (false, c) => redacted.push(c),
+        }
+    }
+    let detail = redacted
+        .trim()
+        .trim_start_matches("failed to deserialize 2xx response body:")
+        .trim();
+    if detail.is_empty() {
+        return MISMATCH.into();
+    }
+    match detail.char_indices().nth(CONTRACT_DETAIL_LIMIT) {
+        Some((cut, _)) => format!("{MISMATCH}: {}...", &detail[..cut]),
+        None => format!("{MISMATCH}: {detail}"),
+    }
+}
 fn api_error<E: std::fmt::Debug>(error: ApiOpError<E>) -> SpeleoDbError {
     match error {
         ApiOpError::Api(error) if (200..300).contains(&error.status) => {
-            SpeleoDbError::Parse("response does not match the SpeleoDB SDK contract".into())
+            SpeleoDbError::Parse(contract_mismatch(error.parse_error))
         }
         ApiOpError::Api(error) => SpeleoDbError::Status {
             status: error.status,
@@ -235,9 +334,14 @@ fn api_error<E: std::fmt::Debug>(error: ApiOpError<E>) -> SpeleoDbError {
                 .unwrap_or_else(|| format!("HTTP {}", error.status)),
         },
         ApiOpError::Transport(HttpError::Network(error)) => network_error(error),
+        // A send failure. Only the timeout and the TLS failure are classified
+        // here; refused / reset / DNS through this arm stay Unknown (tracked
+        // separately as F1, deliberately not changed with the TLS mapping).
         ApiOpError::Transport(HttpError::Middleware(error)) => SpeleoDbError::Transport {
             cause: if error.is_timeout() {
                 TransportCause::Timeout
+            } else if is_tls_failure(&error) {
+                TransportCause::Tls
             } else {
                 TransportCause::Unknown
             },
@@ -322,10 +426,15 @@ fn client(
     insecure: bool,
     timeout: Duration,
 ) -> Result<SdkClient, SpeleoDbError> {
-    let settings = Settings::default();
+    SdkClient::new(base, token, insecure, timeout, settings())
+}
+/// The transport settings in force: the defaults, or a test's override.
+fn settings() -> Settings {
     #[cfg(test)]
-    let settings = TEST_SETTINGS.with(|value| value.get()).unwrap_or(settings);
-    SdkClient::new(base, token, insecure, timeout, settings)
+    if let Some(settings) = TEST_SETTINGS.with(std::cell::Cell::get) {
+        return settings;
+    }
+    Settings::default()
 }
 
 pub fn login(
@@ -369,9 +478,7 @@ pub fn fetch_user_email(base: &str, token: &str, insecure: bool) -> Result<Strin
                         return Ok(email.to_owned());
                     }
                 }
-                Err(SpeleoDbError::Parse(
-                    "response does not match the SpeleoDB SDK contract".into(),
-                ))
+                Err(SpeleoDbError::Parse(contract_mismatch(error.parse_error)))
             }
             Err(error) => Err(api_error(error)),
         }
@@ -622,6 +729,15 @@ pub fn upload_stalx(
         return Err(SpeleoDbError::Parse(
             "commit message must not be empty".into(),
         ));
+    }
+    // sdk#3: the server reads the whole body before it refuses an oversized file,
+    // so refuse it here, before reading it or opening a connection. The push path
+    // shrinks the snapshot first (`core::state::speleodb_upload_limit`); this is the
+    // backstop that keeps every caller from sending a body that cannot land.
+    let size = std::fs::metadata(path).map_err(io_error)?.len();
+    let limit = settings().upload_limit;
+    if size > limit {
+        return Err(SpeleoDbError::UploadTooLarge { size, limit });
     }
     let content = std::fs::read(path).map_err(io_error)?;
     let c = client(base, Some(token), insecure, upload_timeout(content.len()))?;

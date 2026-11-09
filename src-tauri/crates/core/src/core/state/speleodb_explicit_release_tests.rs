@@ -99,7 +99,7 @@ fn done_with_nothing_to_upload_never_frees_another_accounts_lock() {
         let result = state.speleodb_done(None);
         if let Ok(done) = &result {
             assert!(
-                matches!(done, DoneResult::Released),
+                matches!(done, DoneResult::Released { .. }),
                 "{case}: the session ends as released: {done:?}"
             );
         }

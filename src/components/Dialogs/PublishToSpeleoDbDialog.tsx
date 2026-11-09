@@ -105,14 +105,21 @@ export default function PublishToSpeleoDbDialog() {
       longitude: bothCoords ? lonNum : null,
     };
     try {
-      const result = await publishProjectAndReopen(params);
-      if (result === 'stale') return;
+      const { outcome, undoHistoryOmitted } = await publishProjectAndReopen(params);
+      if (outcome === 'stale') return;
       setPublishContinuation(null);
       if (ownsDialog()) closeDialog();
-      if (result === 'upload_pending') {
-        showToast(t('speleodb.publish.uploadPending'), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
-      } else if (result === 'reload_failed') {
-        showToast(t('speleodb.publish.reloadFailed'), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
+      // sdk#3: the first revision went up without its undo history to fit the server's
+      // size limit. One event, one surface: the note rides the outcome's own toast,
+      // and stands alone (as a warning) when the outcome has none.
+      const historyNote = undoHistoryOmitted ? t('speleodb.publish.withoutHistory') : null;
+      const withNote = (message: string) => (historyNote ? `${message} ${historyNote}` : message);
+      if (outcome === 'upload_pending') {
+        showToast(withNote(t('speleodb.publish.uploadPending')), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
+      } else if (outcome === 'reload_failed') {
+        showToast(withNote(t('speleodb.publish.reloadFailed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
+      } else if (historyNote) {
+        showToast(historyNote, TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
       }
     } catch (e) {
       showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');

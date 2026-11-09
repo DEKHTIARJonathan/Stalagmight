@@ -44,9 +44,12 @@ const TRANSPORT_KEYS: Record<TransportCause, string> = {
  * neither what failed nor what to do, and does not even hint the server was
  * unreachable. The message is built here instead: translatable, cause-specific,
  * and naming the server we are actually signed in to (self-hosted users need to
- * know WHICH box). The raw cause is not dropped - it stays on the error and in
- * the backend log (`client::with_retry` warns with the cause + endpoint), which
- * is what makes a bug report actionable.
+ * know WHICH box). The raw cause is not dropped: it stays on the rejected
+ * `SpeleoErrorDto` as `message` (the backend error's Display, request URLs
+ * stripped), so a caller that logs the error keeps it. The backend client does
+ * NOT log transport failures itself (`SdkClient::call` logs only contract
+ * mismatches); a transport failure reaches the backend log only where an
+ * orchestration path logs the error it is degrading around.
  */
 function transportMessage(cause: TransportCause): string {
   // The session endpoint is where we are actually authenticated (the config value

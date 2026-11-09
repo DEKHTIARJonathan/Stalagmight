@@ -29,7 +29,7 @@ it('conversion saves and uploads before downloading a fresh copy and acquiring e
     useProjectStore.setState((state) => ({ project: { ...state.project!, created_at: 'server-normalized' } }));
     return { success: true };
   });
-  expect(await publishProjectAndReopen(params)).toBe('opened');
+  expect((await publishProjectAndReopen(params)).outcome).toBe('opened');
   expect(mock.ipc.mock.calls.map(([cmd]) => cmd)).toEqual(['speleodb_publish', 'speleodb_link_status', 'speleodb_open_project']);
   expect(mock.ipc).toHaveBeenCalledWith('speleodb_publish', { params });
   expect(mock.ipc).toHaveBeenLastCalledWith('speleodb_open_project', { projectId: 'remote', projectName: params.name, latestCommitSha: null });
@@ -41,7 +41,7 @@ it('conversion saves and uploads before downloading a fresh copy and acquiring e
 });
 it('conversion preserves a linked copy after an unconfirmed initial upload without downloading over its work', async () => {
   mock.ipc.mockImplementation(async (cmd) => cmd === 'speleodb_publish' ? published : { ...status, has_unpushed_edits: true });
-  expect(await publishProjectAndReopen(params)).toBe('upload_pending');
+  expect((await publishProjectAndReopen(params)).outcome).toBe('upload_pending');
   expect(mock.ipc).toHaveBeenCalledTimes(2);
   expect(load).not.toHaveBeenCalled();
   expect(mock.acquire).not.toHaveBeenCalled();
@@ -56,7 +56,7 @@ it('conversion preserves newer edits made during creation instead of discarding 
     }
     return status;
   });
-  expect(await publishProjectAndReopen(params)).toBe('upload_pending');
+  expect((await publishProjectAndReopen(params)).outcome).toBe('upload_pending');
   expect(useProjectStore.getState().isDirty).toBe(true);
   expect(load).not.toHaveBeenCalled();
 });
@@ -68,11 +68,11 @@ it.each(['download', 'offline', 'load'])('conversion keeps the created remote id
     return { local_path: published.local_path, offline: failure === 'offline' };
   });
   if (failure === 'load') load.mockResolvedValue({ success: false });
-  expect(await publishProjectAndReopen(params)).toBe('reload_failed');
+  expect((await publishProjectAndReopen(params)).outcome).toBe('reload_failed');
   expect(useSpeleoStore.getState().projectLinkKind).toBe('remote');
   expect(useProjectStore.getState().project?.file_path).toBe(published.local_path);
   expect(mock.acquire).not.toHaveBeenCalled();
-  expect(await publishProjectAndReopen(params)).toBe('stale');
+  expect((await publishProjectAndReopen(params)).outcome).toBe('stale');
   expect(mock.ipc.mock.calls.filter(([cmd]) => cmd === 'speleodb_publish')).toHaveLength(1);
 });
 it.each(['project', 'account'])('conversion does not apply a late creation result after the %s changes', async (change) => {
@@ -81,7 +81,7 @@ it.each(['project', 'account'])('conversion does not apply a late creation resul
     else useSpeleoStore.setState({ sessionGeneration: 1 });
     return published;
   });
-  expect(await publishProjectAndReopen(params)).toBe('stale');
+  expect((await publishProjectAndReopen(params)).outcome).toBe('stale');
   expect(mock.ipc).toHaveBeenCalledTimes(1);
   expect(load).not.toHaveBeenCalled();
   expect(mock.acquire).not.toHaveBeenCalled();
@@ -105,7 +105,20 @@ it.each(['project', 'account'])('conversion ignores a late fresh-download reply 
     } else useSpeleoStore.setState({ sessionGeneration: 1 });
     return { local_path: published.local_path, offline: false };
   });
-  expect(await publishProjectAndReopen(params)).toBe('stale');
+  expect((await publishProjectAndReopen(params)).outcome).toBe('stale');
   expect(load).not.toHaveBeenCalled();
   expect(mock.acquire).not.toHaveBeenCalled();
+});
+
+it('reports a first upload that left the undo history out (sdk#3), beside the outcome', async () => {
+  expect(await publishProjectAndReopen(params)).toEqual({ outcome: 'opened', undoHistoryOmitted: false });
+  mock.ipc.mockImplementation(async (cmd) => {
+    if (cmd === 'speleodb_publish') return { ...published, undo_history_omitted: true };
+    if (cmd === 'speleodb_link_status') return status;
+    if (cmd === 'speleodb_open_project') return { local_path: published.local_path, offline: false };
+    throw new Error(`Unexpected command ${cmd}`);
+  });
+  useProjectStore.setState({ project: { name: params.name, file_path: '/local.stalx', created_at: 'synthetic' } as never });
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local', remoteProjectId: null });
+  expect(await publishProjectAndReopen(params)).toEqual({ outcome: 'opened', undoHistoryOmitted: true });
 });

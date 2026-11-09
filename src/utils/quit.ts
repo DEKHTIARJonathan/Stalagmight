@@ -7,7 +7,7 @@ import { confirmSpeleoFileOpen } from './confirmSpeleoOpen';
  */
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import i18n from '../i18n';
-import { invokeIpc } from './ipc';
+import { getErrorMessage, invokeIpc } from './ipc';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
@@ -279,7 +279,9 @@ export async function handBackProject(
       if (!await confirmSpeleoFileOpen(exit.pendingOpenPath, current)) return;
     } catch (error) {
       if (!current()) return;
-      useUIStore.getState().openDialog('error', { title: 'Open Failed', message: String(error) });
+      // The access check rejects with a structured SpeleoErrorDto, which String() renders
+      // as '[object Object]'; read its message the way the plain open path does.
+      useUIStore.getState().openDialog('error', { title: 'Open Failed', message: getErrorMessage(error) });
       return;
     }
   }

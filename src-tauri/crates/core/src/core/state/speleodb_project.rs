@@ -12,6 +12,7 @@
 //! Lock release and file-access checks live in `speleodb_admin`.
 
 use super::speleodb::{local_dto, validate_project_id, MANAGED_PROJECT_TYPE};
+use super::speleodb_push::PushOutcome;
 use super::AppState;
 use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
@@ -19,6 +20,20 @@ use crate::speleodb::{
     SpeleoDbError, SpeleoErrorDto, SpeleoProjectMetadata, SpeleoPublishParams, SpeleoPublishResult,
     Visibility,
 };
+
+/// [sdk#3] What the publish result reports about the first upload's undo history:
+/// `Some(true)` only when that upload LANDED with the history left out to fit the
+/// server's size limit. An upload that failed or was refused reports nothing - the
+/// project stays dirty and the later Save Changes reports its own outcome.
+fn publish_undo_history_omitted(upload: &Result<PushOutcome, SpeleoErrorDto>) -> Option<bool> {
+    matches!(
+        upload,
+        Ok(PushOutcome::Confirmed {
+            undo_history_omitted: true
+        })
+    )
+    .then_some(true)
+}
 
 /// The canonical SpeleoDB wire label for a visibility ([#206]/[#207]). The server's
 /// `CustomChoiceField` accepts the enum NAME case-insensitively on input; we send the
@@ -294,6 +309,7 @@ impl AppState {
         //    acquire/upload failure and STILL return the cache path: the webview reloads a
         //    dirty remote project and the user completes the upload via the normal Start
         //    editing → Done (which surfaces a genuine push error, in context, if any).
+        let mut undo_history_omitted = None;
         match self.speleodb_handle_auth(
             Endpoint::Acquire,
             client::acquire_lock(&endpoint, &token, insecure_http, &project_id),
@@ -321,6 +337,7 @@ impl AppState {
                         project_id: project_id.clone(),
                     },
                 );
+                undo_history_omitted = publish_undo_history_omitted(&upload);
                 if let Err(e) = upload {
                     tracing::warn!(
                         error = ?e,
@@ -379,6 +396,7 @@ impl AppState {
             project_id,
             endpoint,
             local_path: dest.to_string_lossy().into_owned(),
+            undo_history_omitted,
         })
     }
 }
@@ -386,7 +404,8 @@ impl AppState {
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::{build_create_body, visibility_label};
+    use super::{build_create_body, publish_undo_history_omitted, visibility_label};
+    use crate::core::state::speleodb_push::PushOutcome;
     use crate::speleodb::{SpeleoPublishParams, Visibility};
 
     #[test]
@@ -395,6 +414,28 @@ mod tests {
         // that so a metadata round-trip is byte-identical (#206/#207).
         assert_eq!(visibility_label(Visibility::Private), "PRIVATE");
         assert_eq!(visibility_label(Visibility::Public), "PUBLIC");
+    }
+
+    #[test]
+    fn publish_reports_an_omitted_undo_history_only_for_a_landed_upload() {
+        // sdk#3: the publish result tells the webview the first revision went up
+        // without its undo history, exactly when the upload landed that way.
+        let landed = |undo_history_omitted| {
+            publish_undo_history_omitted(&Ok(PushOutcome::Confirmed {
+                undo_history_omitted,
+            }))
+        };
+        assert_eq!(landed(true), Some(true));
+        assert_eq!(landed(false), None);
+        assert_eq!(
+            publish_undo_history_omitted(&Ok(PushOutcome::Unconfirmed)),
+            None
+        );
+        let refused = crate::speleodb::contract::dto_for_error(
+            crate::speleodb::contract::Endpoint::UploadStalx,
+            &crate::speleodb::SpeleoDbError::UploadTooLarge { size: 2, limit: 1 },
+        );
+        assert_eq!(publish_undo_history_omitted(&Err(refused)), None);
     }
 
     #[test]

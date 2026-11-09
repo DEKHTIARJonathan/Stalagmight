@@ -781,6 +781,43 @@ mod tests {
     }
 
     #[test]
+    fn an_offline_http_hostname_endpoint_opens_its_cached_copy() {
+        // sdk#6: an `http://` hostname endpoint whose host does not resolve (an
+        // internal deployment seen from an offline laptop) used to fail the
+        // endpoint policy with a fatal InsecureEndpoint before any request, so the
+        // cached copy never opened. The real client path now reports the DNS
+        // transport failure, which is offline-eligible exactly as it is for https.
+        // `.invalid` never resolves (RFC 6761), so this is offline by construction.
+        let endpoint = "http://speleodb-offline.invalid:8000";
+        let mut cached_link = link();
+        cached_link.endpoint = endpoint.into();
+        let dir = tempfile::tempdir().expect("temp");
+        let dest = dir.path().join("project.stalx");
+        let mut db = Database::open(&dest).expect("cache");
+        db.save_project(&Project::new("Cached".into(), None))
+            .expect("project");
+        db.save_speleo_link(Some(&cached_link)).expect("link");
+        drop(db);
+
+        let error = client::download_stalx(endpoint, "token", false, &cached_link.project_id)
+            .expect_err("an unresolvable host cannot be downloaded from");
+        assert!(
+            matches!(
+                error,
+                SpeleoDbError::Transport {
+                    cause: TransportCause::Dns,
+                    ..
+                }
+            ),
+            "an unresolvable http host must be an offline DNS failure, got {error:?}"
+        );
+        let opened = offline_open_result(&dest, endpoint, &cached_link.project_id, &error)
+            .expect("the cached copy opens offline");
+        assert_eq!(opened.offline, Some(true));
+        assert_eq!(opened.local_path, dest.to_string_lossy());
+    }
+
+    #[test]
     fn first_download_creates_its_nested_cache_directory() {
         crate::test_helpers::with_isolated_config(|| {
             let dir = tempfile::tempdir().expect("temp");

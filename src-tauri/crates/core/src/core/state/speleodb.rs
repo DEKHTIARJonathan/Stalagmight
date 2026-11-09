@@ -2940,7 +2940,7 @@ mod tests {
             .speleodb_push_only(None)
             .expect("nothing to push is a no-op");
         assert!(
-            matches!(pushed, PushResult::Pushed),
+            matches!(pushed, PushResult::Pushed { .. }),
             "an open gate with a clean link is a genuine no-op, got {pushed:?}"
         );
     }
