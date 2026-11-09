@@ -427,7 +427,11 @@ fn switching_to_read_only_holds_no_guard_across_the_release_post() {
         let state = editing_session(dir.path(), &server.url);
         let expected = release_context(&state, &server.url);
         std::thread::scope(|scope| {
-            let switch = scope.spawn(|| state.speleodb_release_current_lock(Some(expected)));
+            let switch = scope.spawn(|| {
+                state
+                    .speleodb_release_current_lock(Some(expected))
+                    .map_err(|e| e.message)
+            });
             let request = server.wait_for_held_request();
             assert!(
                 request.starts_with("POST "),
@@ -469,7 +473,11 @@ fn a_failed_read_only_release_gives_the_session_its_gate_back() {
         let state = editing_session(dir.path(), &server.url);
         let expected = release_context(&state, &server.url);
         std::thread::scope(|scope| {
-            let switch = scope.spawn(|| state.speleodb_release_current_lock(Some(expected)));
+            let switch = scope.spawn(|| {
+                state
+                    .speleodb_release_current_lock(Some(expected))
+                    .map_err(|e| e.message)
+            });
             let _ = server.wait_for_held_request();
             assert!(!state.edit_enabled(), "shut while the POST is in flight");
             server.let_it_answer();
