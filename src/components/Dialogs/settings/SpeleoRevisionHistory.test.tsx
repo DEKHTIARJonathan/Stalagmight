@@ -299,3 +299,23 @@ describe('SpeleoRevisionHistory (#218)', () => {
     expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();
   });
 });
+
+describe('SpeleoRevisionHistory revision times (sdk#7)', () => {
+  it('shows the server New York wall time as a local time with its GMT offset', async () => {
+    seed('read-only');
+    invokeIpcMock.mockResolvedValue([
+      { ...REVISIONS[0], authored_date: '2026/11/09 04:15' },
+      { ...REVISIONS[1], authored_date: 'not a date' },
+    ] satisfies SpeleoRevision[]);
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+
+    const when = screen.getByTestId('speleodb-revision-date-aaaaaaaa1111');
+    // 04:15 in New York (EST) is 09:15 UTC - not 04:15 in the viewer's zone.
+    expect(when.getAttribute('datetime')).toBe('2026-11-09T09:15:00.000Z');
+    expect(when.textContent).toMatch(/ GMT[+-]\d+(:\d{2})?$/);
+    expect(when.getAttribute('title')).toBeTruthy();
+    // An unplaceable value is shown as the server sent it.
+    expect(screen.getByTestId('speleodb-revision-date-bbbbbbbb2222').textContent).toBe('not a date');
+  });
+});

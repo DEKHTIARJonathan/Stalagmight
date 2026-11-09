@@ -15,22 +15,29 @@ import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError, unpushedLocalEdits, } from '../../../utils/speleoError';
 import { holdsWriteLock } from '../../../utils/quit';
 import { permissionAtLeast } from '../../../utils/speleoPermission';
-import { formatDate } from '../../../i18n/format';
+import { formatRelativeTime } from '../../../i18n/format';
 import type { SpeleoRevision } from '../../../types/ipc.generated';
 import { TOAST_KEYS } from '../../../utils/toastKeys';
+import { formatRevisionTime, parseRevisionDate } from '../../../utils/speleoRevisionTime';
 
-/** RFC-3339 -> localized date/time; falls back to the raw string if unparseable. */
-function formatWhen(iso: string | null): string {
-  if (!iso) return '';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return formatDate(date, undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+/**
+ * sdk#7: a revision's server time as the viewer's local time with its GMT offset,
+ * and the relative time as the tooltip. The server string is New York wall time
+ * with no zone, so it is converted to an instant first (see `speleoRevisionTime`);
+ * an unparseable value is shown as sent.
+ */
+function RevisionWhen({ raw, id }: { raw: string; id: string }) {
+  const date = parseRevisionDate(raw);
+  if (!date) return <span data-testid={`speleodb-revision-date-${id}`}>{raw}</span>;
+  return (
+    <time
+      dateTime={date.toISOString()}
+      title={formatRelativeTime(date)}
+      data-testid={`speleodb-revision-date-${id}`}
+    >
+      {formatRevisionTime(date)}
+    </time>
+  );
 }
 
 export function SpeleoRevisionHistory() {
@@ -211,7 +218,7 @@ export function SpeleoRevisionHistory() {
                     </span>
                     {rev.authored_date && (
                       <span className="text-xs text-text-tertiary">
-                        · {formatWhen(rev.authored_date)}
+                        · <RevisionWhen raw={rev.authored_date} id={rev.id} />
                       </span>
                     )}
                   </div>

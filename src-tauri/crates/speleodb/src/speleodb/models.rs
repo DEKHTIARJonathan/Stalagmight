@@ -73,8 +73,10 @@ pub struct RevisionCommit {
     /// landed" from "someone else pushed".
     #[serde(default)]
     pub author_email: String,
-    /// [#218] Commit timestamp (RFC-3339), for the history view. `None` if the
-    /// server omits it.
+    /// [#218] Commit timestamp, for the history view, exactly as the server sent
+    /// it: `YYYY/MM/DD HH:MM` wall time in the instance's zone (America/New_York)
+    /// with NO offset (sdk#7). The frontend converts it to an instant
+    /// (`src/utils/speleoRevisionTime.ts`). `None` if the server omits it.
     #[serde(default)]
     pub authored_date: Option<String>,
     /// [#218] Commit message, for the history view. `None` if the server omits it.
@@ -147,7 +149,8 @@ pub struct SpeleoRevision {
     pub parent_ids: Vec<String>,
     /// Commit author's email (may be empty if the server omitted it).
     pub author_email: String,
-    /// Commit timestamp (RFC-3339), or `None` if the server omitted it.
+    /// Commit timestamp as the server sent it - New York wall time with no zone
+    /// (see [`RevisionCommit::authored_date`]) - or `None` if the server omitted it.
     pub authored_date: Option<String>,
     /// Commit message, or `None` if the server omitted it.
     pub message: Option<String>,
