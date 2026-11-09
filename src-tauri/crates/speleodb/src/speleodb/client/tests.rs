@@ -955,3 +955,16 @@ fn an_upload_over_the_server_limit_is_refused_before_any_request() {
     upload_stalx(&s.base, "t", false, ID, f.path(), "Fits").unwrap();
     assert_eq!(s.finish().len(), 1);
 }
+
+#[test]
+fn a_profile_contract_mismatch_also_keeps_the_decoder_detail() {
+    // The profile read has its own 2xx fallback (an unset country is accepted);
+    // any other mismatch there now carries the SDK detail too.
+    let mut user = user_json();
+    user["country"] = json!("ZZ");
+    let s = Server::json(user);
+    let err = fetch_user_email(&s.base, "t", false).unwrap_err();
+    s.finish();
+    assert!(matches!(&err, SpeleoDbError::Parse(_)), "got {err:?}");
+    assert!(err.to_string().contains("unknown variant `ZZ`"), "{err}");
+}

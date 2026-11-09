@@ -478,9 +478,7 @@ pub fn fetch_user_email(base: &str, token: &str, insecure: bool) -> Result<Strin
                         return Ok(email.to_owned());
                     }
                 }
-                Err(SpeleoDbError::Parse(
-                    "response does not match the SpeleoDB SDK contract".into(),
-                ))
+                Err(SpeleoDbError::Parse(contract_mismatch(error.parse_error)))
             }
             Err(error) => Err(api_error(error)),
         }
