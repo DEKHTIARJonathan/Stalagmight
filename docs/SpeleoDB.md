@@ -255,11 +255,46 @@ any work) and in `client::upload_stalx`, so no caller can send one
 Save and Close carries its close intent through recovery and closes only after a
 confirmed upload and successful release, with no newer local changes. Cancellation,
 conflict, uncertainty and release failure leave the project open. Plain Close,
-project switching and Quit automatically release the session's lock without
-uploading. Unsaved survey work and form drafts require Discard changes / Cancel.
-Saved unuploaded work remains in the local file. Backend release consent remains
-scoped to the project, authenticated account and session generation. Another
-account's lock is never released by an ordinary exit.
+project switching and Quit release a clean session's lock silently. When the lock
+is held over work SpeleoDB has not seen, they ask the one in-app exit prompt
+(Upload / Keep the lock / Discard / Cancel, `utils/speleoExit`); the backend never
+releases over un-uploaded edits unless the close carries the confirmed discard.
+Without the lock, unsaved survey work gets the unsaved-changes dialog with Save on
+this computer / Discard / Cancel (see above). Saved unuploaded work remains in the
+local file. Backend release consent remains scoped to the project, authenticated
+account and session generation. Another account's lock is never released by an
+ordinary exit.
+
+### Quitting while a transfer is in flight
+
+Quitting never cuts a SpeleoDB upload, acquire, download or release that is still
+running, so a slow connection does not lose work (lock#6, frontend#4). Menu Quit,
+Ctrl+Q, the window X, an OS window close and restart-to-update all request a
+window close, and the close listener's first gate (`utils/quitAfterWork`) runs
+before any question:
+
+- With nothing in flight the quit goes on as before.
+- With an exclusive SpeleoDB call, a hand-off verb, or an exit-prompt answer in
+  flight, the window stays. An info toast says the save or upload is in progress
+  and that Stalagmight will close when it finishes, and the waiting prompt
+  (`QuitWaitDialog`, layered over the upload progress) shows a spinner with Keep
+  Stalagmight open (the default; also Escape) and Quit now. Once the work has
+  drained and stayed drained for 300 ms, the quit is re-issued un-confirmed, so
+  every guard sees the settled state: a successful upload quits; a failed one
+  raises the exit prompt.
+- Quit now is an explicit choice behind a warning (the transfer is cut off and may
+  or may not reach SpeleoDB; the project can stay locked until it is opened
+  again). It saves unsaved edits on this computer first (a failed save stops it),
+  then quits without waiting, and right before the window goes it calls
+  `arm_forced_exit` so the backend may cut the operation.
+
+The backend exit hook (`commands/exit_wait.rs`, from `RunEvent::ExitRequested`) is
+the backstop for anything that reaches the exit anyway, such as a backend
+operation the frontend does not see. While an operation holds the lock-ops span
+and no forced exit is armed (10-second arm), it prevents the exit, waits for the
+operation on a background thread, runs the bounded lock release (5 s, the release
+only) and then exits. Tauri cannot prevent an `app.restart()`; the update restart
+only runs after the frontend gate has let the quit through.
 
 Switch to Read Only Mode refuses unsaved or unuploaded work, including direct IPC
 calls: "Save your changes using Save Changes before switching to read-only mode."
@@ -290,7 +325,9 @@ continue local editing through transient disconnection. Offline opening remains
 read-only. In-place frontend reconciliation suppresses automatic acquisition.
 
 An unreachable server or forcibly terminated process cannot guarantee server-side
-release. Close, Quit and Save-and-Close retain their separate lifecycle behavior.
+release; the server has no lock timeout, so such a lock stays held until this
+account opens the project or hands it back. Close, Quit and Save-and-Close retain
+their separate lifecycle behavior.
 
 ## Network activity and responsiveness
 

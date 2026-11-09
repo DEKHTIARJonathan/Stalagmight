@@ -24,6 +24,7 @@ mod speleodb_admin;
 mod speleodb_cache;
 mod speleodb_cache_install;
 mod speleodb_credentials;
+mod speleodb_exit_wait;
 mod speleodb_foreign;
 mod speleodb_local_state;
 mod speleodb_lock_release;

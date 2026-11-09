@@ -4,6 +4,7 @@ pub mod config;
 pub mod debug;
 pub mod dive_plan;
 pub mod event_sink;
+pub mod exit_wait;
 pub mod export;
 pub mod gas;
 pub mod history;

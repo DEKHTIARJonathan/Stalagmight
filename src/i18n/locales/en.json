@@ -3655,6 +3655,20 @@
     "jump": "Jump",
     "reference": "Reference"
   },
+  "quitWait": {
+    "toast": "An upload or save is in progress. Stalagmight will close when it finishes.",
+    "title": "Waiting to quit",
+    "body": "A SpeleoDB transfer is still running. Stalagmight will close as soon as it finishes, so nothing is lost on a slow connection.",
+    "cancel": "Keep Stalagmight open",
+    "force": "Quit now",
+    "forceTitle": "Quit without waiting?",
+    "forceBody": "The transfer will be cut off, and SpeleoDB may or may not receive it.",
+    "forceDetail": "Your changes stay saved on this computer. If an upload or an editing-lock request is cut off, the project can stay locked to you until you open it again in Stalagmight.",
+    "back": "Back",
+    "forceConfirm": "Quit without waiting",
+    "forcing": "Quitting…",
+    "saveFailed": "Your changes could not be saved on this computer, so Stalagmight did not quit."
+  },
   "speleoExitPrompt": {
     "title": "Your changes are not on SpeleoDB yet",
     "body": "You are editing \"{{name}}\", and some of your changes have not been uploaded to SpeleoDB. What should happen to them before {{action}}?",
