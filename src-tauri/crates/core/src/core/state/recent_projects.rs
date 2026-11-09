@@ -519,7 +519,7 @@ impl AppState {
 
         // Read-only edit gate (#191, D-B6): this renames a `.stalx` BY PATH -
         // usually NOT the open AppState project
-        // - so the transient `edit_enabled` flag (which describes the *open*
+        // - so the derived `edit_enabled()` gate (which describes the *open*
         // project) can only speak for it when the path IS the currently open
         // project. Compute the open-project identity FIRST, BEFORE the disk write,
         // and gate only on a match so `guard_mutation` aborts a rename of the
