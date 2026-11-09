@@ -106,7 +106,10 @@ warning and a "Remove copy and lose my changes" button. Only that confirmation t
 the backend to remove such a copy; without it the backend refuses. The project open
 right now is never removed. Removal sends the `.stalx` to the OS trash where there is
 one, drops its recents row, and deletes the rest of its directory (owner record and
-SQLite sidecars).
+SQLite sidecars). The file goes to the trash under the project's name (for example
+`Synthetic Cave.stalx`, made a safe file name on every OS) rather than as one more
+`project.stalx`, so a user can tell which copy to restore; it is renamed in place
+just before the trash, never over another file, and renamed back if the trash fails.
 
 Removing a copy does not strand a lock. After a successful removal, when the session
 is the copy's account on its instance (owner recorded as this account, or no owner

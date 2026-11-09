@@ -513,8 +513,13 @@ impl AppState {
     /// its directory: the owner record and any SQLite sidecars, which must not
     /// outlive the file they belong to (a later download into the same directory
     /// would otherwise replay them).
+    ///
+    /// The trash gets the file under the project's name (see [`trash_file_name`]),
+    /// so a user restoring a removed copy can tell which one it is.
     fn remove_cached_copy_files(&self, root: &Path, project_id: &str) -> CommandResult {
-        let result = self.delete_project(cache_path_in(root, project_id));
+        let path = cache_path_in(root, project_id);
+        let trash_name = cached_copy_name(&path).as_deref().and_then(trash_file_name);
+        let result = self.delete_project_as(path, trash_name.as_deref());
         if !result.success {
             return result;
         }
@@ -540,6 +545,62 @@ impl AppState {
             }
         }
     }
+}
+
+/// The project name of the copy at `copy`: its link, else its owner record.
+pub(super) fn cached_copy_name(copy: &Path) -> Option<String> {
+    match read_cached_link(copy) {
+        CachedLink::Linked(link) => Some(link.project_name),
+        CachedLink::NotManaged | CachedLink::Unreadable => {
+            read_owner_for(copy).map(|owner| owner.project_name)
+        }
+    }
+}
+
+/// The file name a removed copy is trashed under: the project's name made safe on
+/// every desktop OS, plus `.stalx`. `None` when nothing usable is left (the copy is
+/// then trashed as `project.stalx`).
+///
+/// Path separators, the characters Windows forbids and control characters become
+/// `_`; leading and trailing dots and spaces go (Windows strips the trailing ones, a
+/// leading dot hides the file); a Windows device name (`CON`, `COM1`, ...) gets a
+/// `_` suffix; and the name is cut to 150 bytes, well inside every file system's
+/// 255-byte limit.
+pub(super) fn trash_file_name(project_name: &str) -> Option<String> {
+    const MAX_BYTES: usize = 150;
+    let mut stem = String::new();
+    for c in project_name.chars() {
+        let c = if c.is_control()
+            || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
+        {
+            '_'
+        } else {
+            c
+        };
+        if stem.len() + c.len_utf8() > MAX_BYTES {
+            break;
+        }
+        stem.push(c);
+    }
+    let stem = stem.trim_matches(|c: char| c == '.' || c.is_whitespace());
+    if stem.is_empty() {
+        return None;
+    }
+    let device = stem
+        .split('.')
+        .next()
+        .unwrap_or(stem)
+        .trim_end()
+        .to_ascii_uppercase();
+    let reserved = matches!(device.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || (device.len() == 4
+            && (device.starts_with("COM") || device.starts_with("LPT"))
+            && device.ends_with(|c: char| c.is_ascii_digit()));
+    Some(if reserved {
+        format!("{stem}_.stalx")
+    } else {
+        format!("{stem}.stalx")
+    })
 }
 
 /// The removal verdict for one copy.

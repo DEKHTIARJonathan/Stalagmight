@@ -262,6 +262,43 @@ fn removing_a_clean_copy_takes_its_owner_record_and_sidecars_with_it() {
     });
 }
 
+/// A removed copy goes to the trash under its project's name rather than as one
+/// more `project.stalx`, so the user can tell which copy to restore. The name is
+/// the copy's own project name, made a safe file name everywhere.
+#[test]
+fn a_removed_copy_is_trashed_under_its_project_name() {
+    use super::speleodb_cached::{cached_copy_name, trash_file_name};
+
+    let temp = tempfile::tempdir().expect("temp");
+    let path = seed(temp.path(), MINE, SERVER, false);
+    assert_eq!(cached_copy_name(&path).as_deref(), Some("Remote 1111"));
+    assert_eq!(
+        cached_copy_name(&path).as_deref().and_then(trash_file_name),
+        Some("Remote 1111.stalx".to_owned())
+    );
+
+    for (name, expected) in [
+        ("Synthetic Cave B", Some("Synthetic Cave B.stalx")),
+        (
+            "a/b\\c:d*e?f\"g<h>i|j\u{7}k",
+            Some("a_b_c_d_e_f_g_h_i_j_k.stalx"),
+        ),
+        (" ..hidden cave. ", Some("hidden cave.stalx")),
+        ("CON", Some("CON_.stalx")),
+        ("com1", Some("com1_.stalx")),
+        ("nul.cave", Some("nul.cave_.stalx")),
+        ("COM10", Some("COM10.stalx")),
+        ("Console", Some("Console.stalx")),
+        ("", None),
+        (" ... ", None),
+    ] {
+        assert_eq!(trash_file_name(name).as_deref(), expected, "{name:?}");
+    }
+    let long = trash_file_name(&"\u{e9}".repeat(300)).expect("a long name is cut");
+    assert!(long.len() <= 150 + ".stalx".len(), "{} bytes", long.len());
+    assert!(long.ends_with(".stalx"));
+}
+
 #[test]
 fn the_open_project_and_invalid_ids_are_never_removed() {
     crate::test_helpers::with_isolated_config(|| {

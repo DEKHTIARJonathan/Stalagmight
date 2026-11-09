@@ -136,6 +136,18 @@ impl AppState {
     /// drops the recents entry. Returning a failure after the file is already
     /// trashed would strand a "File not found" zombie row in the UI.
     pub fn delete_project(&self, path: PathBuf) -> CommandResult {
+        self.delete_project_as(path, None)
+    }
+
+    /// [`Self::delete_project`], handing a regular file to the trash under
+    /// `trash_name` (a bare file name) instead of its own - see [`trash_under_name`].
+    /// Everything else is identical: the identity decisions, the teardown and the
+    /// recents prune all use `path`, made while the file is still there under it.
+    pub(super) fn delete_project_as(
+        &self,
+        path: PathBuf,
+        trash_name: Option<&str>,
+    ) -> CommandResult {
         // Does the FINAL component of `path` name a symlink? That one question decides
         // which notion of identity everything below uses, so it is answered once, up
         // front, while the file is still there to be stat'd.
@@ -408,8 +420,10 @@ impl AppState {
         // for what that cost). `symlink_metadata` answered both questions honestly
         // there, an unreadable path has already been refused, so what is left here is
         // exactly "there is an entry" versus "there is provably nothing".
-        if entry.is_ok() {
-            if let Err(e) = send_to_trash(&path) {
+        if let Ok(meta) = &entry {
+            // Only a regular file is renamed: a symlink's own name is what it is.
+            let rename_to = trash_name.filter(|_| meta.file_type().is_file());
+            if let Err(e) = trash_under_name(&path, rename_to, send_to_trash) {
                 // Nothing was destroyed, so the lock is still ours and still
                 // guarding a project that is still there. Put the claim back -
                 // without it the mutex has no local pointer at all: this call
@@ -618,6 +632,37 @@ fn send_to_trash(path: &Path) -> Result<(), String> {
     std::fs::remove_file(path).map_err(|e| e.to_string())
 }
 
+/// Hand `path` to `trash` under the bare file name `name`, when given: the file is
+/// renamed in place first (same directory, so the rename cannot cross a volume).
+/// In the OS trash every cached SpeleoDB copy is otherwise a `project.stalx`
+/// (`project.stalx.2`, ...), and the user restoring one cannot tell which is which.
+///
+/// The name is a courtesy, never a reason to fail or to touch another file: when it
+/// is the file's own name, is already taken, or the rename is refused, the file is
+/// trashed under its own name. When the trash itself fails, the file is renamed
+/// back, so a failed delete leaves it where it was.
+fn trash_under_name(
+    path: &Path,
+    name: Option<&str>,
+    trash: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<(), String> {
+    let named = name.and_then(|name| path.parent().map(|dir| dir.join(name)));
+    let Some(named) = named.filter(|named| {
+        named.as_path() != path
+            && std::fs::symlink_metadata(named).is_err()
+            && std::fs::rename(path, named).is_ok()
+    }) else {
+        return trash(path);
+    };
+    trash(&named).map_err(|e| match std::fs::rename(&named, path) {
+        Ok(()) => e,
+        Err(back) => format!(
+            "{e}; it is now at {} and could not be renamed back ({back})",
+            named.display()
+        ),
+    })
+}
+
 /// Turns the result of a platform trash attempt into this module's `Result`,
 /// falling back to a permanent `fs::remove_file` when the trash could not take
 /// the file. Split out of [`send_to_trash`]'s real (desktop, non-test) arm so
@@ -643,7 +688,76 @@ fn after_trash_attempt(result: Result<(), trash::Error>, path: &Path) -> Result<
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod tests {
-    use super::{after_trash_attempt, AppState};
+    use super::{after_trash_attempt, trash_under_name, AppState};
+    use std::path::{Path, PathBuf};
+
+    /// A cached copy goes to the trash under the project's name, and only the
+    /// renamed file is handed over: the trash sees `<name>.stalx`, with the
+    /// copy's bytes, and nothing is left under the old name.
+    #[test]
+    fn trash_under_name_hands_over_the_renamed_file() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let path = temp.path().join("project.stalx");
+        std::fs::write(&path, b"synthetic copy").expect("seed the file");
+
+        let mut seen: Option<PathBuf> = None;
+        trash_under_name(&path, Some("Synthetic Cave.stalx"), |trashed: &Path| {
+            assert_eq!(
+                std::fs::read(trashed).expect("the renamed file"),
+                b"synthetic copy"
+            );
+            seen = Some(trashed.to_path_buf());
+            std::fs::remove_file(trashed).map_err(|e| e.to_string())
+        })
+        .expect("trashed");
+
+        assert_eq!(seen, Some(temp.path().join("Synthetic Cave.stalx")));
+        assert!(!path.exists() && !temp.path().join("Synthetic Cave.stalx").exists());
+    }
+
+    /// A failed trash puts the file back under its own name: the delete reports
+    /// a failure and the copy is exactly where it was.
+    #[test]
+    fn trash_under_name_renames_back_when_the_trash_fails() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let path = temp.path().join("project.stalx");
+        std::fs::write(&path, b"synthetic copy").expect("seed the file");
+
+        let err = trash_under_name(&path, Some("Synthetic Cave.stalx"), |_| {
+            Err("synthetic trash failure".to_owned())
+        })
+        .expect_err("the trash failed");
+
+        assert_eq!(err, "synthetic trash failure");
+        assert_eq!(
+            std::fs::read(&path).expect("back in place"),
+            b"synthetic copy"
+        );
+        assert!(!temp.path().join("Synthetic Cave.stalx").exists());
+    }
+
+    /// The name never displaces another file: a taken name (or none) trashes the
+    /// file under its own name and leaves the other file alone.
+    #[test]
+    fn trash_under_name_never_overwrites_and_falls_back_to_the_own_name() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let path = temp.path().join("project.stalx");
+        let taken = temp.path().join("owner.json");
+        std::fs::write(&path, b"synthetic copy").expect("seed the file");
+        std::fs::write(&taken, b"{}").expect("seed the other file");
+
+        for name in [Some("owner.json"), Some("project.stalx"), None] {
+            std::fs::write(&path, b"synthetic copy").expect("reseed");
+            let mut seen: Option<PathBuf> = None;
+            trash_under_name(&path, name, |trashed: &Path| {
+                seen = Some(trashed.to_path_buf());
+                std::fs::remove_file(trashed).map_err(|e| e.to_string())
+            })
+            .expect("trashed");
+            assert_eq!(seen.as_deref(), Some(path.as_path()), "{name:?}");
+            assert_eq!(std::fs::read(&taken).expect("untouched"), b"{}");
+        }
+    }
 
     /// The stub arm covers the happy path everywhere; this re-covers
     /// `after_trash_attempt`'s pass-through of a successful trash call, since
