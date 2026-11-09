@@ -30,6 +30,30 @@ struct AfterConfigWrite {
     release: Option<LockReleaseParams>,
 }
 
+/// The outcome of one pass of a locked config write.
+#[must_use]
+enum Locked<T> {
+    /// Written; what is left to do once the write lock is dropped.
+    Done(AfterConfigWrite),
+    /// Nothing was written: the SpeleoDB identity this write would replace moved
+    /// (a sign-in or sign-out landed) after the caller decided it did not need the
+    /// lock-ops span. Hands the payload back for a pass that takes it.
+    NeedsLockOps(T),
+}
+
+/// The SpeleoDB identity a config names: instance, account and token.
+fn speleodb_identity(config: &Config) -> (Option<String>, Option<String>, Option<String>) {
+    (
+        config
+            .speleodb
+            .endpoint
+            .as_deref()
+            .map(crate::speleodb::auth::normalize_endpoint),
+        config.speleodb.email.clone(),
+        config.speleodb.token.0.clone(),
+    )
+}
+
 impl AppState {
     /// Get config
     ///
@@ -61,9 +85,10 @@ impl AppState {
     /// it must not land inside another lock operation's span. Every other save is a
     /// plain local write and must not queue behind an upload or a download, which
     /// hold lock-ops for minutes. Lock-ops is OUTERMOST, so it is taken before
-    /// `config_write_lock`; a writer that lands between the check and the write lock
-    /// and turns this into an instance change sends it round again to take it.
-    pub fn update_config(&self, config: Config) -> Result<()> {
+    /// `config_write_lock`. A sign-in that lands after the check and turns this into
+    /// an instance change is caught under the `config` lock, before anything is
+    /// written, and sends the save round again to take the span first.
+    pub fn update_config(&self, mut config: Config) -> Result<()> {
         let mut lock_ops = None;
         loop {
             if lock_ops.is_none() && self.speleodb_instance_changes(&config) {
@@ -73,19 +98,21 @@ impl AppState {
                 .config_write_lock
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if lock_ops.is_none() && self.speleodb_instance_changes(&config) {
-                drop(write);
-                continue;
+            let door = ConfigWrite::Whole {
+                lock_ops_held: lock_ops.is_some(),
+            };
+            match self.update_config_locked(config, door)? {
+                Locked::Done(after) => {
+                    drop(write);
+                    self.finish_config_write(after);
+                    return Ok(());
+                }
+                Locked::NeedsLockOps(payload) => {
+                    drop(write);
+                    config = payload;
+                    lock_ops = Some(self.speleodb_lock_ops_guard());
+                }
             }
-            let after = self.update_config_locked(
-                config,
-                ConfigWrite::Whole {
-                    lock_ops_held: lock_ops.is_some(),
-                },
-            )?;
-            drop(write);
-            self.finish_config_write(after);
-            return Ok(());
         }
     }
 
@@ -133,13 +160,20 @@ impl AppState {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut config = self.get_config();
         mutate(&mut config)?;
-        let after = self.update_config_locked(config, ConfigWrite::Partial)?;
-        debug_assert!(
-            after.release.is_none(),
-            "a partial config write never changes the SpeleoDB instance"
-        );
-        self.finish_config_write(after);
-        Ok(())
+        match self.update_config_locked(config, ConfigWrite::Partial)? {
+            Locked::Done(after) => {
+                debug_assert!(
+                    after.release.is_none(),
+                    "a partial config write never changes the SpeleoDB instance"
+                );
+                self.finish_config_write(after);
+                Ok(())
+            }
+            // Unreachable by construction: a partial write keeps the stored section.
+            Locked::NeedsLockOps(_) => Err(anyhow::anyhow!(
+                "a partial settings write cannot change the SpeleoDB instance"
+            )),
+        }
     }
 
     /// The body of [`Self::update_config`], with `config_write_lock` already held.
@@ -147,12 +181,13 @@ impl AppState {
     ///
     /// Holds no lock across network I/O. An instance change returns the release it
     /// captured in [`AfterConfigWrite`] for the caller to send once the write lock is
-    /// dropped.
+    /// dropped, and one found without the lock-ops span returns the payload
+    /// unwritten ([`Locked::NeedsLockOps`]).
     fn update_config_locked(
         &self,
         mut config: Config,
         door: ConfigWrite,
-    ) -> Result<AfterConfigWrite> {
+    ) -> Result<Locked<Config>> {
         tracing::info!(purpose = "apply user settings", "Updating configuration");
         // Hold the config lock through persistence so login cannot update the token
         // between this restore and the settings write.
@@ -177,12 +212,10 @@ impl AppState {
                     lock_ops_held: true,
                 })
         {
-            // Unreachable by construction: a partial write keeps the stored section,
-            // and `update_config` re-checks under the write lock before it gets here.
-            // Refuse rather than end a session outside the lock-ops span.
-            return Err(anyhow::anyhow!(
-                "the SpeleoDB instance changed while these settings were being saved; try again"
-            ));
+            // Never end a session outside the lock-ops span. Checked under the
+            // `config` lock that sign-in also writes under, so the answer holds
+            // until the save below.
+            return Ok(Locked::NeedsLockOps(config));
         }
         config.webkit_memory = existing.webkit_memory.clone();
         config.speleodb.email.clone_from(&existing.speleodb.email);
@@ -255,7 +288,7 @@ impl AppState {
             }
         }
 
-        Ok(AfterConfigWrite { release })
+        Ok(Locked::Done(AfterConfigWrite { release }))
     }
 
     /// Reload settings from disk.
@@ -264,6 +297,9 @@ impl AppState {
     /// disk names a different account or instance, and takes it before
     /// `config_write_lock`. That is only known once the file is read, so a reload
     /// that discovers a change drops the write lock, takes lock-ops, and reads again.
+    /// So does one that finds the live identity moved (a sign-in or sign-out landed)
+    /// between its read and its write: publishing the file then would put back the
+    /// credentials the sign-out just removed.
     pub fn reload_config(&self) -> Result<(Config, bool)> {
         let mut lock_ops = None;
         loop {
@@ -273,35 +309,37 @@ impl AppState {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let new_config = Config::load()?;
             let previous = self.get_config();
-            let normalize = |endpoint: &Option<String>| {
-                endpoint
-                    .as_deref()
-                    .map(crate::speleodb::auth::normalize_endpoint)
-            };
-            let auth_changed = normalize(&previous.speleodb.endpoint)
-                != normalize(&new_config.speleodb.endpoint)
-                || previous.speleodb.email != new_config.speleodb.email
-                || previous.speleodb.token.0 != new_config.speleodb.token.0;
+            let auth_changed = speleodb_identity(&previous) != speleodb_identity(&new_config);
             if auth_changed && lock_ops.is_none() {
                 drop(write);
                 lock_ops = Some(self.speleodb_lock_ops_guard());
                 continue;
             }
-            let release = self.reload_config_locked(&new_config, auth_changed);
-            drop(write);
-            self.finish_config_write(AfterConfigWrite { release });
-            return Ok((new_config, auth_changed));
+            match self.reload_config_locked(&new_config, &previous, auth_changed, lock_ops.is_some()) {
+                Locked::Done(after) => {
+                    drop(write);
+                    self.finish_config_write(after);
+                    return Ok((new_config, auth_changed));
+                }
+                Locked::NeedsLockOps(()) => {
+                    drop(write);
+                    lock_ops = Some(self.speleodb_lock_ops_guard());
+                }
+            }
         }
     }
 
     /// The body of [`Self::reload_config`], with `config_write_lock` (and, on an
     /// identity change, lock-ops) held. Returns the old instance's lock release for
-    /// the caller to send after the write lock is dropped.
+    /// the caller to send after the write lock is dropped, or, without lock-ops,
+    /// [`Locked::NeedsLockOps`] when the live identity no longer matches `previous`.
     fn reload_config_locked(
         &self,
         new_config: &Config,
+        previous: &Config,
         auth_changed: bool,
-    ) -> Option<LockReleaseParams> {
+        lock_ops_held: bool,
+    ) -> Locked<()> {
         let release = if auth_changed {
             self.speleodb_logout_drop_gates_deferring_release()
         } else {
@@ -315,6 +353,11 @@ impl AppState {
                 .config
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !lock_ops_held && speleodb_identity(&cfg) != speleodb_identity(previous) {
+                // Sign-in and sign-out write `config` under this lock, so a check
+                // here sees every one that landed after `previous` was read.
+                return Locked::NeedsLockOps(());
+            }
             *cfg = new_config.clone();
             if auth_changed {
                 self.speleodb
@@ -346,7 +389,7 @@ impl AppState {
         // lists config reload as a site it must be called from, so keep the re-arm here.
         // Sequenced after the block above so no lock is held across it.
         self.sync_undo_depth_limit();
-        release
+        Locked::Done(AfterConfigWrite { release })
     }
 }
 
@@ -488,6 +531,56 @@ mod tests {
             assert!(state.update_config(incoming).is_err());
             assert_eq!(std::fs::read(dir.join("config.toml")).unwrap(), before);
             assert!(state.speleodb_session_status().unwrap().logged_in);
+        });
+    }
+
+    #[test]
+    fn a_whole_save_racing_a_sign_in_to_another_instance_asks_for_lock_ops_and_writes_nothing() {
+        crate::test_helpers::with_isolated_config(|| {
+            let state = signed_in_state();
+            let stale = state.get_config();
+            let before = Config::load().unwrap();
+            // A sign-in to another instance lands after the caller decided this
+            // save needed no lock-ops span.
+            state.config.lock().unwrap().speleodb.endpoint =
+                Some("https://signed-in-elsewhere.example.com".to_owned());
+            let outcome = state
+                .update_config_locked(
+                    stale,
+                    ConfigWrite::Whole {
+                        lock_ops_held: false,
+                    },
+                )
+                .unwrap();
+            assert!(matches!(outcome, Locked::NeedsLockOps(_)));
+            assert_eq!(
+                state.get_config().speleodb.endpoint.as_deref(),
+                Some("https://signed-in-elsewhere.example.com"),
+                "nothing written to memory"
+            );
+            assert_eq!(
+                toml::to_string(&Config::load().unwrap()).unwrap(),
+                toml::to_string(&before).unwrap(),
+                "nothing written to disk"
+            );
+            assert!(state.speleodb_session_status().unwrap().logged_in);
+        });
+    }
+
+    #[test]
+    fn a_reload_racing_a_sign_out_asks_for_lock_ops_and_publishes_nothing() {
+        crate::test_helpers::with_isolated_config(|| {
+            let state = signed_in_state();
+            let previous = state.get_config();
+            let from_disk = Config::load().unwrap();
+            // A sign-out lands between the reload's read and its write.
+            state.config.lock().unwrap().speleodb.token.0 = None;
+            let outcome = state.reload_config_locked(&from_disk, &previous, false, false);
+            assert!(matches!(outcome, Locked::NeedsLockOps(())));
+            assert!(
+                state.get_config().speleodb.token.0.is_none(),
+                "the sign-out must not be undone by a reload of the older file"
+            );
         });
     }
 

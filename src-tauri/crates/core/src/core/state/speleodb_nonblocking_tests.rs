@@ -480,6 +480,9 @@ fn a_failed_read_only_release_gives_the_session_its_gate_back() {
             });
             let _ = server.wait_for_held_request();
             assert!(!state.edit_enabled(), "shut while the POST is in flight");
+            // A status refresh landing now sees a shut gate and drops the open
+            // project's claim before it ever waits on lock-ops.
+            state.speleodb_forget_lock_acquired_if_gate_shut();
             server.let_it_answer();
             assert!(
                 switch.join().expect("switch thread").is_err(),
@@ -491,7 +494,48 @@ fn a_failed_read_only_release_gives_the_session_its_gate_back() {
             state.edit_enabled(),
             "the lock is still ours, so the session keeps editing as before the call"
         );
-        assert!(state.speleodb_lock_acquired_here(ID), "and keeps its claim");
+        assert!(
+            state.speleodb_lock_acquired_here(ID),
+            "and keeps its claim, even though a refresh ran during the POST"
+        );
+    });
+}
+
+#[test]
+fn a_failed_read_only_release_after_the_session_ended_keeps_the_claim_for_the_janitor() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    with_isolated_config(|| {
+        let server = ScriptedServer::start(vec![
+            reply(200, &project_held_by(ME), false),
+            reply(500, r#"{"detail":"synthetic failure"}"#, true),
+        ]);
+        let state = editing_session(dir.path(), &server.url);
+        let expected = release_context(&state, &server.url);
+        std::thread::scope(|scope| {
+            let switch = scope.spawn(|| {
+                state
+                    .speleodb_release_current_lock(Some(expected))
+                    .map_err(|e| e.message)
+            });
+            let _ = server.wait_for_held_request();
+            // A close or switch during the POST: a session boundary. With the
+            // gate shut and the claim off, it has nothing of its own to release.
+            {
+                let _project = state.project.lock().expect("project");
+                state.bump_speleodb_session();
+            }
+            server.let_it_answer();
+            assert!(switch.join().expect("switch thread").is_err());
+        });
+        server.finish();
+        assert!(
+            !state.edit_enabled(),
+            "the boundary owns the gate now; a failed release must not reopen it"
+        );
+        assert!(
+            state.speleodb_lock_acquired_here(ID),
+            "the mutex is still held on the server, so its claim survives for a retry"
+        );
     });
 }
 
@@ -607,6 +651,35 @@ fn a_reverify_from_an_ended_session_is_ignored() {
         assert!(
             next.success,
             "a verdict about an ended session must not refuse this one: {next:?}"
+        );
+        assert!(state.edit_enabled());
+    });
+}
+
+#[test]
+fn a_reverify_verdict_does_not_outlive_the_gate_it_was_taken_under() {
+    // The lock is found lost, the status refresh shuts the gate, and Start Editing
+    // re-acquires - all within one session generation. The probe's verdict is about
+    // the lock that was lost, not the one just taken.
+    let dir = tempfile::tempdir().expect("temp dir");
+    with_isolated_config(|| {
+        let server = ScriptedServer::start(vec![reply(
+            200,
+            &project_held_by("other@example.com"),
+            false,
+        )]);
+        let state = editing_session(dir.path(), &server.url);
+        assert!(state.execute(an_edit("triggers the re-verify")).success);
+        wait_for_reverify(&state);
+        server.finish();
+        let generation = state.speleodb_session_generation();
+        state.set_edit_enabled(false);
+        state.set_edit_enabled(true);
+        assert_eq!(state.speleodb_session_generation(), generation);
+        let next = state.execute(an_edit("under the fresh lock"));
+        assert!(
+            next.success,
+            "a fresh lock must not be refused by the old verdict: {next:?}"
         );
         assert!(state.edit_enabled());
     });

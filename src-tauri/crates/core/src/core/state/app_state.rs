@@ -360,9 +360,21 @@ impl AppState {
 
     /// Set the transient edit-enabled flag. `false` only for a remote SpeleoDB
     /// project opened without a write lock; reset to `true` on every open/close.
+    ///
+    /// Opening a shut gate also drops any pending #202 lock re-verify: it was
+    /// started under the edit session that shut, and whatever it finds describes
+    /// that session, not the one opening now (a re-acquire can reopen the gate
+    /// within the same session generation, so the generation alone cannot tell).
     pub(crate) fn set_edit_enabled(&self, v: bool) {
-        self.edit_enabled
-            .store(v, std::sync::atomic::Ordering::Relaxed);
+        let was = self
+            .edit_enabled
+            .swap(v, std::sync::atomic::Ordering::Relaxed);
+        if v && !was {
+            *self
+                .speleodb_reverify
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
     }
 
     /// THE mutation chokepoint (#191, D-B6). Every SURVEY-CONTENT mutation entry

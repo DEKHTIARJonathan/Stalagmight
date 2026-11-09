@@ -170,7 +170,10 @@ impl AppState {
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
         // Clean check and gate transition under ONE `command_lock` + `project`
         // acquisition: mutations and session boundaries cannot slip between them.
-        let gate_was_open = {
+        // The claim comes off with the gate, so a status refresh during the POST
+        // (which drops the claim of a shut gate) has nothing to take, and a failed
+        // POST can put back exactly what was there.
+        let (gate_was_open, claim) = {
             let _commands = self
                 .command_lock
                 .lock()
@@ -192,15 +195,18 @@ impl AppState {
             self.speleodb_require_clean_project(project.as_ref())
                 .map_err(admin_dto)?;
             let open = self.edit_enabled();
+            let claim = self.speleodb_forget_lock_acquired_for(&link.project_id);
             self.set_edit_enabled(false);
-            open
+            (open, claim)
         };
         if super::speleodb::lock_held_by_me(holder.as_deref(), Some(&email)) {
             if let Err(e) = client::release_lock(&endpoint, &token, insecure_http, &link.project_id)
             {
                 // Still ours: give the same session its gate back, exactly as it was
                 // before this call. A boundary that landed during the POST owns the
-                // gate now, so leave it alone.
+                // gate now, so leave it alone - but the claim goes back either way:
+                // it is the only local pointer to a mutex the server still holds,
+                // and with the session gone it is what the janitor retries from.
                 let _project = self
                     .project
                     .lock()
@@ -208,10 +214,10 @@ impl AppState {
                 if gate_was_open && generation == self.speleodb_session_generation() {
                     self.set_edit_enabled(true);
                 }
+                self.speleodb_restore_lock_claim(claim);
                 return Err(dto_for_error(Endpoint::Release, &e));
             }
         }
-        self.speleodb_forget_lock_acquired_for(&link.project_id);
         Ok(())
     }
 
