@@ -139,7 +139,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.set_station_comment",
     "command.set_zero_datum",
     "command.speleodb_done",
-    "command.speleodb_force_edit",
     "command.speleodb_get_project_metadata",
     "command.speleodb_get_revisions",
     "command.speleodb_link_status",
@@ -149,7 +148,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.speleodb_logout",
     "command.speleodb_open_project",
     "command.speleodb_open_project_discarding_local",
-    "command.speleodb_patch_project",
     "command.speleodb_project_access_at",
     "command.speleodb_publish",
     "command.speleodb_push",
@@ -158,8 +156,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.speleodb_release_lock_acquired_here",
     "command.speleodb_restore_revision",
     "command.speleodb_session",
-    "command.speleodb_set_exclude_geojson",
-    "command.speleodb_set_undo_mode",
     "command.speleodb_start_editing",
     "command.speleodb_take_remote",
     "command.speleodb_unlink",
@@ -267,7 +263,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.open-from-speleodb",
     "action.dialog.speleodb-done",
     "action.dialog.speleodb-divergence",
-    "action.dialog.speleodb-force-edit",
     "action.dialog.speleodb-close",
     "action.dialog.speleodb-quit",
     "action.dialog.speleodb-no-permission",
@@ -278,7 +273,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-unwound-push",
     "action.dialog.speleodb-discard-changes",
     "action.dialog.speleodb-revert",
-    "action.dialog.speleodb-project",
     "action.dialog.publish-to-speleodb",
     "action.dialog.split-section",
     "action.dialog.swap-comments",
@@ -342,7 +336,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.open-from-speleodb",
     "dialog-cancel.speleodb-done",
     "dialog-cancel.speleodb-divergence",
-    "dialog-cancel.speleodb-force-edit",
     "dialog-cancel.speleodb-close",
     "dialog-cancel.speleodb-quit",
     "dialog-cancel.speleodb-no-permission",
@@ -353,7 +346,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-unwound-push",
     "dialog-cancel.speleodb-discard-changes",
     "dialog-cancel.speleodb-revert",
-    "dialog-cancel.speleodb-project",
     "dialog-cancel.publish-to-speleodb",
     "dialog-cancel.split-section",
     "dialog-cancel.swap-comments",
@@ -444,7 +436,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.open-from-speleodb",
     "dwell.dialog.speleodb-done",
     "dwell.dialog.speleodb-divergence",
-    "dwell.dialog.speleodb-force-edit",
     "dwell.dialog.speleodb-close",
     "dwell.dialog.speleodb-quit",
     "dwell.dialog.speleodb-no-permission",
@@ -455,7 +446,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-unwound-push",
     "dwell.dialog.speleodb-discard-changes",
     "dwell.dialog.speleodb-revert",
-    "dwell.dialog.speleodb-project",
     "dwell.dialog.publish-to-speleodb",
     "dwell.dialog.split-section",
     "dwell.dialog.swap-comments",
@@ -599,7 +589,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.open-from-speleodb",
     "active-dwell.dialog.speleodb-done",
     "active-dwell.dialog.speleodb-divergence",
-    "active-dwell.dialog.speleodb-force-edit",
     "active-dwell.dialog.speleodb-close",
     "active-dwell.dialog.speleodb-quit",
     "active-dwell.dialog.speleodb-no-permission",
@@ -610,7 +599,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.speleodb-unwound-push",
     "active-dwell.dialog.speleodb-discard-changes",
     "active-dwell.dialog.speleodb-revert",
-    "active-dwell.dialog.speleodb-project",
     "active-dwell.dialog.publish-to-speleodb",
     "active-dwell.dialog.split-section",
     "active-dwell.dialog.swap-comments",
@@ -1041,7 +1029,9 @@ mod tests {
         //       pair is the backend's one-shot consent for the install, so a
         //       webview `invoke` cannot skip the exit guards.
         // Native SDK migration removes retired commands and picker events.
-        assert_eq!(EVENT_NAMES.len(), 665);
+        // Removed force-edit command/dialog (5) and project settings dialog (4).
+        // Retired workspace metadata mutation commands (3).
+        assert_eq!(EVENT_NAMES.len(), 653);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

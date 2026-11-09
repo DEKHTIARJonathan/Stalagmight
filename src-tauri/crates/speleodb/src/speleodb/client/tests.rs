@@ -154,6 +154,11 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
     let s = Server::json(json!(projects));
     let listed = list_projects(&s.base, "t", false).unwrap();
     assert_eq!(listed.len(), 1);
+    let summary = super::super::models::SpeleoProjectSummary::from_project(listed[0].clone());
+    assert_eq!(
+        summary.modified_date.as_deref(),
+        Some("2026-01-01T00:00:00Z")
+    );
     assert_eq!(listed[0].kind, "stalagmight");
     assert_eq!(listed[0].permission, Some(Permission::Admin));
     assert!(s.finish()[0].starts_with("GET /api/v2/projects/ "));
@@ -168,6 +173,10 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
             get_project(&s.base, "t", false, ID)
         }
         .unwrap();
+        assert_eq!(
+            result.modified_date.as_deref(),
+            Some("2026-01-01T00:00:00+00:00")
+        );
         assert_eq!(result.permission, Some(Permission::ReadOnly));
         assert_eq!(result.active_mutex.unwrap().user, "other@example.com");
         assert!(s.finish()[0].starts_with(&format!("GET /api/v2/projects/{ID}/ ")));
@@ -768,4 +777,32 @@ fn downloads_allow_healthy_progress_beyond_the_idle_budget_but_reject_stalls() {
         }
         worker.join().unwrap();
     }
+}
+
+#[test]
+fn dns_failure_keeps_its_typed_cause_for_offline_open() {
+    struct OfflineDns;
+    impl reqwest::dns::Resolve for OfflineDns {
+        fn resolve(&self, _name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+            Box::pin(async { Err(std::io::Error::other("synthetic DNS failure").into()) })
+        }
+    }
+    let error = runtime().expect("runtime").block_on(async {
+        reqwest::Client::builder()
+            .no_proxy()
+            .dns_resolver(Arc::new(OfflineDns))
+            .build()
+            .expect("client")
+            .get("http://synthetic.invalid/")
+            .send()
+            .await
+            .expect_err("synthetic resolver always fails")
+    });
+    assert!(matches!(
+        network_error(error),
+        SpeleoDbError::Transport {
+            cause: TransportCause::Dns,
+            ..
+        }
+    ));
 }

@@ -4132,14 +4132,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 overrides: {},
               },
               // SpeleoDB config block: the real get_config always returns this
-              // (Rust SpeleoDbConfig::default), and SpeleoStatusButton reads
-              // config.speleodb.poll_interval_seconds on every project-view mount -
-              // omitting it here makes config.speleodb undefined and crashes the view.
+              // (Rust SpeleoDbConfig::default); Settings reads it directly.
               speleodb: {
                 endpoint: null,
                 email: null,
                 insecure_http: false,
-                poll_interval_seconds: 60,
               },
               // Spread LAST so a stored `[gas]` block wins over the literal's own.
               ...(mockGasConfig ? { gas: mockGasConfig } : {}),
@@ -5639,11 +5636,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // [#258 review] The provenance-scoped unwind. No payload, and no argument:
           // it releases whatever THIS process recorded acquiring, or nothing.
           case 'speleodb_release_lock_acquired_here':
-          case 'speleodb_set_exclude_geojson':
-          // [#303] The per-project undo-history policy write: no payload. The FE
-          // re-reads `speleodb_link_status` afterwards for the new value.
-          case 'speleodb_set_undo_mode':
-          // #215 lock release + delete: no payload.
           case 'speleodb_project_access_at':
           case 'speleodb_release_current_lock':
           // [#303] Which revision a chain step would load, backward and forward. `null`
@@ -5658,18 +5650,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'speleodb_discard_changes':
             return { kind: 'editing' };
           case 'speleodb_get_project_metadata':
-          case 'speleodb_patch_project':
-            // Deterministic project metadata for the #206 settings tab. patch echoes
-            // the same shape (a real server would return post-edit truth).
-            return {
-              name: 'Mock Cave',
-              description: '',
-              country: 'US',
-              visibility: 'PRIVATE',
-              latitude: null,
-              longitude: null,
-              exclude_geojson: false,
-            };
+            return { name: 'Mock Cave', description: '', country: 'US', visibility: 'PRIVATE', latitude: null, longitude: null, exclude_geojson: false };
           case 'speleodb_publish':
             // #207 publish result: the reloaded (now-remote) local .stalx path.
             return {

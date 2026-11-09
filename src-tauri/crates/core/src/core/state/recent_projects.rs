@@ -236,8 +236,8 @@ impl AppState {
         // and left the entire undo/redo stack in place so an undo could replay
         // against the deleted project. The teardown additionally drops the database
         // handle, clears the undo stack, drops the display-settings and
-        // adjusted-geometry caches, and resets the read-only edit gate plus the
-        // force-edit flag so neither leaks into the next open.
+        // adjusted-geometry caches, and resets the read-only edit gate so it cannot
+        // leak into the next open.
         //
         // ONE acquisition of the `project` lock covers BOTH the identity check and
         // the teardown, and that is load-bearing rather than tidiness. Reading the
@@ -341,7 +341,7 @@ impl AppState {
                 // Kept, not dropped: nothing has been destroyed yet, and the
                 // trash below can still fail. A claim cleared over a file that
                 // survived is a mutex left held with no local pointer to it -
-                // the session is closed, so the poll's catch-alls never see it,
+                // the session is closed, so the refresh's catch-alls never see it,
                 // and the no-project janitor has nothing to retry. See the
                 // trash-failure return, which puts it back.
                 cleared_claim = held_lock
@@ -413,7 +413,7 @@ impl AppState {
                 // Nothing was destroyed, so the lock is still ours and still
                 // guarding a project that is still there. Put the claim back -
                 // without it the mutex has no local pointer at all: this call
-                // closed the session, so the poll's catch-alls will never run
+                // closed the session, so the refresh's catch-alls will never run
                 // over it, and the deferred release below is not reached from
                 // here either.
                 self.speleodb_restore_lock_claim(cleared_claim);

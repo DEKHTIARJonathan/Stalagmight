@@ -35,7 +35,7 @@ function mockRoutes(overrides: Record<string, () => Promise<unknown>> = {}) {
       speleodb_session: () => Promise.resolve({ logged_in: true }),
       speleodb_list_projects: () => Promise.resolve([REMOTE_PROJECT]),
       speleodb_open_project: () =>
-        Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false }),
+        Promise.resolve({ local_path: '/cache/p1.stalx' }),
       ...overrides,
     };
     return (routes[cmd] ?? (() => Promise.resolve(undefined)))();
@@ -62,7 +62,6 @@ beforeEach(() => {
     showToast: showToastMock,
   });
 });
-
 
 /**
  * #270 (P1) - a TRANSIENT project-list failure must not log an authenticated user
@@ -208,7 +207,7 @@ describe('OpenFromSpeleoDbDialog with work at risk in the open project (#270)', 
     useSpeleoStore.setState({ link: null, remoteProjectId: null });
   });
 
-  it('says so in the browser instead of swapping the project out', async () => {
+  it('opens another project while preserving saved unpushed work', async () => {
     // A DIFFERENT remote project is open, saved to disk but never uploaded.
     useProjectStore.setState({ project: { file_path: '/cache/p9.stalx' } as never, isDirty: false });
     useSpeleoStore.setState({
@@ -219,8 +218,7 @@ describe('OpenFromSpeleoDbDialog with work at risk in the open project (#270)', 
         lockedByOther: false,
         hasUnpushedEdits: true,
         unwound: false,
-        forceEditing: false,
-        forceEditAllowed: false,
+
         undoMode: 'full',
         remoteState: 'unknown',
         noAccess: false,
@@ -231,23 +229,20 @@ describe('OpenFromSpeleoDbDialog with work at risk in the open project (#270)', 
     // The pull would have SUCCEEDED, so an unguarded open runs all the way through.
     mockRoutes({
       speleodb_open_project: () =>
-        Promise.resolve({ local_path: '/cache/p1/project.stalx', concurrent_session: false }),
+        Promise.resolve({ local_path: '/cache/p1/project.stalx' }),
     });
     render(<OpenFromSpeleoDbDialog />);
 
     await userEvent.click(await screen.findByTestId('open-from-speleodb-open-p1'));
 
-    expect(await screen.findByTestId('open-from-speleodb-error')).toBeInTheDocument();
-    // Nothing pulled, nothing loaded - and the browser is still up, so the user can
-    // pick something else or close it and hand the project back.
-    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_open_project')).toBe(false);
-    expect(loadProjectMock).not.toHaveBeenCalled();
-    expect(closeDialogMock).not.toHaveBeenCalled();
+    await waitFor(() => expect(loadProjectMock).toHaveBeenCalled());
+    expect(confirmMock).not.toHaveBeenCalled();
+
   });
 });
 
-
-it.each(['read-only', 'locked'])('restores the browser after a cancelled %s warning', async (kind) => {
+it.each(['read-only', 'locked'])('restores the browser after cancelling an unsaved switch to a %s project', async (kind) => {
+  useProjectStore.setState({ project: { file_path: '/old.stalx' } as never, isDirty: true });
   confirmMock.mockResolvedValue(false);
   mockRoutes({ speleodb_list_projects: async () => [{ ...REMOTE_PROJECT,
     permission: kind === 'read-only' ? 'READ_ONLY' : 'READ_AND_WRITE',

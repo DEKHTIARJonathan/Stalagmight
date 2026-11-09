@@ -29,7 +29,7 @@ const ARGS: RestoreRevisionArgs = {
   restore: true,
 };
 
-const RESTORED = { local_path: '/cache/p1.stalx', concurrent_session: false };
+const RESTORED = { local_path: '/cache/p1.stalx' };
 
 const run = async (over: Partial<RestoreRevisionArgs> = {}): Promise<void> => {
   const { result } = renderHook(() => useRestoreRevision());

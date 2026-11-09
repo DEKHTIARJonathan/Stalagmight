@@ -68,10 +68,10 @@ use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, Salva
 use stalagmight_lib::speleodb::{
     DoneResult, Permission, PushResult, RemoteState, SpeleoAccessVerification, SpeleoDbAction,
     SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult,
-    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary,
-    SpeleoPublishParams, SpeleoPublishResult, SpeleoReleaseContext, SpeleoRevision,
-    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult,
-    TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
+    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectSummary, SpeleoPublishParams,
+    SpeleoPublishResult, SpeleoReleaseContext, SpeleoRevision, SpeleoRewindTarget,
+    SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult, TransportCause,
+    UnpushedLocalEdits, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_attribution::TileAttribution;
 use stalagmight_lib::tile_providers::TileProviderInfo;
@@ -135,6 +135,7 @@ fn main() {
     fs::create_dir_all(&out_dir).expect("Failed to create ipc types directory");
     // Remove generated files whose source types were retired with native transfer.
     for name in [
+        "SpeleoProjectMetadataPatch",
         "KeychainReport",
         "TokenFallback",
         "TokenStorage",
@@ -393,6 +394,7 @@ fn main() {
     export::<SpeleoFileAccess>(&out_dir);
     export::<SpeleoAccessVerification>(&out_dir);
     export::<SpeleoReleaseContext>(&out_dir);
+    export::<SpeleoReleaseContext>(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bindings"));
     export::<SpeleoLoginResult>(&out_dir);
     export::<SpeleoOpenResult>(&out_dir);
     // #214 adopt-Ariane result (import + link + type-flip outcome), and what the
@@ -430,7 +432,6 @@ fn main() {
     // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)
     export::<Visibility>(&out_dir);
     export::<SpeleoProjectMetadata>(&out_dir);
-    export::<SpeleoProjectMetadataPatch>(&out_dir);
     export::<SpeleoPublishParams>(&out_dir);
     export::<SpeleoPublishResult>(&out_dir);
     // #215 full Project Settings: collaborator roster (users + teams) + team picker
@@ -643,7 +644,6 @@ fn main() {
         "PushResult",
         "Visibility",
         "SpeleoProjectMetadata",
-        "SpeleoProjectMetadataPatch",
         "SpeleoPublishParams",
         "SpeleoPublishResult",
     ];

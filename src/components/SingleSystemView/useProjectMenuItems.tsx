@@ -1,3 +1,4 @@
+import { useSpeleoStore } from '../../store/speleoStore';
 /**
  * Builds the in-project hamburger (AppMenu) items for SingleSystemView.
  *
@@ -11,13 +12,9 @@ import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProject } from '../../hooks/useProject';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoStore } from '../../store/speleoStore';
-import { useSpeleoMenuItems } from './useSpeleoMenuItems';
-import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
-import { SpeleoBadgedIcon } from '../common/SpeleoBadgedIcon';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
-import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem, openFromSpeleoDbMenuItem } from '../common/appMenuItems';
+import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem } from '../common/appMenuItems';
 import type { AppMenuItem } from '../common/AppMenu';
 import {
   SaveIcon,
@@ -26,7 +23,6 @@ import {
   SlidersIcon,
   InfoIcon,
   DatabaseIcon,
-  FilePlusIcon,
   BugIcon,
   LayersIcon,
   MapIcon,
@@ -53,15 +49,8 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   const showMapStats = useUIStore((s) => s.showMapStats);
   const showZoomStats = useUIStore((s) => s.showZoomStats);
   const toggleDisplay = useUIStore((s) => s.toggleDisplay);
-  // SpeleoDB submenu (T2d) - only for a remote project.
-  const speleoLink = useSpeleoStore((s) => s.link);
-  // The signed-in session gates "Publish to SpeleoDB" (a local project can only be
-  // published while logged in).
-  const speleoSession = useSpeleoStore((s) => s.session);
-  // The submenu's rows live in their own hook - the toolbar status button's
-  // right-click menu renders the very same array.
-  const speleoItems = useSpeleoMenuItems();
 
+  const speleoLink = useSpeleoStore((s) => s.link);
   return useMemo(() => {
     const sz = 18;
 
@@ -92,41 +81,6 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
 
     return [
       ...leadingMenuItems(t, { onNewProject: handleNewProject }, 'hamburger'),
-      // "Open from SpeleoDB" needs a signed-in session (it lists the caller's
-      // remote projects), so hide it when logged out.
-      ...(speleoSession?.loggedIn
-        ? [openFromSpeleoDbMenuItem(t, { onOpen: () => openDialog('open-from-speleodb') })]
-        : []),
-      // Publish to SpeleoDB - only for a LOCAL project (not already linked) while
-      // signed in (a publish needs a session).
-      ...(!speleoLink && speleoSession?.loggedIn
-        ? [
-            {
-              id: 'publish-to-speleodb-menu',
-              label: t('speleodb.publish.menuItem'),
-              icon: (
-                <SpeleoBadgedIcon
-                  badge={<FilePlusIcon size={11} />}
-                  badgeColor="text-green-400"
-                  size={sz}
-                  testIdPrefix="publish-to-speleodb-menu-icon"
-                />
-              ),
-              onClick: () => openDialog('publish-to-speleodb'),
-            },
-          ]
-        : []),
-      // SpeleoDB submenu (T2d) - only when a remote project is open.
-      ...(speleoLink
-        ? [
-            {
-              id: 'speleodb-menu',
-              label: t('speleodb.menu.title'),
-              icon: <SpeleoDbLogo size={sz} testId="speleodb-menu-logo" />,
-              submenu: speleoItems,
-            },
-          ]
-        : []),
       { id: 'project-menu-sep-1', label: '', separator: true },
       {
         id: 'toolbar-save-button',
@@ -243,5 +197,5 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showDevStats, showMemoryStats, showMapStats, showZoomStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoItems]);
+  }, [t, openDialog, showDevStats, showMemoryStats, showMapStats, showZoomStats, toggleDisplay, onSave, saveFailed, handleNewProject, handleSaveProjectAs, handleCloseProject, speleoLink]);
 }

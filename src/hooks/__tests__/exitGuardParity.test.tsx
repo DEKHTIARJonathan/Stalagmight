@@ -51,8 +51,7 @@ const link = (o: Partial<SpeleoLinkState>): SpeleoLinkState => ({
   lockedByOther: false,
   hasUnpushedEdits: false,
   unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
+
   undoMode: 'full',
   remoteState: 'up_to_date',
   noAccess: false,
@@ -150,70 +149,26 @@ const allExits = async (): Promise<{
   return { quit, close, open, new: nu };
 };
 
-describe('all four exits agree on the SpeleoDB guard (#270)', () => {
-  it('lock held + unpushed: ALL FOUR prompt', async () => {
-    useSpeleoStore.setState({ link: link({ editState: 'editing', hasUnpushedEdits: true }) });
+describe('all four exits agree on unsaved changes', () => {
+  it.each([
+    { editState: 'editing' as const, hasUnpushedEdits: true },
+    { editState: 'editing' as const, hasUnpushedEdits: false },
+    { editState: 'read-only' as const, hasUnpushedEdits: true },
+    { editState: 'read-only' as const, hasUnpushedEdits: false },
+    { editState: 'editing' as const, hasUnpushedEdits: true },
+  ])('saved work never prompts: %j', async (state) => {
+    useSpeleoStore.setState({ link: link(state) });
+    expect(await allExits()).toEqual({ quit: false, close: false, open: false, new: false });
+    expect(closeProject).toHaveBeenCalled();
+    expect(loadProject).toHaveBeenCalled();
+  });
+
+  it.each(['editing', 'read-only'] as const)('unsaved %s work prompts on every exit', async (editState) => {
+    useProjectStore.setState({ isDirty: true });
+    useSpeleoStore.setState({ link: link({ editState, hasUnpushedEdits: true }) });
     expect(await allExits()).toEqual({ quit: true, close: true, open: true, new: true });
     expect(closeProject).not.toHaveBeenCalled();
     expect(loadProject).not.toHaveBeenCalled();
-  });
-
-  // The regression this file exists for. Read-only + unpushed is reached by a
-  // re-verify divergence or a `clearSession()` after a dead token; the work is at its
-  // most stranded there, and closing used to say nothing at all - as did opening
-  // another project over it, which is the exit that then overwrites the shell.
-  it('no lock + unpushed: ALL FOUR prompt', async () => {
-    useSpeleoStore.setState({ link: link({ editState: 'read-only', hasUnpushedEdits: true }) });
-    expect(await allExits()).toEqual({ quit: true, close: true, open: true, new: true });
-    expect(closeProject).not.toHaveBeenCalled();
-    expect(loadProject).not.toHaveBeenCalled();
-  });
-
-  it('no lock + nothing unpushed: NONE prompts', async () => {
-    useSpeleoStore.setState({ link: link({ editState: 'read-only', hasUnpushedEdits: false }) });
-    expect(await allExits()).toEqual({ quit: false, close: false, open: false, new: false });
-    // Nothing to protect, so each exit actually happens.
-    expect(closeProject).toHaveBeenCalled();
-    expect(loadProject).toHaveBeenCalledWith(OTHER);
-    expect(openDialog).not.toHaveBeenCalledWith('speleodb-close', expect.anything());
-  });
-
-  // All exits offer a deliberate local keep-lock choice, even on a clean copy.
-  it('lock held + nothing unpushed: every exit offers the keep-lock prompt', async () => {
-    useSpeleoStore.setState({ link: link({ editState: 'editing', hasUnpushedEdits: false }) });
-    expect(await allExits()).toEqual({ quit: true, close: true, open: true, new: true });
-    expect(closeProject).not.toHaveBeenCalled();
-    expect(loadProject).not.toHaveBeenCalled();
-  });
-
-  it('a force-edit session with unpushed edits prompts on all four exits', async () => {
-    // #213 force-editing holds NO lock, so `editState === 'editing'` alone is not
-    // what catches this - the unpushed-work term is.
-    useSpeleoStore.setState({
-      link: link({ editState: 'editing', forceEditing: true, hasUnpushedEdits: true }),
-    });
-    expect(await allExits()).toEqual({ quit: true, close: true, open: true, new: true });
-  });
-
-  // A force-editor holds no lock (#213), so with nothing unpushed there is genuinely
-  // nothing to decide. The close guard used to spell its lock term out as
-  // `editState === 'editing'`, which is true here, and raised a prompt whose only
-  // button was "Close anyway" - `holdsWriteLock` is the shared predicate that exists
-  // precisely so that spelling cannot drift back in.
-  it('a force-edit session with NOTHING unpushed prompts nowhere', async () => {
-    useSpeleoStore.setState({
-      link: link({ editState: 'editing', forceEditing: true, hasUnpushedEdits: false }),
-    });
-    expect(await allExits()).toEqual({ quit: false, close: false, open: false, new: false });
-    expect(closeProject).toHaveBeenCalled();
-    expect(loadProject).toHaveBeenCalledWith(OTHER);
-  });
-
-  it('a local project is untouched by any of the four SpeleoDB guards', async () => {
-    useSpeleoStore.setState({ link: null });
-    expect(await allExits()).toEqual({ quit: false, close: false, open: false, new: false });
-    expect(closeProject).toHaveBeenCalled();
-    expect(loadProject).toHaveBeenCalledWith(OTHER);
   });
 });
 

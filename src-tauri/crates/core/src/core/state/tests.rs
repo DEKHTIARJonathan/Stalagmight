@@ -62,13 +62,6 @@ fn poison_mutex<T>(mutex: &Mutex<T>) {
 
 // === Project Operations Tests ===
 
-/// [#473] Creating a project clears the PREVIOUS project's discarded-history flag.
-///
-/// The flag is per-project and drives a banner reading "edit history could not be read
-/// and was discarded". Create is a project-slot commit like a load, and every commit has
-/// to write it - the first version of this fix reset `edit_enabled` and `force_editing`
-/// here and forgot this one, so opening a project with an unreadable history and then
-/// choosing File > New Project put a data-loss banner over a brand-new empty project.
 #[test]
 fn creating_a_project_clears_a_previous_projects_discarded_history_flag() {
     let state = AppState::new().unwrap();
@@ -17103,12 +17096,10 @@ fn setting_the_undo_mode_on_a_linked_project_needs_the_edit_gate() {
         .speleodb_set_undo_mode(crate::models::UndoMode::Disabled)
         .expect("with an edit session the override is settable");
 
-    // Force editing is intentionally the same gate. It carries conflict risk, but the
-    // user explicitly accepted that mode and its commands may edit this same project file.
-    state.set_force_editing(true);
+    state.set_edit_enabled(false);
     state
         .speleodb_set_undo_mode(crate::models::UndoMode::Full)
-        .expect("force editing may change the project policy too");
+        .expect_err("a released session cannot change the project policy");
 }
 
 #[test]
@@ -23380,8 +23371,6 @@ fn remote_fixture() -> (AppState, SectionId, ShotId, TempDir) {
     (state, section_id, shot_id, temp)
 }
 
-/// Build the same fixture but force editing ENABLED (simulating a later
-/// lock-acquire) so the dirty-bit plumbing can be exercised.
 fn remote_fixture_editable() -> (AppState, SectionId, ShotId, TempDir) {
     let (state, sid, shid, temp) = remote_fixture();
     state.set_edit_enabled(true);

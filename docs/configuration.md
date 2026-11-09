@@ -30,8 +30,6 @@ endpoint = "https://www.speleodb.org"
 email = "you@example.com"
 token = "<API token>"
 insecure_http = false
-allow_force_edit = false
-poll_interval_seconds = 60
 undo_mode = "full"
 ```
 
@@ -50,7 +48,7 @@ credential bytes (or prior absence) are restored with private permissions. A fai
 rollback is reported explicitly; two files cannot provide crash-atomic updates.
 
 When `speleodb/speleodb.conf` is genuinely absent, the legacy `[speleodb]` table
-supplies endpoint, email, `insecure_http`, `allow_force_edit`,
+supplies endpoint, email, `insecure_http`,
 `poll_interval_seconds` and `undo_mode`. Normalization still applies, including the
 polling floor. Passwords, tokens and obsolete credential-storage options are ignored;
 sign in again to store a token. The separate file always takes precedence, including
@@ -65,7 +63,11 @@ untouched; cleanup failures are reported. No keychain access is restored.
 is restored only when the resolved instance matches its configured endpoint.
 Reloading configuration applies a changed endpoint, account or token to the live
 session and resets its edit gate; unrelated preference reloads retain the session.
-The poll interval is clamped to at least 30 seconds on load.
+Projects refresh at startup and immediately after sign-in. Successful "Log in now"
+closes Settings and shows the project listing. Refreshes display a spinner until
+they finish, including failed requests. Use the refresh button
+on the home screen to reload the listing, or Refresh in the open project's
+SpeleoDB workspace. No periodic SpeleoDB refresh runs in the background.
 
 ## Key Config Options
 
@@ -576,3 +578,6 @@ not whatever `log_directory()` resolves to when it runs. The two differ: once
 `setup` has initialised `app_dirs`, `log_directory()` starts returning the
 bundle-identifier path (`<local-data>/com.stalagmight.desktop/logs`), which is
 not where any log file was written.
+
+The obsolete lockless-edit preference is ignored when loading older files and is
+omitted when saving. It cannot enable editing.

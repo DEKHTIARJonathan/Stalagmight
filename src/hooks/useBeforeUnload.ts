@@ -1,3 +1,4 @@
+import { confirmWorkspaceDrafts } from '../utils/workspaceDrafts';
 import { useEffect, useRef } from 'react';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { confirm } from '@tauri-apps/plugin-dialog';
@@ -114,6 +115,7 @@ export function useBeforeUnload(
           // through this same event. Consume the one-shot so the in-app guard
           // below is skipped for THIS close only - otherwise e.g. "Discard &
           // Quit" would re-open the dialog it came from, forever.
+          if (!await confirmWorkspaceDrafts()) return;
           const preConfirmed = consumeQuitConfirmation();
 
           // A close request that is NOT pre-confirmed starts a fresh quit attempt,

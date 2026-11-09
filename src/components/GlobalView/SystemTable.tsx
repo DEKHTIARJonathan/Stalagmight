@@ -1,3 +1,5 @@
+import { RemoteUpdatedTime } from './RemoteUpdatedTime';
+import { SpeleoProjectInfo } from './SpeleoProjectInfo';
 import { type MouseEvent } from 'react';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useTranslation } from 'react-i18next';
@@ -204,7 +206,7 @@ export function SystemTable({
               myEmail,
               remoteProjects,
               localStates,
-              { [item.projectId]: item.summary },
+              { ...remoteSummaries, [item.projectId]: item.summary },
             );
             return (
               <tr
@@ -214,7 +216,6 @@ export function SystemTable({
                 }`}
                 data-testid={`system-row-remote-${item.projectId}`}
                 data-remote="true"
-                data-local-edits={remoteLock.hasLocalEdits ? 'true' : 'false'}
                 data-recent-accent={recentAccent(remoteLock)}
                 role="button"
                 aria-disabled={busy || undefined}
@@ -223,9 +224,10 @@ export function SystemTable({
                   if (!busy) onOpenRemote(item.summary);
                 }}
                 onKeyDown={(e) => {
-                  if (!busy && (e.key === 'Enter' || e.key === ' ')) {
+                  if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
-                    onOpenRemote(item.summary);
+                    e.stopPropagation();
+                    if (!busy) onOpenRemote(item.summary);
                   }
                 }}
               >
@@ -240,9 +242,9 @@ export function SystemTable({
                   {item.summary.name}
                 </td>
                 <td className={cellClass}>
-                  <SpeleoRecentInfo
-                    info={remoteLock}
-                    name={item.summary.name}
+                  <SpeleoProjectInfo
+                    lock={remoteLock}
+                    summary={item.summary}
                     testIdPrefix={`system-row-remote-${item.projectId}-speleo`}
                   />
                 </td>
@@ -250,7 +252,8 @@ export function SystemTable({
                   {t('globalView.recent.remote.onSpeleoDb')}
                 </td>
                 <td className={cellClass}>
-                  <div className="flex items-center justify-end gap-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <RemoteUpdatedTime date={item.summary.modified_date} />
                     <button
                       type="button"
                       disabled={busy}

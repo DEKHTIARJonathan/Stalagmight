@@ -242,7 +242,6 @@ mod tests {
             let mut stale = state.get_config();
             stale.speleodb.email = None;
             stale.speleodb.token.0 = None;
-            stale.speleodb.poll_interval_seconds = 90;
             state.update_config(stale).unwrap();
             let loaded = Config::load().unwrap();
             assert_eq!(
@@ -250,7 +249,9 @@ mod tests {
                 Some("synthetic-test-token")
             );
             assert_eq!(loaded.speleodb.email.as_deref(), Some("diver@example.com"));
-            assert_eq!(loaded.speleodb.poll_interval_seconds, 90);
+            assert!(!toml::to_string(&loaded.speleodb)
+                .unwrap()
+                .contains("allow_force_edit"));
             assert!(state.speleodb_session_status().unwrap().logged_in);
         });
     }

@@ -1840,7 +1840,6 @@ pub fn run() {
             commands::speleodb::speleodb_remove_link_at,
             // SpeleoDB single-writer hand-off (#194/#197)
             commands::speleodb::speleodb_start_editing,
-            commands::speleodb::speleodb_force_edit,
             commands::speleodb::speleodb_done,
             commands::speleodb::speleodb_update,
             commands::speleodb::speleodb_push,
@@ -1859,12 +1858,9 @@ pub fn run() {
             commands::speleodb::speleodb_unwind_target,
             commands::speleodb::speleodb_rewind_target,
             commands::speleodb::speleodb_discard_changes,
-            commands::speleodb::speleodb_set_undo_mode,
             // SpeleoDB Enable-rendering PATCH (#200)
-            commands::speleodb::speleodb_set_exclude_geojson,
             // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)
             commands::speleodb::speleodb_get_project_metadata,
-            commands::speleodb::speleodb_patch_project,
             commands::speleodb::speleodb_publish,
             // SpeleoDB project settings: release the open project lock
             commands::speleodb::speleodb_release_current_lock,

@@ -131,11 +131,13 @@ automatically. All test content is synthetic; no private cave fixtures are used.
 
 UI regression coverage must include:
 
-- Only Stalagmight projects appear; read-only permission and lock ownership remain
-  distinct and visible. Remote opens warn before downloading; cold recents and
-  direct file opens inspect SQLite metadata and warn before replacing the project.
-- Cancelling an open warning performs no download, lock release or project
-  replacement, including a switch initiated through the close dialog.
+- Opening a SpeleoDB project automatically attempts to acquire its editing lock.
+  Read-only permissions, another editor's lock, and connection failures remain
+  distinct. A failed acquisition leaves the project open read-only and explains
+  why; a competing editor is identified by their email address.
+- A project with unsaved local changes offers Discard changes or Cancel before
+  switching or closing. Cancelling performs no download, release or replacement.
+  Saved but unuploaded work stays in the local file and does not trigger an exit prompt.
 - Deferred open/create setup, remote downloads, and reconciliation cannot replay
   older selections over newer mutations. Cancelling a newer preflight warning does
   not strand an older already-dispatched load; it reconciles and settles loading.
@@ -146,13 +148,14 @@ UI regression coverage must include:
   replacement, and dialog replacement invalidate close and older-version confirmation
   continuations before further side effects. Cancelled or superseded remote opens
   restore the owning prompt's controls without resetting replacement prompts.
-- Manual SpeleoDB Save and publishing collect a commit message. Autosave remains
-  local; failures keep the message and local edits available for retry.
-- Switching projects or closing the app warns about unsaved/unuploaded work.
-  Cancelling preserves the current project and lock. Keep-lock exits close locally without contacting the current server. Confirmed
-  release exits check the current owner; a different holder is not released.
-  Local release/acquire/poll operations are serialized. A failed upload or explicit
-  release keeps the exit dialog open.
+- Manual SpeleoDB Save collects a commit message. Creating a project uses
+  `Project Creation` automatically. Autosave remains local; failures keep the
+  message and local edits available for retry.
+- Switching projects, closing a project, or quitting releases the editing lock
+  automatically. These exits do not upload changes. The SpeleoDB workspace offers
+  Switch to Read Only Mode only when locally saved and uploaded; Resume editing
+  retries editing when it becomes available. A different holder is never released.
+  Local release/acquire/refresh operations are serialized.
 - Read-only users cannot acquire or upload; another user's mutex does not become
   a lock owned by this process. Offline/failed metadata checks never grant editing.
 
@@ -160,3 +163,90 @@ Use selected Playwright cases for the affected workflows, including
 `window-close-protection.spec.ts` and `speleodb-managed-file.spec.ts`. The tests
 mock IPC and therefore complement, rather than replace, the Rust HTTP contracts
 and live round trips.
+
+## Workspace acceptance
+
+Use synthetic controlled projects. Check Sections-first default, logo + text at
+narrow widths and UI zoom, Survey/Plan/Export navigation, keyboard tab arrows,
+focus retention, pin/hover/collapse, resizing, and fullscreen table state. Check
+metadata and connection drafts across tab/section/dock hiding, including invalid
+drafts on switch, close, sign-out and Quit. Exercise upload, cancel, retry, missing
+lock, contention naming the editor, sign-in recovery, conflicts, uncertainty and
+release failure. Verify ordinary upload retains the lock, Save and Close waits for
+confirmed upload/release, and autosave retry remains local-only. Inspect light and
+dark themes. Record real-app and live-server results separately from mocked browser
+checks in [the workspace acceptance record](plans/2026-11-08_speleodb-workspace.md).
+
+For the reduced workspace, verify Save Changes, Reload Project, Close Project and History,
+and absence of a Projects tab and metadata, rendering, undo-policy, account and admin forms. Sign-in
+must open application Settings and preserve the originating description and
+Save-and-Close intent without automatically uploading on return. Local settings
+remains available and direct IPC cannot rename a linked project.
+
+Acquisition tests must observe a live revisions request after acquire and no download
+for equal revisions. Cover stale listing hints, verified descendants, ambiguous
+history, failed downloads and status refresh never opening editing. Reload tests
+must cover cancellation, acknowledged discard, historical checkouts, mode preservation
+and safe failure. Direct read-only/reload calls and concurrent project/account/edit
+changes must reject stale consent. Use only synthetic data. For focused verification,
+run newly created or modified cases with explicit file and test-name filters, plus
+static gates. Run the full suites when requested; selected acceptance does not imply
+full-suite acceptance.
+
+### Focused workspace verification (2026-11-09)
+
+Selected new or modified cases passed: 23 Rust backend tests, 24 Vitest cases and
+6 headless Chromium cases. The browser coverage includes the reduced workspace,
+Close Project cancellation and return to the listing, lock release/resume, Save,
+and Settings authentication preserving the description and close intent without
+uploading. Backend coverage includes live revision verification, safe replacement,
+pending-work guards and edits arriving during a reload's network request.
+
+Main, agent and Playwright typechecks, all nine non-test lint gates, root and
+workspace-member formatting checks, and workspace Clippy with telemetry and all
+targets passed. Node 24 and the pinned pnpm were used. Existing repository/toolchain
+warnings remain; no full-suite or live-server acceptance is claimed. One overly
+broad Vitest rerun filter also matched one unchanged reload case, which passed;
+subsequent filters were narrowed. No external fixtures were used or committed.
+
+### Local conversion and transfer progress verification (2026-11-09)
+
+Selected new or modified cases passed: 25 Vitest cases, 7 headless Chromium cases,
+and one Rust integration test using a synthetic HTTP server and native SQLite
+files. Coverage includes local conversion, fresh server reopening, partial failures,
+Settings draft recovery, centered layouts at 1280px and 540px, and app-blocking
+progress for publishing and uploads from menu Save, Ctrl+S and Cmd+S. Fake-clock
+cases verify the exact 120-second expiration, preserved descriptions, and prevention
+of duplicate submission. Layout and progress screenshots were inspected.
+
+Main, agent and Playwright typechecks, all nine non-test lint gates, root and
+workspace-member formatting, and workspace Clippy with telemetry and all targets
+passed. Existing repository/toolchain warnings remain. No unchanged test cases,
+external fixtures or live-server tests were run for this change; these selected
+results do not claim full-suite acceptance.
+
+### Full automated verification (2026-11-09)
+
+At the user's request, verification was broadened to the full automated suites:
+
+- Vitest: 408 files, 5,698 tests passed, including the IPC mock contract. Seven stale
+  expectations from the first run were corrected before the clean full rerun.
+- Rust workspace with telemetry: 3,590 tests passed, 41 ignored, including doc tests.
+  Corrected retired telemetry entries, source inventories and old acquisition/load
+  assertions; made accepted synthetic HTTP sockets explicitly blocking on macOS.
+- Vendored Compass: 119 unit tests and 3 doc tests passed.
+- Headless Chromium: all 1,135 cases executed, initially 1,127 passed and 8 failed.
+  Updated dialog-scoped focus, retained-but-hidden workspace and two-row toolbar
+  assertions, and disabled fling inertia in the painted pan-position test. All
+  eight failed cases passed on targeted reruns. The three gas-planning cases
+  passed unchanged after navigation interruptions in the initial run. A second
+  full browser run was not performed.
+- All three typechecks, all nine lint gates, all standalone JavaScript script-test
+  files, root and workspace-member Rust formatting checks, and workspace Clippy
+  with telemetry and all targets passed. The Playwright typecheck and parallel
+  lint were repeated after the browser-test corrections.
+
+Clippy retains existing repository warnings. Ignored and environment-gated checks
+are not equivalent to executed coverage; native desktop UAT and live-server
+acceptance were not separately verified. No external fixtures were added or
+committed. Logs and browser failure artifacts are under `/tmp/stalagmight-*`.

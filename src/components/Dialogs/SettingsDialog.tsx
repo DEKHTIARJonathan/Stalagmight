@@ -1,3 +1,4 @@
+import { finishSpeleoSettings } from '../../utils/finishSpeleoSettings';
 import { useState, useEffect, useCallback, useRef, useMemo, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -28,10 +29,7 @@ import {
   defaultConfig,
   getThemedDisplayDefaults,
   getThemedSectionColorDefaults,
-  MIN_POLL_INTERVAL_SECONDS,
-  MAX_POLL_INTERVAL_SECONDS,
 } from '../../types/config';
-import { clamp } from '../../utils/clamp';
 import type { ResolvedTheme } from '../../store/uiStore';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { isValidationConfigValid } from '../../utils/validation';
@@ -370,7 +368,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
 
 export default function SettingsDialog() {
   const { t } = useTranslation();
-  const { closeDialog } = useUIStore();
+  const closeDialog = finishSpeleoSettings;
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   const setThemePreview = useUIStore((s) => s.setThemePreview);
   const setSyntacticHighlightPreview = useUIStore((s) => s.setSyntacticHighlightPreview);
@@ -392,7 +390,9 @@ export default function SettingsDialog() {
     (dialogData?.initialCategory as SettingsCategory) || 'general'
   );
   // Focused category index for roving tabindex
-  const [focusedIndex, setFocusedIndex] = useState(0);
+  const [focusedIndex, setFocusedIndex] = useState(() =>
+    Math.max(0, CATEGORIES.findIndex((category) => category.id === activeCategory))
+  );
 
   // Local config copy for editing
   const [localConfig, setLocalConfig] = useState<Config | null>(config);
@@ -552,28 +552,13 @@ export default function SettingsDialog() {
   const commitSettings = useCallback(async (): Promise<boolean> => {
     if (!localConfig) return false;
     if (isDirty) {
-      // Guarantee the SpeleoDB poll interval is in range no matter how it was
-      // entered - a below-floor value whose validation error was cleared when the
-      // panel unmounted on a category switch, or a hand-set out-of-range one. The
-      // backend re-clamps the floor on load, but clamp BOTH ends here so an invalid
-      // value can never be persisted in the first place (fix 13).
-      const clamped: Config = {
-        ...localConfig,
-        speleodb: {
-          ...localConfig.speleodb,
-          poll_interval_seconds: clamp(
-            localConfig.speleodb.poll_interval_seconds,
-            MIN_POLL_INTERVAL_SECONDS,
-            MAX_POLL_INTERVAL_SECONDS,
-          ),
-        },
-      };
-      const result = await updateConfig(clamped);
+      const result = await updateConfig(localConfig);
       if (!result.success) return false;
     }
     if (hasPendingAuth) {
       const kind = pendingAuth?.kind;
       const auth = await applyPendingAuth(localConfig.speleodb.endpoint);
+      if (auth.cancelled) return false;
       if (!auth.ok) {
         setAuthError(
           humanizeSpeleoError(auth.error, kind === 'login' ? t('speleodb.errors.loginFailed') : undefined),

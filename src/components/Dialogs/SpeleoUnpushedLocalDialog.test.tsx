@@ -1,4 +1,4 @@
-import { beforeEach, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import SpeleoUnpushedLocalDialog from './SpeleoUnpushedLocalDialog';
@@ -50,4 +50,22 @@ it('a superseded handler cannot clear a replacement prompt operation', async () 
   await act(async () => { cancelOld({ status: 'cancelled' }); });
   expect(take).toBeDisabled();
   expect(screen.getByTestId('speleodb-unpushed-local-cancel')).toBeDisabled();
+});
+
+describe('unsynced work protection during a remote open', () => {
+  it('offers cancellation without an online local-copy shortcut', async () => {
+    render(<SpeleoUnpushedLocalDialog />);
+    expect(screen.queryByTestId('speleodb-unpushed-local-keep')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-cancel'));
+    expect(takeRemote).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBeNull();
+  });
+  it('requires an explicit second confirmation before replacing unsynced work', async () => {
+    render(<SpeleoUnpushedLocalDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+    expect(takeRemote).not.toHaveBeenCalled();
+    expect(screen.getByTestId('speleodb-unpushed-local-discard-warning')).toBeVisible();
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+    expect(takeRemote).toHaveBeenCalledTimes(1);
+  });
 });

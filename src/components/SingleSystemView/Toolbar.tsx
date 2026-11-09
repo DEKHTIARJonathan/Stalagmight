@@ -298,9 +298,7 @@ export default function Toolbar({
   // because both clusters own absolutely-positioned popovers that a clipping
   // context would cut off. Reclaiming that width needs a stage that REMOVES tool
   // controls (folding them into a menu), not one that resizes them.
-  // The SpeleoStatusButton's presence widens the left cluster, so its visibility
-  // gates re-measurement too.
-  const speleoLinkPresent = useSpeleoStore((s) => s.link != null);
+  // SpeleoDB navigation is available for both local and remote projects.
   // #270: the status button grows by a "!" badge when the project has changes only
   // on this computer and no lock protecting them, so that flip changes the left
   // cluster's width and must re-run the fit below, exactly like the button
@@ -352,7 +350,6 @@ export default function Toolbar({
     // constant-width chevron slot, so their availability no longer changes the
     // left cluster width and must not kick off a reset -> re-fit on every edit.
     editingBlocked,
-    speleoLinkPresent,
     speleoUnpushedBadge,
     // The navigate group appearing/disappearing changes the right cluster's
     // natural width (#409), so its toggle must re-run the fit from scratch.
@@ -413,18 +410,20 @@ export default function Toolbar({
     setCarouselLeft(Math.max(minCenter, Math.min(maxCenter, windowCenter)));
   });
 
+  const splitToolbar = headerWidth > 0 && headerWidth < 720;
   const { displayCondensed, importCondensed, historyCondensed, tight, centerInFlow, clusterCls, centerCls } =
-    toolbarCondenseLayout(condense);
+    toolbarCondenseLayout(splitToolbar ? CONDENSE_MAX : condense);
   const centerStyle: CSSProperties | undefined = centerInFlow
     ? undefined
     : { left: carouselLeft ?? '50%' };
 
   return (
-    <header ref={headerRef} className="relative flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
+    <header ref={headerRef} className={`relative flex items-center justify-between px-4 py-2 border-b border-border bg-panel ${splitToolbar ? 'flex-wrap gap-y-1' : ''}`} data-testid="toolbar">
       {/* Left section: hamburger menu, Import, then Undo/Redo */}
       <div
         ref={leftRef}
         className={`flex items-center ${clusterCls} ${tight ? 'gap-0.5' : 'gap-2'} transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
+        style={splitToolbar ? { flexBasis: '100%' } : undefined}
         data-testid="toolbar-file-controls"
       >
         {/* Disabled during placement mode so the file/project actions that moved
@@ -491,7 +490,6 @@ export default function Toolbar({
               // boundary. The button stays disabled (Undo / Ctrl+Z must keep doing
               // nothing); only HOVER opens the panel. Placement mode is excluded - that
               // reason for `disabled` must still suppress the panel entirely.
-              hoverableWhenEmpty={!placementModeActive}
               onSingleAction={onUndo}
               testId="toolbar-undo-button"
               ariaLabel={t('common.actions.undo')}
@@ -518,7 +516,6 @@ export default function Toolbar({
               // redo stack still has the forward chain step to show ("Redo into next
               // SpeleoDB version"), and hover is the only way to reach it while the button
               // itself stays correctly disabled.
-              hoverableWhenEmpty={!placementModeActive}
               onSingleAction={onRedo}
               testId="toolbar-redo-button"
               ariaLabel={t('common.actions.redo')}

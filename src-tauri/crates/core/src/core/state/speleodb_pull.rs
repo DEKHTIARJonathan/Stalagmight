@@ -7,7 +7,9 @@ use super::speleodb_revisions::validate_hexsha;
 use super::AppState;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::models::SpeleoProjectSummary;
-use crate::speleodb::{client, sync, SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult};
+use crate::speleodb::{
+    client, sync, SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult, TransportCause,
+};
 pub(super) fn usable_tip(tip: Option<String>, project_id: &str) -> Option<String> {
     let sha = tip?;
     if validate_hexsha(&sha).is_ok() {
@@ -37,6 +39,35 @@ impl Default for DownloadOptions {
             generation: None,
         }
     }
+}
+
+/// A connection failure is the only reason to open a cache instead of downloading.
+/// Never use cache availability to bypass access denial or invalid server content.
+fn offline_open_result(
+    dest: &std::path::Path,
+    endpoint: &str,
+    project_id: &str,
+    error: &SpeleoDbError,
+) -> Option<SpeleoOpenResult> {
+    if !matches!(
+        error,
+        SpeleoDbError::Transport {
+            cause: TransportCause::Refused | TransportCause::Timeout | TransportCause::Dns,
+            ..
+        }
+    ) {
+        return None;
+    }
+    let db = crate::persistence::Database::open_for_metadata(dest).ok()?;
+    let link = db.load_speleo_link().ok()??;
+    if link.project_id != project_id || link.endpoint != endpoint {
+        return None;
+    }
+    Some(SpeleoOpenResult {
+        local_path: dest.to_string_lossy().into_owned(),
+        offline: Some(true),
+        has_unpushed_edits: Some(link.has_unpushed_edits),
+    })
 }
 
 impl AppState {
@@ -93,16 +124,25 @@ impl AppState {
         let insecure_http = self.speleodb_insecure_http();
 
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
-        if policy == LocalEditsPolicy::Protect {
-            self.guard_local_edits(&project_id, &dest)
-                .map_err(local_dto)?;
-        }
+        // Download first so offline opens can recover unsynced cached work too.
+        // install_linked_download still refuses to replace any unpushed edits.
 
-        let tip = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
+        let tip = match self.speleodb_handle_auth(
+            Endpoint::GetProject,
+            client::get_revisions(&endpoint, &token, insecure_http, &project_id),
+        ) {
             Ok(history) => usable_tip(
                 sync::tip_of(&history.commits).map(str::to_owned),
                 &project_id,
             ),
+            Err(
+                e @ SpeleoDbError::Status {
+                    status: 401 | 403 | 404,
+                    ..
+                },
+            ) => {
+                return Err(dto_for_error(Endpoint::GetProject, &e));
+            }
             Err(e) => {
                 tracing::warn!(
                     error = %e,
@@ -114,21 +154,31 @@ impl AppState {
                 None
             }
         };
-        let native = self
-            .speleodb_handle_auth(
-                Endpoint::DownloadStalx,
-                match tip.as_deref() {
-                    Some(sha) => client::download_stalx_at_hash(
-                        &endpoint,
-                        &token,
-                        insecure_http,
-                        &project_id,
-                        sha,
-                    ),
-                    None => client::download_stalx(&endpoint, &token, insecure_http, &project_id),
-                },
-            )
-            .map_err(|e| dto_for_error(Endpoint::DownloadStalx, &e))?;
+        let download = self.speleodb_handle_auth(
+            Endpoint::DownloadStalx,
+            match tip.as_deref() {
+                Some(sha) => client::download_stalx_at_hash(
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &project_id,
+                    sha,
+                ),
+                None => client::download_stalx(&endpoint, &token, insecure_http, &project_id),
+            },
+        );
+        let native = match download {
+            Ok(native) => native,
+            Err(error) => {
+                if policy == LocalEditsPolicy::Protect {
+                    if let Some(cached) = offline_open_result(&dest, &endpoint, &project_id, &error)
+                    {
+                        return Ok(cached);
+                    }
+                }
+                return Err(dto_for_error(Endpoint::DownloadStalx, &error));
+            }
+        };
 
         let base_sha = tip;
         let _ = latest_commit_sha; // A list hint cannot date an unpinned download.
@@ -142,12 +192,6 @@ impl AppState {
             last_verify_at: None,
             undo_mode: None,
         };
-        let concurrent_session = {
-            let holder = self.speleodb_lock_holder(&endpoint, &token, insecure_http, &project_id);
-            self.speleodb_my_email()
-                .is_some_and(|me| sync::concurrent_session_notice(holder.as_deref(), &me))
-        };
-
         self.install_linked_download_with_limits(
             native.path(),
             &dest,
@@ -163,7 +207,8 @@ impl AppState {
 
         Ok(SpeleoOpenResult {
             local_path: dest.to_string_lossy().into_owned(),
-            concurrent_session,
+            offline: None,
+            has_unpushed_edits: None,
         })
     }
     pub(super) fn speleodb_fast_forward(
@@ -173,10 +218,34 @@ impl AppState {
         insecure_http: bool,
         link: &crate::models::SpeleoLink,
         tip: Option<&str>,
-        policy: LocalEditsPolicy,
+        transition: (LocalEditsPolicy, u64, Option<Vec<u8>>),
     ) -> Result<String, SpeleoDbError> {
+        let (policy, generation, expected_snapshot) = transition;
+        let bytes = {
+            let project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if generation != self.speleodb_session_generation() {
+                return Err(SpeleoDbError::SessionMoved);
+            }
+            let bytes =
+                serde_json::to_vec(&*project).map_err(|e| SpeleoDbError::Io(e.to_string()))?;
+            if expected_snapshot
+                .as_ref()
+                .is_some_and(|expected| expected != &bytes)
+            {
+                return Err(SpeleoDbError::SessionMoved);
+            }
+            bytes
+        };
+        let was_editing = self.edit_enabled();
         let project_id = &link.project_id;
-        let pinned = usable_tip(tip.map(str::to_owned), project_id);
+        // A verified revision must be downloaded by its exact identifier.
+        let pinned = tip.map(str::to_owned);
+        if let Some(sha) = pinned.as_deref() {
+            validate_hexsha(sha)?;
+        }
         let native = self.speleodb_handle_auth(
             Endpoint::DownloadStalx,
             match pinned.as_deref() {
@@ -187,7 +256,10 @@ impl AppState {
             },
         )?;
         let dest = self.speleodb_cache_path(project_id)?;
-        let new_link = crate::models::SpeleoLink {
+        if policy == LocalEditsPolicy::Protect {
+            self.guard_local_edits(project_id, &dest)?;
+        }
+        let mut new_link = crate::models::SpeleoLink {
             endpoint: endpoint.to_owned(),
             project_id: project_id.clone(),
             project_name: link.project_name.clone(),
@@ -197,15 +269,52 @@ impl AppState {
             last_verify_at: Some(chrono::Utc::now().to_rfc3339()),
             undo_mode: None,
         };
-        self.install_linked_download(native.path(), &dest, new_link, policy, InheritedUndo::Drop)?;
-
-        let local_path = dest.to_string_lossy().into_owned();
-        self.close_project();
-        self.do_load_project_full(dest)
-            .map_err(|e| SpeleoDbError::Io(format!("reload after fast-forward failed: {e}")))?;
+        {
+            let db = crate::persistence::Database::open_existing_untrusted(
+                native.path(),
+                DOWNLOADED_VALUE_LIMIT,
+                DOWNLOADED_PROCESSING_DEADLINE,
+            )
+            .map_err(super::speleodb_cache_install::downloaded_file_error)?;
+            db.load_project()
+                .map_err(|e| SpeleoDbError::Parse(format!("invalid downloaded project: {e}")))?;
+            new_link.undo_mode = Some(self.effective_undo_mode(preserved_undo_mode(&db)));
+            db.save_speleo_link(Some(&new_link))
+                .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
+        }
+        let staged = super::speleodb_cache_install::stage_download(
+            native.path(),
+            &dest,
+            InheritedUndo::Drop,
+            super::speleodb_cache_install::sync_staged_file,
+        )?;
+        {
+            let db = crate::persistence::Database::open_existing(&staged)
+                .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
+            restore_display_settings(
+                &db,
+                &super::speleodb_cache::preserved_display_settings(&dest),
+            );
+        }
+        super::speleodb_cache_install::sync_staged_file(&staged)?;
+        let result = self
+            .open_project_download(
+                staged.to_path_buf(),
+                dest.clone(),
+                (generation, bytes),
+                was_editing,
+            )
+            .map_err(|e| SpeleoDbError::Io(e.message))?;
+        if !result.success {
+            return Err(SpeleoDbError::Io(
+                result
+                    .error
+                    .unwrap_or_else(|| "Could not reload project".into()),
+            ));
+        }
         self.speleodb_set_unwound_from(None);
         self.speleodb_set_inherited_through(None);
-        Ok(local_path)
+        Ok(dest.to_string_lossy().into_owned())
     }
 
     /// Validate and stamp the downloaded file before it can replace a working cache.
@@ -244,6 +353,9 @@ impl AppState {
                 options.limits.1,
             )
             .map_err(super::speleodb_cache_install::downloaded_file_error)?;
+            // Decode the complete project before any working bytes are replaced.
+            db.load_project()
+                .map_err(|e| SpeleoDbError::Parse(format!("invalid downloaded project: {e}")))?;
             link.undo_mode = Some(self.effective_undo_mode(preserved_undo_mode(&db)));
             db.save_speleo_link(Some(&link)).map_err(|e| {
                 SpeleoDbError::Io(format!("could not link downloaded project: {e}"))
@@ -560,6 +672,109 @@ mod tests {
             assert_eq!(std::fs::read(dest).expect("unchanged"), before);
             state.clear_active_load(&token);
         });
+    }
+
+    #[test]
+    fn offline_fallback_requires_connection_failure_and_matching_cache_identity() {
+        let dir = tempfile::tempdir().expect("temp");
+        let dest = dir.path().join("project.stalx");
+        let mut cached_link = link();
+        cached_link.has_unpushed_edits = true;
+        let mut db = Database::open(&dest).expect("cache");
+        db.save_project(&Project::new("Cached".into(), None))
+            .expect("project");
+        db.save_speleo_link(Some(&cached_link)).expect("link");
+        for cause in [
+            TransportCause::Refused,
+            TransportCause::Timeout,
+            TransportCause::Dns,
+        ] {
+            let error = SpeleoDbError::Transport {
+                cause,
+                detail: "offline".into(),
+            };
+            let result = offline_open_result(
+                &dest,
+                &cached_link.endpoint,
+                &cached_link.project_id,
+                &error,
+            )
+            .expect("matching cache opens offline");
+            assert_eq!(result.offline, Some(true));
+            assert_eq!(result.has_unpushed_edits, Some(true));
+            assert!(offline_open_result(
+                &dest,
+                "https://other.example",
+                &cached_link.project_id,
+                &error
+            )
+            .is_none());
+            assert!(
+                offline_open_result(&dest, &cached_link.endpoint, "another-project", &error)
+                    .is_none()
+            );
+            assert!(offline_open_result(
+                &dir.path().join("missing.stalx"),
+                &cached_link.endpoint,
+                &cached_link.project_id,
+                &error
+            )
+            .is_none());
+        }
+        let errors = [
+            SpeleoDbError::Status {
+                status: 401,
+                message: "unauthorized".into(),
+            },
+            SpeleoDbError::Status {
+                status: 403,
+                message: "forbidden".into(),
+            },
+            SpeleoDbError::Status {
+                status: 404,
+                message: "gone".into(),
+            },
+            SpeleoDbError::Status {
+                status: 500,
+                message: "server error".into(),
+            },
+            SpeleoDbError::Parse("invalid download".into()),
+            SpeleoDbError::Io("unreadable".into()),
+            SpeleoDbError::Transport {
+                cause: TransportCause::Tls,
+                detail: "certificate".into(),
+            },
+            SpeleoDbError::Transport {
+                cause: TransportCause::Unknown,
+                detail: "unknown".into(),
+            },
+        ];
+        for error in errors {
+            assert!(offline_open_result(
+                &dest,
+                &cached_link.endpoint,
+                &cached_link.project_id,
+                &error
+            )
+            .is_none());
+        }
+        assert!(
+            db.load_speleo_link()
+                .expect("preserved link")
+                .expect("linked")
+                .has_unpushed_edits
+        );
+        db.save_speleo_link(None).expect("unlink");
+        assert!(offline_open_result(
+            &dest,
+            &cached_link.endpoint,
+            &cached_link.project_id,
+            &SpeleoDbError::Transport {
+                cause: TransportCause::Refused,
+                detail: "offline".into()
+            }
+        )
+        .is_none());
     }
 
     #[test]

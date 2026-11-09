@@ -77,5 +77,7 @@ it.each(['READ_ONLY', 'READ_AND_WRITE'] as const)('uses the remote row permissio
   renderTable({ summary: { ...SUMMARY, permission }, cached: { ...SUMMARY,
     permission: permission === 'READ_ONLY' ? 'READ_AND_WRITE' : 'READ_ONLY',
   } });
-  expect(screen.queryByTestId('system-row-remote-p1-speleo-read-only') !== null).toBe(permission === 'READ_ONLY');
+  expect(screen.getByTestId('system-row-remote-p1-speleo-permission')).toHaveTextContent(
+    permission === 'READ_ONLY' ? 'Permission: Read-only' : 'Permission: Read and write',
+  );
 });

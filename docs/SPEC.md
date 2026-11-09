@@ -37,6 +37,59 @@ rather than restating it, because a copy here rots silently.
 
 ---
 
+## SpeleoDB project workspace
+
+All project editors expose a full logo + SpeleoDB toolbar button in every mode.
+Survey opens on Sections and offers Sections | SpeleoDB tabs in one left dock.
+Plan and Export reveal SpeleoDB only on request unless it was already selected;
+returning to Survey restores its tab. Tab navigation preserves map, selection,
+section expansion, scroll and unfinished drafts, without changing lock ownership.
+A local project's SpeleoDB tab contains a centered explanation of version history
+and team collaboration and one Convert to a SpeleoDB project action. It opens the
+creation form; confirmation saves and uploads, then downloads and opens the fresh
+server version. The project becomes managed. Failed upload/download recovery keeps
+that managed identity and pending work without creating duplicate server projects.
+Signed-out users authenticate in Settings and return to their creation draft.
+Publishing blocks the app with a centered progress indicator for up to 120 seconds.
+After that limit the indicator expires, a timeout explanation appears, and the
+dialog can be closed while the original request finishes; duplicate submission
+remains disabled.
+
+The dock retains resize/pin/hover behavior, uses a 320px SpeleoDB minimum within the
+400px maximum, and floats at constrained widths. Programmatic opening focuses the
+selected tab and exits fullscreen table mode while preserving table state.
+
+The persistent project header and everyday Save Changes, Switch to Read Only Mode/Resume editing, Reload Project
+and web controls sit above an expandable History section. Close Project sits below Reload Project and returns
+to the project listing after unsaved-work confirmation and lock release. Account and
+connection forms live exclusively in application Settings. Local settings retains
+validation and elevation editing; linked project names remain server-managed. Home retains its entry points. The
+project-editor SpeleoDB menus, remote settings dialog and undo-menu revision
+controls are replaced by workspace navigation. Critical access, lock-loss,
+upload-failure and unuploaded-work indicators remain visible outside the tab.
+
+Remote opening automatically attempts lock acquisition and reconciliation. No
+explicit editing-without-a-lock feature exists. Offline opening stays read-only;
+transient disconnection after acquisition permits local editing. Confirmed lock
+loss, permission loss or sign-out closes the editing gate. Backend direct mutation
+and upload calls enforce the same ownership requirements.
+
+Explicit Save, its shortcut and Save Changes share a dispatcher: local Save for
+local projects, upload confirmation for linked ones, and a blocked explanation
+without the lock. Upload needs a description, local save and fresh server ownership
+verification; ordinary upload keeps the lock. Clean projects do not upload empty
+revisions. Autosave and autosave retry remain local-only. Save and Close continues
+only after confirmed upload and release, with no newer unuploaded changes. Other
+exits automatically release without upload, protecting unsaved survey and form
+drafts with Discard changes / Cancel. Dirtiness is independent of validity.
+Switch to read-only refuses unsaved or unuploaded changes, with Save Changes guidance.
+Reload requires explicit Discard changes / Cancel for pending work, preserves mode,
+and never acquires a lock. Historical checkouts return to the live server version.
+Start Editing is the only acquisition/reconciliation flow; fresh revision topology
+is checked after acquisition. Status refresh cannot enable editing. Failed downloads,
+validation, stale sessions and newer edits preserve the current project.
+See [SpeleoDB](SpeleoDB.md) and [Saving](saving.md) for failure and recovery rules.
+
 ## 1. Overview
 
 ### 1.1 Purpose
@@ -69,7 +122,7 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 - Multi-project workspace (Global View)
 - Export: PNG, SVG, PDF (map images), CSV, JSON, Ariane `.tml` (data)
 - Dive and gas planning as the Plan workspace mode, persisted to a `.plnx` sidecar
-- SpeleoDB integration - remote project hand-off; see [the native-file and lock contract](SpeleoDB.md) for Save + Push, local autosave, keep-lock exits and access verification
+- SpeleoDB integration - remote project hand-off; see [the native-file and lock contract](SpeleoDB.md) for Save + Push, local autosave, automatic-release exits and access verification
 - SQLite project storage, undo/redo with persistence
 - An Android tablet build, sideload-only and not in CI, with partial touch
   support ([touch-support.md](touch-support.md))
@@ -158,7 +211,7 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 
 ### 2.9 Settings
 - Global settings in the Settings dialog, plus a per-project subset (project name,
-  validation thresholds, SpeleoDB) stored in the `.stalx`
+  validation thresholds) stored in the `.stalx`
 - Changes are staged and applied on Save, not live (section 10.4)
 - Reset to defaults per category
 
@@ -467,8 +520,9 @@ the `ModeCarousel` in the middle of the toolbar (`uiStore.appMode`): **Survey**,
 **Plan**, **Export**. Survey is the editable workspace. Plan and Export force the
 read-only Closures Computed View (on a project with no eligible closures the
 geometry falls back to the Raw Data View; the modes are read-only regardless - gating keys
-off `appMode`, not the geometry), so the left Sections dock and every
-geometry-mutating tool are Survey-only; selection, inspection and measurement stay
+off `appMode`, not the geometry), so the Sections tab and every
+geometry-mutating tool are Survey-only. Linked projects retain the SpeleoDB left
+workspace on request in every mode; selection, inspection and measurement stay
 available in all three.
 
 Plan is dive and gas planning: the gas reach field over the survey, route and
@@ -579,7 +633,7 @@ Primary view for survey work.
 
 | Panel | Default State | Behavior |
 |-------|---------------|----------|
-| Sections Panel | Open, 250px | Resizable, collapsible |
+| Left workspace | Sections open, 250px | Resizable, collapsible; linked projects also offer SpeleoDB (320px minimum, 400px maximum, overlay when constrained) |
 | Detail Panel | Open, 300px | Resizable, collapsible |
 | Data Table | Collapsed | Resizable (height), collapsible |
 
@@ -727,7 +781,7 @@ The Undo and Redo toolbar buttons feature dropdown menus showing recent actions 
 - **Hover**: Dropdown opens after 300ms delay when hovering over Undo/Redo buttons
 - **Chevron Indicator**: A small `▾` chevron appears next to the button text when history is available
 - **Click**: Single click on button performs standard undo/redo (one step)
-- **Empty State**: The button stays disabled and hover opens nothing, with one exception - on a SpeleoDB-linked project whose write lock is held and where a revision-chain step resolves, hover (or ArrowDown) opens the panel to show the pinned Unwind/Rewind entry. Placement mode suppresses the panel entirely
+- **Empty State**: The button stays disabled and hover opens nothing. SpeleoDB Unwind/Rewind controls live in the left workspace History section.
 
 #### Dropdown Layout
 
@@ -797,7 +851,7 @@ The dropdown stays open when performing actions (button click, item click, keybo
   - Mouse leaving the button/dropdown area (100ms buffer)
   - Pressing Escape key
   - Clicking outside the dropdown
-  - Stack becoming empty after an action (auto-close), unless a SpeleoDB write lock is held
+  - Stack becoming empty after an action (auto-close)
 
 #### Action Behavior
 
@@ -807,7 +861,7 @@ When an action is performed while the dropdown is open:
 - Keyboard navigation and scroll position reset to the top (first item)
 - Detail preview popup is dismissed immediately on any action
 - Rapid clicks are queued and executed sequentially with a refresh after each
-- If the stack becomes empty after an action, remaining queued actions are discarded and the dropdown closes - unless a SpeleoDB write lock is held, in which case it stays open so the Unwind/Rewind chain entry stays reachable
+- If the stack becomes empty after an action, remaining queued actions are discarded and the dropdown closes
 - On error, the dropdown stays open, the stack is refreshed to reflect backend state, and an error dialog is shown with title, message, and stack trace (if available from a caught exception)
 - Ctrl+Z/Y/Shift+Z keyboard shortcuts are intercepted by the dropdown (capture phase) to prevent the global handler from causing a double-undo/redo
 - Keyboard shortcuts are NOT intercepted when focus is in a text input, textarea, select, or contentEditable element (native text editing undo/redo is preserved)
@@ -1654,7 +1708,7 @@ The sidebar displays 12 settings categories, with a visual separator before the 
 | Export | Default image format (PNG/SVG/PDF), default DPI, default layer includes (satellite, grid, labels) |
 | Shortcuts | Searchable shortcut editor with categories (Tools, Edit, View, Panels), primary/secondary binding slots, conflict detection, reserved shortcuts display |
 | Cache | Tile cache statistics, clear cache button, cache enable toggle, max size, TTL days |
-| SpeleoDB | Account sign-in, API endpoint, token fallback, insecure-HTTP and force-edit toggles, lock poll interval |
+| SpeleoDB | Account sign-in, API endpoint, token fallback, insecure-HTTP setting, startup and manual refresh |
 | Advanced | Debug settings (hitboxes, hit detection logging), logging level/max size, placement suggestion heuristic constants, panel dimensions, reload config from disk |
 
 ### 10.3 Navigation

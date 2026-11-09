@@ -15,7 +15,8 @@ map itself is the same map in all three.
 
 | | Survey | Plan | Export |
 |---|---|---|---|
-| Left Sections dock | shown | not rendered | not rendered |
+| Sections tab | shown | hidden | hidden |
+| SpeleoDB workspace | available | on request or already visible | on request or already visible |
 | Right dock | `DetailPanel` | `GasPlanPanel` | `ExportPanel` |
 | Bottom dock | `DataTable` | `PlanTablesPanel` | not rendered |
 | Toolbar tools | `TOOLBAR_ITEMS` | `READ_ONLY_TOOLBAR_ITEMS` | `READ_ONLY_TOOLBAR_ITEMS` |
@@ -140,3 +141,22 @@ and docks over the freshly loaded ones. `uiStore.planDocks.test.ts` pins it.
   `e2e-playwright/mocks/tauri-ipc.ts` (unknown commands fall through to a warning
   and `null`, which the UI reads as failure), and the mock must initialize any
   store state your new gate reads, or the control is silently dead in every spec.
+
+## Left project workspace
+
+Sections remains Survey-only. All projects expose SpeleoDB navigation in every
+mode through the full toolbar button. Plan/Export keep the left dock hidden until
+requested unless SpeleoDB was selected before leaving Survey. Returning restores
+the Survey tab. History, synchronization and Close Project controls and links to application Settings remain accessible in every
+mode; survey and revision editing stay Survey-only. Hidden tab bodies retain their
+state, and tab navigation does not acquire or release a lock.
+
+Only Start Editing can open the remote edit gate, after acquiring the lock and
+verifying live revision history. Status refresh can close a lost session but cannot
+resume one. Switch to Read Only Mode requires locally saved and uploaded work.
+Reload Project preserves the existing mode and does not acquire a lock; pending
+work requires Discard changes / Cancel. Local settings retains validation and
+elevation gates, while linked names remain immutable. Account and connection forms
+exist only in application Settings. Local project editors expose only the centered conversion prompt in their SpeleoDB tab.
+The creation form saves, uploads and opens a fresh remote copy; successful conversion
+then exposes the managed-project workspace.

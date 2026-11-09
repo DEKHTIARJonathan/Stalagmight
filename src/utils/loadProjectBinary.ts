@@ -445,7 +445,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     frozen_shots: env.frozen_shots as FrozenShotRef[],
     displaySettings: env.display_settings,
     // #270: the SpeleoDB read-only gate is resolved from this, synchronously,
-    // before the project view renders - never from the async link-status poll.
+    // before the project view renders - never from the async link-status refresh.
     isRemote: env.is_remote,
     surveyData,
   };

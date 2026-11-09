@@ -187,8 +187,8 @@ prevents timer resets from redundant calls.
 
 Every SpeleoDB HTTP call is instrumented at the Rust client's single choke
 point (`SdkClient::call`) so we can size the
-server load Stalagmight causes and spot a runaway poll/retry loop *before* it
-reaches the server. Recorded **per HTTP attempt** (a retried idempotent 5xx
+server load Stalagmight causes and spot excessive requests or retries.
+Recorded **per HTTP attempt** (a retried idempotent 5xx
 really re-hits the server, so a retry storm shows up as inflated counts +
 latency). Emitted from the backend via `TelemetryCollector::track`, so they land
 in the global `project_seq 0` bucket.

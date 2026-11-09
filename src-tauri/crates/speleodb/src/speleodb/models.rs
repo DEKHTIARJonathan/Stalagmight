@@ -221,6 +221,9 @@ pub struct ActiveMutex {
 /// parsed down to the fields the spike consumes.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Project {
+    /// Server update time, independent of the downloaded cache file.
+    #[serde(default)]
+    pub modified_date: Option<String>,
     pub id: String,
     pub name: String,
     /// Absent (not null) when the requesting user has no permission.
@@ -265,6 +268,10 @@ pub struct Project {
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export_to = "../../bindings/SpeleoProjectSummary.ts")]
 pub struct SpeleoProjectSummary {
+    /// Server update time; absent when server metadata is unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub modified_date: Option<String>,
     pub id: String,
     pub name: String,
     pub permission: Option<Permission>,
@@ -294,10 +301,11 @@ pub enum SpeleoAccessVerification {
     Unavailable,
 }
 
-/// Consent to release local unpushed work belongs to this account and project.
+/// A transition belongs to this account, project session and local edit version.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub struct SpeleoReleaseContext {
+    pub project_modified_at: String,
     pub session_generation: String,
     pub project_id: String,
     pub endpoint: String,
@@ -307,6 +315,7 @@ pub struct SpeleoReleaseContext {
 impl SpeleoProjectSummary {
     pub fn from_project(p: Project) -> Self {
         Self {
+            modified_date: p.modified_date,
             id: p.id,
             name: p.name,
             permission: p.permission,
@@ -328,8 +337,7 @@ pub struct SpeleoLoginResult {
 }
 
 /// [#206] The editable SpeleoDB project metadata, returned to the webview by
-/// `speleodb_get_project_metadata` (to prefill the Project Settings tab) and by
-/// `speleodb_patch_project` (the post-edit server truth). `description`/`country`
+/// `speleodb_get_project_metadata` for read-only project details. `description`/`country`
 /// are required server-side; `latitude`/`longitude` are the optional both-or-neither
 /// location pin.
 #[derive(Debug, Clone, Serialize, TS)]
@@ -359,22 +367,6 @@ impl SpeleoProjectMetadata {
             exclude_geojson: p.exclude_geojson,
         }
     }
-}
-
-/// [#206] A partial metadata edit from the webview. The frontend sends only the
-/// fields the user changed; the orchestration folds the `Some` fields into the
-/// `PATCH /projects/{id}/` body. `coordinates_edited` gates the location pin
-/// (both-or-neither): when true, `latitude`+`longitude` are sent (both `Some` =
-/// set the pin, both `None` = clear it); when false the pin is untouched.
-#[derive(Debug, Clone, Deserialize, TS)]
-pub struct SpeleoProjectMetadataPatch {
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub country: Option<String>,
-    pub visibility: Option<Visibility>,
-    pub coordinates_edited: bool,
-    pub latitude: Option<f64>,
-    pub longitude: Option<f64>,
 }
 
 /// [#207] Parameters for creating + publishing a local project on SpeleoDB. The
@@ -411,11 +403,14 @@ pub struct SpeleoPublishResult {
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct SpeleoOpenResult {
     pub local_path: String,
-    /// #193 b8: the server reports a write lock held by THIS account at open time,
-    /// i.e. a second same-account session is editing the project. The frontend
-    /// surfaces a notice (the ancestry self-heal assumes a single same-account
-    /// session - a concurrent one would misattribute its commits as ours).
-    pub concurrent_session: bool,
+    /// Present only when a failed connection required opening a validated cache.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub offline: Option<bool>,
+    /// Preserve unsynced work when seeding the frontend's offline link state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub has_unpushed_edits: Option<bool>,
 }
 
 /// Outcome of `speleodb_start_editing` (#194): the result of acquiring the write
@@ -543,7 +538,7 @@ pub struct SpeleoLinkStatus {
     ///
     /// RAW rather than combined with the dirty bit, which it was at first and could not
     /// stay: a step onto the tip leaves the copy CLEAN, so the composite was false at the
-    /// only moment the frontend polls, and the Undo that follows marks dirty optimistically
+    /// post-step status refresh, and the Undo that follows marks dirty optimistically
     /// without asking the backend anything. The frontend therefore has to be able to
     /// compose the two itself, which means holding this half unmixed.
     pub unwound: bool,
@@ -579,18 +574,6 @@ pub struct SpeleoLinkStatus {
     pub exclude_geojson: bool,
     /// [#303] The project's undo-history policy - what its next push will carry.
     pub undo_mode: crate::models::UndoMode,
-    /// [#213] The open remote project is being force-edited WITHOUT the write lock
-    /// (`edit_enabled` is also true, but no lock is held). Drives the persistent
-    /// big-red "unmergeable `.stalx`" banner + the "Reconnect to sync" action, and
-    /// tells the shell to offer Reconnect rather than Done. Transient; `false` for a
-    /// normal read-only or lock-held session.
-    pub force_editing: bool,
-    /// [#213] The user's `SpeleoDbConfig.allow_force_edit` opt-in, surfaced here so
-    /// the read-only shell can gate the "Edit without lock" affordance without a
-    /// separate config fetch. A copy of a global preference (not per-link), refreshed
-    /// on every poll so a Settings change takes effect on the next status read. When
-    /// false, the force-edit menu item stays hidden and the backend also refuses.
-    pub allow_force_edit: bool,
     /// [#218] The open remote project's SpeleoDB project id, so the in-project menu
     /// can open the revision-history view for it (the FE otherwise has no way to name
     /// which remote project is open). `None` for a local project / none open.
@@ -673,9 +656,7 @@ pub struct SpeleoErrorDto {
 ///
 /// The two branches the frontend offers, and exactly what each calls:
 ///
-/// - **Keep local** - open [`Self::local_path`] through the normal
-///   `load_project_full` open flow. Nothing is downloaded and nothing is
-///   overwritten; the cached copy opens with its un-pushed edits intact.
+/// - **Cancel** - leave the cached copy and its un-pushed edits intact.
 /// - **Take remote and discard local** - call
 ///   `speleodb_open_project_discarding_local` with the same arguments the refused
 ///   `speleodb_open_project` was given. That is the abandoning verb: it performs
@@ -685,7 +666,7 @@ pub struct SpeleoErrorDto {
 pub struct UnpushedLocalEdits {
     /// The SpeleoDB project whose local copy holds the un-pushed edits.
     pub project_id: String,
-    /// The `.stalx` that holds them - the file "keep local" opens.
+    /// The `.stalx` that holds the protected edits.
     pub local_path: String,
     /// When it was last edited (RFC-3339), when known. `None` for an older copy
     /// that never recorded one.
@@ -719,6 +700,7 @@ mod tests {
         })
         .expect("serialize session status");
         let summary = serde_json::to_string(&SpeleoProjectSummary {
+            modified_date: None,
             id: "11111111-1111-1111-1111-111111111111".to_owned(),
             name: "Cave".to_owned(),
             permission: Some(Permission::ReadOnly),
@@ -729,7 +711,8 @@ mod tests {
         .expect("serialize project summary");
         let open = serde_json::to_string(&SpeleoOpenResult {
             local_path: "/cache/project.stalx".to_owned(),
-            concurrent_session: false,
+            offline: None,
+            has_unpushed_edits: None,
         })
         .expect("serialize open result");
         // [Track A] #186/D-B2: the structured error DTO must also never carry a
@@ -774,8 +757,6 @@ mod tests {
             server_error: None,
             exclude_geojson: false,
             undo_mode: crate::models::UndoMode::Full,
-            force_editing: false,
-            allow_force_edit: false,
             project_id: Some("11111111-1111-1111-1111-111111111111".to_owned()),
         })
         .expect("serialize link status");

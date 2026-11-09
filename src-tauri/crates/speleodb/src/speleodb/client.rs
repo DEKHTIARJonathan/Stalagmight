@@ -197,6 +197,8 @@ fn network_error(error: reqwest::Error) -> SpeleoDbError {
     use std::error::Error;
     let mut cause = if error.is_timeout() {
         TransportCause::Timeout
+    } else if error.is_dns() {
+        TransportCause::Dns
     } else {
         TransportCause::Unknown
     };
@@ -205,7 +207,10 @@ fn network_error(error: reqwest::Error) -> SpeleoDbError {
         if let Some(io) = current.downcast_ref::<std::io::Error>() {
             match io.kind() {
                 std::io::ErrorKind::TimedOut => cause = TransportCause::Timeout,
-                std::io::ErrorKind::ConnectionRefused
+                std::io::ErrorKind::NetworkUnreachable
+                | std::io::ErrorKind::HostUnreachable
+                | std::io::ErrorKind::NotConnected
+                | std::io::ErrorKind::ConnectionRefused
                 | std::io::ErrorKind::ConnectionReset
                 | std::io::ErrorKind::ConnectionAborted
                 | std::io::ErrorKind::BrokenPipe => cause = TransportCause::Refused,
@@ -293,6 +298,7 @@ fn project(value: types::Project) -> Result<Project, SpeleoDbError> {
         },
     });
     Ok(Project {
+        modified_date: Some(value.modified_date.to_rfc3339()),
         id: value.id.to_string(),
         name: value.name,
         permission,
@@ -436,6 +442,7 @@ fn list_projection(value: serde_json::Value) -> Result<Vec<Project>, SpeleoDbErr
                 .map(str::to_owned)
         };
         projects.push(Project {
+            modified_date: optional("modified_date"),
             id: id.into(),
             name: name.into(),
             kind: "stalagmight".into(),

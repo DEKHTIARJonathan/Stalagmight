@@ -23,7 +23,7 @@ const loadBinaryMock = vi.hoisted(() => vi.fn());
 const confirmMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
 
-vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock, getErrorMessage: (e: unknown) => String(e) }));
 vi.mock('../../utils/loadProjectBinary', () => ({ loadProjectFullBinary: loadBinaryMock }));
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
 
@@ -88,6 +88,7 @@ beforeEach(() => {
 
   invokeIpcMock.mockImplementation(async (command: string) => {
     if (command === 'list_recent_projects') return [];
+    if (command === 'speleodb_start_editing') return { kind: 'locked_by', email: 'editor@example.com' };
     // Never answers: stands in for the slow/hanging status probe the gate must
     // no longer depend on. (`refreshLinkStatus` swallows the rejection.)
     if (command === 'speleodb_link_status') return new Promise(() => {});
@@ -162,41 +163,37 @@ describe('restricted native file preflight', () => {
   it.each([
     { permission: 'READ_ONLY', lock_holder: null },
     { permission: 'READ_AND_WRITE', lock_holder: 'other@example.com' },
-  ])('warns on a cold direct open and preserves the current project on cancel: %o', async (access) => {
-    const current = { file_path: '/current.stalx', name: 'Current' };
-    useProjectStore.setState({ project: current as never });
+  ])('opens without an advance warning and attempts the lock once: %o', async (access) => {
+    mockLoad(true);
     invokeIpcMock.mockImplementation(async (command: string) => {
-      if (command === 'speleodb_project_access_at') return { project: { id: 'p', name: 'Restricted', ...access }, endpoint: 'https://example.com', verification: 'verified' };
+      if (command === 'speleodb_project_access_at') return { project: { id: 'p', name: 'Restricted', ...access } };
+      if (command === 'speleodb_start_editing') return { kind: 'locked_by', email: access.lock_holder };
       return [];
     });
-    confirmMock.mockResolvedValue(false);
-    const first = useProjectStore.getState().loadProject('/cold.stalx');
-    const duplicate = useProjectStore.getState().loadProject('/cold.stalx');
-    expect(await first).toEqual({ success: false });
+    const first = useProjectStore.getState().loadProject('/mock/loaded.stalx');
+    const duplicate = useProjectStore.getState().loadProject('/mock/loaded.stalx');
+    expect(await first).toEqual({ success: true });
     await duplicate;
-    expect(confirmMock).toHaveBeenCalledTimes(1);
-    expect(loadBinaryMock).not.toHaveBeenCalled();
-    expect(useProjectStore.getState().project).toBe(current);
-    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_project_access_at', { path: '/cold.stalx' });
-    expect(invokeIpcMock).not.toHaveBeenCalledWith('cancel_loading', undefined, expect.anything());
+    expect(confirmMock).not.toHaveBeenCalled();
+    expect(loadBinaryMock).toHaveBeenCalledOnce();
+    expect(invokeIpcMock.mock.calls.filter(([cmd]) => cmd === 'speleodb_start_editing')).toHaveLength(1);
   });
 
-  it('does not repeat a remote-browser access confirmation', async () => {
+  it('does not acquire when intentionally reloading after releasing', async () => {
     mockLoad(true);
-    await useProjectStore.getState().loadProject('/confirmed.stalx', { accessConfirmed: true });
-    expect(invokeIpcMock.mock.calls.some(([command]) => command === 'speleodb_project_access_at')).toBe(false);
-    expect(confirmMock).not.toHaveBeenCalled();
+    await useProjectStore.getState().loadProject('/mock/loaded.stalx', { accessConfirmed: true, acquireLock: false });
+    expect(invokeIpcMock.mock.calls.some(([cmd]) => cmd === 'speleodb_start_editing')).toBe(false);
   });
 });
 
-it('settles an already-dispatched load when a newer restricted-file warning is cancelled', async () => {
+it('settles an already-dispatched load when a newer file preflight fails', async () => {
   mockLoad(false);
   const payload = await loadBinaryMock();
   let finish!: (value: unknown) => void;
   loadBinaryMock.mockReset().mockReturnValue(new Promise((resolve) => { finish = resolve; }));
   invokeIpcMock.mockImplementation(async (command, args) => {
     if (command === 'speleodb_project_access_at' && args.path === '/restricted.stalx') {
-      return { project: { name: 'Restricted B', permission: 'READ_ONLY', lock_holder: null }, verification: 'verified', endpoint: 'https://example.com' };
+      throw new Error('File preflight failed');
     }
     if (command === 'list_recent_projects' || command === 'take_unrecognised_shot_kinds') return [];
     return undefined;
@@ -214,17 +211,14 @@ it('settles an already-dispatched load when a newer restricted-file warning is c
 });
 
 
-it('reconciles a dispatched close after a newer file warning is cancelled', async () => {
+it('reconciles a dispatched close after a newer file preflight fails', async () => {
   const current = { file_path: '/current.stalx', name: 'Current' };
   useProjectStore.setState({ project: current as never, isClosing: false });
   let finishClose!: (result: { success: boolean }) => void;
   const closeResult = new Promise<{ success: boolean }>((resolve) => { finishClose = resolve; });
   invokeIpcMock.mockImplementation(async (command: string) => {
     if (command === 'close_project') return closeResult;
-    if (command === 'speleodb_project_access_at') return {
-      project: { id: 'p', name: 'Restricted', permission: 'READ_ONLY', lock_holder: null },
-      endpoint: 'https://example.com', verification: 'verified',
-    };
+    if (command === 'speleodb_project_access_at') throw new Error('File preflight failed');
     return [];
   });
   const closing = useProjectStore.getState().closeProject({ releaseLock: false });
@@ -242,16 +236,13 @@ it('reconciles a dispatched close after a newer file warning is cancelled', asyn
 });
 
 
-it('carries pending New through a dispatched close and a cancelled newer warning', async () => {
+it('carries pending New through a dispatched close and a failed newer preflight', async () => {
   useProjectStore.setState({ project: { file_path: '/current.stalx', name: 'Current' } as never, isClosing: false });
   let finishClose!: (result: { success: boolean }) => void;
   const closeResult = new Promise<{ success: boolean }>((resolve) => { finishClose = resolve; });
   invokeIpcMock.mockImplementation(async (command: string) => {
     if (command === 'close_project') return closeResult;
-    if (command === 'speleodb_project_access_at') return {
-      project: { id: 'p', name: 'Restricted', permission: 'READ_ONLY', lock_holder: null },
-      endpoint: 'https://example.com', verification: 'verified',
-    };
+    if (command === 'speleodb_project_access_at') throw new Error('File preflight failed');
     return [];
   });
   const closing = handBackProject({ pendingNewProject: true }, { releaseLock: false });

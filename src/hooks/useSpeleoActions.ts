@@ -1,3 +1,5 @@
+import { confirm } from '@tauri-apps/plugin-dialog';
+import { showSpeleoReadOnlyNotice } from '../utils/autoAcquireSpeleoLock';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
@@ -18,6 +20,7 @@ import { TOAST_KEYS } from '../utils/toastKeys';
 import type {
   DoneResult,
   PushResult,
+  SpeleoFileAccess,
   StartEditingResult,
   UpdateResult,
 } from '../types/ipc.generated';
@@ -46,14 +49,6 @@ export interface SpeleoActions {
   discardChanges: (
     keepLock: boolean,
   ) => Promise<'editing' | 'released' | 'discarded_without_lock' | 'stale'>;
-  /** #213 (E2): enter optimistic force-edit - edit WITHOUT the write lock (offline,
-      or while someone else holds it). Gated on the `allow_force_edit` opt-in (the
-      backend refuses otherwise) and behind a big-red destructive confirm; the caller
-      must gate this on that confirm. Re-seeds the link (→ editing + `forceEditing`).
-      Returns `true` only on success so the confirm dialog closes on success and stays
-      open (error toast shown) on a backend refusal, rather than dismissing as if it
-      worked. */
-  forceEdit: () => Promise<boolean>;
   update: () => Promise<void>;
   /** Push edits without releasing the lock (T2d); uploading UI requires a message.
       Returns the backend outcome (or `null` if the call threw) so callers can keep
@@ -100,7 +95,6 @@ export function useSpeleoActions(): SpeleoActions {
   const applyUpdate = useSpeleoStore((s) => s.applyUpdate);
   const applyDone = useSpeleoStore((s) => s.applyDone);
   const applyPush = useSpeleoStore((s) => s.applyPush);
-  const bumpPoll = useSpeleoStore((s) => s.bumpPoll);
   const clearSession = useSpeleoStore((s) => s.clearSession);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
   const raiseNoAnchorBanner = useSpeleoStore((s) => s.raiseNoAnchorBanner);
@@ -175,7 +169,7 @@ export function useSpeleoActions(): SpeleoActions {
           }
           return { editing: true, treeReplaced: false, landed: true };
         case 'fast_forwarded': {
-          const loaded = await loadProject(result.local_path);
+          const loaded = await loadProject(result.local_path, { acquireLock: false });
           if (!speleoProjectSessionStillCurrent(issuedFor)) {
             return { editing: false, treeReplaced: false, landed: false };
           }
@@ -186,13 +180,7 @@ export function useSpeleoActions(): SpeleoActions {
           };
         }
         case 'locked_by':
-          showToast(
-            t('speleodb.editBar.toasts.lockedBy', {
-              email: result.email ?? t('speleodb.editBar.someone'),
-            }),
-            TOAST_KEYS.SPELEODB_LOCKED_BY,
-            'warning',
-          );
+          showSpeleoReadOnlyNotice(t(result.email ? 'speleodb.readOnlyNotice.lockedBy' : 'speleodb.readOnlyNotice.unavailable', { email: result.email }));
           return { editing: false, treeReplaced: false, landed: true };
         case 'divergence_needed':
           return { editing: false, treeReplaced: false, landed: true };
@@ -221,13 +209,14 @@ export function useSpeleoActions(): SpeleoActions {
       }
       return routed.editing;
     } catch (e) {
-      handleError(e, 'speleodb.editBar.toasts.startFailed');
+      if (speleoProjectSessionStillCurrent(issuedFor)) {
+        showSpeleoReadOnlyNotice(humanizeError(e, 'speleodb.readOnlyNotice.failed'));
+      }
       return false;
     } finally {
-      bumpPoll();
       endBusy(busyToken);
     }
-  }, [routeStartEditingResult, handleError, beginBusy, endBusy, bumpPoll]);
+  }, [routeStartEditingResult, humanizeError, beginBusy, endBusy]);
 
   const discardChanges = useCallback(
     async (
@@ -258,46 +247,45 @@ export function useSpeleoActions(): SpeleoActions {
         if (!result) return 'released';
         return routed?.editing ? 'editing' : 'discarded_without_lock';
       } finally {
-        bumpPoll();
         endBusy(busyToken);
       }
     },
-    [routeStartEditingResult, beginBusy, endBusy, bumpPoll],
+    [routeStartEditingResult, beginBusy, endBusy],
   );
-
-  const forceEdit = useCallback(async (): Promise<boolean> => {
-    const busyToken = beginBusy();
-    try {
-      // No result payload: the backend flips the edit gate + force-edit flag.
-      // Re-seed the link so `editState → editing` and `forceEditing → true` drive
-      // the read-only badge off and the big-red banner on.
-      await invokeIpc<null>('speleodb_force_edit');
-      await refreshLinkStatus();
-      showToast(t('speleodb.forceEdit.toasts.active'), TOAST_KEYS.SPELEODB_FORCE_EDIT, 'warning');
-      return true;
-    } catch (e) {
-      // Backend refusal (opt-in off / link lost / already lock-held): surface the
-      // toast and report failure so the confirm dialog stays open instead of
-      // dismissing as if force-edit engaged.
-      handleError(e, 'speleodb.forceEdit.toasts.failed');
-      return false;
-    } finally {
-      bumpPoll();
-      endBusy(busyToken);
-    }
-  }, [refreshLinkStatus, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
 
   const update = useCallback(async () => {
     const issuedFor = speleoProjectSessionIssuedFor(
       useSpeleoStore.getState().remoteProjectId,
     );
+    const project = useProjectStore.getState();
+    const path = project.project?.file_path;
+    const tree = project.projectTreeGeneration;
+    const current = () => speleoProjectSessionStillCurrent(issuedFor) &&
+      useProjectStore.getState().project?.file_path === path &&
+      useProjectStore.getState().projectTreeGeneration === tree;
+    const pending = project.isDirty || useSpeleoStore.getState().link?.hasUnpushedEdits;
     const busyToken = beginBusy();
     try {
-      const result = await invokeIpc<UpdateResult>('speleodb_update');
-      if (!speleoProjectSessionStillCurrent(issuedFor)) return;
+      let discardChanges = false;
+      if (pending) {
+        discardChanges = await confirm('Discard changes removes unsaved and unuploaded modifications. Save first using Save Changes to preserve your work. Cancel keeps everything.', {
+          title: 'Reload Project', kind: 'warning', okLabel: 'Discard changes', cancelLabel: 'Cancel',
+        });
+        if (!discardChanges || !current()) return;
+      }
+      if (!current() || !path) return;
+      const access = await invokeIpc<SpeleoFileAccess | null>('speleodb_project_access_at', { path, localOnly: true });
+      if (!current()) return;
+      if (!access?.release_context) throw new Error('The project or account changed. Try again.');
+      const result = await invokeIpc<UpdateResult>('speleodb_update', { discardChanges, expected: access.release_context });
+      if (!current()) return;
       applyUpdate(result);
       switch (result.kind) {
         case 'up_to_date':
+          // Revision equality says nothing about changed locks or permissions.
+          // Manual refresh must refresh those too now that there is no timer.
+          await refreshLinkStatus();
+          if (!speleoProjectSessionStillCurrent(issuedFor)) return;
           showToast(t('speleodb.editBar.toasts.upToDate'), TOAST_KEYS.SPELEODB_UP_TO_DATE, 'info');
           break;
         case 'fast_forwarded':
@@ -311,7 +299,7 @@ export function useSpeleoActions(): SpeleoActions {
             // unguarded `refreshProjectState` below - which overwrites
             // project/stations/surveyData wholesale - must not paint this
             // project's state over whatever the user actually opened.
-            const loaded = await loadProject(result.local_path);
+            const loaded = await loadProject(result.local_path, { acquireLock: false });
             if (!loaded.success) break;
           }
           await applySpeleoTreeReplacement(issuedFor, true);
@@ -320,12 +308,11 @@ export function useSpeleoActions(): SpeleoActions {
           break;
       }
     } catch (e) {
-      handleError(e, 'speleodb.editBar.toasts.updateFailed');
+      if (current()) handleError(e, 'speleodb.editBar.toasts.updateFailed');
     } finally {
-      bumpPoll();
       endBusy(busyToken);
     }
-  }, [applyUpdate, loadProject, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
+  }, [applyUpdate, loadProject, refreshLinkStatus, showToast, t, handleError, beginBusy, endBusy]);
 
   const push = useCallback(
     async (
@@ -337,7 +324,11 @@ export function useSpeleoActions(): SpeleoActions {
         return null;
       }
       const issuedFor = speleoProjectSessionIssuedFor(useSpeleoStore.getState().remoteProjectId);
-      const current = () => speleoProjectSessionStillCurrent(issuedFor) && (opts?.isCurrent?.() ?? true);
+      const path = useProjectStore.getState().project?.file_path;
+      const operation = useProjectStore.getState().loading.clientOpId;
+      const current = () => speleoProjectSessionStillCurrent(issuedFor) &&
+        useProjectStore.getState().project?.file_path === path &&
+        useProjectStore.getState().loading.clientOpId === operation && (opts?.isCurrent?.() ?? true);
       const treeGeneration = useProjectStore.getState().projectTreeGeneration;
       const busyToken = beginBusy();
       // A fresh attempt supersedes the previous failure banner (#260); a landed
@@ -398,7 +389,6 @@ export function useSpeleoActions(): SpeleoActions {
         });
         return null;
       } finally {
-        bumpPoll();
         endBusy(busyToken);
       }
     },
@@ -409,7 +399,6 @@ export function useSpeleoActions(): SpeleoActions {
       humanizeError,
       beginBusy,
       endBusy,
-      bumpPoll,
       noteNoAnchorIfNeeded,
       flushToDiskAfterPush,
       raisePushFailedBanner,
@@ -451,6 +440,13 @@ export function useSpeleoActions(): SpeleoActions {
         // push RELEASES) and must stay put while the confirmation is up.
         return null;
       }
+      const issuedFor = speleoProjectSessionIssuedFor(useSpeleoStore.getState().remoteProjectId);
+      const path = useProjectStore.getState().project?.file_path;
+      const operation = useProjectStore.getState().loading.clientOpId;
+      const treeGeneration = useProjectStore.getState().projectTreeGeneration;
+      const current = () => speleoProjectSessionStillCurrent(issuedFor) &&
+        useProjectStore.getState().project?.file_path === path &&
+        useProjectStore.getState().loading.clientOpId === operation && (opts?.isCurrent?.() ?? true);
       const busyToken = beginBusy();
       clearPushFailedBanner();
       // #260: "Changes uploaded and the write lock released." lied whenever there was nothing to
@@ -464,7 +460,18 @@ export function useSpeleoActions(): SpeleoActions {
           message: message ?? null,
           acceptOlderVersion: opts?.acceptOlderVersion ?? false,
         });
-        if (opts?.isCurrent && !opts.isCurrent()) return null;
+        if (!current()) return null;
+        if (result.kind === 'released' && useProjectStore.getState().projectTreeGeneration !== treeGeneration) {
+          // The release happened, but newer frontend work is not covered by that
+          // reply. Preserve it without pretending the already-released lock is held.
+          applyDone(result);
+          useSpeleoStore.getState().markDirty();
+          raisePushFailedBanner({
+            message: 'Newer changes remain on this computer. The editing lock was released; resume editing before uploading them.',
+            origin: 'done', pushMessage: message ?? null,
+          });
+          return { kind: 'push_unconfirmed' };
+        }
         applyDone(result);
         switch (asDoneKind(result.kind)) {
           case 'released':
@@ -503,7 +510,7 @@ export function useSpeleoActions(): SpeleoActions {
         }
         return result;
       } catch (e) {
-        if (opts?.isCurrent && !opts.isCurrent()) return null;
+        if (!current()) return null;
         const humanized = humanizeError(e, 'speleodb.editBar.toasts.doneFailed');
         raisePushFailedBanner({
           message: humanized,
@@ -512,7 +519,6 @@ export function useSpeleoActions(): SpeleoActions {
         });
         return null;
       } finally {
-        bumpPoll();
         endBusy(busyToken);
       }
     },
@@ -523,7 +529,6 @@ export function useSpeleoActions(): SpeleoActions {
       humanizeError,
       beginBusy,
       endBusy,
-      bumpPoll,
       noteNoAnchorIfNeeded,
       flushToDiskAfterPush,
       raisePushFailedBanner,
@@ -553,10 +558,9 @@ export function useSpeleoActions(): SpeleoActions {
       handleError(e, 'speleodb.editBar.toasts.takeRemoteFailed');
       return false;
     } finally {
-      bumpPoll();
       endBusy(busyToken);
     }
-  }, [loadProject, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
+  }, [loadProject, showToast, t, handleError, beginBusy, endBusy]);
 
-  return { busy, startEditing, discardChanges, forceEdit, update, push, done, takeRemote };
+  return { busy, startEditing, discardChanges, update, push, done, takeRemote };
 }

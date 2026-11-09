@@ -95,9 +95,6 @@ export function useRestoreRevision() {
       chainForward = false,
     }: RestoreRevisionArgs) => {
       const issuedFor = speleoProjectSessionIssuedFor(projectId);
-      // The backend hardcodes concurrent_session:false for an in-place revision swap
-      // (the open project is unchanged), so unlike the open/adopt flow there is no
-      // concurrent-session notice to surface here.
       await invokeIpc<SpeleoOpenResult>('speleodb_restore_revision', {
         projectId,
         projectName,

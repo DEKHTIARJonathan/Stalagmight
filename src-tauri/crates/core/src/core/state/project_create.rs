@@ -163,14 +163,6 @@ impl AppState {
         // reset the gate so a previously-open read-only remote project's disabled
         // flag can't leak in.
         self.set_edit_enabled(true);
-        // #213: a new local project is never force-editing; clear any prior flag.
-        self.set_force_editing(false);
-        // [#473] A project created from nothing has no persisted history, so it cannot
-        // have lost any. Cleared for the same reason as the two gates above: the flag is
-        // per-project, the previous project may have set it, and a stale `true` here puts
-        // a banner reading "edit history could not be read and was discarded" over a
-        // brand-new empty project. Create is a project-slot commit like a load, and every
-        // commit must write this.
         self.set_history_discarded(false);
 
         CommandResult::success()
@@ -199,6 +191,16 @@ impl AppState {
         // coded failure).
         if let Err(f) = self.guard_mutation("Update project settings") {
             return f;
+        }
+        if self.speleodb_open_link().is_ok()
+            && self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .is_some_and(|project| project.name != name)
+        {
+            return CommandResult::failure("Linked project names are managed by SpeleoDB".into());
         }
         let before_snapshot = self.capture_project_snapshot().ok();
         {
@@ -524,14 +526,6 @@ impl AppState {
         // [Track B] (#191) A freshly-created local project is always editable;
         // reset the gate so a prior read-only remote project can't leak in.
         self.set_edit_enabled(true);
-        // #213: a new local project is never force-editing; clear any prior flag.
-        self.set_force_editing(false);
-        // [#473] A project created from nothing has no persisted history, so it cannot
-        // have lost any. Cleared for the same reason as the two gates above: the flag is
-        // per-project, the previous project may have set it, and a stale `true` here puts
-        // a banner reading "edit history could not be read and was discarded" over a
-        // brand-new empty project. Create is a project-slot commit like a load, and every
-        // commit must write this.
         self.set_history_discarded(false);
 
         // Track whether the initial save is still pending: a deferred new project

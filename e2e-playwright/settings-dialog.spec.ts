@@ -50,6 +50,26 @@ function filterTestableCategories(categories: string[]): string[] {
   return categories.filter((category) => category !== 'map');
 }
 
+test('SpeleoDB shortcut selects its tab without a mouse focus outline', async ({ page }) => {
+  await setupTauriMocks(page);
+  await page.goto('/');
+  await page.getByTestId('global-speleodb-button').click();
+  const speleo = page.getByTestId('settings-tab-speleodb');
+  const general = page.getByTestId('settings-tab-general');
+  await expect(page.getByTestId('settings-panel-speleodb')).toBeVisible();
+  await expect(speleo).toHaveAttribute('aria-selected', 'true');
+  await expect(speleo).toHaveAttribute('tabindex', '0');
+  await expect(speleo).toHaveCSS('box-shadow', 'none');
+  await expect(general).toHaveAttribute('tabindex', '-1');
+  await expect(general).toHaveCSS('box-shadow', 'none');
+  await general.click();
+  await expect(general).toHaveCSS('box-shadow', 'none');
+  await page.keyboard.press('ArrowDown');
+  const appearance = page.getByTestId('settings-tab-appearance');
+  await expect(appearance).toBeFocused();
+  await expect(appearance).not.toHaveCSS('box-shadow', 'none');
+});
+
 test.describe('Settings Dialog - Keyboard Shortcuts to Open', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);

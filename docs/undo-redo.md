@@ -584,7 +584,8 @@ are megabytes each.
 A SpeleoDB-linked project is a binary `.stalx` committed to a git repo, so what its undo
 stack holds at push time is what every commit stores forever. Two policies, resolved by
 `AppState::undo_policy` from `speleo_link.undo_mode` (per project, rides to the server) then
-`SpeleoDbConfig.undo_mode` (the application default):
+`SpeleoDbConfig.undo_mode` (the application default). Existing per-project values
+continue to load and apply; the workspace no longer offers a policy editor:
 
 | | `Full` (default) | `Disabled` | Local project |
 |---|---|---|---|
@@ -628,7 +629,6 @@ side's value.
 | Confirmed push | entries with `timestamp <= push_start` dropped; redo cleared | they are in the commit now, so keeping them would duplicate them in the next one. Bounded by push-start because an edit recorded after the snapshot keeps its dirty bit, so its history has to survive with it |
 | Any server `.stalx` becoming the local cache file | undo/redo tables emptied in the downloaded FILE | `InheritedUndo::Drop` at the `replace_cache_stalx*` chokepoint - pull, fast-forward and revision swap all funnel there |
 | Lock acquired over a copy that equals git (`UpToDate` + clean) | in-memory stacks cleared | the history describes already-committed operations. The clean check is what lets lock, edit, unlock-without-pushing, re-lock keep the user's own history |
-| Force-edit | in-memory stacks cleared | no lock and no reconcile, so the equals-git fence cannot be evaluated; that session already carries the unmergeable warning |
 
 Clearing on adopt happens in the FILE, not in memory: the load path reads those tables into
 the live stack, so a memory-only clear would leave the history on disk for the next open.
@@ -764,7 +764,7 @@ One lock sits OUTSIDE even that: `speleodb_lock_ops`
 operation** against every other and is deliberately held across network calls.
 Start Editing takes it before its first read (generation, link, token, holder)
 and holds it through the commit; so do the reclaim-checked releases, the status
-poll's inherited-lock gate reopen, and logout - each of which can invalidate a
+refresh's inherited-lock gate reopen, and logout - each of which can invalidate a
 fact another one of them is mid-way through acting on. Nothing holding `project` / `database` / `undo_stack` may
 block on it - its users decide under `project`, drop that guard, and only then
 take it. The SpeleoDB session generation (`speleodb_session_generation`) is
@@ -772,6 +772,11 @@ likewise only ever bumped while holding `project`; see the module doc in
 `speleodb_session.rs` for the rules.
 
 ## History UI
+
+SpeleoDB revision inspection, restore/revert, and Unwind/Rewind live in the left
+workspace History section. They are separate from the local undo/redo dropdown,
+which closes when its stack becomes empty. Revision editing requires Survey mode
+and the editing lock.
 
 ### Dropdown (`UndoHistoryDropdown.tsx`)
 
@@ -821,12 +826,12 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 |------|----------|
 | `src-tauri/crates/core/src/core/undo.rs` | `UndoStack`, `UndoEntry`, `UndoData` types, `DepthLimit` + the byte budget, the persist plan |
 | `src-tauri/crates/core/src/core/state/undo.rs` | `undo()`, `redo()`, `undo_to()`, `redo_to()` implementation |
-| `src-tauri/crates/core/src/core/state/undo_policy.rs` | `undo_policy()` (the Full/Disabled resolver), `speleodb_set_undo_mode` |
+| `src-tauri/crates/core/src/core/state/undo_policy.rs` | `undo_policy()` (the Full/Disabled resolver) |
 | `src-tauri/crates/models/src/undo_mode.rs` | `UndoMode`, `UndoPolicy` |
 | `src-tauri/crates/speleodb/src/speleodb/sync.rs` | `unwind_target` - the BASE-then-first-parents chain |
 | `src-tauri/crates/core/src/core/state/speleodb_cache.rs` | `InheritedUndo` and the drop-on-adopt chokepoint |
 | `src/components/Dialogs/SpeleoUnwindDialog.tsx` | The Unwind confirmation |
-| `src/components/Dialogs/settings/SpeleoUndoModeControl.tsx` | The per-project Full/Disabled control |
+| `src-tauri/crates/core/src/core/state/undo_policy.rs` | Persisted policy loading and effective undo limits |
 | `src-tauri/crates/core/src/core/state/commands.rs` | `execute()`, `execute_batch()` |
 | `src-tauri/crates/core/src/core/state/undo_capture.rs` | `generate_undo_data()`, `finalize_undo_data()`, `is_undoable()` |
 | `src-tauri/crates/core/src/core/command.rs` | `Command` enum and `description()` method |

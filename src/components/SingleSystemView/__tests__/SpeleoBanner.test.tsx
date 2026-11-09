@@ -1,10 +1,4 @@
-/**
- * Component test (#213 force-edit banner, #260 push-failure banner).
- *
- * The big-red banner appears whenever the link is force-editing (edit gate on, no
- * lock held), outranking the transient yellow notices; its Reconnect action runs the
- * existing acquire verb (speleodb_start_editing). It names the holder when locked.
- */
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -16,6 +10,9 @@ vi.mock('../../../utils/ipc', () => ({
 }));
 
 import { SpeleoBanner } from '../SpeleoBanner';
+import { SpeleoWorkspace } from '../SpeleoWorkspace';
+import { useProjectStore } from '../../../store/projectStore';
+import { getUploadContinuation, setUploadContinuation } from '../../../utils/uploadContinuation';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
 
@@ -26,8 +23,7 @@ const LINK: SpeleoLinkState = {
   lockedByOther: false,
   hasUnpushedEdits: true,
   unwound: false,
-  forceEditing: true,
-  forceEditAllowed: true,
+
   undoMode: 'full',
   remoteState: 'unknown',
   noAccess: false,
@@ -38,53 +34,17 @@ const seedLink = (o: Partial<SpeleoLinkState> = {}) =>
   useSpeleoStore.setState({ link: { ...LINK, ...o }, banner: null });
 
 beforeEach(() => {
+  setUploadContinuation(null);
+  useProjectStore.setState({ project: { file_path: '/synthetic/remote.stalx', name: 'Synthetic survey', zero_datums: [] } as never, isDirty: false });
   invokeIpcMock.mockReset();
   invokeIpcMock.mockResolvedValue({ kind: 'editing' });
-  useSpeleoStore.setState({ link: null, banner: null, busy: false });
-  useUIStore.setState({ activeDialog: null, dialogData: {} });
+  useSpeleoStore.setState({ link: null, banner: null, busy: false, session: null, remoteProjectId: 'synthetic' });
+  useUIStore.setState({ activeDialog: null, dialogData: {}, speleoWorkspaceSection: null });
 });
 
-describe('SpeleoBanner force-edit (#213)', () => {
-  it('renders the persistent force-edit banner while force-editing', () => {
-    seedLink();
-    render(<SpeleoBanner />);
-    const banner = screen.getByTestId('speleo-banner');
-    expect(banner).toHaveAttribute('data-kind', 'force_edit_active');
-    // No dismiss - it is backend-derived and re-raised every poll.
-    expect(screen.queryByTestId('speleo-banner-dismiss')).not.toBeInTheDocument();
-  });
-
-  it('Reconnect runs the acquire verb (speleodb_start_editing)', async () => {
-    seedLink();
-    render(<SpeleoBanner />);
-    await userEvent.click(screen.getByTestId('speleo-banner-reconnect'));
-    await waitFor(() =>
-      expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(true),
-    );
-  });
-
-  it('names the lock holder in the banner when someone else holds it', () => {
-    seedLink({ lockedByOther: true, lockHolder: 'holder@example.com' });
-    render(<SpeleoBanner />);
-    expect(screen.getByTestId('speleo-banner').textContent).toContain('holder@example.com');
-  });
-
-  it('does not render for a normal (non-force) editing session', () => {
-    seedLink({ forceEditing: false });
-    render(<SpeleoBanner />);
-    expect(screen.queryByTestId('speleo-banner')).not.toBeInTheDocument();
-  });
-});
-
-/**
- * #260 - the persistent push-failure banner. A failed push/unlock only raised a
- * toast, which auto-clears after 3 s, so the failure left no durable surface. The
- * banner keeps the humanized error on screen and its Retry replays the SAME verb
- * with the SAME commit message.
- */
 describe('SpeleoBanner push failure (#260)', () => {
   const seedFailure = (origin: 'push' | 'done', pushMessage: string | null = null) => {
-    seedLink({ forceEditing: false });
+    seedLink({ });
     useSpeleoStore.setState({
       banner: { kind: 'push_failed', message: 'Could not push changes: boom', origin, pushMessage },
     });
@@ -101,38 +61,24 @@ describe('SpeleoBanner push failure (#260)', () => {
     expect(screen.getByTestId('speleo-banner-dismiss')).toBeInTheDocument();
   });
 
-  it('Retry re-issues the push verb with the original commit message', async () => {
+  it('Retry opens Save confirmation with the original description without uploading', async () => {
     seedFailure('push', 'my message');
-    invokeIpcMock.mockResolvedValue({ kind: 'pushed' });
     render(<SpeleoBanner />);
-
     await userEvent.click(screen.getByTestId('speleo-banner-retry-push'));
-
-    await waitFor(() =>
-      expect(
-        invokeIpcMock.mock.calls.some(
-          (c) => c[0] === 'speleodb_push' && (c[1] as { message?: string }).message === 'my message',
-        ),
-      ).toBe(true),
-    );
-    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_done')).toBe(false);
+    expect(useUIStore.getState().activeDialog).toBe('speleodb-done');
+    expect(useUIStore.getState().dialogData.mode).toBe('push');
+    expect(getUploadContinuation('/synthetic/remote.stalx')?.message).toBe('my message');
+    expect(invokeIpcMock).not.toHaveBeenCalled();
   });
 
-  it('Retry re-issues the unlock verb when the failure came from Done', async () => {
+  it('Retry opens release confirmation with the original description after a Done failure', async () => {
     seedFailure('done', 'wrap up');
-    invokeIpcMock.mockResolvedValue({ kind: 'released' });
     render(<SpeleoBanner />);
-
     await userEvent.click(screen.getByTestId('speleo-banner-retry-push'));
-
-    await waitFor(() =>
-      expect(
-        invokeIpcMock.mock.calls.some(
-          (c) => c[0] === 'speleodb_done' && (c[1] as { message?: string }).message === 'wrap up',
-        ),
-      ).toBe(true),
-    );
-    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_push')).toBe(false);
+    expect(useUIStore.getState().activeDialog).toBe('speleodb-done');
+    expect(useUIStore.getState().dialogData.mode).toBe('release');
+    expect(getUploadContinuation('/synthetic/remote.stalx')?.message).toBe('wrap up');
+    expect(invokeIpcMock).not.toHaveBeenCalled();
   });
 
   it('Retry is disabled while a verb is already in flight (no double-fire)', async () => {
@@ -203,7 +149,7 @@ describe('SpeleoBanner push failure (#260)', () => {
   it('still shows an unrelated banner while such a dialog is open', () => {
     // Only the push-failure kind is owned by the dialog; the informational
     // notices are not duplicated there, so they must not be suppressed.
-    seedLink({ forceEditing: false });
+    seedLink({ });
     useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
     useUIStore.setState({ activeDialog: 'speleodb-done' });
     render(<SpeleoBanner />);
@@ -211,7 +157,7 @@ describe('SpeleoBanner push failure (#260)', () => {
   });
 
   it('clearPushFailedBanner leaves an unrelated banner alone', () => {
-    seedLink({ forceEditing: false });
+    seedLink({ });
     useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
     useSpeleoStore.getState().clearPushFailedBanner();
     expect(useSpeleoStore.getState().banner).toEqual({ kind: 'no_anchor' });
@@ -229,7 +175,7 @@ describe('SpeleoBanner push failure (#260)', () => {
  */
 describe('SpeleoBanner retry needs an open edit gate (#270)', () => {
   const seedReadOnlyFailure = () => {
-    seedLink({ forceEditing: false, editState: 'read-only' });
+    seedLink({ editState: 'read-only' });
     useSpeleoStore.setState({
       banner: {
         kind: 'push_failed',
@@ -247,21 +193,17 @@ describe('SpeleoBanner retry needs an open edit gate (#270)', () => {
     expect(screen.getByTestId('speleo-banner-start-editing-to-retry')).toBeInTheDocument();
   });
 
-  it('that action acquires the lock rather than re-issuing the doomed push', async () => {
+  it('opens Settings for signed-out recovery without acquiring or uploading', async () => {
     seedReadOnlyFailure();
-    invokeIpcMock.mockResolvedValue({ kind: 'editing' });
     render(<SpeleoBanner />);
-
     await userEvent.click(screen.getByTestId('speleo-banner-start-editing-to-retry'));
-
-    await waitFor(() =>
-      expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(true),
-    );
-    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_push')).toBe(false);
+    expect(useUIStore.getState().activeDialog).toBe('settings');
+    expect(useUIStore.getState().dialogData.initialCategory).toBe('speleodb');
+    expect(invokeIpcMock).not.toHaveBeenCalled();
   });
 
   it('still offers Retry once the gate is open again', () => {
-    seedLink({ forceEditing: false, editState: 'editing' });
+    seedLink({ editState: 'editing' });
     useSpeleoStore.setState({
       banner: { kind: 'push_failed', message: 'boom', origin: 'push', pushMessage: 'm' },
     });
@@ -272,38 +214,29 @@ describe('SpeleoBanner retry needs an open edit gate (#270)', () => {
     ).not.toBeInTheDocument();
   });
 
-  it('survives the start-editing it asks for, so Retry is actually reachable', async () => {
-    // The test above seeds the post-gate state by hand; this one gets there the ONLY
-    // way a user can - by pressing the banner's own Start-editing button. That path
-    // used to destroy the banner: `applyStartEditing`'s success arm cleared the whole
-    // slot, so the surface vanished the instant it succeeded, taking the Retry control
-    // and the typed commit message with it and leaving the user holding the lock with
-    // the edits still unpushed and nothing on screen saying so.
+  it('preserves the failure while workspace Resume editing recovers the session', async () => {
     seedReadOnlyFailure();
+    useSpeleoStore.setState({ session: { loggedIn: true, endpoint: 'https://synthetic.example', userEmail: 'user@example.com' } });
     invokeIpcMock.mockResolvedValue({ kind: 'editing' });
-    render(<SpeleoBanner />);
-
+    render(<><SpeleoBanner /><SpeleoWorkspace /></>);
     await userEvent.click(screen.getByTestId('speleo-banner-start-editing-to-retry'));
-
-    await waitFor(() =>
-      expect(screen.getByTestId('speleo-banner-retry-push')).toBeInTheDocument(),
-    );
-    const banner = useSpeleoStore.getState().banner;
-    expect(banner?.kind).toBe('push_failed');
-    // The commit message the retry replays came through intact.
-    expect(banner).toMatchObject({ origin: 'push', pushMessage: 'm' });
+    expect(useUIStore.getState().leftWorkspace).toBe('speleodb');
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId('speleodb-workspace-editing'));
+    await waitFor(() => expect(screen.getByTestId('speleo-banner-retry-push')).toBeInTheDocument());
+    expect(useSpeleoStore.getState().banner).toMatchObject({ origin: 'push', pushMessage: 'm' });
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_start_editing');
   });
 
-  it('but a fast-forward does clear it - the working copy is the server`s now', async () => {
-    // A fast-forward can only run over a copy with nothing unpushed (the backend's
-    // `LocalEditsPolicy::Protect` refuses otherwise) and it replaces the working copy
-    // with the server's, so an older failure no longer describes anything here.
+  it('a verified workspace fast-forward clears the obsolete upload failure', async () => {
     seedReadOnlyFailure();
+    useSpeleoStore.setState({ session: { loggedIn: true, endpoint: 'https://synthetic.example', userEmail: 'user@example.com' },
+      link: { ...LINK, editState: 'read-only', hasUnpushedEdits: false }, refreshLinkStatus: vi.fn(async () => {}) });
+    useProjectStore.setState({ loadProject: vi.fn(async () => ({ success: true })),
+      refreshProjectState: vi.fn(async () => {}), checkProjectIntegrity: vi.fn(async () => []), checkHistoryDiscarded: vi.fn(async () => {}) });
     invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/tmp/p.stalx' });
-    render(<SpeleoBanner />);
-
-    await userEvent.click(screen.getByTestId('speleo-banner-start-editing-to-retry'));
-
+    render(<><SpeleoBanner /><SpeleoWorkspace /></>);
+    await userEvent.click(screen.getByTestId('speleodb-workspace-editing'));
     await waitFor(() => expect(useSpeleoStore.getState().banner).toBeNull());
   });
 });

@@ -44,8 +44,7 @@ const link = (o: Partial<SpeleoLinkState> = {}): SpeleoLinkState => ({
   lockedByOther: false,
   hasUnpushedEdits: true,
   unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
+
   undoMode: 'full',
   remoteState: 'up_to_date',
   noAccess: false,
@@ -116,39 +115,12 @@ describe('guardQuit', () => {
     expect(openDialog).toHaveBeenCalledWith('unsaved-changes', { pendingQuit: true });
   });
 
-  // The regression this file exists for: saved to disk, so the old guard passed.
-  it('blocks on unpushed SpeleoDB edits even when the project is saved to disk', () => {
-    useSpeleoStore.setState({ link: link() });
-    expect(guardQuit()).toBe(true);
-    expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
-  });
-
-  it('offers keep-lock exit while holding the lock with nothing unpushed', () => {
-    useSpeleoStore.setState({ link: link({ hasUnpushedEdits: false }) });
-    expect(guardQuit()).toBe(true);
-    expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
-  });
-
-  // The guard keys off the WORK AT RISK, not the lock: edits the server has never
-  // seen are what quitting can strand, and whether we still hold the write lock
-  // only changes which choices the dialog offers (it adapts to a lock-less state).
-  it('blocks a force-edit session with unpushed edits - they are the most stranded of all', () => {
-    // A force-editor edits WITHOUT the lock (#213), so there is nothing to
-    // push/keep/release - which is exactly why walking away silently is wrong: the
-    // edits cannot reach the server until a reconnect.
-    useSpeleoStore.setState({ link: link({ forceEditing: true }) });
-    expect(guardQuit()).toBe(true);
-    expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
-  });
-
-  it('blocks a read-only remote project that still has unpushed edits', () => {
-    // How this is reached: `notifyReverifyDivergence()` drops to read-only while
-    // KEEPING the unpushed edits, and any ReLogin error runs `clearSession()`,
-    // which also drops to read-only. Requiring editState === 'editing' disarmed
-    // the guard in precisely those states.
-    useSpeleoStore.setState({ link: link({ editState: 'read-only' }) });
-    expect(guardQuit()).toBe(true);
-    expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
+  it.each([
+    {}, { hasUnpushedEdits: false }, { }, { editState: 'read-only' as const },
+  ])('does not prompt for saved work or a held lock: %j', (state) => {
+    useSpeleoStore.setState({ link: link(state) });
+    expect(guardQuit()).toBe(false);
+    expect(openDialog).not.toHaveBeenCalled();
   });
 
   it('does NOT block a read-only remote project with nothing unpushed', () => {
@@ -157,16 +129,6 @@ describe('guardQuit', () => {
     });
     expect(guardQuit()).toBe(false);
     expect(openDialog).not.toHaveBeenCalled();
-  });
-
-  it('uses the SpeleoDB prompt (not the disk one) when a force-edit session is also disk-dirty', () => {
-    // The SpeleoDB prompt subsumes the disk one - it carries its own "save
-    // locally" checkbox - so it must be the one that runs, or "Discard & Quit"
-    // would walk straight past the unpushed edits.
-    useProjectStore.setState({ isDirty: true });
-    useSpeleoStore.setState({ link: link({ forceEditing: true }) });
-    expect(guardQuit()).toBe(true);
-    expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
   });
 
   // Composition: BOTH dirty. The SpeleoDB prompt runs first because it is the only
@@ -193,6 +155,7 @@ describe('guardQuit', () => {
 describe('guardQuit puts back the dialog it displaces', () => {
   it('carries the displaced dialog and its data into the SpeleoDB prompt', () => {
     useSpeleoStore.setState({ link: link() });
+    useProjectStore.setState({ isDirty: true });
     useUIStore.setState({
       activeDialog: 'dmp-selection',
       dialogData: { dmpFile: { sections: 3 } },
@@ -219,6 +182,7 @@ describe('guardQuit puts back the dialog it displaces', () => {
 
   it('adds nothing when no dialog was on screen', () => {
     useSpeleoStore.setState({ link: link() });
+    useProjectStore.setState({ isDirty: true });
     expect(guardQuit()).toBe(true);
     expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
   });
@@ -226,6 +190,7 @@ describe('guardQuit puts back the dialog it displaces', () => {
   it('does not ask a prompt to return to ITSELF - that is a loop, not a hop', () => {
     // Reachable: the dialog is up, the user presses X again rather than answering it.
     useSpeleoStore.setState({ link: link() });
+    useProjectStore.setState({ isDirty: true });
     useUIStore.setState({ activeDialog: 'speleodb-quit', dialogData: {} });
 
     expect(guardQuit()).toBe(true);

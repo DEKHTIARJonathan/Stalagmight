@@ -1,3 +1,5 @@
+import { sortRecentListItems } from './sortRecentListItems';
+import { LoadingSpinner } from '../common/LoadingSpinner';
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
@@ -25,7 +27,7 @@ import { resolveSpeleoLock } from './SpeleoLockBadge';
 import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
 import MetadataPanel from './MetadataPanel';
 import { RecentSortControl } from './RecentSortControl';
-import { useRecentSort, sortRecentProjects, defaultDirectionForField, type RecentSortField } from './useRecentSort';
+import { useRecentSort, defaultDirectionForField, type RecentSortField } from './useRecentSort';
 import { RecentDensityToggle } from './RecentDensityToggle';
 import { useRecentDensity } from './useRecentDensity';
 import SystemTable from './SystemTable';
@@ -33,7 +35,8 @@ import MissingSystemCard from './MissingSystemCard';
 import RemoteSystemCard from './RemoteSystemCard';
 import {
   deriveMissingPaths,
-  deriveRemoteOnlyItems,
+  deriveRemoteItems,
+  remoteSummaryForProject,
   buildRecentListItems,
   filterRecentListItems,
 } from './recentListItems';
@@ -94,6 +97,7 @@ export default function GlobalView() {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState<ViewTab>('list');
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
+  const [remoteSelectionActive, setRemoteSelectionActive] = useState(false);
   const [multiSelectedIds, setMultiSelectedIds] = useState<Set<string>>(new Set());
   const [metadataPanelCollapsed, setMetadataPanelCollapsed] = useState(false);
   // Search filter state (owned here, passed down to GlobalViewMap)
@@ -133,13 +137,23 @@ export default function GlobalView() {
   // so a second row click (or a click on a different remote row) before then would slip
   // past the visual disable and issue a concurrent open. The ref blocks it immediately.
   const remoteBusyRef = useRef(false);
+  const failedRemoteOpenRef = useRef<{ summary: SpeleoProjectSummary; localPath: string } | null>(null);
   const handleOpenRemote = useCallback(
     async (summary: SpeleoProjectSummary) => {
+      setRemoteSelectionActive(true);
+      setSelectedProjectId(null);
+      setMultiSelectedIds(new Set());
       if (remoteBusyRef.current) return;
       remoteBusyRef.current = true;
+      failedRemoteOpenRef.current = null;
       setRemoteBusy(true);
       try {
-        const outcome = await openRemote(summary);if (outcome.status === 'error') {
+        const outcome = await openRemote(summary);
+        if (outcome.status === 'load_failed') {
+          failedRemoteOpenRef.current = { summary, localPath: outcome.localPath };
+        }
+        if (outcome.status === 'error') {
+          if (outcome.reLogin) useSpeleoStore.getState().clearSession();
           showToast(outcome.message, TOAST_KEYS.SPELEODB_OPEN_REMOTE_ERROR, 'error');
         }
       } finally {
@@ -174,6 +188,8 @@ export default function GlobalView() {
   useEffect(() => {
     // Only sync when there's an actual change to avoid loops
     const storeSet = selectedSystemIds;
+    setRemoteSelectionActive(storeSet.size > 0 && [...storeSet].every((id) =>
+      recentProjects.some((p) => p.file_path === id && p.is_remote)));
     const localSet = multiSelectedIds;
 
     // Check if sets are different
@@ -203,8 +219,25 @@ export default function GlobalView() {
   );
   const hasGpsProjects = gpsProjectCount > 0;
 
+  const openRemoteAtPath = useCallback((filePath: string) => {
+    const project = recentProjects.find((p) => p.file_path === filePath);
+    if (!project?.is_remote) return false;
+    const summary = remoteSummaryForProject(project, remoteSummaries);
+    if (summary) void handleOpenRemote(summary);
+    return true;
+  }, [recentProjects, remoteSummaries, handleOpenRemote]);
+
   // Handle project selection (single click)
   const handleProjectSelect = useCallback((filePath: string, ctrlKey?: boolean) => {
+    if (recentProjects.some((p) => p.file_path === filePath && p.is_remote)) {
+      setRemoteSelectionActive(true);
+      // Keep map selection identity so clearing/Ctrl-deselecting it is observable.
+      // The metadata and local action selections below exclude remote projects.
+      setSelectedProjectId(filePath);
+      setMultiSelectedIds(new Set([filePath]));
+      return;
+    }
+    setRemoteSelectionActive(false);
     if (ctrlKey) {
       // Ctrl+click: toggle selection in multi-select mode. The SET is committed
       // through a pure functional updater so two clicks in one React batch can't
@@ -236,11 +269,13 @@ export default function GlobalView() {
       setSelectedProjectId(filePath);
       setMultiSelectedIds(new Set([filePath]));
     }
-  }, [multiSelectedIds]);
+  }, [multiSelectedIds, recentProjects]);
 
   // Handle right-click context menu (from list view)
   const handleContextMenu = useCallback((e: MouseEvent, filePath: string) => {
     e.preventDefault();
+    if (recentProjects.some((p) => p.file_path === filePath && p.is_remote)) return;
+    setRemoteSelectionActive(false);
     // If right-clicked project isn't selected, select it
     if (!multiSelectedIds.has(filePath)) {
       setSelectedProjectId(filePath);
@@ -252,10 +287,12 @@ export default function GlobalView() {
       y: e.clientY,
       projectPath: filePath,
     });
-  }, [multiSelectedIds]);
+  }, [multiSelectedIds, recentProjects]);
 
   // Handle context menu from map (called with coordinates instead of MouseEvent)
   const handleMapContextMenu = useCallback((filePath: string, x: number, y: number) => {
+    if (recentProjects.some((p) => p.file_path === filePath && p.is_remote)) return;
+    setRemoteSelectionActive(false);
     // If right-clicked project isn't selected, select it
     if (!multiSelectedIds.has(filePath)) {
       setSelectedProjectId(filePath);
@@ -267,7 +304,7 @@ export default function GlobalView() {
       y,
       projectPath: filePath,
     });
-  }, [multiSelectedIds]);
+  }, [multiSelectedIds, recentProjects]);
 
   // Handle project open (double-click on map, list row, context menu, or from
   // metadata panel). Routed through the shared open/import router (#450) for
@@ -295,8 +332,10 @@ export default function GlobalView() {
     // `LAUNCHABLE_EXTENSIONS` allowlist (launch.rs). Every recents open call
     // site (map, list/table, context menu, keyboard shortcut) funnels through
     // this one function, so the gate lives here rather than at each call site.
+    if (openRemoteAtPath(filePath)) return;
+    failedRemoteOpenRef.current = null;
     await routeOpenedFile(filePath, 'Open Failed', { allow: 'project-only' });
-  }, []);
+  }, [openRemoteAtPath]);
 
   // Source-tagged open variants for telemetry attribution (the recent list vs
   // the recent map are distinct entry points feeding the same loadProject).
@@ -304,33 +343,46 @@ export default function GlobalView() {
   // `.stalx`-only gate) rather than duplicating that ordering here - see
   // openRecentEntry.ts.
   const handleOpenFromList = useCallback((filePath: string) => {
+    if (openRemoteAtPath(filePath)) return;
+    failedRemoteOpenRef.current = null;
     return openRecentEntry(filePath, 'recent-list');
-  }, []);
+  }, [openRemoteAtPath]);
   const handleOpenFromMap = useCallback((filePath: string) => {
+    if (openRemoteAtPath(filePath)) return;
+    failedRemoteOpenRef.current = null;
     return openRecentEntry(filePath, 'recent-map');
-  }, []);
+  }, [openRemoteAtPath]);
 
   // Handle cancel during loading
   const handleCancelLoading = useCallback(async () => {
+    failedRemoteOpenRef.current = null;
     await cancelLoading();
   }, [cancelLoading]);
 
   // Handle retry after error
   const handleRetryLoading = useCallback(async () => {
+    const failedRemote = failedRemoteOpenRef.current;
+    if (failedRemote && failedRemote.localPath === loading.projectPath) {
+      await handleOpenRemote(failedRemote.summary);
+      return;
+    }
     if (loading.projectPath) {
+      if (openRemoteAtPath(loading.projectPath)) return;
       // Retry of a recent-projects open; attribute it the same way.
       setProjectActionSource('recent-list');
       await loadProject(loading.projectPath);
     }
-  }, [loading.projectPath, loadProject]);
+  }, [loading.projectPath, loadProject, openRemoteAtPath, handleOpenRemote]);
 
   // Handle dismiss error (reset loading state)
   const handleDismissError = useCallback(() => {
+    failedRemoteOpenRef.current = null;
     resetLoading();
   }, [resetLoading]);
 
   // Handle remove from recent (from metadata panel)
   const handleRemoveFromRecent = useCallback(async (filePath: string) => {
+    if (recentProjects.some((p) => p.file_path === filePath && p.is_remote)) return;
     await removeFromRecentProjects(filePath);
     // Clear selection if the removed project was selected
     if (selectedProjectId === filePath) {
@@ -342,7 +394,7 @@ export default function GlobalView() {
       newSet.delete(filePath);
       return newSet;
     });
-  }, [removeFromRecentProjects, selectedProjectId]);
+  }, [removeFromRecentProjects, selectedProjectId, recentProjects]);
 
   // Prune selection when a project leaves the recents list (e.g. after a delete,
   // or any external removal): otherwise selectedProjectId / multiSelectedIds dangle
@@ -381,11 +433,14 @@ export default function GlobalView() {
     selectedProjectId,
     multiSelectedIds,
     activeTab,
-    recentProjects,
+    recentProjects: recentProjects.filter((p) => !p.is_remote),
     loading,
     contextMenu,
     mapRef,
-    setSelectedProjectId,
+    setSelectedProjectId: (selection) => {
+      setRemoteSelectionActive(false);
+      setSelectedProjectId(selection);
+    },
     setMultiSelectedIds,
     setContextMenu,
     handleProjectOpen,
@@ -396,7 +451,7 @@ export default function GlobalView() {
   const handleMergeProjects = useCallback(() => {
     setContextMenu((prev) => ({ ...prev, visible: false }));
     const selectedProjects: ProjectMetadata[] = recentProjects.filter((p) =>
-      multiSelectedIds.has(p.file_path)
+      !p.is_remote && multiSelectedIds.has(p.file_path)
     );
     if (selectedProjects.length >= 2) {
       openDialog('merge-projects', { selectedProjects });
@@ -482,7 +537,7 @@ export default function GlobalView() {
   // Get the selected project metadata
   const selectedProject = useMemo(() => {
     if (!selectedProjectId) return null;
-    return recentProjects.find(p => p.file_path === selectedProjectId) || null;
+    return recentProjects.find(p => !p.is_remote && p.file_path === selectedProjectId) || null;
   }, [selectedProjectId, recentProjects]);
 
   // Selected projects array for multi-selection support. Declared before the
@@ -490,7 +545,7 @@ export default function GlobalView() {
   // selection - the MetadataPanel renders the aggregate from this array even when
   // there is no primary selectedProject.
   const selectedProjects = useMemo(() => {
-    return recentProjects.filter(p => multiSelectedIds.has(p.file_path));
+    return recentProjects.filter(p => !p.is_remote && multiSelectedIds.has(p.file_path));
   }, [recentProjects, multiSelectedIds]);
 
   // Latch gating the list-view details panel. It starts hidden and opens only
@@ -523,15 +578,11 @@ export default function GlobalView() {
   }, [selectedProjectId, selectedProjects.length, activeTab, detailsOpen]);
 
   // Get selected projects count
-  const selectedCount = multiSelectedIds.size;
+  const selectedCount = selectedProjects.length;
 
   // Recent-projects sort preference (persisted) and the sorted list for the
   // list view. The map view is intentionally unaffected by this.
   const recentSort = useRecentSort();
-  const sortedProjects = useMemo(
-    () => sortRecentProjects(recentProjects, recentSort.field, recentSort.direction),
-    [recentProjects, recentSort.field, recentSort.direction]
-  );
 
   // List view layout density (cards vs compact table), persisted.
   const [density, setDensity] = useRecentDensity();
@@ -558,17 +609,18 @@ export default function GlobalView() {
     () => deriveMissingPaths(recentPaths, recentProjects),
     [recentPaths, recentProjects]
   );
-  // #218: purely-remote SpeleoDB projects (accessible on the server, not in local
-  // recents) - excluding any already linked to a local recent so they aren't listed
-  // twice. Empty when logged out / before the scan.
+  // Cached and uncached SpeleoDB projects share one remote entry and open flow.
   const remoteItems = useMemo(
-    () => deriveRemoteOnlyItems(remoteSummaries, recentProjects),
+    () => deriveRemoteItems(remoteSummaries, recentProjects),
     [remoteSummaries, recentProjects]
   );
   // Combined, then filtered by the search term (name / location / path).
   const listItems = useMemo(
-    () => buildRecentListItems(sortedProjects, missingPaths, remoteItems),
-    [sortedProjects, missingPaths, remoteItems]
+    () => sortRecentListItems(
+      buildRecentListItems(recentProjects, missingPaths, remoteItems),
+      recentProjects, recentSort.field, recentSort.direction,
+    ),
+    [recentProjects, missingPaths, remoteItems, recentSort.field, recentSort.direction]
   );
   const visibleItems = useMemo(
     () => filterRecentListItems(listItems, searchTerm),
@@ -587,7 +639,7 @@ export default function GlobalView() {
     ],
     [recentProjects, remoteSummaries]
   );
-  const { states: localStates, reload: reloadLocalStates } = useSpeleoLocalStates(localStateIds);
+  const { states: localStates, loaded: localStatesLoaded, reload: reloadLocalStates } = useSpeleoLocalStates(localStateIds);
 
   // Manual SpeleoDB re-scan (the header refresh button, #201): re-reads lock state
   // for the recents badges. `prompt`-less, so it never re-raises the held-lock
@@ -598,15 +650,11 @@ export default function GlobalView() {
   // this computer is LOCAL state, which the lock scan does not touch, and the hook
   // keys its fetch on the id SET - so over an unchanged recents list nothing
   // re-issued it and the accent stayed at whatever it was when GlobalView mounted.
-  const [refreshingLocks, setRefreshingLocks] = useState(false);
+  const refreshingProjects = useSpeleoStore((s) => s.projectRefreshCount > 0);
+  const refreshingLocks = refreshingProjects || !localStatesLoaded;
   const handleRefreshLocks = useCallback(async () => {
-    setRefreshingLocks(true);
     reloadLocalStates();
-    try {
-      await scanLocksOnOpen();
-    } finally {
-      setRefreshingLocks(false);
-    }
+    await scanLocksOnOpen();
   }, [scanLocksOnOpen, reloadLocalStates]);
 
   const isSearching = searchTerm.trim().length > 0;
@@ -707,6 +755,31 @@ export default function GlobalView() {
     [t, handleNewProject, openDialog, speleoLoggedIn],
   );
 
+  const speleoRefreshButton = (speleoLoggedIn || refreshingProjects) ? (
+    <Button
+      type="button"
+      size="sm"
+      onClick={() => void handleRefreshLocks()}
+      disabled={refreshingLocks}
+      aria-busy={refreshingLocks}
+      title={t('globalView.speleoRefresh.title')}
+      data-testid="globalview-speleo-refresh"
+      className="whitespace-nowrap"
+      icon={refreshingLocks ? (
+        <LoadingSpinner testId="globalview-speleo-refresh-spinner" />
+      ) : (
+        <SpeleoBadgedIcon
+          badge={<RefreshGlyph size={10} />}
+          badgeColor="text-accent"
+          size={18}
+          testIdPrefix="globalview-speleo-refresh-icon"
+        />
+      )}
+    >
+      {t('globalView.speleoRefresh.label')}
+    </Button>
+  ) : null;
+
   return (
     <div data-testid="global-view" className="h-full flex flex-col">
       {/* Header - left: menu + primary actions, center: title, right: Map|List toggle */}
@@ -733,6 +806,16 @@ export default function GlobalView() {
             title={actionsCondensed ? t('globalView.actions.openOrImport') : undefined}
           >
             {actionsCondensed ? null : t('globalView.actions.openOrImport')}
+          </Button>
+          <Button
+            data-testid="global-speleodb-button"
+            className="whitespace-nowrap"
+            onClick={() => openDialog('settings', { initialCategory: 'speleodb' })}
+            icon={showToolbarIcons || actionsCondensed ? <SpeleoBadgedIcon size={16} testIdPrefix="global-speleodb-icon" /> : undefined}
+            aria-label={actionsCondensed ? 'SpeleoDB' : undefined}
+            title={actionsCondensed ? 'SpeleoDB' : undefined}
+          >
+            {actionsCondensed ? null : 'SpeleoDB'}
           </Button>
         </div>
 
@@ -788,28 +871,15 @@ export default function GlobalView() {
               </button>
             </div>
           )}
-          {/* SpeleoDB re-scan, far right of the view toggle - only when logged in
-              (#201). Refreshes the recents lock badges without re-prompting. */}
-          {speleoLoggedIn && (
-            <button
-              type="button"
-              onClick={() => void handleRefreshLocks()}
-              disabled={refreshingLocks}
-              title={t('globalView.speleoRefresh.title')}
-              aria-label={t('globalView.speleoRefresh.aria')}
-              data-testid="globalview-speleo-refresh"
-              className="flex items-center justify-center w-8 h-8 rounded text-text-secondary hover:text-text hover:bg-panel transition-colors disabled:opacity-50"
-            >
-              <SpeleoBadgedIcon
-                badge={<RefreshGlyph size={10} />}
-                badgeColor="text-accent"
-                size={18}
-                testIdPrefix="globalview-speleo-refresh-icon"
-              />
-            </button>
-          )}
         </div>
       </header>
+
+      {refreshingLocks && (
+        <div role="status" className="flex items-center gap-2 px-4 py-2 text-sm text-text-secondary" data-testid="globalview-refresh-status">
+          <LoadingSpinner testId="globalview-list-spinner" />
+          {t('globalView.speleoRefresh.loading')}
+        </div>
+      )}
 
       {/* Loading Modal Overlay */}
       {loading.isLoading && (
@@ -837,7 +907,14 @@ export default function GlobalView() {
       {/* Content */}
       <main className="flex-1 overflow-hidden flex">
         {/* Main content area - disabled during loading */}
-        <div className={`flex-1 overflow-hidden ${loading.isLoading ? 'pointer-events-none opacity-50' : ''}`}>
+        <div className={`flex-1 min-w-0 overflow-hidden grid grid-rows-[auto_minmax(0,1fr)] ${loading.isLoading ? 'pointer-events-none opacity-50' : ''}`}>
+          <div>
+            {(!hasRecentItems || activeTab === 'map') && speleoRefreshButton && (
+              <div className="flex justify-end px-6 pt-4 pb-2">
+                {speleoRefreshButton}
+              </div>
+            )}
+          </div>
           {!hasRecentItems ? (
             <div className="h-full overflow-auto p-6">
               <EmptyState
@@ -883,10 +960,14 @@ export default function GlobalView() {
                       })}
                     </Button>
                   )}
+                  {speleoRefreshButton}
                   <RecentSortControl
                     field={recentSort.field}
                     direction={recentSort.direction}
-                    onFieldChange={recentSort.setField}
+                    onFieldChange={(field) => {
+                      recentSort.setField(field);
+                      recentSort.setDirection(defaultDirectionForField(field));
+                    }}
                     onToggleDirection={recentSort.toggleDirection}
                   />
                   <RecentDensityToggle density={density} onChange={setDensity} />
@@ -1027,13 +1108,9 @@ export default function GlobalView() {
           )}
         </div>
 
-        {/* Metadata Panel. Map view: always shown (lives alongside the map), incl.
-            the empty "Select a project" state. List view: hidden until the first
-            selection is confirmed past the double-click window (so it doesn't flash
-            on a double-click-to-open), then it follows the selection - and requires
-            a live selection (primary OR a surviving multi-selection), so it never
-            shows the empty state in the list. */}
-        {recentProjects.length > 0 && (activeTab === 'map' || (detailsOpen && (selectedProject !== null || selectedProjects.length > 0))) && (
+        {/* Remote selection never exposes local actions; an unselected map keeps its placeholder. */}
+        {recentProjects.length > 0 && !remoteSelectionActive && !remoteBusy &&
+          (activeTab === 'map' || (detailsOpen && (selectedProject !== null || selectedProjects.length > 0))) && (
           <MetadataPanel
             project={selectedProject}
             selectedProjects={selectedProjects}

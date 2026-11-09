@@ -1,3 +1,4 @@
+import { LeftWorkspace } from './LeftWorkspace';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts';
@@ -95,6 +96,16 @@ export default function SingleSystemView() {
   // stub and hides the bottom table. The carousel owns enter/exit; setView()/setColorMode
   // reset it. The left Sections Dock is survey-only (Plan/Export are read-only).
   const appMode = useUIStore((s) => s.appMode);
+  const workspace = useUIStore((s) => s.leftWorkspace);
+  const outsideSurvey = useUIStore((s) => s.speleoOutsideSurvey);
+  const revealNonce = useUIStore((s) => s.speleoRevealNonce);
+  const workspaceMin = workspace === 'speleodb' ? 320 : PANEL_SIZE_BOUNDS.sections.min;
+  const openPath = project?.file_path;
+  const previousPath = useRef(openPath);
+  useLayoutEffect(() => {
+    if (previousPath.current !== openPath) useUIStore.getState().resetLeftWorkspace();
+    previousPath.current = openPath;
+  }, [openPath]);
   // R9/R10 (#395): the bottom Cylinders/DPV/Segments/Profile panel belongs to the full rig, which
   // only exists once the diver has answered "Where does this dive start?".
   const gasOriginChosen = useGasPlanStore((s) => s.originChosen);
@@ -220,15 +231,15 @@ export default function SingleSystemView() {
   const detailPinnedOpen = useUIStore((s) => s.detailPanelMode === 'pin' && s.detailPanelOpen);
   // Sections is survey-only; Plan/Export don't render it at all, so it costs
   // nothing there (not even an opener bar).
-  const sectionsPresent = appMode === 'survey';
+  const sectionsPresent = appMode === 'survey' || outsideSurvey;
   const squeezeSections = useMemo(
     () => ({
-      width: sectionsPanelWidth,
-      min: PANEL_SIZE_BOUNDS.sections.min,
+      width: Math.max(workspaceMin, sectionsPanelWidth),
+      min: workspaceMin,
       present: sectionsPresent,
       pinnedOpen: sectionsPinnedOpen,
     }),
-    [sectionsPanelWidth, sectionsPresent, sectionsPinnedOpen],
+    [sectionsPanelWidth, sectionsPresent, sectionsPinnedOpen, workspaceMin],
   );
   const squeezeDetail = useMemo(
     () => ({
@@ -276,6 +287,18 @@ export default function SingleSystemView() {
   // `forcedClosed` layers the transient viewport collapse on top without touching
   // either persisted field.
   const sectionsReveal = usePanelReveal('sections', { forcedClosed: squeeze.sections.collapsed });
+  useEffect(() => {
+    useUIStore.setState({ leftWorkspaceVisible: sectionsPresent && sectionsReveal.isOpen });
+  }, [sectionsPresent, sectionsReveal.isOpen]);
+  const revealLeft = sectionsReveal.revealTemporarily;
+  const lastReveal = useRef(revealNonce);
+  useLayoutEffect(() => {
+    if (lastReveal.current === revealNonce) return;
+    lastReveal.current = revealNonce;
+    revealLeft();
+    const frame = requestAnimationFrame(() => document.getElementById('workspace-tab-speleodb')?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [revealNonce, revealLeft]);
   const detailReveal = usePanelReveal('detail', { forcedClosed: squeeze.detail.collapsed });
   const dataReveal = usePanelReveal('data-table', { forcedClosed: dataSqueeze.collapsed });
 
@@ -295,7 +318,7 @@ export default function SingleSystemView() {
     data: { display: 0, user: 0 },
   });
   squeezeRef.current = {
-    sections: { display: sectionsDisplayWidth, user: sectionsPanelWidth },
+    sections: { display: sectionsDisplayWidth, user: Math.max(workspaceMin, sectionsPanelWidth) },
     detail: { display: detailDisplayWidth, user: detailPanelWidth },
     data: { display: dataDisplayHeight, user: dataTableHeight },
   };
@@ -399,7 +422,7 @@ export default function SingleSystemView() {
   // viewport-collapsed panel still reports that same width: it is what the panel renders at if
   // the user floats it open, and while it is NOT open neither branch below reads it.
   const dataOverlayLeft =
-    appMode !== 'survey'
+    !sectionsPresent
       ? 0
       : sectionsReveal.isOpen
         ? sectionsDisplayWidth
@@ -746,7 +769,7 @@ export default function SingleSystemView() {
       <div ref={setMainEl} className="relative flex-1 flex overflow-hidden">
         {/* Sections (left) - survey-only; Plan/Export show the read-only closure map
             with no section-editing affordances. */}
-        {appMode === 'survey' && (
+        <div className="contents" style={!sectionsPresent ? { display: 'none' } : undefined}>
         <Dock
           reveal={sectionsReveal}
           edge="left"
@@ -754,13 +777,14 @@ export default function SingleSystemView() {
           // own width without starving the map (#260). The store keeps the user's
           // value, so zooming back out restores it.
           size={sectionsDisplayWidth}
-          minSize={PANEL_SIZE_BOUNDS.sections.min}
+          minSize={workspaceMin}
           maxSize={PANEL_SIZE_BOUNDS.sections.max}
           onResize={applySectionsWidth}
           onResizeEnd={handleSectionsResizeEnd}
-          label={panelLabels.name.sections}
+          label={workspace === 'speleodb' ? 'SpeleoDB' : panelLabels.name.sections}
           openArrow={CHEVRON_RIGHT}
           closeArrow={CHEVRON_LEFT}
+          keepMounted
           testId="sections"
           tabLabels={panelLabels.sections}
           tabTop={SECTIONS_TAB_TOP}
@@ -771,9 +795,9 @@ export default function SingleSystemView() {
           suspendSiblingTransition={dataResizing}
           onResizingChange={onSectionsResizing}
         >
-          {sectionsContent}
+          <LeftWorkspace key={openPath} sections={sectionsContent} />
         </Dock>
-        )}
+        </div>
 
         {/* Map + data table. `min-w-0` lets this column shrink when both side
             panels dock (otherwise flex refuses and push behavior breaks). */}
@@ -907,7 +931,7 @@ export default function SingleSystemView() {
           status={autoSave.status}
           countdown={autoSave.countdown}
           isDirty={isDirty}
-          onSave={handleSaveProject}
+          onSave={() => void useProjectStore.getState().saveProject()}
         />
       </footer>
     </div>
