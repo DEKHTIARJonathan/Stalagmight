@@ -1,7 +1,9 @@
 /**
  * An in-app yes/no question for the exit paths that used the native
- * `@tauri-apps/plugin-dialog` `confirm` (the window-close tier for an import or a
- * dive plan in progress, and the account-change guard).
+ * `@tauri-apps/plugin-dialog` `confirm`: the window-close tier for an import or a
+ * dive plan in progress, the account-change guard, the unsent SpeleoDB input
+ * question (`utils/workspaceDrafts`) and the unsaved-changes question before an
+ * open from SpeleoDB. No guard or SpeleoDB flow uses a native dialog.
  *
  * Same overlay shape as the SpeleoDB exit prompt (`utils/speleoExit`): its own
  * store, mounted by App above whatever dialog is open, awaited by the caller. A
