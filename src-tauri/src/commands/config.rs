@@ -1,5 +1,5 @@
 use anyhow::anyhow;
-use tauri::State;
+use tauri::{AppHandle, Manager, State};
 
 use std::collections::BTreeMap;
 
@@ -17,9 +17,21 @@ pub(crate) fn get_config_impl(state: &AppState) -> Config {
 }
 
 /// Update the configuration.
+///
+/// Async, off the main thread: a save that changes the SpeleoDB instance ends the
+/// session, which waits for any SpeleoDB lock operation in flight (an upload or a
+/// download can run for minutes) and then hands the old project's lock back over
+/// the network. As a synchronous command that froze the whole window. The partial
+/// `update_*` commands below stay synchronous - they never wait on SpeleoDB (see
+/// `AppState::modify_config`) - which keeps their in-order application on the
+/// main thread.
 #[tauri::command]
-pub fn update_config(state: State<AppState>, config: Config) -> Result<(), String> {
-    update_config_impl(state.inner(), config)
+pub async fn update_config(app: AppHandle, config: Config) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        update_config_impl(app.state::<AppState>().inner(), config)
+    })
+    .await
+    .map_err(|e| format!("settings save task failed: {e}"))?
 }
 
 pub(crate) fn update_config_impl(state: &AppState, config: Config) -> Result<(), String> {
@@ -28,9 +40,18 @@ pub(crate) fn update_config_impl(state: &AppState, config: Config) -> Result<(),
 
 /// Reload configuration from disk without persisting any changes
 /// Returns the reloaded config and whether the SpeleoDB credential identity changed.
+///
+/// Async for the same reason as [`update_config`]: a reload that finds another
+/// account or instance on disk ends the SpeleoDB session.
 #[tauri::command]
-pub fn reload_config(state: State<AppState>) -> Result<(Config, bool), String> {
-    state.reload_config().map_err(|e| e.to_string())
+pub async fn reload_config(app: AppHandle) -> Result<(Config, bool), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppState>()
+            .reload_config()
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("settings reload task failed: {e}"))?
 }
 
 /// Update panel sizes in configuration (efficient partial update)

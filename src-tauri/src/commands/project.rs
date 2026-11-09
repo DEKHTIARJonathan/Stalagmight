@@ -208,9 +208,18 @@ pub(crate) fn remove_from_recent_projects_impl(state: &AppState, path: PathBuf) 
 /// Permanently delete a project's files from disk and drop it from the recent
 /// list. The destructive counterpart to `remove_from_recent_projects`; see
 /// [`AppState::delete_project`] for the OS-trash / permanent-delete semantics.
+///
+/// Async, off the main thread: deleting the open SpeleoDB project hands its write
+/// lock back over the network once the file is gone, after waiting for any
+/// SpeleoDB lock operation in flight. As a synchronous command that froze the
+/// whole window for the length of both.
 #[tauri::command]
-pub fn delete_project(state: State<AppState>, path: PathBuf) -> CommandResult {
-    delete_project_impl(state.inner(), path)
+pub async fn delete_project(app: tauri::AppHandle, path: PathBuf) -> CommandResult {
+    tauri::async_runtime::spawn_blocking(move || {
+        delete_project_impl(app.state::<AppState>().inner(), path)
+    })
+    .await
+    .unwrap_or_else(|e| CommandResult::failure(format!("Delete task failed: {e}")))
 }
 
 pub(crate) fn delete_project_impl(state: &AppState, path: PathBuf) -> CommandResult {

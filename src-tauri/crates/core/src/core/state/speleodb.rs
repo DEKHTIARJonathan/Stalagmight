@@ -1607,14 +1607,23 @@ impl AppState {
     }
 
     /// #202 lazy lock re-verify: when EDITING a remote project with a real held
-    /// lock, at most once per [`REVERIFY_INTERVAL_SECS`], re-GET the project before
-    /// applying an edit and confirm we STILL HOLD the write lock. Called from the
-    /// `execute()` command chokepoint AFTER `guard_mutation` (so it runs only for an
-    /// enabled edit session on that path - undo/redo and the other direct mutation
-    /// entrypoints deliberately do NOT re-verify; they are covered by the same
-    /// backstops). It bounds wasted work; it is NOT a correctness guard (the
-    /// release-time fence + a 403 on push are), so a transient failure lets the edit
-    /// through and the fence catches any real conflict.
+    /// lock, at most once per [`REVERIFY_INTERVAL_SECS`], re-GET the project and
+    /// confirm we STILL HOLD the write lock. Called from the `execute()` command
+    /// chokepoint AFTER `guard_mutation` (so it runs only for an enabled edit session
+    /// on that path - undo/redo and the other direct mutation entrypoints
+    /// deliberately do NOT re-verify; they are covered by the same backstops). It
+    /// bounds wasted work; it is NOT a correctness guard (the release-time fence + a
+    /// 403 on push are).
+    ///
+    /// The GET runs on a background thread and NEVER on the caller's: `execute()`
+    /// is reached from synchronous commands, which Tauri runs on the main thread,
+    /// under `command_lock`. An inline probe froze the whole window for up to the
+    /// probe budget once per interval, and held every other edit, undo and save
+    /// behind it. This call stamps the attempt and returns at once; the edit that
+    /// triggered it goes ahead, exactly as it does when the probe fails offline. The
+    /// verdict is collected by the next edit ([`Self::speleodb_collect_reverify`]),
+    /// so a lost lock still routes the user to the divergence prompt, one edit
+    /// later than when the check ran inline.
     ///
     /// Only the lock-holder is checked, NOT the server tip: while we hold the lock
     /// no other writer can advance the tip, so a "tip moved" signal would mean our
@@ -1622,66 +1631,120 @@ impl AppState {
     /// `latest_commit` field is `max(authored_date)` and unreliable as a tip anyway,
     /// see [`sync::tip_of`]; comparing it to a topology-derived BASE false-positives.)
     ///
-    /// The GET uses a short, non-retried probe budget ([`client::get_project_probe`]):
-    /// it runs UNDER the command lock, so a hung server must not stall the whole
-    /// command pipeline (autosave included).
-    ///
-    /// - No lock held (read-only / local project) or not yet due: no-op.
-    /// - Lock lost (mutex holder is not us): drop the edit gate and return an
-    ///   `EDIT_REVERIFY_DIVERGED` failure so the FE blocks this edit and routes to
-    ///   the divergence prompt.
-    /// - Still ours: stamp `last_verify_at` and allow.
-    /// - Transient / offline GET failure: stamp the attempt (keeps the <=3/hr bound)
-    ///   and ALLOW the edit - offline editing stays first-class.
-    pub(super) fn speleodb_verify_lock_if_expired(&self) -> Result<(), crate::core::CommandResult> {
+    /// - No lock held (read-only / local project), not yet due, or a probe already
+    ///   pending for this session: no-op.
+    /// - Otherwise: stamp `last_verify_at` (keeps the <=3/hr bound even offline) and
+    ///   start the probe ([`client::get_project_probe`], short and non-retried).
+    pub(super) fn speleodb_verify_lock_if_expired(&self) {
         if !self.edit_enabled() {
-            return Ok(());
+            return;
         }
         let Ok(link) = self.speleodb_open_link() else {
-            return Ok(()); // local-only: no remote lock to verify
+            return; // local-only: no remote lock to verify
         };
         let now = chrono::Utc::now();
         if !reverify_due(link.last_verify_at.as_deref(), now) {
+            return;
+        }
+        let Ok((endpoint, token, me)) = self.speleodb_active_account() else {
+            return; // logged out: the close/logout path already drops the gate
+        };
+        let generation = self.speleodb_session_generation();
+        // `execute()` holds `command_lock`, so nothing else starts a probe between
+        // this check and the store below.
+        if self
+            .speleodb_reverify
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|probe| probe.generation == generation)
+        {
+            return;
+        }
+        let _ = self.speleodb_mutate_link(|l| l.last_verify_at = Some(now.to_rfc3339()));
+        let insecure_http = self.speleodb_insecure_http();
+        let project_id = link.project_id;
+        let probe = std::thread::spawn(move || {
+            match client::get_project_probe(&endpoint, &token, insecure_http, &project_id) {
+                Ok(project) => !lock_held_by_me(
+                    project.active_mutex.as_ref().map(|m| m.user.as_str()),
+                    Some(&me),
+                ),
+                Err(e) => {
+                    // Transient / offline: #202 is not a correctness guard, so the
+                    // edit stands (the release-time fence is the backstop).
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "lazy lock re-verify (#202)",
+                        "speleodb re-verify GET failed; allowing edits (release fence is the backstop)"
+                    );
+                    false
+                }
+            }
+        });
+        *self
+            .speleodb_reverify
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(PendingReverify { generation, probe });
+    }
+
+    /// Collect a finished background re-verify (see
+    /// [`Self::speleodb_verify_lock_if_expired`]). Called from `execute()` BEFORE
+    /// `guard_mutation`, under `command_lock`; never waits for an unfinished probe.
+    ///
+    /// A probe that found the write lock no longer ours (released, admin-cleared, or
+    /// taken by another session) drops the edit gate - so further edits are cleanly
+    /// read-only until resolved - and fails THIS edit with
+    /// `EDIT_REVERIFY_DIVERGED`, which the frontend routes to the divergence prompt.
+    /// Only for the session that started the probe, and only while its gate is still
+    /// open: a verdict about an earlier session, or a gate something else has already
+    /// shut, says nothing about the edit in hand.
+    pub(super) fn speleodb_collect_reverify(&self) -> Result<(), crate::core::CommandResult> {
+        let finished = {
+            let mut pending = self
+                .speleodb_reverify
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if !pending
+                .as_ref()
+                .is_some_and(|pending| pending.probe.is_finished())
+            {
+                return Ok(());
+            }
+            pending.take()
+        };
+        let Some(PendingReverify { generation, probe }) = finished else {
+            return Ok(());
+        };
+        // Finished, so `join` returns at once. A probe that panicked proved nothing.
+        if !probe.join().unwrap_or(false) {
             return Ok(());
         }
-        let Ok((endpoint, token)) = self.speleodb_active_token() else {
-            return Ok(()); // logged out: the close/logout path already drops the gate
-        };
-        let insecure_http = self.speleodb_insecure_http();
-
-        match client::get_project_probe(&endpoint, &token, insecure_http, &link.project_id) {
-            Ok(project) => {
-                let me = self.speleodb_my_email();
-                let holder = project.active_mutex.as_ref().map(|m| m.user.as_str());
-                if !lock_held_by_me(holder, me.as_deref()) {
-                    // The write lock is no longer ours (released, admin-cleared, or
-                    // taken by another session). We can no longer safely edit: drop
-                    // the gate (so further edits are cleanly read-only until resolved)
-                    // and route the user to the divergence prompt.
-                    self.set_edit_enabled(false);
-                    return Err(crate::core::CommandResult::failure(format!(
-                        "{}: the SpeleoDB write lock is no longer held - reconcile before editing.",
-                        crate::core::command::EDIT_REVERIFY_DIVERGED_CODE
-                    )));
-                }
-                // Still ours: stamp the verify and allow the edit.
-                let _ = self.speleodb_mutate_link(|l| l.last_verify_at = Some(now.to_rfc3339()));
-                Ok(())
-            }
-            Err(e) => {
-                // Transient / offline: #202 is not a correctness guard, so allow the
-                // edit (the release-time fence is the backstop). Stamp the attempt so
-                // an offline editor doesn't re-issue a failing GET on every edit.
-                tracing::warn!(
-                    error = %e,
-                    purpose = "lazy lock re-verify (#202)",
-                    "speleodb re-verify GET failed; allowing the edit (release fence is the backstop)"
-                );
-                let _ = self.speleodb_mutate_link(|l| l.last_verify_at = Some(now.to_rfc3339()));
-                Ok(())
-            }
+        let _project = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.speleodb_session_generation() != generation || !self.edit_enabled() {
+            return Ok(());
         }
+        self.set_edit_enabled(false);
+        Err(crate::core::CommandResult::failure(format!(
+            "{}: the SpeleoDB write lock is no longer held - reconcile before editing.",
+            crate::core::command::EDIT_REVERIFY_DIVERGED_CODE
+        )))
     }
+}
+
+/// A #202 lock re-verify running in the background, started by one edit and
+/// collected by a later one.
+pub(super) struct PendingReverify {
+    /// The session generation the probe was started in.
+    pub(super) generation: u64,
+    /// The probe thread. It returns `true` when it saw the write lock held by
+    /// someone else (or by nobody), `false` when it is still ours or the probe failed
+    /// offline. Polled with `is_finished`, so collecting it never blocks.
+    pub(super) probe: std::thread::JoinHandle<bool>,
 }
 
 #[cfg(test)]

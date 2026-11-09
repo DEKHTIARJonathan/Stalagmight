@@ -207,6 +207,11 @@ pub struct AppState {
     /// (decide under `project`, drop it, then take this). See
     /// `core::state::speleodb_session`.
     pub(super) speleodb_lock_ops: Mutex<()>,
+    /// The #202 lock re-verify running in the background, if any: started by one
+    /// edit, collected by a later one, so `execute()` never waits on the network.
+    /// See `AppState::speleodb_verify_lock_if_expired`. Held only briefly, never
+    /// across I/O.
+    pub(super) speleodb_reverify: Mutex<Option<super::speleodb::PendingReverify>>,
 }
 
 impl AppState {
@@ -264,6 +269,7 @@ impl AppState {
             adjusted_cache_generation: AtomicU64::new(0),
             speleodb_session_generation: AtomicU64::new(0),
             speleodb_lock_ops: Mutex::new(()),
+            speleodb_reverify: Mutex::new(None),
         })
     }
 

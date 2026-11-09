@@ -127,15 +127,22 @@ impl AppState {
     }
 
     /// Switch the current project to read-only. No discard or upload is implicit.
+    ///
+    /// No guard but the lock-ops span is held across either network call. The holder
+    /// probe runs with nothing else held. The clean check and the gate closing then
+    /// happen together under `command_lock` + `project`, so no mutation or session
+    /// boundary lands between them, and both guards drop before the release POST.
+    /// That was the freeze: holding them across the POST made every edit, undo, save
+    /// and `get_project_state` - synchronous commands, so on the main thread - wait
+    /// up to the release timeout. With the gate already shut, an edit attempted
+    /// during the POST is refused as read-only instead of waiting. If the POST
+    /// fails, a gate this call closed is reopened for the same session, so a failed
+    /// switch still leaves the project editable under the lock it still holds.
     pub fn speleodb_release_current_lock(
         &self,
         expected: Option<crate::speleodb::SpeleoReleaseContext>,
     ) -> Result<(), SpeleoErrorDto> {
         let _lock_ops = self.speleodb_lock_ops_guard();
-        let _commands = self
-            .command_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.speleodb_check_expected_context(expected.as_ref())
             .map_err(admin_dto)?;
         let generation = self.speleodb_session_generation();
@@ -146,6 +153,10 @@ impl AppState {
             )));
         }
         {
+            let _commands = self
+                .command_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let project = self
                 .project
                 .lock()
@@ -157,30 +168,49 @@ impl AppState {
         let holder = self
             .speleodb_lock_holder_checked(&endpoint, &token, insecure_http, &link.project_id)
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
-        // Hold project through clean check, release and gate close. Mutations and
-        // session boundaries cannot slip between the check and the transition.
-        let project = self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if generation != self.speleodb_session_generation()
-            || expected.as_ref().is_none_or(|expected| {
-                expected.session_generation != generation.to_string()
-                    || project.as_ref().is_none_or(|project| {
-                        project.modified_at.to_rfc3339() != expected.project_modified_at
-                    })
-            })
-        {
-            return Err(admin_dto(SpeleoDbError::SessionMoved));
-        }
-        self.speleodb_require_clean_project(project.as_ref())
-            .map_err(admin_dto)?;
+        // Clean check and gate transition under ONE `command_lock` + `project`
+        // acquisition: mutations and session boundaries cannot slip between them.
+        let gate_was_open = {
+            let _commands = self
+                .command_lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if generation != self.speleodb_session_generation()
+                || expected.as_ref().is_none_or(|expected| {
+                    expected.session_generation != generation.to_string()
+                        || project.as_ref().is_none_or(|project| {
+                            project.modified_at.to_rfc3339() != expected.project_modified_at
+                        })
+                })
+            {
+                return Err(admin_dto(SpeleoDbError::SessionMoved));
+            }
+            self.speleodb_require_clean_project(project.as_ref())
+                .map_err(admin_dto)?;
+            let open = self.edit_enabled();
+            self.set_edit_enabled(false);
+            open
+        };
         if super::speleodb::lock_held_by_me(holder.as_deref(), Some(&email)) {
-            client::release_lock(&endpoint, &token, insecure_http, &link.project_id)
-                .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
+            if let Err(e) = client::release_lock(&endpoint, &token, insecure_http, &link.project_id)
+            {
+                // Still ours: give the same session its gate back, exactly as it was
+                // before this call. A boundary that landed during the POST owns the
+                // gate now, so leave it alone.
+                let _project = self
+                    .project
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if gate_was_open && generation == self.speleodb_session_generation() {
+                    self.set_edit_enabled(true);
+                }
+                return Err(dto_for_error(Endpoint::Release, &e));
+            }
         }
-        self.set_edit_enabled(false);
-        drop(project);
         self.speleodb_forget_lock_acquired_for(&link.project_id);
         Ok(())
     }
