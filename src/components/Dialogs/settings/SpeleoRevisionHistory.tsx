@@ -151,12 +151,12 @@ export function SpeleoRevisionHistory() {
           // permanent: locking the project for editing and uploading the changes
           // resolves it, and Revert stays on offer here precisely because it carries
           // its own explicit discard route for the same changes.
-          <p className="text-xs text-warning" data-testid="speleodb-revisions-unpushed-hint">
+          <p className="text-xs text-warning-text" data-testid="speleodb-revisions-unpushed-hint">
             {t('speleodb.revisions.viewBlockedByUnpushed')}
           </p>
         ) : (
           !iHoldLock && (
-            <p className="text-xs text-warning" data-testid="speleodb-revisions-lock-hint">
+            <p className="text-xs text-warning-text" data-testid="speleodb-revisions-lock-hint">
               {t('speleodb.revisions.lockToRestore')}
             </p>
           )
@@ -196,7 +196,7 @@ export function SpeleoRevisionHistory() {
                     </code>
                     {isCurrent && (
                       <span
-                        className="px-1.5 py-0.5 rounded text-xs bg-accent-20 text-accent"
+                        className="px-1.5 py-0.5 rounded text-xs bg-accent-20 text-accent-text"
                         data-testid={`speleodb-revision-current-${rev.id}`}
                       >
                         {t('speleodb.revisions.current')}
@@ -204,7 +204,7 @@ export function SpeleoRevisionHistory() {
                     )}
                     {rev.parent_ids.length > 1 && (
                       <span
-                        className="px-1.5 py-0.5 rounded text-xs bg-warning-20 text-warning"
+                        className="px-1.5 py-0.5 rounded text-xs bg-warning-20 text-warning-text"
                         data-testid={`speleodb-revision-merge-${rev.id}`}
                       >
                         {t('speleodb.revisions.merge')}
@@ -267,6 +267,7 @@ export function SpeleoRevisionHistory() {
                 {!isCurrent && !iHoldLock && canRevert && (
                   <Button
                     variant="danger"
+                    filled={false}
                     size="sm"
                     disabled={operationBusy}
                     onClick={() =>

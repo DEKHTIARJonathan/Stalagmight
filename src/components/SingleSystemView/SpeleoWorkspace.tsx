@@ -11,6 +11,7 @@ import { canResumeSpeleoEditing, permissionAtLeast } from '../../utils/speleoPer
 import { dispatchProjectSave } from '../../utils/dispatchProjectSave';
 import { SpeleoRevisionHistory } from '../Dialogs/settings/SpeleoRevisionHistory';
 import { useProject } from '../../hooks/useProject';
+import { useProjectStore } from '../../store/projectStore';
 import type { SpeleoLinkState } from '../../store/speleoStore';
 import { Button } from '../common/Button';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
@@ -23,18 +24,18 @@ const areas = [['history', 'Revision History']] as const;
 const ICON = 16;
 
 /**
- * Which everyday action is the primary one (style guide: one per view), from the
- * state of the open copy:
- * - editing, or holding unsaved edits: Save Changes (it protects the work: it
- *   uploads, or saves on this computer when it cannot);
- * - signed out: Sign in, the only way back to editing (Save has nothing to upload);
+ * Which everyday action is the one filled button (style guide: one filled button
+ * per state; every other action keeps its colour as an outline), from the state
+ * of the open copy:
+ * - changes not yet uploaded (unsaved edits, or saved on this computer only):
+ *   Save Changes, which protects them (it uploads, or saves on this computer
+ *   when it cannot, and takes the lock when it can);
+ * - signed out, nothing unsaved: the editing button, which signs in (Connect),
+ *   the only way back to editing;
  * - signed in, able to resume, nothing waiting: Resume editing;
- * - signed in with saved but un-uploaded edits: Save Changes (it takes the lock);
- * - otherwise (view-only access, no access): none.
- *
- * Not applied to the buttons yet: they take #668's colour-by-kind variants. The
- * one-filled-button-per-state rule (the owner's reconciliation of #668) builds on
- * this.
+ * - editing with nothing to save, view-only access, no access, or permission not
+ *   known yet: none. Save has nothing to upload, and the editing button can only
+ *   step down to read-only or is disabled.
  */
 export function speleoPrimaryAction(
   link: SpeleoLinkState,
@@ -42,10 +43,12 @@ export function speleoPrimaryAction(
   canResume: boolean,
   isDirty: boolean,
 ): 'save' | 'editing' | null {
-  if (link.editState === 'editing' || isDirty) return 'save';
+  const changes = isDirty || link.hasUnpushedEdits;
+  if (link.editState === 'editing') return changes ? 'save' : null;
+  if (isDirty) return 'save';
   if (!signedIn) return 'editing';
-  if (link.hasUnpushedEdits) return 'save';
-  return canResume ? 'editing' : null;
+  if (!canResume) return null;
+  return link.hasUnpushedEdits ? 'save' : 'editing';
 }
 
 /** Why a workspace action is disabled, as its tooltip; `undefined` when it is not. */
@@ -85,6 +88,7 @@ export function SpeleoWorkspace() {
   const busy = useSpeleoOperationBusy();
   const { handleCloseProject } = useProject();
   const web = useSpeleoWebLink();
+  const isDirty = useProjectStore((s) => s.isDirty);
   if (!link) return (
     <div className="flex h-full min-h-0 flex-col items-center overflow-y-auto px-5 py-8" data-testid="speleodb-workspace-local">
       <div className="my-auto flex w-full max-w-[16rem] flex-col items-center text-center" data-testid="speleodb-workspace-conversion-prompt">
@@ -108,14 +112,15 @@ export function SpeleoWorkspace() {
   const why = disabledReasons(t, link, signedIn, busy, web.url !== null);
   const editingDisabled = busy || (signedIn && !canResume && !editing);
   const reloadDisabled = busy || why.reload !== undefined;
+  const primary = speleoPrimaryAction(link, signedIn, canResume, isDirty);
   return (
     <div className="h-full min-h-0 flex flex-col gap-3 p-3 text-sm" data-testid="speleodb-workspace">
       <SpeleoWorkspaceHeader link={link} />
       <div className="shrink-0 grid gap-2" data-testid="speleodb-workspace-everyday">
-        <Button variant="primary" className={actionClass} onClick={() => void dispatchProjectSave()} disabled={busy}
+        <Button variant="primary" filled={primary === 'save'} className={actionClass} onClick={() => void dispatchProjectSave()} disabled={busy}
           title={busy ? why.busy : undefined}
           icon={<SaveIcon size={ICON} />} data-testid="speleodb-workspace-upload">Save Changes</Button>
-        <Button variant={editing ? 'warning' : 'success'} className={actionClass}
+        <Button variant={editing ? 'neutral' : 'success'} filled={primary === 'editing'} className={actionClass}
           onClick={() => editing ? void releaseOpenProjectLock() : canResume ? void startEditing() : useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })}
           disabled={editingDisabled}
           title={!editingDisabled ? undefined : busy ? why.busy : why.editing}
@@ -126,7 +131,7 @@ export function SpeleoWorkspace() {
         <Button variant="info" className={actionClass} onClick={() => void update()} disabled={reloadDisabled}
           title={!reloadDisabled ? undefined : why.reload ?? why.busy}
           icon={<RefreshGlyph size={ICON} />} data-testid="speleodb-workspace-latest">Reload Project</Button>
-        <Button variant="danger" className={actionClass} onClick={() => void handleCloseProject()} disabled={busy} title={busy ? why.busy : undefined}
+        <Button variant="neutral" className={actionClass} onClick={() => void handleCloseProject()} disabled={busy} title={busy ? why.busy : undefined}
           icon={<CloseIcon size={ICON} />} data-testid="speleodb-workspace-close">Close Project</Button>
         <Button variant="external" className={actionClass} onClick={web.open} disabled={!web.url} title={why.web}
           icon={<ExternalLinkIcon size={ICON} />} data-testid="speleodb-workspace-open-web">Open on SpeleoDB</Button>
