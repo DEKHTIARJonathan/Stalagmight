@@ -1060,7 +1060,8 @@ mod tests {
         // leaves one for the janitor - and only its own account can ever hand
         // that mutex back. With ONE slot, signing in as somebody else and
         // starting to edit anything overwrote the only pointer to it, and the
-        // lock was stranded until the server's own timeout.
+        // lock was stranded until somebody released it by hand (SpeleoDB has no
+        // lock timeout).
         let state = AppState::new().expect("state");
         sign_in_as(&state, "http://127.0.0.1:1/", "first@example.com");
         state.speleodb_note_lock_acquired(Some(ID));

@@ -488,8 +488,8 @@ impl AppState {
                     code: "delete_project_lock_release_failed".to_string(),
                     message: format!(
                         "Project deleted, but its SpeleoDB write lock could not be released: {e}. \
-                         Other divers stay locked out until it expires; you can release it from \
-                         the held-lock prompt."
+                         Other divers stay locked out until it is released; you can release it \
+                         from the held-lock prompt or on the SpeleoDB website."
                     ),
                     severity: WarningSeverity::Warning,
                 });

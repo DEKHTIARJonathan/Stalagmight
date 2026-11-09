@@ -158,6 +158,23 @@ fn is_local_edits_refusal(err: &SpeleoDbError) -> bool {
     matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. })
 }
 
+/// Could an acquire that failed this way still have LANDED (sdk#4)? A transport
+/// failure, a 5xx or an unreadable reply can all arrive after the server committed
+/// the mutex to us - a proxy giving up on a slow reply, a reset after the write, a
+/// body the SDK's strict schema refuses. A 4xx is the server's own verdict about
+/// the request and is never ambiguous.
+fn acquire_outcome_unknown(err: &SpeleoDbError) -> bool {
+    matches!(
+        err,
+        SpeleoDbError::Transport { .. }
+            | SpeleoDbError::Parse(_)
+            | SpeleoDbError::Status {
+                status: 500..=599,
+                ..
+            }
+    )
+}
+
 /// [Track A] #186/D-B2: map a non-endpoint (local / session) `SpeleoDbError` to
 /// the IPC `SpeleoErrorDto`. Local errors always fail closed to `Fatal`
 /// regardless of endpoint, so the endpoint passed to [`dto_for_error`] is
@@ -904,8 +921,8 @@ impl AppState {
         //   unheld -> ours transition. Reading it as inherited (what this used to do)
         //   costs the authorship shortcut over a push that really was ours AND, worse,
         //   skips the unwind release - stranding a mutex we took over an edit session
-        //   that never started, which blocks every other writer until the server-side
-        //   timeout or the next login's held-lock prompt.
+        //   that never started, which blocks every other writer until the next login's
+        //   held-lock prompt or a release by hand (SpeleoDB has no lock timeout).
         // - `Err` is provenance we could not read at all. No record (as above), and the
         //   keep-or-release question is settled by what a release would COST rather
         //   than by who took the lock - see `keep_lock_on_unwind` below, which is
@@ -974,8 +991,9 @@ impl AppState {
         // leave the lock exactly as it found it; ending an inherited session is Done /
         // Release / close's job - verbs the user aims at the lock on purpose. Same
         // asymmetry `speleodb_lock_release_params` already encodes: a lock kept back is
-        // recoverable (the next login's scan re-raises this very prompt, and the server
-        // mutex times out on its own), un-pushed work behind a freed lock is not.
+        // recoverable (the next login's scan re-raises this very prompt, or the user
+        // releases it on the website; SpeleoDB never expires a lock on its own),
+        // un-pushed work behind a freed lock is not.
         //
         // A FAILED probe cannot decide this by provenance - it does not know any - so
         // it decides by consequence, and the two blanket answers are both wrong:
@@ -987,7 +1005,7 @@ impl AppState {
         //   only on this machine.
         // - Blanket KEEP strands a lock we may well have just taken over a copy with
         //   nothing to protect, for nothing - recoverable only via the next login's
-        //   held-lock prompt or the server-side timeout.
+        //   held-lock prompt or a release by hand: the server has no lock timeout.
         //
         // So the unknown case keys on whether there IS anything to protect
         // (`Err(_) => link.has_unpushed_edits`), which is the same asymmetry
@@ -1049,6 +1067,57 @@ impl AppState {
                     insecure_http,
                     &link.project_id,
                 ));
+            }
+            // sdk#4: a failure that says nothing about whether the acquire LANDED.
+            // The server may have committed the mutex to us before a proxy gave up
+            // on the reply, the connection reset, or the SDK refused the body - and
+            // SpeleoDB never expires a lock on its own, so walking away from one we
+            // hold blocks every other writer until somebody releases it by hand.
+            // The server's mutex is the only record of what happened: read it.
+            Err(e) if acquire_outcome_unknown(&e) => {
+                match self.speleodb_lock_holder_checked(
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &link.project_id,
+                ) {
+                    // It landed; only the reply was lost. ADOPT it and carry on as
+                    // if the acquire had answered: the user asked to edit, and the
+                    // lock is ours either way. Provenance stays what the
+                    // pre-acquire probe established (`acquired_here`), and every
+                    // abort arm below unwinds it exactly as it would a clean acquire.
+                    Ok(Some(holder)) if lock_held_by_me(Some(holder.as_str()), me.as_deref()) => {
+                        tracing::info!(
+                            error = %e,
+                            project_id = %link.project_id,
+                            purpose = "adopt an acquire whose reply was lost (sdk#4)",
+                            "speleodb: the acquire failed ambiguously but the server says we \
+                             hold the lock; continuing as if it had answered"
+                        );
+                    }
+                    // Somebody else holds it: our acquire did not take it.
+                    Ok(Some(holder)) if me.is_some() => {
+                        return Ok(StartEditingResult::LockedBy {
+                            email: Some(holder),
+                        });
+                    }
+                    // Nobody holds it (the acquire did not land), or there is no
+                    // email to compare the holder with: report the failure.
+                    Ok(_) => return Err(dto_for_error(Endpoint::Acquire, &e)),
+                    // Still cannot tell. Releasing blind is never an answer (lock#4),
+                    // so leave a PROVISIONAL claim - unbound, it opens nothing - as
+                    // the pointer the next close or the janitor needs: their
+                    // holder-checked release hands the lock back only if it turns out
+                    // to be ours. Only where the unwind would have released a lock
+                    // this call took; a kept one (inherited, or unknown over un-pushed
+                    // edits) is left exactly as it was found.
+                    Err(_) => {
+                        if !keep_lock_on_unwind {
+                            self.speleodb_record_unbound_claim(&link.project_id);
+                        }
+                        return Err(dto_for_error(Endpoint::Acquire, &e));
+                    }
+                }
             }
             Err(e) => return Err(dto_for_error(Endpoint::Acquire, &e)),
         }
@@ -3630,7 +3699,8 @@ mod tests {
         // that holder released in between and THIS call made the unheld -> ours
         // transition. Treating it as inherited skipped the unwind release and stranded
         // a mutex we had just taken over an edit session that never started, blocking
-        // every other writer until the server-side timeout.
+        // every other writer until somebody released it by hand (SpeleoDB has no
+        // lock timeout).
         //
         // Same diverged history and dirty fixture as the two tests above, so the only
         // input that differs is the mutex holder's identity.
@@ -4145,7 +4215,7 @@ mod tests {
         // "keep on unknown": with NOTHING un-pushed there is no work to strand, and a
         // lock this call may well have just taken would be left held over an edit
         // session that never started - recoverable only through the next login's
-        // held-lock prompt or the server's own timeout.
+        // held-lock prompt or a release by hand (SpeleoDB has no lock timeout).
         //
         // Same failing probe as the test above, same divergence routing; only the dirty
         // bit differs, which is exactly the input the rule keys on.
@@ -4707,7 +4777,7 @@ mod tests {
     ///
     /// The positive direction of the pair below: a stand-down that fired here
     /// too would pass the successor test on its own while stranding every
-    /// deleted project's mutex until the server timeout.
+    /// deleted project's mutex until somebody released it by hand.
     #[test]
     fn the_delete_sequence_clears_its_own_claim_then_releases() {
         let (base, _listener, hits) = answering_counting_stub(REMOTE_ID);

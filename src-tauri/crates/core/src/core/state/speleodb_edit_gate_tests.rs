@@ -311,7 +311,8 @@ fn the_gate_is_opened_only_through_the_claim_binding() {
     for entry in std::fs::read_dir(&dir).expect("state dir") {
         let entry = entry.expect("entry");
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !name.ends_with(".rs") || name.ends_with("_tests.rs") || name == "tests.rs" {
+        let is_rust = entry.path().extension().is_some_and(|ext| ext == "rs");
+        if !is_rust || name.ends_with("_tests.rs") || name == "tests.rs" {
             continue;
         }
         let src = std::fs::read_to_string(entry.path()).expect("source");
