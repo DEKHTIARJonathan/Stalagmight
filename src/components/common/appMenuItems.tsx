@@ -118,10 +118,15 @@ export function openFromSpeleoDbMenuItem(
   };
 }
 
-/** Settings + Debug-logs rows. */
+/**
+ * Settings row plus the Debug submenu. Debug Logs is the submenu's first row in
+ * BOTH hamburgers, so it sits in the same place whether or not a project is open;
+ * the in-project menu appends its overlay toggles (`debugExtras`) below it.
+ */
 export function serviceMenuItems(
   t: TFunction,
   actions: { onSettings: () => void; onDebug: () => void },
+  debugExtras: AppMenuItem[] = [],
 ): AppMenuItem[] {
   return [
     {
@@ -132,11 +137,24 @@ export function serviceMenuItems(
       onClick: actions.onSettings,
     },
     {
-      id: 'global-debug-button',
-      label: t('globalView.actions.debugLogs'),
+      // Ids kept from the in-project Debug submenu and the former top-level
+      // Debug Logs row, for e2e/test-id continuity.
+      id: 'debug-menu',
+      label: t('singleView.menu.debug'),
       icon: <BugIcon size={ICON_SIZE} />,
       iconColor: MENU_ICON_COLORS.debug,
-      onClick: actions.onDebug,
+      submenu: [
+        {
+          id: 'global-debug-button',
+          label: t('globalView.actions.debugLogs'),
+          icon: <BugIcon size={ICON_SIZE} />,
+          iconColor: MENU_ICON_COLORS.debug,
+          onClick: actions.onDebug,
+        },
+        ...(debugExtras.length > 0
+          ? [{ id: 'debug-menu-sep', label: '', separator: true }, ...debugExtras]
+          : []),
+      ],
     },
   ];
 }
