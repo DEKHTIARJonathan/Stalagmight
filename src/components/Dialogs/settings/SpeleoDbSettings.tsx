@@ -87,7 +87,7 @@ export function SpeleoDbSettings({
   // Editing is staged. Saving a different server signs out the current session;
   // "Log in now" instead authenticates against the staged server immediately.
   const handleEndpointChange = (v: string) =>
-    onChange({ speleodb: { ...speleo, endpoint: v.length > 0 ? v : null } });
+    onChange({ speleodb: { ...speleo, endpoint: v.length > 0 ? v.toLowerCase() : null } });
   const handleInsecureHttpToggle = createToggleHandler(onChange, (v) => ({
     speleodb: { ...speleo, insecure_http: v },
   }));
@@ -248,6 +248,10 @@ export function SpeleoDbSettings({
         >
           <input
             type="text"
+            inputMode="url"
+            autoCapitalize="none"
+            autoCorrect="off"
+            spellCheck={false}
             disabled={busy}
             value={speleo.endpoint ?? ''}
             onChange={(e) => handleEndpointChange(e.target.value)}
