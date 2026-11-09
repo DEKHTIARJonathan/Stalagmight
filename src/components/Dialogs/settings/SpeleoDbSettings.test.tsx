@@ -24,14 +24,15 @@ beforeEach(() => {
   });
 });
 
-function startLogin() {
+function startLogin(onLoginApplied?: () => boolean, config = defaultConfig) {
   render(
     <SpeleoDbSettings
-      config={defaultConfig}
+      config={config}
       onChange={onChange}
       changedFields={new Set()}
       onValidationError={vi.fn()}
       panelIdBase="settings-test"
+      onLoginApplied={onLoginApplied}
     />,
   );
   fireEvent.click(screen.getByTestId('speleodb-settings-try-login'));
@@ -49,4 +50,25 @@ it.each(['error', 'settings'])('does not dismiss a replacement %s dialog after a
   await act(async () => finishLogin());
   expect(closeDialog).not.toHaveBeenCalled();
   expect(onChange).not.toHaveBeenCalled();
+});
+
+it('logs in over the on-screen connection, including its insecure-HTTP choice', async () => {
+  const config = { ...defaultConfig, speleodb: { ...defaultConfig.speleodb, endpoint: 'http://lab.example/', insecure_http: true } };
+  startLogin(undefined, config);
+  await act(async () => finishLogin());
+  expect(useSpeleoStore.getState().applyPendingAuth).toHaveBeenCalledWith('http://lab.example/', true);
+});
+
+it('keeps Settings open when its host still has edits staged in other tabs', async () => {
+  const onLoginApplied = vi.fn(() => false);
+  startLogin(onLoginApplied);
+  await act(async () => finishLogin());
+  expect(onLoginApplied).toHaveBeenCalledOnce();
+  expect(closeDialog).not.toHaveBeenCalled();
+});
+
+it('closes once its host has applied the SpeleoDB settings and nothing else is staged', async () => {
+  startLogin(() => true);
+  await act(async () => finishLogin());
+  expect(closeDialog).toHaveBeenCalledOnce();
 });

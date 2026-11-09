@@ -125,7 +125,7 @@ fn conversion_saves_unsaved_survey_uploads_once_and_requires_verified_editing_af
         state.set_project_for_tests(project);
         state.set_database_for_tests(db);
         state
-            .speleodb_login(Some(base), None, None, Some("synthetic-token".into()))
+            .speleodb_login(Some(base), None, None, None, Some("synthetic-token".into()))
             .expect("sign in");
         let result = state
             .speleodb_publish(SpeleoPublishParams {

@@ -418,8 +418,11 @@ interface SpeleoStore {
   setPendingAuth: (p: PendingAuth) => void;
   clearPendingAuth: () => void;
   setAuthError: (msg: string | null) => void;
-  /** Apply the staged login/logout (A2). ok=false carries the raw error. */
-  applyPendingAuth: (endpoint: string | null) => Promise<{ ok: boolean; error?: unknown; cancelled?: boolean }>;
+  /** Apply the staged login/logout (A2). ok=false carries the raw error.
+      `endpoint` and `insecureHttp` are the connection to log in over - the values
+      on screen in Settings, which the backend saves with the session on success
+      (`insecureHttp` omitted = the saved choice). */
+  applyPendingAuth: (endpoint: string | null, insecureHttp?: boolean) => Promise<{ ok: boolean; error?: unknown; cancelled?: boolean }>;
 
   // --- link/edit (action shell #204) ---
   /**
@@ -695,7 +698,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   clearPendingAuth: () => set({ pendingAuth: null, authError: null }),
   setAuthError: (authError) => set({ authError }),
 
-  applyPendingAuth: async (endpoint) => {
+  applyPendingAuth: async (endpoint, insecureHttp) => {
     const p = get().pendingAuth;
     if (!p) return { ok: true };
     const request = ++authRequestSeq;
@@ -732,6 +735,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       } else {
         const r = await invokeIpc<SpeleoLoginResult>('speleodb_login', {
           endpoint: (endpoint ?? '').trim() || undefined,
+          ...(insecureHttp === undefined ? {} : { insecureHttp }),
           email: p.useToken ? undefined : p.email.trim() || undefined,
           password: p.useToken ? undefined : p.password || undefined,
           token: p.useToken ? p.token.trim() || undefined : undefined,
@@ -739,6 +743,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         if (!current()) return { ok: false, cancelled: true };
         set((state) => ({ pendingAuth: state.pendingAuth === p ? null : state.pendingAuth, authError: null }));
         get().setSessionFromLogin(r);
+        // The backend saved the connection this login was made over (endpoint and
+        // insecure HTTP) with the token: bring the app's copy of the settings in line.
+        await useProjectStore.getState().loadConfig();
         // #201: a fresh login is an "on login" scan point - surface any locks this
         // user left held (and prime the recents badges). `prompt: true` so it raises
         // the resume/release prompt even after the app-open scan already ran.

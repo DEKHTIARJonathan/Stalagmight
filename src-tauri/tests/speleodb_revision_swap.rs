@@ -176,6 +176,7 @@ fn open_p(state: &AppState, project_id: &str, base: &str) -> PathBuf {
             Some(base.to_owned()),
             None,
             None,
+            None,
             Some("synthetic-token".into()),
         )
         .expect("sign in");

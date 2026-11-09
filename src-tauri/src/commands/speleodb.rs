@@ -52,18 +52,21 @@ async fn run_blocking<T: Send + 'static>(
 /// Log in to SpeleoDB. Either email+`password` (exchanged for a token) or a
 /// pasted `token` must be supplied; with a pasted token the `email` is ignored
 /// and derived from the API instead. `endpoint` overrides the configured/env
-/// endpoint for this session. Returns the (authoritative) user email + whether
-/// the authenticated instance - never the token itself.
+/// endpoint for this session, and `insecure_http` the saved plaintext-http
+/// choice (Settings passes the values on screen); both are saved with the
+/// session on success. Returns the (authoritative) user email + the
+/// authenticated instance - never the token itself.
 #[tauri::command]
 pub async fn speleodb_login(
     app: AppHandle,
     endpoint: Option<String>,
+    insecure_http: Option<bool>,
     email: Option<String>,
     password: Option<String>,
     token: Option<String>,
 ) -> Result<SpeleoLoginResult, SpeleoErrorDto> {
     run_blocking(app, move |s| {
-        s.speleodb_login(endpoint, email, password, token)
+        s.speleodb_login(endpoint, insecure_http, email, password, token)
     })
     .await
 }

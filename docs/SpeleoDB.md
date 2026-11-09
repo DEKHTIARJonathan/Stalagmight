@@ -163,7 +163,10 @@ to the project listing. History includes inspection, restore/revert and
 Unwind/Rewind; revision editing remains Survey-only.
 
 Account sign-in, endpoint and connection management live exclusively in application
-Settings under SpeleoDB. Every sign-in link opens that category. A blocked save
+Settings under SpeleoDB. Every sign-in link opens that category. "Log in now" uses
+the endpoint and insecure-HTTP choice on screen and, on success, saves them with the
+session; Settings stays open when other tabs still hold unsaved edits (see
+[configuration](configuration.md)). A blocked save
 retains its project, validated description and Save-and-Close intent while Settings
 is open. Authentication returns to confirmation without saving or uploading.
 Changing project or account invalidates the continuation.

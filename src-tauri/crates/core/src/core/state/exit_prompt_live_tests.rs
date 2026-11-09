@@ -368,6 +368,7 @@ fn run_someone_elses_lock(live: &Live, state: &AppState, token: &str, p1: &str) 
     state
         .speleodb_login(
             Some(live.url.clone()),
+            None,
             Some(live.email.clone()),
             Some(live.password.clone()),
             None,
@@ -437,6 +438,7 @@ fn exit_prompt_live_keep_discard_stranded_and_sign_out() {
         state
             .speleodb_login(
                 Some(live.url.clone()),
+                None,
                 Some(live.email.clone()),
                 Some(live.password.clone()),
                 None,

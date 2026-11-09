@@ -3133,7 +3133,13 @@ mod tests {
         let (_temp, state) = editing_fixture(&base);
         let generation = state.reserve_download_generation();
         state
-            .speleodb_login(Some(base), None, None, Some("replacement-token".into()))
+            .speleodb_login(
+                Some(base),
+                None,
+                None,
+                None,
+                Some("replacement-token".into()),
+            )
             .expect("login");
         assert_ne!(generation, state.speleodb_session_generation());
         assert!(state.get_project_state().is_some());

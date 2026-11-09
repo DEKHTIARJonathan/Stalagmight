@@ -1068,6 +1068,34 @@ describe('successful sign-in refresh', () => {
     });
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_list_projects');
   });
+
+  it.each([true, false])('logs in over the given insecure-HTTP choice (%s) and reloads the saved settings', async (insecureHttp) => {
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_login') return { user_email: 'me@x', endpoint: 'http://lab.example/' };
+      if (cmd === 'get_config') return null;
+      return null;
+    });
+    useSpeleoStore.getState().setPendingAuth({
+      kind: 'login', email: '', password: '', token: '<your_token_here>', useToken: true,
+    });
+    expect(await useSpeleoStore.getState().applyPendingAuth('http://lab.example/', insecureHttp)).toEqual({ ok: true });
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_login', expect.objectContaining({
+      endpoint: 'http://lab.example/', insecureHttp,
+    }));
+    // The backend saved that connection with the session; the app's copy follows.
+    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'get_config')).toBe(true);
+  });
+
+  it('leaves the insecure-HTTP choice to the saved one when none is given', async () => {
+    invokeIpcMock.mockImplementation(async (cmd: string) =>
+      cmd === 'speleodb_login' ? { user_email: 'me@x', endpoint: 'https://x/' } : null);
+    useSpeleoStore.getState().setPendingAuth({
+      kind: 'login', email: '', password: '', token: '<your_token_here>', useToken: true,
+    });
+    await useSpeleoStore.getState().applyPendingAuth('https://x/');
+    const login = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_login');
+    expect(login?.[1]).not.toHaveProperty('insecureHttp');
+  });
 });
 
 describe('refresh progress', () => {

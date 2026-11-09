@@ -1,5 +1,5 @@
 import { finishSpeleoSettings } from '../../../utils/finishSpeleoSettings';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Toggle } from '../../common/Toggle';
 import { Button } from '../../common/Button';
@@ -23,7 +23,15 @@ export function SpeleoDbSettings({
   onChange,
   changedFields,
   panelIdBase,
-}: SettingsCategoryProps) {
+  onLoginApplied,
+}: SettingsCategoryProps & {
+  /**
+   * "Log in now" succeeded and the backend saved the connection it used. The host
+   * adopts it as saved; `true` means nothing else is staged and Settings may close.
+   * Without a host the login just closes Settings.
+   */
+  onLoginApplied?: () => boolean;
+}) {
   const { t } = useTranslation();
   const session = useSpeleoStore((s) => s.session);
   const refreshSession = useSpeleoStore((s) => s.refreshSession);
@@ -38,8 +46,6 @@ export function SpeleoDbSettings({
   const busy = useSpeleoOperationBusy();
 
   const speleo = config.speleodb;
-  const connectionRef = useRef(speleo);
-  connectionRef.current = speleo;
   const [loggingIn, setLoggingIn] = useState(false);
   useEffect(() => {
     void refreshSession();
@@ -56,10 +62,15 @@ export function SpeleoDbSettings({
   const showLoginForm = pendingAuth?.kind === 'login' || (!stagedLogout && !session?.loggedIn);
 
   // Log in NOW (don't wait for Save) so the user can verify their credentials
-  // against the staged endpoint. Applies the same login `applyPendingAuth` runs on
-  // Save; on success it closes Settings while the project listing refreshes,
-  // on failure it surfaces the error. The credentials required (email or token) -
-  // an empty form just reports the backend's "missing credentials".
+  // against the connection on screen: the staged endpoint AND the staged insecure
+  // HTTP choice, never the saved one (a public http:// server stays refused unless
+  // the box on screen is ticked). Applies the same login `applyPendingAuth` runs on
+  // Save. On success the backend has saved that connection with the session, so
+  // the SpeleoDB tab is applied; Settings then closes while the project listing
+  // refreshes - unless other tabs hold staged edits, which closing would discard.
+  // On failure it surfaces the error and saves nothing. The credentials required
+  // (email or token) - an empty form just reports the backend's "missing
+  // credentials".
   const canTryLogin = login.useToken ? login.token.trim().length > 0 : login.email.trim().length > 0;
   const handleTryLogin = async () => {
     // Ensure the typed credentials are staged before applyPendingAuth reads them
@@ -68,16 +79,14 @@ export function SpeleoDbSettings({
     const issuedDialog = useUIStore.getState().dialogData;
     setLoggingIn(true);
     try {
-      const result = await applyPendingAuth(speleo.endpoint);
+      const result = await applyPendingAuth(speleo.endpoint, speleo.insecure_http);
       if (result.cancelled) return;
       // A slow login may finish after Settings was dismissed or replaced.
       // Its session still applies, but it must not close or edit the new dialog.
       const currentDialog = useUIStore.getState();
       if (currentDialog.activeDialog !== 'settings' || currentDialog.dialogData !== issuedDialog) return;
       if (result.ok) {
-        const endpoint = useSpeleoStore.getState().session?.endpoint;
-        if (endpoint && connectionRef.current === speleo) onChange({ speleodb: { ...speleo, endpoint } });
-        finishSpeleoSettings();
+        if (onLoginApplied?.() ?? true) finishSpeleoSettings();
       } else {
         setAuthError(humanizeSpeleoError(result.error, t('speleodb.errors.loginFailed')));
       }

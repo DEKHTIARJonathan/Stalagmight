@@ -63,8 +63,13 @@ untouched; cleanup failures are reported. No keychain access is restored.
 is restored only when the resolved instance matches its configured endpoint.
 Reloading configuration applies a changed endpoint, account or token to the live
 session and resets its edit gate; unrelated preference reloads retain the session.
-Projects refresh at startup and immediately after sign-in. Successful "Log in now"
-closes Settings and shows the project listing. Refreshes display a spinner until
+Projects refresh at startup and immediately after sign-in. "Log in now" in Settings
+signs in over the connection on screen, including its insecure-HTTP choice (never the
+saved one, so a public `http://` server stays refused unless the box on screen is
+ticked). On success the backend saves that endpoint and `insecure_http` with the
+token, which applies the SpeleoDB tab; Settings then closes and shows the project
+listing, unless other tabs hold unsaved edits, in which case it stays open with
+those edits still staged. A failed login saves nothing. Refreshes display a spinner until
 they finish, including failed requests. Use the refresh button
 on the home screen to reload the listing, or Refresh in the open project's
 SpeleoDB workspace. No periodic SpeleoDB refresh runs in the background.

@@ -398,6 +398,9 @@ export default function SettingsDialog() {
   const [localConfig, setLocalConfig] = useState<Config | null>(config);
   // Reference to original config for change detection
   const originalConfigRef = useRef<Config | null>(config);
+  // The latest staged config, for callbacks that outlive the render that made them.
+  const localConfigRef = useRef(localConfig);
+  localConfigRef.current = localConfig;
 
   // Category error states
   const [categoryErrors, setCategoryErrors] = useState<Partial<Record<SettingsCategory, boolean>>>({});
@@ -557,7 +560,7 @@ export default function SettingsDialog() {
     }
     if (hasPendingAuth) {
       const kind = pendingAuth?.kind;
-      const auth = await applyPendingAuth(localConfig.speleodb.endpoint);
+      const auth = await applyPendingAuth(localConfig.speleodb.endpoint, localConfig.speleodb.insecure_http);
       if (auth.cancelled) return false;
       if (!auth.ok) {
         setAuthError(
@@ -569,6 +572,28 @@ export default function SettingsDialog() {
     }
     return true;
   }, [localConfig, isDirty, hasPendingAuth, pendingAuth, updateConfig, applyPendingAuth, setAuthError, t]);
+
+  // "Log in now" signed in over the SpeleoDB connection on screen, and the backend
+  // saved that connection (endpoint, insecure HTTP) with the session. Adopt the
+  // saved section as both the baseline and the staged value, so the SpeleoDB tab is
+  // applied and only edits made in the other tabs stay staged. True when nothing
+  // else is staged, so Settings may close without discarding anything.
+  const adoptSavedSpeleoSettings = useCallback((): boolean => {
+    const original = originalConfigRef.current;
+    const local = localConfigRef.current;
+    const session = useSpeleoStore.getState().session;
+    if (!original || !local || !session?.loggedIn) return false;
+    // Exactly what `speleodb_login` wrote: the staged section, with the endpoint it
+    // resolved and the account it signed in.
+    const saved = {
+      ...local.speleodb,
+      endpoint: session.endpoint ?? local.speleodb.endpoint,
+      email: session.userEmail ?? local.speleodb.email,
+    };
+    originalConfigRef.current = { ...original, speleodb: saved };
+    setLocalConfig((prev) => (prev ? { ...prev, speleodb: { ...saved } } : prev));
+    return getChangedFields(originalConfigRef.current, { ...local, speleodb: saved }).size === 0;
+  }, []);
 
   // Save settings
   const handleSave = useCallback(async () => {
@@ -695,7 +720,7 @@ export default function SettingsDialog() {
       case 'cache':
         return <CacheSettings {...commonProps} />;
       case 'speleodb':
-        return <SpeleoDbSettings {...commonProps} />;
+        return <SpeleoDbSettings {...commonProps} onLoginApplied={adoptSavedSpeleoSettings} />;
       case 'appearance':
         return <AppearanceSettings {...commonProps} />;
       case 'advanced':
