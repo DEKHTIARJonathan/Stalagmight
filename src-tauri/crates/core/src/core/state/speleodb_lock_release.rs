@@ -638,8 +638,9 @@ mod tests {
         }
         assert_eq!(
             body.matches("tracing::warn!").count(),
-            2,
-            "both the link read and the token read must warn on an unexpected failure"
+            3,
+            "the link read, the pending-close read and the token read must each warn on \
+             an unexpected failure"
         );
     }
 }
