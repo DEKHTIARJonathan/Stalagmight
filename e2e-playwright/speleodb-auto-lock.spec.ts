@@ -1,5 +1,6 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
+import { openSpeleoFromMenu, openSpeleoTab } from './helpers/speleoWorkspace';
 import type { useUIStore } from '../src/store/uiStore';
 import type { useSpeleoStore } from '../src/store/speleoStore';
 import type { useProjectStore } from '../src/store/projectStore';
@@ -49,15 +50,14 @@ async function openRemote(page: Page, lockedByOther: boolean) {
 
 test('opening acquires silently; workspace release stays open and does not reacquire', async ({ page }) => {
   await openRemote(page, false);
-  const status = page.getByTestId('speleodb-status-button');
-  await status.click();
+  await openSpeleoTab(page);
   await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Switch to Read Only Mode');
   await expect(page.getByTestId('speleodb-read-only-dialog')).toHaveCount(0);
   await page.getByTestId('speleodb-workspace-editing').click();
   await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Resume editing');
   await expect(page.getByTestId('single-system-view')).toBeVisible();
   expect(await page.evaluate(() => (window as unknown as { __lockCalls: string[] }).__lockCalls)).toEqual(['acquire', 'release']);
-  await status.click();
+  await openSpeleoTab(page);
   await page.getByTestId('speleodb-workspace-editing').click();
   await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Switch to Read Only Mode');
 });
@@ -69,7 +69,7 @@ test('contended open shows one read-only modal naming the actual editor', async 
   await expect(notice).toContainText('editor@example.com is currently editing');
   await page.getByTestId('speleodb-read-only-continue').click();
   await expect(notice).toHaveCount(0);
-  await page.getByTestId('speleodb-status-button').click();
+  await openSpeleoTab(page);
   await expect(page.getByTestId('speleodb-workspace-project-header')).toContainText('editor@example.com');
   expect(await page.evaluate(() => (window as unknown as { __lockCalls: string[] }).__lockCalls)).toEqual(['acquire']);
 });
@@ -77,7 +77,7 @@ test('contended open shows one read-only modal naming the actual editor', async 
 
 test('workspace contains everyday controls and History without project or settings tabs', async ({ page }) => {
   await openRemote(page, false);
-  await page.getByTestId('speleodb-status-button').click();
+  await openSpeleoTab(page);
   await expect(page.getByTestId('speleodb-workspace-upload')).toHaveText('Save Changes');
   await expect(page.getByTestId('speleodb-workspace-latest')).toHaveText('Reload Project');
   await expect(page.getByTestId('speleodb-workspace-section-history')).toBeVisible();
@@ -92,7 +92,8 @@ test('workspace contains everyday controls and History without project or settin
 test('all-mode navigation preserves the Survey tab and exits fullscreen', async ({ page }) => {
   await openRemote(page, false);
   await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.uiStore.getState().setAppMode('plan'));
-  await page.getByTestId('speleodb-status-button').click();
+  // Plan shows no left panel until asked: the hamburger's SpeleoDB row brings it in.
+  await openSpeleoFromMenu(page);
   await expect(page.getByTestId('speleodb-workspace')).toBeVisible();
   await expect(page.getByTestId('workspace-tab-sections')).toHaveCount(0);
   await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.uiStore.getState().setAppMode('export'));
@@ -100,18 +101,17 @@ test('all-mode navigation preserves the Survey tab and exits fullscreen', async 
   await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.uiStore.getState().setAppMode('survey'));
   await expect(page.getByTestId('workspace-tab-sections')).toHaveAttribute('aria-selected', 'true');
   await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.uiStore.getState().enterDataTableFullScreen());
-  await page.getByTestId('speleodb-status-button').click();
+  await openSpeleoFromMenu(page);
   await expect.poll(() => page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.uiStore.getState().dataTableFullScreen)).toBe(false);
   await expect(page.getByTestId('speleodb-workspace')).toBeVisible();
 });
 
-test('narrow toolbar keeps the full button, and a narrow saved panel resizes immediately', async ({ page }) => {
+test('a narrow window reaches the SpeleoDB tab from the menu, and a narrow saved panel resizes immediately', async ({ page }) => {
   await page.setViewportSize({ width: 540, height: 720 });
   await openRemote(page, false);
   await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.uiStore.setState({ sectionsPanelWidth: 200 }));
-  const button = page.getByTestId('speleodb-status-button');
-  await expect(button).toHaveText('SpeleoDB');
-  await button.click();
+  await expect(page.getByTestId('speleodb-status-button')).toHaveCount(0);
+  await openSpeleoFromMenu(page);
   const panel = page.getByTestId('sections-panel-bar');
   const handle = page.getByTestId('sections-resize-handle');
   await expect(panel).toBeVisible();
@@ -124,8 +124,6 @@ test('narrow toolbar keeps the full button, and a narrow saved panel resizes imm
   await page.mouse.move(box!.x + box!.width / 2 + 30, box!.y + box!.height / 2, { steps: 5 });
   await page.mouse.up();
   await expect.poll(async () => (await panel.boundingBox())?.width ?? 0).toBeGreaterThan(initial!.width + 20);
-  const bounds = await button.boundingBox();
-  expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(540);
 });
 
 test('upload saves locally, retains the lock, and a released lock blocks a subsequent upload', async ({ page }) => {
@@ -136,7 +134,7 @@ test('upload saves locally, retains the lock, and a released lock blocks a subse
     const store = w.__E2E_TEST__.speleoStore;
     store.setState({ link: { ...store.getState().link!, hasUnpushedEdits: true } });
   });
-  await page.getByTestId('speleodb-status-button').click();
+  await openSpeleoTab(page);
   await page.getByTestId('speleodb-workspace-upload').click();
   await page.getByTestId('speleodb-done-message').fill('Synthetic survey update');
   await page.getByTestId('speleodb-done-confirm').click();
@@ -154,7 +152,7 @@ test('read-only switching refuses unuploaded work and sign-in opens application 
     const store = (window as unknown as TestWindow).__E2E_TEST__.speleoStore;
     store.setState({ link: { ...store.getState().link!, hasUnpushedEdits: true } });
   });
-  await page.getByTestId('speleodb-status-button').click();
+  await openSpeleoTab(page);
   await page.getByTestId('speleodb-workspace-editing').click();
   await expect(page.getByTestId('error-dialog')).toContainText('Save your changes using Save Changes');
   expect(await page.evaluate(() => (window as unknown as { __lockCalls: string[] }).__lockCalls)).toEqual(['acquire']);
@@ -173,7 +171,7 @@ test('read-only switching refuses unuploaded work and sign-in opens application 
 test('workspace Close Project warns for unsaved work, cancels safely and closes to the listing', async ({ page }) => {
   await openRemote(page, false);
   await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.setState({ isDirty: true }));
-  await page.getByTestId('speleodb-status-button').click();
+  await openSpeleoTab(page);
   await page.getByTestId('speleodb-workspace-close').click();
   await expect(page.getByTestId('speleodb-close-dialog')).toBeVisible();
   await page.getByTestId('speleodb-close-cancel').click();

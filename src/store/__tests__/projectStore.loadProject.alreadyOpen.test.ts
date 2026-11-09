@@ -125,7 +125,7 @@ describe('loadProject ALREADY_OPEN re-resolves the SpeleoDB gate (#270)', () => 
 
     expect(useSpeleoStore.getState().projectLinkKind).toBe('remote');
     expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
-    // `SpeleoStatusButton` requires `link !== null` to offer manual recovery.
+    // The SpeleoDB workspace requires `link !== null` to offer manual recovery.
     expect(useSpeleoStore.getState().link).not.toBeNull();
   });
 
