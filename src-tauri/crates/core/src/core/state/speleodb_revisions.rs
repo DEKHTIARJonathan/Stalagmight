@@ -55,11 +55,7 @@ fn downloaded_revision_undo_mode_with_limits(
         std::fs::copy(source, &probe).map_err(|e| SpeleoDbError::Io(e.to_string()))?;
         let db =
             crate::persistence::Database::open_existing_untrusted(&probe, value_limit, deadline)
-                .map_err(|e| {
-                    SpeleoDbError::Io(format!(
-                        "could not open the downloaded revision to read its undo policy: {e}"
-                    ))
-                })?;
+                .map_err(super::speleodb_cache_install::downloaded_file_error)?;
         let stored_mode = db
             .load_speleo_link()
             .map_err(|e| {

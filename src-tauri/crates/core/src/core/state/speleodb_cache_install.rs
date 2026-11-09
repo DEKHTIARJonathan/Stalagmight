@@ -9,6 +9,17 @@ use super::AppState;
 use crate::persistence::Database;
 use crate::speleodb::SpeleoDbError;
 
+/// Preserve the shared newer-schema refusal through hardened download opens.
+pub(super) fn downloaded_file_error(error: anyhow::Error) -> SpeleoDbError {
+    if let Some(newer) = error.downcast_ref::<crate::persistence::NewerSchema>() {
+        return SpeleoDbError::NewerSchema(crate::persistence::NewerSchema {
+            file: "project.stalx".into(),
+            ..newer.clone()
+        });
+    }
+    SpeleoDbError::Io(format!("could not open downloaded project: {error}"))
+}
+
 pub(super) fn sync_staged_file(path: &Path) -> Result<(), SpeleoDbError> {
     std::fs::OpenOptions::new()
         .read(true)
@@ -49,7 +60,10 @@ pub(super) fn stage_download(
     })?;
     Database::check_not_newer_at(&staged).map_err(|newer| {
         SpeleoDbError::NewerSchema(crate::persistence::NewerSchema {
-            file: source.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default(),
+            file: dest
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default(),
             ..newer
         })
     })?;

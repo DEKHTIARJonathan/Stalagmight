@@ -243,7 +243,7 @@ impl AppState {
                 options.limits.0,
                 options.limits.1,
             )
-            .map_err(|e| SpeleoDbError::Io(format!("could not open downloaded project: {e}")))?;
+            .map_err(super::speleodb_cache_install::downloaded_file_error)?;
             link.undo_mode = Some(self.effective_undo_mode(preserved_undo_mode(&db)));
             db.save_speleo_link(Some(&link)).map_err(|e| {
                 SpeleoDbError::Io(format!("could not link downloaded project: {e}"))
@@ -270,6 +270,7 @@ impl AppState {
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
+    clippy::panic,
     reason = "synthetic native download regression fixtures"
 )]
 mod tests {
@@ -384,7 +385,7 @@ mod tests {
                 .expect("project");
             let before = std::fs::read(&dest).expect("bytes");
             let state = AppState::new().expect("state");
-            for case in ["invalid", "schema", "value", "deadline"] {
+            for case in ["invalid", "schema", "value", "deadline", "future"] {
                 let source = dir.path().join(format!("{case}.stalx"));
                 if case == "invalid" {
                     std::fs::write(&source, b"not SQLite").expect("invalid");
@@ -393,6 +394,16 @@ mod tests {
                         .expect("database")
                         .save_project(&Project::new("X".repeat(4096), None))
                         .expect("project");
+                    if case == "future" {
+                        rusqlite::Connection::open(&source)
+                            .expect("connection")
+                            .pragma_update(
+                                None,
+                                "user_version",
+                                crate::persistence::SCHEMA_VERSION + 1,
+                            )
+                            .expect("newer schema");
+                    }
                     if case == "schema" {
                         rusqlite::Connection::open(&source)
                             .expect("connection")
@@ -405,22 +416,26 @@ mod tests {
                     "deadline" => (DOWNLOADED_VALUE_LIMIT, std::time::Duration::ZERO),
                     _ => (DOWNLOADED_VALUE_LIMIT, DOWNLOADED_PROCESSING_DEADLINE),
                 };
-                assert!(
-                    state
-                        .install_linked_download_with_limits(
-                            &source,
-                            &dest,
-                            link(),
-                            LocalEditsPolicy::Protect,
-                            InheritedUndo::Drop,
-                            DownloadOptions {
-                                limits,
-                                generation: None
-                            }
-                        )
-                        .is_err(),
-                    "{case} must be refused"
-                );
+                let error = state
+                    .install_linked_download_with_limits(
+                        &source,
+                        &dest,
+                        link(),
+                        LocalEditsPolicy::Protect,
+                        InheritedUndo::Drop,
+                        DownloadOptions {
+                            limits,
+                            generation: None,
+                        },
+                    )
+                    .expect_err("download must be refused");
+                if case == "future" {
+                    let SpeleoDbError::NewerSchema(newer) = error else {
+                        panic!("newer-schema payload lost: {error:?}");
+                    };
+                    assert_eq!(newer.file, "project.stalx");
+                    assert_eq!(newer.found, crate::persistence::SCHEMA_VERSION + 1);
+                }
                 assert_eq!(std::fs::read(&dest).expect("cache bytes"), before, "{case}");
             }
         });

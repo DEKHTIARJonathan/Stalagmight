@@ -274,7 +274,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod tests {
-    use super::{map_status, Endpoint, SpeleoDbAction};
+    use super::{dto_for_error, map_status, Endpoint, SpeleoDbAction, SpeleoDbError};
 
     #[test]
     fn map_status_per_row() {
@@ -448,13 +448,18 @@ mod tests {
     #[test]
     fn a_newer_schema_refusal_is_fatal_and_carries_its_payload() {
         let newer = crate::models::NewerSchema {
-            file: "project.stalx".to_owned(), found: 19, supported: 18,
+            file: "project.stalx".to_owned(),
+            found: 19,
+            supported: 18,
         };
         let dto = dto_for_error(Endpoint::User, &SpeleoDbError::NewerSchema(newer.clone()));
         assert_eq!(dto.action, SpeleoDbAction::Fatal);
         assert_eq!(dto.message, newer.to_string());
         assert_eq!(dto.newer_schema, Some(newer));
-        assert_eq!(dto_for_error(Endpoint::User, &SpeleoDbError::NotAuthenticated).newer_schema, None);
+        assert_eq!(
+            dto_for_error(Endpoint::User, &SpeleoDbError::NotAuthenticated).newer_schema,
+            None
+        );
     }
 
     #[test]

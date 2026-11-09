@@ -605,64 +605,53 @@ mod tests {
     /// cleanup writes into the staged copy and before the rename.
     #[test]
     fn a_download_from_a_newer_schema_never_replaces_the_cache() {
-        use std::io::Write as _;
-
-        let seed_dir = tempfile::TempDir::new().expect("seed temp");
-        let seeded = seed_dir.path().join("seeded.stalx");
-        {
-            let mut db = Database::open(&seeded).expect("open seed");
-            db.save_project(&Project::new("From the future".to_owned(), None))
-                .expect("save project");
-        }
-        rusqlite::Connection::open(&seeded)
-            .expect("reopen seed")
-            .pragma_update(None, "user_version", crate::persistence::SCHEMA_VERSION + 1)
-            .expect("stamp a newer schema");
-        let bytes = std::fs::read(&seeded).expect("read seed");
-        let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
-        writer
-            .start_file(ENTRY, zip::write::SimpleFileOptions::default())
-            .expect("start entry");
-        writer.write_all(&bytes).expect("write entry");
-        let zip = writer.finish().expect("finish zip").into_inner();
-
         let temp = tempfile::TempDir::new().expect("temp");
+        let source = temp.path().join("download.stalx");
+        Database::open(&source)
+            .expect("seed")
+            .save_project(&Project::new("From the future".into(), None))
+            .expect("save");
+        rusqlite::Connection::open(&source)
+            .expect("connection")
+            .pragma_update(None, "user_version", crate::persistence::SCHEMA_VERSION + 1)
+            .expect("stamp newer schema");
         let dest = temp.path().join("project.stalx");
         seed_linked_stalx(&dest, false);
-        let before = std::fs::read(&dest).expect("read destination");
+        let before = std::fs::read(&dest).expect("destination");
         let state = AppState::new().expect("state");
-
         let err = state
-            .replace_cache_stalx(
-                &mut Dump::open(&zip).expect("open dump"),
-                ENTRY,
+            .replace_cache_stalx_with(
+                &source,
                 &dest,
                 ID,
+                LocalEditsPolicy::Protect,
                 InheritedUndo::Drop,
             )
-            .expect_err("a newer schema's download must not be installed");
-
+            .expect_err("newer schema refused");
         let SpeleoDbError::NewerSchema(newer) = &err else {
-            panic!("refused for the wrong reason: {err:?}");
+            panic!("wrong refusal: {err:?}");
         };
         assert_eq!(
             *newer,
             crate::persistence::NewerSchema {
-                // The entry's own name, not the staged copy's.
-                file: "project.stalx".to_owned(),
+                file: "project.stalx".into(),
                 found: crate::persistence::SCHEMA_VERSION + 1,
                 supported: crate::persistence::SCHEMA_VERSION,
             }
         );
-        assert_eq!(err.to_string(), newer.to_string(), "the shared wording");
+        assert_eq!(err.to_string(), newer.to_string());
+        assert_eq!(std::fs::read(&dest).expect("destination"), before);
+        let mut names = std::fs::read_dir(temp.path())
+            .expect("directory")
+            .map(|entry| entry.expect("entry").file_name())
+            .collect::<Vec<_>>();
+        names.sort();
         assert_eq!(
-            std::fs::read(&dest).expect("read destination"),
-            before,
-            "the local copy is byte-identical"
-        );
-        assert!(
-            !sanitized_download_path(&dest).exists(),
-            "the staged download is cleaned up"
+            names,
+            vec![
+                std::ffi::OsString::from("download.stalx"),
+                std::ffi::OsString::from("project.stalx")
+            ]
         );
     }
 }
