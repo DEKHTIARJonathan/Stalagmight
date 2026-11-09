@@ -905,14 +905,21 @@ mod tests {
         let (_temp, root, path, state) = managed_editing_session(&server);
         state.mark_remote_dirty();
         let refused = state.speleodb_discard_cached_copy_in(&root, PID);
-        assert!(!refused.success, "the OPEN project goes through close-with-discard");
+        assert!(
+            !refused.success,
+            "the OPEN project goes through close-with-discard"
+        );
         assert!(path.exists());
         assert!(state.close_project().success);
         let result = state.speleodb_discard_cached_copy_in(&root, PID);
         assert!(result.success, "{:?}", result.error);
         assert!(!path.exists(), "the un-uploaded copy is gone");
         settle();
-        assert_eq!(release_requests(&seen), 0, "the sign-out releases locks itself, explicitly");
+        assert_eq!(
+            release_requests(&seen),
+            0,
+            "the sign-out releases locks itself, explicitly"
+        );
         let bad = state.speleodb_discard_cached_copy_in(&root, "../escape");
         assert!(!bad.success, "ids are validated before they become paths");
     }
