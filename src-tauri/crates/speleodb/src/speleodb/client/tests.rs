@@ -333,6 +333,48 @@ fn live_credentials(
         Err(missing)
     }
 }
+
+fn live_settings(value: &impl Fn(&str) -> Option<String>) -> Settings {
+    Settings {
+        timeout: Some(Duration::from_millis(
+            value("SPELEODB_API_TIMEOUT_MS")
+                .unwrap_or_else(|| "120000".into())
+                .parse::<u64>()
+                .expect("timeout milliseconds"),
+        )),
+        retries: value("SPELEODB_API_RETRY_COUNT")
+            .unwrap_or_else(|| "3".into())
+            .parse::<u32>()
+            .expect("retry count"),
+        ..Settings::default()
+    }
+}
+
+#[test]
+fn live_settings_default_to_120_seconds_and_allow_explicit_overrides() {
+    let defaults = live_settings(&|_| None);
+    assert_eq!(defaults.timeout, Some(Duration::from_secs(120)));
+    assert_eq!(defaults.retries, 3);
+
+    let file = std::collections::HashMap::from([
+        ("SPELEODB_API_TIMEOUT_MS".into(), "180000".into()),
+        ("SPELEODB_API_RETRY_COUNT".into(), "1".into()),
+    ]);
+    let from_file = live_settings(&|name| live_value(name, &|_| None, &file));
+    assert_eq!(from_file.timeout, Some(Duration::from_secs(180)));
+    assert_eq!(from_file.retries, 1);
+
+    let overridden = live_settings(&|name| {
+        live_value(
+            name,
+            &|key| (key == "SPELEODB_API_TIMEOUT_MS").then(|| "20000".into()),
+            &file,
+        )
+    });
+    assert_eq!(overridden.timeout, Some(Duration::from_secs(20)));
+    assert_eq!(overridden.retries, 1);
+}
+
 fn cleanup_created<T, E>(
     release: impl FnOnce() -> Result<T, E>,
     delete: impl FnOnce() -> Result<T, E>,
@@ -488,20 +530,7 @@ fn live_used_api_calls_with_email_and_token() {
     };
     let [base, provided_token, email, password] = inputs;
     eprintln!("live SpeleoDB API tests executing EMAIL and TOKEN authentication paths");
-    let timeout = value("SPELEODB_API_TIMEOUT_MS")
-        .unwrap_or_else(|| "20000".into())
-        .parse::<u64>()
-        .expect("timeout milliseconds");
-    let retries = value("SPELEODB_API_RETRY_COUNT")
-        .unwrap_or_else(|| "3".into())
-        .parse::<u32>()
-        .expect("retry count");
-    let settings = Settings {
-        timeout: Some(Duration::from_millis(timeout)),
-        retries,
-        ..Settings::default()
-    };
-    let _settings = TestSettings::install(settings);
+    let _settings = TestSettings::install(live_settings(&value));
     let login_token = login(&base, false, &email, &password).expect("EMAIL authentication");
     assert!(fetch_user_email(&base, &login_token, false)
         .expect("EMAIL profile")

@@ -17,7 +17,7 @@ application continues to use its saved endpoint and credential storage.
 | `SPELEODB_INSTANCE_URL` | Test server base URL |
 | `SPELEODB_OAUTH_TOKEN` | Existing bearer token, validated independently |
 | `SPELEODB_EMAIL`, `SPELEODB_PASSWORD` | Email login, followed by profile validation |
-| `SPELEODB_API_TIMEOUT_MS` | Per-request timeout, including file transfers; defaults to `20000` |
+| `SPELEODB_API_TIMEOUT_MS` | Timeout in milliseconds, including file transfers; defaults to `120000` (120 seconds) |
 | `SPELEODB_API_RETRY_COUNT` | Additional attempts for safe reads and token exchange; defaults to `3` |
 | `SPELEODB_API_TEST_ENABLED` | Exactly `true` enables live requests; defaults to `false` |
 
@@ -28,8 +28,10 @@ blank or placeholder credentials skip before any network operation, naming only 
 missing variable names. Diagnostics distinguish disabled, incomplete configuration,
 and execution; authentication/API/assertion/cleanup failures after validation fail
 the test. Credentials are never printed.
-Set a timeout long enough for the test server's native-file processing; a process
-override can be used without editing `.env`.
+The live suite uses a 120-second timeout for API requests and uploads, and a
+120-second read-idle timeout for downloads (no total download deadline).
+`SPELEODB_API_TIMEOUT_MS` overrides these budgets. Connections retain the
+application's 30-second timeout. Uploads are not automatically retried.
 
 ## Commands
 
