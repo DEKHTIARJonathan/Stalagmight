@@ -112,9 +112,9 @@ export function SpeleoDbSettings({
 
   return (
     <div
-      role="tabpanel"
+      role={embedded ? undefined : 'tabpanel'}
       id={getPanelId(panelIdBase, 'speleodb')}
-      aria-labelledby={getTabId(panelIdBase, 'speleodb')}
+      aria-labelledby={embedded ? undefined : getTabId(panelIdBase, 'speleodb')}
       data-testid="settings-panel-speleodb"
     >
       <h2 className="text-lg font-medium mb-4">{t('settings.speleodb.title')}</h2>
@@ -176,6 +176,7 @@ export function SpeleoDbSettings({
                 </label>
                 <input
                   type="email"
+                  aria-label={t('settings.speleodb.account.email')}
                   disabled={loggingIn || busy}
                   value={login.email}
                   onChange={(e) => updateLogin({ email: e.target.value })}
@@ -203,6 +204,7 @@ export function SpeleoDbSettings({
                 <input
                   type="password"
                   disabled={loggingIn || busy}
+                  aria-label={t('settings.speleodb.account.token')}
                   value={login.token}
                   onChange={(e) => updateLogin({ token: e.target.value })}
                   className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
@@ -217,6 +219,7 @@ export function SpeleoDbSettings({
                 <input
                   type="password"
                   disabled={loggingIn || busy}
+                  aria-label={t('settings.speleodb.account.password')}
                   value={login.password}
                   onChange={(e) => updateLogin({ password: e.target.value })}
                   className="w-full px-2 py-1 bg-background border border-border rounded text-sm"

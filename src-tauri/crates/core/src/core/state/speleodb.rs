@@ -3551,6 +3551,49 @@ mod tests {
                    {"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
 
     #[test]
+    fn a_late_metadata_response_cannot_rename_a_different_open_project() {
+        let (_temp, state) = editing_fixture("https://unused.example/");
+        let original = state
+            .project
+            .lock()
+            .expect("project")
+            .as_ref()
+            .expect("open")
+            .name
+            .clone();
+        state.speleodb_fold_local_name("Stale response", "22222222-2222-2222-2222-222222222222");
+        assert_eq!(
+            state
+                .project
+                .lock()
+                .expect("project")
+                .as_ref()
+                .expect("open")
+                .name,
+            original
+        );
+        assert_eq!(
+            state.speleodb_open_link().expect("link").project_name,
+            "Remote"
+        );
+        state.speleodb_fold_local_name("Current response", REMOTE_ID);
+        assert_eq!(
+            state
+                .project
+                .lock()
+                .expect("project")
+                .as_ref()
+                .expect("open")
+                .name,
+            "Current response"
+        );
+        assert_eq!(
+            state.speleodb_open_link().expect("link").project_name,
+            "Current response"
+        );
+    }
+
+    #[test]
     fn remote_metadata_and_upload_require_an_acquired_session() {
         let (_temp, state) = editing_fixture("https://unreachable.invalid/");
         state.set_edit_enabled(false);

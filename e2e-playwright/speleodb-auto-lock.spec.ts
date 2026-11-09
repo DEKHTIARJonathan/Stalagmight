@@ -150,3 +150,36 @@ test('upload saves locally, retains the lock, and a released lock blocks a subse
   await expect(page.getByTestId('speleodb-upload-blocked')).toBeVisible();
   await expect(page.getByTestId('speleodb-done-confirm')).toBeDisabled();
 });
+
+test('invalid metadata drafts protect close, project replacement and server changes', async ({ page }) => {
+  await openRemote(page, false);
+  await page.getByTestId('speleodb-status-button').click();
+  await page.getByTestId('speleodb-workspace-section-settings').click();
+  await page.getByTestId('speleodb-settings-latitude').fill('91');
+  await expect(page.getByTestId('speleodb-settings-save')).toBeDisabled();
+  await page.evaluate(() => {
+    const w = window as unknown as TestWindow;
+    w.__MOCK_IPC_OVERRIDES__['plugin:dialog|confirm'] = false;
+    w.__MOCK_IPC_OVERRIDES__.speleodb_list_projects = [{
+      id: 'synthetic-next', name: 'Synthetic next project', type_tag: 'stalx',
+      latest_commit_sha: null, permission: 'READ_AND_WRITE', lock_holder: null,
+    }];
+  });
+  const closed = await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.getState().closeProject());
+  expect(closed.success).toBe(false);
+  await expect(page.getByTestId('speleodb-settings-latitude')).toHaveValue('91');
+  await page.getByTestId('speleodb-workspace-section-projects').click();
+  const open = page.getByTestId('open-from-speleodb-open-synthetic-next');
+  await expect(open).toBeEnabled();
+  await open.click();
+  await expect(open).toBeEnabled();
+  await expect(page.getByTestId('open-from-speleodb-error')).toHaveCount(0);
+  await page.getByTestId('speleodb-workspace-section-account').click();
+  await page.getByTestId('input-speleodb-endpoint').fill('https://different.synthetic.example');
+  await page.getByTestId('speleodb-workspace-apply-connection').click();
+  await expect(page.getByTestId('speleodb-workspace-apply-connection')).toBeEnabled();
+  await page.getByTestId('speleodb-workspace-section-settings').click();
+  await expect(page.getByTestId('speleodb-settings-latitude')).toHaveValue('91');
+  await expect(page.getByTestId('speleodb-settings-save')).toBeDisabled();
+  await expect(page.getByTestId('single-system-view')).toBeVisible();
+});

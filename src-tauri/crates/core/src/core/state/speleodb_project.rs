@@ -3,9 +3,9 @@
 //!
 //! Split out of `core/state/speleodb.rs` (which is frozen at the file-size ratchet
 //! warn line) into a sibling `impl AppState` block, alongside the #215 admin split.
-//! Everything here is permission-gated only in the UI - the server's 401/403 is the
-//! real enforcement - and none of it takes the edit mutex, which governs only the
-//! survey `.stalx`.
+//! Remote metadata writes require an acquired editing session and fresh server
+//! verification of permission and lock ownership. Server enforcement remains the
+//! final fence.
 //!
 //! The create POST is the one non-idempotent call in the family: a retry would mint
 //! a second project, so every deterministic failure has to be caught before it.
@@ -118,8 +118,8 @@ fn build_create_body(params: &SpeleoPublishParams) -> serde_json::Value {
 impl AppState {
     /// Set the open project's server-side `exclude_geojson` flag (#200
     /// Enable-rendering): `PATCH /projects/{id}/`. The server enforces permission
-    /// (READ_AND_WRITE) and NO lock is required - the edit mutex governs only the
-    /// survey `.stalx`, not project metadata. Setting it `false` re-enables
+    /// (READ_AND_WRITE); the application also requires the editing lock. Setting
+    /// it `false` re-enables
     /// web-viewer GeoJSON generation, which takes effect only on the NEXT push
     /// (the server has no retroactive re-render for the current tip; the FE
     /// confirmation states this). A 403 surfaces as an error the button reports.
@@ -160,9 +160,8 @@ impl AppState {
 
     /// [#206] PATCH the open remote project's metadata with ONLY the changed fields,
     /// then fold the SDB-authoritative name into the local `.stalx` (the name is the
-    /// one field stored on both sides; SDB is authoritative - see [#216]). No lock is
-    /// required (PATCH `/projects/{id}/` is `READ_AND_WRITE`, mutex-free); the edit
-    /// lock governs only the survey file. Returns the post-edit server truth.
+    /// one field stored on both sides; SDB is authoritative - see [#216]). Requires
+    /// fresh permission and editing-lock verification. Returns the post-edit server truth.
     pub fn speleodb_patch_project(
         &self,
         patch: SpeleoProjectMetadataPatch,

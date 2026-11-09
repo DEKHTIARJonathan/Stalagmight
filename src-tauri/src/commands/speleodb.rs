@@ -135,8 +135,7 @@ pub async fn speleodb_logout(app: AppHandle) -> Result<(), SpeleoErrorDto> {
 
 /// Acquire the write lock on the open remote project and reconcile it against the
 /// server (#194). Enables editing on a clean reconcile; reports divergence,
-/// contention (locked-by), or an error otherwise. [#213] Also serves as the
-/// force-edit "reconnect".
+/// contention (locked-by), or an error otherwise.
 #[tauri::command]
 pub async fn speleodb_start_editing(app: AppHandle) -> Result<StartEditingResult, SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_start_editing).await
@@ -370,15 +369,15 @@ pub async fn speleodb_rewind_target(
 /// (`speleo_link.undo_mode`).
 ///
 /// EDIT-SESSION-REQUIRED: this writes the `.stalx`, which is project state that rides to
-/// the server in the next push, so every collaborator inherits it. Force editing uses
-/// the same gate deliberately - see `AppState::speleodb_set_undo_mode`.
+/// the server in the next push, so every collaborator inherits it. It requires
+/// an acquired editing session.
 #[tauri::command]
 pub async fn speleodb_set_undo_mode(app: AppHandle, mode: UndoMode) -> Result<(), SpeleoErrorDto> {
     run_blocking(app, move |s| s.speleodb_set_undo_mode(mode)).await
 }
 
 /// Set the open project's server-side `exclude_geojson` flag (#200
-/// Enable-rendering): `PATCH /projects/{id}/`, permission-gated, no lock. Passing
+/// Enable-rendering): `PATCH /projects/{id}/`, with fresh permission and lock verification. Passing
 /// `false` re-enables web-viewer GeoJSON, effective on the next push.
 #[tauri::command]
 pub async fn speleodb_set_exclude_geojson(

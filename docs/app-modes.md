@@ -15,7 +15,8 @@ map itself is the same map in all three.
 
 | | Survey | Plan | Export |
 |---|---|---|---|
-| Left Sections dock | shown | not rendered | not rendered |
+| Sections tab | shown | hidden | hidden |
+| Linked-project SpeleoDB workspace | available | on request or already visible | on request or already visible |
 | Right dock | `DetailPanel` | `GasPlanPanel` | `ExportPanel` |
 | Bottom dock | `DataTable` | `PlanTablesPanel` | not rendered |
 | Toolbar tools | `TOOLBAR_ITEMS` | `READ_ONLY_TOOLBAR_ITEMS` | `READ_ONLY_TOOLBAR_ITEMS` |

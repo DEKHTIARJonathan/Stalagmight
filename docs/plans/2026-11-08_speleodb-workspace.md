@@ -63,6 +63,46 @@ constrained layouts use the existing overlay dock.
 
 ## Verification record
 
-Implementation and acceptance results are recorded here as work completes.
-Only synthetic data may be committed. Live acceptance requires controlled test
-projects and an available authenticated real-app session.
+Completed on 2026-11-09. No push, PR, version tag, project-file format change or
+fixture migration was performed. All test data introduced for this work is synthetic.
+
+| Check | Result |
+| --- | --- |
+| Main, agent and Playwright TypeScript checks | Passed |
+| IPC mock/handler contract | 7 passed; removed command absent |
+| Frontend unit/component suite | 5,684 passed across 408 files |
+| Targeted headless Chromium cases | 48 unique passed (28 baseline cases plus 26 additional, with 6 overlapping) |
+| Complete Rust workspace with telemetry | 3,593 unit/doc tests passed; 41 intentionally ignored |
+| Vendored compass_data suite | Passed, including doctests |
+| Root/member rustfmt and workspace all-target Clippy | Passed; existing advisory Clippy warnings remain |
+| Read-only, test-ID, Unicode-dash gates and their fixtures | Passed |
+| Parallel-safety, timing-reporter, file-size and private-leak gates | Passed; existing file-size baseline warnings remain |
+
+Browser coverage includes automatic acquisition/contention, tab and accordion draft
+retention, keyboard focus, all modes, fullscreen-table exit, narrow toolbar/resize,
+upload retaining the lock, blocked upload, invalid-draft close/switch/server-change
+cancellation, account/browser flows, and existing close protection.
+
+The native Tauri walkthrough used an isolated profile and two controlled projects
+on the configured test server. It verified Home sign-in and creation, Sections-first
+navigation, missing-lock recovery without automatic upload, invalid metadata draft
+retention, ordinary upload with a new server revision and retained lock, and Save
+and Close with a new server revision, released lock and closed project. It found a
+publication relocation/automatic-acquisition bug; the fix passed a fresh native
+creation/publish walkthrough. Both controlled projects were deleted and their
+absence verified. The user's existing projects, locks and running dev app were
+preserved. Test app, bridge and driver processes were stopped.
+
+Light/dark baseline layouts were inspected. Native capture uses synthetic WebKit
+input and DOM screenshots, with equivalent inline CSS for loaded stylesheet rules;
+WebGL and external PNG masks are omitted. Hidden macOS WebKit suspended resize/frame
+callbacks during the requested size/zoom matrix. Two unexplained ordinary native
+app exits prevented final native mode/fullscreen/hover/trusted-shortcut checks.
+Those cases pass in Chromium; full native responsive and trusted-input acceptance
+remains limited. Live destructive offline/auth-loss/conflict/failure variants were
+not exercised; deterministic backend and frontend tests cover them.
+
+Local, ignored evidence is under
+`.agent-artifacts/reports/speleodb-workspace-20261108/`: `report.md`,
+`screenshots/INDEX.md` (14 inspected captures), `size-matrix.json` and `cleanup.json`.
+The report distinguishes completed workflows from harness-limited attempts.

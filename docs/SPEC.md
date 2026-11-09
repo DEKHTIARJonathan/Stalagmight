@@ -501,8 +501,9 @@ the `ModeCarousel` in the middle of the toolbar (`uiStore.appMode`): **Survey**,
 **Plan**, **Export**. Survey is the editable workspace. Plan and Export force the
 read-only Closures Computed View (on a project with no eligible closures the
 geometry falls back to the Raw Data View; the modes are read-only regardless - gating keys
-off `appMode`, not the geometry), so the left Sections dock and every
-geometry-mutating tool are Survey-only; selection, inspection and measurement stay
+off `appMode`, not the geometry), so the Sections tab and every
+geometry-mutating tool are Survey-only. Linked projects retain the SpeleoDB left
+workspace on request in every mode; selection, inspection and measurement stay
 available in all three.
 
 Plan is dive and gas planning: the gas reach field over the survey, route and
@@ -613,7 +614,7 @@ Primary view for survey work.
 
 | Panel | Default State | Behavior |
 |-------|---------------|----------|
-| Sections Panel | Open, 250px | Resizable, collapsible |
+| Left workspace | Sections open, 250px | Resizable, collapsible; linked projects also offer SpeleoDB (320px minimum, 400px maximum, overlay when constrained) |
 | Detail Panel | Open, 300px | Resizable, collapsible |
 | Data Table | Collapsed | Resizable (height), collapsible |
 
