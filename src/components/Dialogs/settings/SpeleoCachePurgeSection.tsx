@@ -9,7 +9,7 @@ import { useSpeleoCacheStore } from '../../../store/speleoCacheStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { useSpeleoOperationBusy } from '../../../hooks/useSpeleoOperationBusy';
-import { cachedCopyAtRisk } from '../../../utils/speleoCachedCopies';
+import { cachedCopyAtRisk, isListedCachedCopy } from '../../../utils/speleoCachedCopies';
 import type { SpeleoCachedProject, SpeleoPurgeReport } from '../../../types/ipc.generated';
 
 type PurgeStep =
@@ -22,8 +22,12 @@ interface PurgeMessage {
 }
 
 /**
- * SpeleoDB settings: "Purge all cached files". Removes every SpeleoDB copy this
- * computer downloaded, for every account, except the project open right now.
+ * SpeleoDB settings: "Purge all cached files". Removes the SpeleoDB copies this
+ * computer downloaded, except the project open right now: signed in, the copies
+ * the home screen lists for the account (its own, and older ones with no recorded
+ * account from the same instance); signed out, every account's. Another account's
+ * copy is never counted, listed or removed while signed in, and the backend
+ * applies the same rule when it purges.
  *
  * Copies with changes that were never uploaded (or that could not be read) are
  * never removed silently: the confirmation lists them and defaults to keeping
@@ -41,9 +45,10 @@ export function SpeleoCachePurgeSection() {
   const { t } = useTranslation();
   const busy = useSpeleoOperationBusy();
   const refresh = useSpeleoCacheStore((s) => s.refresh);
-  // Nothing to purge once the listing says so (no copy, or only the open project's):
-  // the button is disabled and says why, instead of a red button that does nothing.
-  const nothingToPurge = useSpeleoCacheStore((s) => s.loaded && s.copies.every((copy) => copy.is_open));
+  // Nothing to purge once the listing says so (no copy of this session's, or only
+  // the open project's): the button is disabled and says why, instead of a red
+  // button that does nothing.
+  const nothingToPurge = useSpeleoCacheStore((s) => s.loaded && purgeable(s.copies).every((copy) => copy.is_open));
   const [step, setStep] = useState<PurgeStep | null>(null);
   const [working, setWorking] = useState(false);
   const [message, setMessage] = useState<PurgeMessage | null>(null);
@@ -59,7 +64,7 @@ export function SpeleoCachePurgeSection() {
 
   const start = async () => {
     setMessage(null);
-    const copies = await refresh();
+    const copies = purgeable(await refresh());
     // Re-checked at click time: the refreshed listing disables the button if empty.
     if (copies.every((copy) => copy.is_open)) return;
     setStep({ kind: 'confirm', copies });
@@ -125,6 +130,11 @@ export function SpeleoCachePurgeSection() {
       )}
     </SettingsSection>
   );
+}
+
+/** The copies the purge reaches: the ones the home screen lists for this session. */
+function purgeable(copies: SpeleoCachedProject[]): SpeleoCachedProject[] {
+  return copies.filter(isListedCachedCopy);
 }
 
 function purgeMessage(t: ReturnType<typeof useTranslation>['t'], report: SpeleoPurgeReport): PurgeMessage {

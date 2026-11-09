@@ -392,8 +392,15 @@ impl AppState {
     ///   (a clean copy downloads exactly as before);
     /// - its `base_commit_sha` IS the tip: nobody has pushed since it was taken, so
     ///   the local work is a pure fast-forward and there is nothing to conflict
-    ///   with. A base that differs is the real divergence, and only that reaches
-    ///   the refusal prompt.
+    ///   with. A base that differs is the real divergence, and it reaches the
+    ///   refusal prompt;
+    /// - its owner record (`owner.json`, see `speleodb_cached`) names the signed-in
+    ///   account (`email` on `endpoint`). Un-uploaded work is the work of whoever
+    ///   made it: another account's copy (or one recorded on another instance) is
+    ///   never opened as this account's, and neither is a copy with no owner record
+    ///   (downloaded before the record existed), since nothing tells whose edits
+    ///   those are. Both fall back to the guarded download, whose refusal prompt
+    ///   asks the user, and their owner record is left exactly as it is.
     ///
     /// Nothing is written: the dirty bit and the base stay exactly as they are. The
     /// lock is NOT decided here - the load's own Start Editing resumes a lock we
@@ -403,6 +410,7 @@ impl AppState {
         project_id: &str,
         dest: &Path,
         endpoint: &str,
+        email: &str,
         tip: Option<&str>,
     ) -> Option<crate::speleodb::SpeleoOpenResult> {
         let tip = tip?;
@@ -426,6 +434,20 @@ impl AppState {
             return None;
         }
         if link.base_commit_sha.as_deref() != Some(tip) {
+            return None;
+        }
+        let ownership = super::speleodb_cached::copy_ownership(
+            Some((endpoint, email)),
+            dest,
+            Some(&link.endpoint),
+        );
+        if ownership != super::speleodb_cached::SpeleoCacheOwnership::Mine {
+            tracing::info!(
+                project_id = %project_id,
+                ?ownership,
+                purpose = "never open another account's un-uploaded work as this account's",
+                "speleodb: the local copy is not recorded as this account's; no fast-forward"
+            );
             return None;
         }
         tracing::info!(
@@ -492,8 +514,11 @@ mod tests {
     const ID_B: &str = "22222222-2222-2222-2222-222222222222";
 
     const SERVER: &str = "https://sdb.example/";
+    /// The signed-in account the fast-forward tests open as.
+    const ME: &str = "diver@example.com";
 
-    /// A cached copy of [`ID_A`] on [`SERVER`] with the given base and dirty bit.
+    /// A cached copy of [`ID_A`] on [`SERVER`] with the given base and dirty bit,
+    /// recorded as [`ME`]'s.
     fn seed_based(root: &Path, base: Option<&str>, dirty: bool) -> PathBuf {
         let path = cache_path_in(root, ID_A);
         std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
@@ -511,7 +536,15 @@ mod tests {
             undo_mode: None,
         }))
         .expect("save link");
+        drop(db);
+        AppState::new()
+            .expect("state")
+            .speleodb_record_cache_owner(&path, SERVER, ME, "Cached");
         path
+    }
+
+    fn owner_record(path: &Path) -> Option<Vec<u8>> {
+        std::fs::read(path.with_file_name("owner.json")).ok()
     }
 
     fn link_at(path: &Path) -> SpeleoLink {
@@ -531,7 +564,7 @@ mod tests {
         let path = seed_based(temp.path(), Some("9fdc7da"), true);
         let state = AppState::new().expect("state");
         let opened = state
-            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, Some("9fdc7da"))
+            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, ME, Some("9fdc7da"))
             .expect("opened locally");
         assert_eq!(opened.local_path, path.to_string_lossy());
         assert_eq!(opened.has_unpushed_edits, Some(true));
@@ -551,7 +584,7 @@ mod tests {
         let path = seed_based(temp.path(), Some("9fdc7da"), true);
         let state = AppState::new().expect("state");
         assert!(state
-            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, Some("abc1234"))
+            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, ME, Some("abc1234"))
             .is_none());
     }
 
@@ -561,7 +594,7 @@ mod tests {
         let path = seed_based(temp.path(), Some("9fdc7da"), false);
         let state = AppState::new().expect("state");
         assert!(state
-            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, Some("9fdc7da"))
+            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, ME, Some("9fdc7da"))
             .is_none());
     }
 
@@ -572,14 +605,14 @@ mod tests {
         let path = seed_based(temp.path(), Some("9fdc7da"), true);
         assert!(
             state
-                .speleodb_local_fast_forward_open(ID_A, &path, SERVER, None)
+                .speleodb_local_fast_forward_open(ID_A, &path, SERVER, ME, None)
                 .is_none(),
             "no tip: fall back to the guarded download"
         );
         let path = seed_based(temp.path(), None, true);
         assert!(
             state
-                .speleodb_local_fast_forward_open(ID_A, &path, SERVER, Some("9fdc7da"))
+                .speleodb_local_fast_forward_open(ID_A, &path, SERVER, ME, Some("9fdc7da"))
                 .is_none(),
             "no base: nothing proves a fast-forward"
         );
@@ -591,13 +624,14 @@ mod tests {
         let path = seed_based(temp.path(), Some("9fdc7da"), true);
         let state = AppState::new().expect("state");
         assert!(state
-            .speleodb_local_fast_forward_open(ID_B, &path, SERVER, Some("9fdc7da"))
+            .speleodb_local_fast_forward_open(ID_B, &path, SERVER, ME, Some("9fdc7da"))
             .is_none());
         assert!(state
             .speleodb_local_fast_forward_open(
                 ID_A,
                 &path,
                 "https://other.example/",
+                ME,
                 Some("9fdc7da")
             )
             .is_none());
@@ -607,6 +641,7 @@ mod tests {
                     ID_A,
                     &path,
                     "https://SDB.example",
+                    ME,
                     Some("9fdc7da")
                 )
                 .is_some(),
@@ -614,8 +649,62 @@ mod tests {
         );
         let missing = temp.path().join("nowhere").join("project.stalx");
         assert!(state
-            .speleodb_local_fast_forward_open(ID_A, &missing, SERVER, Some("9fdc7da"))
+            .speleodb_local_fast_forward_open(ID_A, &missing, SERVER, ME, Some("9fdc7da"))
             .is_none());
+    }
+
+    #[test]
+    fn another_accounts_work_on_the_tip_is_never_opened_as_this_accounts() {
+        // Pre-PR finding: the arm never read the owner record, so account B opened
+        // account A's un-uploaded work as its own (and the pull then recorded B).
+        let temp = tempfile::tempdir().expect("temp");
+        let path = seed_based(temp.path(), Some("9fdc7da"), true);
+        let state = AppState::new().expect("state");
+        assert!(
+            state
+                .speleodb_local_fast_forward_open(
+                    ID_A,
+                    &path,
+                    SERVER,
+                    "someone@example.com",
+                    Some("9fdc7da")
+                )
+                .is_none(),
+            "another account on the same instance"
+        );
+        assert!(
+            state
+                .speleodb_local_fast_forward_open(
+                    ID_A,
+                    &path,
+                    SERVER,
+                    "Diver@Example.COM",
+                    Some("9fdc7da")
+                )
+                .is_some(),
+            "the owner's own account, however its email is cased"
+        );
+        state.speleodb_record_cache_owner(&path, "https://other.example/", ME, "Cached");
+        assert!(
+            state
+                .speleodb_local_fast_forward_open(ID_A, &path, SERVER, ME, Some("9fdc7da"))
+                .is_none(),
+            "the same email recorded on another instance is another account"
+        );
+    }
+
+    #[test]
+    fn an_owner_less_copy_with_un_uploaded_work_is_not_claimed() {
+        // A copy downloaded before owners were recorded: nothing says whose edits
+        // these are, so the open asks (the guarded download's prompt) instead.
+        let temp = tempfile::tempdir().expect("temp");
+        let path = seed_based(temp.path(), Some("9fdc7da"), true);
+        std::fs::remove_file(path.with_file_name("owner.json")).expect("make it legacy");
+        let state = AppState::new().expect("state");
+        assert!(state
+            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, ME, Some("9fdc7da"))
+            .is_none());
+        assert_eq!(owner_record(&path), None, "nothing is recorded");
     }
 
     #[test]
@@ -627,7 +716,7 @@ mod tests {
         let state = AppState::new().expect("state");
         assert!(state.open_project(path.clone()).success, "open the copy");
         assert!(state
-            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, Some("9fdc7da"))
+            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, ME, Some("9fdc7da"))
             .is_none());
         // The edit's dirty stamp, set as a fixture (see the forward-edit tripwire).
         state
@@ -639,7 +728,7 @@ mod tests {
             .touch_speleo_link_dirty("2026-11-09T10:00:00Z")
             .expect("stamp the dirty bit");
         assert!(state
-            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, Some("9fdc7da"))
+            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, ME, Some("9fdc7da"))
             .is_some());
     }
 

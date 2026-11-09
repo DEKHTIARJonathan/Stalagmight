@@ -8,8 +8,10 @@ import { DialogWrapper } from './DialogWrapper';
 import type { SpeleoProjectSummary, UnpushedLocalEdits } from '../../types/ipc.generated';
 
 /**
- * Refuse to overwrite unsynced work. Raised only when the server has moved past the
- * local copy's base (or the base cannot be checked): un-uploaded work sitting on the
+ * Refuse to overwrite unsynced work. Raised when the server has moved past the
+ * local copy's base (or the base cannot be checked), and when the copy is not
+ * recorded as the signed-in account's (another account's, or one downloaded before
+ * owners were recorded): only this account's un-uploaded work sitting on the
  * server tip opens directly instead. "Open my local copy" opens it as it is (no
  * download) so the user can carry on through the ordinary resume / upload flows;
  * Cancel preserves it; replacing it requires confirmation.

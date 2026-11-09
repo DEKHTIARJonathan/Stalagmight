@@ -114,7 +114,13 @@ function SignOutPrompt({ kind, initial, settle }: {
         const closed = await closeDiscardingLocal();
         outcome = closed.ok ? { ok: true } : { ok: false, error: closed.error };
       } else {
-        const result = await invokeIpc<CommandResult>('speleodb_discard_cached_copy', { projectId: id }, {
+        // Reached only from the confirmed "lost forever" step: that is the user's
+        // explicit consent, which the backend requires before it removes
+        // un-uploaded work (and it refuses another account's copy regardless).
+        const result = await invokeIpc<CommandResult>('speleodb_discard_cached_copy', {
+          projectId: id,
+          discardUnpushed: true,
+        }, {
           purpose: 'discard un-uploaded changes before signing out',
         });
         outcome = result.success ? { ok: true } : { ok: false, error: result.error ?? undefined };

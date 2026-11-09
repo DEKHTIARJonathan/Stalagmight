@@ -3604,7 +3604,7 @@
       },
       "purge": {
         "title": "Downloaded projects",
-        "help": "Copies of SpeleoDB projects downloaded to this computer, for every account. Projects stay on SpeleoDB and download again when you open them.",
+        "help": "Copies of SpeleoDB projects downloaded to this computer: your account's while you are signed in, every account's while you are signed out. Projects stay on SpeleoDB and download again when you open them.",
         "button": "Purge all cached files",
         "working": "Purging…",
         "empty": "There are no downloaded copies to remove.",

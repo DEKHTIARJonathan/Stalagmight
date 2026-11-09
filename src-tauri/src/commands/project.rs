@@ -135,17 +135,22 @@ pub(crate) fn close_project_impl(state: &AppState, lock: CloseLock) -> CommandRe
 /// Sign-out's "Discard" for a SpeleoDB project's cached copy that is NOT open:
 /// remove it so the sign-out leaves no un-uploaded work behind. Releases nothing;
 /// the sign-out releases the account's remaining locks explicitly afterwards.
+///
+/// `discard_unpushed` is the user's explicit Discard: without it a copy with
+/// un-uploaded (or unreadable) work is refused. A copy that is not the signed-in
+/// account's is refused either way.
 #[tauri::command]
 pub async fn speleodb_discard_cached_copy(
     app: tauri::AppHandle,
     project_id: String,
+    discard_unpushed: bool,
 ) -> CommandResult {
     // A sign-out action: the app's exit waits for it (lock#6).
     let _transfer = super::exit_wait::user_transfer(&app);
     tauri::async_runtime::spawn_blocking(move || {
         app.state::<AppState>()
             .inner()
-            .speleodb_discard_cached_copy(&project_id)
+            .speleodb_discard_cached_copy(&project_id, discard_unpushed)
     })
     .await
     .unwrap_or_else(|e| CommandResult::failure(format!("Discarding the copy failed: {e}")))

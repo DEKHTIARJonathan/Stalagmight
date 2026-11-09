@@ -208,14 +208,21 @@ impl AppState {
                 None
             }
         };
-        // Un-uploaded local work sitting on the server tip is a fast-forward, not
-        // a conflict: open it as it is (see `speleodb_local_fast_forward_open`).
+        // Un-uploaded local work of THIS account sitting on the server tip is a
+        // fast-forward, not a conflict: open it as it is (see
+        // `speleodb_local_fast_forward_open`). Another account's work, or work
+        // nobody recorded an owner for, goes through the guarded download below
+        // instead, whose refusal prompt asks, and its owner record is not touched.
         if policy == LocalEditsPolicy::Protect {
-            if let Some(local) =
-                self.speleodb_local_fast_forward_open(&project_id, &dest, &endpoint, tip.as_deref())
-            {
-                // The server just showed this account the project's history, so the
-                // copy is this account's to work on from now on.
+            if let Some(local) = self.speleodb_local_fast_forward_open(
+                &project_id,
+                &dest,
+                &endpoint,
+                &email,
+                tip.as_deref(),
+            ) {
+                // Already recorded as this account's (the arm requires it): refresh
+                // the record, which carries the project's current name.
                 self.speleodb_record_cache_owner(&dest, &endpoint, &email, &project_name);
                 return Ok(local);
             }

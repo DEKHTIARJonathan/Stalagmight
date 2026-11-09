@@ -21,6 +21,7 @@ const MINE: &str = "11111111-1111-1111-1111-111111111111";
 const THEIRS: &str = "22222222-2222-2222-2222-222222222222";
 const LEGACY: &str = "33333333-3333-3333-3333-333333333333";
 const ELSEWHERE: &str = "44444444-4444-4444-4444-444444444444";
+const THEIRS_CLEAN: &str = "55555555-5555-5555-5555-555555555555";
 
 const SERVER: &str = "https://sdb.example";
 const OTHER_SERVER: &str = "https://other.example";
@@ -352,6 +353,53 @@ fn purge_keeps_un_uploaded_and_open_copies_unless_told_otherwise() {
     });
 }
 
+/// The pre-PR finding: signed in, the purge reached other accounts' copies, their
+/// un-uploaded work included, though the home screen hides them and the purge
+/// confirmation never named them. It now reaches exactly what the home screen
+/// lists; signed out, everything.
+#[test]
+fn signed_in_purge_reaches_only_the_copies_the_home_screen_lists() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = loopback(|_| held_by("someone@example.com"));
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        let setup = AppState::new().expect("state");
+        let mine = seed(root, MINE, &url, true);
+        setup.speleodb_record_cache_owner(&mine, &url, ME, "Mine");
+        let theirs = seed(root, THEIRS, &url, true);
+        setup.speleodb_record_cache_owner(&theirs, &url, "someone@example.com", "Theirs");
+        let theirs_clean = seed(root, THEIRS_CLEAN, &url, false);
+        setup.speleodb_record_cache_owner(&theirs_clean, &url, "someone@example.com", "Theirs");
+        seed(root, LEGACY, &url, false);
+        let elsewhere = seed(root, ELSEWHERE, OTHER_SERVER, true);
+
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        let report = state.speleodb_purge_cached_copies_in(root, true);
+        assert_eq!(report.removed, 2, "{report:?}");
+        assert!(report.kept_unpushed.is_empty() && report.kept_open.is_empty());
+        assert!(report.failed.is_empty(), "{:?}", report.failed);
+        assert!(!root.join(MINE).exists() && !root.join(LEGACY).exists());
+        assert!(
+            theirs.exists(),
+            "another account's un-uploaded work survives"
+        );
+        assert!(theirs_clean.exists(), "another account's clean copy too");
+        assert!(elsewhere.exists(), "another instance's copy too");
+        assert!(
+            seen.lock()
+                .expect("log")
+                .iter()
+                .all(|line| line.contains(MINE) || line.contains(LEGACY)),
+            "nothing is asked about the other account's projects"
+        );
+
+        let all = signed_out().speleodb_purge_cached_copies_in(root, true);
+        assert_eq!(all.removed, 3, "signed out, every copy: {all:?}");
+        assert!(!theirs.exists() && !theirs_clean.exists() && !elsewhere.exists());
+    });
+}
+
 // --- opening a cached copy without a session ---------------------------------
 
 #[test]
@@ -575,6 +623,159 @@ fn a_missing_project_never_falls_back_to_the_copy() {
     });
 }
 
+// --- the fast-forward open only opens this account's own work -----------------
+
+/// A loopback SpeleoDB whose history tip is `abc1234` (the [`seed`] base) and
+/// whose download is a valid synthetic project, recording the request lines.
+fn history_server() -> (String, Arc<Mutex<Vec<String>>>) {
+    let native = {
+        let temp = tempfile::tempdir().expect("temp");
+        let path = temp.path().join("server.stalx");
+        let mut db = Database::open(&path).expect("server db");
+        db.save_project(&Project::new("Server".to_owned(), None))
+            .expect("save project");
+        drop(db);
+        std::fs::read(&path).expect("server bytes")
+    };
+    let history = super::tests_support::sdk_fixture(r#"{"commits":[{"id":"abc1234"}]}"#);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("addr").port();
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&seen);
+    std::thread::spawn(move || {
+        while let Ok((mut stream, _)) = listener.accept() {
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 4096];
+            while !request.windows(4).any(|w| w == b"\r\n\r\n") {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => request.extend_from_slice(chunk.get(..n).unwrap_or_default()),
+                }
+            }
+            let line = String::from_utf8_lossy(&request)
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            let (kind, body) = if line.contains("/download/") {
+                ("application/octet-stream", native.clone())
+            } else {
+                ("application/json", history.clone().into_bytes())
+            };
+            log.lock().expect("log").push(line);
+            let head = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: {kind}\r\nContent-Length: {}\r\n\
+                 Connection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = stream.write_all(head.as_bytes());
+            let _ = stream.write_all(&body);
+            let _ = stream.flush();
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), seen)
+}
+
+fn owner_bytes(copy: &Path) -> Option<Vec<u8>> {
+    std::fs::read(copy.with_file_name("owner.json")).ok()
+}
+
+fn downloads(seen: &Arc<Mutex<Vec<String>>>) -> usize {
+    seen.lock()
+        .expect("log")
+        .iter()
+        .filter(|line| line.contains("/download/"))
+        .count()
+}
+
+/// Open the cached copy of [`MINE`] at `copy` online, protecting local edits. A
+/// refusal is reduced to the action the frontend routes on.
+fn open_online(
+    state: &AppState,
+    copy: &Path,
+) -> Result<crate::speleodb::SpeleoOpenResult, SpeleoDbAction> {
+    state
+        .speleodb_pull_project_to(
+            copy,
+            MINE.to_owned(),
+            "Remote".to_owned(),
+            None,
+            LocalEditsPolicy::Protect,
+        )
+        .map_err(|e| e.action)
+}
+
+#[test]
+fn another_accounts_un_uploaded_work_on_the_tip_takes_the_prompt_and_keeps_its_owner() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = history_server();
+        let temp = tempfile::tempdir().expect("temp");
+        // Base == tip, un-uploaded edits, recorded as another account's.
+        let copy = seed(temp.path(), MINE, &url, true);
+        let state = AppState::new().expect("state");
+        state.speleodb_record_cache_owner(&copy, &url, "someone@example.com", "Theirs");
+        let before = owner_bytes(&copy).expect("owner record");
+        sign_in(&state, &url, ME);
+
+        let refused = open_online(&state, &copy).expect_err("no fast-forward");
+        assert_eq!(
+            refused,
+            SpeleoDbAction::UnpushedLocalEdits,
+            "the existing un-uploaded-local prompt"
+        );
+        assert_eq!(downloads(&seen), 1, "it went the guarded-download way");
+        assert_eq!(owner_bytes(&copy), Some(before), "owner.json unchanged");
+        let link = Database::open_for_metadata(&copy)
+            .expect("open")
+            .load_speleo_link()
+            .expect("read")
+            .expect("linked");
+        assert!(
+            link.has_unpushed_edits,
+            "the other account's work is intact"
+        );
+        assert_eq!(
+            ownership(&state, temp.path(), MINE),
+            Some(SpeleoCacheOwnership::OtherAccount)
+        );
+    });
+}
+
+#[test]
+fn an_owner_less_copy_with_un_uploaded_work_takes_the_prompt_and_stays_unclaimed() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, _seen) = history_server();
+        let temp = tempfile::tempdir().expect("temp");
+        let copy = seed(temp.path(), MINE, &url, true);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        let refused = open_online(&state, &copy).expect_err("no fast-forward");
+        assert_eq!(refused, SpeleoDbAction::UnpushedLocalEdits);
+        assert_eq!(owner_bytes(&copy), None, "not silently claimed");
+    });
+}
+
+#[test]
+fn my_own_un_uploaded_work_on_the_tip_still_fast_forwards() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = history_server();
+        let temp = tempfile::tempdir().expect("temp");
+        let copy = seed(temp.path(), MINE, &url, true);
+        let state = AppState::new().expect("state");
+        state.speleodb_record_cache_owner(&copy, &url, ME, "Mine");
+        sign_in(&state, &url, ME);
+        let opened = open_online(&state, &copy).expect("fast-forward open");
+        assert_eq!(opened.has_unpushed_edits, Some(true));
+        assert_eq!(opened.local_path, copy.to_string_lossy());
+        assert_eq!(downloads(&seen), 0, "nothing downloaded");
+        assert_eq!(
+            ownership(&state, temp.path(), MINE),
+            Some(SpeleoCacheOwnership::Mine)
+        );
+    });
+}
+
 // --- removing a copy hands back this account's lock ---------------------------
 
 /// A project body whose lock `holder` holds, for every request (probe and release).
@@ -646,9 +847,10 @@ fn another_accounts_copy_or_no_session_asks_the_server_nothing() {
         owned_copy(temp.path(), &url, "someone@example.com");
         let state = AppState::new().expect("state");
         sign_in(&state, &url, ME);
+        // Signed in, the purge does not reach another account's copy at all.
         let report = state.speleodb_purge_cached_copies_in(temp.path(), false);
-        assert_eq!(report.removed, 1);
-        assert!(report.locks_released.is_empty() && report.locks_unchecked.is_empty());
+        assert_eq!(report, super::speleodb_cached::SpeleoPurgeReport::default());
+        assert!(cache_path_in(temp.path(), MINE).exists());
 
         owned_copy(temp.path(), &url, ME);
         let signed_out = signed_out();
