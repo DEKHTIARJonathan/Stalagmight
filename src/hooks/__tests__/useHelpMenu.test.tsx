@@ -1,6 +1,7 @@
 /**
  * #665: the macOS Help menu's "Keyboard Shortcuts" entry emits an event that
- * this hook turns into the shortcuts dialog, under the same rules as `?`.
+ * this hook turns into the shortcuts dialog unless something already owns the
+ * screen.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render } from '@testing-library/react';
@@ -15,7 +16,9 @@ vi.mock('@tauri-apps/api/event', () => ({
 }));
 
 import { useHelpMenu, SHOW_SHORTCUTS_EVENT } from '../useHelpMenu';
-import { useUIStore } from '../../store/uiStore';
+import { useUIStore, type PlacementModeState } from '../../store/uiStore';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 function Harness() {
   useHelpMenu();
@@ -33,7 +36,12 @@ describe('useHelpMenu', () => {
   beforeEach(() => {
     listeners.clear();
     unlisten.mockClear();
-    useUIStore.setState({ activeDialog: null, placementMode: null, dataTableFullScreen: false });
+    useUIStore.setState({
+      activeDialog: null,
+      placementMode: null,
+      dataTableFullScreen: false,
+      screenOccupants: 0,
+    });
   });
 
   it('opens the keyboard shortcuts dialog when the menu event arrives', async () => {
@@ -51,6 +59,23 @@ describe('useHelpMenu', () => {
     useUIStore.setState({ dataTableFullScreen: true });
     await mountAndFire();
     expect(useUIStore.getState().activeDialog).toBeNull();
+  });
+
+  it('does nothing during station placement', async () => {
+    useUIStore.setState({ placementMode: {} as PlacementModeState });
+    await mountAndFire();
+    expect(useUIStore.getState().activeDialog).toBeNull();
+  });
+
+  it('does nothing while an overlay is waiting for an answer', async () => {
+    useUIStore.setState({ screenOccupants: 1 });
+    await mountAndFire();
+    expect(useUIStore.getState().activeDialog).toBeNull();
+  });
+
+  it('listens for the event name the Rust menu sends', () => {
+    const rust = readFileSync(join(__dirname, '../../../src-tauri/src/app_menu.rs'), 'utf-8');
+    expect(rust).toContain(`const SHOW_SHORTCUTS_EVENT: &str = "${SHOW_SHORTCUTS_EVENT}";`);
   });
 
   it('stops listening on unmount', async () => {
