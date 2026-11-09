@@ -9,12 +9,20 @@ import { setIpcOverrides } from './helpers/ipcOverrides';
  *   and the open's 401 is shown (frontend#3).
  * - Settings' Connect saves the staged settings first, then signs in with the
  *   connection on screen, and reports a failure in an in-app dialog (security#4).
+ *   The insecure-HTTP option exists only in a development build: these specs run
+ *   against the dev server locally and a production build in CI, and assert it
+ *   per mode (`__E2E_TEST__.devBuild`).
  * - Unsent SpeleoDB input is asked about in-app before the app closes (frontend#10).
  */
 
 const ENDPOINT = 'https://synthetic.example';
 
 type Call = { cmd: string; args: Record<string, unknown> | null };
+
+/** Whether the bundle under test is a development build (main.tsx). */
+async function devBuild(page: Page): Promise<boolean> {
+  return page.evaluate(() => (window as unknown as { __E2E_TEST__: { devBuild?: boolean } }).__E2E_TEST__.devBuild === true);
+}
 
 async function calls(page: Page, cmd: string): Promise<Call[]> {
   const all = await page.evaluate(
@@ -95,8 +103,28 @@ test.describe('Settings Connect', () => {
     await page.getByTestId('input-speleodb-endpoint').fill('https://lab.example/');
     await connect(page);
     await expect(page.getByTestId('settings-dialog')).toBeHidden();
+    const logins = (await calls(page, 'speleodb_login')).map((c) => c.args);
+    expect(logins).toEqual([expect.objectContaining({ endpoint: 'https://lab.example/' })]);
+    // The box on screen in a development build; no choice at all in a release one.
+    if (await devBuild(page)) expect(logins[0]).toMatchObject({ insecureHttp: false });
+    else expect(logins[0]).not.toHaveProperty('insecureHttp');
+  });
+
+  test('the insecure-HTTP option exists only in a development build, and Connect uses the box on screen', async ({ page }) => {
+    const toggle = page.getByTestId('toggle-speleodb-insecure-http');
+    if (!await devBuild(page)) {
+      await expect(page.getByTestId('setting-speleodb-insecure-http')).toHaveCount(0);
+      await expect(toggle).toHaveCount(0);
+      return;
+    }
+    await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await toggle.click();
+    await expect(page.getByTestId('speleodb-insecure-http-warning')).toBeVisible();
+    await page.getByTestId('input-speleodb-endpoint').fill('http://lab.example/');
+    await connect(page);
+    await expect(page.getByTestId('settings-dialog')).toBeHidden();
     expect((await calls(page, 'speleodb_login')).map((c) => c.args)).toEqual([
-      expect.objectContaining({ endpoint: 'https://lab.example/', insecureHttp: false }),
+      expect.objectContaining({ endpoint: 'http://lab.example/', insecureHttp: true }),
     ]);
   });
 

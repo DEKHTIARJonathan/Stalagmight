@@ -416,3 +416,95 @@ test.describe('Sign-out never strands a lock or un-uploaded work', () => {
     expect(order).toEqual(['speleodb_release_lock', 'speleodb_login']);
   });
 });
+
+/** Settings on its SpeleoDB tab, as the account menu and every sign-in link open it. */
+async function openSpeleoSettings(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    (window as unknown as {
+      __E2E_TEST__: { uiStore: { getState: () => { openDialog: (name: string, data: unknown) => void } } };
+    }).__E2E_TEST__.uiStore.getState().openDialog('settings', { initialCategory: 'speleodb' });
+  });
+  await expect(page.getByTestId('settings-panel-speleodb')).toBeVisible();
+}
+
+test.describe('Disconnect in Settings runs the sign-out flow first', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupMockedPage(page);
+    await createProject(page, 'Synthetic disconnect');
+    await setIpcOverrides(page, { speleodb_done: { kind: 'released' } });
+  });
+
+  test('un-uploaded work: Cancel stays connected in Settings; Keep my changes then disconnects', async ({ page }) => {
+    await seedLockedWithChanges(page);
+    await setIpcOverrides(page, {
+      // Settings asks the backend who is signed in when it opens.
+      speleodb_session: { logged_in: true, user_email: ME, endpoint: ENDPOINT },
+      speleodb_list_projects: [summary('synthetic-open', ME)],
+      speleodb_local_project_states: { 'synthetic-open': { ...localState(true), is_open: true } },
+    });
+    await openSpeleoSettings(page);
+    const settings = page.getByTestId('settings-dialog');
+    const signedIn = page.getByTestId('speleodb-account-signed-in');
+    await expect(signedIn).toContainText(`Connected to ${ENDPOINT} as ${ME}`);
+
+    // Never a direct logout: the sign-out dialog comes first, over Settings.
+    await page.getByTestId('speleodb-settings-logout').click();
+    const dialog = page.getByTestId('speleodb-signout-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toContainText('Before you disconnect');
+    await expect(page.getByTestId('speleodb-signout-open')).toBeVisible();
+    await expect(page.getByTestId('speleodb-signout-go')).toHaveText('Disconnect');
+    await expect(page.getByTestId('speleodb-signout-go')).toBeDisabled();
+
+    // Cancel: still connected, Settings still open on the SpeleoDB tab.
+    await page.getByTestId('speleodb-signout-cancel').click();
+    await expect(dialog).toHaveCount(0);
+    await expect(settings).toBeVisible();
+    await expect(signedIn).toBeVisible();
+    await expect(page.getByTestId('speleodb-settings-logout')).toBeEnabled();
+    expect(await calls(page, 'speleodb_logout')).toEqual([]);
+    expect(await calls(page, 'speleodb_release_lock')).toEqual([]);
+
+    // Again, keeping the changes on this computer: the lock is handed back, then
+    // the session ends, and Settings stays open with the Connect form.
+    await page.getByTestId('speleodb-settings-logout').click();
+    await expect(dialog).toBeVisible();
+    await page.getByTestId('speleodb-signout-open-keep').click();
+    await expect(page.getByTestId('speleodb-signout-open-kept')).toBeVisible();
+    await setIpcOverrides(page, { speleodb_session: { logged_in: false, user_email: null, endpoint: null } });
+    await page.getByTestId('speleodb-signout-go').click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(async () => (await calls(page, 'speleodb_logout')).length).toBe(1);
+    const order = (await calls(page)).map((c) => c.cmd)
+      .filter((c) => ['speleodb_done', 'speleodb_discard_cached_copy', 'speleodb_release_lock', 'speleodb_logout'].includes(c));
+    expect(order).toEqual(['speleodb_release_lock', 'speleodb_logout']);
+    await expect(settings).toBeVisible();
+    await expect(page.getByTestId('speleodb-account-login-form')).toBeVisible();
+    await expect(page.getByTestId('single-system-view')).toBeVisible();
+  });
+
+  test('a failed hand-back offers Try again / Disconnect anyway, still over Settings', async ({ page }) => {
+    await seedLockedWithChanges(page);
+    await page.evaluate(() => {
+      const s = (window as unknown as { __E2E_TEST__: { speleoStore: { setState: (s: unknown) => void } } }).__E2E_TEST__.speleoStore;
+      s.setState({ link: null, remoteProjectId: null });
+    });
+    await setIpcOverrides(page, {
+      speleodb_session: { logged_in: true, user_email: ME, endpoint: ENDPOINT },
+      speleodb_list_projects: [summary('a', ME)],
+      speleodb_local_project_states: { a: localState(false) },
+      speleodb_release_lock: { __throw: 'Synthetic offline' },
+    });
+    await openSpeleoSettings(page);
+    await page.getByTestId('speleodb-settings-logout').click();
+    await expect(page.getByTestId('speleodb-signout-releasable')).toContainText('Synthetic a');
+    await page.getByTestId('speleodb-signout-go').click();
+    await expect(page.getByTestId('speleodb-signout-release-failed')).toContainText('Synthetic a');
+    await expect(page.getByTestId('speleodb-signout-retry')).toHaveText('Try again');
+    await expect(page.getByTestId('speleodb-signout-anyway')).toHaveText('Disconnect anyway');
+    expect(await calls(page, 'speleodb_logout')).toEqual([]);
+    await page.getByTestId('speleodb-signout-anyway').click();
+    await expect.poll(async () => (await calls(page, 'speleodb_logout')).length).toBe(1);
+    await expect(page.getByTestId('settings-dialog')).toBeVisible();
+  });
+});

@@ -101,6 +101,12 @@ declare global {
        * `loadProject`/`saveProject`, a strictly larger capability).
        */
       routeOpenedFile?: (path: string, errorTitle?: string) => Promise<void>;
+      /**
+       * `import.meta.env.DEV` of the bundle under test. Specs run against the dev
+       * server locally and a production build in CI; development-build-only UI
+       * (the SpeleoDB insecure-HTTP option) is asserted per mode.
+       */
+      devBuild?: boolean;
     };
   }
 }
@@ -115,6 +121,7 @@ if (import.meta.env.DEV || import.meta.env.MODE === 'test' || import.meta.env.VI
   testAPI.globalViewStore = useGlobalViewStore;
   testAPI.gasPlanStore = useGasPlanStore;
   testAPI.speleoStore = useSpeleoStore;
+  testAPI.devBuild = import.meta.env.DEV;
   testAPI.exportStore = useExportStore;
   testAPI.networkStore = useNetworkStore;
   testAPI.updateStore = useUpdateStore;
