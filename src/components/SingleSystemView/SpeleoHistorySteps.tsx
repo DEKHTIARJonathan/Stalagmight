@@ -11,7 +11,7 @@ function HistoryStep({ direction }: { direction: ChainDirection }) {
   const survey = useUIStore((s) => s.appMode === 'survey');
   const enabled = editing && survey && !canLocal;
   const { target } = useUnwindTarget(enabled, direction);
-  return <Button disabled={!enabled || !target || busy} data-testid={`speleodb-history-${direction}`}
+  return <Button variant="warning" className="w-full min-h-10 py-2.5 shadow-sm" disabled={!enabled || !target || busy} data-testid={`speleodb-history-${direction}`}
     onClick={() => {
       if (!target || !enabled) return;
       useUIStore.getState().openDialog('speleodb-unwind', {

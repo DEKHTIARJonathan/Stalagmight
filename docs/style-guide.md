@@ -27,7 +27,10 @@ This guide captures the current UI conventions and design tokens for Stalagmight
   - `primary`: the single main action in a view or dialog.
   - `secondary`: default action style.
   - `ghost`: low-emphasis actions in dense UI or toolbars.
-  - `danger`: destructive actions.
+  - `danger`: destructive actions and exiting a project.
+  - `warning`: transitions that can replace content or relinquish editing access.
+  - `success`: enabling editing.
+  - `info`: navigation and read-only inspection.
 - Use `icon` on `Button` for leading icons.
 - Use `IconButton` for icon-only actions; always include `aria-label` and, when helpful, `tooltip`.
 
@@ -66,3 +69,8 @@ This guide captures the current UI conventions and design tokens for Stalagmight
   burst of taps is one write). `WizardMapPanel` is the reference
   implementation; the SingleSystemView resizers have not been retrofitted yet
   (#396).
+
+SpeleoDB workspace actions use equal-height, full-width buttons. Save uses the
+theme's primary accent, Resume editing is green, read-only/reload/history changes
+are amber, Close is red, and navigation or inspection uses a tinted accent button.
+Labels and confirmations explain the action independently of color.

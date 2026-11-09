@@ -209,3 +209,36 @@ test('Settings authentication returns the Save description and close intent with
   expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.uiStore.getState().dialogData.closeAfterSave)).toBe(true);
   await expect(page.getByTestId('single-system-view')).toBeVisible();
 });
+
+for (const theme of ['dark', 'light'] as const) {
+  test(`workspace buttons have consistent geometry and semantic colors in ${theme} theme`, async ({ page }, testInfo) => {
+    await openRemote(page, false);
+    await page.evaluate((theme) => {
+      const stores = (window as unknown as TestWindow).__E2E_TEST__;
+      const appearance = stores.projectStore.getState().config!.appearance;
+      stores.uiStore.getState().setThemePreview({ ...appearance, theme });
+    }, theme);
+    await page.getByTestId('speleodb-status-button').click();
+    const controls = page.getByTestId('speleodb-workspace-everyday');
+    await expect(controls).toBeVisible();
+    await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
+    const buttons = controls.getByRole('button');
+    await expect(buttons).toHaveCount(5);
+    const styles = await buttons.evaluateAll((nodes) => nodes.map((node) => {
+      const style = getComputedStyle(node);
+      const box = node.getBoundingClientRect();
+      return { background: style.backgroundColor, height: box.height, width: box.width };
+    }));
+    for (const style of styles) {
+      expect(style.height).toBe(styles[0].height);
+      expect(style.width).toBe(styles[0].width);
+      expect(style.background).not.toBe('rgba(0, 0, 0, 0)');
+    }
+    expect(styles[1].background).toBe(styles[2].background);
+    expect(new Set(styles.map((style) => style.background)).size).toBe(4);
+    await page.getByTestId('speleodb-workspace').screenshot({ path: testInfo.outputPath(`speleodb-buttons-${theme}.png`) });
+    await page.getByTestId('speleodb-workspace-editing').click();
+    await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Resume editing');
+    await expect.poll(() => page.getByTestId('speleodb-workspace-editing').evaluate((node) => getComputedStyle(node).backgroundColor)).not.toBe(styles[1].background);
+  });
+}
