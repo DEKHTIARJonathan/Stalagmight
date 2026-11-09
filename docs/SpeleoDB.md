@@ -342,12 +342,16 @@ For managed projects, the persistent header shows identity, editing access, lock
 connection status. Everyday controls are Save Changes, Switch to Read Only Mode or
 Resume editing (Sign in to resume editing while signed out), Reload Project, Close
 Project and Open on SpeleoDB: equal-height, full-width buttons coloured by the kind
-of action (Save Changes primary, Resume editing green, Switch to Read Only Mode
-amber, Reload Project blue, Close Project red, and browser navigation purple with an
-external-link icon). A disabled control says why in its tooltip (signed out, no
-access, view-only, or another SpeleoDB operation running). The colours, the
-one-filled-button-per-state rule (`speleoPrimaryAction`) and a neutral Close
-Project are being finalised by follow-up commits. Revision History is the only
+of action (Save Changes in the theme's accent, Resume editing and signing in green,
+Reload Project blue, browser navigation purple with an external-link icon, Switch to
+Read Only Mode and Close Project a neutral grey). Only the action that makes sense
+now is filled (`speleoPrimaryAction`): Save Changes while there are changes not yet
+uploaded, Resume editing when the account can edit, signing in while signed out,
+and none when the access is view-only or when editing with nothing to save. Every
+other button keeps its colour as an outline. Every colour is a theme token at WCAG
+AA in all themes (see docs/style-guide.md, Buttons). A disabled control says why in
+its tooltip (signed out, no access, view-only, or another SpeleoDB operation
+running). Revision History is the only
 expandable section; its "Revision History on SpeleoDB" button opens the project's
 revision list on the web. Close Project sits below Reload Project,
 warns about unsaved work, releases the editing lock on confirmed close and returns
@@ -671,8 +675,8 @@ While any SpeleoDB network call is in flight, a small spinner beside the SpeleoD
 tab label says "Talking to SpeleoDB..."; it overlays the tab and never changes its
 size. While a lock, upload, download or account call runs, the controls that would
 start another one are disabled: the workspace's Save Changes, Resume editing /
-Switch to Read Only Mode, Reload Project, Close Project and conversion, History's
-Unwind/Rewind, revision View/Restore/Revert, opening from SpeleoDB, the held-lock
+Switch to Read Only Mode, Reload Project, Close Project and conversion, revision
+View/Restore/Revert, opening from SpeleoDB, the held-lock
 prompt's Resume and Release, publishing, removing a cached copy, "Purge all cached
 files", and the SpeleoDB endpoint, connection and sign-in/sign-out controls in
 Settings. Reads such as the status refresh show the
