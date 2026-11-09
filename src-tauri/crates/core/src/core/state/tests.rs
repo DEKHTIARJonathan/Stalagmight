@@ -6903,20 +6903,33 @@ fn test_remove_recent_projects_fails_when_lock_poisoned() {
 
 #[test]
 fn test_remove_recent_project_removes_present_entry() {
-    // Isolated because `remove_from_recent_projects` persists the trimmed list and
-    // reports a save failure as `success: false`, so this assert is only about the
-    // removal if the save has a writable config file of its own to land in.
     crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("local.stalx");
+        let managed = temp.path().join("managed.stalx");
+        let original = b"synthetic original survey file";
+        std::fs::write(&local, original).unwrap();
+        std::fs::write(&managed, b"synthetic managed survey file").unwrap();
         let state = AppState::new().unwrap();
-        {
-            let mut recent = state.recent_projects.lock().unwrap();
-            *recent = vec![PathBuf::from("/a.stalx"), PathBuf::from("/b.stalx")];
-        }
-
-        let result = state.remove_from_recent_projects(PathBuf::from("/a.stalx"));
+        *state.recent_projects.lock().unwrap() = vec![local.clone(), managed.clone()];
+        let result = state.remove_from_recent_projects(local.clone());
         assert!(result.success);
-        let recent = state.recent_projects.lock().unwrap();
-        assert_eq!(*recent, vec![PathBuf::from("/b.stalx")]);
+        assert_eq!(
+            *state.recent_projects.lock().unwrap(),
+            vec![managed.clone()]
+        );
+        assert_eq!(
+            crate::config::Config::load()
+                .unwrap()
+                .general
+                .recent_projects,
+            vec![managed.clone()]
+        );
+        assert_eq!(std::fs::read(&local).unwrap(), original);
+        assert_eq!(
+            std::fs::read(&managed).unwrap(),
+            b"synthetic managed survey file"
+        );
     });
 }
 

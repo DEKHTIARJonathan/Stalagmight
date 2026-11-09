@@ -110,6 +110,8 @@ export default function PublishToSpeleoDbDialog() {
       if (ownsDialog()) closeDialog();
       if (result === 'upload_pending') {
         showToast(t('speleodb.publish.uploadPending'), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
+      } else if (result === 'recent_cleanup_failed') {
+        showToast(t('speleodb.publish.recentCleanupFailed'), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
       } else if (result === 'reload_failed') {
         showToast(t('speleodb.publish.reloadFailed'), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
       }

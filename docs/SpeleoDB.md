@@ -178,8 +178,10 @@ The overlay expires after 120 seconds with a timeout explanation and an enabled
 Close action; an in-flight request cannot be submitted again. Account/project
 changes and newer edits still invalidate stale results.
 On confirmation, the project is saved and its first revision uploaded, then a fresh
-server copy is downloaded and opened as a managed project. Editing is acquired once
-through the shared verified acquisition flow. Unconfirmed uploads preserve the
+server copy is downloaded and opened as a managed project. After successful
+reopening, its original local Recent Projects reference is removed. The original
+`.stalx` file is retained; unsuccessful conversions keep their original recent
+reference. Editing is acquired once through the shared verified acquisition flow. Unconfirmed uploads preserve the
 linked working copy for Save Changes; failed downloads preserve the remote identity
 and offer Reload Project. Retrying recovery never creates a second server project.
 

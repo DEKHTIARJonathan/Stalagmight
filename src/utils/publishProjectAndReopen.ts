@@ -6,13 +6,14 @@ import { invokeIpc } from './ipc';
 import { beginProjectMutation, isProjectMutationCurrent, reserveProjectRequest } from './projectTransition';
 import { speleoErrorAction } from './speleoError';
 
-export type PublishReopenOutcome = 'opened' | 'upload_pending' | 'reload_failed' | 'stale';
+export type PublishReopenOutcome = 'opened' | 'upload_pending' | 'reload_failed' | 'recent_cleanup_failed' | 'stale';
 
 /** Creation saves and uploads; only a clean confirmed upload may be downloaded again. */
 export async function publishProjectAndReopen(params: SpeleoPublishParams): Promise<PublishReopenOutcome> {
   const initial = useProjectStore.getState();
   if (!initial.project || useSpeleoStore.getState().link) return 'stale';
-  let path = initial.project.file_path;
+  const originalPath = initial.project.file_path;
+  let path = originalPath;
   const createdAt = initial.project.created_at;
   let requireOriginalCreation = true;
   const tree = initial.projectTreeGeneration;
@@ -60,7 +61,16 @@ export async function publishProjectAndReopen(params: SpeleoPublishParams): Prom
     requireOriginalCreation = false;
     if (!current()) return 'stale';
     await autoAcquireSpeleoLock(downloaded.local_path, current);
-    return current() ? 'opened' : 'stale';
+    if (!current()) return 'stale';
+    // Forget only the successful conversion's original local shortcut. The
+    // existing recents action never deletes the project file and refreshes both
+    // the listing and persisted configuration after removal.
+    if (originalPath && originalPath !== downloaded.local_path) {
+      const removed = await useProjectStore.getState().removeFromRecentProjects(originalPath);
+      if (!current()) return 'stale';
+      if (!removed.success) return 'recent_cleanup_failed';
+    }
+    return 'opened';
   } catch (error) {
     if (!current()) return 'stale';
     if (speleoErrorAction(error) === 'ReLogin') useSpeleoStore.getState().clearSession();
