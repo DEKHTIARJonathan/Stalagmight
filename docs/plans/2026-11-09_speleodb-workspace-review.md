@@ -33,3 +33,14 @@ executed for these corrections. Existing test call sites and a synthetic respons
 were adjusted for the tightened internal contracts; no tests were added. Runtime
 behavior and compatibility with the existing suites remain unverified for this
 review's changes. Earlier acceptance results do not validate these corrections.
+
+## Follow-up static validation
+
+The user subsequently requested Clippy, linting and typechecking without tests.
+The two denied unnecessary qualifications in the status probe were replaced with
+the existing `normalize_endpoint` import, and the affected Rust source was formatted.
+
+Passed: workspace Clippy with telemetry and all targets; main, agent and Playwright
+typechecks; all nine lint gates without their test scripts; Rust formatting for the
+root package and every workspace member; and whitespace review. Clippy retains
+existing advisory warnings. No tests or application sessions were run.

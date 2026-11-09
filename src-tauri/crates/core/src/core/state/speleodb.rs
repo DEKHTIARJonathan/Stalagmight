@@ -489,9 +489,7 @@ impl AppState {
                             if self.speleodb_session_generation() != status_generation {
                                 return Err(local_dto(SpeleoDbError::SessionMoved));
                             }
-                            if crate::speleodb::auth::normalize_endpoint(&endpoint)
-                                != crate::speleodb::auth::normalize_endpoint(&link.endpoint)
-                            {
+                            if normalize_endpoint(&endpoint) != normalize_endpoint(&link.endpoint) {
                                 self.speleodb_disable_editing_if_current(status_generation);
                                 return Err(local_dto(SpeleoDbError::SessionMoved));
                             }
