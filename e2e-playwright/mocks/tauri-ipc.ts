@@ -942,6 +942,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
       const EXIT_RECORDED_COMMANDS = new Set([
         'close_project', 'save_project', 'speleodb_done', 'speleodb_release_lock',
+        // A project switch / quit settles the open project's lock first.
+        'speleodb_settle_open_lock',
         'speleodb_discard_cached_copy', 'speleodb_logout', 'speleodb_login',
         'install_app_update_and_restart',
         // Home's remove-copy prompt and Settings' purge: specs assert the consent
@@ -1611,6 +1613,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             projectPath = null;
             return { success: true, section_ids: [] };
           }
+
+          // A project switch / quit hands the open project's lock back first. Nothing
+          // is held in a mocked run, so nothing is released (no `lock_release`); specs
+          // that drive a failed release override this reply.
+          case 'speleodb_settle_open_lock':
+            return { success: true, warnings: [], error: null, section_ids: [] };
 
           case 'cancel_loading': {
             // Idempotent - does nothing but shouldn't error

@@ -340,7 +340,12 @@ for (const theme of ['dark', 'light'] as const) {
   });
 }
 
-async function traceMenuClose(page: Page, failFirst: boolean) {
+/**
+ * Record the menu close's `close_project` calls; `failFirst` makes the first one
+ * fail - as a failed lock release (`lock_release: 'failed'`), or as any other
+ * close failure.
+ */
+async function traceMenuClose(page: Page, failFirst: false | 'release' | 'other') {
   await page.evaluate((fail) => {
     const w = window as unknown as TestWindow & {
       __TAURI_INTERNALS__: { invoke: (command: string, args?: unknown) => Promise<unknown> };
@@ -351,7 +356,11 @@ async function traceMenuClose(page: Page, failFirst: boolean) {
     w.__TAURI_INTERNALS__.invoke = async (command, args) => {
       if (command === 'close_project') {
         w.__menuCloseRequests.push(args);
-        if (fail && w.__menuCloseRequests.length === 1) return { success: false, error: 'Synthetic lock release failed. The project is still open.', warnings: [], section_ids: [] };
+        if (fail && w.__menuCloseRequests.length === 1) {
+          return fail === 'release'
+            ? { success: false, error: 'The SpeleoDB lock could not be handed back: synthetic 503', warnings: [], section_ids: [], lock_release: 'failed' }
+            : { success: false, error: 'Synthetic close failure. The project is still open.', warnings: [], section_ids: [] };
+        }
       }
       return invoke(command, args);
     };
@@ -382,16 +391,32 @@ for (const dirty of [false, true]) {
 
 test('hamburger Close Project keeps the project open on lock release failure and supports retry', async ({ page }) => {
   await openRemote(page, false);
-  await traceMenuClose(page, true);
+  await traceMenuClose(page, 'release');
   await openAppMenu(page);
   await page.getByTestId('back-button').click();
-  await expect(page.getByTestId('error-dialog')).toContainText('Synthetic lock release failed');
+  // The release failure asks "Couldn't hand back the lock" instead of #668's error dialog.
+  await expect(page.getByTestId('speleodb-release-failed-dialog')).toBeVisible();
+  await expect(page.getByTestId('speleodb-release-failed-reason')).toContainText('synthetic 503');
+  await expect(page.getByTestId('error-dialog')).toHaveCount(0);
   await expect(page.getByTestId('single-system-view')).toBeVisible();
   expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.getState().project?.file_path)).toBe('/projects/cave-alpha.stalx');
+  await page.getByTestId('speleodb-release-failed-retry').click();
+  await expect(page.getByTestId('global-view')).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __menuCloseRequests: unknown[] }).__menuCloseRequests))
+    .toEqual([{ releaseLock: true, discardLocal: false }, { releaseLock: true, discardLocal: false }]);
+});
+
+test('hamburger Close Project shows any other close failure in an error dialog', async ({ page }) => {
+  await openRemote(page, false);
+  await traceMenuClose(page, 'other');
+  await openAppMenu(page);
+  await page.getByTestId('back-button').click();
+  await expect(page.getByTestId('error-dialog')).toContainText('Close Project failed');
+  await expect(page.getByTestId('error-dialog')).toContainText('Synthetic close failure');
+  await expect(page.getByTestId('speleodb-release-failed-dialog')).toHaveCount(0);
+  await expect(page.getByTestId('single-system-view')).toBeVisible();
   await page.getByTestId('error-dialog').getByRole('button', { name: 'OK', exact: true }).click();
   await openAppMenu(page);
   await page.getByTestId('back-button').click();
   await expect(page.getByTestId('global-view')).toBeVisible();
-  expect(await page.evaluate(() => (window as unknown as { __menuCloseRequests: unknown[] }).__menuCloseRequests))
-    .toEqual([{ releaseLock: true, discardLocal: false }, { releaseLock: true, discardLocal: false }]);
 });

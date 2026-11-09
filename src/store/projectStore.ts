@@ -64,6 +64,7 @@ import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations }
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
 import { runProjectSwitch, runConfirmedProjectSwitch, reserveProjectRequest, isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent } from '../utils/projectTransition';
+import { releaseFailed, resolveReleaseFailure, settleOpenLockBeforeLeaving } from '../utils/speleoReleaseFailure';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
@@ -334,12 +335,15 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   saveAfterImport: () => Promise<boolean>;
   /**
    * Close the open project. By default (`releaseLock` unset/true) the backend
-   * best-effort releases a held SpeleoDB write lock first so the close can't strand
-   * the server mutex (fix 1) - but never over un-uploaded edits, which keep it.
-   * `releaseLock: false` is the exit prompt's "Keep the lock"; `discardLocal: true`
-   * its confirmed "Discard changes" (local copy removed, then the lock released).
-   * A close the backend reports as failed leaves the project open: editing is shown
-   * paused until the link status is refreshed, and the caller shows the error.
+   * hands a held SpeleoDB write lock back first (holder-checked) so the close can't
+   * strand the server mutex (fix 1) - but never over un-uploaded edits, which keep it.
+   * A release that fails or is uncertain closes nothing and raises "Couldn't hand
+   * back the lock" (Retry / Close and keep the lock / Cancel, which resolves
+   * 'Cancelled'). `releaseLock: false` is the exit prompt's "Keep the lock";
+   * `discardLocal: true` its confirmed "Discard changes" (local copy removed, then
+   * the lock released). A close the backend reports as failed leaves the project
+   * open: editing is shown paused until the link status is refreshed, and the
+   * caller shows the error.
    */
   closeProject:(opts?: { releaseLock?: boolean; discardLocal?: boolean; request?: number; isCurrent?: () => boolean }) => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
@@ -984,6 +988,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
     const promise: Promise<LoadProjectOutcome> = runConfirmedProjectSwitch(path, () => get().project?.file_path, opts?.accessConfirmed, async () => {
       if (get().project?.file_path !== path && !await confirmWorkspaceDrafts(current)) return { success: false, superseded: !current() };
+      // Hand the open project's lock back before leaving it; a failed release asks (utils/speleoReleaseFailure).
+      if (get().project?.file_path !== path && !await settleOpenLockBeforeLeaving('switch', get().project !== null, current)) return { success: false, superseded: !current() };
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
       // resolution, the Zustand set, the view switch / MapCanvas mount, or
@@ -1287,6 +1293,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const current = () => dispatched ? isProjectMutationCurrent(request) : isProjectRequestCurrent(request);
     if (!current()) return emptyCommandResult(false, 'Superseded');
     if (!await confirmWorkspaceDrafts(current)) return emptyCommandResult(false, current() ? 'Cancelled' : 'Superseded');
+    if (!await settleOpenLockBeforeLeaving('switch', get().project !== null, current)) return emptyCommandResult(false, current() ? 'Cancelled' : 'Superseded');
     // ALWAYS cancel first - NO isLoading guard
     await get().cancelLoading();
     if (!current()) return emptyCommandResult(false, 'Superseded');
@@ -1455,14 +1462,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (!await confirmWorkspaceDrafts(current)) return emptyCommandResult(false, current() ? 'Cancelled' : 'Superseded');
         if (!current()) return emptyCommandResult(false, 'Superseded');
         dispatched = true;
-        const result = await invokeIpc<CommandResult>(
-          'close_project',
-          // Default: release a held SpeleoDB lock (never over un-uploaded edits -
-          // the backend keeps it). The exit prompt's "Keep the lock" passes
-          // `releaseLock: false`; its confirmed "Discard changes" `discardLocal: true`.
-          { releaseLock: opts?.releaseLock ?? true, discardLocal: opts?.discardLocal === true },
-          { purpose: 'close project and release resources' },
-        );
+        // Default: release a held SpeleoDB lock (never over un-uploaded edits -
+        // the backend keeps it). The exit prompt's "Keep the lock" passes
+        // `releaseLock: false`; its confirmed "Discard changes" `discardLocal: true`.
+        const close = (releaseLock: boolean, discardLocal = false) => invokeIpc<CommandResult>('close_project',
+          { releaseLock, discardLocal }, { purpose: 'close project and release resources' });
+        let result = await close(opts?.releaseLock ?? true, opts?.discardLocal === true);
+        // A release that failed or is uncertain closed nothing: ask (Retry / Close and keep the lock / Cancel).
+        if (releaseFailed(result)) { reconcileFailedClose(); result = await resolveReleaseFailure('close', result, close); }
         if (result.success && isProjectMutationCurrent(request)) {
           clearOpenProjectState(set);
         } else if (!result.success) {

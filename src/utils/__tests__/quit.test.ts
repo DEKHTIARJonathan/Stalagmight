@@ -117,21 +117,21 @@ describe('guardQuit', () => {
     expect(openDialog).toHaveBeenCalledWith('unsaved-changes', { pendingQuit: true });
   });
 
+  // Never strand a lock silently: a SpeleoDB project with nothing un-uploaded asks
+  // no question, but hands its lock back (holder-checked) BEFORE the quit goes on -
+  // the backend decides from its own claim, so a read-only one is a no-op there.
   it.each([
     { hasUnpushedEdits: false }, { editState: 'read-only' as const },
-  ])('does not prompt for a clean lock or work we hold no lock over: %j', (state) => {
+    { editState: 'read-only' as const, hasUnpushedEdits: false },
+  ])('hands the lock back without a prompt, then quits: %j', async (state) => {
     useSpeleoStore.setState({ link: link(state) });
-    expect(guardQuit()).toBe(false);
+    invokeIpcMock.mockResolvedValueOnce({ success: true, warnings: [], error: null, section_ids: [] } as never);
+    expect(guardQuit()).toBe(true);
+    await vi.waitFor(() => expect(closeMock).toHaveBeenCalledTimes(1));
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_settle_open_lock', { releaseLock: true }, expect.anything());
+    expect(consumeQuitConfirmation()).toBe(true);
     expect(openDialog).not.toHaveBeenCalled();
     expect(useSpeleoExitPrompt.getState().request).toBeNull();
-  });
-
-  it('does NOT block a read-only remote project with nothing unpushed', () => {
-    useSpeleoStore.setState({
-      link: link({ editState: 'read-only', hasUnpushedEdits: false }),
-    });
-    expect(guardQuit()).toBe(false);
-    expect(openDialog).not.toHaveBeenCalled();
   });
 
   // The bug this guards: saved (autosaved) work under our lock used to quit with

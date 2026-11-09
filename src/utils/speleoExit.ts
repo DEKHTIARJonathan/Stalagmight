@@ -30,6 +30,7 @@ import i18n from '../i18n';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../store/speleoStore';
 import { getErrorMessage } from './ipc';
+import { RELEASE_CANCELLED } from './speleoReleaseFailure';
 
 /** What the user is trying to do. Picks the wording only - the choices are the same. */
 export type SpeleoExitReason = 'close' | 'switch' | 'quit';
@@ -114,6 +115,8 @@ async function closeWith(opts: { releaseLock?: boolean; discardLocal?: boolean }
     return { ok: false, error: getErrorMessage(error, i18n.t('speleoExitPrompt.errors.closeFailed')) };
   }
   if (!result.success) {
+    // The user stayed at "Couldn't hand back the lock": say so, not "Cancelled".
+    if (result.error === RELEASE_CANCELLED) return { ok: false, error: i18n.t('speleoReleaseFailed.stillOpen') };
     return { ok: false, error: result.error || i18n.t('speleoExitPrompt.errors.closeFailed') };
   }
   // A close that happened but left something behind - the discard could not

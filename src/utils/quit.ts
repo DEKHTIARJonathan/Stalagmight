@@ -12,6 +12,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import { askSpeleoExit, closeKeepingLock, openProjectNeedsSpeleoExitPrompt } from './speleoExit';
+import { RELEASE_CANCELLED, settleOpenLockBeforeLeaving } from './speleoReleaseFailure';
 
 /**
  * Set by {@link performQuit} for exactly one `tauri://close-requested` round
@@ -291,9 +292,11 @@ export async function handBackProject(
   const result = await closeProject({ ...(opts?.releaseLock === undefined ? {} : { releaseLock: opts.releaseLock }), request, isCurrent: canClose });
   if (!current()) return;
   if (!result.success) {
-    const message = result.error || 'Could not close the project. Your project is still open.';
+    // The user cancelled "Couldn't hand back the lock": they stay, nothing to report.
+    if (result.error === RELEASE_CANCELLED) return;
+    const message = result.error || i18n.t('projectClose.failedMessage');
     if (opts?.onFailure) opts.onFailure(message);
-    else useUIStore.getState().openDialog('error', { title: 'Close failed', message });
+    else useUIStore.getState().openDialog('error', { title: i18n.t('projectClose.failedTitle'), message });
     return;
   }
   opts?.onClosed?.();
@@ -353,6 +356,11 @@ export function openExitPrompt(dialog: string, data?: Record<string, unknown>): 
  *   local changes (saving unsaved edits first) and restarts, so the user resumes
  *   exactly where they were - the "Keep the lock" end state without the question.
  * - Otherwise unsaved changes get the ordinary unsaved-changes dialog.
+ * - A clean SpeleoDB project hands its lock back before the quit goes on
+ *   ({@link quitAfterHandingBackLock}): a release that fails or is uncertain asks
+ *   "Couldn't hand back the lock", and Cancel there abandons the quit. The bounded
+ *   silent release at process exit stays only for the exits the app cannot
+ *   intercept.
  */
 export function guardQuit(): boolean {
   const { project, isDirty } = useProjectStore.getState();
@@ -375,7 +383,25 @@ export function guardQuit(): boolean {
     return true;
   }
 
+  if (useSpeleoStore.getState().link !== null) {
+    void quitAfterHandingBackLock();
+    return true;
+  }
+
   return false;
+}
+
+/**
+ * Settle the open project's SpeleoDB lock, then quit (pre-confirmed): the
+ * holder-checked release, or - when it fails or is uncertain - the user's answer
+ * to "Couldn't hand back the lock" (Retry until it settles, or Close and keep the
+ * lock). Cancel abandons the quit, and any update restart riding on it. A local
+ * project, or a SpeleoDB project holding no lock, quits straight away.
+ */
+export async function quitAfterHandingBackLock(): Promise<void> {
+  const projectOpen = useProjectStore.getState().project !== null;
+  if (await settleOpenLockBeforeLeaving('quit', projectOpen)) performQuit();
+  else abandonUpdateRestart();
 }
 
 /** The update restart's answer for un-uploaded work under our lock (see `guardQuit`). */

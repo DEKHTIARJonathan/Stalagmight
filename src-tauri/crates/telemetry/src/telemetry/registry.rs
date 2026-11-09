@@ -155,6 +155,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.speleodb_release_current_lock",
     "command.speleodb_release_lock",
     "command.speleodb_release_lock_acquired_here",
+    "command.speleodb_settle_open_lock",
     "command.speleodb_restore_revision",
     "command.speleodb_session",
     "command.speleodb_start_editing",
@@ -1064,7 +1065,10 @@ mod tests {
         //       listing, removing one copy, and Settings' purge:
         //       command.speleodb_cached_projects, command.speleodb_remove_cached_copy,
         //       command.speleodb_purge_cached_copies = 669.
-        assert_eq!(EVENT_NAMES.len(), 669);
+        //   + 1 a project switch or a quit hands the open project's lock back
+        //       before leaving it, and asks when that fails (never strand a lock
+        //       silently): command.speleodb_settle_open_lock = 670.
+        assert_eq!(EVENT_NAMES.len(), 670);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

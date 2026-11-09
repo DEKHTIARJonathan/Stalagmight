@@ -479,20 +479,51 @@ any work) and in `client::upload_stalx`, so no caller can send one
 Save and Close carries its close intent through recovery and closes only after a
 confirmed upload and successful release, with no newer local changes. Cancellation,
 conflict, uncertainty and release failure leave the project open. Plain Close,
-including Hamburger Menu -> Close Project, project switching and Quit release a
-clean session's lock silently, through the holder check (only a lock SpeleoDB says
-this account holds is released). When the lock is held over work SpeleoDB has not
-seen, they ask the one in-app exit prompt (Upload / Keep the lock / Discard /
-Cancel, `utils/speleoExit`); the backend never releases over un-uploaded edits
-unless the close carries the confirmed discard. A close the backend reports as
-failed keeps the project open with a visible error and pauses editing until the
-link status is refreshed. A clean close whose release fails or is uncertain
-currently still closes and keeps the claim for a later holder-checked retry; the
-in-app "Couldn't hand back the lock" dialog (Retry / Close and keep the lock /
-Cancel) for close, switch and quit is being finalised by a follow-up commit.
-Without the lock, unsaved survey work gets the unsaved-changes dialog with Save on
-this computer / Discard / Cancel (see above). Saved unuploaded work remains in the
+including Hamburger Menu -> Close Project, project switching and Quit hand a
+clean session's lock back without a question, through the holder check (only a
+lock SpeleoDB says this account holds is released). When the lock is held over
+work SpeleoDB has not seen, they ask the one in-app exit prompt (Upload / Keep the
+lock / Discard / Cancel, `utils/speleoExit`); the backend never releases over
+un-uploaded edits unless the close carries the confirmed discard. Without the
+lock, unsaved survey work gets the unsaved-changes dialog with Save on this
+computer / Discard / Cancel (see above). Saved unuploaded work remains in the
 local file.
+
+A lock is never stranded silently. A clean Close, project switch (file open, New
+Project, open from SpeleoDB) or Quit the app drives (menu Quit, Ctrl+Q, the window
+X, restart-to-update) leaves the project only once its lock release is settled.
+The backend reports the outcome on the reply of the call that released
+(`CommandResult.lock_release`: `released`, `not_held` or `failed`), so the
+frontend decides without a second round trip: `close_project` for a close, and
+`speleodb_settle_open_lock` - the same release, without closing - before a switch
+or a quit. A release that failed or is uncertain (the holder could not be read, a
+transport error, a 5xx, a lost reply, a reply that still names this account, no
+usable token for the account holding the claim, an unreadable session) closes
+nothing: the claim stays, unbound, so editing is already paused, and the in-app
+dialog "Couldn't hand back the lock" (`utils/speleoReleaseFailure`) asks:
+
+- Retry - the holder-checked release again. The dialog stays up, with the new
+  reason, while it keeps failing; a lock SpeleoDB now says is someone else's (a
+  lost reply after which another account took it) counts as settled, and nothing
+  is sent for it.
+- Close and keep the lock - leave on purpose (`close_project` with
+  `release_lock: false`, or `speleodb_settle_open_lock` with `release_lock: false`
+  before a switch or quit). The claim is marked kept, so neither the stranded-claim
+  cleanup, the switch's own release nor the exit's hands it back, and the lock
+  appears in the next sign-in's held-lock prompt.
+- Cancel - stay in the project, read-only: the switch or quit is abandoned
+  (with any update restart riding on it), and Resume editing takes the lock again.
+
+A quit that first waited for a transfer (see below) is re-issued un-confirmed, so
+it reaches the same question rather than exiting. Any other close failure keeps
+the project open with the "Close Project failed" error dialog and pauses editing
+until the link status is refreshed. A close after a sign-out (or a rejected token)
+does not ask: the claim belongs to an account no longer signed in, the sign-out
+flow already asked about its locks (Try again / Sign out anyway), and the claim
+stays for the stranded-claim cleanup after that account's next sign-in. The
+bounded silent release at process exit (`RunEvent::ExitRequested`) remains only
+for the exits the app cannot intercept (an OS-forced exit, Quit now over a
+running transfer).
 
 Form drafts are unsent SpeleoDB input: an upload description (in the upload dialog,
 or kept while Settings is open for sign-in or an error replaced the dialog) and the
@@ -522,14 +553,15 @@ window close, and the close listener's first gate (`utils/quitAfterWork`) runs
 before any question:
 
 - With nothing in flight the quit goes on as before.
-- With an exclusive SpeleoDB call, a hand-off verb, or an exit-prompt answer in
-  flight, the window stays. An info toast says the save or upload is in progress
+- With an exclusive SpeleoDB call, a hand-off verb, an exit-prompt answer or a
+  "Couldn't hand back the lock" Retry in flight, the window stays. An info toast says the save or upload is in progress
   and that Stalagmight will close when it finishes, and the waiting prompt
   (`QuitWaitDialog`, layered over the upload progress) shows a spinner with Keep
   Stalagmight open (the default; also Escape) and Quit now. Once the work has
   drained and stayed drained for 300 ms, the quit is re-issued un-confirmed, so
-  every guard sees the settled state: a successful upload quits; a failed one
-  raises the exit prompt.
+  every guard sees the settled state: a successful upload quits once the clean
+  project's lock is handed back (or "Couldn't hand back the lock" is answered); a
+  failed one raises the exit prompt.
 - Quit now is an explicit choice behind a warning (the transfer is cut off and may
   or may not reach SpeleoDB; the project can stay locked until it is opened
   again). It saves unsaved edits on this computer first (a failed save stops it),
@@ -638,8 +670,9 @@ Editing inherited it.
 - Take remote shuts the gate and releases the lock before it reloads the server
   version, so the project comes back read-only; the frontend reopens it without
   re-acquiring and offers Resume editing.
-- A claim whose release failed is kept as an unbound pointer for a later retry.
-  It opens nothing.
+- A claim whose release failed is kept as an unbound pointer for a retry: the
+  user's Retry in "Couldn't hand back the lock", or a later holder-checked
+  release. It opens nothing.
 
 Every release - automatic (close, project switch, quit, restart-to-update, logout,
 account switch, unlink, Take remote, delete, Start Editing's unwind, the
@@ -650,10 +683,13 @@ The automatic paths cap that read at 2 seconds so it fits inside the 5-second ex
 and update-restart wait. Another account's lock is never released, even when the
 signed-in account is an administrator, whom the server would let release anybody's.
 When someone else or nobody holds the lock, the local claim ends, the gate shuts
-and nothing is sent. When the holder cannot be read, nothing is sent and the claim
-is kept: an explicit verb reports the failure (Save Changes stays in editing), the
-stranded-claim cleanup retries on a later status refresh with no project open, and
-on quit or update the lock stays held for the next sign-in's held-lock prompt.
+and nothing is sent. A release reply that still names this account released
+nothing and counts as a failure. When the holder cannot be read, nothing is sent
+and the claim is kept: an explicit verb reports the failure (Save Changes stays in
+editing), a close, switch or quit asks "Couldn't hand back the lock" (see Save,
+switching and exit), the stranded-claim cleanup retries on a later status refresh
+with no project open, and an exit the app cannot intercept leaves the lock held
+for the next sign-in's held-lock prompt.
 Automatic releases are decided from the claim, never from the gate, so a session
 whose gate a lost lock or a sign-out already shut still ends its claim. The
 un-uploaded-work rule above applies to all of them except the explicit discard

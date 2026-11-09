@@ -33,6 +33,7 @@ import { invokeIpc } from './ipc';
 import { abandonUpdateRestart, performQuit, quitApp } from './quit';
 import { saveOpenProjectLocally } from './saveOpenProjectLocally';
 import { useSpeleoExitPrompt } from './speleoExit';
+import { useReleaseFailurePrompt } from './speleoReleaseFailure';
 import { TOAST_KEYS } from './toastKeys';
 
 /**
@@ -56,10 +57,12 @@ export async function holdQuitDuring<T>(work: () => Promise<T>): Promise<T> {
 /**
  * In-flight work a quit must not cut: a SpeleoDB lock / upload / download /
  * account call or hand-off verb, an exit-prompt answer being carried out (its
- * close can be releasing the lock), or a flow held by {@link holdQuitDuring}.
+ * close can be releasing the lock), a "Couldn't hand back the lock" Retry, or a
+ * flow held by {@link holdQuitDuring}.
  */
 export function quitBlockingWorkInFlight(): boolean {
-  return isSpeleoOperationBusy() || useSpeleoExitPrompt.getState().working || useQuitHolds.getState().count > 0;
+  return isSpeleoOperationBusy() || useSpeleoExitPrompt.getState().working ||
+    useReleaseFailurePrompt.getState().working || useQuitHolds.getState().count > 0;
 }
 
 /**
@@ -116,6 +119,7 @@ function watchUntilDrained(): void {
     useSpeleoNetworkStore.subscribe(check),
     useSpeleoStore.subscribe(check),
     useSpeleoExitPrompt.subscribe(check),
+    useReleaseFailurePrompt.subscribe(check),
     useQuitHolds.subscribe(check),
   ];
   stopWatching = () => unsubscribers.forEach((unsubscribe) => unsubscribe());

@@ -28,7 +28,7 @@ use stalagmight_lib::config::{
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
-    ReversedSection, ValidationWarning, WarningSeverity,
+    LockReleaseOutcome, ReversedSection, ValidationWarning, WarningSeverity,
 };
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
@@ -165,6 +165,7 @@ fn main() {
 
     // Core command/result types
     export::<CommandResult>(&out_dir);
+    export::<LockReleaseOutcome>(&out_dir);
     export::<ReversedSection>(&out_dir);
     export::<ImportReceipt>(&out_dir);
     export::<CommentHolder>(&out_dir);
@@ -449,6 +450,7 @@ fn main() {
 
     let export_list = [
         "CommandResult",
+        "LockReleaseOutcome",
         "ReversedSection",
         "ImportReceipt",
         "CommentHolder",

@@ -252,6 +252,32 @@ pub async fn speleodb_release_lock_acquired_here(app: AppHandle) -> Result<(), S
     run_transfer(app, AppState::speleodb_release_lock_acquired_here).await
 }
 
+/// Settle the OPEN project's write lock before a project switch or a quit leaves
+/// it, without closing anything: hand it back, holder-checked (`release_lock`
+/// unset or `true`), or keep it (`false`, the "Couldn't hand back the lock"
+/// dialog's Close and keep the lock). The reply carries what the release came to
+/// (`CommandResult::lock_release`); a failed or uncertain one fails the call, and
+/// the switch or quit waits for the user's answer. A user-visible transfer: the
+/// app's exit waits for it (lock#6).
+#[tauri::command]
+pub async fn speleodb_settle_open_lock(
+    app: AppHandle,
+    release_lock: Option<bool>,
+) -> crate::core::CommandResult {
+    let _transfer = super::exit_wait::user_transfer(&app);
+    let release = release_lock != Some(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppState>()
+            .inner()
+            .speleodb_settle_open_lock(release)
+    })
+    .await
+    .unwrap_or_else(|e| {
+        crate::core::CommandResult::failure(format!("Handing back the lock failed: {e}"))
+            .with_lock_release(Some(crate::core::LockReleaseOutcome::Failed))
+    })
+}
+
 /// Release the write lock on ONE project by id (#201 per-project "Release" in the
 /// held-lock resume prompt). Targets an arbitrary held project, not necessarily
 /// the open one; on success the caller re-scans to refresh the recents badges.

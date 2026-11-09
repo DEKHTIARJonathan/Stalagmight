@@ -4,7 +4,8 @@ import userEvent from '@testing-library/user-event';
 
 const performQuitMock = vi.hoisted(() => vi.fn());
 const handleSaveProjectMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/quit', () => ({ performQuit: performQuitMock, abandonUpdateRestart: vi.fn() }));
+// The quit continuation: a SpeleoDB project hands its lock back, then quits.
+vi.mock('../../utils/quit', () => ({ quitAfterHandingBackLock: performQuitMock, abandonUpdateRestart: vi.fn() }));
 vi.mock('../../hooks/useProject', () => ({ useProject: () => ({ handleSaveProject: handleSaveProjectMock }) }));
 vi.mock('../../utils/ipc', () => ({ invokeIpc: vi.fn(), getErrorMessage: String }));
 

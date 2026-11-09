@@ -958,6 +958,22 @@ fn held_by(holder: &str) -> (u16, String) {
     )
 }
 
+/// [`held_by`] `ME` for the holder probe, and for the release itself the project
+/// with no holder - what SpeleoDB answers once it has let go. (A release reply that
+/// still names this account released nothing, and is reported as a failure.)
+fn held_by_me_until_released(line: &str) -> (u16, String) {
+    if line.contains("/release") {
+        (
+            200,
+            super::tests_support::sdk_fixture(&format!(
+                r#"{{"id":"{MINE}","name":"Remote","permission":"READ_AND_WRITE"}}"#
+            )),
+        )
+    } else {
+        held_by(ME)
+    }
+}
+
 fn releases(seen: &Arc<Mutex<Vec<String>>>) -> usize {
     seen.lock()
         .expect("log")
@@ -978,7 +994,7 @@ fn owned_copy(root: &Path, url: &str, owner: &str) -> PathBuf {
 #[test]
 fn removing_my_copy_hands_back_the_lock_the_server_says_i_hold() {
     crate::test_helpers::with_isolated_config(|| {
-        let (url, seen) = loopback(|_| held_by(ME));
+        let (url, seen) = loopback(held_by_me_until_released);
         let temp = tempfile::tempdir().expect("temp");
         owned_copy(temp.path(), &url, ME);
         let state = AppState::new().expect("state");
@@ -1012,7 +1028,7 @@ fn removing_my_copy_never_releases_someone_elses_lock() {
 #[test]
 fn another_accounts_copy_or_no_session_asks_the_server_nothing() {
     crate::test_helpers::with_isolated_config(|| {
-        let (url, seen) = loopback(|_| held_by(ME));
+        let (url, seen) = loopback(held_by_me_until_released);
         let temp = tempfile::tempdir().expect("temp");
         owned_copy(temp.path(), &url, "someone@example.com");
         let state = AppState::new().expect("state");
@@ -1055,7 +1071,7 @@ fn an_unreachable_server_removes_the_copy_and_says_the_lock_may_stay() {
 #[test]
 fn purge_reports_the_locks_it_handed_back() {
     crate::test_helpers::with_isolated_config(|| {
-        let (url, seen) = loopback(|_| held_by(ME));
+        let (url, seen) = loopback(held_by_me_until_released);
         let temp = tempfile::tempdir().expect("temp");
         owned_copy(temp.path(), &url, ME);
         let state = AppState::new().expect("state");
@@ -1070,7 +1086,7 @@ fn purge_reports_the_locks_it_handed_back() {
 #[test]
 fn a_copy_that_could_not_be_removed_keeps_its_lock() {
     crate::test_helpers::with_isolated_config(|| {
-        let (url, seen) = loopback(|_| held_by(ME));
+        let (url, seen) = loopback(held_by_me_until_released);
         let temp = tempfile::tempdir().expect("temp");
         let path = owned_copy(temp.path(), &url, ME);
         let state = AppState::new().expect("state");

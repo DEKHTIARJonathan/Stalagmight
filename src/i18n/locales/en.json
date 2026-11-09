@@ -3848,5 +3848,21 @@
       "signOutAnyway": "Disconnect anyway",
       "unnamed": "Unnamed project"
     }
+  },
+  "speleoReleaseFailed": {
+    "title": "Couldn't hand back the lock",
+    "body": "Stalagmight could not hand back the SpeleoDB lock on \"{{name}}\" before {{action}}. Until it is handed back, nobody else can edit the project.",
+    "reason": "What went wrong: {{reason}}",
+    "retry": "Retry",
+    "retrying": "Retrying...",
+    "retryHint": "Ask SpeleoDB again, and hand the lock back if it is still yours.",
+    "keep": "Close and keep the lock",
+    "keepHint": "Leave the project reserved for you. The next time you connect to SpeleoDB, Stalagmight offers to release it; you can also release it on the SpeleoDB website.",
+    "cancelHint": "Cancel keeps the project open. It stays read-only until you resume editing.",
+    "stillOpen": "The SpeleoDB lock was not handed back, so the project is still open."
+  },
+  "projectClose": {
+    "failedTitle": "Close Project failed",
+    "failedMessage": "The project is still open. Try again."
   }
 }

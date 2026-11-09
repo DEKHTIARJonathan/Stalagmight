@@ -1,4 +1,5 @@
 import { dispatchProjectSave } from '../utils/dispatchProjectSave';
+import i18n from '../i18n';
 import { useCallback } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
@@ -91,7 +92,9 @@ export function useProject() {
     if (result.success) {
       setView('global');
     } else if (result.error !== 'Cancelled' && result.error !== 'Superseded' && result.error !== 'Already closing') {
-      openDialog('error', { title: 'Close Project failed', message: result.error || 'The project is still open. Try again.' });
+      // A failed lock release has already asked "Couldn't hand back the lock"
+      // (Cancel resolves 'Cancelled'); this is every other close failure.
+      openDialog('error', { title: i18n.t('projectClose.failedTitle'), message: result.error || i18n.t('projectClose.failedMessage') });
     }
     const t2 = performance.now();
     const { recordPerfTiming } = await import('../utils/memoryProbe');

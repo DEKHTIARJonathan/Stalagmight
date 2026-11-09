@@ -1875,6 +1875,8 @@ pub fn run() {
             commands::speleodb::speleodb_publish,
             // SpeleoDB project settings: release the open project lock
             commands::speleodb::speleodb_release_current_lock,
+            // A project switch / quit hands the open project's lock back first
+            commands::speleodb::speleodb_settle_open_lock,
             commands::speleodb::speleodb_project_access_at,
             // Section commands
             commands::section::create_section,

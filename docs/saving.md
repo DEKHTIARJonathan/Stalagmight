@@ -300,9 +300,11 @@ account as its holder; over un-uploaded work the exit prompt decides (Upload / K
 the lock / Discard / Cancel) and the backend never releases without the confirmed
 discard. A close the backend reports as failed keeps the project open with a visible
 error and pauses editing until the link status is refreshed. A release that fails
-or is uncertain currently still closes and keeps the claim for a later
-holder-checked retry; the in-app "Couldn't hand back the lock" dialog (Retry / Close
-and keep the lock / Cancel) is being finalised by a follow-up commit. Local files
+or is uncertain closes nothing: the claim stays unbound (editing paused) and the
+in-app "Couldn't hand back the lock" dialog asks - Retry (the holder-checked
+release again), Close and keep the lock (the lock waits for the next sign-in's
+held-lock prompt) or Cancel (stay, read-only). Project switches and quits ask the
+same question (see [SpeleoDB](SpeleoDB.md#save-switching-and-exit)). Local files
 and saved unpublished changes remain intact. The API has no atomic
 compare-and-release, so a server-side ownership change between the holder check and
 the POST remains a protocol limitation.

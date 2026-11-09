@@ -63,8 +63,9 @@ pub(crate) fn save_project_impl(state: &AppState, path: Option<PathBuf>) -> Comm
 /// answers, plus the silent default for a project with nothing un-uploaded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CloseLock {
-    /// Hand the lock back (best-effort) - unless the project still has un-pushed
-    /// edits, in which case the backend keeps it (see `speleodb_lock_release`).
+    /// Hand the lock back (holder-checked) - unless the project still has
+    /// un-pushed edits, in which case the backend keeps it (see
+    /// `speleodb_lock_release`). A failed release keeps the project open.
     Release,
     /// "Keep the lock": close, leave the lock held for the next open to resume.
     Keep,
@@ -87,12 +88,15 @@ impl CloseLock {
     }
 }
 
-/// Close the current project. `release_lock` (default `true`) best-effort releases
-/// a held SpeleoDB write lock first so a close doesn't strand the server mutex
-/// (fix 1) - never over un-pushed edits, which keep it. `false` keeps the lock on
-/// purpose (the exit prompt's "Keep the lock"). `discard_local: true` is the exit
-/// prompt's confirmed "Discard changes": the local copy is removed, then the lock
-/// is released.
+/// Close the current project. `release_lock` (default `true`) hands a held
+/// SpeleoDB write lock back first (holder-checked) so a close doesn't strand the
+/// server mutex (fix 1) - never over un-pushed edits, which keep it - and closes
+/// only once that release is settled: one that fails or is uncertain closes
+/// nothing and reports `lock_release: Failed`, for the frontend's "Couldn't hand
+/// back the lock" dialog. `false` keeps the lock on purpose (the exit prompt's
+/// "Keep the lock", that dialog's Close and keep the lock). `discard_local: true`
+/// is the exit prompt's confirmed "Discard changes": the local copy is removed,
+/// then the lock is released.
 ///
 /// Async + `spawn_blocking`: the release is a network round trip, and a sync
 /// command runs on the main thread - a slow or unreachable server froze the whole
@@ -117,8 +121,8 @@ pub async fn close_project(
 pub(crate) fn close_project_impl(state: &AppState, lock: CloseLock) -> CommandResult {
     match lock {
         // Release a held SpeleoDB lock BEFORE the close tears down the database
-        // (the link row lives there).
-        CloseLock::Release => state.speleodb_release_held_lock_on_close(),
+        // (the link row lives there), and close only once it is settled.
+        CloseLock::Release => return state.speleodb_close_releasing_lock(),
         // Retain the server mutex past this close. Recorded on the claim BEFORE
         // the teardown, while the link row is still readable - and recorded at
         // all because the stranded-claim janitor cannot otherwise tell a

@@ -81,7 +81,9 @@ verification; ordinary upload keeps the lock. Clean projects do not upload empty
 revisions. Autosave and autosave retry remain local-only. Save and Close continues
 only after confirmed upload and release, with no newer unuploaded changes. Other
 exits automatically release without upload, protecting unsaved survey and form
-drafts with Discard changes / Cancel. Dirtiness is independent of validity.
+drafts with Discard changes / Cancel. A release that fails or is uncertain never
+leaves silently: Close, project switches and Quit stay put and ask "Couldn't hand
+back the lock" (Retry / Close and keep the lock / Cancel). Dirtiness is independent of validity.
 Switch to read-only refuses unsaved or unuploaded changes, with Save Changes guidance.
 Reload requires explicit Discard changes / Cancel for pending work, preserves mode,
 and never acquires a lock. Historical checkouts return to the live server version.
