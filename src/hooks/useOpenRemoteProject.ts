@@ -15,7 +15,7 @@ import {
   humanizeSpeleoError,
   unpushedLocalEdits,
 } from '../utils/speleoError';
-import { needsSpeleoHandBackPrompt } from '../utils/quit';
+import { confirm } from '@tauri-apps/plugin-dialog';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import type {
   SpeleoProjectSummary,
@@ -220,137 +220,40 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     [showToast, setLinkOnOpen, loadProject, onBeforeLoad, t],
   );
 
-  /**
-   * [#270] Would opening `summary` strand work in the project already on screen?
-   * Returns the message to refuse with, or null when the swap is safe.
-   *
-   * "Open from SpeleoDB" sits in the IN-PROJECT hamburger and this flow ends in
-   * `loadProject`, which replaces the open project backend-side - so it is one of
-   * the ways OUT of a project, and the only one that asked nothing at all. Unsaved
-   * in-memory edits were discarded with no prompt, and a managed project was swapped
-   * away with its un-pushed work left behind in the cache and its server lock still
-   * held. Every other way out asks first: close, opening another `.stalx`, New
-   * Project and the held-lock resume prompt on `needsSpeleoHandBackPrompt`, quit on
-   * its unpushed-work half (the backend releases the lock on process exit).
-   *
-   * Checked at the ENTRY point rather than in the shared `finishOpen` tail, where the
-   * sibling `alreadyOpen` test lives: the tail runs AFTER the pull, and its first act
-   * is the optimistic seed that overwrites the very link this reads. So it runs at
-   * BOTH entry points that issue a project-replacing command of their own -
-   * `openRemote` - never in the tail they share.
-   *
-   * The refused-open prompt's two branches run it too. They answer the prompt a
-   * guarded `openRemote` raised - but that
-   * prompt is about the TARGET's cached copy, and this asks about the project on
-   * SCREEN, which the answer says nothing about. The prompt is also a user
-   * interaction of unbounded length: an in-flight `refreshLinkStatus` can finish
-   * while `SpeleoUnpushedLocalDialog` is open. Its `seedFromStatus` rewrites `link` -
-   * so the open project can acquire un-pushed work, or have its lock resolved,
-   * between the check and the load that replaces it. Nothing shuts the door out of an
-   * un-pushed cache copy, because the case that needs that door is the one where the
-   * target IS the open project, and that is exactly what the same-project exemption
-   * below lets through.
-   *
-   * It REFUSES rather than raising the shared hand-back prompt, the way
-   * `HeldLockResumeDialog`'s Continue-editing row does. `speleodb-close` replays what
-   * raised it (`pendingOpenPath` / `pendingNewProject`) and has no notion of a remote
-   * open, so raising it here would resolve the SpeleoDB side and then drop the user
-   * on the home screen with nothing opened - trading a silent swap for a swallowed
-   * request. Refusing leaves the browser, the open project and the work exactly as
-   * they were, and names an action that is one menu away.
-   *
-   * SpeleoDB before disk-dirty, the order every other exit guard uses: Close resolves
-   * BOTH (its prompt carries a "save changes locally" checkbox), so naming that first
-   * settles a project that is dirty in both senses in one hop rather than two.
-   */
+  // Only unsaved memory changes need confirmation before a remote open. Saved
+  // local edits remain on disk, and the backend releases the old project's lock.
+  // The acknowledgement belongs to this exact project snapshot and request.
+  const confirmUnsavedHandBack = useCallback(async (current: () => boolean) => {
+    const { project, isDirty } = useProjectStore.getState();
+    if (!project || !isDirty) return { project: null };
+    const accepted = await confirm(t('speleodb.exit.unsavedMessage'), {
+      title: t('speleodb.exit.unsavedTitle'),
+      kind: 'warning',
+      okLabel: t('speleodb.exit.discardChanges'),
+      cancelLabel: t('common.actions.cancel'),
+    });
+    if (!accepted || !current() || useProjectStore.getState().project !== project) return null;
+    return { project };
+  }, [t]);
+
   const handBackRefusal = useCallback(
-    (summary: SpeleoProjectSummary): string | null => {
+    (summary: SpeleoProjectSummary, acknowledgedProject: ReturnType<typeof useProjectStore.getState>['project'] = null): string | null => {
       const { project, isDirty } = useProjectStore.getState();
-      if (!project) return null;
-      const speleo = useSpeleoStore.getState();
-      // Re-opening the project already on screen is exempt from the HAND-BACK check
-      // only, not from the whole guard. Nothing is handed back to a project we are
-      // re-opening, and that exemption is load-bearing: it is how the refused-open
-      // prompt is reached for the OPEN project, whose pull is refused over its
-      // un-pushed cache copy and whose only way out is that prompt's "take the server
-      // copy". Refusing on un-pushed work here would shut the door this branch exists
-      // behind. Decided from the id the status refresh recorded, because that is all
-      // there is to go on BEFORE the pull; `remoteProjectId` is null until the first
-      // refresh lands, so that window refuses an open it could have allowed - a menu
-      // trip, against losing work the other way.
-      const reopeningOpenProject = speleo.remoteProjectId === summary.id;
-      if (!reopeningOpenProject && needsSpeleoHandBackPrompt(speleo.link))
-        return t('speleodb.errors.openBlockedUnpushed', { name: summary.name });
-      // Disk-dirty is NOT exempt, even re-opening. `speleodb_open_project` replaces
-      // the cache `.stalx`, and `replace_cache_stalx_abandoning` closes the live
-      // backend project without saving before the rename - so unsaved in-memory
-      // survey is dropped. The persisted dirty bit normally makes the backend refuse
-      // first, but `mark_remote_dirty` logs and swallows a failure to write it, and a
-      // frontend-only edit can leave `isDirty` as the only evidence there is anything
-      // to lose. Exempting the re-open from this too was the wrong half to widen.
-      if (isDirty) return t('speleodb.errors.openBlockedUnsaved', { name: summary.name });
+      if (project && isDirty && project !== acknowledgedProject) {
+        return t('speleodb.errors.openBlockedUnsaved', { name: summary.name });
+      }
       return null;
     },
     [t],
   );
 
-  /**
-   * [#270] `handBackRefusal` again, on the far side of the command - for the pull
-   * verbs, whose await is the DOWNLOAD.
-   *
-   * The entry check has to run before the command; it is the only place that can
-   * stop it. But its answer is stale by the time the command returns, and here the
-   * gap is not a user sitting on a dialog the way the open confirm and the
-   * refused-open prompt are. It is the network, on EVERY open: `download_stalx` runs
-   * with a 120-second timeout and a 512 MiB ceiling. The pull resolves the revision
-   * history, downloads and validates native SQLite, then installs it. An in-flight
-   * status refresh or a local edit can change the open project's state during
-   * that wait. Recheck before replacing it, whichever view initiated the open.
-   *
-   * `finishOpen` cannot be left to notice, for the reason the entry check exists at
-   * all: its first act is the optimistic seed, which overwrites exactly what the
-   * refresh just wrote. By the time `loadProject` replaces the project the evidence is
-   * already gone - the newly-discovered work hidden, or the newly-discovered lock
-   * silently released.
-   *
-   * Refusing here leaves the pulled copy on disk, and that is a price rather than a
-   * second data risk. Under `LocalEditsPolicy::Protect` the backend runs
-   * `guard_local_edits` inside `replace_cache_stalx`, and that guard fails CLOSED (a local copy it cannot read
-   * refuses too), so a replace only ever happens over a cache copy with
-   * `has_unpushed_edits == false` - a clean copy of a server revision, re-downloadable
-   * in full. `Discard` is the take-remote branch, where the user confirmed that exact
-   * loss by name. The local `display_settings` are carried across the replace either
-   * way. So nothing that exists only on this computer is spent by refusing, and the
-   * project on screen - which is what this guard is about - is untouched.
-   *
-   * Skipped when the pull names the project ALREADY ON SCREEN, and that is not a
-   * courtesy: refusing there would be worse than the swap it prevents.
-   * `replace_cache_stalx_abandoning` calls `close_project_if_open_at(dest)` before
-   * the rename, so a pull whose destination is the open project has already closed
-   * it backend-side by the time we get here; returning an error would leave the shell
-   * displaying a project the backend does not have open, where every later command,
-   * auto-save included, fails with "no project open" - the exact state that
-   * function's own failure path goes out of its way to undo. And there is nothing to
-   * protect: `finishOpen` skips the seed for that path (`alreadyOpen`), so the refresh's
-   * update is not overwritten, and the `loadProject` that follows re-resolves the
-   * same project's link anyway.
-   *
-   * Decided by the SAME literal path comparison `finishOpen` makes, deliberately, so
-   * the two can never disagree - this skips exactly when that skips the seed, and
-   * guards exactly when it seeds. See `alreadyOpen` for why literal is the correct
-   * test and not merely the careless one. Known residual: `close_project_if_open_at`
-   * canonicalizes (`project_io::same_file`), so an ALIAS spelling closes the project
-   * backend-side while this side reads "not already open". Only the disk-dirty half
-   * can then refuse (the hand-back half is exempt - an alias is the same project, so
-   * `remoteProjectId === summary.id`), and only if `isDirty` flipped during the
-   * download. Narrow, and the alternative - canonicalizing here - is the thing the
-   * do-not-regress tests at the foot of the suite exist to block; alias tolerance has
-   * to start in `do_load_project_full`, with this side following.
-   */
+  // Recheck after downloading: edits made since the acknowledgement must not be
+  // discarded. When the download replaced the currently open cache file, the
+  // backend already closed that session, so finish its UI reconciliation instead.
   const handBackRefusalAfterPull = useCallback(
-    (summary: SpeleoProjectSummary, localPath: string): string | null => {
+    (summary: SpeleoProjectSummary, localPath: string, acknowledgedProject: ReturnType<typeof useProjectStore.getState>['project']): string | null => {
       if ((useProjectStore.getState().project?.file_path ?? null) === localPath) return null;
-      return handBackRefusal(summary);
+      return handBackRefusal(summary, acknowledgedProject);
     },
     [handBackRefusal],
   );
@@ -362,16 +265,22 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     ): Promise<OpenRemoteOutcome> => {
       // Before the pull, the seed and the load: nothing about the open project may be
       // given up silently (see `handBackRefusal`).
-      const refusal = handBackRefusal(summary);
-      if (refusal) return { status: 'error', message: refusal, reLogin: false };
       const ownership = reserveRemoteOpen();
+      let acknowledged: Awaited<ReturnType<typeof confirmUnsavedHandBack>>;
+      try {
+        acknowledged = await confirmUnsavedHandBack(ownership.current);
+      } catch (error) {
+        if (!ownership.current()) return { status: 'cancelled' };
+        return { status: 'error', message: humanizeSpeleoError(error, t('speleodb.errors.openFailed')), reLogin: false };
+      }
+      if (!acknowledged || !ownership.current()) return { status: 'cancelled' };
       try {
         if (!await confirmSpeleoOpen(summary) || !ownership.current()) return { status: 'cancelled' };
       } catch (e) {
         if (!ownership.latest()) return { status: 'cancelled' };
         return { status: 'error', message: humanizeSpeleoError(e, t('speleodb.errors.openFailed')), reLogin: false };
       }
-      const afterWarning = handBackRefusal(summary);
+      const afterWarning = handBackRefusal(summary, acknowledged.project);
       if (afterWarning) return { status: 'error', message: afterWarning, reLogin: false };
       let result: SpeleoOpenResult;
       try {
@@ -402,12 +311,9 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           reLogin: speleoErrorAction(e) === 'ReLogin',
         };
       }
-      // The link the entry check read is now as old as the download, and the refresh
-      // underneath has had the whole of it to rewrite the link (see
-      // `handBackRefusalAfterPull`). Re-read it BEFORE the seed overwrites it and
-      // before the load closes the open project.
+      // A new edit during the download invalidates the earlier discard consent.
       if (!ownership.current()) return { status: 'cancelled' };
-      const landed = handBackRefusalAfterPull(summary, result.local_path);
+      const landed = handBackRefusalAfterPull(summary, result.local_path, acknowledged.project);
       if (landed) return { status: 'error', message: landed, reLogin: false };
       return finishOpen(result, summary.permission, summary.id, ownership, {
         hasUnpushedEdits: result.has_unpushed_edits === true,
@@ -420,6 +326,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     },
     [
       finishOpen,
+      confirmUnsavedHandBack,
       handBackRefusal,
       handBackRefusalAfterPull,
       openDialog,
@@ -437,28 +344,17 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     async (
       summary: SpeleoProjectSummary,
     ): Promise<OpenRemoteOutcome> => {
-      /**
-       * [#270] The same entry guard, re-evaluated HERE - the discarding open is a
-       * second project-replacing command, not a continuation of the first one, and
-       * the answer it carries is about the TARGET's cached copy, never about the
-       * project on screen.
-       *
-       * The `openRemote` that raised the prompt ran the guard, but the prompt is a
-       * user interaction of unbounded length. Local edits or an in-flight status
-       * refresh can change the link the guard reads while the prompt is up. Same gap the open route had, same fix; every other hand-back exit
-       * evaluates its guard immediately before the destructive step.
-       *
-       * Both halves apply even when the target IS the open project. The hand-back
-       * half is exempt there (that is the door this whole branch exists to open, over
-       * a cache copy that is un-pushed BY DEFINITION), but the disk-dirty half is not:
-       * the command routes through `replace_cache_stalx_abandoning`, which closes the
-       * live project WITHOUT saving and installs the downloaded SQLite file, so
-       * unsaved in-memory survey goes with it. Nothing is stranded by refusing - the
-       * user saves and presses it again.
-       */
-      const refusal = handBackRefusal(summary);
-      if (refusal) return { status: 'error', message: refusal, reLogin: false };
+      // Discarding the target's cached copy does not authorize discarding newly
+      // unsaved work in the project currently on screen. Ask separately if needed.
       const ownership = reserveRemoteOpen();
+      let acknowledged: Awaited<ReturnType<typeof confirmUnsavedHandBack>>;
+      try {
+        acknowledged = await confirmUnsavedHandBack(ownership.current);
+      } catch (error) {
+        if (!ownership.current()) return { status: 'cancelled' };
+        return { status: 'error', message: humanizeSpeleoError(error, t('speleodb.errors.openFailed')), reLogin: false };
+      }
+      if (!acknowledged || !ownership.current()) return { status: 'cancelled' };
       let result: SpeleoOpenResult;
       try {
         if (!ownership.dispatch()) return { status: 'cancelled' };
@@ -475,16 +371,15 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           reLogin: speleoErrorAction(e) === 'ReLogin',
         };
       }
-      // Same download, same window, same re-read - this verb is `openRemote`'s pull
-      // with the guard waived for the TARGET's cache copy, which says nothing about
-      // the project on screen. See `handBackRefusalAfterPull`.
+      // Recheck current unsaved work before replacing the open project.
       if (!ownership.current()) return { status: 'cancelled' };
-      const landed = handBackRefusalAfterPull(summary, result.local_path);
+      const landed = handBackRefusalAfterPull(summary, result.local_path, acknowledged.project);
       if (landed) return { status: 'error', message: landed, reLogin: false };
       return finishOpen(result, summary.permission, summary.id, ownership);
     },
     [
       finishOpen,
+      confirmUnsavedHandBack,
       handBackRefusal,
       handBackRefusalAfterPull,
       t,

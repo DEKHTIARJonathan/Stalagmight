@@ -1,3 +1,4 @@
+import { useSpeleoReadOnlyNotice } from '../utils/autoAcquireSpeleoLock';
 /**
  * Unit test - the SpeleoDB push/unlock verbs flush the survey to disk so the
  * projectStore's `isDirty` flag clears immediately.
@@ -33,7 +34,7 @@ beforeEach(() => {
   saveProjectMock = vi.fn(async () => ({ success: true }));
   // A georeferenced zero datum keeps noteNoAnchorIfNeeded quiet on the push paths.
   useProjectStore.setState({
-    project: { zero_datums: [{}] } as never,
+    project: { file_path: '/remote.stalx', zero_datums: [{}] } as never,
     saveProject: saveProjectMock,
   });
   useSpeleoStore.setState({
@@ -527,11 +528,7 @@ describe('useSpeleoActions - discard routes every StartEditingResult (#303)', ()
 
     expect(outcome).toBe('discarded_without_lock');
     expect(applyStartEditing).toHaveBeenCalledWith(locked);
-    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(
-      expect.any(String),
-      'speleodb-locked-by',
-      'warning',
-    );
+    expect(useSpeleoReadOnlyNotice.getState().notice?.message).toContain('other@example.com');
   });
 
   it('applies divergence and reloads a fast-forwarded result', async () => {

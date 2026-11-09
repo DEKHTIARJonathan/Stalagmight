@@ -131,11 +131,13 @@ automatically. All test content is synthetic; no private cave fixtures are used.
 
 UI regression coverage must include:
 
-- Only Stalagmight projects appear; read-only permission and lock ownership remain
-  distinct and visible. Remote opens warn before downloading; cold recents and
-  direct file opens inspect SQLite metadata and warn before replacing the project.
-- Cancelling an open warning performs no download, lock release or project
-  replacement, including a switch initiated through the close dialog.
+- Opening a SpeleoDB project automatically attempts to acquire its editing lock.
+  Read-only permissions, another editor's lock, and connection failures remain
+  distinct. A failed acquisition leaves the project open read-only and explains
+  why; a competing editor is identified by their email address.
+- A project with unsaved local changes offers Discard changes or Cancel before
+  switching or closing. Cancelling performs no download, release or replacement.
+  Saved but unuploaded work stays in the local file and does not trigger an exit prompt.
 - Deferred open/create setup, remote downloads, and reconciliation cannot replay
   older selections over newer mutations. Cancelling a newer preflight warning does
   not strand an older already-dispatched load; it reconciles and settles loading.
@@ -146,13 +148,14 @@ UI regression coverage must include:
   replacement, and dialog replacement invalidate close and older-version confirmation
   continuations before further side effects. Cancelled or superseded remote opens
   restore the owning prompt's controls without resetting replacement prompts.
-- Manual SpeleoDB Save and publishing collect a commit message. Autosave remains
-  local; failures keep the message and local edits available for retry.
-- Switching projects or closing the app warns about unsaved/unuploaded work.
-  Cancelling preserves the current project and lock. Keep-lock exits close locally without contacting the current server. Confirmed
-  release exits check the current owner; a different holder is not released.
-  Local release/acquire/refresh operations are serialized. A failed upload or explicit
-  release keeps the exit dialog open.
+- Manual SpeleoDB Save collects a commit message. Creating a project uses
+  `Project Creation` automatically. Autosave remains local; failures keep the
+  message and local edits available for retry.
+- Switching projects, closing a project, or quitting releases the editing lock
+  automatically. These exits do not upload changes. The SpeleoDB menu also offers
+  Release editing lock to remain in the project read-only; Acquire editing lock
+  retries editing when it becomes available. A different holder is never released.
+  Local release/acquire/refresh operations are serialized.
 - Read-only users cannot acquire or upload; another user's mutex does not become
   a lock owned by this process. Offline/failed metadata checks never grant editing.
 

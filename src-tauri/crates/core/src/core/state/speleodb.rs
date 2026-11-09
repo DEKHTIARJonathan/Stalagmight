@@ -3192,16 +3192,70 @@ mod tests {
     }
 
     #[test]
+    fn lifecycle_release_preserves_saved_unpublished_files() {
+        for release in [
+            AppState::speleodb_release_held_lock_on_close,
+            AppState::speleodb_release_held_lock_detached,
+            |state: &AppState| {
+                state.speleodb_release_held_lock_bounded(std::time::Duration::from_secs(2));
+            },
+        ] {
+            let (base, handle) = release_stub(REMOTE_ID);
+            let (_temp, state) = editing_fixture(&base);
+            state.mark_remote_dirty();
+            let path = state
+                .get_project_state()
+                .expect("project")
+                .file_path
+                .expect("path");
+            let before = std::fs::read(&path).expect("saved bytes");
+            release(&state);
+            handle.join().expect("release reached server");
+            assert_eq!(std::fs::read(&path).expect("file preserved"), before);
+            assert!(
+                state
+                    .speleodb_open_link()
+                    .expect("link preserved")
+                    .has_unpushed_edits
+            );
+            assert!(!state.speleodb_lock_acquired_here(REMOTE_ID));
+        }
+    }
+
+    #[test]
+    fn lifecycle_release_can_finish_an_owned_claim_after_the_edit_gate_closes() {
+        let (base, handle) = release_stub(REMOTE_ID);
+        let (_temp, state) = editing_fixture(&base);
+        state.mark_remote_dirty();
+        state.set_edit_enabled(false);
+        state.speleodb_release_held_lock_on_close();
+        handle.join().expect("release reached server");
+        assert!(!state.speleodb_lock_acquired_here(REMOTE_ID));
+        assert!(state.speleodb_open_link().expect("link").has_unpushed_edits);
+    }
+
+    #[test]
+    fn lifecycle_release_does_not_release_unowned_or_foreign_locks() {
+        let (_temp, state) = editing_fixture("https://x/");
+        state.set_force_editing(true);
+        assert!(state.speleodb_lifecycle_lock_release_params().is_none());
+        state.set_force_editing(false);
+        state.set_edit_enabled(false);
+        state.speleodb_forget_lock_acquired_for(REMOTE_ID);
+        assert!(state.speleodb_lifecycle_lock_release_params().is_none());
+        state.set_edit_enabled(true);
+        *state.speleodb.lock().expect("session") = authed_session_at("https://another.example/");
+        assert!(state.speleodb_lifecycle_lock_release_params().is_none());
+    }
+
+    #[test]
     fn silent_lock_release_is_skipped_when_the_project_has_unpushed_edits() {
-        // The close / project-switch / app-exit release is SILENT, so it must never
-        // free the server mutex while local edits are stranded on this machine:
-        // the project would immediately be lockable by someone else and the edits
-        // could then only come back through a divergence. Keeping the lock is
-        // recoverable; stranding the edits is not.
+        // Logout keeps its unpublished-work veto; lifecycle transitions use a
+        // separate policy that releases the lock while preserving the local file.
         let (_temp, state) = editing_fixture("https://x/");
         assert!(
             state.speleodb_held_lock_release_params().is_some(),
-            "a CLEAN edit session still releases its lock on close/exit/switch"
+            "a clean edit session still releases its lock on logout"
         );
 
         state.mark_remote_dirty();
@@ -3281,6 +3335,133 @@ mod tests {
             .expect("login");
         assert_ne!(generation, state.speleodb_session_generation());
         assert!(state.get_project_state().is_some());
+    }
+
+    #[test]
+    fn release_discards_only_unsaved_state_after_validating_the_saved_copy() {
+        crate::test_helpers::with_isolated_config(|| {
+            let (base, handle) = release_stub(REMOTE_ID);
+            let (_temp, state) = editing_fixture(&base);
+            state.mark_remote_dirty();
+            let expected = crate::speleodb::SpeleoReleaseContext {
+                session_generation: state.speleodb_session_generation().to_string(),
+                project_id: REMOTE_ID.into(),
+                endpoint: base,
+                user_email: "u@x".into(),
+            };
+            state
+                .project
+                .lock()
+                .expect("project")
+                .as_mut()
+                .expect("open")
+                .name = "Unsaved name".into();
+            state
+                .speleodb_release_current_lock_with_discard(false, true, Some(expected), true)
+                .expect("discard and release");
+            handle.join().expect("release request");
+            assert_eq!(state.get_project_state().expect("project").name, "Remote");
+            assert!(!state.edit_enabled());
+            assert!(
+                state
+                    .speleodb_open_link()
+                    .expect("saved link")
+                    .has_unpushed_edits
+            );
+        });
+    }
+
+    #[test]
+    fn failed_saved_copy_validation_never_releases_or_replaces_live_state() {
+        let (base, _listener, seen) =
+            recording_stub(r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote"}"#);
+        let (_temp, state) = editing_fixture(&base);
+        let expected = crate::speleodb::SpeleoReleaseContext {
+            session_generation: state.speleodb_session_generation().to_string(),
+            project_id: REMOTE_ID.into(),
+            endpoint: base,
+            user_email: "u@x".into(),
+        };
+        let path = state
+            .get_project_state()
+            .expect("project")
+            .file_path
+            .expect("path");
+        std::fs::rename(&path, path.with_extension("saved-backup"))
+            .expect("make saved path unavailable");
+        state
+            .project
+            .lock()
+            .expect("project")
+            .as_mut()
+            .expect("open")
+            .name = "Unsaved name".into();
+        assert!(state
+            .speleodb_release_current_lock_with_discard(false, true, Some(expected), true)
+            .is_err());
+        assert_eq!(
+            state.get_project_state().expect("project kept").name,
+            "Unsaved name"
+        );
+        assert!(state.edit_enabled());
+        assert!(seen.lock().expect("requests").is_empty());
+    }
+
+    #[test]
+    fn failed_release_does_not_commit_a_prepared_discard() {
+        let (base, _listener, _seen) = recording_stub("not valid JSON");
+        let (_temp, state) = editing_fixture(&base);
+        let expected = crate::speleodb::SpeleoReleaseContext {
+            session_generation: state.speleodb_session_generation().to_string(),
+            project_id: REMOTE_ID.into(),
+            endpoint: base,
+            user_email: "u@x".into(),
+        };
+        state
+            .project
+            .lock()
+            .expect("project")
+            .as_mut()
+            .expect("open")
+            .name = "Unsaved name".into();
+        assert!(state
+            .speleodb_release_current_lock_with_discard(false, true, Some(expected), true)
+            .is_err());
+        assert_eq!(
+            state.get_project_state().expect("project kept").name,
+            "Unsaved name"
+        );
+        assert!(state.edit_enabled());
+    }
+
+    #[test]
+    fn prepared_discard_rejects_a_concurrent_project_edit() {
+        let (_temp, state) = editing_fixture("https://x/");
+        let path = state
+            .get_project_state()
+            .expect("project")
+            .file_path
+            .expect("path");
+        let bytes = serde_json::to_vec(&*state.project.lock().expect("project")).expect("snapshot");
+        let result = state.open_project_prepared(
+            path,
+            Some((state.speleodb_session_generation(), bytes)),
+            || {
+                state
+                    .project
+                    .lock()
+                    .expect("project")
+                    .as_mut()
+                    .expect("open")
+                    .name = "Concurrent edit".into();
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            state.get_project_state().expect("project kept").name,
+            "Concurrent edit"
+        );
     }
 
     #[test]

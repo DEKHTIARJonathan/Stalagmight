@@ -10,8 +10,9 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderHook } from '@testing-library/react';
 
+const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../../utils/ipc', () => ({
-  invokeIpc: vi.fn(),
+  invokeIpc: invokeIpcMock,
   getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
 }));
 
@@ -53,6 +54,7 @@ const openMenu = async () => {
 };
 
 beforeEach(() => {
+  invokeIpcMock.mockReset();
   openDialogMock = vi.fn();
   useSpeleoStore.setState({
     link: LINK,
@@ -70,6 +72,22 @@ describe('SpeleoStatusMenu', () => {
     expect(screen.queryByTestId('speleodb-status-menu')).not.toBeInTheDocument();
     fireEvent.contextMenu(screen.getByTestId('speleodb-status-button'));
     expect(await screen.findByTestId('speleodb-status-menu')).toHaveAttribute('role', 'menu');
+  });
+
+  it.each(['read-only', 'editing'] as const)('left click opens and toggles the menu without changing a %s lock', async (editState) => {
+    useSpeleoStore.setState({ link: { ...LINK, editState } });
+    render(<SpeleoStatusButton />);
+    const trigger = screen.getByTestId('speleodb-status-button');
+    expect(trigger).toHaveAttribute('aria-haspopup', 'menu');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.click(trigger);
+    expect(await screen.findByTestId('speleodb-status-menu')).toBeVisible();
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
+    await userEvent.click(trigger);
+    expect(screen.queryByTestId('speleodb-status-menu')).toBeNull();
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+    expect(openDialogMock).not.toHaveBeenCalled();
   });
 
   it('renders exactly the hamburger submenu ids, in order', async () => {

@@ -90,21 +90,8 @@ export function useProject() {
   }, [saveProject, handleSaveProjectAs, openDialog]);
 
   const handleCloseProject = useCallback(async () => {
-    // A SpeleoDB project we still hold the write lock for routes through the close-
-    // flow guard (release with or without uploading) BEFORE the normal unsaved-changes
-    // prompt, so no in-app close affordance - hamburger Close, Save-and-Close, the
-    // overwrite-confirm close - can leave the server mutex stranded (fix 1). The
-    // dialog owns the actual close and handles both dirty states itself.
-    //
-    // #270: the lock is not the only thing worth guarding, and gating on it ALONE
-    // was the same defect `guardQuit` was fixed for - the states that strand the
-    // work hardest (`notifyReverifyDivergence`, a `ReLogin` that runs
-    // `clearSession()`) are exactly the ones that drop to read-only while KEEPING
-    // the unpushed edits. Closing there returned straight to the home screen with
-    // no notice at all. `needsSpeleoHandBackPrompt` is the exact predicate the two
-    // OTHER hand-back exits (open-another-.stalx, New Project) now use, and its
-    // unpushed-work half is literally shared with `guardQuit`, so none of the four
-    // can silently diverge again.
+    // Saved local work is safe to leave. Only unsaved changes need confirmation;
+    // the backend releases the project lock when the close actually happens.
     if (needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
       openDialog('speleodb-close');
       return { success: false, error: 'Showing dialog' };

@@ -289,7 +289,8 @@ describe('SpeleoManagedFileDialog', () => {
 });
 
 
-it.each(['read-only', 'locked'])('restores the managed prompt after a cancelled %s warning', async (kind) => {
+it.each(['read-only', 'locked'])('restores the managed prompt after cancelling an unsaved switch to a %s project', async (kind) => {
+  useProjectStore.setState({ project: { file_path: '/old.stalx' } as never, isDirty: true });
   confirmMock.mockResolvedValue(false);
   invokeIpcMock.mockResolvedValue([{ ...SUMMARY,
     permission: kind === 'read-only' ? 'READ_ONLY' : 'READ_AND_WRITE',

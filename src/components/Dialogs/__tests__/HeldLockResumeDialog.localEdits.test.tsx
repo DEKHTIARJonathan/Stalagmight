@@ -185,65 +185,13 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
     expect(useSpeleoStore.getState().heldLocks).toHaveLength(2);
   });
 
-  it('refuses to open over a disk-clean project that still owes SpeleoDB work', async () => {
-    // The sibling above covers disk-dirty. This is the case that made this a FIFTH
-    // exit: the open project is saved to disk - so `isDirty` is false and the old
-    // guard waved it through - while still holding un-pushed edits and our write
-    // lock. Closing it backend-side hands neither back; it hides the local copy and
-    // drops the lock. Every other way out of a project routes through
-    // `needsSpeleoHandBackPrompt`, and this one has to as well.
-    useProjectStore.setState({
-      project: { file_path: '/other/open.stalx' } as never,
-      isDirty: false,
-    });
-    useSpeleoStore.setState({
-      link: { editState: 'editing', forceEditing: false, hasUnpushedEdits: true } as never,
-    });
-    const showToast = vi.fn();
-    useUIStore.setState({ showToast });
+  it.each([true, false])('opens another project when current work is saved (unpushed: %s)', async (hasUnpushedEdits) => {
+    useProjectStore.setState({ project: { file_path: '/other/open.stalx' } as never, isDirty: false });
+    useSpeleoStore.setState({ link: { editState: 'editing', forceEditing: false, hasUnpushedEdits } as never });
     wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
     render(<HeldLockResumeDialog />);
-
     await userEvent.click(await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`));
-
-    await waitFor(() => expect(showToast).toHaveBeenCalled());
-    expect(showToast.mock.calls[0]?.[1]).toBe('speleodb-continue-editing-unpushed');
-    expect(loadProjectMock).not.toHaveBeenCalled();
-    // Same shape as the dirty case: nothing acquired, nothing discarded, every lock
-    // still listed so the user can hand the open project back and return here.
-    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(false);
-    expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(true);
-    expect(useSpeleoStore.getState().heldLocks).toHaveLength(2);
-  });
-
-  it('refuses to open over a project whose only outstanding thing is our write lock', async () => {
-    // The sibling above sets BOTH halves of `needsSpeleoHandBackPrompt` at once, so it
-    // passes just as well against a guard that only looked at `hasUnpushedEdits`. This
-    // is the OTHER disjunct on its own: everything is saved and everything is pushed,
-    // and the single thing the open project still owes is the write lock we hold on it.
-    // `loadProject` closes it backend-side, which drops that lock without handing it
-    // back - the very outcome this prompt exists to resolve, done silently to a second
-    // project. `holdsWriteLock` is why the shared predicate has two terms.
-    useProjectStore.setState({
-      project: { file_path: '/other/open.stalx' } as never,
-      isDirty: false,
-    });
-    useSpeleoStore.setState({
-      link: { editState: 'editing', forceEditing: false, hasUnpushedEdits: false } as never,
-    });
-    const showToast = vi.fn();
-    useUIStore.setState({ showToast });
-    wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
-    render(<HeldLockResumeDialog />);
-
-    await userEvent.click(await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`));
-
-    await waitFor(() => expect(showToast).toHaveBeenCalled());
-    expect(showToast.mock.calls[0]?.[1]).toBe('speleodb-continue-editing-unpushed');
-    expect(loadProjectMock).not.toHaveBeenCalled();
-    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(false);
-    expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(true);
-    expect(useSpeleoStore.getState().heldLocks).toHaveLength(2);
+    await waitFor(() => expect(loadProjectMock).toHaveBeenCalled());
   });
 
   // DO-NOT-REGRESS. The hand-back guard must stay INSIDE the same-project branch.

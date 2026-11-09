@@ -3191,18 +3191,18 @@
       "readOnlyBadge": "SpeleoDB · read-only"
     },
     "button": {
-      "unlocked": "Read-only - click to start editing (take the write lock)",
-      "editingUnwound": "This copy is at an older version of the survey - click to choose what to do with it",
-      "editingDirty": "You're editing - click to push your changes and release the write lock",
-      "editingClean": "You hold the write lock - click to release it",
-      "forceEditing": "Editing WITHOUT the write lock - your changes can't be merged until you reconnect. Click to reconnect.",
-      "forceEditingLockedBy": "Editing WITHOUT the write lock ({{email}} holds it) - click to reconnect and reconcile",
-      "lockedByOther": "Being edited by {{email}} - click to pull the latest",
-      "remoteAhead": "SpeleoDB has newer changes - click to pull",
-      "conflict": "Local and remote have diverged - click to resolve",
-      "viewOnly": "Read-only access - click to refresh from SpeleoDB",
-      "noPermission": "You don't have permission to this SpeleoDB project - click for options",
-      "unknownError": "SpeleoDB reported an unexpected error - click for details",
+      "unlocked": "Read-only - open SpeleoDB menu",
+      "editingUnwound": "Viewing an older survey version - open SpeleoDB menu",
+      "editingDirty": "Editing - changes have not been uploaded. Open SpeleoDB menu.",
+      "editingClean": "Editing - open SpeleoDB menu",
+      "forceEditing": "Editing without the lock - open SpeleoDB menu to reconnect",
+      "forceEditingLockedBy": "Editing without the lock (held by {{email}}) - open SpeleoDB menu",
+      "lockedByOther": "Read-only - {{email}} is editing this project. Open SpeleoDB menu.",
+      "remoteAhead": "SpeleoDB has newer changes - open SpeleoDB menu",
+      "conflict": "Local and remote changes need review - open SpeleoDB menu",
+      "viewOnly": "Read-only access - open SpeleoDB menu",
+      "noPermission": "You do not have access to this SpeleoDB project - open SpeleoDB menu",
+      "unknownError": "SpeleoDB reported an unexpected error - open SpeleoDB menu",
       "loggedOut": "Log in to SpeleoDB to edit this project"
     },
     "serverError": {
@@ -3211,9 +3211,9 @@
     },
     "menu": {
       "title": "SpeleoDB",
-      "lock": "Start editing (take the write lock)",
-      "unlock": "Finish editing (push & release)",
-      "push": "Push (keep the write lock)",
+      "lock": "Resume editing",
+      "unlock": "Release editing lock",
+      "push": "Upload changes",
       "refresh": "Refresh from SpeleoDB",
       "discardChanges": "Discard changes…",
       "editWithoutLock": "Edit without the write lock…"
@@ -3649,6 +3649,25 @@
       "releasing": "Releasing…",
       "released": "Write lock released.",
       "releaseFailed": "Could not release the write lock"
+    },
+    "readOnlyNotice": {
+      "title": "Project opened read-only",
+      "lockedBy": "{{email}} is currently editing this project. You can view it, but you cannot make changes.",
+      "unavailable": "The editing lock could not be acquired. You can view this project, but you cannot make changes.",
+      "failed": "The editing lock could not be acquired. This project is open read-only.",
+      "continue": "Continue read-only"
+    },
+    "release": {
+      "title": "Release editing lock",
+      "unsavedMessage": "This project has unsaved changes. Discard them and release the editing lock? Changes already saved on this computer will be kept and will not be uploaded.",
+      "discard": "Discard changes",
+      "released": "Editing lock released. This project is now read-only.",
+      "failed": "Could not release editing lock"
+    },
+    "exit": {
+      "unsavedTitle": "Discard unsaved changes?",
+      "unsavedMessage": "Your unsaved changes will be discarded. Changes already saved on this computer will be kept. Nothing will be uploaded to SpeleoDB.",
+      "discardChanges": "Discard changes"
     }
   },
   "shotKind": {

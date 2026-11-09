@@ -488,12 +488,14 @@ pub async fn speleodb_release_current_lock(
     own_only: Option<bool>,
     allow_unpushed: Option<bool>,
     expected: Option<stalagmight_core::speleodb::SpeleoReleaseContext>,
+    discard_unsaved: Option<bool>,
 ) -> Result<(), SpeleoErrorDto> {
     run_blocking(app, move |s| {
-        s.speleodb_release_current_lock(
+        s.speleodb_release_current_lock_with_discard(
             own_only.unwrap_or(false),
             allow_unpushed.unwrap_or(false),
             expected,
+            discard_unsaved.unwrap_or(false),
         )
     })
     .await

@@ -61,13 +61,10 @@ pub(crate) fn save_project_impl(state: &AppState, path: Option<PathBuf>) -> Comm
 
 /// Close the current project. `release_lock` (default `true`) best-effort releases
 /// a held SpeleoDB write lock first so a close doesn't strand the server mutex
-/// (fix 1); the close dialog's "Keep lock" path passes `false`.
+/// (fix 1); internal transitions that retain the session may pass `false`.
 ///
-/// `true` is a REQUEST, not a guarantee: like every other silent release it goes
-/// through `speleodb_held_lock_release_params`, which declines while the project
-/// has un-pushed edits (see `core::state::speleodb_lock_release`). A caller that
-/// must release regardless - "discard my edits and release" - calls
-/// `speleodb_release_lock` explicitly and then closes.
+/// A release is best-effort: an unavailable server can leave its lock held.
+/// Saved unpublished changes remain in the local project file.
 #[tauri::command]
 pub fn close_project(state: State<AppState>, release_lock: Option<bool>) -> CommandResult {
     close_project_impl(state.inner(), release_lock.unwrap_or(true))
@@ -77,9 +74,9 @@ pub(crate) fn close_project_impl(state: &AppState, release_lock: bool) -> Comman
     // Release a held SpeleoDB lock BEFORE the close tears down the database (the
     // link row lives there). Best-effort + gated so the keep-lock path can opt out.
     if release_lock {
-        state.speleodb_release_held_lock_best_effort();
+        state.speleodb_release_held_lock_on_close();
     } else {
-        // "Keep lock": the user chose to hold the server mutex past this close.
+        // Internal transition: retain the server mutex past this close.
         // Recorded on the claim BEFORE the teardown, while the link row is still
         // readable - and recorded at all because the stranded-claim janitor
         // cannot otherwise tell a deliberate keep from a session that died

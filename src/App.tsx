@@ -1,3 +1,4 @@
+import { SpeleoReadOnlyNotice } from './components/Dialogs/SpeleoReadOnlyNotice';
 import { useEffect, useCallback, useState, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
@@ -791,6 +792,7 @@ function App() {
       {activeDialog === 'new-project' && <NewProjectDialog />}
       {activeDialog === 'open-from-speleodb' && <OpenFromSpeleoDbDialog />}
       {activeDialog === 'publish-to-speleodb' && <PublishToSpeleoDbDialog />}
+      <SpeleoReadOnlyNotice />
       {activeDialog === 'speleodb-done' && <SpeleoDoneDialog />}
       {activeDialog === 'speleodb-divergence' && <SpeleoDivergenceDialog />}
       {activeDialog === 'speleodb-force-edit' && <SpeleoForceEditDialog />}

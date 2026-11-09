@@ -1,40 +1,10 @@
-//! The SILENT, best-effort release paths for a held SpeleoDB write lock.
+//! Lock release for project close, switch, app exit, and logout.
 //!
-//! These are the releases nobody asked for explicitly: closing a project,
-//! switching to another project, and quitting the app. They exist so a normal
-//! close/quit doesn't strand the server mutex locked for every other editor
-//! (fix 1 / M1 / M2). Split out of `core::state::speleodb` so the one gate they
-//! all share - [`AppState::speleodb_held_lock_release_params`] - and the
-//! data-safety rule it enforces live in one small, readable place.
-//!
-//! The DELIBERATE (explicit) release verbs do NOT go through the veto:
-//! `speleodb_done` (push, then release once the push is confirmed),
-//! `speleodb_release_lock` / `speleodb_release_all_locks` (the held-lock prompt's
-//! per-project / release-all), `speleodb_release_current_lock`, and the two
-//! ABANDON verbs - `speleodb_unlink` and `speleodb_take_remote` - via
-//! [`AppState::speleodb_release_held_lock_abandoning`]. A user who asks to drop
-//! the lock still gets to drop it, un-pushed edits or not.
-//!
-//! `speleodb_logout` is NOT in that list: it releases through
-//! [`AppState::speleodb_release_held_lock_best_effort`], veto included. Logging
-//! out is not the same act as surrendering the lock - unlike the abandon verbs it
-//! neither deletes the link row nor discards the edits - and the lock it leaves
-//! held is recoverable, because the next login's scan raises the held-lock prompt
-//! over exactly that project.
-//!
-//! The abandon variant exists because those two verbs are only ever reached WITH
-//! un-pushed edits and deliberately walk away from them: unlink deletes the link
-//! row (a lock kept back could never be released from this project again), and
-//! take-remote discards the local edits by definition, behind the frontend's
-//! second destroy-confirmation.
-//!
-//! `AppState::delete_project` is the third abandon caller and the only one that
-//! cannot use a single verb: it destroys the `.stalx` the link row lives in, so it
-//! has to snapshot with [`AppState::speleodb_abandon_lock_release_params`] while the
-//! database handle is still alive and release with
-//! [`AppState::speleodb_release_captured_lock`] once its teardown - and the `project`
-//! mutex - are out of the way. Destroying the file is the plainest abandon there is,
-//! which is why it takes the un-vetoed snapshot.
+//! Closing, switching, and quitting release the editing lock without uploading or
+//! deleting saved local changes. The frontend confirms discarding unsaved work
+//! before those transitions. Logout retains its separate unpushed-edit veto.
+//! Deferred releases remain scoped to the account, project, and session that
+//! initiated them, so they cannot release a successor editing session's lock.
 
 use std::time::Duration;
 
@@ -69,9 +39,10 @@ pub(super) struct LockReleaseParams {
 /// sees which act they are looking at instead of decoding a bare `bool`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReleaseIntent {
-    /// A SILENT release nobody asked for (close, project switch, quit, logout):
-    /// vetoed when the project still holds un-pushed edits.
+    /// Logout keeps a lock protecting unpublished work.
     Silent,
+    /// End the open editing session, retaining saved unpublished work locally.
+    Lifecycle,
     /// A DELIBERATE abandon of the project's SpeleoDB identity (`speleodb_unlink`,
     /// `speleodb_take_remote`): the user has said outright they are walking away
     /// from the local work, so there is no future push for the veto to protect.
@@ -87,6 +58,11 @@ impl AppState {
     /// thread. Reads the link BEFORE the caller tears down or swaps the database.
     pub(super) fn speleodb_held_lock_release_params(&self) -> Option<LockReleaseParams> {
         self.speleodb_lock_release_params(ReleaseIntent::Silent)
+    }
+
+    /// Snapshot for close/switch/exit, which release without publishing saved edits.
+    pub(super) fn speleodb_lifecycle_lock_release_params(&self) -> Option<LockReleaseParams> {
+        self.speleodb_lock_release_params(ReleaseIntent::Lifecycle)
     }
 
     /// The same snapshot WITHOUT the un-pushed-edits veto, for a deliberate
@@ -106,7 +82,7 @@ impl AppState {
         // so recovery does not depend on the gate or a local claim. Deliberately
         // retained internal claims and the un-pushed-edits veto are protected by
         // `LockClaim::kept`; normal user-facing close and quit release the lock.
-        if !self.edit_enabled() || self.force_editing() {
+        if self.force_editing() || (intent != ReleaseIntent::Lifecycle && !self.edit_enabled()) {
             return None;
         }
         // A `.ok()?` here used to collapse REAL failures into the ordinary "nothing
@@ -130,17 +106,14 @@ impl AppState {
                 return None;
             }
         };
-        // Data-safety asymmetry, deliberate: never SILENTLY release a lock whose
-        // project still has un-pushed local edits. The two failure modes are not
-        // symmetric. Keeping the lock held is recoverable - the user reopens the
-        // project and continues, pushes with Done, or releases on purpose - and the
-        // server lock times out on its own anyway. Releasing while edits are
-        // stranded locally is NOT: the project is immediately free for someone else
-        // to lock and push, and the local edits can then only be reconciled through
-        // a divergence. `speleodb_done` gets this right (it pushes first and only
-        // releases once a re-check confirms the push landed); this gate is what the
-        // silent paths get instead. The user-driven verbs listed in the module doc
-        // bypass this gate on purpose, so "discard my edits and release" still works.
+        // A failed reconciliation can shut the edit gate while leaving an owned
+        // claim. Lifecycle cleanup still releases that claim; an ordinary read-only
+        // open without one never gains permission to release another user's lock.
+        if !self.edit_enabled() && !self.speleodb_lock_acquired_here(&link.project_id) {
+            return None;
+        }
+        // Logout keeps its existing unpublished-work protection. Close/switch/exit
+        // intentionally release while keeping the saved local file and its dirty bit.
         if intent == ReleaseIntent::Silent && link.has_unpushed_edits {
             tracing::info!(
                 project_id = %link.project_id,
@@ -174,6 +147,11 @@ impl AppState {
                 return None;
             }
         };
+        if crate::speleodb::auth::normalize_endpoint(&endpoint)
+            != crate::speleodb::auth::normalize_endpoint(&link.endpoint)
+        {
+            return None;
+        }
         Some(LockReleaseParams {
             endpoint,
             token,
@@ -205,16 +183,8 @@ impl AppState {
         }
     }
 
-    /// Best-effort release of a held SpeleoDB write lock when a remote EDIT session
-    /// is closed, so a normal close/quit doesn't strand the server mutex locked for
-    /// every other editor (fix 1). Unlike [`AppState::speleodb_logout`] it keeps the
-    /// token and the edit gate (the caller's close teardown resets the gate) - it
-    /// only surrenders the server lock. Reads the link BEFORE the caller tears down
-    /// the database. The keep-lock close path skips this by passing
-    /// `release_lock = false` to the close command. A read-only-open or local
-    /// project holds no lock, so this is a no-op there. Synchronous: acceptable on
-    /// the close command (Tauri runs it off the main thread); the app-exit and
-    /// project-switch paths use the bounded / detached variants below instead.
+    /// Logout's best-effort release. Saved unpublished work retains its lock;
+    /// lifecycle transitions instead call the close/detached/bounded variants.
     pub fn speleodb_release_held_lock_best_effort(&self) {
         if let Some(p) = self.speleodb_held_lock_release_params() {
             self.speleodb_release_best_effort(
@@ -224,6 +194,33 @@ impl AppState {
                 &p.project_id,
             );
         }
+    }
+
+    /// Release on a normal project close without uploading or deleting local work.
+    /// Reclaim checks protect a newer session if another open wins the transition.
+    pub fn speleodb_release_held_lock_on_close(&self) {
+        let Some((params, claim, generation)) = self.speleodb_capture_lifecycle_release() else {
+            return;
+        };
+        if let Err(error) = self.speleodb_stand_down_and_release(&params, generation, claim) {
+            tracing::warn!(%error, project_id = %params.project_id, "SpeleoDB lock release on close failed");
+        }
+    }
+
+    fn speleodb_capture_lifecycle_release(
+        &self,
+    ) -> Option<(
+        LockReleaseParams,
+        Option<super::speleodb_session::LockClaim>,
+        u64,
+    )> {
+        let _project = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let params = self.speleodb_lifecycle_lock_release_params()?;
+        let claim = self.speleodb_forget_lock_acquired_for(&params.project_id);
+        Some((params, claim, self.speleodb_session_generation()))
     }
 
     /// Release a held lock for a caller that is ABANDONING the project's SpeleoDB
@@ -447,15 +444,7 @@ impl AppState {
         // is about to be torn down anyway - lock stranded. Left open, there is
         // nothing for the refresh to resurrect, and the release shuts it under the
         // same guard that then decides (`speleodb_stand_down_and_release`).
-        let (p, claim, entry_gen) = {
-            let _proj_guard = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let p = self.speleodb_held_lock_release_params()?;
-            let claim = self.speleodb_forget_lock_acquired_for(&p.project_id);
-            (p, claim, self.speleodb_session_generation())
-        };
+        let (p, claim, entry_gen) = self.speleodb_capture_lifecycle_release()?;
         let (tx, rx) = std::sync::mpsc::channel();
         let sink = self.get_event_sink();
         std::thread::spawn(move || {

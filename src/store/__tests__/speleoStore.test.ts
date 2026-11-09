@@ -784,6 +784,51 @@ describe('speleoStore', () => {
       expect(s.heldLockPromptPending).toBe(false);
     });
 
+    it('does not prompt to recover the project opened while the startup scan was pending', async () => {
+      loggedInAs('me@x');
+      useProjectStore.setState({ project: null });
+      let finish!: (value: unknown) => void;
+      invokeIpcMock.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+      const scan = useSpeleoStore.getState().scanLocksOnOpen();
+      useProjectStore.setState({ project: { file_path: '/current.stalx' } as never });
+      useSpeleoStore.setState({ remoteProjectId: 'p1', heldLockPromptOpen: true });
+      finish([{ id: 'p1', name: 'Current', lock_holder: 'me@x' }]);
+      await scan;
+      expect(useSpeleoStore.getState().heldLocks).toBeNull();
+      expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(false);
+      expect(useSpeleoStore.getState().remoteLocks).toEqual({ p1: 'me@x' });
+      useProjectStore.setState({ project: null });
+    });
+
+    it('defers other held projects until returning home while retaining the current project badge', async () => {
+      loggedInAs('me@x');
+      useProjectStore.setState({ project: { file_path: '/current.stalx' } as never });
+      useSpeleoStore.setState({ remoteProjectId: 'p1' });
+      invokeIpcMock.mockResolvedValue([
+        { id: 'p1', name: 'Current', lock_holder: 'me@x' },
+        { id: 'p2', name: 'Stranded', lock_holder: 'me@x' },
+      ]);
+      await useSpeleoStore.getState().scanLocksOnOpen();
+      expect(useSpeleoStore.getState().heldLocks).toEqual([{ projectId: 'p2', projectName: 'Stranded' }]);
+      expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(false);
+      expect(useSpeleoStore.getState().heldLockPromptPending).toBe(true);
+      expect(useSpeleoStore.getState().remoteLocks).toEqual({ p1: 'me@x', p2: 'me@x' });
+      useProjectStore.setState({ project: null });
+      await useSpeleoStore.getState().scanLocksOnOpen();
+      expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(true);
+    });
+
+    it('defers recovery while the open project id is still resolving', async () => {
+      loggedInAs('me@x');
+      useProjectStore.setState({ project: { file_path: '/current.stalx' } as never });
+      useSpeleoStore.setState({ remoteProjectId: null });
+      invokeIpcMock.mockResolvedValue([{ id: 'p1', name: 'Current', lock_holder: 'me@x' }]);
+      await useSpeleoStore.getState().scanLocksOnOpen();
+      expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(false);
+      expect(useSpeleoStore.getState().heldLockPromptPending).toBe(true);
+      useProjectStore.setState({ project: null });
+    });
+
     it('a routine badge refresh keeps the badges but does NOT re-open the prompt', async () => {
       loggedInAs('me@x');
       useSpeleoStore.setState({ heldLockPromptPending: false, heldLockPromptOpen: false });

@@ -1,3 +1,4 @@
+import { showSpeleoReadOnlyNotice } from '../utils/autoAcquireSpeleoLock';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
@@ -185,13 +186,7 @@ export function useSpeleoActions(): SpeleoActions {
           };
         }
         case 'locked_by':
-          showToast(
-            t('speleodb.editBar.toasts.lockedBy', {
-              email: result.email ?? t('speleodb.editBar.someone'),
-            }),
-            TOAST_KEYS.SPELEODB_LOCKED_BY,
-            'warning',
-          );
+          showSpeleoReadOnlyNotice(t(result.email ? 'speleodb.readOnlyNotice.lockedBy' : 'speleodb.readOnlyNotice.unavailable', { email: result.email }));
           return { editing: false, treeReplaced: false, landed: true };
         case 'divergence_needed':
           return { editing: false, treeReplaced: false, landed: true };
@@ -220,12 +215,14 @@ export function useSpeleoActions(): SpeleoActions {
       }
       return routed.editing;
     } catch (e) {
-      handleError(e, 'speleodb.editBar.toasts.startFailed');
+      if (speleoProjectSessionStillCurrent(issuedFor)) {
+        showSpeleoReadOnlyNotice(humanizeError(e, 'speleodb.readOnlyNotice.failed'));
+      }
       return false;
     } finally {
       endBusy(busyToken);
     }
-  }, [routeStartEditingResult, handleError, beginBusy, endBusy]);
+  }, [routeStartEditingResult, humanizeError, beginBusy, endBusy]);
 
   const discardChanges = useCallback(
     async (

@@ -1,3 +1,4 @@
+import { autoAcquireSpeleoLock, useSpeleoReadOnlyNotice } from '../utils/autoAcquireSpeleoLock';
 import { createSaveProjectAction } from './projectSaveActions';
 import { runDeduplicatedProjectLoad } from '../utils/projectLoadRequests';
 import { create } from 'zustand';
@@ -294,7 +295,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   cancelLoading: () => Promise<void>;
 
   /** Load a project using the consolidated load_project_full command */
-  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number }) => Promise<LoadProjectOutcome>;
+  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number; acquireLock?: boolean }) => Promise<LoadProjectOutcome>;
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
@@ -968,9 +969,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   //
   // Current same-path requests share decoding and geometry work. Ownership is
   // reserved before preflight; operation IDs protect dispatched loads afterward.
-  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number }) =>
+  loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number; acquireLock?: boolean }) =>
     runDeduplicatedProjectLoad(path, opts?.request, (request) => {
     const actionSource = peekProjectActionSource();
+    let openedRemote = false;
+    let acquisitionBusyToken: number | undefined;
     let dispatched = false;
     const current = () => dispatched ? isProjectMutationCurrent(request) :
       isProjectRequestCurrent(request) || (opts?.accessConfirmed === true && isProjectMutationCurrent(request));
@@ -1084,6 +1087,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // `path` identifies WHICH project this link is for, so a link left over
         // from the previously-open remote project is replaced rather than reused.
         useSpeleoStore.getState().syncProjectLink(result.isRemote, path);
+        openedRemote = result.isRemote;
+        if (openedRemote && opts?.acquireLock !== false) acquisitionBusyToken = useSpeleoStore.getState().beginBusy();
+        useSpeleoReadOnlyNotice.setState({ notice: null });
 
         // Apply display settings to UI store (merge, don't overwrite)
         useUIStore.getState().applyDisplaySettings(result.displaySettings);
@@ -1259,7 +1265,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
     }, request);
 
-    return promise;
+    return promise.then(async outcome => {
+      if (outcome.success && openedRemote && opts?.acquireLock !== false && current()) {
+        await autoAcquireSpeleoLock(path, current);
+      }
+      return outcome;
+    }).finally(() => {
+      if (acquisitionBusyToken !== undefined) useSpeleoStore.getState().endBusy(acquisitionBusyToken);
+    });
   }),
 
   // Project operations - uses consolidated create_project_full command

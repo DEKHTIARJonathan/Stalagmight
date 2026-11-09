@@ -6,7 +6,7 @@
  * errand, and a destination that sits among the verbs gets pressed by mistake.
  *
  * Split out of `useProjectMenuItems` so the same `AppMenuItem[]` can back a SECOND
- * surface - the right-click menu on the toolbar's SpeleoDB status button
+ * surface - the menu on the toolbar's SpeleoDB status button
  * (`SpeleoStatusMenu`). Both render these rows with the same ids, so one selector
  * (or one test helper) reaches either surface.
  *
@@ -16,7 +16,7 @@
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoStore, isUnwoundNotEdited } from '../../store/speleoStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { useSpeleoWebLink } from '../../hooks/useSpeleoWebLink';
 import {
@@ -29,31 +29,34 @@ import {
 import type { AppMenuItem } from '../common/AppMenu';
 import { SlidersIcon, PencilIcon, LockIcon } from '../common/icons';
 import { holdsWriteLock } from '../../utils/quit';
+import { permissionAtLeast } from '../../utils/speleoPermission';
+import { releaseOpenProjectLock } from '../../utils/releaseOpenProjectLock';
 
 export function useSpeleoMenuItems(): AppMenuItem[] {
   const { t } = useTranslation();
   const openDialog = useUIStore((s) => s.openDialog);
-  // Select the four PRIMITIVES this hook reads, not the link object: the status
+  // Select the state fields this hook reads, not the link object: the status
   // refresh hands out a fresh object on every status response (`seedFromStatus` allocates), so
   // memoizing on the object meant the memo never held - all seven rows and their
   // `SpeleoBadgedIcon` SVG trees were rebuilt on every refresh, in both consumers
-  // (the hamburger and the status button's right-click menu), for a menu that is
+  // (the hamburger and the status button's menu), for a menu that is
   // usually closed. `useSpeleoProjectMetadata` already does exactly this, for
   // exactly this reason.
   const isRemote = useSpeleoStore((s) => s.link !== null);
+  const permission = useSpeleoStore((s) => s.link?.permission ?? null);
+  const noAccess = useSpeleoStore((s) => s.link?.noAccess ?? false);
+  const serverError = useSpeleoStore((s) => s.link?.serverError ?? null);
+  const conflict = useSpeleoStore((s) => s.divergence !== null || s.link?.remoteState === 'conflict');
   const editState = useSpeleoStore((s) => s.link?.editState ?? null);
   const forceEditing = useSpeleoStore((s) => s.link?.forceEditing ?? false);
   const hasUnpushedEdits = useSpeleoStore((s) => s.link?.hasUnpushedEdits ?? false);
-  // [#303] Dirty only because a chain step walked the copy back - pushing that publishes
-  // a revert, so the rows that would push route to their own confirmation instead.
-  const unwoundNotEdited = useSpeleoStore((s) => isUnwoundNotEdited(s.link));
   const forceEditAllowed = useSpeleoStore((s) => s.link?.forceEditAllowed ?? false);
   // Derived in the SELECTOR so this stays a boolean primitive like its neighbours -
   // the shared predicate applied to the link object, not a sixth hand-rolled copy of
   // `editState === 'editing' && !forceEditing`. That spelling had already drifted at
   // one of its six call sites, which is why `holdsWriteLock` exists.
   const holdsLock = useSpeleoStore((s) => holdsWriteLock(s.link));
-  const { busy, startEditing, update, done } = useSpeleoActions();
+  const { busy, startEditing, update } = useSpeleoActions();
   // No page argument: the plain project page is the one a "take me to this project"
   // row should land on.
   const web = useSpeleoWebLink();
@@ -62,7 +65,21 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
     if (!isRemote) return [];
     const sz = 18;
 
+    const issueItem: AppMenuItem | null = noAccess ? {
+      id: 'speleodb-menu-no-permission', label: t('speleodb.noPermission.convert'),
+      onClick: () => openDialog('speleodb-no-permission'),
+    } : conflict ? {
+      id: 'speleodb-menu-resolve', label: t('speleodb.divergence.title'),
+      onClick: () => openDialog('speleodb-divergence'),
+    } : serverError ? {
+      id: 'speleodb-menu-error', label: t('speleodb.serverError.title'),
+      onClick: () => openDialog('error', {
+        title: t('speleodb.serverError.title'), message: serverError.message, hideReportHint: true,
+      }),
+    } : null;
+
     return [
+      ...(issueItem ? [{ ...issueItem, disabled: busy }] : []),
       editState === 'editing' && forceEditing
         ? {
             // #213: a force-editor holds no lock, so the top action is
@@ -99,11 +116,7 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
             ),
             disabled: busy,
             onClick: () => {
-              // Release; the push&release dialog when there are local edits.
-              // [#303] An unwound copy is not work to push - see the status button.
-              if (unwoundNotEdited) openDialog('speleodb-unwound-push');
-              else if (hasUnpushedEdits) openDialog('speleodb-done');
-              else void done(null);
+              void releaseOpenProjectLock();
             },
           }
         : {
@@ -117,7 +130,7 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
                 testIdPrefix="speleodb-menu-lock-icon"
               />
             ),
-            disabled: busy,
+            disabled: busy || noAccess || (permission !== null && !permissionAtLeast(permission, 'READ_AND_WRITE')),
             onClick: () => {
               void startEditing();
             },
@@ -138,7 +151,7 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
         // who has the edit gate open with no lock (#213) and therefore normally has
         // unpushed edits, that being the point of force-editing - and the backend can
         // only refuse it ("reconnect to acquire the write lock before pushing").
-        // Newly reachable from the far more discoverable right-click status menu.
+        // Newly reachable from the status menu.
         disabled: busy || !holdsLock || !hasUnpushedEdits,
         // Collect a commit message via the done dialog in push mode (like
         // push & release, but the lock is retained - fix 8).
@@ -241,16 +254,18 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
     t,
     openDialog,
     isRemote,
+    permission,
+    noAccess,
+    serverError,
+    conflict,
     editState,
     forceEditing,
     holdsLock,
     hasUnpushedEdits,
-    unwoundNotEdited,
     forceEditAllowed,
     busy,
     startEditing,
     update,
-    done,
     web.url,
     web.open,
   ]);

@@ -10,6 +10,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 
+const releaseMock = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock('../../../utils/releaseOpenProjectLock', () => ({ releaseOpenProjectLock: releaseMock }));
+
 vi.mock('../../../utils/ipc', () => ({
   invokeIpc: vi.fn(),
   getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
@@ -44,9 +47,11 @@ function items(o: Partial<SpeleoLinkState> = {}): AppMenuItem[] {
 const ids = (o: Partial<SpeleoLinkState> = {}): string[] => items(o).map((it) => it.id);
 
 beforeEach(() => {
+  releaseMock.mockClear();
   useSpeleoStore.setState({
     link: null,
     remoteProjectId: 'p1',
+    divergence: null,
     session: { loggedIn: true, userEmail: 'me@x', endpoint: 'https://x/', },
   });
 });
@@ -144,31 +149,27 @@ describe('useSpeleoMenuItems destinations', () => {
   });
 });
 
-/**
- * [#303] The status button and this menu open the push DIALOG directly when the copy is
- * dirty, which walks straight past the guard inside `done()`. So an unwound copy has to be
- * branched here too, or the user meets "Push & release" before anything explains that
- * pushing it publishes a revert.
- */
-describe('useSpeleoMenuItems - an unwound copy does not route to a push (#303)', () => {
-  it('opens the unwound confirmation instead of the done dialog', () => {
+describe('useSpeleoMenuItems explicit release', () => {
+  it.each([true, false])('releases without opening an upload dialog (unwound: %s)', (unwound) => {
     const openDialog = vi.fn();
     useUIStore.setState({ openDialog });
-    const menu = items({ editState: 'editing', hasUnpushedEdits: true, unwound: true });
-
+    const menu = items({ editState: 'editing', hasUnpushedEdits: true, unwound });
     menu.find((i) => i.id === 'speleodb-menu-unlock')?.onClick?.();
-
-    expect(openDialog).toHaveBeenCalledWith('speleodb-unwound-push');
-    expect(openDialog).not.toHaveBeenCalledWith('speleodb-done');
+    expect(releaseMock).toHaveBeenCalledOnce();
+    expect(openDialog).not.toHaveBeenCalled();
   });
+});
 
-  it('still routes an ordinary dirty copy to the done dialog', () => {
-    const openDialog = vi.fn();
-    useUIStore.setState({ openDialog });
-    const menu = items({ editState: 'editing', hasUnpushedEdits: true, unwound: false });
+it('does not offer editing to an account with read-only permission', () => {
+  expect(items({ permission: 'READ_ONLY' }).find((item) => item.id === 'speleodb-menu-lock')?.disabled).toBe(true);
+});
 
-    menu.find((i) => i.id === 'speleodb-menu-unlock')?.onClick?.();
-
-    expect(openDialog).toHaveBeenCalledWith('speleodb-done');
-  });
+it.each([
+  [{ noAccess: true }, 'speleodb-menu-no-permission', 'speleodb-no-permission'],
+  [{ remoteState: 'conflict' }, 'speleodb-menu-resolve', 'speleodb-divergence'],
+] as const)('keeps issue resolution reachable through the menu (%s)', (state, id, dialog) => {
+  const openDialog = vi.fn();
+  useUIStore.setState({ openDialog });
+  items(state).find((item) => item.id === id)?.onClick?.();
+  expect(openDialog).toHaveBeenCalledWith(dialog);
 });

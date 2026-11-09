@@ -15,7 +15,15 @@ impl AppState {
     /// strand the shell on a project the backend no longer has open. If this is
     /// ever exposed over IPC, the guard question returns; a tripwire test pins
     /// the non-exposure (`the_legacy_open_project_is_not_exposed_over_ipc`).
-    pub(super) fn open_project(&self, path: PathBuf) -> CommandResult {
+    pub(super) fn open_project_prepared<F>(
+        &self,
+        path: PathBuf,
+        expected: Option<(u64, Vec<u8>)>,
+        before_commit: F,
+    ) -> std::result::Result<CommandResult, crate::speleodb::SpeleoErrorDto>
+    where
+        F: FnOnce() -> std::result::Result<(), crate::speleodb::SpeleoErrorDto>,
+    {
         tracing::info!(
             path = ?path,
             purpose = "resume editing",
@@ -41,7 +49,10 @@ impl AppState {
                     reason = "file not found",
                     "Project open failed"
                 );
-                return CommandResult::failure(format!("File not found: {}", path.display()));
+                return Ok(CommandResult::failure(format!(
+                    "File not found: {}",
+                    path.display()
+                )));
             }
             Err(e) => {
                 let e = anyhow::Error::from(e);
@@ -52,11 +63,11 @@ impl AppState {
                         reason = "permission denied",
                         "Project open failed"
                     );
-                    return CommandResult::failure(format!(
+                    return Ok(CommandResult::failure(format!(
                         "{}: Cannot access {}: {e}",
                         crate::core::loading::PERMISSION_DENIED_CODE,
                         path.display()
-                    ));
+                    )));
                 }
                 tracing::warn!(
                     path = ?path,
@@ -64,7 +75,10 @@ impl AppState {
                     reason = %e,
                     "Project open failed (metadata access error)"
                 );
-                return CommandResult::failure(format!("File not found: {}", path.display()));
+                return Ok(CommandResult::failure(format!(
+                    "File not found: {}",
+                    path.display()
+                )));
             }
         }
 
@@ -78,7 +92,7 @@ impl AppState {
                     reason = %e,
                     "Failed to open project database"
                 );
-                return CommandResult::failure(format!("{e}"));
+                return Ok(CommandResult::failure(format!("{e}")));
             }
         };
 
@@ -91,7 +105,9 @@ impl AppState {
                     reason = %e,
                     "Failed to load project data"
                 );
-                return CommandResult::failure(format!("Failed to load project data: {e}"));
+                return Ok(CommandResult::failure(format!(
+                    "Failed to load project data: {e}"
+                )));
             }
         };
 
@@ -165,7 +181,15 @@ impl AppState {
         //
         // [#469] Read BEFORE the entries rather than after, because the depth it resolves
         // is also the bound the LOAD runs under; see `history_load_row_cap`.
-        let mut speleo_link = db.load_speleo_link().ok().flatten();
+        let mut speleo_link = match db.load_speleo_link() {
+            Ok(link) => link,
+            Err(error) if expected.is_some() => {
+                return Err(super::speleodb::local_dto(
+                    crate::speleodb::SpeleoDbError::Io(error.to_string()),
+                ))
+            }
+            Err(_) => None,
+        };
         if let Some(link) = &mut speleo_link {
             self.materialize_undo_mode(&db, link);
         }
@@ -188,6 +212,11 @@ impl AppState {
                     .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
                     .collect::<Vec<_>>(),
                 Err(e) => {
+                    if expected.is_some() {
+                        return Err(super::speleodb::local_dto(
+                            crate::speleodb::SpeleoDbError::Io(e.to_string()),
+                        ));
+                    }
                     tracing::warn!(
                         error = %e,
                         purpose = "restore edit history",
@@ -204,6 +233,11 @@ impl AppState {
                     .map(|(_, cmd, undo, ts)| (cmd, undo, ts))
                     .collect::<Vec<_>>(),
                 Err(e) => {
+                    if expected.is_some() {
+                        return Err(super::speleodb::local_dto(
+                            crate::speleodb::SpeleoDbError::Io(e.to_string()),
+                        ));
+                    }
                     tracing::warn!(
                         error = %e,
                         purpose = "restore edit history",
@@ -228,6 +262,33 @@ impl AppState {
                     .map(|dt| dt.with_timezone(&chrono::Utc))
             });
 
+        let saved_link_matches = || {
+            speleo_link.as_ref().is_some_and(|saved| {
+                self.speleodb_open_link().is_ok_and(|live| {
+                    saved.project_id == live.project_id
+                        && crate::speleodb::auth::normalize_endpoint(&saved.endpoint)
+                            == crate::speleodb::auth::normalize_endpoint(&live.endpoint)
+                })
+            })
+        };
+        // A discard is consent for the exact in-memory project captured before
+        // reading its saved copy. Check before HTTP and again under the commit lock.
+        if let Some((generation, bytes)) = &expected {
+            let current = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if self.speleodb_session_generation() != *generation
+                || !saved_link_matches()
+                || serde_json::to_vec(&*current).ok().as_deref() != Some(bytes.as_slice())
+            {
+                return Err(super::speleodb::local_dto(
+                    crate::speleodb::SpeleoDbError::SessionMoved,
+                ));
+            }
+        }
+        before_commit()?;
+
         // ALL commits under ONE `project` acquisition, exactly as
         // `do_load_project_full`'s finalization and for the same reason (round
         // 5): the delete's check-and-teardown serializes on this mutex, and a
@@ -238,6 +299,16 @@ impl AppState {
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some((generation, bytes)) = &expected {
+            if self.speleodb_session_generation() != *generation
+                || !saved_link_matches()
+                || serde_json::to_vec(&*proj_guard).ok().as_deref() != Some(bytes.as_slice())
+            {
+                return Err(super::speleodb::local_dto(
+                    crate::speleodb::SpeleoDbError::SessionMoved,
+                ));
+            }
+        }
         *proj_guard = Some(project);
         // A session boundary (a project committed into the slot), bumped under
         // the guard per the `speleodb_session` rule.
@@ -336,7 +407,14 @@ impl AppState {
             purpose = "resume editing",
             "Project opened"
         );
-        CommandResult::success()
+        Ok(CommandResult::success())
+    }
+
+    pub(super) fn open_project(&self, path: PathBuf) -> CommandResult {
+        match self.open_project_prepared(path, None, || Ok(())) {
+            Ok(result) => result,
+            Err(error) => CommandResult::failure(error.message),
+        }
     }
 
     /// Load a project with full progress reporting.

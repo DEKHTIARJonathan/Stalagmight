@@ -33,30 +33,9 @@ type ButtonKind =
   | 'unknown_error';
 
 /**
- * The single SpeleoDB status button (T2c), mounted right of the hamburger when a
- * remote project is open. The white logo carries a state glyph + color; one click
- * drives the hand-off:
- * - (no badge) read-only, up to date - the resting state → acquire the write lock
- *   (Start editing). Bare on purpose: nothing is wrong and nothing is held, so it
- *   is the one state with nothing to announce.
- * - 🟢 pen (we hold the write lock) → release; if dirty, the push&release dialog
- * - 🟥 crossed-pencil on faint red (force-editing WITHOUT the lock, #213) → Reconnect
- * - 🟠 hourglass (someone else holds it) → pull the latest; if dirty, resolve
- * - 🔵 pull (remote advanced) → pull the latest; if dirty, resolve
- * - ✏️̸ crossed pencil (read-only / web-viewer permission) → refresh the .stalx
- * - 🟥 crimson (conflict) → the resolution dialog (#198)
- * - ❗ red exclamation (no permission - shared as a file) → offer converting to a
- *   plain unmanaged .stalx (fix 10)
- *
- * Across ALL of those states (#270) the mark itself turns from white to yellow
- * whenever the project has edits that are not on SpeleoDB, and gains a standalone
- * yellow "!" when those edits are not even protected by a held lock - which is what
- * makes the "unlocked" state stop being dirty-blind.
- *
- * A RIGHT-click opens the hamburger's SpeleoDB submenu against the button instead
- * (`SpeleoStatusMenu`), so every hand-off verb is reachable from the indicator that
- * reports the state, not only the one the left click happens to be wired to.
- *
+ * SpeleoDB project status and its actions menu. Both mouse buttons open the same
+ * menu; inspecting status never acquires or releases the project's editing lock.
+ * The badge and tint report editing access and changes held only on this computer.
  */
 export function SpeleoStatusButton() {
   const { t } = useTranslation();
@@ -64,10 +43,9 @@ export function SpeleoStatusButton() {
   const link = useSpeleoStore((s) => s.link);
   const loggedIn = useSpeleoStore((s) => s.session?.loggedIn ?? false);
   const divergence = useSpeleoStore((s) => s.divergence);
-  const openDialog = useUIStore((s) => s.openDialog);
   const appMode = useUIStore((s) => s.appMode);
-  const { busy, startEditing, update, done } = useSpeleoActions();
-  // The right-click menu's rows - the same array the hamburger's SpeleoDB submenu
+  const { busy } = useSpeleoActions();
+  // The menu's rows - the same array the hamburger's SpeleoDB submenu
   // renders. Held in LOCAL state rather than the `activeDialog` slot: the store-driven
   // ContextMenu is hard-wired to survey-entity targets, and routing through
   // `activeDialog` would evict the very dialogs these rows open.
@@ -84,8 +62,7 @@ export function SpeleoStatusButton() {
   // "unlocked" state stops being dirty-blind.
   // [#303] ...unless the ONLY reason it is set is that a chain step walked this copy back
   // to an older version. There is nothing of the user's on this computer then, so tinting
-  // the mark "you have work at risk" and routing the click to a push both say the wrong
-  // thing - and the push in particular publishes a revert.
+  // the mark "you have work at risk" would describe edits the user never made.
   const unwoundNotEdited = isUnwoundNotEdited(link);
   const unpushed = link.hasUnpushedEdits && !unwoundNotEdited;
   // We hold the server write lock - see `holdsWriteLock` for why force-editing is
@@ -97,7 +74,7 @@ export function SpeleoStatusButton() {
   const tint = unpushed ? UNPUSHED_ACCENT : undefined;
   // Appended to whichever state title applies, so the new dirty variants of the
   // existing states all say the one thing the user needs to know. Left off when we
-  // hold the lock: those titles already talk about pushing.
+  // hold the lock: those titles already describe the pending upload.
   const unpushedSuffix = unpushedUnlocked ? ` ${t('speleodb.localEdits.titleSuffix')}` : '';
 
   // The standalone "!", rendered beside the mark (not on it - the corner badge is
@@ -190,77 +167,7 @@ export function SpeleoStatusButton() {
                 ? 'remote_ahead'
                 : 'unlocked';
 
-  const handleClick = () => {
-    // While the right-click menu is open the button is a TOGGLE, not the verb.
-    // `useDismissableLayer` treats a mousedown on the trigger as "inside" and does
-    // not dismiss - right for AppMenu, whose trigger toggles, but here the verb
-    // behind this button is the destructive hand-off (start editing, release, or
-    // the push & release dialog). Without this, a user who right-clicked to look at
-    // the menu and then left-clicked to dismiss it acquired or released the
-    // SpeleoDB write lock they never asked for, and the stale menu stayed open over
-    // the changed state.
-    if (menuOpen) {
-      setMenuOpen(false);
-      return;
-    }
-    switch (kind) {
-      case 'unlocked':
-        void startEditing();
-        break;
-      case 'editing':
-        // Release; push & release via the dialog when there are local changes. An
-        // unwound copy takes its own confirmation instead: `done` guards the push, but
-        // this route opens the push DIALOG first, so without the branch the user meets
-        // "Push & release" before anything has a chance to explain what it would do.
-        if (unwoundNotEdited) openDialog('speleodb-unwound-push');
-        else if (link.hasUnpushedEdits) openDialog('speleodb-done');
-        else void done(null);
-        break;
-      case 'force_edit':
-        // We hold no lock, so the action is Reconnect (acquire + reconcile). If the
-        // acquire finds divergence it reports it and the App effect opens the
-        // resolution dialog; if someone else holds it, it reports "locked by {email}".
-        void startEditing();
-        break;
-      case 'locked_by_other':
-        // Try to take the lock - the acquire fails while someone else holds it and
-        // reports "unable to lock - being edited by {email}", or succeeds if they've
-        // since released it.
-        void startEditing();
-        break;
-      case 'view_only':
-        // Read-only access: the only meaningful action is pulling the latest.
-        void update();
-        break;
-      case 'remote_ahead':
-        // Pull the latest; hand off to the resolution dialog if we'd clobber edits.
-        if (link.hasUnpushedEdits) openDialog('speleodb-divergence');
-        else void update();
-        break;
-      case 'conflict':
-        openDialog('speleodb-divergence');
-        break;
-      case 'no_permission':
-        // No access on the server - offer converting to a plain local .stalx.
-        openDialog('speleodb-no-permission');
-        break;
-      case 'unknown_error':
-        // Nothing to act on - just surface what SpeleoDB actually said (a deleted
-        // project, a 5xx, ...) in the generic error dialog (fix 12).
-        openDialog('error', {
-          title: t('speleodb.serverError.title'),
-          message: link.serverError?.message ?? t('speleodb.serverError.fallback'),
-          hideReportHint: true,
-        });
-        break;
-    }
-  };
-
-  // `unlocked` gets NO badge: it is the resting state of a remote project - nothing
-  // is wrong, nothing is held, nothing needs doing - and decorating it spent the
-  // badge slot on the one case that has nothing to say. The tooltip still offers
-  // "click to start editing", and the #270 yellow tint still calls out un-pushed
-  // work, so the two things worth noticing keep their signal.
+  // The indicator reports state; changing the lock requires an explicit menu action.
   const glyph =
     kind === 'unlocked' ? null : kind === 'editing' ? (
       <PenGlyph size={11} />
@@ -320,8 +227,7 @@ export function SpeleoStatusButton() {
     kind === 'unlocked'
       ? t('speleodb.button.unlocked')
       : kind === 'editing'
-        ? // [#303] An unwound copy holds none of the user's work, so "push your changes"
-          // names something that does not exist - and the click does not go there either.
+        ? // An unwound copy is an older version, not new edits waiting to upload.
           unwoundNotEdited
           ? t('speleodb.button.editingUnwound')
           : link.hasUnpushedEdits
@@ -350,7 +256,7 @@ export function SpeleoStatusButton() {
       <button
         ref={buttonRef}
         type="button"
-        onClick={handleClick}
+        onClick={() => setMenuOpen((open) => !open)}
         // Known limitation: `onContextMenu` never fires on a DISABLED button, so
         // right-click is inert while `busy` and in the logged-out branch above.
         // Both are states in which every row of the menu would be disabled anyway,
@@ -360,6 +266,8 @@ export function SpeleoStatusButton() {
           setMenuOpen(true);
         }}
         disabled={busy}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
         title={`${title}${unpushedSuffix}`}
         aria-label={`${title}${unpushedSuffix}`}
         data-testid="speleodb-status-button"

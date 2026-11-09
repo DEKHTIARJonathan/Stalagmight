@@ -188,22 +188,7 @@ export function resetUpdateRestartForTests(): void {
   updateRestartArmed = false;
 }
 
-/**
- * Work that exists ONLY on this computer: edits SpeleoDB has never seen.
- *
- * Shared by EVERY exit ({@link guardQuit} plus the three hand-back exits behind
- * {@link needsSpeleoHandBackPrompt}) so they cannot drift again. The predicate
- * keys on the WORK AT RISK, not on the lock, because the states where the work is
- * most stranded are precisely the ones that drop the lock while keeping the
- * edits: `notifyReverifyDivergence()` sets read-only, and any `ReLogin` error
- * runs `clearSession()`, which does too.
- *
- * Quit needs only this - and deliberately so: holding the lock with nothing
- * unpushed is safe to walk away from, because the backend's exit-time release
- * vetoes itself when there ARE unpushed edits (aab5121d). The hand-back exits
- * additionally have to resolve a held lock, since they hand the project back
- * while the app keeps running.
- */
+/** Saved local work that has not reached SpeleoDB. This does not require an exit prompt. */
 export function hasUnpushedSpeleoWork(link: SpeleoLinkState | null): boolean {
   return link?.hasUnpushedEdits === true;
 }
@@ -225,28 +210,10 @@ export function holdsWriteLock(link: SpeleoLinkState | null): boolean {
   return link?.editState === 'editing' && !link.forceEditing;
 }
 
-/**
- * The SpeleoDB guard for every exit that HANDS THE OPEN PROJECT BACK while the app
- * keeps running. There are three, and they are reached from the same in-project
- * hamburger menu, so a user has no reason to expect them to differ:
- *
- * - Close                (`useProject.handleCloseProject`)
- * - Open another `.stalx` (`routeOpenedFile`, also Ctrl+O and drag-drop)
- * - New Project          (`newProjectGuarded`, also Ctrl+N)
- *
- * Both terms are needed and neither subsumes the other. The held lock must be
- * resolved because the app keeps running, so nothing else will ever release it -
- * this is what {@link guardQuit} does NOT need, since the backend releases on
- * process exit. The unpushed work must be surfaced because nothing else surfaces
- * it, and it survives in the cache `.stalx` long after the project is swapped out.
- *
- * Only the close exit used to have EITHER: opening another project or starting a
- * new one gated on disk-dirty alone, so a remote project saved to disk with
- * unpushed edits was swapped out with no notice at all - the same defect, on the
- * two exits nobody had looked at.
- */
+/** Only unsaved local changes require a decision when leaving a linked project.
+ * Saved, unpushed work remains in the local file; closing releases the lock. */
 export function needsSpeleoHandBackPrompt(link: SpeleoLinkState | null): boolean {
-  return hasUnpushedSpeleoWork(link) || holdsWriteLock(link);
+  return link !== null && useProjectStore.getState().isDirty;
 }
 
 /**
@@ -316,7 +283,7 @@ export function closeExitStillCurrent(exit: { request?: number; sessionGeneratio
  */
 export async function handBackProject(
   exit: { pendingOpenPath?: string | null; pendingNewProject?: boolean; accessConfirmed?: boolean; request?: number; sessionGeneration?: number },
-  opts?: { releaseLock?: boolean },
+  opts?: { releaseLock?: boolean; onClosed?: () => void; onFailure?: (message: string) => void },
 ): Promise<void> {
   const request = exit.request ?? reserveProjectRequest();
   let dispatched = false;
@@ -334,8 +301,15 @@ export async function handBackProject(
   }
   if (!current()) return;
   dispatched = true;
-  const result = await closeProject({ ...opts, request });
-  if (!current() || !result.success) return;
+  const result = await closeProject({ ...(opts?.releaseLock === undefined ? {} : { releaseLock: opts.releaseLock }), request });
+  if (!current()) return;
+  if (!result.success) {
+    const message = result.error || 'Could not close the project. Your project is still open.';
+    if (opts?.onFailure) opts.onFailure(message);
+    else useUIStore.getState().openDialog('error', { title: 'Close failed', message });
+    return;
+  }
+  opts?.onClosed?.();
   // loadProject switches the view and surfaces its own failures.
   if (exit.pendingOpenPath) await loadProject(exit.pendingOpenPath, { accessConfirmed: true, request });
   // `createProject` seeds the shell from here; the close above already left us on the
@@ -380,31 +354,12 @@ export function openExitPrompt(dialog: string, data?: Record<string, unknown>): 
   else openDialog(dialog, { ...data, ...displaced });
 }
 
-/**
- * The exit guards, in the order the close flow uses them (see
- * `useProject.handleCloseProject`). Returns `true` when a dialog was opened and
- * the caller must NOT quit; `false` when there is nothing to protect.
- *
- * Ordering - SpeleoDB first, unsaved-to-disk second - is the same as the
- * close-project flow's, and matters because the two conditions overlap: a project
- * can be both unsaved to disk AND unpushed to the server. The SpeleoDB prompt is
- * the one that subsumes the other (it carries its own "Save changes locally"
- * checkbox, defaulted to on, exactly like `SpeleoCloseDialog`), so running it
- * first composes the two into ONE decision. The reverse order could not: the
- * unsaved-changes dialog knows nothing about the lock, so its "Discard & Quit"
- * would quit straight past the unpushed edits.
- *
- * Both branches terminate: each dialog quits via {@link performQuit}, which
- * arms the one-shot confirmation so the resulting close request skips this
- * guard entirely.
- */
+/** Ask only about unsaved local changes. Saved work never triggers an upload prompt. */
 export function guardQuit(): boolean {
   const { project, isDirty } = useProjectStore.getState();
   if (!project) return false;
 
   const link = useSpeleoStore.getState().link;
-  // A held lock always offers a deliberate local keep-lock exit, including when
-  // nothing is pending. Unpushed work still prompts after loss of editing access.
   if (needsSpeleoHandBackPrompt(link)) {
     openExitPrompt('speleodb-quit');
     return true;

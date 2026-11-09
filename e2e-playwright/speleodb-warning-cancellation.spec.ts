@@ -4,12 +4,14 @@ import { createProject, setupMockedPage } from './helpers/app';
 // Synthetic projects only. Exercise the real native-confirm IPC seam.
 for (const dialog of ['open-from-speleodb', 'speleodb-managed-file'] as const) {
   for (const warning of ['read-only', 'locked'] as const) {
-    test(`${dialog} recovers after cancelling the ${warning} warning`, async ({ page }) => {
+    test(`${dialog} preserves unsaved work when cancelling a switch to a ${warning} project`, async ({ page }) => {
       await setupMockedPage(page);
+      await createProject(page, 'Synthetic unsaved source');
       await page.evaluate(({ dialog, warning }) => {
         const w = window as unknown as {
           __MOCK_IPC_OVERRIDES__: Record<string, unknown>;
           __E2E_TEST__: {
+            projectStore: { setState: (state: unknown) => void };
             speleoStore: { setState: (state: unknown) => void };
             uiStore: { getState: () => { openDialog: (name: string, data?: unknown) => void } };
           };
@@ -21,6 +23,7 @@ for (const dialog of ['open-from-speleodb', 'speleodb-managed-file'] as const) {
             lock_holder: warning === 'locked' ? 'other@example.com' : null }],
           'plugin:dialog|confirm': false,
         };
+        w.__E2E_TEST__.projectStore.setState({ isDirty: true });
         w.__E2E_TEST__.speleoStore.setState({ session: {
           loggedIn: true, endpoint: 'https://synthetic.example', userEmail: 'test@example.com',
         } });
@@ -38,13 +41,13 @@ for (const dialog of ['open-from-speleodb', 'speleodb-managed-file'] as const) {
       await expect(open).toBeEnabled();
       await page.getByTestId(managed ? 'speleodb-managed-file-cancel' : 'open-from-speleodb-close').click();
       await expect(page.getByTestId(managed ? 'speleodb-managed-file-dialog' : 'open-from-speleodb-dialog')).toBeHidden();
-      await expect(page.getByTestId('global-view')).toBeVisible();
+      await expect(page.getByTestId('single-system-view')).toBeVisible();
     });
   }
 }
 
 
-for (const button of ['speleodb-close-release', 'speleodb-close-push-release']) {
+for (const button of ['speleodb-close-discard']) {
   test(`close protects the destination probe for ${button}`, async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Synthetic close protection');
@@ -62,8 +65,8 @@ for (const button of ['speleodb-close-release', 'speleodb-close-push-release']) 
       w.__sideEffects = [];
       w.__MOCK_IPC_OVERRIDES__ = {
         'plugin:dialog|confirm': false,
-        speleodb_project_access_at: new Promise((resolve) => {
-          w.__finishProbe = () => resolve({ project: { name: 'Synthetic destination', permission: 'READ_ONLY', lock_holder: null }, endpoint: 'https://example.com', verification: 'verified' });
+        speleodb_project_access_at: new Promise((_resolve, reject) => {
+          w.__finishProbe = () => reject(new Error('Synthetic probe failure'));
         }),
       };
       for (const command of ['save_project', 'speleodb_done', 'speleodb_release_current_lock', 'close_project', 'load_project_full_binary']) {
@@ -79,16 +82,16 @@ for (const button of ['speleodb-close-release', 'speleodb-close-push-release']) 
       } });
       w.__E2E_TEST__.uiStore.getState().openDialog('speleodb-close', { pendingOpenPath: '/synthetic/destination.stalx' });
     });
-    await page.getByRole('textbox', { name: 'Commit message' }).fill('Synthetic update');
     await page.getByTestId(button).click();
     await expect(page.getByTestId('speleodb-close-cancel')).toBeDisabled();
-    await expect(page.getByTestId('speleodb-close-save-locally')).toBeDisabled();
+    await expect(page.getByTestId('speleodb-close-discard')).toBeDisabled();
     await page.keyboard.press('Escape');
     await page.getByTestId('speleodb-close-dialog-close').click();
     await expect(page.getByTestId('speleodb-close-dialog')).toBeVisible();
     await page.evaluate(() => (window as unknown as { __finishProbe: () => void }).__finishProbe());
-    await expect(page.getByTestId(button)).toBeEnabled();
+    await expect(page.getByTestId('speleodb-close-error')).toContainText('Synthetic probe failure');
     expect(await page.evaluate(() => (window as unknown as { __sideEffects: string[] }).__sideEffects)).toEqual([]);
+    await expect(page.getByTestId('speleodb-close-cancel')).toBeEnabled();
     await page.getByTestId('speleodb-close-cancel').click();
     await expect(page.getByTestId('speleodb-close-dialog')).toBeHidden();
   });

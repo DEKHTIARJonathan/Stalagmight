@@ -966,13 +966,20 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           // (returning to recents, the refresh button). That is what stops the prompt
           // re-appearing on every recents visit while still firing on login + app-start.
           const promptWorthy = opts?.prompt === true || state.heldLockPromptPending;
+          // Opening a project now acquires its lock. A slow startup scan must not
+          // describe that active edit session as a stranded lock to recover.
+          const projectOpen = useProjectStore.getState().project !== null;
+          const openProjectId = projectOpen ? state.remoteProjectId : null;
+          const recoveryLocks = heldLocks.filter(lock => lock.projectId !== openProjectId);
           return {
             remoteLocks,
             remoteProjects,
             remoteSummaries,
-            heldLocks: heldLocks.length > 0 ? heldLocks : null,
-            heldLockPromptPending: false,
-            ...(promptWorthy && heldLocks.length > 0 ? { heldLockPromptOpen: true } : {}),
+            heldLocks: recoveryLocks.length > 0 ? recoveryLocks : null,
+            // Defer recovery until the home screen rather than covering an active
+            // project. Its id can still be unknown while the first status is pending.
+            heldLockPromptPending: projectOpen && recoveryLocks.length > 0 && promptWorthy,
+            heldLockPromptOpen: !projectOpen && recoveryLocks.length > 0 && (promptWorthy || state.heldLockPromptOpen),
           };
         });
       } catch {
