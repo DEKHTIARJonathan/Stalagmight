@@ -3,6 +3,33 @@ use super::speleodb::local_dto;
 use super::AppState;
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 
+/// Delete only this account's obsolete app-owned plaintext file. Never read or
+/// import its contents, inspect other accounts, or access a system keychain.
+fn remove_legacy_token(
+    config_path: &std::path::Path,
+    endpoint: &str,
+    email: &str,
+) -> Result<(), SpeleoErrorDto> {
+    let filename: String = crate::speleodb::auth::account_key(endpoint, email)
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let root = config_path
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."));
+    match std::fs::remove_file(root.join("speleodb").join("tokens").join(filename)) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => Err(local_dto(SpeleoDbError::Io("Signed out, but an obsolete plaintext SpeleoDB credential could not be removed. Try signing out again.".into()))),
+    }
+}
+
 impl AppState {
     /// Clear the token while holding the same lock used by settings saves.
     pub(super) fn speleodb_clear_saved_token(&self) -> Result<(), SpeleoErrorDto> {
@@ -14,7 +41,16 @@ impl AppState {
         config.speleodb.preserve_unreadable_file = false;
         config.save_speleodb().map_err(|_| local_dto(SpeleoDbError::Io(
             "Signed out, but the saved SpeleoDB token could not be removed. Try signing out again.".to_owned()
-        )))
+        )))?;
+        if let (Some(endpoint), Some(email)) = (&config.speleodb.endpoint, &config.speleodb.email) {
+            let path = crate::config::Config::config_path().map_err(|_| {
+                local_dto(SpeleoDbError::Io(
+                    "Could not locate obsolete SpeleoDB credentials".into(),
+                ))
+            })?;
+            remove_legacy_token(&path, endpoint, email)?;
+        }
+        Ok(())
     }
 
     pub fn speleodb_logout(&self) -> Result<(), SpeleoErrorDto> {
@@ -76,5 +112,48 @@ impl AppState {
                 self.set_force_editing(false);
             }
         }
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "synthetic legacy credential cleanup tests"
+)]
+mod tests {
+    use super::*;
+    #[test]
+    fn logout_removes_only_the_current_accounts_obsolete_plaintext_file() {
+        crate::test_helpers::with_isolated_config(|| {
+            let state = AppState::new().expect("state");
+            let path = crate::config::Config::config_path().expect("isolated config");
+            let root = path.parent().expect("parent").join("speleodb/tokens");
+            std::fs::create_dir_all(&root).expect("directory");
+            let old = root.join("https___example.com_diver_example.com");
+            let other = root.join("other-account");
+            std::fs::write(&old, b"synthetic-old-token").expect("legacy file");
+            std::fs::write(&other, b"synthetic-other-token").expect("other account");
+            {
+                let mut config = state.config.lock().expect("config");
+                config.speleodb.endpoint = Some("https://example.com".into());
+                config.speleodb.email = Some("diver@example.com".into());
+                config.speleodb.token.0 = Some("synthetic-current-token".into());
+            }
+            state.speleodb_logout().expect("logout");
+            assert!(!old.exists());
+            assert!(other.exists());
+            assert!(state.get_config().speleodb.token.0.is_none());
+        });
+    }
+    #[test]
+    fn legacy_cleanup_failure_is_reported_without_recursive_deletion() {
+        let dir = tempfile::tempdir().expect("temp");
+        let path = dir.path().join("config.toml");
+        let target = dir
+            .path()
+            .join("speleodb/tokens/https___example.com_diver_example.com");
+        std::fs::create_dir_all(&target).expect("block removal");
+        assert!(remove_legacy_token(&path, "https://example.com", "diver@example.com").is_err());
+        assert!(target.is_dir());
     }
 }

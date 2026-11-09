@@ -58,6 +58,9 @@ when damaged or unreadable. Malformed legacy preferences are logged without sour
 values and retained on unrelated saves for recovery. A successful two-file save
 persists migrated preferences and removes the legacy table; a failed general save
 restores the prior separate file or its absence.
+Signing out also deletes the current account's obsolete app-owned plaintext token
+file from `speleodb/tokens`, without reading or importing it. Other accounts are
+untouched; cleanup failures are reported. No keychain access is restored.
 `DEV_SPELEODB_URL` still overrides the instance for development, but a saved token
 is restored only when the resolved instance matches its configured endpoint.
 Reloading configuration applies a changed endpoint, account or token to the live
