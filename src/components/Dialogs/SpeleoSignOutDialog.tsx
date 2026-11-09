@@ -7,6 +7,7 @@ import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import { closeDiscardingLocal } from '../../utils/speleoExit';
 import { commitMessageTooLong } from '../../utils/commitMessage';
+import { saveOpenProjectLocally } from '../../utils/saveOpenProjectLocally';
 import {
   releaseSignOutLocks,
   signOutHasWork,
@@ -23,7 +24,7 @@ import { SpeleoExitUploadFields, SpeleoExitUploadProgress, useSpeleoExitUpload }
 
 type Phase = 'checking' | 'checkFailed' | 'review' | 'releasing' | 'releaseFailed';
 /** Per project: still to answer, being confirmed, being carried out, or answered. */
-type RowState = 'pending' | 'upload' | 'confirm' | 'working' | 'uploaded' | 'discarded';
+type RowState = 'pending' | 'upload' | 'confirm' | 'working' | 'uploaded' | 'discarded' | 'kept';
 
 /**
  * What signing out would leave behind, and the user's answer for each (see
@@ -130,6 +131,25 @@ function SignOutPrompt({ kind, initial, settle }: {
     }
   };
 
+  // "Keep my changes on this computer" (decision 10: never discard-only). The
+  // copy keeps its edits, its un-uploaded mark and its recents row; its lock joins
+  // the hand-backs below, the user's explicit choice standing in for the consent
+  // a silent release never has. Unsaved edits of the OPEN project are saved first.
+  const keepOpen = async () => {
+    if (!openId) return;
+    setRow(openId, 'working');
+    setError(null);
+    if (useProjectStore.getState().isDirty) {
+      const saved = await saveOpenProjectLocally();
+      if (!saved?.success || useProjectStore.getState().isDirty) {
+        setRow(openId, 'pending');
+        setError(t('speleoExitPrompt.signOut.keepFailed'));
+        return;
+      }
+    }
+    setRow(openId, 'kept');
+  };
+
   const openToUpload = (project: SignOutProject) => {
     // Cancels the sign-out: the work can only be uploaded from inside the project.
     settle(false);
@@ -152,14 +172,17 @@ function SignOutPrompt({ kind, initial, settle }: {
 
   const signOut = () => {
     if (!survey) return;
-    // Discarded rows that held a lock join the plain releases; an uploaded or
-    // discarded OPEN project already handed its lock back.
-    const discardedLocks = survey.unuploaded.filter((p) => p.holdsLock && rowState(p.summary.id) === 'discarded');
-    void release([...survey.releasable, ...discardedLocks]);
+    // Discarded or kept rows that held a lock join the plain releases; an
+    // uploaded or discarded OPEN project already handed its lock back, and a kept
+    // one hands it back here (we hold it: that is why it was asked about).
+    const answered = (p: SignOutProject) => ['discarded', 'kept'].includes(rowState(p.summary.id));
+    const otherLocks = survey.unuploaded.filter((p) => p.holdsLock && answered(p));
+    const keptOpen = open && rowState(open.summary.id) === 'kept' ? [open] : [];
+    void release([...survey.releasable, ...otherLocks, ...keptOpen]);
   };
 
-  const openResolved = !open || ['uploaded', 'discarded'].includes(rowState(open.summary.id));
-  const othersResolved = (survey?.unuploaded ?? []).every((p) => rowState(p.summary.id) === 'discarded');
+  const openResolved = !open || ['uploaded', 'discarded', 'kept'].includes(rowState(open.summary.id));
+  const othersResolved = (survey?.unuploaded ?? []).every((p) => ['discarded', 'kept'].includes(rowState(p.summary.id)));
   const canSignOut = phase === 'review' && openResolved && othersResolved && !anyWorking;
   const goLabel = kind === 'switch' ? t('speleoExitPrompt.signOut.switch') : t('speleoExitPrompt.signOut.signOut');
   const names = (projects: SignOutProject[]) => projects.map((p) => p.summary.name || t('speleoExitPrompt.signOut.unnamed')).join(', ');
@@ -205,6 +228,9 @@ function SignOutPrompt({ kind, initial, settle }: {
                   {rowState(open.summary.id) === 'discarded' && (
                     <p className="text-sm text-text-secondary" data-testid="speleodb-signout-open-discarded">{t('speleoExitPrompt.signOut.discarded')}</p>
                   )}
+                  {rowState(open.summary.id) === 'kept' && (
+                    <p className="text-sm text-text-secondary" data-testid="speleodb-signout-open-kept">{t('speleoExitPrompt.signOut.kept')}</p>
+                  )}
                   {rowState(open.summary.id) === 'pending' && (
                     <>
                       <p className="text-sm text-text-secondary">{t('speleoExitPrompt.signOut.openProjectBody')}</p>
@@ -213,11 +239,16 @@ function SignOutPrompt({ kind, initial, settle }: {
                           data-testid="speleodb-signout-open-upload">
                           {t('speleoExitPrompt.upload')}
                         </Button>
+                        <Button onClick={() => void keepOpen()} disabled={anyWorking}
+                          data-testid="speleodb-signout-open-keep">
+                          {t('speleoExitPrompt.signOut.keep')}
+                        </Button>
                         <Button variant="danger" onClick={() => setRow(open.summary.id, 'confirm')} disabled={anyWorking}
                           data-testid="speleodb-signout-open-discard">
                           {t('speleoExitPrompt.discard')}
                         </Button>
                       </div>
+                      <p className="text-xs text-text-secondary">{t('speleoExitPrompt.signOut.keepHint')}</p>
                     </>
                   )}
                   {(rowState(open.summary.id) === 'upload' || (rowState(open.summary.id) === 'working' && uploading)) && (
@@ -263,6 +294,10 @@ function SignOutPrompt({ kind, initial, settle }: {
                             <p className="text-xs text-text-secondary" data-testid={`speleodb-signout-row-${id}-discarded`}>
                               {t('speleoExitPrompt.signOut.discarded')}
                             </p>
+                          ) : state === 'kept' ? (
+                            <p className="text-xs text-text-secondary" data-testid={`speleodb-signout-row-${id}-kept`}>
+                              {t('speleoExitPrompt.signOut.kept')}
+                            </p>
                           ) : state === 'confirm' ? (
                             <DiscardConfirm name={project.summary.name} disabled={anyWorking}
                               onBack={() => setRow(id, 'pending')} onConfirm={() => void discard(project)}
@@ -272,6 +307,10 @@ function SignOutPrompt({ kind, initial, settle }: {
                               <Button variant="primary" onClick={() => openToUpload(project)} disabled={anyWorking}
                                 data-testid={`speleodb-signout-row-${id}-open`}>
                                 {t('speleoExitPrompt.signOut.openToUpload')}
+                              </Button>
+                              <Button onClick={() => setRow(id, 'kept')} disabled={anyWorking}
+                                data-testid={`speleodb-signout-row-${id}-keep`}>
+                                {t('speleoExitPrompt.signOut.keep')}
                               </Button>
                               <Button variant="danger" onClick={() => setRow(id, 'confirm')} disabled={anyWorking}
                                 data-testid={`speleodb-signout-row-${id}-discard`}>
