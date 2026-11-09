@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { SpeleoWorkspace } from './SpeleoWorkspace';
+import { SpeleoNetworkBusyIndicator } from './SpeleoNetworkBusyIndicator';
 import type { ReactNode } from 'react';
 
 export function LeftWorkspace({ sections }: { sections: ReactNode }) {
@@ -23,6 +24,7 @@ export function LeftWorkspace({ sections }: { sections: ReactNode }) {
           }}
           className={`flex-1 px-3 py-2 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${tab === id ? 'bg-accent-10 font-medium' : 'text-text-secondary'}`}>
           {id === 'speleodb' ? 'SpeleoDB' : 'Sections'}
+          {id === 'speleodb' && <SpeleoNetworkBusyIndicator />}
         </button>)}
       </div>
       <div role="tabpanel" id="workspace-panel-sections" aria-labelledby="workspace-tab-sections" hidden={mode !== 'survey' || tab !== 'sections'} className="flex-1 min-h-0">{sections}</div>

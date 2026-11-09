@@ -10,6 +10,7 @@ import { Select } from '../common/Select';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoOperationBusy } from '../../hooks/useSpeleoOperationBusy';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 import { validateCoordinates } from '../../utils/gps';
 import { reverseGeocodeCountry } from '../../utils/reverseGeocodeCountry';
@@ -38,7 +39,7 @@ export default function PublishToSpeleoDbDialog() {
   const [owner] = useState(captureUploadOwner);
   const [draft] = useState(getPublishContinuation);
   const loggedIn = useSpeleoStore((s) => s.session?.loggedIn === true);
-  const busy = useSpeleoStore((s) => s.busy);
+  const busy = useSpeleoOperationBusy();
   const [description, setDescription] = useState(draft?.description ?? '');
   // Best-effort prefill from the first georeferenced zero datum, if any.
   const firstGps = useMemo(() => project?.zero_datums?.[0]?.gps ?? null, [project]);

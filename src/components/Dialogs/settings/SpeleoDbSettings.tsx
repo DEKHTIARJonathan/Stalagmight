@@ -15,6 +15,7 @@ import { defaultConfig } from '../../../types/config';
 import { useSpeleoStore, type PendingLogin } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
+import { useSpeleoOperationBusy } from '../../../hooks/useSpeleoOperationBusy';
 
 /** SpeleoDB account and connection settings. */
 export function SpeleoDbSettings({
@@ -32,7 +33,9 @@ export function SpeleoDbSettings({
   const applyPendingAuth = useSpeleoStore((s) => s.applyPendingAuth);
   const setAuthError = useSpeleoStore((s) => s.setAuthError);
   const authError = useSpeleoStore((s) => s.authError);
-  const busy = useSpeleoStore((s) => s.busy);
+  // Any lock, upload, download or account call in flight, not just the hand-off
+  // verbs: the account and endpoint must not change under one.
+  const busy = useSpeleoOperationBusy();
 
   const speleo = config.speleodb;
   const connectionRef = useRef(speleo);

@@ -1,12 +1,13 @@
 import { useUnwindTarget, type ChainDirection } from '../../hooks/useUnwindTarget';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoOperationBusy } from '../../hooks/useSpeleoOperationBusy';
 import { useUIStore } from '../../store/uiStore';
 import { Button } from '../common/Button';
 
 function HistoryStep({ direction }: { direction: ChainDirection }) {
   const editing = useSpeleoStore((s) => s.link?.editState === 'editing');
-  const busy = useSpeleoStore((s) => s.busy);
+  const busy = useSpeleoOperationBusy();
   const canLocal = useProjectStore((s) => direction === 'back' ? s.canUndo : s.canRedo);
   const survey = useUIStore((s) => s.appMode === 'survey');
   const enabled = editing && survey && !canLocal;
