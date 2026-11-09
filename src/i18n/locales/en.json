@@ -3605,7 +3605,8 @@
       "name": "Name",
       "descriptionLabel": "Description",
       "coordinatesHint": "Enter both latitude and longitude, within their valid ranges.",
-      "uploadPending": "The project was created on SpeleoDB. Changes remain on this computer; use Save Changes to finish uploading."
+      "uploadPending": "The project was created on SpeleoDB. Changes remain on this computer; use Save Changes to finish uploading.",
+      "withoutHistory": "The project's first revision was uploaded without undo history: it is over the SpeleoDB size limit."
     },
     "lock": {
       "title": "Write lock",

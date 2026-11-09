@@ -399,6 +399,12 @@ pub struct SpeleoPublishResult {
     /// The SpeleoDB cache path the freshly-published project now lives at; the
     /// webview reloads it through the normal `open_project` flow (read-only-remote).
     pub local_path: String,
+    /// As on [`DoneResult::Released`]: `Some(true)` when the first upload left the
+    /// undo history out to fit under the server's size limit (sdk#3). Absent
+    /// otherwise, including when that upload did not land.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub undo_history_omitted: Option<bool>,
 }
 
 /// Result of pulling + extracting a project, returned to the webview. The
@@ -697,8 +703,8 @@ mod tests {
     use super::{
         DoneResult, Permission, Project, PushResult, RemoteState, RevisionCommit, RevisionHistory,
         SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
-        SpeleoProjectSummary, SpeleoRevision, SpeleoSessionStatus, StartEditingResult,
-        UpdateResult, Visibility,
+        SpeleoProjectSummary, SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus,
+        StartEditingResult, UpdateResult, Visibility,
     };
 
     #[test]
@@ -986,5 +992,15 @@ mod tests {
             plain(&pushed),
             r#"{"kind":"pushed","undo_history_omitted":true}"#
         );
+        let publish = |undo_history_omitted| SpeleoPublishResult {
+            project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
+            endpoint: "https://speleodb.example".to_owned(),
+            local_path: "/cache/project.stalx".to_owned(),
+            undo_history_omitted,
+        };
+        let quiet = serde_json::to_value(publish(None)).expect("serialize");
+        assert!(quiet.get("undo_history_omitted").is_none());
+        let noted = serde_json::to_value(publish(Some(true))).expect("serialize");
+        assert_eq!(noted["undo_history_omitted"], serde_json::json!(true));
     }
 }

@@ -104,7 +104,9 @@ fixed. The sanitized snapshot is measured before anything is sent:
   the upload-without-history path the other undo modes take. If that fits, the
   survey data uploads in full and the success toast becomes a warning that the
   revision was uploaded without undo history (`undo_history_omitted` on the
-  `released` / `pushed` result). Only the copy changes; after the landed push the
+  `released` / `pushed` result, and on the publish result for the first upload,
+  where the note rides the publish outcome's own toast or stands alone as a
+  warning). Only the copy changes; after the landed push the
   local undo stack follows the same per-push rule as in every mode;
 - still over, the push is refused before any request with a clear "too large"
   error naming both sizes. Nothing is uploaded, and the project stays dirty and
