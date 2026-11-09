@@ -8,6 +8,8 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { dispatchProjectSave } from '../../utils/dispatchProjectSave';
 import { getUploadContinuation, setUploadContinuation } from '../../utils/uploadContinuation';
+import { useSpeleoExitPrompt } from '../../utils/speleoExit';
+import { useSpeleoSignOut } from '../../utils/speleoSignOut';
 
 export function SpeleoBanner() {
   const { t } = useTranslation();
@@ -26,13 +28,17 @@ export function SpeleoBanner() {
   const dialogOwnsFailure = useUIStore((s) =>
     s.activeDialog !== null && PUSH_FAILURE_DIALOGS.includes(s.activeDialog),
   );
+  // The exit prompt and the sign-out prompt are overlays of their own, not an
+  // `activeDialog`, and both render the failure inline too (their upload step).
+  const exitPromptOpen = useSpeleoExitPrompt((s) => s.request !== null);
+  const signOutPromptOpen = useSpeleoSignOut((s) => s.request !== null);
   const busy = useSpeleoStore((s) => s.busy);
   // No banner, no bar. Read-only on its own is NOT a banner state: the map's
   // read-only pill and the SpeleoDB tab's lock badge already say it, and the pill
   // carries the Resume editing action.
   if (!banner) return null;
   // #260: the failure is on screen inside the dialog that caused it - never both.
-  if (banner.kind === 'push_failed' && dialogOwnsFailure) return null;
+  if (banner.kind === 'push_failed' && (dialogOwnsFailure || exitPromptOpen || signOutPromptOpen)) return null;
 
   // #260: keep the failed attempt's own context so Retry replays the same verb with
   // the same commit message (narrowed once here - the JSX callbacks close over it).

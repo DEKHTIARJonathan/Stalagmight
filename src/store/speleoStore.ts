@@ -1427,10 +1427,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
  * the banner straight back, so the "your changes are only on this computer"
  * reminder is never lost.
  *
+ * The exit prompt and the sign-out prompt own a failure the same way, but they
+ * are overlays of their own rather than `activeDialog` entries, so the banner
+ * checks their open requests directly (`SpeleoBanner`).
+ *
  * Every entry retries through its own primary button (`Upload & release` /
- * `Upload & keep editing` / `Push & release` / `Push, release & quit` /
- * `Retry the upload`), so none needs a second retry control and none loses the
- * commit message the user typed.
+ * `Upload & keep editing` / `Retry the upload`), so none needs a second retry
+ * control and none loses the commit message the user typed.
  *
  * `speleodb-revert` earns its place for a sharper reason than the rest. Its push
  * happens inside the restore flow (`useRevertRevision` -> `done`), and the dialog
@@ -1442,8 +1445,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
  */
 export const PUSH_FAILURE_DIALOGS: readonly string[] = [
   'speleodb-done',
-  'speleodb-close',
-  'speleodb-quit',
   'speleodb-revert',
   'speleodb-unwound-push',
 ];

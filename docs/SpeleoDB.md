@@ -464,7 +464,11 @@ after that notice is still applied when it ends, for as long as the same project
 and SpeleoDB session are open: a success updates the link and shows its usual
 toast; a failure raises the push-failure banner and an error toast, and keeps the
 description for the retry. Only the dialog's own follow-ups (closing it, Save and
-Close) need it to still be open.
+Close) need it to still be open. While a dialog or prompt that shows the failure
+inline is open (Finish editing, the revert and unwound-upload confirmations, the
+exit prompt, the sign-out prompt), the banner stays hidden, so the failure is
+never shown twice; it comes back if that surface closes with the failure
+unresolved.
 Offline, failed or uncertain uploads never report success; the
 message and local work remain available for retry. Autosave and failed-autosave
 retry write only to the local SQLite file.

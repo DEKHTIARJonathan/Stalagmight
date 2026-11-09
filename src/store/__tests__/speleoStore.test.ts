@@ -1039,12 +1039,16 @@ describe('speleoStore', () => {
   describe('PUSH_FAILURE_DIALOGS', () => {
     it.each([
       'speleodb-done',
-      'speleodb-close',
-      'speleodb-quit',
       'speleodb-revert',
       'speleodb-unwound-push',
     ])('covers %s', (id) => {
       expect(PUSH_FAILURE_DIALOGS).toContain(id);
+    });
+
+    // No dialog opens these ids any more: the close and quit questions are the
+    // exit prompt's overlay, which the banner checks directly.
+    it('lists no dead dialog ids', () => {
+      expect(PUSH_FAILURE_DIALOGS).toEqual(['speleodb-done', 'speleodb-revert', 'speleodb-unwound-push']);
     });
   });
 });

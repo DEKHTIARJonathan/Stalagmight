@@ -1,6 +1,6 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -15,6 +15,8 @@ import { useProjectStore } from '../../../store/projectStore';
 import { getUploadContinuation, setUploadContinuation } from '../../../utils/uploadContinuation';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
+import { askSpeleoExit, resetSpeleoExitPromptForTests } from '../../../utils/speleoExit';
+import { useSpeleoSignOut } from '../../../utils/speleoSignOut';
 
 const LINK: SpeleoLinkState = {
   permission: 'READ_AND_WRITE',
@@ -151,11 +153,26 @@ describe('SpeleoBanner push failure (#260)', () => {
     expect(screen.queryByTestId('speleo-banner')).not.toBeInTheDocument();
   });
 
-  it('hides itself while the close-flow dialog owns the failure', () => {
+  // The exit prompt (Close / Quit / switch) and the sign-out prompt are overlays of
+  // their own, not an `activeDialog`, and render the same failure inline in their
+  // upload step: the banner used to show it a second time behind them.
+  it.each([
+    ['the exit prompt', () => {
+      void askSpeleoExit('quit');
+      return () => resetSpeleoExitPromptForTests();
+    }],
+    ['the sign-out prompt', () => {
+      useSpeleoSignOut.setState({ request: { id: 1, kind: 'signOut', survey: null, settle: () => {} } });
+      return () => useSpeleoSignOut.setState({ request: null });
+    }],
+  ])('hides itself while %s is open, and comes back once it is gone', (_label, open) => {
     seedFailure('done');
-    useUIStore.setState({ activeDialog: 'speleodb-close' });
-    render(<SpeleoBanner />);
+    const close = open();
+    const { rerender } = render(<SpeleoBanner />);
     expect(screen.queryByTestId('speleo-banner')).not.toBeInTheDocument();
+    act(() => close());
+    rerender(<SpeleoBanner />);
+    expect(screen.getByTestId('speleo-banner')).toHaveAttribute('data-kind', 'push_failed');
   });
 
   it('renders again once that dialog is dismissed with the failure unresolved', () => {
