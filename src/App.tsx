@@ -20,7 +20,7 @@ import { routeOpenedFile } from './utils/openOrImport';
 import { useLaunchWithFile } from './utils/launchWithFile';
 import { guardQuit } from './utils/quit';
 import { isDroppableFilePath } from './utils/fileDialogs';
-import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale, useAppUpdate } from './hooks';
+import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale, useAppUpdate, useHelpMenu } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
 import { registerOnboardingRestart } from './hooks/useOnboardingRestart';
 import { ORIENTATION_FLOW_ID } from './onboarding/flows';
@@ -130,6 +130,9 @@ function App() {
 
   // Event-driven network status orchestrator (tile transport events + offline polling)
   useNetworkStatus();
+
+  // macOS Help menu > Keyboard Shortcuts (#665)
+  useHelpMenu();
 
   // Whole-UI zoom via Ctrl+= / Ctrl+- / Ctrl+0 (persisted)
   useUiScale();
