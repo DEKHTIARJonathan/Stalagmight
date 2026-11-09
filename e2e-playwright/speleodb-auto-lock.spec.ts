@@ -1,6 +1,7 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
 import { openSpeleoFromMenu, openSpeleoTab } from './helpers/speleoWorkspace';
+import { LEFT_WORKSPACE_MIN_WIDTH } from '../src/components/SingleSystemView/layoutConstants';
 import type { useUIStore } from '../src/store/uiStore';
 import type { useSpeleoStore } from '../src/store/speleoStore';
 import type { useProjectStore } from '../src/store/projectStore';
@@ -115,7 +116,7 @@ test('a narrow window reaches the SpeleoDB tab from the menu, and a narrow saved
   const panel = page.getByTestId('sections-panel-bar');
   const handle = page.getByTestId('sections-resize-handle');
   await expect(panel).toBeVisible();
-  await expect.poll(async () => (await panel.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(319.5);
+  await expect.poll(async () => (await panel.boundingBox())?.width ?? 0).toBeGreaterThanOrEqual(LEFT_WORKSPACE_MIN_WIDTH - 0.5);
   const initial = await panel.boundingBox();
   const box = await handle.boundingBox();
   expect(box).not.toBeNull();

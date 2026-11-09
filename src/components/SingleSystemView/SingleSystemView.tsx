@@ -31,6 +31,7 @@ import {
   MAP_MIN_HEIGHT,
   DATA_DOCK_TAB_INSET,
   DATA_DOCK_TAB_FALLBACK_INSET,
+  LEFT_WORKSPACE_MIN_WIDTH,
 } from './layoutConstants';
 import { useSidePanelSqueeze, useDataPanelSqueeze, resolveResize } from './sidePanelSqueeze';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
@@ -99,7 +100,8 @@ export default function SingleSystemView() {
   const workspace = useUIStore((s) => s.leftWorkspace);
   const outsideSurvey = useUIStore((s) => s.speleoOutsideSurvey);
   const revealNonce = useUIStore((s) => s.speleoRevealNonce);
-  const workspaceMin = workspace === 'speleodb' ? 320 : PANEL_SIZE_BOUNDS.sections.min;
+  // One floor for both tabs: the panel keeps its width when the tab changes.
+  const workspaceMin = LEFT_WORKSPACE_MIN_WIDTH;
   const openPath = project?.file_path;
   const previousPath = useRef(openPath);
   useLayoutEffect(() => {
