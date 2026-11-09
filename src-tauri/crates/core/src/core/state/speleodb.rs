@@ -408,7 +408,17 @@ impl AppState {
     /// passive probe must not auto-drop the session (mirrors
     /// [`Self::speleodb_lock_holder`]).
     pub fn speleodb_link_status(&self) -> Result<SpeleoLinkStatus, SpeleoErrorDto> {
-        let link = match self.speleodb_open_link() {
+        let (status_generation, link_result) = {
+            let _project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (
+                self.speleodb_session_generation(),
+                self.speleodb_open_link(),
+            )
+        };
+        let link = match link_result {
             Ok(link) => link,
             // No remote project open (no database, or a local project): not-remote.
             Err(SpeleoDbError::NoRemoteProject) => {
@@ -460,7 +470,6 @@ impl AppState {
         }
         let has_unpushed_edits = link.has_unpushed_edits;
 
-        let status_generation = self.speleodb_session_generation();
         // Best-effort network enrichment: the user's permission tier + lock holder
         // (get_project), and the remote-state reconcile verdict (revision topology,
         // the #202 freshness fold). Guard the request URL with the same project-id
@@ -472,23 +481,50 @@ impl AppState {
                 match self.speleodb_active_token() {
                     Ok((endpoint, token)) => {
                         let insecure_http = self.speleodb_insecure_http();
-                        match client::get_project(
-                            &endpoint,
-                            &token,
-                            insecure_http,
-                            &link.project_id,
-                        ) {
-                            Ok(p) => {
-                                if self.speleodb_session_generation() == status_generation
-                                    && (!lock_held_by_me(
-                                        p.active_mutex.as_ref().map(|mutex| mutex.user.as_str()),
+                        // Serialize the short holder probe with acquisition/release.
+                        // Otherwise a response saying "unlocked" can close a new
+                        // edit session acquired while this request was in flight.
+                        let status = {
+                            let _lock_ops = self.speleodb_lock_ops_guard();
+                            if self.speleodb_session_generation() != status_generation {
+                                return Err(local_dto(SpeleoDbError::SessionMoved));
+                            }
+                            if crate::speleodb::auth::normalize_endpoint(&endpoint)
+                                != crate::speleodb::auth::normalize_endpoint(&link.endpoint)
+                            {
+                                self.speleodb_disable_editing_if_current(status_generation);
+                                return Err(local_dto(SpeleoDbError::SessionMoved));
+                            }
+                            let result = client::get_project_probe(
+                                &endpoint,
+                                &token,
+                                insecure_http,
+                                &link.project_id,
+                            );
+                            let lost = match &result {
+                                Ok(remote) => {
+                                    !lock_held_by_me(
+                                        remote
+                                            .active_mutex
+                                            .as_ref()
+                                            .map(|mutex| mutex.user.as_str()),
                                         self.speleodb_my_email().as_deref(),
-                                    ) || p.permission.is_some_and(|permission| {
-                                        permission < crate::speleodb::Permission::ReadAndWrite
-                                    }))
-                                {
-                                    self.set_edit_enabled(false);
+                                    ) || !remote.permission.is_some_and(|permission| {
+                                        permission >= crate::speleodb::Permission::ReadAndWrite
+                                    })
                                 }
+                                Err(SpeleoDbError::Status {
+                                    status: 401 | 403, ..
+                                }) => true,
+                                Err(_) => false,
+                            };
+                            if lost {
+                                self.speleodb_disable_editing_if_current(status_generation);
+                            }
+                            result
+                        };
+                        match status {
+                            Ok(p) => {
                                 // Only now (the project is reachable) is the revision-
                                 // topology fold worth a SECOND round trip. On every
                                 // error arm below the remote state is Unknown anyway
@@ -519,17 +555,11 @@ impl AppState {
                             // collaborator on this managed project - flag it so the
                             // UI can offer converting to a local file (fix 10).
                             Err(SpeleoDbError::Status { status: 403, .. }) => {
-                                if self.speleodb_session_generation() == status_generation {
-                                    self.set_edit_enabled(false);
-                                }
                                 (None, None, RemoteState::Unknown, true, None, false)
                             }
                             // A 401 is a dead token (re-login) handled by the edit
                             // verbs; this passive probe must not nag about it.
                             Err(SpeleoDbError::Status { status: 401, .. }) => {
-                                if self.speleodb_session_generation() == status_generation {
-                                    self.set_edit_enabled(false);
-                                }
                                 (None, None, RemoteState::Unknown, false, None, false)
                             }
                             // Any OTHER status (a 404 for a deleted/renamed project,
@@ -582,6 +612,10 @@ impl AppState {
         } else {
             edit_enabled
         };
+
+        if self.speleodb_session_generation() != status_generation {
+            return Err(local_dto(SpeleoDbError::SessionMoved));
+        }
 
         Ok(SpeleoLinkStatus {
             is_remote: true,
@@ -3561,7 +3595,11 @@ mod tests {
             .expect("open")
             .name
             .clone();
-        state.speleodb_fold_local_name("Stale response", "22222222-2222-2222-2222-222222222222");
+        state.speleodb_fold_local_name(
+            "Stale response",
+            "22222222-2222-2222-2222-222222222222",
+            state.speleodb_session_generation(),
+        );
         assert_eq!(
             state
                 .project
@@ -3576,7 +3614,11 @@ mod tests {
             state.speleodb_open_link().expect("link").project_name,
             "Remote"
         );
-        state.speleodb_fold_local_name("Current response", REMOTE_ID);
+        state.speleodb_fold_local_name(
+            "Current response",
+            REMOTE_ID,
+            state.speleodb_session_generation(),
+        );
         assert_eq!(
             state
                 .project
@@ -4769,7 +4811,7 @@ mod tests {
         );
         let later = match later_holder {
             Some(user) => format!(
-                r#"{{"id":"{project_id}","name":"Remote","active_mutex":{{"user":"{user}"}}}}"#
+                r#"{{"id":"{project_id}","name":"Remote","permission":"READ_AND_WRITE","active_mutex":{{"user":"{user}"}}}}"#
             ),
             None => format!(r#"{{"id":"{project_id}","name":"Remote"}}"#),
         };

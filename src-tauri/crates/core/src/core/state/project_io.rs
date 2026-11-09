@@ -397,10 +397,23 @@ impl AppState {
     }
 
     pub(super) fn save_project(&self, path: Option<PathBuf>) -> CommandResult {
+        self.save_project_at_generation(path, None)
+    }
+
+    pub(super) fn save_project_at_generation(
+        &self,
+        path: Option<PathBuf>,
+        expected_generation: Option<u64>,
+    ) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
         };
 
+        if expected_generation
+            .is_some_and(|generation| self.speleodb_session_generation() != generation)
+        {
+            return CommandResult::failure("The project session changed before saving".to_string());
+        }
         let Some(project) = proj_guard.as_mut() else {
             return CommandResult::failure("No project open".to_string());
         };
@@ -1078,10 +1091,10 @@ impl AppState {
                 // (undo persistence, display settings) will fail. Clear the stale
                 // database handle so callers don't use it.
                 project.file_path = Some(save_path.clone());
-                drop(proj_guard);
                 if let Ok(mut database) = self.database.lock() {
                     *database = None;
                 }
+                drop(proj_guard);
                 // Distinct code (not the generic "SYSTEM") so the frontend can keep
                 // databaseOpen=false and leave DB-backed actions (e.g. Ignore)
                 // disabled until the project is reopened (issue #57 / Codex).
@@ -1099,11 +1112,11 @@ impl AppState {
         // Update file path after successful save
         project.file_path = Some(save_path.clone());
 
-        // Update database handle
-        drop(proj_guard);
+        // Publish the reopened handle before a replacement project can take the slot.
         if let Ok(mut database) = self.database.lock() {
             *database = Some(db);
         }
+        drop(proj_guard);
 
         // Clear in-memory cache since settings are now persisted to DB
         self.clear_display_settings_cache();

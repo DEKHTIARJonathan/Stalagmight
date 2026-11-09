@@ -408,17 +408,21 @@ impl AppState {
         let _lock_ops = self.speleodb_lock_ops_guard();
         // One read, so the holder comparison below cannot pair one account's
         // endpoint with another's email (`speleodb_active_account`).
+        let Ok((generation, open)) = self.speleodb_session_snapshot() else {
+            return false;
+        };
+        if open.project_id != link.project_id || open.endpoint != link.endpoint {
+            return false;
+        }
         let Ok((endpoint, token, me)) = self.speleodb_active_account() else {
             return false;
         };
+        if normalize_endpoint(&endpoint) != normalize_endpoint(&link.endpoint) {
+            return false;
+        }
         let insecure_http = self.speleodb_insecure_http();
-        let holder = match self.speleodb_lock_holder_checked(
-            &endpoint,
-            &token,
-            insecure_http,
-            &link.project_id,
-        ) {
-            Ok(holder) => holder,
+        let remote = match client::get_project(&endpoint, &token, insecure_http, &link.project_id) {
+            Ok(remote) => remote,
             Err(e) => {
                 tracing::debug!(
                     error = %e,
@@ -429,10 +433,18 @@ impl AppState {
                 return false;
             }
         };
-        if !super::speleodb::lock_held_by_me(holder.as_deref(), Some(me.as_str())) {
+        let holder = remote
+            .active_mutex
+            .as_ref()
+            .map(|mutex| mutex.user.as_str());
+        if !remote
+            .permission
+            .is_some_and(|permission| permission >= crate::speleodb::Permission::ReadAndWrite)
+            || !super::speleodb::lock_held_by_me(holder, Some(me.as_str()))
+        {
             return false;
         }
-        self.speleodb_commit_editing(None, &link.project_id, false)
+        self.speleodb_commit_editing(Some(generation), &link.project_id, false)
             .is_ok()
     }
 

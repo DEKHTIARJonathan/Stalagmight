@@ -124,9 +124,9 @@ impl AppState {
     /// (the server has no retroactive re-render for the current tip; the FE
     /// confirmation states this). A 403 surfaces as an error the button reports.
     pub fn speleodb_set_exclude_geojson(&self, exclude: bool) -> Result<(), SpeleoErrorDto> {
+        let _lock_ops = self.speleodb_lock_ops_guard();
         let link = self.speleodb_validated_link()?;
-        self.speleodb_require_owned_lock(&link)?;
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let (endpoint, token) = self.speleodb_require_owned_lock_locked(&link)?;
         let insecure_http = self.speleodb_insecure_http();
         let payload = serde_json::json!({ "exclude_geojson": exclude }).to_string();
         // The PATCH reuses the GetProject endpoint mapping (there is no dedicated
@@ -166,9 +166,9 @@ impl AppState {
         &self,
         patch: SpeleoProjectMetadataPatch,
     ) -> Result<SpeleoProjectMetadata, SpeleoErrorDto> {
-        let link = self.speleodb_validated_link()?;
-        self.speleodb_require_owned_lock(&link)?;
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let _lock_ops = self.speleodb_lock_ops_guard();
+        let (generation, link) = self.speleodb_session_snapshot()?;
+        let (endpoint, token) = self.speleodb_require_owned_lock_locked(&link)?;
         let insecure_http = self.speleodb_insecure_http();
 
         // Reject a blank rename at the boundary: the server requires a non-empty name,
@@ -202,7 +202,7 @@ impl AppState {
         // Fold the (possibly server-normalized) name into the open `.stalx` when it
         // was edited, so the embedded project name tracks SDB without dirtying.
         if patch.name.is_some() {
-            self.speleodb_fold_local_name(&updated.name, &link.project_id);
+            self.speleodb_fold_local_name(&updated.name, &link.project_id, generation);
         }
 
         Ok(SpeleoProjectMetadata::from_project(&updated))
@@ -214,12 +214,20 @@ impl AppState {
     /// touches the `speleo_link` table), and refresh the link's cached `project_name`.
     /// Best-effort - a failure is logged, never surfaced (the server write already
     /// landed). Locks project → database in that order (mirrors `speleodb_render_tml`).
-    pub(super) fn speleodb_fold_local_name(&self, name: &str, project_id: &str) {
+    pub(super) fn speleodb_fold_local_name(
+        &self,
+        name: &str,
+        project_id: &str,
+        expected_generation: u64,
+    ) {
         // Keep project -> database locked across the identity check and both writes.
         // A late PATCH/GET response must never rename the replacement project.
         let Ok(mut project_guard) = self.project.lock() else {
             return;
         };
+        if self.speleodb_session_generation() != expected_generation {
+            return;
+        }
         let Some(open) = project_guard.as_mut() else {
             return;
         };
@@ -258,6 +266,7 @@ impl AppState {
         &self,
         params: SpeleoPublishParams,
     ) -> Result<SpeleoPublishResult, SpeleoErrorDto> {
+        let _lock_ops = self.speleodb_lock_ops_guard();
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
@@ -289,7 +298,7 @@ impl AppState {
                 "this project is already linked to SpeleoDB".to_owned(),
             )));
         }
-        {
+        let generation = {
             let proj_guard = self
                 .project
                 .lock()
@@ -305,7 +314,8 @@ impl AppState {
                         .to_owned(),
                 )));
             }
-        }
+            self.speleodb_session_generation()
+        };
 
         // 1. Create the project. `type: stalagmight` + `exclude_geojson: false` are fixed
         //    (the repo-layout contract, [#208]); lat/long are both-or-neither;
@@ -334,7 +344,7 @@ impl AppState {
             std::fs::create_dir_all(parent)
                 .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
         }
-        let save = self.save_project(Some(dest.clone()));
+        let save = self.save_project_at_generation(Some(dest.clone()), Some(generation));
         if !save.success {
             return Err(local_dto(SpeleoDbError::Io(format!(
                 "failed to write project into the SpeleoDB cache: {}",
@@ -368,6 +378,13 @@ impl AppState {
             }),
         };
         {
+            let _project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if self.speleodb_session_generation() != generation {
+                return Err(local_dto(SpeleoDbError::SessionMoved));
+            }
             let db_guard = self
                 .database
                 .lock()
@@ -408,6 +425,7 @@ impl AppState {
                     // Skip the #216 name fold: the project was just created with this
                     // exact name, so the fold GET would be a guaranteed no-op.
                     false,
+                    generation,
                 );
                 // Release the lock regardless of the push outcome (best-effort).
                 self.speleodb_release_best_effort(&endpoint, &token, insecure_http, &project_id);
@@ -447,7 +465,13 @@ impl AppState {
         {
             match self.speleodb_server_head(&endpoint, &token, insecure_http, &project_id) {
                 Ok((tip, _)) if tip.is_some() => {
-                    let _ = self.speleodb_mutate_link(|l| l.base_commit_sha = tip.clone());
+                    let _project = self
+                        .project
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if self.speleodb_session_generation() == generation {
+                        let _ = self.speleodb_mutate_link(|l| l.base_commit_sha = tip.clone());
+                    }
                 }
                 Ok(_) => {}
                 Err(e) => tracing::warn!(

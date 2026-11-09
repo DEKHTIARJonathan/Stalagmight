@@ -148,6 +148,20 @@ where
 }
 
 impl AppState {
+    fn speleodb_push_project_guard(
+        &self,
+        generation: u64,
+    ) -> Result<std::sync::MutexGuard<'_, Option<crate::models::Project>>, SpeleoErrorDto> {
+        let project = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.speleodb_session_generation() != generation || project.is_none() {
+            return Err(local_dto(SpeleoDbError::SessionMoved));
+        }
+        Ok(project)
+    }
+
     /// Push the open project's edits (if any) and release the write lock,
     /// returning to read-only (#197). On a confirmed push (or nothing to push) the
     /// lock is released and the edit gate dropped; on divergence or an ambiguous
@@ -166,7 +180,8 @@ impl AppState {
         message: Option<String>,
         accept_older_version: bool,
     ) -> Result<DoneResult, SpeleoErrorDto> {
-        let link = self.speleodb_validated_link()?;
+        let _lock_ops = self.speleodb_lock_ops_guard();
+        let (generation, link) = self.speleodb_session_snapshot()?;
 
         // Edit-session gate: Done acts only on an ACTIVE edit session. The edit gate
         // is set true only by Start editing (after acquiring the lock) / its FF arm,
@@ -193,7 +208,7 @@ impl AppState {
 
         // Dirty-bit gate: only push when there are un-pushed edits.
         let outcome = if link.has_unpushed_edits {
-            self.speleodb_push(&endpoint, &token, insecure_http, &link, message)?
+            self.speleodb_push(&endpoint, &token, insecure_http, &link, message, generation)?
         } else {
             PushOutcome::Confirmed
         };
@@ -206,7 +221,10 @@ impl AppState {
                 // keep the lock + editability and report PushUnconfirmed so a retry of
                 // Done re-pushes the late edit - releasing now would strand it
                 // read-only until a fresh Start editing. Only release once clean.
-                let link_after = self.speleodb_open_link().map_err(local_dto)?;
+                let link_after = {
+                    let _project = self.speleodb_push_project_guard(generation)?;
+                    self.speleodb_open_link().map_err(local_dto)?
+                };
                 if link_after.has_unpushed_edits {
                     // Say WHY. Both routes to `PushUnconfirmed` render the same banner
                     // ("the upload could not be confirmed"), and this one used to log
@@ -234,6 +252,7 @@ impl AppState {
                     client::release_lock(&endpoint, &token, insecure_http, &link.project_id),
                 )
                 .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
+                let _project = self.speleodb_push_project_guard(generation)?;
                 self.set_edit_enabled(false);
                 // The lock this process took is back with the server; the edit session
                 // it licensed is over. This project's claim, not the account's whole
@@ -265,7 +284,8 @@ impl AppState {
         message: Option<String>,
         accept_older_version: bool,
     ) -> Result<PushResult, SpeleoErrorDto> {
-        let link = self.speleodb_validated_link()?;
+        let _lock_ops = self.speleodb_lock_ops_guard();
+        let (generation, link) = self.speleodb_session_snapshot()?;
 
         // Push acts only on an ACTIVE edit session (a held lock); without it there
         // is no lock and nothing to push - answer locally rather than earn a
@@ -288,11 +308,12 @@ impl AppState {
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
-        match self.speleodb_push(&endpoint, &token, insecure_http, &link, message)? {
+        match self.speleodb_push(&endpoint, &token, insecure_http, &link, message, generation)? {
             PushOutcome::Confirmed => {
                 // A late edit after push_start leaves the dirty bit set (not yet on
                 // the server); report PushUnconfirmed so a retry re-pushes it. The
                 // lock is retained either way.
+                let _project = self.speleodb_push_project_guard(generation)?;
                 let still_dirty = self
                     .speleodb_open_link()
                     .map_err(local_dto)?
@@ -548,9 +569,16 @@ impl AppState {
         insecure_http: bool,
         link: &crate::models::SpeleoLink,
         message: Option<String>,
+        generation: u64,
     ) -> Result<PushOutcome, SpeleoErrorDto> {
         let project_id = &link.project_id;
-        self.speleodb_require_owned_lock(link)?;
+        {
+            let _project = self.speleodb_push_project_guard(generation)?;
+        }
+        let (verified_endpoint, verified_token) = self.speleodb_require_owned_lock_locked(link)?;
+        if verified_endpoint != endpoint || verified_token != token {
+            return Err(local_dto(SpeleoDbError::SessionMoved));
+        }
 
         // Authoritative server tip - the revision topology, NOT the unreliable
         // latest_commit field (see speleodb_server_head). The fetched history is
@@ -592,6 +620,7 @@ impl AppState {
             // Our prior (ambiguous) push landed; adopt the tip as BASE, then push the
             // current state on top (a 304 if nothing changed since).
             PushPlan::AdoptThenUpload => {
+                let _project = self.speleodb_push_project_guard(generation)?;
                 self.speleodb_mutate_link(|l| l.base_commit_sha = tip.clone())
                     .map_err(local_dto)?;
             }
@@ -604,6 +633,7 @@ impl AppState {
                 // recall went stale when that upload landed, so a failure to record
                 // the adoption locally must not be what leaves it standing.
                 let landed = PushOutcome::Confirmed;
+                let _project = self.speleodb_push_project_guard(generation)?;
                 self.speleodb_mutate_link(|l| {
                     l.base_commit_sha = tip.clone();
                     l.has_unpushed_edits = false;
@@ -619,7 +649,15 @@ impl AppState {
         }
 
         // Normal push (Done / Push): fold the SDB-authoritative name pre-push (#216).
-        self.speleodb_upload(endpoint, token, insecure_http, link, message, true)
+        self.speleodb_upload(
+            endpoint,
+            token,
+            insecure_http,
+            link,
+            message,
+            true,
+            generation,
+        )
     }
 
     /// Build the upload (VACUUM snapshot with the dirty bit cleared in the copy +
@@ -633,7 +671,11 @@ impl AppState {
         link: &crate::models::SpeleoLink,
         message: Option<String>,
         fold_metadata: bool,
+        generation: u64,
     ) -> Result<PushOutcome, SpeleoErrorDto> {
+        {
+            let _project = self.speleodb_push_project_guard(generation)?;
+        }
         let project_id = &link.project_id;
         let commit_message = message
             .map(|m| m.trim().to_owned())
@@ -667,7 +709,7 @@ impl AppState {
             // describes the needle rather than quoting it.)
             match client::get_project(endpoint, token, insecure_http, project_id) {
                 Ok(fetched) => {
-                    self.speleodb_fold_local_name(&fetched.name, project_id);
+                    self.speleodb_fold_local_name(&fetched.name, project_id, generation);
                     server_kind = Some(fetched.kind);
                 }
                 Err(e) => tracing::warn!(
@@ -699,7 +741,10 @@ impl AppState {
         // Flush in-memory state before taking the native SQLite snapshot.
         // save_project also heals duplicate shot UUIDs and non-finite geometry,
         // so the upload carries the same normalized data as the local file.
-        if !self.save_project(None).success {
+        if !self
+            .save_project_at_generation(None, Some(generation))
+            .success
+        {
             return Err(local_dto(SpeleoDbError::Io(
                 "failed to flush project before push".to_owned(),
             )));
@@ -707,8 +752,11 @@ impl AppState {
 
         // Self-contained snapshot of the live `.stalx` (#195), dirty bit cleared in
         // the COPY so it never rides to the server.
-        crate::persistence::Database::vacuum_snapshot(&live, &snapshot)
-            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        {
+            let _project = self.speleodb_push_project_guard(generation)?;
+            crate::persistence::Database::vacuum_snapshot(&live, &snapshot)
+                .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        }
 
         // Derive policy and history cleanup from the file just captured, never from the
         // live handle or stack. `save_project` can return success with a
@@ -739,6 +787,9 @@ impl AppState {
         clear_snapshot_dirty(&snapshot, keep_undo, inherited_through.as_deref())
             .map_err(local_dto)?;
 
+        {
+            let _project = self.speleodb_push_project_guard(generation)?;
+        }
         let result = self.speleodb_handle_auth(
             Endpoint::UploadStalx,
             client::upload_stalx(
@@ -775,6 +826,7 @@ impl AppState {
                     server_kind.as_deref(),
                 );
                 let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
+                let _project = self.speleodb_push_project_guard(generation)?;
                 self.speleodb_mutate_link(|l| {
                     // NEVER let a successful push move BASE BACKWARD. A None BASE
                     // over a dirty copy fences straight to Diverged, then walks the
@@ -829,6 +881,7 @@ impl AppState {
                         project_id,
                         server_kind.as_deref(),
                     );
+                    let _project = self.speleodb_push_project_guard(generation)?;
                     self.speleodb_mutate_link(|l| {
                         if sync::edits_captured_by_push(
                             l.last_edit_at.as_deref(),

@@ -724,7 +724,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           await invokeIpc<null>('speleodb_logout');
         } finally {
           if (current()) {
-            set({ pendingAuth: null, authError: null });
+            set((state) => ({ pendingAuth: state.pendingAuth === p ? null : state.pendingAuth, authError: null }));
             get().clearSession();
             const projects = useProjectStore.getState();
             await Promise.all([projects.loadRecentProjects(), projects.loadConfig()]);
@@ -738,7 +738,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           token: p.useToken ? p.token.trim() || undefined : undefined,
         });
         if (!current()) return { ok: false, cancelled: true };
-        set({ pendingAuth: null, authError: null });
+        set((state) => ({ pendingAuth: state.pendingAuth === p ? null : state.pendingAuth, authError: null }));
         get().setSessionFromLogin(r);
         // #201: a fresh login is an "on login" scan point - surface any locks this
         // user left held (and prime the recents badges). `prompt: true` so it raises

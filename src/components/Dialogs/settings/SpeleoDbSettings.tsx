@@ -38,6 +38,8 @@ export function SpeleoDbSettings({
   const busy = useSpeleoStore((s) => s.busy);
 
   const speleo = config.speleodb;
+  const connectionRef = useRef(speleo);
+  connectionRef.current = speleo;
   const [loggingIn, setLoggingIn] = useState(false);
   const loggingRef = useRef(false);
   const draft = useRef({ pendingAuth, isApplying });
@@ -90,7 +92,7 @@ export function SpeleoDbSettings({
       if (!embedded && (currentDialog.activeDialog !== 'settings' || currentDialog.dialogData !== issuedDialog)) return;
       if (result.ok) {
         const endpoint = useSpeleoStore.getState().session?.endpoint;
-        if (endpoint) onChange({ speleodb: { ...speleo, endpoint } });
+        if (endpoint && connectionRef.current === speleo) onChange({ speleodb: { ...speleo, endpoint } });
         if (!embedded) closeDialog();
       } else {
         setAuthError(humanizeSpeleoError(result.error, t('speleodb.errors.loginFailed')));

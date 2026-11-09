@@ -44,6 +44,13 @@ impl AppState {
         password: Option<String>,
         token: Option<String>,
     ) -> Result<SpeleoLoginResult, SpeleoErrorDto> {
+        let entry_generation = {
+            let _project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.speleodb_session_generation()
+        };
         let endpoint = self
             .speleodb_resolve_endpoint(override_endpoint.as_deref())
             .ok_or(SpeleoDbError::NoEndpoint)
@@ -75,6 +82,13 @@ impl AppState {
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if self.speleodb_session_generation() != entry_generation {
+            return Err(local_dto(SpeleoDbError::SessionMoved));
+        }
+        let linked_project = !matches!(
+            self.speleodb_open_link(),
+            Err(SpeleoDbError::NoRemoteProject)
+        );
         // Persist before publishing a successful login. A failed write must be
         // visible, rather than silently losing the session on the next launch.
         let mut config = self
@@ -94,6 +108,10 @@ impl AppState {
         }
         let mut session = self.speleodb_session_lock().map_err(local_dto)?;
         self.bump_speleodb_session();
+        if linked_project {
+            // A new identity/token must verify ownership before editing resumes.
+            self.set_edit_enabled(false);
+        }
         session.token_store.store(&endpoint, &email, &token);
         session.endpoint = Some(endpoint.clone());
         session.email = Some(email.clone());
