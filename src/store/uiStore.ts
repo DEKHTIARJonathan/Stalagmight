@@ -2023,7 +2023,6 @@ export const useUIStore = create<UIStore>((set) => ({
   dialogData: {},
   dmpImportWizardPhase: null,
   openDialog: (activeDialog, dialogData = {}) => {
-    if (activeDialog === 'speleodb-projects') activeDialog = 'open-from-speleodb';
     if (activeDialog === 'speleodb-project') {
       useUIStore.getState().closeDialog();
       useUIStore.getState().openSpeleoWorkspace('history');

@@ -584,7 +584,8 @@ are megabytes each.
 A SpeleoDB-linked project is a binary `.stalx` committed to a git repo, so what its undo
 stack holds at push time is what every commit stores forever. Two policies, resolved by
 `AppState::undo_policy` from `speleo_link.undo_mode` (per project, rides to the server) then
-`SpeleoDbConfig.undo_mode` (the application default):
+`SpeleoDbConfig.undo_mode` (the application default). Existing per-project values
+continue to load and apply; the workspace no longer offers a policy editor:
 
 | | `Full` (default) | `Disabled` | Local project |
 |---|---|---|---|
@@ -825,7 +826,7 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 |------|----------|
 | `src-tauri/crates/core/src/core/undo.rs` | `UndoStack`, `UndoEntry`, `UndoData` types, `DepthLimit` + the byte budget, the persist plan |
 | `src-tauri/crates/core/src/core/state/undo.rs` | `undo()`, `redo()`, `undo_to()`, `redo_to()` implementation |
-| `src-tauri/crates/core/src/core/state/undo_policy.rs` | `undo_policy()` (the Full/Disabled resolver), `speleodb_set_undo_mode` |
+| `src-tauri/crates/core/src/core/state/undo_policy.rs` | `undo_policy()` (the Full/Disabled resolver) |
 | `src-tauri/crates/models/src/undo_mode.rs` | `UndoMode`, `UndoPolicy` |
 | `src-tauri/crates/speleodb/src/speleodb/sync.rs` | `unwind_target` - the BASE-then-first-parents chain |
 | `src-tauri/crates/core/src/core/state/speleodb_cache.rs` | `InheritedUndo` and the drop-on-adopt chokepoint |

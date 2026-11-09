@@ -1239,7 +1239,7 @@ impl AppState {
                     insecure_http,
                     &link,
                     tip.as_deref(),
-                    (LocalEditsPolicy::Protect, entry_gen),
+                    (LocalEditsPolicy::Protect, entry_gen, None),
                 ) {
                     Ok(p) => p,
                     Err(e) => {
@@ -1402,7 +1402,7 @@ impl AppState {
             insecure_http,
             &link,
             tip.as_deref(),
-            (LocalEditsPolicy::Discard, generation),
+            (LocalEditsPolicy::Discard, generation, None),
         );
         if result.is_err() {
             self.set_edit_enabled(false);
@@ -4184,7 +4184,7 @@ mod tests {
     }
 
     #[test]
-    fn a_freshly_taken_lock_is_still_released_when_the_fast_forward_fails() {
+    fn workspace_a_freshly_taken_lock_is_still_released_when_the_fast_forward_fails() {
         // DO-NOT-REGRESS (passes before the local-edits keep rule as well as after):
         // the fast-forward arm's OTHER unwind, and the line the keep rule must not
         // cross. A lock this call demonstrably took, over a copy with nothing local at
@@ -4198,9 +4198,12 @@ mod tests {
         // fast-forward fails inside native SQLite validation - a corrupt-file failure, not the
         // local-edits refusal. So the arm really does run to its unwind here, and the
         // release below is that unwind's doing.
-        let (base, _listener, seen) = recording_stub(FREE_MUTEX_DIVERGED_BODY);
+        let (base, _listener, seen) = recording_stub(WORKSPACE_NEWER_FREE_BODY);
         let (_temp, state) = remote_readonly_fixture();
         *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        state
+            .speleodb_mutate_link(|link| link.endpoint = base.clone())
+            .expect("bind synthetic endpoint");
 
         state
             .speleodb_start_editing()

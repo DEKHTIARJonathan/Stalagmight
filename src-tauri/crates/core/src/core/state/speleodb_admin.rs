@@ -136,7 +136,8 @@ impl AppState {
             .command_lock
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.speleodb_check_expected_context(expected.as_ref())?;
+        self.speleodb_check_expected_context(expected.as_ref())
+            .map_err(admin_dto)?;
         let generation = self.speleodb_session_generation();
         let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
         if link.has_unpushed_edits {
@@ -149,7 +150,8 @@ impl AppState {
                 .project
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            self.speleodb_require_clean_project(project.as_ref())?;
+            self.speleodb_require_clean_project(project.as_ref())
+                .map_err(admin_dto)?;
         }
         let (_, _, email) = self.speleodb_active_account().map_err(admin_dto)?;
         let holder = self
@@ -161,10 +163,18 @@ impl AppState {
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if generation != self.speleodb_session_generation() {
+        if generation != self.speleodb_session_generation()
+            || expected.as_ref().is_none_or(|expected| {
+                expected.session_generation != generation.to_string()
+                    || project.as_ref().is_none_or(|project| {
+                        project.modified_at.to_rfc3339() != expected.project_modified_at
+                    })
+            })
+        {
             return Err(admin_dto(SpeleoDbError::SessionMoved));
         }
-        self.speleodb_require_clean_project(project.as_ref())?;
+        self.speleodb_require_clean_project(project.as_ref())
+            .map_err(admin_dto)?;
         if super::speleodb::lock_held_by_me(holder.as_deref(), Some(&email)) {
             client::release_lock(&endpoint, &token, insecure_http, &link.project_id)
                 .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
@@ -179,26 +189,24 @@ impl AppState {
     pub(super) fn speleodb_require_clean_project(
         &self,
         project: Option<&crate::models::Project>,
-    ) -> Result<(), SpeleoErrorDto> {
+    ) -> Result<(), SpeleoDbError> {
         let database = self
             .database
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let db = database
-            .as_ref()
-            .ok_or_else(|| admin_dto(SpeleoDbError::NoRemoteProject))?;
+        let db = database.as_ref().ok_or(SpeleoDbError::NoRemoteProject)?;
         let saved = db
             .load_project()
-            .map_err(|e| admin_dto(SpeleoDbError::Io(e.to_string())))?;
+            .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
         let link = db
             .load_speleo_link()
-            .map_err(|e| admin_dto(SpeleoDbError::Io(e.to_string())))?;
+            .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
         if project.is_none_or(|p| p.modified_at != saved.modified_at)
             || link.is_none_or(|link| link.has_unpushed_edits)
         {
-            return Err(admin_dto(SpeleoDbError::Io(
+            return Err(SpeleoDbError::Io(
                 "Save your changes using Save Changes before switching to read-only mode.".into(),
-            )));
+            ));
         }
         Ok(())
     }
@@ -207,12 +215,14 @@ impl AppState {
     pub(super) fn speleodb_check_expected_context(
         &self,
         expected: Option<&crate::speleodb::SpeleoReleaseContext>,
-    ) -> Result<(), SpeleoErrorDto> {
+    ) -> Result<(), SpeleoDbError> {
         let Some(expected) = expected else {
-            return Err(admin_dto(SpeleoDbError::SessionMoved));
+            return Err(SpeleoDbError::SessionMoved);
         };
-        let (generation, link) = self.speleodb_session_snapshot()?;
-        let (endpoint, _, email) = self.speleodb_active_account().map_err(admin_dto)?;
+        let (generation, link) = self
+            .speleodb_session_snapshot()
+            .map_err(|_| SpeleoDbError::SessionMoved)?;
+        let (endpoint, _, email) = self.speleodb_active_account()?;
         let project = self
             .project
             .lock()
@@ -228,7 +238,7 @@ impl AppState {
                 != crate::speleodb::auth::normalize_endpoint(&endpoint)
             || !super::speleodb::lock_held_by_me(Some(&expected.user_email), Some(&email))
         {
-            return Err(admin_dto(SpeleoDbError::SessionMoved));
+            return Err(SpeleoDbError::SessionMoved);
         }
         Ok(())
     }

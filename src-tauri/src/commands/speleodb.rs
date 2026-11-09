@@ -157,6 +157,10 @@ pub async fn speleodb_done(
 /// Read-only refresh of the open project against the server (#197): no lock is
 /// taken (UpToDate / FastForward / DivergenceNeeded).
 #[tauri::command]
+#[expect(
+    clippy::result_large_err,
+    reason = "IPC returns the shared structured SpeleoDB error"
+)]
 pub async fn speleodb_update(
     app: AppHandle,
     discard_changes: Option<bool>,
@@ -443,6 +447,10 @@ pub async fn speleodb_publish(
 
 /// Switch a clean linked project to read-only, releasing only our own lock.
 #[tauri::command]
+#[expect(
+    clippy::result_large_err,
+    reason = "IPC returns the shared structured SpeleoDB error"
+)]
 pub async fn speleodb_release_current_lock(
     app: AppHandle,
     expected: Option<stalagmight_core::speleodb::SpeleoReleaseContext>,

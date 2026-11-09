@@ -370,6 +370,7 @@ impl AppState {
             (
                 LocalEditsPolicy::Discard,
                 self.speleodb_session_generation(),
+                None,
             ),
         )
         .map_err(local_dto)
@@ -452,36 +453,56 @@ impl AppState {
     }
 
     /// Reload never acquires a lock. Discard consent belongs to one backend session.
+    #[expect(
+        clippy::result_large_err,
+        reason = "preserve the shared structured IPC recovery payload"
+    )]
     pub fn speleodb_reload(
         &self,
         discard_changes: bool,
         expected: Option<crate::speleodb::SpeleoReleaseContext>,
     ) -> Result<UpdateResult, SpeleoErrorDto> {
         let _lock_ops = self.speleodb_lock_ops_guard();
-        let _commands = self
-            .command_lock
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        self.speleodb_check_expected_context(expected.as_ref())?;
-        self.speleodb_reload_locked(discard_changes)
+        self.speleodb_check_expected_context(expected.as_ref())
+            .map_err(local_dto)?;
+        self.speleodb_reload_locked(discard_changes, expected.as_ref())
     }
 
-    #[cfg(test)]
-    pub fn speleodb_update(&self) -> Result<UpdateResult, SpeleoErrorDto> {
-        self.speleodb_reload_locked(false)
-    }
-
+    #[expect(
+        clippy::result_large_err,
+        reason = "preserve the shared structured IPC recovery payload"
+    )]
     fn speleodb_reload_locked(
         &self,
         discard_changes: bool,
+        expected: Option<&crate::speleodb::SpeleoReleaseContext>,
     ) -> Result<UpdateResult, SpeleoErrorDto> {
         let generation = self.speleodb_session_generation();
+        let bytes = {
+            let project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if generation != self.speleodb_session_generation()
+                || expected.is_some_and(|expected| {
+                    expected.session_generation != generation.to_string()
+                        || project.as_ref().is_none_or(|project| {
+                            project.modified_at.to_rfc3339() != expected.project_modified_at
+                        })
+                })
+            {
+                return Err(local_dto(SpeleoDbError::SessionMoved));
+            }
+            serde_json::to_vec(&*project)
+                .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?
+        };
         if !discard_changes {
             let project = self
                 .project
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            self.speleodb_require_clean_project(project.as_ref())?;
+            self.speleodb_require_clean_project(project.as_ref())
+                .map_err(local_dto)?;
         }
         let link = self.speleodb_validated_link()?;
         if link.has_unpushed_edits && !discard_changes {
@@ -495,8 +516,16 @@ impl AppState {
             self.speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
         })
         .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
-        if generation != self.speleodb_session_generation() {
-            return Err(local_dto(SpeleoDbError::SessionMoved));
+        {
+            let project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if generation != self.speleodb_session_generation()
+                || serde_json::to_vec(&*project).ok().as_deref() != Some(bytes.as_slice())
+            {
+                return Err(local_dto(SpeleoDbError::SessionMoved));
+            }
         }
         if tip.is_none() && !commits.is_empty() {
             return Ok(UpdateResult::DivergenceNeeded);
@@ -529,6 +558,7 @@ impl AppState {
                         LocalEditsPolicy::Protect
                     },
                     generation,
+                    Some(bytes),
                 ),
             )
             .map_err(local_dto)?;

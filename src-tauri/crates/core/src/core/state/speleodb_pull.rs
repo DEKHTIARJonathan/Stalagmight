@@ -218,9 +218,9 @@ impl AppState {
         insecure_http: bool,
         link: &crate::models::SpeleoLink,
         tip: Option<&str>,
-        transition: (LocalEditsPolicy, u64),
+        transition: (LocalEditsPolicy, u64, Option<Vec<u8>>),
     ) -> Result<String, SpeleoDbError> {
-        let (policy, generation) = transition;
+        let (policy, generation, expected_snapshot) = transition;
         let bytes = {
             let project = self
                 .project
@@ -229,12 +229,23 @@ impl AppState {
             if generation != self.speleodb_session_generation() {
                 return Err(SpeleoDbError::SessionMoved);
             }
-            serde_json::to_vec(&*project).map_err(|e| SpeleoDbError::Io(e.to_string()))?
+            let bytes =
+                serde_json::to_vec(&*project).map_err(|e| SpeleoDbError::Io(e.to_string()))?;
+            if expected_snapshot
+                .as_ref()
+                .is_some_and(|expected| expected != &bytes)
+            {
+                return Err(SpeleoDbError::SessionMoved);
+            }
+            bytes
         };
         let was_editing = self.edit_enabled();
         let project_id = &link.project_id;
         // A verified revision must be downloaded by its exact identifier.
-        let pinned = usable_tip(tip.map(str::to_owned), project_id);
+        let pinned = tip.map(str::to_owned);
+        if let Some(sha) = pinned.as_deref() {
+            validate_hexsha(sha)?;
+        }
         let native = self.speleodb_handle_auth(
             Endpoint::DownloadStalx,
             match pinned.as_deref() {
@@ -285,6 +296,7 @@ impl AppState {
                 &super::speleodb_cache::preserved_display_settings(&dest),
             );
         }
+        super::speleodb_cache_install::sync_staged_file(&staged)?;
         let result = self
             .open_project_download(
                 staged.to_path_buf(),

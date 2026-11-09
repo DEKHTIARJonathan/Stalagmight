@@ -278,7 +278,7 @@ export function useSpeleoActions(): SpeleoActions {
       if (!current()) return;
       if (!access?.release_context) throw new Error('The project or account changed. Try again.');
       const result = await invokeIpc<UpdateResult>('speleodb_update', { discardChanges, expected: access.release_context });
-      if (!speleoProjectSessionStillCurrent(issuedFor)) return;
+      if (!current()) return;
       applyUpdate(result);
       switch (result.kind) {
         case 'up_to_date':
@@ -308,7 +308,7 @@ export function useSpeleoActions(): SpeleoActions {
           break;
       }
     } catch (e) {
-      handleError(e, 'speleodb.editBar.toasts.updateFailed');
+      if (current()) handleError(e, 'speleodb.editBar.toasts.updateFailed');
     } finally {
       endBusy(busyToken);
     }

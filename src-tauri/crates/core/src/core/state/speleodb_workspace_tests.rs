@@ -1,3 +1,5 @@
+const WORKSPACE_NEWER_FREE_BODY: &str = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote","permission":"READ_AND_WRITE","active_mutex":null,"commits":[{"id":"def4567","parent_ids":["abc123"],"author_email":"u@x"},{"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
+const WORKSPACE_NEWER_BODY: &str = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote","permission":"READ_AND_WRITE","active_mutex":{"user":"u@x"},"commits":[{"id":"def4567","parent_ids":["abc123"],"author_email":"u@x"},{"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
 // Included in speleodb::tests to reuse its synthetic HTTP and project builders.
 fn workspace_context(state: &AppState) -> crate::speleodb::SpeleoReleaseContext {
     let (generation, link) = state.speleodb_session_snapshot().expect("snapshot");
@@ -104,7 +106,7 @@ fn workspace_acquisition_checks_live_revisions_after_acquire_without_equal_revis
 
 #[test]
 fn workspace_reload_failed_download_preserves_pending_work_and_mode_without_acquiring() {
-    let (base, _listener, seen) = recording_stub(SAME_ACCOUNT_HOLDER_BODY);
+    let (base, _listener, seen) = recording_stub(WORKSPACE_NEWER_BODY);
     let (_temp, state) = editing_fixture(&base);
     state.mark_remote_dirty();
     let before = state.capture_project_snapshot().expect("before");
@@ -188,7 +190,7 @@ fn workspace_historical_checkout_at_equal_base_still_downloads_on_acknowledged_r
         r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote","permission":"READ_AND_WRITE","active_mutex":{"user":"u@x"},"commits":[{"id":"abc1234","parent_ids":[],"author_email":"u@x"}]}"#,
     );
     let (_temp, state) = editing_fixture(&base);
-    state.speleodb_set_unwound_from(Some("def456".into()));
+    state.speleodb_set_unwound_from(Some("def456"));
     state.mark_remote_dirty();
     assert!(state
         .speleodb_reload(true, Some(workspace_context(&state)))
@@ -297,4 +299,78 @@ fn workspace_prepared_reload_rejects_newer_edits_and_invalid_files_without_repla
         assert_eq!(std::fs::read(&dest).expect("unchanged bytes"), bytes);
         assert!(state.edit_enabled());
     }
+}
+
+#[test]
+fn workspace_acquisition_refuses_an_unusable_verified_revision_without_downloading_head() {
+    let (base, _listener, seen) = recording_stub(SAME_ACCOUNT_HOLDER_BODY);
+    let (_temp, state) = editing_fixture(&base);
+    state.set_edit_enabled(false);
+    assert!(state.speleodb_start_editing().is_err());
+    assert!(!state.edit_enabled());
+    assert!(!seen
+        .lock()
+        .expect("requests")
+        .iter()
+        .any(|r| r.contains("/download/")));
+}
+
+#[test]
+fn workspace_reload_rejects_edits_made_during_live_revision_verification() {
+    use std::io::{Read as _, Write as _};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listener");
+    let base = format!("http://{}", listener.local_addr().expect("address"));
+    let (_temp, state) = editing_fixture(&base);
+    let expected = workspace_context(&state);
+    let (arrived, started) = std::sync::mpsc::channel();
+    let (finish, resume) = std::sync::mpsc::channel();
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("revision request");
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(2)))
+            .expect("timeout");
+        let mut request = Vec::new();
+        let mut chunk = [0u8; 4096];
+        loop {
+            let count = stream.read(&mut chunk).expect("request");
+            if count == 0 {
+                break;
+            }
+            request.extend_from_slice(&chunk[..count]);
+            if request.windows(4).any(|bytes| bytes == b"\r\n\r\n") {
+                break;
+            }
+        }
+        assert!(String::from_utf8_lossy(&request).contains("/revisions/"));
+        arrived.send(()).expect("request arrived");
+        let _ = resume.recv_timeout(std::time::Duration::from_secs(2));
+        let body = crate::core::state::tests_support::sdk_fixture(WORKSPACE_NEWER_BODY);
+        write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).expect("reply");
+    });
+    std::thread::scope(|scope| {
+        let pending = scope.spawn(|| state.speleodb_reload(true, Some(expected)));
+        started
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("verification started");
+        assert!(
+            state.set_surface_elevation(Some(12.5)).success,
+            "edits remain possible during verification"
+        );
+        finish.send(()).expect("finish verification");
+        let error = pending
+            .join()
+            .expect("reload thread")
+            .expect_err("newer edits invalidate discard consent");
+        assert!(error.message.contains("changed"));
+    });
+    server.join().expect("server");
+    assert_eq!(
+        state
+            .get_project_state()
+            .expect("project")
+            .surface_elevation,
+        Some(12.5)
+    );
+    assert!(state.speleodb_open_link().expect("link").has_unpushed_edits);
+    assert!(state.edit_enabled());
 }

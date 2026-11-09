@@ -20,7 +20,7 @@ import type {
  * read-only until Start editing - #204). Replaces the dev spike's list half;
  * login now lives in Settings (#205), so this dialog only browses + opens.
  */
-export default function OpenFromSpeleoDbDialog({ embedded = false }: { embedded?: boolean } = {}) {
+export default function OpenFromSpeleoDbDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const openDialog = useUIStore((s) => s.openDialog);
@@ -35,7 +35,7 @@ export default function OpenFromSpeleoDbDialog({ embedded = false }: { embedded?
   const sessionGeneration = useSpeleoStore((s) => s.sessionGeneration);
   const { openRemote } = useOpenRemoteProject({
     onBeforeLoad: closeDialog,
-    cancelReturnsTo: embedded ? 'speleodb-projects' : 'open-from-speleodb',
+    cancelReturnsTo: 'open-from-speleodb',
   });
 
   // Start in 'checking' so the session probe settles before the first paint
@@ -162,7 +162,7 @@ export default function OpenFromSpeleoDbDialog({ embedded = false }: { embedded?
       if (!current()) return;
       if (outcome.status === 'error') surfaceOpenError(outcome.message, outcome.reLogin);
     } finally {
-      // The embedded browser survives both the refusal prompt and its cancellation.
+      // A refused-open prompt returns to this browser on cancellation.
       if (current()) setBusy(false);
     }
   };
@@ -265,8 +265,8 @@ export default function OpenFromSpeleoDbDialog({ embedded = false }: { embedded?
                 <Button onClick={() => void handleRefresh()} disabled={busy} aria-busy={busy} icon={busy ? <LoadingSpinner testId="open-from-speleodb-refresh-spinner" /> : undefined} data-testid="open-from-speleodb-refresh">
                   {t('speleodb.browser.refresh')}
                 </Button>
-                <Button onClick={embedded ? () => openDialog('new-project') : closeDialog} disabled={busy} data-testid="open-from-speleodb-close">
-                  {embedded ? t('common.actions.new') : t('common.actions.close')}
+                <Button onClick={closeDialog} disabled={busy} data-testid="open-from-speleodb-close">
+                  {t('common.actions.close')}
                 </Button>
               </div>
             </div>
@@ -274,7 +274,7 @@ export default function OpenFromSpeleoDbDialog({ embedded = false }: { embedded?
         )}
       </div>
   );
-  return embedded ? content : (
+  return (
     <DialogWrapper title={t('speleodb.browser.title')} onClose={closeDialog} size="lg" data-testid="open-from-speleodb-dialog">
       {content}
     </DialogWrapper>

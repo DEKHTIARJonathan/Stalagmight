@@ -28,6 +28,10 @@ impl AppState {
     }
 
     /// Fully prepare a downloaded project before installing its bytes and state.
+    #[expect(
+        clippy::result_large_err,
+        reason = "preserve the shared structured IPC recovery payload"
+    )]
     pub(super) fn open_project_download(
         &self,
         source: PathBuf,
@@ -38,6 +42,10 @@ impl AppState {
         self.open_project_prepared_inner(dest, Some(expected), || Ok(()), Some((source, editing)))
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "preserve the shared structured IPC recovery payload"
+    )]
     fn open_project_prepared_inner<F>(
         &self,
         path: PathBuf,
@@ -347,7 +355,8 @@ impl AppState {
                     crate::speleodb::SpeleoDbError::SessionMoved,
                 ));
             }
-            self.install_prepared_database(source, &path, db, proj_guard.as_ref())?
+            self.install_prepared_database(source, &path, db, proj_guard.as_ref())
+                .map_err(super::speleodb::local_dto)?
         } else {
             db
         };
