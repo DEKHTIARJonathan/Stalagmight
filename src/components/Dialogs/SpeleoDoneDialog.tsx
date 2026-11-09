@@ -14,6 +14,7 @@ import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 import { SpeleoProgressOverlay } from './SpeleoProgressOverlay';
 import { CommitMessageLimit } from './CommitMessageLimit';
 import { commitMessageTooLong } from '../../utils/commitMessage';
+import { toastLateUploadOutcome } from '../../utils/lateUploadOutcome';
 
 /**
  * Commit-message confirm for the action shell (#204), in two modes read off
@@ -88,11 +89,27 @@ export default function SpeleoDoneDialog() {
     const path = state.project?.file_path;
     const op = state.loading.clientOpId;
     const generation = useSpeleoStore.getState().sessionGeneration;
-    const current = () => uploadOwnerStillCurrent(owner) && useProjectStore.getState().project?.file_path === path &&
+    // frontend#2: two different questions. `sessionCurrent` - is this still the
+    // project, operation and SpeleoDB session the upload was started for - gates
+    // APPLYING the upload's result, and is all `push` / `done` get as `isCurrent`.
+    // Whether THIS dialog is still on screen must not: once the 120-second notice
+    // lets the user close it, a result that lands later still updates the link,
+    // toasts and raises the failure banner. The dialog's own follow-ups (its inline
+    // messages, closing it, Save and Close) still need it open.
+    const sessionCurrent = () => uploadOwnerStillCurrent(owner) && useProjectStore.getState().project?.file_path === path &&
       useProjectStore.getState().loading.clientOpId === op &&
-      useSpeleoStore.getState().sessionGeneration === generation &&
-      useUIStore.getState().activeDialog === 'speleodb-done' &&
+      useSpeleoStore.getState().sessionGeneration === generation;
+    const dialogOpen = () => useUIStore.getState().activeDialog === 'speleodb-done' &&
       useUIStore.getState().dialogData === dialogData;
+    const current = () => sessionCurrent() && dialogOpen();
+    /** The dialog was walked away from mid-upload: report what it would have. */
+    const settledAfterDismiss = (resolved: { kind: string } | null): boolean => {
+      if (!sessionCurrent()) return true;
+      if (dialogOpen()) return false;
+      if (resolved?.kind === 'pushed' || resolved?.kind === 'released') setUploadContinuation(null);
+      toastLateUploadOutcome(resolved);
+      return true;
+    };
     try {
       if (mode === 'push') {
         let saved;
@@ -108,9 +125,9 @@ export default function SpeleoDoneDialog() {
         }
         setUploadProgressExpired(false);
         setUploading(true);
-        const resolved = closeAfterSave ? await done(text, { isCurrent: current, pendingExit: { kind: 'close', sessionGeneration: generation } }) : await push(text, { isCurrent: current });
+        const resolved = closeAfterSave ? await done(text, { isCurrent: sessionCurrent, pendingExit: { kind: 'close', sessionGeneration: generation } }) : await push(text, { isCurrent: sessionCurrent });
         setUploading(false);
-        if (!current()) return;
+        if (settledAfterDismiss(resolved)) return;
         if (resolved?.kind === 'released' && closeAfterSave) {
           const latest = useProjectStore.getState();
           if (latest.isDirty || useSpeleoStore.getState().link?.hasUnpushedEdits) {
@@ -140,9 +157,10 @@ export default function SpeleoDoneDialog() {
           setUploadProgressExpired(false);
           setUploading(true);
         }
-        const resolved = await done(text, { isCurrent: current });
+        const resolved = await done(text, { isCurrent: sessionCurrent });
         setUploading(false);
-        if (current() && resolved?.kind === 'released') closeDialog();
+        if (settledAfterDismiss(resolved)) return;
+        if (resolved?.kind === 'released') closeDialog();
       }
     } finally { attempt.current = false; setUploading(false); setSubmitting(false); }
   };

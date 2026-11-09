@@ -3412,7 +3412,8 @@
         "pushFailed": "Could not push changes",
         "tookRemote": "Reset to the SpeleoDB version.",
         "takeRemoteFailed": "Could not take the SpeleoDB version",
-        "notEditing": "Nothing was uploaded - you are not editing this project right now. Start editing again (signing in first if needed) to upload your changes."
+        "notEditing": "Nothing was uploaded - you are not editing this project right now. Start editing again (signing in first if needed) to upload your changes.",
+        "lateUploadFailed": "The upload you left running did not reach SpeleoDB. Your changes are still on this computer."
       },
       "push": "Save Changes",
       "unlock": "Switch to Read Only Mode"

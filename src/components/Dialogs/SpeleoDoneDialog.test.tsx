@@ -293,6 +293,49 @@ it('Save upload progress expires after 120 seconds and retains the description w
     await act(async () => uploaded({ kind: 'pushed' }));
     expect(useUIStore.getState().activeDialog).toBe('settings');
     expect(invokeIpcMock.mock.calls.filter(([cmd]) => cmd === 'speleodb_push')).toHaveLength(1);
+    // frontend#2: the dialog is gone, but the result is still applied and reported.
+    expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(expect.stringContaining('pushed'), 'speleodb-pushed', 'success');
+    expect(getUploadContinuation('/progress.stalx')).toBeNull();
+  } finally { vi.useRealTimers(); }
+});
+
+it('a failure that lands after the dialog was closed raises the banner and a toast (frontend#2)', async () => {
+  useProjectStore.setState({ project: { file_path: '/late.stalx', zero_datums: [{}] } as never });
+  useUIStore.setState({ dialogData: { mode: 'push' } });
+  let fail!: (error: Error) => void;
+  invokeIpcMock.mockImplementation((cmd) => cmd === 'speleodb_push' ? new Promise((_resolve, reject) => { fail = reject; }) : Promise.resolve(null));
+  render(<SpeleoDoneDialog />);
+  fillCommitMessage();
+  vi.useFakeTimers();
+  try {
+    await act(async () => fireEvent.click(screen.getByTestId('speleodb-done-confirm')));
+    act(() => vi.advanceTimersByTime(120_000));
+    fireEvent.click(screen.getByTestId('speleodb-done-cancel'));
+    expect(useUIStore.getState().activeDialog).toBeNull();
+    await act(async () => fail(new Error('Synthetic late failure')));
+    expect(useSpeleoStore.getState().banner?.kind).toBe('push_failed');
+    expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(expect.stringContaining('did not reach SpeleoDB'), 'speleodb-late-upload', 'error');
+    // The description survives for the retry.
+    expect(getUploadContinuation('/late.stalx')?.message).toBe('Survey update');
+  } finally { vi.useRealTimers(); }
+});
+
+it('Finish editing applies a release that lands after the dialog was closed (frontend#2)', async () => {
+  useUIStore.setState({ dialogData: {} });
+  let released!: (value: { kind: 'released' }) => void;
+  invokeIpcMock.mockImplementation((cmd) => cmd === 'speleodb_done' ? new Promise((resolve) => { released = resolve; }) : Promise.resolve(null));
+  render(<SpeleoDoneDialog />);
+  fillCommitMessage();
+  vi.useFakeTimers();
+  try {
+    await act(async () => fireEvent.click(screen.getByTestId('speleodb-done-confirm')));
+    act(() => vi.advanceTimersByTime(120_000));
+    fireEvent.click(screen.getByTestId('speleodb-done-cancel'));
+    await act(async () => released({ kind: 'released' }));
+    expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-released', 'success');
   } finally { vi.useRealTimers(); }
 });
 
