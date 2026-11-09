@@ -23,7 +23,6 @@ import {
   SlidersIcon,
   InfoIcon,
   DatabaseIcon,
-  BugIcon,
   LayersIcon,
   MapIcon,
   TargetIcon,
