@@ -407,7 +407,8 @@ impl AppState {
                     purpose = "remove a cached SpeleoDB copy (user confirmed)",
                     "speleodb: removing a cached copy"
                 );
-                let (result, lock) = self.remove_cached_copy_and_lock(root, project_id);
+                let (result, lock) =
+                    self.remove_cached_copy_and_lock(root, project_id, &mut ServerReach::default());
                 match lock {
                     LockHandBack::Unknown(reason) => {
                         let mut warnings = result.warnings.clone();
@@ -468,6 +469,9 @@ impl AppState {
             .map(|copy| (copy.project_id, copy.project_name))
             .collect();
         let mut other_accounts = 0_usize;
+        // One server for the whole run: once it has not answered, the remaining
+        // copies' locks are reported unchecked without another probe each.
+        let mut server = ServerReach::default();
         for id in cached_ids(root) {
             let path = cache_path_in(root, &id);
             let link_endpoint = copy_link_endpoint(&path);
@@ -480,7 +484,7 @@ impl AppState {
                 Removal::Open => report.kept_open.push(name),
                 Removal::AtRisk => report.kept_unpushed.push(name),
                 Removal::Allowed => {
-                    let (result, lock) = self.remove_cached_copy_and_lock(root, &id);
+                    let (result, lock) = self.remove_cached_copy_and_lock(root, &id, &mut server);
                     if result.success {
                         report.removed += 1;
                     } else {
@@ -633,13 +637,14 @@ impl AppState {
         &self,
         root: &Path,
         project_id: &str,
+        server: &mut ServerReach,
     ) -> (CommandResult, LockHandBack) {
         let account = self.copy_account_session(&cache_path_in(root, project_id));
         let result = self.remove_cached_copy_files(root, project_id);
         if !result.success {
             return (result, LockHandBack::NotOurs);
         }
-        let lock = self.hand_back_removed_copy_lock(project_id, account);
+        let lock = self.hand_back_removed_copy_lock(project_id, account, server);
         (result, lock)
     }
 
@@ -664,14 +669,22 @@ impl AppState {
     /// when it says this account, hand it back through the normal release. Never
     /// drops the session on a failed probe: this is a best-effort courtesy after a
     /// removal, not an authenticated operation the user asked for.
+    ///
+    /// When an earlier probe of the same run (`server`) could not reach the server,
+    /// nothing is asked: the lock is reported unchecked straight away instead of
+    /// waiting out the probe's timeout once more for every copy.
     fn hand_back_removed_copy_lock(
         &self,
         project_id: &str,
         account: Option<(String, String, String)>,
+        server: &mut ServerReach,
     ) -> LockHandBack {
         let Some((endpoint, token, email)) = account else {
             return LockHandBack::NotOurs;
         };
+        if let Some(reason) = &server.unreachable {
+            return LockHandBack::Unknown(reason.clone());
+        }
         let insecure_http = self.speleodb_insecure_http();
         match crate::speleodb::client::get_project_probe(
             &endpoint,
@@ -685,7 +698,13 @@ impl AppState {
                     return LockHandBack::NotHeld;
                 }
             }
-            Err(e) => return LockHandBack::Unknown(e.to_string()),
+            Err(e) => {
+                let reason = e.to_string();
+                if matches!(e, crate::speleodb::SpeleoDbError::Transport { .. }) {
+                    server.unreachable = Some(reason.clone());
+                }
+                return LockHandBack::Unknown(reason);
+            }
         }
         match self.speleodb_release_lock(project_id.to_owned()) {
             Ok(()) => {
@@ -812,4 +831,14 @@ enum LockHandBack {
     Released,
     /// The server could not be asked, or the release failed.
     Unknown(String),
+}
+
+/// Whether the server has answered the lock probes of one removal run (a single
+/// removal, or a whole purge: every probe goes to the signed-in instance).
+#[derive(Default)]
+struct ServerReach {
+    /// Why the server could not be reached (a transport failure), once one probe
+    /// has failed that way. Later copies are not probed: each would only wait out
+    /// the probe's timeout again.
+    unreachable: Option<String>,
 }

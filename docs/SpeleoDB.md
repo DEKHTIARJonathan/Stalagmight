@@ -167,7 +167,10 @@ it cannot read at all removes nothing. Copies with un-uploaded or unreadable sta
 listed in the confirmation and kept by default ("Keep those, remove the rest").
 Deleting them too takes a second confirmation. The backend re-checks every copy when
 it removes it. Each removed copy's lock is handled as above, and the result lists the
-locks that were handed back and those that could not be checked. The result is
+locks that were handed back and those that could not be checked. Once one probe
+cannot reach the server, the remaining copies are removed without a probe each
+(which would only wait out its timeout again) and their locks are listed as not
+checked. The result is
 announced (a live region) and scrolled into view. With nothing to remove (no copy, or
 only the open project's), the button is disabled and says so.
 

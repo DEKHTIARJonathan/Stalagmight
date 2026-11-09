@@ -1068,6 +1068,54 @@ fn an_unreachable_server_removes_the_copy_and_says_the_lock_may_stay() {
     });
 }
 
+/// A purge with the server down probes once, not once per copy: each probe would
+/// wait out its own timeout (5 s), so a cache of many copies held the purge for
+/// minutes. Every copy is still removed, and every one of this account's locks is
+/// reported as not checked.
+#[test]
+fn a_purge_with_the_server_down_probes_once_and_reports_every_lock_unchecked() {
+    crate::test_helpers::with_isolated_config(|| {
+        // Accepts each connection and drops it at once: a transport failure the
+        // probe sees immediately, and a count of how many probes were made.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let url = format!("http://{}", listener.local_addr().expect("addr"));
+        let probes = Arc::new(Mutex::new(0_usize));
+        let counted = Arc::clone(&probes);
+        std::thread::spawn(move || {
+            while let Ok((stream, _)) = listener.accept() {
+                *counted.lock().expect("count") += 1;
+                drop(stream);
+            }
+        });
+        let temp = tempfile::tempdir().expect("temp");
+        let recorder = AppState::new().expect("state");
+        for id in [MINE, LEGACY, ELSEWHERE] {
+            let path = seed(temp.path(), id, &url, false);
+            recorder.speleodb_record_cache_owner(&path, &url, ME, "Remote");
+        }
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+
+        let report = state.speleodb_purge_cached_copies_in(temp.path(), false);
+
+        assert_eq!(report.removed, 3, "{report:?}");
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert!(state.speleodb_cached_projects_in(temp.path()).is_empty());
+        let mut unchecked = report.locks_unchecked.clone();
+        unchecked.sort();
+        assert_eq!(
+            unchecked,
+            vec![
+                "Remote 1111".to_owned(),
+                "Remote 3333".to_owned(),
+                "Remote 4444".to_owned()
+            ]
+        );
+        assert_eq!(*probes.lock().expect("count"), 1, "one probe for the run");
+        assert!(state.speleodb_active_token().is_ok(), "the session is kept");
+    });
+}
+
 #[test]
 fn purge_reports_the_locks_it_handed_back() {
     crate::test_helpers::with_isolated_config(|| {
