@@ -95,9 +95,10 @@ pub enum SpeleoDbError {
     #[error("invalid SpeleoDB revision id")]
     InvalidRevision,
     // [Track A] #187: the endpoint scheme/host failed the http private-network
-    // policy (public `http://`, a missing/unknown scheme, or an unresolvable
-    // host). Non-retryable by construction - `tls::enforce` errors before any
-    // request attempt, so `with_retry` never loops on it.
+    // policy (public `http://`, a missing/unknown scheme, or no host). An
+    // unresolvable host is NOT this error: it is `Transport { cause: Dns }`
+    // (offline, sdk#6). Non-retryable by construction - `tls::enforce` errors
+    // before the SDK client exists, so `SdkClient::call` never loops on it.
     #[error("refusing to use an insecure SpeleoDB endpoint: {endpoint}")]
     InsecureEndpoint { endpoint: String },
     /// [P1] No open remote SpeleoDB project to act on (start editing / done /

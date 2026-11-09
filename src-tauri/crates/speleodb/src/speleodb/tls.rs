@@ -13,8 +13,14 @@
 //! disables TLS certificate verification, so self-signed / internal-CA `https://`
 //! endpoints stay rejected by ureq's TLS stack.
 //!
-//! [`enforce`] is called once per request at the top of `client::with_retry`
-//! (#185 step 5), so a new client method physically cannot forget the check.
+//! [`enforce`] runs in `client::SdkClient::new`, before the SDK client exists,
+//! so a new client method physically cannot forget the check.
+//!
+//! A host that does not resolve is UNREACHABLE, not insecure: nothing can be
+//! dialed, so no plaintext byte can leave. [`enforce`] reports it as the same
+//! `Transport { cause: Dns }` failure a request to an `https://` host would hit,
+//! so an offline `http://` endpoint gets the offline handling (the cached open)
+//! an `https://` one gets, instead of a fatal `InsecureEndpoint`.
 //!
 //! NOTE (#187/D-187, risk 2): this is a guard against accidental
 //! plaintext-to-public misconfiguration, NOT an adversarial SSRF / DNS-rebinding
@@ -28,7 +34,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use http::Uri;
 
-use super::SpeleoDbError;
+use super::{SpeleoDbError, TransportCause};
 
 /// Classification of a single resolved IP address for the http policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,24 +98,21 @@ fn classify_v6(v6: Ipv6Addr) -> AddrClass {
     }
 }
 
-/// Resolve the URI's authority to the address set the agent will dial.
-///
-/// Uses [`DefaultResolver::host_and_port`] to assemble the exact `host:port`
-/// ureq dials, then `ToSocketAddrs` to resolve it (the D-187-permitted fallback
-/// - wiring the full `&Config`/`NextTimeout` resolver path is awkward and buys
-/// nothing for a check that only needs the IP set). Returns an `InsecureEndpoint`
-/// error on a missing authority or a resolution failure (fail closed).
-fn resolve_addrs(uri: &Uri) -> Result<Vec<IpAddr>, SpeleoDbError> {
-    let endpoint = uri.to_string();
-    let host = uri.host().ok_or_else(|| SpeleoDbError::InsecureEndpoint {
-        endpoint: endpoint.clone(),
-    })?;
-    let host = host.trim_start_matches('[').trim_end_matches(']');
-    let host_and_port = (host, uri.port_u16().unwrap_or(80));
-    let addrs = host_and_port
-        .to_socket_addrs()
-        .map_err(|_| SpeleoDbError::InsecureEndpoint { endpoint })?;
-    Ok(addrs.map(|sa| sa.ip()).collect())
+/// Resolve `host:port` to the address set the client will dial, with the
+/// system resolver (the one the transport uses). Pure I/O; the policy decision
+/// stays in [`enforce_with`].
+fn resolve_addrs(host: &str, port: u16) -> std::io::Result<Vec<IpAddr>> {
+    Ok((host, port).to_socket_addrs()?.map(|sa| sa.ip()).collect())
+}
+
+/// The DNS failure an unresolvable `http://` host reports: the same typed
+/// transport error the request itself would have produced, never the policy
+/// refusal. `detail` names the cause for the log; no URL rides in it.
+fn unresolved(detail: impl std::fmt::Display) -> SpeleoDbError {
+    SpeleoDbError::Transport {
+        cause: TransportCause::Dns,
+        detail: format!("could not resolve the SpeleoDB host: {detail}"),
+    }
 }
 
 /// `true` for `localhost` and any `*.localhost` label (case-insensitive). These
@@ -150,15 +153,28 @@ fn notice_unencrypted_once(endpoint: &str) {
 
 /// Enforce the http/https transport policy for `endpoint`. See the module docs.
 ///
-/// - `https://` → `Ok(())` immediately (no resolution, no notice - it is encrypted).
-/// - `http://` → allowed only if every resolved address is private/loopback/
+/// - `https://` -> `Ok(())` immediately (no resolution, no notice - it is encrypted).
+/// - `http://` -> allowed only if every resolved address is private/loopback/
 ///   link-local (or `insecure_http` is set, which lifts the scheme block only);
 ///   the first allowed http connection of the session emits a one-time notice.
-/// - missing / unknown scheme → `Err(InsecureEndpoint)`.
+///   A host that does not resolve (or resolves to nothing) is
+///   `Err(Transport { cause: Dns })`: offline, not insecure.
+/// - missing / unknown scheme, or no host -> `Err(InsecureEndpoint)`.
 pub(crate) fn enforce(endpoint: &str, insecure_http: bool) -> Result<(), SpeleoDbError> {
-    let uri = Uri::from_str(endpoint).map_err(|_| SpeleoDbError::InsecureEndpoint {
+    enforce_with(endpoint, insecure_http, resolve_addrs)
+}
+
+/// [`enforce`] with the resolver injected, so the policy is testable without DNS
+/// (a resolvable PUBLIC hostname cannot be produced offline otherwise).
+fn enforce_with(
+    endpoint: &str,
+    insecure_http: bool,
+    resolve: impl FnOnce(&str, u16) -> std::io::Result<Vec<IpAddr>>,
+) -> Result<(), SpeleoDbError> {
+    let insecure = || SpeleoDbError::InsecureEndpoint {
         endpoint: endpoint.to_owned(),
-    })?;
+    };
+    let uri = Uri::from_str(endpoint).map_err(|_| insecure())?;
 
     match uri.scheme_str() {
         // TLS protects the credentials regardless of peer address; never resolve.
@@ -172,30 +188,28 @@ pub(crate) fn enforce(endpoint: &str, insecure_http: bool) -> Result<(), SpeleoD
                 // localhost / *.localhost are loopback by convention (no DNS).
                 true
             } else {
-                // Empty resolution or any public address fails closed (D-187);
-                // `resolve_addrs` returns Err (fail closed) on a resolution
-                // failure, propagated here before the private-only check.
-                let addrs = resolve_addrs(&uri)?;
-                !addrs.is_empty()
-                    && addrs
-                        .iter()
-                        .copied()
-                        .all(|ip| is_private(classify_addr(ip)))
+                // No host at all is a malformed endpoint: refuse (fail closed).
+                let host = uri.host().ok_or_else(insecure)?;
+                let host = host.trim_start_matches('[').trim_end_matches(']');
+                // A resolution failure is an offline host, reported as the DNS
+                // transport failure (see the module docs) - never allowed, never
+                // dialed. A resolvable host must be private on EVERY address.
+                let addrs = resolve(host, uri.port_u16().unwrap_or(80)).map_err(unresolved)?;
+                if addrs.is_empty() {
+                    return Err(unresolved("no addresses"));
+                }
+                addrs.iter().all(|ip| is_private(classify_addr(*ip)))
             };
             if allowed {
                 // Any allowed http is plaintext - notice once per session (E3).
                 notice_unencrypted_once(endpoint);
                 Ok(())
             } else {
-                Err(SpeleoDbError::InsecureEndpoint {
-                    endpoint: endpoint.to_owned(),
-                })
+                Err(insecure())
             }
         }
         // D-B19: require an explicit, known scheme - never silently rewrite.
-        _ => Err(SpeleoDbError::InsecureEndpoint {
-            endpoint: endpoint.to_owned(),
-        }),
+        _ => Err(insecure()),
     }
 }
 
@@ -206,8 +220,8 @@ mod tests {
     use std::str::FromStr;
     use std::sync::atomic::AtomicBool;
 
-    use super::{classify_addr, enforce, latch_once, AddrClass};
-    use crate::speleodb::SpeleoDbError;
+    use super::{classify_addr, enforce, enforce_with, latch_once, AddrClass};
+    use crate::speleodb::{SpeleoDbError, TransportCause};
 
     fn ip(s: &str) -> IpAddr {
         IpAddr::from_str(s).expect("test IP literal")
@@ -315,12 +329,69 @@ mod tests {
     }
 
     #[test]
-    fn enforce_empty_resolution_fails_closed() {
-        // A host that cannot resolve to any address fails closed with
-        // InsecureEndpoint (never silently allowed).
-        let err = enforce("http://this-host-does-not-exist.invalid", false)
-            .expect_err("unresolvable http host must fail closed");
-        assert!(matches!(err, SpeleoDbError::InsecureEndpoint { .. }));
+    fn enforce_unresolvable_http_host_is_an_offline_dns_failure() {
+        // sdk#6: a host that cannot resolve is never allowed (nothing is dialed),
+        // but it is reported as the DNS transport failure, not as a fatal
+        // InsecureEndpoint - so an offline `http://` endpoint gets the cached open
+        // an offline `https://` one gets. `.invalid` never resolves (RFC 6761).
+        let err = enforce("http://this-host-does-not-exist.invalid:8000", false)
+            .expect_err("unresolvable http host must not be allowed");
+        assert!(
+            matches!(
+                err,
+                SpeleoDbError::Transport {
+                    cause: TransportCause::Dns,
+                    ..
+                }
+            ),
+            "got {err:?}"
+        );
+        // Same through the injected resolver, including an empty answer.
+        let not_found = || std::io::Error::new(std::io::ErrorKind::NotFound, "offline");
+        for resolved in [Err(not_found()), Ok(Vec::new())] {
+            let err = enforce_with("http://speleodb.lan:8000", false, |_, _| resolved)
+                .expect_err("nothing to dial");
+            assert!(matches!(
+                err,
+                SpeleoDbError::Transport {
+                    cause: TransportCause::Dns,
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn enforce_resolved_hostname_is_judged_on_every_address() {
+        // A hostname that RESOLVES to a public address is still refused without the
+        // override - the DNS mapping above must not open a plaintext path to the
+        // internet. Private-only resolution is allowed; one public address in a
+        // mixed answer refuses the whole host.
+        let public = |host: &str, port: u16| {
+            assert_eq!((host, port), ("speleodb.example", 80));
+            Ok(vec![ip("93.184.216.34")])
+        };
+        assert!(matches!(
+            enforce_with("http://speleodb.example", false, public),
+            Err(SpeleoDbError::InsecureEndpoint { .. })
+        ));
+        assert!(enforce_with("http://speleodb.lan:8000", false, |_, port| {
+            assert_eq!(port, 8000);
+            Ok(vec![ip("10.10.0.220"), ip("fd12:3456::1")])
+        })
+        .is_ok());
+        assert!(matches!(
+            enforce_with("http://speleodb.lan:8000", false, |_, _| Ok(vec![
+                ip("10.10.0.220"),
+                ip("8.8.8.8")
+            ])),
+            Err(SpeleoDbError::InsecureEndpoint { .. })
+        ));
+        // The override lifts the block without resolving at all.
+        assert!(enforce_with("http://speleodb.example", true, |_, _| {
+            Err(std::io::Error::other("must not resolve"))
+        })
+        .is_ok());
     }
 
     #[test]
