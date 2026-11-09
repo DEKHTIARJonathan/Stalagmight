@@ -32,7 +32,7 @@ use crate::persistence::Database;
 use crate::speleodb::models::SpeleoLocalProjectState;
 
 /// The file inside each per-project cache directory.
-const CACHE_STALX: &str = "project.stalx";
+pub(super) const CACHE_STALX: &str = "project.stalx";
 
 /// `<cache>/speleodb/` - the root of the per-project pull cache, or `None` before
 /// the app dirs are resolved (unit tests, pre-`setup`).
@@ -460,6 +460,7 @@ impl AppState {
             offline: None,
             has_unpushed_edits: Some(true),
             read_only: None,
+            other_owner: None,
         })
     }
 

@@ -91,3 +91,32 @@ describe('unsynced work protection during a remote open', () => {
     expect(takeRemote).toHaveBeenCalledTimes(1);
   });
 });
+
+// Must-fix 1: one account never takes over another account's un-uploaded work.
+describe("another account's un-uploaded work", () => {
+  const THEIRS = {
+    local_path: '/synthetic/cave.stalx', last_edit_at: null, other_owner: 'someone@example.com',
+  };
+  beforeEach(async () => {
+    await import('../../i18n');
+    useUIStore.setState({ activeDialog: 'speleodb-unpushed-local', dialogData: {
+      summary: { id: 'synthetic', name: 'Synthetic cave' },
+      unpushedLocal: THEIRS,
+    } });
+  });
+
+  it('names the account whose changes they are, and offers to open the copy read-only', async () => {
+    render(<SpeleoUnpushedLocalDialog />);
+    const message = screen.getByTestId('speleodb-unpushed-local-message');
+    expect(message).toHaveTextContent('opened on this computer by someone@example.com');
+    expect(message).not.toHaveTextContent('your local changes');
+    const openButton = screen.getByTestId('speleodb-unpushed-local-open-local');
+    expect(openButton).toHaveTextContent('Open it read-only');
+    expect(screen.getByTestId('speleodb-unpushed-local-open-hint'))
+      .toHaveTextContent('without taking the editing lock');
+    expect(screen.getByTestId('speleodb-unpushed-local-take-remote'))
+      .toHaveTextContent("discard someone@example.com's changes");
+    await userEvent.click(openButton);
+    expect(openLocal).toHaveBeenCalledWith({ id: 'synthetic', name: 'Synthetic cave' }, THEIRS);
+  });
+});

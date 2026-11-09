@@ -689,12 +689,19 @@ fn downloads(seen: &Arc<Mutex<Vec<String>>>) -> usize {
         .count()
 }
 
-/// Open the cached copy of [`MINE`] at `copy` online, protecting local edits. A
-/// refusal is reduced to the action the frontend routes on.
+/// A refused open, reduced to what the frontend routes on: the action, and whose
+/// work the un-uploaded-local prompt names (`None` = the signed-in account's own).
+#[derive(Debug, PartialEq, Eq)]
+struct Refusal {
+    action: SpeleoDbAction,
+    other_owner: Option<String>,
+}
+
+/// Open the cached copy of [`MINE`] at `copy` online, protecting local edits.
 fn open_online(
     state: &AppState,
     copy: &Path,
-) -> Result<crate::speleodb::SpeleoOpenResult, SpeleoDbAction> {
+) -> Result<crate::speleodb::SpeleoOpenResult, Refusal> {
     state
         .speleodb_pull_project_to(
             copy,
@@ -703,7 +710,10 @@ fn open_online(
             None,
             LocalEditsPolicy::Protect,
         )
-        .map_err(|e| e.action)
+        .map_err(|e| Refusal {
+            action: e.action,
+            other_owner: e.unpushed_local.and_then(|local| local.other_owner),
+        })
 }
 
 #[test]
@@ -721,8 +731,11 @@ fn another_accounts_un_uploaded_work_on_the_tip_takes_the_prompt_and_keeps_its_o
         let refused = open_online(&state, &copy).expect_err("no fast-forward");
         assert_eq!(
             refused,
-            SpeleoDbAction::UnpushedLocalEdits,
-            "the existing un-uploaded-local prompt"
+            Refusal {
+                action: SpeleoDbAction::UnpushedLocalEdits,
+                other_owner: Some("someone@example.com".to_owned()),
+            },
+            "the un-uploaded-local prompt, naming whose work it is"
         );
         assert_eq!(downloads(&seen), 1, "it went the guarded-download way");
         assert_eq!(owner_bytes(&copy), Some(before), "owner.json unchanged");
@@ -751,7 +764,14 @@ fn an_owner_less_copy_with_un_uploaded_work_takes_the_prompt_and_stays_unclaimed
         let state = AppState::new().expect("state");
         sign_in(&state, &url, ME);
         let refused = open_online(&state, &copy).expect_err("no fast-forward");
-        assert_eq!(refused, SpeleoDbAction::UnpushedLocalEdits);
+        assert_eq!(
+            refused,
+            Refusal {
+                action: SpeleoDbAction::UnpushedLocalEdits,
+                other_owner: None,
+            },
+            "nothing names another account: the prompt as before"
+        );
         assert_eq!(owner_bytes(&copy), None, "not silently claimed");
     });
 }
@@ -773,6 +793,152 @@ fn my_own_un_uploaded_work_on_the_tip_still_fast_forwards() {
             ownership(&state, temp.path(), MINE),
             Some(SpeleoCacheOwnership::Mine)
         );
+    });
+}
+
+#[test]
+fn offline_another_accounts_un_uploaded_work_opens_read_only_and_names_them() {
+    crate::test_helpers::with_isolated_config(|| {
+        // Never resolves (RFC 6761): a DNS failure, so the open falls back to the
+        // cached copy (a refused connection is not offline-eligible today).
+        let url = "http://speleodb-offline.invalid:8000";
+        let temp = tempfile::tempdir().expect("temp");
+        let copy = seed(temp.path(), MINE, url, true);
+        let state = AppState::new().expect("state");
+        state.speleodb_record_cache_owner(&copy, url, "someone@example.com", "Theirs");
+        sign_in(&state, url, ME);
+        let opened = open_online(&state, &copy).expect("offline open");
+        assert_eq!(opened.offline, Some(true));
+        assert_eq!(opened.read_only, Some(SpeleoReadOnlyOpen::OtherAccount));
+        assert_eq!(opened.other_owner.as_deref(), Some("someone@example.com"));
+
+        // This account's own work opens offline as before.
+        state.speleodb_record_cache_owner(&copy, url, ME, "Mine");
+        let mine = open_online(&state, &copy).expect("offline open");
+        assert_eq!((mine.read_only, mine.other_owner), (None, None));
+    });
+}
+
+// --- Start Editing never takes over another account's work --------------------
+
+/// The cached copy of [`MINE`] on `url`, open, recorded as `owner`'s, with this
+/// state signed in as [`ME`].
+fn open_copy_owned_by(root: &Path, url: &str, owner: &str, dirty: bool) -> (PathBuf, AppState) {
+    let copy = seed(root, MINE, url, dirty);
+    let state = AppState::new().expect("state");
+    state.speleodb_record_cache_owner(&copy, url, owner, "Remote 1111");
+    assert!(state.open_project(copy.clone()).success, "open the copy");
+    sign_in(&state, url, ME);
+    (copy, state)
+}
+
+#[test]
+fn start_editing_refuses_another_accounts_un_uploaded_work_before_any_request() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = super::tests_support::lock_server(MINE, None);
+        let temp = tempfile::tempdir().expect("temp");
+        let (copy, state) = open_copy_owned_by(temp.path(), &url, "someone@example.com", true);
+        let before = owner_bytes(&copy);
+        let refused = state
+            .speleodb_start_editing()
+            .expect_err("never adopt another account's work");
+        assert_eq!(refused.action, SpeleoDbAction::Fatal);
+        assert!(
+            refused.message.contains("someone@example.com"),
+            "{}",
+            refused.message
+        );
+        assert!(
+            seen.lock().expect("log").is_empty(),
+            "no lock was asked for"
+        );
+        assert!(!state.edit_enabled(), "still read-only");
+        assert_eq!(owner_bytes(&copy), before, "owner.json unchanged");
+    });
+}
+
+#[test]
+fn start_editing_a_clean_copy_recorded_for_another_account_records_this_one() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = super::tests_support::lock_server(MINE, None);
+        let temp = tempfile::tempdir().expect("temp");
+        let (_copy, state) = open_copy_owned_by(temp.path(), &url, "someone@example.com", false);
+        // Whatever the stub's answers lead to, the acquire is attempted: a clean
+        // copy holds only the server's content, nobody's work.
+        let _ = state.speleodb_start_editing();
+        assert!(
+            !seen.lock().expect("log").is_empty(),
+            "the lock was asked for"
+        );
+        assert_eq!(
+            ownership(&state, temp.path(), MINE),
+            Some(SpeleoCacheOwnership::Mine)
+        );
+    });
+}
+
+#[test]
+fn start_editing_my_own_or_an_owner_less_copy_is_not_refused() {
+    crate::test_helpers::with_isolated_config(|| {
+        for owner in [Some(ME), None] {
+            let (url, seen) = super::tests_support::lock_server(MINE, None);
+            let temp = tempfile::tempdir().expect("temp");
+            let copy = seed(temp.path(), MINE, &url, true);
+            let state = AppState::new().expect("state");
+            if let Some(owner) = owner {
+                state.speleodb_record_cache_owner(&copy, &url, owner, "Remote 1111");
+            }
+            assert!(state.open_project(copy).success, "open the copy");
+            sign_in(&state, &url, ME);
+            if let Err(e) = state.speleodb_start_editing() {
+                assert!(
+                    !e.message.contains("can edit and upload"),
+                    "{owner:?}: {}",
+                    e.message
+                );
+            }
+            assert!(
+                !seen.lock().expect("log").is_empty(),
+                "{owner:?}: the lock was asked for"
+            );
+        }
+    });
+}
+
+/// Home's single "Remove local copy" follows the purge's rule: signed in, never
+/// another account's (or another instance's) copy; signed out, any copy.
+#[test]
+fn signed_in_removal_never_reaches_another_accounts_copy() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        let theirs = seed(root, THEIRS, SERVER, true);
+        let setup = AppState::new().expect("state");
+        setup.speleodb_record_cache_owner(&theirs, SERVER, "someone@example.com", "Theirs");
+        let elsewhere = seed(root, ELSEWHERE, OTHER_SERVER, false);
+
+        let state = AppState::new().expect("state");
+        sign_in(&state, SERVER, ME);
+        for (id, path) in [(THEIRS, &theirs), (ELSEWHERE, &elsewhere)] {
+            let refused = state.speleodb_remove_cached_copy_in(root, id, true);
+            assert!(!refused.success, "{id}");
+            assert!(refused
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("another SpeleoDB account")));
+            assert!(path.exists(), "{id} is kept");
+        }
+
+        let out = signed_out();
+        assert!(
+            out.speleodb_remove_cached_copy_in(root, THEIRS, true)
+                .success
+        );
+        assert!(
+            out.speleodb_remove_cached_copy_in(root, ELSEWHERE, false)
+                .success
+        );
+        assert!(!theirs.exists() && !elsewhere.exists());
     });
 }
 

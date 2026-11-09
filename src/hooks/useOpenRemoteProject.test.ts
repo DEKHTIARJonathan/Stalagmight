@@ -745,3 +745,34 @@ describe('openLocalCopy', () => {
     expect(loadProjectMock).not.toHaveBeenCalled();
   });
 });
+
+// Must-fix 1: one account never takes over another account's un-uploaded work.
+describe("another account's un-uploaded work", () => {
+  const THEIRS = {
+    project_id: 'p1', local_path: '/cache/p1/project.stalx', last_edit_at: null, other_owner: 'someone@example.com',
+  };
+
+  it('"Open it read-only" loads the copy without taking the lock, and names whose changes they are', async () => {
+    expect(await hook().openLocalCopy(SUMMARY, THEIRS)).toEqual({ status: 'opened' });
+    expect(invokeIpcMock.mock.calls.map((c) => c[0])).not.toContain('speleodb_open_project');
+    expect(loadProjectMock).toHaveBeenCalledWith(THEIRS.local_path, {
+      accessConfirmed: true, request: expect.any(Number), acquireLock: false,
+    });
+    expect(setLinkOnOpenMock).toHaveBeenCalledWith(expect.objectContaining({
+      forPath: THEIRS.local_path, hasUnpushedEdits: true, offline: true, projectId: 'p1',
+    }));
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(
+      expect.stringContaining('only someone@example.com can edit and upload them'), 'speleodb-read-only-open', 'info');
+  });
+
+  it('an offline open the backend marked as another account\'s opens read-only and says whose it is', async () => {
+    invokeIpcMock.mockResolvedValue({
+      local_path: '/cache/p1/project.stalx', offline: true, has_unpushed_edits: true,
+      read_only: 'other_account', other_owner: 'someone@example.com',
+    });
+    expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1/project.stalx', expect.objectContaining({ acquireLock: false }));
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(
+      expect.stringContaining('changes someone@example.com made'), 'speleodb-read-only-open', 'info');
+  });
+});

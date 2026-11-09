@@ -3474,7 +3474,11 @@
       "lastEditedUnknown": "We could not tell when the local copy was last edited.",
       "takeRemote": "Take the server copy & discard my changes",
       "discardWarning": "Taking the server copy permanently deletes the changes made to \"{{name}}\" on this computer. They are not on SpeleoDB, so there is no other copy and this cannot be undone.",
-      "takeRemoteConfirm": "Yes, discard my changes"
+      "takeRemoteConfirm": "Yes, discard my changes",
+      "messageOtherAccount": "\"{{name}}\" has already been opened on this computer by {{owner}}, and that local copy holds changes {{owner}} made that SpeleoDB has never seen. They are {{owner}}'s work, not yours, so they have been left intact.",
+      "cancelHintOtherAccount": "Cancel to leave {{owner}}'s changes as they are, or confirm replacing them with the server version.",
+      "takeRemoteOtherAccount": "Take the server copy & discard {{owner}}'s changes",
+      "takeRemoteConfirmOtherAccount": "Yes, discard {{owner}}'s changes"
     },
     "transport": {
       "refused": "Could not connect to SpeleoDB at {{endpoint}}. Check your network connection, the server address, and whether the server is running.",
@@ -3581,6 +3585,7 @@
       "logInTitle": "Open the SpeleoDB settings to sign in",
       "openedSignedOut": "Opened a read-only copy. Sign in to SpeleoDB to edit it.",
       "openedSessionExpired": "Your SpeleoDB session has expired. Opened a read-only copy; sign in again to edit it.",
+      "openedOtherAccount": "Opened a read-only copy. It holds changes {{owner}} made that were never uploaded: only {{owner}} can edit and upload them. You can still save a copy.",
       "menu": {
         "aria": "SpeleoDB project actions",
         "open": "Open project",
@@ -3804,7 +3809,9 @@
     },
     "unpushedLocal": {
       "openLocal": "Open my local copy",
-      "openLocalHint": "\"Open my local copy\" opens the copy on this computer as it is, without downloading anything. You can then upload your changes, and Stalagmight will tell you if SpeleoDB has a newer version."
+      "openLocalHint": "\"Open my local copy\" opens the copy on this computer as it is, without downloading anything. You can then upload your changes, and Stalagmight will tell you if SpeleoDB has a newer version.",
+      "openReadOnly": "Open it read-only",
+      "openReadOnlyHint": "\"Open it read-only\" opens the copy on this computer as it is, without downloading anything and without taking the editing lock. You can look at {{owner}}'s changes and save a copy of the project, but only {{owner}} can edit and upload them."
     },
     "readOnly": {
       "lockedByKeepsChanges": "{{email}} is editing this project right now, so it is open read-only. Your changes are kept on this computer, and you can upload them once {{email}} has finished.",
