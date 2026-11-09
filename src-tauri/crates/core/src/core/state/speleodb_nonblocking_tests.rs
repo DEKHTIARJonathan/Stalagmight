@@ -233,9 +233,18 @@ fn an_edit(name: &str) -> Command {
 /// Every guard a synchronous command could need is free right now.
 fn assert_no_guard_is_held(state: &AppState, during: &str) {
     assert!(state.project.try_lock().is_ok(), "`project` held {during}");
-    assert!(state.command_lock.try_lock().is_ok(), "`command_lock` held {during}");
-    assert!(state.database.try_lock().is_ok(), "`database` held {during}");
-    assert!(state.undo_stack.try_lock().is_ok(), "`undo_stack` held {during}");
+    assert!(
+        state.command_lock.try_lock().is_ok(),
+        "`command_lock` held {during}"
+    );
+    assert!(
+        state.database.try_lock().is_ok(),
+        "`database` held {during}"
+    );
+    assert!(
+        state.undo_stack.try_lock().is_ok(),
+        "`undo_stack` held {during}"
+    );
     assert!(state.config.try_lock().is_ok(), "`config` held {during}");
     assert!(
         state.config_write_lock.try_lock().is_ok(),
@@ -267,7 +276,9 @@ fn config_writes_complete_while_a_lock_operation_holds_the_span() {
                     .expect("partial write");
                 let mut whole = state.get_config();
                 whole.general.undo_history_limit = 77;
-                state.update_config(whole).expect("whole write, same instance");
+                state
+                    .update_config(whole)
+                    .expect("whole write, same instance");
                 done.send(started.elapsed()).expect("report");
             });
             let outcome = finished.recv_timeout(PROMPT);
@@ -364,7 +375,10 @@ fn config_writes_do_not_wait_behind_an_instance_change_release() {
                 state.update_config(moved)
             });
             let request = server.wait_for_held_request();
-            assert!(request.starts_with("POST "), "the release is in flight: {request}");
+            assert!(
+                request.starts_with("POST "),
+                "the release is in flight: {request}"
+            );
             assert_no_guard_is_held(&state, "during the instance-change release POST");
             assert!(!state.edit_enabled(), "the gate is shut before the POST");
 
@@ -415,7 +429,10 @@ fn switching_to_read_only_holds_no_guard_across_the_release_post() {
         std::thread::scope(|scope| {
             let switch = scope.spawn(|| state.speleodb_release_current_lock(Some(expected)));
             let request = server.wait_for_held_request();
-            assert!(request.starts_with("POST "), "the release is in flight: {request}");
+            assert!(
+                request.starts_with("POST "),
+                "the release is in flight: {request}"
+            );
             assert_no_guard_is_held(&state, "during the read-only release POST");
 
             let started = Instant::now();
@@ -494,14 +511,21 @@ fn wait_for_reverify(state: &AppState) {
 fn a_due_lock_reverify_never_waits_on_the_network() {
     let dir = tempfile::tempdir().expect("temp dir");
     with_isolated_config(|| {
-        let server = ScriptedServer::start(vec![reply(200, &project_held_by("other@example.com"), true)]);
+        let server = ScriptedServer::start(vec![reply(
+            200,
+            &project_held_by("other@example.com"),
+            true,
+        )]);
         let state = editing_session(dir.path(), &server.url);
 
         let started = Instant::now();
         let first = state.execute(an_edit("triggers the re-verify"));
         assert!(first.success, "the triggering edit goes ahead: {first:?}");
         let request = server.wait_for_held_request();
-        assert!(request.starts_with("GET "), "the probe is in flight: {request}");
+        assert!(
+            request.starts_with("GET "),
+            "the probe is in flight: {request}"
+        );
         assert!(
             started.elapsed() < PROMPT,
             "the edit returned while the probe was still waiting: {:?}",
@@ -509,7 +533,10 @@ fn a_due_lock_reverify_never_waits_on_the_network() {
         );
         assert_no_guard_is_held(&state, "during the re-verify GET");
         let second = state.execute(an_edit("while the probe is out"));
-        assert!(second.success, "edits keep working while it runs: {second:?}");
+        assert!(
+            second.success,
+            "edits keep working while it runs: {second:?}"
+        );
 
         server.let_it_answer();
         wait_for_reverify(&state);
@@ -554,7 +581,11 @@ fn a_reverify_that_confirms_the_lock_changes_nothing() {
 fn a_reverify_from_an_ended_session_is_ignored() {
     let dir = tempfile::tempdir().expect("temp dir");
     with_isolated_config(|| {
-        let server = ScriptedServer::start(vec![reply(200, &project_held_by("other@example.com"), false)]);
+        let server = ScriptedServer::start(vec![reply(
+            200,
+            &project_held_by("other@example.com"),
+            false,
+        )]);
         let state = editing_session(dir.path(), &server.url);
         assert!(state.execute(an_edit("triggers the re-verify")).success);
         wait_for_reverify(&state);

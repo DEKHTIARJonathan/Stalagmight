@@ -135,9 +135,7 @@ impl AppState {
     /// inside its lock-ops span, so no lock operation can land between this and the
     /// POST. The gate closes before the POST rather than after it: nothing is edited
     /// under a lock that is about to be handed back.
-    pub(super) fn speleodb_logout_drop_gates_deferring_release(
-        &self,
-    ) -> Option<LockReleaseParams> {
+    pub(super) fn speleodb_logout_drop_gates_deferring_release(&self) -> Option<LockReleaseParams> {
         {
             let _proj_guard = self
                 .project
@@ -168,7 +166,6 @@ impl AppState {
             }
         }
     }
-
 }
 
 #[cfg(test)]

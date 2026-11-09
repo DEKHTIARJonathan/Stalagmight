@@ -148,7 +148,11 @@ impl AppState {
     /// Holds no lock across network I/O. An instance change returns the release it
     /// captured in [`AfterConfigWrite`] for the caller to send once the write lock is
     /// dropped.
-    fn update_config_locked(&self, mut config: Config, door: ConfigWrite) -> Result<AfterConfigWrite> {
+    fn update_config_locked(
+        &self,
+        mut config: Config,
+        door: ConfigWrite,
+    ) -> Result<AfterConfigWrite> {
         tracing::info!(purpose = "apply user settings", "Updating configuration");
         // Hold the config lock through persistence so login cannot update the token
         // between this restore and the settings write.
@@ -167,7 +171,12 @@ impl AppState {
             };
             normalize(&existing.speleodb.endpoint) != normalize(&config.speleodb.endpoint)
         };
-        if instance_changed && door != (ConfigWrite::Whole { lock_ops_held: true }) {
+        if instance_changed
+            && door
+                != (ConfigWrite::Whole {
+                    lock_ops_held: true,
+                })
+        {
             // Unreachable by construction: a partial write keeps the stored section,
             // and `update_config` re-checks under the write lock before it gets here.
             // Refuse rather than end a session outside the lock-ops span.
