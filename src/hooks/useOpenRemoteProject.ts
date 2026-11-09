@@ -2,6 +2,7 @@ import { confirmWorkspaceDrafts, discardWorkspaceDrafts, workspaceDraftNotice } 
 import { isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent, reserveProjectRequest } from '../utils/projectTransition';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { useUIStore, type ToastKind } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import {
@@ -86,6 +87,22 @@ function reserveRemoteOpen() {
       sessionGeneration = useSpeleoStore.getState().sessionGeneration;
     } };
 
+}
+
+/**
+ * The toast for a copy that opened read-only without the server's say: signed
+ * out, a session the server just rejected, or another account's un-uploaded work
+ * (named, so the user knows whose changes they are looking at).
+ */
+function readOnlyOpenToast(t: TFunction, result: SpeleoOpenResult): { message: string; key: string; kind: ToastKind } {
+  const key = TOAST_KEYS.SPELEODB_READ_ONLY_OPEN;
+  if (result.read_only === 'other_account') {
+    return { message: t('speleodb.cachedCopies.openedOtherAccount', { owner: result.other_owner ?? '' }), key, kind: 'info' };
+  }
+  if (result.read_only === 'session_expired') {
+    return { message: t('speleodb.cachedCopies.openedSessionExpired'), key, kind: 'warning' };
+  }
+  return { message: t('speleodb.cachedCopies.openedSignedOut'), key, kind: 'info' };
 }
 
 /** Pull a native project, seed its access state, load it, and roll back a failed load. */
@@ -333,13 +350,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           key: 'speleodb-offline-open',
           kind: 'warning' as const,
         } } : {}),
-        ...(result.read_only ? { successToast: {
-          message: t(sessionExpired
-            ? 'speleodb.cachedCopies.openedSessionExpired'
-            : 'speleodb.cachedCopies.openedSignedOut'),
-          key: TOAST_KEYS.SPELEODB_READ_ONLY_OPEN,
-          kind: sessionExpired ? 'warning' as const : 'info' as const,
-        } } : {}),
+        ...(result.read_only ? { successToast: readOnlyOpenToast(t, result) } : {}),
       });
     },
     [
@@ -412,6 +423,9 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    * there: it re-acquires the lock if it can and runs the divergence check, so
    * SpeleoDB having moved on is reported by the existing divergence dialog rather
    * than resolved by throwing either copy away.
+   *
+   * A copy holding ANOTHER account's work (`local.other_owner`) opens read-only
+   * instead: no lock is taken, and the toast names whose changes they are.
    */
   const openLocalCopy = useCallback(
     async (
@@ -433,8 +447,17 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       if (landed) return { status: 'error', message: landed, reLogin: false };
       // `offline` keeps finishOpen from treating an already-open copy as a tree the
       // backend just replaced: nothing was downloaded, so there is nothing to re-read.
-      return finishOpen({ local_path: local.local_path, offline: true, has_unpushed_edits: true },
-        summary.permission, summary.id, ownership, { hasUnpushedEdits: true });
+      // Another account's work opens read-only: no lock is taken for it (and the
+      // backend refuses Start Editing on it).
+      const otherOwner = local.other_owner ?? null;
+      const result: SpeleoOpenResult = otherOwner
+        ? { local_path: local.local_path, offline: true, has_unpushed_edits: true,
+          read_only: 'other_account', other_owner: otherOwner }
+        : { local_path: local.local_path, offline: true, has_unpushed_edits: true };
+      return finishOpen(result, summary.permission, summary.id, ownership, {
+        hasUnpushedEdits: true,
+        ...(otherOwner ? { successToast: readOnlyOpenToast(t, result) } : {}),
+      });
     },
     [finishOpen, confirmUnsavedHandBack, handBackRefusalAfterPull, t],
   );

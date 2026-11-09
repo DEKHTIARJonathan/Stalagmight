@@ -240,6 +240,9 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
             project_id: project_id.clone(),
             local_path: local_path.clone(),
             last_edit_at: last_edit_at.clone(),
+            // Whose work it is needs the cache's owner record, which only the core
+            // can read; it fills this in where it knows (the online open).
+            other_owner: None,
         }),
         _ => None,
     };
@@ -293,6 +296,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         | SpeleoDbError::InvalidRevision
         | SpeleoDbError::InsecureEndpoint { .. }
         | SpeleoDbError::UploadTooLarge { .. }
+        | SpeleoDbError::OtherAccountsCopy { .. }
         | SpeleoDbError::NoRemoteProject => (SpeleoDbAction::Fatal, None, err.to_string()),
     };
     SpeleoErrorDto {

@@ -357,7 +357,8 @@ test.describe('Sign-out never strands a lock or un-uploaded work', () => {
     await expect(page.getByTestId('speleodb-signout-row-x-discarded')).toBeVisible();
     await page.getByTestId('speleodb-signout-go').click();
     await expect.poll(() => authResult(page)).toEqual({ ok: true });
-    expect((await calls(page, 'speleodb_discard_cached_copy')).map((c) => c.args)).toEqual([{ projectId: 'x' }]);
+    // The confirmed step carries the explicit consent the backend requires.
+    expect((await calls(page, 'speleodb_discard_cached_copy')).map((c) => c.args)).toEqual([{ projectId: 'x', discardUnpushed: true }]);
     expect((await calls(page, 'speleodb_release_lock')).map((c) => c.args)).toEqual([{ projectId: 'x' }]);
   });
 

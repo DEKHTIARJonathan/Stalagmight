@@ -5701,8 +5701,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'speleodb_discard_changes':
             return { kind: 'editing' };
           // Sign-out's discard of a cached copy that is not open. Specs assert the
-          // invocation (via __MOCK_EXIT_CALLS__); the reply is a plain success.
+          // invocation (via __MOCK_EXIT_CALLS__). Like the backend, it refuses
+          // without the explicit consent flag (the mock's copies all hold
+          // un-uploaded work: that is why the sign-out asks about them).
           case 'speleodb_discard_cached_copy':
+            if (args?.discardUnpushed !== true) {
+              return {
+                success: false,
+                warnings: [],
+                error: 'This copy has changes that were never uploaded to SpeleoDB, or its state could not be read. Nothing was removed.',
+                section_ids: [],
+              };
+            }
             return { success: true, warnings: [], error: null, section_ids: [] };
           // Cached SpeleoDB copies on the home screen. Nothing is cached in a mocked
           // run; specs that need copies (owner-classified) override the listing.

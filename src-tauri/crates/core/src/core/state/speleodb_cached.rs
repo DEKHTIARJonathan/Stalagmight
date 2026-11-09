@@ -22,7 +22,17 @@
 //!   holds; the next successful online open records the owner.
 //!
 //! Removal never reaches un-uploaded work without the caller's explicit consent
-//! (`discard_unpushed`), and never touches the project that is open.
+//! (`discard_unpushed`), and never touches the project that is open. Signed in,
+//! Home's removal and the purge reach only the copies the listing shows, and
+//! sign-out's Discard only the session's own copies: another account's work is
+//! never removed through this account's session.
+//!
+//! Nor is it ever taken over. The fast-forward open opens un-uploaded work as it is
+//! only for the copy's recorded owner (see `speleodb_local_state`); the guarded
+//! download's prompt and the offline open name another owner and open its work
+//! read-only (`speleodb_pull`); and Start Editing refuses a copy recorded for
+//! another account while it holds un-uploaded edits
+//! (`AppState::speleodb_guard_open_copy_owner`).
 //!
 //! Removal does not strand a lock either. Once the copy is gone, when the session
 //! is the copy's account on its instance (owner recorded as this account, or no
@@ -51,6 +61,19 @@ const OWNER_FILE: &str = "owner.json";
 /// not be read) between the question and the removal.
 const UNPUSHED_REFUSAL: &str = "This copy has changes that were never uploaded to SpeleoDB, \
 or its state could not be read. Nothing was removed.";
+
+/// Refusal text when Home's "Remove local copy" names another account's copy while
+/// signed in. Home does not list such a copy, so reaching this means the listing was
+/// stale (it was read signed out) or the call did not come from it.
+const OTHER_ACCOUNTS_REMOVAL_REFUSAL: &str = "This copy belongs to another SpeleoDB account, \
+so it cannot be removed while you are signed in. Nothing was removed.";
+
+/// Refusal text when sign-out's Discard names a copy the session is not the account
+/// of (another account's or instance's, or no session at all). The sign-out only
+/// lists the signed-in account's projects, so reaching this means the call did not
+/// come from that list.
+const NOT_THIS_ACCOUNTS_REFUSAL: &str = "Only copies downloaded by the SpeleoDB account in \
+use can be discarded here. Nothing was removed.";
 
 /// Which account a cached copy belongs to, relative to the signed-in session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -164,6 +187,50 @@ fn ownership_of(
             SpeleoCacheOwnership::OtherAccount
         }
         None => SpeleoCacheOwnership::Unknown,
+    }
+}
+
+/// [`ownership_of`] for the copy at `copy`, reading its owner record. Shared with
+/// the fast-forward open (`speleodb_local_state`), which must apply the same rule
+/// as the listing before it opens a copy as the session's own work.
+pub(super) fn copy_ownership(
+    session: Option<(&str, &str)>,
+    copy: &Path,
+    link_endpoint: Option<&str>,
+) -> SpeleoCacheOwnership {
+    ownership_of(session, read_owner_for(copy).as_ref(), link_endpoint)
+}
+
+/// The account (email) the owner record of the copy at `copy` names when that is
+/// NOT the session's `(endpoint, email)`: another account, or the same email
+/// recorded on another instance. `None` when there is no record (an owner-less copy
+/// keeps the unknown-owner rules) or it names the session's own account.
+pub(super) fn copy_recorded_for_other_account(
+    session: (&str, &str),
+    copy: &Path,
+) -> Option<String> {
+    let owner = read_owner_for(copy)?;
+    (ownership_of(Some(session), Some(&owner), None) == SpeleoCacheOwnership::OtherAccount)
+        .then_some(owner.email)
+}
+
+/// Whether `path` is laid out as the managed cache copy of `project_id`
+/// (`<root>/<project_id>/project.stalx`, whatever the root): the only place an
+/// owner record is ever written, so the only file one may speak for.
+fn is_cache_layout(path: &Path, project_id: &str) -> bool {
+    path.file_name()
+        .is_some_and(|name| name == super::speleodb_local_state::CACHE_STALX)
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|dir| dir == project_id)
+}
+
+/// The endpoint the copy at `copy` links to, `None` when it cannot be read.
+fn copy_link_endpoint(copy: &Path) -> Option<String> {
+    match read_cached_link(copy) {
+        CachedLink::Linked(link) => Some(link.endpoint),
+        CachedLink::NotManaged | CachedLink::Unreadable => None,
     }
 }
 
@@ -315,6 +382,19 @@ impl AppState {
         if let Err(e) = super::speleodb::validate_project_id(project_id) {
             return CommandResult::failure(e.to_string());
         }
+        // Signed in, only a copy the home screen lists for this account (the same
+        // rule as the purge); signed out, any copy, as before.
+        let account = match self.removal_scope() {
+            Ok(account) => account,
+            Err(refusal) => return CommandResult::failure(refusal),
+        };
+        let path = cache_path_in(root, project_id);
+        let session = account
+            .as_ref()
+            .map(|(endpoint, email)| (endpoint.as_str(), email.as_str()));
+        if !copy_ownership(session, &path, copy_link_endpoint(&path).as_deref()).listed() {
+            return CommandResult::failure(OTHER_ACCOUNTS_REMOVAL_REFUSAL.to_owned());
+        }
         match self.cached_copy_removal(root, project_id, discard_unpushed) {
             Removal::Open => CommandResult::failure(
                 "This project is open. Close it first, then remove its copy.".to_owned(),
@@ -349,8 +429,15 @@ impl AppState {
         }
     }
 
-    /// "Purge all cached files": remove every cached copy except the open one, and
-    /// except those with un-uploaded (or unreadable) work unless `discard_unpushed`.
+    /// "Purge all cached files": remove every cached copy the session reaches except
+    /// the open one, and except those with un-uploaded (or unreadable) work unless
+    /// `discard_unpushed`.
+    ///
+    /// Signed in, the purge reaches exactly the copies the home screen lists: the
+    /// account's own on its instance, and those with no owner record from that
+    /// instance. Another account's copy (or another instance's) is not touched, not
+    /// even with `discard_unpushed`: its un-uploaded work is not this user's to
+    /// throw away, and the confirmation never named it. Signed out, every copy.
     pub fn speleodb_purge_cached_copies(&self, discard_unpushed: bool) -> SpeleoPurgeReport {
         cache_root()
             .map(|root| self.speleodb_purge_cached_copies_in(&root, discard_unpushed))
@@ -363,13 +450,31 @@ impl AppState {
         root: &Path,
         discard_unpushed: bool,
     ) -> SpeleoPurgeReport {
+        let mut report = SpeleoPurgeReport::default();
+        // Read once, so every copy is judged against the same account.
+        let account = match self.removal_scope() {
+            Ok(account) => account,
+            Err(refusal) => {
+                report.failed.push(refusal);
+                return report;
+            }
+        };
+        let session = account
+            .as_ref()
+            .map(|(endpoint, email)| (endpoint.as_str(), email.as_str()));
         let names: std::collections::HashMap<String, String> = self
             .speleodb_cached_projects_in(root)
             .into_iter()
             .map(|copy| (copy.project_id, copy.project_name))
             .collect();
-        let mut report = SpeleoPurgeReport::default();
+        let mut other_accounts = 0_usize;
         for id in cached_ids(root) {
+            let path = cache_path_in(root, &id);
+            let link_endpoint = copy_link_endpoint(&path);
+            if !copy_ownership(session, &path, link_endpoint.as_deref()).listed() {
+                other_accounts += 1;
+                continue;
+            }
             let name = names.get(&id).cloned().unwrap_or_else(|| id.clone());
             match self.cached_copy_removal(root, &id, discard_unpushed) {
                 Removal::Open => report.kept_open.push(name),
@@ -398,11 +503,101 @@ impl AppState {
             failed = report.failed.len(),
             locks_released = report.locks_released.len(),
             locks_unchecked = report.locks_unchecked.len(),
+            other_accounts,
             discard_unpushed,
             purpose = "purge the SpeleoDB cache (user confirmed)",
             "speleodb: purged cached copies"
         );
         report
+    }
+
+    /// The account Home's removals are scoped to: `Some((endpoint, email))` signed
+    /// in, `None` signed out (every copy is in reach then, as Home lists them all).
+    /// A session that cannot be read at all is neither: `Err` with the refusal, and
+    /// nothing is removed.
+    fn removal_scope(&self) -> Result<Option<(String, String)>, String> {
+        match self.speleodb_active_account() {
+            Ok((endpoint, _token, email)) => Ok(Some((endpoint, email))),
+            Err(crate::speleodb::SpeleoDbError::NotAuthenticated) => Ok(None),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "scope a cached-copy removal to the signed-in account",
+                    "speleodb: could not read the session; nothing removed"
+                );
+                Err(format!(
+                    "Could not tell which account is signed in ({e}). Nothing was removed."
+                ))
+            }
+        }
+    }
+
+    /// Start Editing's owner guard (must-fix 1: one account never takes over another
+    /// account's un-uploaded work). When the open project is a managed cache copy
+    /// whose owner record names another account (or another instance):
+    ///
+    /// - with un-uploaded edits, refuse: acquiring the lock would make that
+    ///   account's work this account's to edit and upload. The copy stays open
+    ///   read-only, where it can still be saved as a copy.
+    /// - clean, it holds only the server's content, nobody's work: it is recorded
+    ///   as this account's from now on, so Home lists it and the next open's
+    ///   fast-forward knows whose edits it carries.
+    ///
+    /// A copy with no owner record keeps the unknown-owner rules, and a file that is
+    /// not the managed cache copy has no record to read.
+    pub(super) fn speleodb_guard_open_copy_owner(
+        &self,
+        endpoint: &str,
+        link: &crate::models::SpeleoLink,
+    ) -> Result<(), crate::speleodb::SpeleoDbError> {
+        let (Some(email), Some(path)) = (self.speleodb_my_email(), self.open_project_path()) else {
+            return Ok(());
+        };
+        if !is_cache_layout(&path, &link.project_id) {
+            return Ok(());
+        }
+        let Some(owner) = copy_recorded_for_other_account((endpoint, &email), &path) else {
+            return Ok(());
+        };
+        if link.has_unpushed_edits {
+            tracing::info!(
+                project_id = %link.project_id,
+                purpose = "never adopt another account's un-uploaded work",
+                "speleodb: the open copy holds another account's un-uploaded edits; not editing"
+            );
+            return Err(crate::speleodb::SpeleoDbError::OtherAccountsCopy { owner });
+        }
+        self.speleodb_record_cache_owner(&path, endpoint, &email, &link.project_name);
+        Ok(())
+    }
+
+    /// The backend guard of sign-out's per-project Discard
+    /// (`AppState::speleodb_discard_cached_copy`), which must not rely on the
+    /// dialog's consent: `Some(refusal)` unless the copy of `project_id` may be
+    /// thrown away now. Refused: a copy the session is not the account of (the same
+    /// rule as the lock hand-back after a removal: owner recorded as this account,
+    /// or no owner recorded and the copy is from this instance; signed out reaches
+    /// nothing), the open project, and - unless `discard_unpushed` carries the
+    /// user's explicit Discard - a copy with un-uploaded or unreadable work.
+    pub(super) fn cached_copy_discard_refusal(
+        &self,
+        root: &Path,
+        project_id: &str,
+        discard_unpushed: bool,
+    ) -> Option<String> {
+        if self
+            .copy_account_session(&cache_path_in(root, project_id))
+            .is_none()
+        {
+            return Some(NOT_THIS_ACCOUNTS_REFUSAL.to_owned());
+        }
+        match self.cached_copy_removal(root, project_id, discard_unpushed) {
+            Removal::Allowed => None,
+            Removal::Open => {
+                Some("This project is open. Close it first, then discard its changes.".to_owned())
+            }
+            Removal::AtRisk => Some(UNPUSHED_REFUSAL.to_owned()),
+        }
     }
 
     /// May the copy of `project_id` be removed now?
@@ -453,14 +648,10 @@ impl AppState {
     /// of the copy's own instance. `None` signed out or for another account's copy.
     fn copy_account_session(&self, copy: &Path) -> Option<(String, String, String)> {
         let (endpoint, token, email) = self.speleodb_active_account().ok()?;
-        let link_endpoint = match read_cached_link(copy) {
-            CachedLink::Linked(link) => Some(link.endpoint),
-            CachedLink::NotManaged | CachedLink::Unreadable => None,
-        };
-        let ownership = ownership_of(
+        let ownership = copy_ownership(
             Some((endpoint.as_str(), email.as_str())),
-            read_owner_for(copy).as_ref(),
-            link_endpoint.as_deref(),
+            copy,
+            copy_link_endpoint(copy).as_deref(),
         );
         matches!(
             ownership,

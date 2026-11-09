@@ -869,6 +869,10 @@ impl AppState {
         if normalize_endpoint(&endpoint) != normalize_endpoint(&link.endpoint) {
             return Err(local_dto(SpeleoDbError::SessionMoved));
         }
+        // Before anything is sent: another account's un-uploaded work in this copy
+        // is never taken over by acquiring its lock (see `speleodb_cached`).
+        self.speleodb_guard_open_copy_owner(&endpoint, &link)
+            .map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
         // Whether the acquire below is OURS to claim - probed BEFORE it, because the

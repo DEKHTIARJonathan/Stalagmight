@@ -3,6 +3,7 @@ use super::speleodb::{local_dto, validate_project_id};
 use super::speleodb_cache::{
     preserved_undo_mode, restore_display_settings, InheritedUndo, LocalEditsPolicy,
 };
+use super::speleodb_cached::copy_recorded_for_other_account;
 use super::speleodb_revisions::validate_hexsha;
 use super::AppState;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
@@ -69,7 +70,42 @@ fn offline_open_result(
         offline: Some(true),
         has_unpushed_edits: Some(link.has_unpushed_edits),
         read_only: None,
+        other_owner: None,
     })
+}
+
+/// An offline open of a copy that holds ANOTHER account's un-uploaded edits (its
+/// owner record names someone else) opens read-only and says whose work it is: the
+/// signed-in account must never take that work over (`speleodb_cached`). A clean
+/// copy, or one with no owner record, opens as before.
+fn other_accounts_work_read_only(
+    mut opened: SpeleoOpenResult,
+    dest: &std::path::Path,
+    endpoint: &str,
+    email: &str,
+) -> SpeleoOpenResult {
+    if opened.has_unpushed_edits == Some(true) {
+        opened.other_owner = copy_recorded_for_other_account((endpoint, email), dest);
+        if opened.other_owner.is_some() {
+            opened.read_only = Some(SpeleoReadOnlyOpen::OtherAccount);
+        }
+    }
+    opened
+}
+
+/// The guarded download's refusal names whose work the copy holds when its owner
+/// record names another account, so the prompt does not call it "your changes" and
+/// opens it read-only (`UnpushedLocalEdits::other_owner`).
+fn name_other_owner(
+    mut dto: SpeleoErrorDto,
+    dest: &std::path::Path,
+    endpoint: &str,
+    email: &str,
+) -> SpeleoErrorDto {
+    if let Some(local) = dto.unpushed_local.as_mut() {
+        local.other_owner = copy_recorded_for_other_account((endpoint, email), dest);
+    }
+    dto
 }
 
 /// Without a usable session the server cannot be asked anything, and nothing it
@@ -95,6 +131,7 @@ fn signed_out_open_result(
         offline: None,
         has_unpushed_edits: Some(link.has_unpushed_edits),
         read_only: Some(reason),
+        other_owner: None,
     })
 }
 
@@ -208,14 +245,21 @@ impl AppState {
                 None
             }
         };
-        // Un-uploaded local work sitting on the server tip is a fast-forward, not
-        // a conflict: open it as it is (see `speleodb_local_fast_forward_open`).
+        // Un-uploaded local work of THIS account sitting on the server tip is a
+        // fast-forward, not a conflict: open it as it is (see
+        // `speleodb_local_fast_forward_open`). Another account's work, or work
+        // nobody recorded an owner for, goes through the guarded download below
+        // instead, whose refusal prompt asks, and its owner record is not touched.
         if policy == LocalEditsPolicy::Protect {
-            if let Some(local) =
-                self.speleodb_local_fast_forward_open(&project_id, &dest, &endpoint, tip.as_deref())
-            {
-                // The server just showed this account the project's history, so the
-                // copy is this account's to work on from now on.
+            if let Some(local) = self.speleodb_local_fast_forward_open(
+                &project_id,
+                &dest,
+                &endpoint,
+                &email,
+                tip.as_deref(),
+            ) {
+                // Already recorded as this account's (the arm requires it): refresh
+                // the record, which carries the project's current name.
                 self.speleodb_record_cache_owner(&dest, &endpoint, &email, &project_name);
                 return Ok(local);
             }
@@ -239,7 +283,9 @@ impl AppState {
                 if policy == LocalEditsPolicy::Protect {
                     if let Some(cached) = offline_open_result(&dest, &endpoint, &project_id, &error)
                     {
-                        return Ok(cached);
+                        return Ok(other_accounts_work_read_only(
+                            cached, &dest, &endpoint, &email,
+                        ));
                     }
                 }
                 if let Some(expired) = self.session_expired_open(&dest, &project_id, &error, policy)
@@ -273,7 +319,7 @@ impl AppState {
                 ..DownloadOptions::default()
             },
         )
-        .map_err(local_dto)?;
+        .map_err(|e| name_other_owner(local_dto(e), &dest, &endpoint, &email))?;
         self.speleodb_record_cache_owner(&dest, &endpoint, &email, &project_name);
 
         Ok(SpeleoOpenResult {
@@ -281,6 +327,7 @@ impl AppState {
             offline: None,
             has_unpushed_edits: None,
             read_only: None,
+            other_owner: None,
         })
     }
 

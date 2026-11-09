@@ -687,9 +687,19 @@ impl AppState {
     /// end, and the sign-out releases every remaining lock of the account
     /// explicitly once the user's choices are done. Refuses the OPEN project - its
     /// discard is the close-with-discard (`close_project`'s `discard_local`).
-    pub fn speleodb_discard_cached_copy(&self, project_id: &str) -> CommandResult {
+    ///
+    /// The consent is checked HERE, not only in the dialog: a copy with un-uploaded
+    /// (or unreadable) work is removed only when `discard_unpushed` carries the
+    /// user's explicit Discard, and a copy the session is not the account of
+    /// (another account's or instance's, or no session at all) is refused
+    /// whatever the flag says (`AppState::cached_copy_discard_refusal`).
+    pub fn speleodb_discard_cached_copy(
+        &self,
+        project_id: &str,
+        discard_unpushed: bool,
+    ) -> CommandResult {
         match super::speleodb_local_state::cache_root() {
-            Some(root) => self.speleodb_discard_cached_copy_in(&root, project_id),
+            Some(root) => self.speleodb_discard_cached_copy_in(&root, project_id, discard_unpushed),
             None => CommandResult::failure(
                 "Could not find Stalagmight's SpeleoDB storage. Nothing was changed.".to_owned(),
             ),
@@ -701,25 +711,22 @@ impl AppState {
         &self,
         root: &Path,
         project_id: &str,
+        discard_unpushed: bool,
     ) -> CommandResult {
         if let Err(e) = super::speleodb::validate_project_id(project_id) {
             return CommandResult::failure(e.to_string());
         }
-        let path = super::speleodb_local_state::cache_path_in(root, project_id);
-        if self
-            .open_project_path()
-            .is_some_and(|open| super::project_io::same_file(&open, &path))
+        if let Some(refusal) = self.cached_copy_discard_refusal(root, project_id, discard_unpushed)
         {
-            return CommandResult::failure(
-                "This project is open. Close it first, then discard its changes.".to_owned(),
-            );
+            return CommandResult::failure(refusal);
         }
         tracing::info!(
             project_id = %project_id,
+            discard_unpushed,
             purpose = "discard un-uploaded changes before signing out (user confirmed)",
             "speleodb: discarding a cached copy"
         );
-        self.delete_project(path)
+        self.delete_project(super::speleodb_local_state::cache_path_in(root, project_id))
     }
 }
 
@@ -1101,14 +1108,15 @@ mod tests {
         let (server, seen) = recording_server();
         let (_temp, root, path, state) = managed_editing_session(&server);
         set_unpushed_edits(&state);
-        let refused = state.speleodb_discard_cached_copy_in(&root, PID);
+        state.speleodb_record_cache_owner(&path, &server, "u@x", "Remote");
+        let refused = state.speleodb_discard_cached_copy_in(&root, PID, true);
         assert!(
             !refused.success,
             "the OPEN project goes through close-with-discard"
         );
         assert!(path.exists());
         assert!(state.close_project().success);
-        let result = state.speleodb_discard_cached_copy_in(&root, PID);
+        let result = state.speleodb_discard_cached_copy_in(&root, PID, true);
         assert!(result.success, "{:?}", result.error);
         assert!(!path.exists(), "the un-uploaded copy is gone");
         settle();
@@ -1117,8 +1125,68 @@ mod tests {
             0,
             "the sign-out releases locks itself, explicitly"
         );
-        let bad = state.speleodb_discard_cached_copy_in(&root, "../escape");
+        let bad = state.speleodb_discard_cached_copy_in(&root, "../escape", true);
         assert!(!bad.success, "ids are validated before they become paths");
+    }
+
+    /// The sign-out dialog's consent is not the only guard (pre-PR finding): the
+    /// backend refuses un-uploaded work without the explicit Discard flag, and
+    /// another account's copy whatever the flag says.
+    #[test]
+    fn sign_out_discard_needs_consent_for_un_uploaded_work_and_only_reaches_this_accounts_copy() {
+        let (server, seen) = recording_server();
+        let (_temp, root, path, state) = managed_editing_session(&server);
+        set_unpushed_edits(&state);
+        assert!(state.close_project().success);
+
+        state.speleodb_record_cache_owner(&path, &server, "u@x", "Remote");
+        let unasked = state.speleodb_discard_cached_copy_in(&root, PID, false);
+        assert!(!unasked.success, "no consent, no discard");
+        assert!(unasked
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("never uploaded")));
+        assert!(path.exists());
+
+        state.speleodb_record_cache_owner(&path, &server, "someone@example.com", "Remote");
+        let theirs = state.speleodb_discard_cached_copy_in(&root, PID, true);
+        assert!(!theirs.success, "another account's copy is refused");
+        assert!(theirs
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("account in use")));
+        assert!(path.exists(), "their un-uploaded work is intact");
+
+        state.speleodb_record_cache_owner(&path, "https://other.example/", "u@x", "Remote");
+        assert!(
+            !state
+                .speleodb_discard_cached_copy_in(&root, PID, true)
+                .success,
+            "the same email on another instance is another account"
+        );
+
+        state.speleodb_session_lock().expect("session").forget();
+        state.speleodb_record_cache_owner(&path, &server, "u@x", "Remote");
+        assert!(
+            !state
+                .speleodb_discard_cached_copy_in(&root, PID, true)
+                .success,
+            "signed out, no copy is the session's"
+        );
+        assert!(path.exists());
+        settle();
+        assert_eq!(release_requests(&seen), 0);
+    }
+
+    #[test]
+    fn sign_out_discard_of_a_clean_own_copy_needs_no_consent() {
+        let (server, _seen) = recording_server();
+        let (_temp, root, path, state) = managed_editing_session(&server);
+        assert!(state.close_project().success);
+        state.speleodb_record_cache_owner(&path, &server, "u@x", "Remote");
+        let result = state.speleodb_discard_cached_copy_in(&root, PID, false);
+        assert!(result.success, "{:?}", result.error);
+        assert!(!path.exists());
     }
 
     #[cfg(unix)]

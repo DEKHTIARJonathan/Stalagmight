@@ -252,7 +252,12 @@ for (const density of ['cards', 'table'] as const) {
 test('purge keeps copies with un-uploaded changes unless deleting them is confirmed twice', async ({ page }) => {
   await seed(page, {
     signedIn: true,
-    copies: [copy(MINE, 'Synthetic mine', 'mine', true), copy(LEGACY, 'Synthetic legacy', 'unknown')],
+    copies: [
+      copy(MINE, 'Synthetic mine', 'mine', true),
+      copy(LEGACY, 'Synthetic legacy', 'unknown'),
+      // Another account's un-uploaded work: signed in, the purge never names or counts it.
+      copy(THEIRS, 'Synthetic theirs', 'other_account', true),
+    ],
     purge: { removed: 1, kept_unpushed: ['Synthetic mine'], kept_open: [], failed: [], locks_released: ['Synthetic legacy'], locks_unchecked: [] },
   });
   await page.evaluate(() => {
@@ -265,6 +270,8 @@ test('purge keeps copies with un-uploaded changes unless deleting them is confir
   await section.getByTestId('speleodb-purge-cache').click();
   const dialog = page.getByTestId('speleodb-purge-dialog');
   await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('Remove 2 downloaded copies');
+  await expect(dialog).not.toContainText('Synthetic theirs');
   await expect(dialog.getByTestId('speleodb-purge-at-risk-list')).toHaveText('Synthetic mine');
   await expect(dialog.getByTestId('speleodb-purge-locks')).toContainText('Your editing locks on these projects are handed back');
   await dialog.getByTestId('speleodb-purge-keep-at-risk').click();
@@ -279,6 +286,7 @@ test('purge keeps copies with un-uploaded changes unless deleting them is confir
   await page.getByTestId('speleodb-purge-delete-all').click();
   const lost = page.getByTestId('speleodb-purge-lost-dialog');
   await expect(lost).toBeVisible();
+  await expect(lost.getByTestId('speleodb-purge-at-risk-list')).toHaveText('Synthetic mine');
   // Back returns to the first question without purging.
   await lost.getByTestId('speleodb-purge-lost-back').click();
   await expect(page.getByTestId('speleodb-purge-dialog')).toBeVisible();

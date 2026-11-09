@@ -77,6 +77,38 @@ signed-in account opens the copy online (download, or the fast-forward local ope
 after the server showed that account the history) and when a project is published.
 It is not written for offline or signed-out opens.
 
+Un-uploaded work belongs to the account that made it, and no other account ever
+takes it over:
+
+- The online open takes the fast-forward (local edits whose base is the server tip
+  open as they are, with no download) only for a copy whose owner record names the
+  signed-in account on the signed-in instance.
+- Another account's copy with un-uploaded edits (or one recorded on another
+  instance) goes through the guarded download instead, which refuses to replace the
+  edits, and its owner record is left as it is. The prompt names that account
+  instead of saying "your changes", and its non-destructive answer is "Open it
+  read-only": the copy loads without downloading anything and without taking the
+  lock, and a toast says whose changes they are. The user can look at them and save
+  a copy of the project. Cancel, or take the server copy after a confirmation, work
+  as before (taking the server copy discards the other account's changes and
+  records the signed-in account).
+- An offline open of such a copy opens it read-only too, with the same toast.
+- Start Editing (and with it Resume editing and the held-lock prompt's resume)
+  refuses an open cache copy whose owner record names another account while it
+  holds un-uploaded edits, before any request is sent: "this copy holds changes
+  <account> made that were never uploaded to SpeleoDB. Only <account> can edit and
+  upload them...". The copy stays open read-only. A clean copy recorded for another
+  account holds only the server's content, so Start Editing goes ahead and records
+  the signed-in account as its owner.
+- A copy with no owner record (downloaded before the record existed) is not claimed
+  silently when it holds un-uploaded edits: nothing tells whose they are, so it
+  takes the guarded download and its prompt (with "Open my local copy", which still
+  opens it for editing as before). It keeps no owner until a download replaces it
+  (once its work is uploaded, or after the confirmed take-the-server-copy); a clean
+  owner-less copy just downloads and records the account as before.
+- Signed out, every cached copy opens read-only anyway; signing in later does not
+  let Start Editing take over another account's work, by the rule above.
+
 The home screen lists the cached copies by owner:
 
 - **Signed in**: the copies of the signed-in account on the signed-in instance.
@@ -103,8 +135,10 @@ menu: Open project, Zoom to system (when the project is on the map) and Remove l
 copy. Removing a copy goes through an in-app confirmation that first re-reads the
 copy. A copy with un-uploaded edits, or one whose state cannot be read, gets a
 warning and a "Remove copy and lose my changes" button. Only that confirmation tells
-the backend to remove such a copy; without it the backend refuses. The project open
-right now is never removed. Removal sends the `.stalx` to the OS trash where there is
+the backend to remove such a copy; without it the backend refuses. Signed in, the
+backend also refuses another account's (or another instance's) copy, which Home does
+not list then anyway; signed out, any copy can be removed. The project open right
+now is never removed. Removal sends the `.stalx` to the OS trash where there is
 one, drops its recents row, and deletes the rest of its directory (owner record and
 SQLite sidecars). The file goes to the trash under the project's name (for example
 `Synthetic Cave.stalx`, made a safe file name on every OS) rather than as one more
@@ -123,8 +157,13 @@ probe or release that fails returns a warning saying so. Removal and the purge c
 as exclusive SpeleoDB operations: their confirm buttons are disabled while another
 lock, upload or account call runs, and the spinner shows while they run.
 
-SpeleoDB settings has "Purge all cached files". It removes every cached copy of every
-account except the open project. Copies with un-uploaded or unreadable state are
+SpeleoDB settings has "Purge all cached files". It removes the cached copies the
+home screen lists, except the open project: signed in, the account's own copies and
+the owner-less ones from its instance; signed out, every copy of every account and
+instance. Signed in, another account's copy (or another instance's) is never counted,
+listed or removed, not even by "Delete everything": its un-uploaded work is not this
+user's to throw away. The backend applies the same rule when it purges, and a session
+it cannot read at all removes nothing. Copies with un-uploaded or unreadable state are
 listed in the confirmation and kept by default ("Keep those, remove the rest").
 Deleting them too takes a second confirmation. The backend re-checks every copy when
 it removes it. Each removed copy's lock is handled as above, and the result lists the
@@ -503,13 +542,19 @@ open project's un-uploaded work under our lock (Upload / Keep my changes on this
 computer / Discard), other cached copies with un-uploaded work (Open to upload /
 Keep my changes on this computer / Discard), and the remaining locks, handed back
 with Try again / Sign out anyway when a release fails. There is no keep-the-lock
-answer. "Keep my changes on this computer" is the non-destructive one when the
+answer. Discard of a copy that is not open (`speleodb_discard_cached_copy`) carries
+the user's confirmed choice as an explicit flag (`discard_unpushed`): the backend
+refuses a copy with un-uploaded or unreadable work without it, and refuses a copy
+the signed-in account is not the owner of whatever the flag says (owner recorded as
+another account or instance; an owner-less copy from the signed-in instance counts
+as the account's, as on the home screen). "Keep my changes on this computer" is the non-destructive one when the
 upload is not possible: unsaved edits of the open project are saved first, the copy
 keeps its edits, its un-uploaded mark and its recents row, and its lock is handed
 back through the explicit per-project release (`speleodb_release_lock`). The user's
 choice is the consent: the logout's own silent release still keeps the lock over
-un-uploaded edits. After the next sign-in the ordinary open takes over (base equals
-tip: the local copy opens and resumes; a divergence offers "Open my local copy").
+un-uploaded edits. After the same account's next sign-in the ordinary open takes
+over (base equals tip: the local copy opens and resumes; a divergence offers "Open my
+local copy"). Another account opening the project gets that prompt instead.
 
 Switch to Read Only Mode refuses unsaved or unuploaded work, including direct IPC
 calls: "Save your changes using Save Changes before switching to read-only mode."

@@ -420,11 +420,17 @@ pub struct SpeleoOpenResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub has_unpushed_edits: Option<bool>,
-    /// Present only when the cached copy opened read-only because there is no
-    /// usable SpeleoDB session. The frontend must not try to take the lock.
+    /// Present only when the cached copy opened read-only without the server's
+    /// say: no usable SpeleoDB session, or another account's un-uploaded work.
+    /// The frontend must not try to take the lock.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub read_only: Option<SpeleoReadOnlyOpen>,
+    /// With [`SpeleoReadOnlyOpen::OtherAccount`]: the account (email) the copy is
+    /// recorded for, so the frontend can say whose work it holds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub other_owner: Option<String>,
 }
 
 /// Why an open returned the cached copy read-only, without the server's say.
@@ -437,6 +443,10 @@ pub enum SpeleoReadOnlyOpen {
     /// The server rejected the saved token during this open. The token was dropped,
     /// so the app is now signed out, and the copy opened as for a signed-out user.
     SessionExpired,
+    /// The copy's owner record names another account and it holds un-uploaded
+    /// edits: that account's work, which this account may look at (and save a
+    /// copy of) but never take the lock over, edit or upload.
+    OtherAccount,
 }
 
 /// Outcome of `speleodb_start_editing` (#194): the result of acquiring the write
@@ -712,6 +722,12 @@ pub struct UnpushedLocalEdits {
     /// When it was last edited (RFC-3339), when known. `None` for an older copy
     /// that never recorded one.
     pub last_edit_at: Option<String>,
+    /// The account (email) the copy's owner record names, when that is NOT the
+    /// signed-in account: the edits are that account's work. The prompt then says
+    /// so, and its "open the local copy" answer opens it read-only.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub other_owner: Option<String>,
 }
 
 #[cfg(test)]
@@ -755,6 +771,7 @@ mod tests {
             offline: None,
             has_unpushed_edits: None,
             read_only: Some(SpeleoReadOnlyOpen::SessionExpired),
+            other_owner: None,
         })
         .expect("serialize open result");
         // [Track A] #186/D-B2: the structured error DTO must also never carry a

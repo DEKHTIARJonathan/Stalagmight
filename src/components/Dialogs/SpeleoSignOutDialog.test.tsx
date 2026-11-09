@@ -134,11 +134,27 @@ describe('SpeleoSignOutDialog', () => {
       await userEvent.click(screen.getByTestId(`speleodb-signout-row-${id}-discard-confirm`));
       expect(await screen.findByTestId(`speleodb-signout-row-${id}-discarded`)).toBeVisible();
     }
-    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_cached_copy', { projectId: 'x' }, expect.anything());
-    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_cached_copy', { projectId: 'y' }, expect.anything());
+    // The confirmed step is the explicit consent the backend requires.
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_cached_copy', { projectId: 'x', discardUnpushed: true }, expect.anything());
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_cached_copy', { projectId: 'y', discardUnpushed: true }, expect.anything());
     await userEvent.click(go);
     expect(await answer).toBe(true);
     expect(released).toEqual(['x']);
+  });
+
+  it('a Discard the backend refuses leaves the row unanswered and says why', async () => {
+    // The backend guard, e.g. for a copy that is another account's: nothing removed.
+    const refusal = 'Only copies downloaded by the SpeleoDB account in use can be discarded here. Nothing was removed.';
+    invokeIpcMock.mockImplementation(async (command: string) => (
+      command === 'speleodb_discard_cached_copy' ? { ...ok, success: false, error: refusal } : null
+    ));
+    void show({ openProject: null, releasable: [], unuploaded: [entry('x')] });
+    await userEvent.click(screen.getByTestId('speleodb-signout-row-x-discard'));
+    await userEvent.click(screen.getByTestId('speleodb-signout-row-x-discard-confirm'));
+    expect(await screen.findByTestId('speleodb-signout-error')).toHaveTextContent(refusal);
+    expect(screen.queryByTestId('speleodb-signout-row-x-discarded')).toBeNull();
+    expect(screen.getByTestId('speleodb-signout-row-x-discard')).toBeEnabled();
+    expect(screen.getByTestId('speleodb-signout-go')).toBeDisabled();
   });
 
   // Decision 10: when the upload is not possible, the edits are never discard-only.

@@ -97,9 +97,30 @@ describe('Purge all cached files', () => {
     expect(purges()).toEqual([{ discardUnpushed: true }]);
   });
 
+  it('signed in, never counts or lists another account\'s copies, even with un-uploaded changes', async () => {
+    answer([
+      copy('a', 'Alpha'),
+      copy('u', 'Legacy', { ownership: 'unknown', has_unpushed_edits: true }),
+      copy('t', 'Theirs', { ownership: 'other_account', has_unpushed_edits: true }),
+      copy('s', 'Theirs clean', { ownership: 'other_account' }),
+    ]);
+    render(<SpeleoCachePurgeSection />);
+    await userEvent.click(screen.getByTestId('speleodb-purge-cache'));
+    const dialog = await screen.findByTestId('speleodb-purge-dialog');
+    expect(dialog).toHaveTextContent('Remove 2 downloaded copies');
+    expect(screen.getByTestId('speleodb-purge-at-risk')).toHaveTextContent('1 copy has changes');
+    expect(screen.getByTestId('speleodb-purge-at-risk-list')).toHaveTextContent('Legacy');
+    expect(dialog).not.toHaveTextContent('Theirs');
+    await userEvent.click(screen.getByTestId('speleodb-purge-delete-all'));
+    const lost = await screen.findByTestId('speleodb-purge-lost-dialog');
+    expect(lost).toHaveTextContent('Legacy');
+    expect(lost).not.toHaveTextContent('Theirs');
+  });
+
   it.each([
     ['no copy at all', []],
     ['only the open project', [copy('a', 'Alpha', { is_open: true })]],
+    ['only another account\'s copies', [copy('t', 'Theirs', { ownership: 'other_account' })]],
   ])('is disabled, and says why, with %s cached', async (_label, listing) => {
     answer(listing);
     render(<SpeleoCachePurgeSection />);

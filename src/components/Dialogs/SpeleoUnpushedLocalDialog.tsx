@@ -8,11 +8,19 @@ import { DialogWrapper } from './DialogWrapper';
 import type { SpeleoProjectSummary, UnpushedLocalEdits } from '../../types/ipc.generated';
 
 /**
- * Refuse to overwrite unsynced work. Raised only when the server has moved past the
- * local copy's base (or the base cannot be checked): un-uploaded work sitting on the
+ * Refuse to overwrite unsynced work. Raised when the server has moved past the
+ * local copy's base (or the base cannot be checked), and when the copy is not
+ * recorded as the signed-in account's (another account's, or one downloaded before
+ * owners were recorded): only this account's un-uploaded work sitting on the
  * server tip opens directly instead. "Open my local copy" opens it as it is (no
  * download) so the user can carry on through the ordinary resume / upload flows;
  * Cancel preserves it; replacing it requires confirmation.
+ *
+ * When the copy's owner record names ANOTHER account (`other_owner`), the edits
+ * are that account's: the prompt names it instead of saying "your changes", and
+ * the non-destructive answer becomes "Open it read-only" - no lock is taken, and
+ * the backend refuses Start Editing on it, so the work can be looked at and saved
+ * as a copy but never edited or uploaded as this account's.
  */
 export default function SpeleoUnpushedLocalDialog() {
   const { t } = useTranslation();
@@ -59,6 +67,10 @@ export default function SpeleoUnpushedLocalDialog() {
     if (cancelReturnsTo) openDialog(cancelReturnsTo);
     else closeDialog();
   };
+
+  // The copy's owner record names another account: the edits are that account's
+  // work. Say so, and open it read-only rather than as this account's to edit.
+  const owner = unpushedLocal.other_owner ?? null;
 
   const lastEditAt = unpushedLocal.last_edit_at;
   const parsed = lastEditAt ? new Date(lastEditAt) : null;
@@ -112,13 +124,19 @@ export default function SpeleoUnpushedLocalDialog() {
       data-testid="speleodb-unpushed-local-dialog"
     >
       <div className="space-y-4">
-        <p className="text-sm text-text-secondary">
-          {t('speleodb.unpushedLocal.message', { name: summary.name })}
+        <p className="text-sm text-text-secondary" data-testid="speleodb-unpushed-local-message">
+          {owner
+            ? t('speleodb.unpushedLocal.messageOtherAccount', { name: summary.name, owner })
+            : t('speleodb.unpushedLocal.message', { name: summary.name })}
         </p>
         <p className="text-sm text-text-primary" data-testid="speleodb-unpushed-local-last-edited">
           {lastEditedLine}
         </p>
-        <p className="text-xs text-text-secondary">{t('speleodb.unpushedLocal.cancelHint')}</p>
+        <p className="text-xs text-text-secondary">
+          {owner
+            ? t('speleodb.unpushedLocal.cancelHintOtherAccount', { owner })
+            : t('speleodb.unpushedLocal.cancelHint')}
+        </p>
 
         {discardArmed && (
           <div
@@ -140,7 +158,11 @@ export default function SpeleoUnpushedLocalDialog() {
           </div>
         )}
 
-        <p className="text-xs text-text-secondary">{t('speleoExitPrompt.unpushedLocal.openLocalHint')}</p>
+        <p className="text-xs text-text-secondary" data-testid="speleodb-unpushed-local-open-hint">
+          {owner
+            ? t('speleoExitPrompt.unpushedLocal.openReadOnlyHint', { owner })
+            : t('speleoExitPrompt.unpushedLocal.openLocalHint')}
+        </p>
 
         <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-border">
           <Button onClick={dismiss} disabled={busy} data-testid="speleodb-unpushed-local-cancel">
@@ -148,7 +170,7 @@ export default function SpeleoUnpushedLocalDialog() {
           </Button>
           <Button variant="primary" data-primary-action="" onClick={() => void handleOpenLocal()} disabled={busy}
             data-testid="speleodb-unpushed-local-open-local">
-            {t('speleoExitPrompt.unpushedLocal.openLocal')}
+            {owner ? t('speleoExitPrompt.unpushedLocal.openReadOnly') : t('speleoExitPrompt.unpushedLocal.openLocal')}
           </Button>
           <Button
             variant="danger"
@@ -162,9 +184,11 @@ export default function SpeleoUnpushedLocalDialog() {
             disabled={busy}
             data-testid="speleodb-unpushed-local-take-remote"
           >
-            {discardArmed
-              ? t('speleodb.unpushedLocal.takeRemoteConfirm')
-              : t('speleodb.unpushedLocal.takeRemote')}
+            {owner
+              ? t(discardArmed
+                ? 'speleodb.unpushedLocal.takeRemoteConfirmOtherAccount'
+                : 'speleodb.unpushedLocal.takeRemoteOtherAccount', { owner })
+              : t(discardArmed ? 'speleodb.unpushedLocal.takeRemoteConfirm' : 'speleodb.unpushedLocal.takeRemote')}
           </Button>
         </div>
       </div>

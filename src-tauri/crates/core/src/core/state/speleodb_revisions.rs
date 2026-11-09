@@ -664,6 +664,7 @@ impl AppState {
             offline: None,
             has_unpushed_edits: None,
             read_only: None,
+            other_owner: None,
         })
     }
 }

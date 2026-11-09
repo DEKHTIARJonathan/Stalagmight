@@ -125,6 +125,15 @@ pub enum SpeleoDbError {
     /// update require one). Fails closed (Fatal).
     #[error("no open SpeleoDB project")]
     NoRemoteProject,
+    /// Start Editing on a cached copy whose owner record names another account and
+    /// that holds un-uploaded edits: taking the lock would make that account's work
+    /// this account's. Refused (Fatal); the copy stays open read-only.
+    #[error(
+        "this copy holds changes {owner} made that were never uploaded to SpeleoDB. Only \
+         {owner} can edit and upload them, so it stays read-only for this account; you \
+         can still save a copy of it"
+    )]
+    OtherAccountsCopy { owner: String },
     /// The open project changed - or went away - between the moment a SpeleoDB
     /// operation read it and the moment it was ready to commit (a delete, close,
     /// project switch or logout landed inside the network window): Start Editing
