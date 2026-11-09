@@ -74,7 +74,7 @@ use super::speleodb::local_dto;
 use super::speleodb_lock_release::LockReleaseParams;
 use super::AppState;
 use crate::speleodb::auth::normalize_endpoint;
-use crate::speleodb::{client, SpeleoDbError, SpeleoErrorDto};
+use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 
 /// WHICH project this process took a write lock on, and under WHOSE account.
 ///
@@ -316,29 +316,16 @@ impl AppState {
     ///
     /// Called ONLY from inside Start Editing's lock-ops span - hence the
     /// `_locked` reclaim variant; taking `speleodb_lock_ops` here would
-    /// self-deadlock.
-    pub(super) fn speleodb_unwind_release(
-        &self,
-        endpoint: &str,
-        token: &str,
-        insecure_http: bool,
-        project_id: &str,
-        entry_gen: u64,
-    ) {
+    /// self-deadlock. Both arms are holder-checked (lock#4).
+    pub(super) fn speleodb_unwind_release(&self, params: &LockReleaseParams, entry_gen: u64) {
         if self.speleodb_session_generation() == entry_gen {
-            self.speleodb_release_best_effort(endpoint, token, insecure_http, project_id);
+            self.speleodb_release_best_effort(params);
             return;
         }
-        let params = LockReleaseParams {
-            endpoint: endpoint.to_owned(),
-            token: token.to_owned(),
-            insecure_http,
-            project_id: project_id.to_owned(),
-        };
-        if let Err(e) = self.speleodb_release_unless_reclaimed_locked(&params) {
+        if let Err(e) = self.speleodb_release_unless_reclaimed_locked(params) {
             tracing::warn!(
                 error = %e,
-                project_id,
+                project_id = %params.project_id,
                 purpose = "hand back a lock acquired by a session that no longer exists",
                 "speleodb: post-session-move unwind release failed"
             );
@@ -418,13 +405,10 @@ impl AppState {
             );
             return Ok(());
         }
-        client::release_lock(
-            &params.endpoint,
-            &params.token,
-            params.insecure_http,
-            &params.project_id,
-        )
-        .map(|_| ())
+        // No successor accounts for it, so it is ours to hand back - if the
+        // server still says it is ours at all (lock#4). Not held by us is a
+        // success: the caller's claim is over either way.
+        super::speleodb_lock_release::release_if_held_by_us(params).map(|_| ())
     }
 
     /// A deferred release, from the moment it can finally be decided: stand the
@@ -601,7 +585,6 @@ impl AppState {
                 // again WITH a token.
                 return;
             };
-            let me = Some(me);
             let Ok(mut session) = self.speleodb_session_lock() else {
                 return;
             };
@@ -611,7 +594,7 @@ impl AppState {
                 // internal retention or the un-pushed-edits veto already
                 // decided that this mutex stays held. The janitor is for claims
                 // whose session died without deciding anything.
-                !claim.is_kept() && claim.taken_by(Some(&endpoint), me.as_deref())
+                !claim.is_kept() && claim.taken_by(Some(&endpoint), Some(&me))
             }) else {
                 // Everything retained belongs to another account or another
                 // deployment. Their tokens are the only ones that can release
@@ -638,6 +621,7 @@ impl AppState {
                 LockReleaseParams {
                     endpoint,
                     token,
+                    email: me,
                     insecure_http: self.speleodb_insecure_http(),
                     project_id: claim.project_id.clone(),
                 },
@@ -960,21 +944,56 @@ mod tests {
         assert!(matches!(refused, SpeleoDbError::SessionMoved));
     }
 
+    /// Release params for [`ID`] as the fixture account on `endpoint`.
+    fn release_params(endpoint: &str) -> super::LockReleaseParams {
+        super::LockReleaseParams {
+            endpoint: endpoint.to_owned(),
+            token: "tok".to_owned(),
+            email: "diver@example.com".to_owned(),
+            insecure_http: true,
+            project_id: ID.to_owned(),
+        }
+    }
+
     #[test]
     fn the_unwind_in_an_unmoved_session_clears_the_record_as_before() {
         let temp = tempfile::TempDir::new().expect("temp");
         let state = AppState::new().expect("state");
+        let (server, seen) =
+            crate::core::state::tests_support::lock_server(ID, Some("diver@example.com".into()));
+        sign_in_as(&state, &server, "diver@example.com");
         open_linked(&state, temp.path(), "a.stalx", ID);
         let entry_gen = state.speleodb_session_generation();
         state.speleodb_note_lock_acquired(Some(ID));
 
-        // The POST fails fast (nothing listens); best-effort is the contract.
-        state.speleodb_unwind_release("http://127.0.0.1:1/", "token", true, ID, entry_gen);
+        state.speleodb_unwind_release(&release_params(&server), entry_gen);
 
+        assert_eq!(
+            crate::core::state::tests_support::release_posts(&seen),
+            1,
+            "the server says the lock is ours, so it is handed back"
+        );
         assert!(
             !state.speleodb_lock_acquired_here(ID),
             "same session: the release ends OUR claim, exactly as it always did"
         );
+    }
+
+    #[test]
+    fn a_failed_unwind_release_keeps_the_claim_for_a_retry() {
+        // The holder cannot be read (nothing listens), so nothing is released
+        // blind - and the claim, the only local pointer to a mutex that may still
+        // be ours, survives for a later holder-checked retry.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let state = AppState::new().expect("state");
+        sign_in_unreachable(&state);
+        open_linked(&state, temp.path(), "a.stalx", ID);
+        let entry_gen = state.speleodb_session_generation();
+        state.speleodb_note_lock_acquired(Some(ID));
+
+        state.speleodb_unwind_release(&release_params(UNREACHABLE), entry_gen);
+
+        assert!(state.speleodb_lock_acquired_here(ID));
     }
 
     #[test]
@@ -990,7 +1009,7 @@ mod tests {
         // The successor's claim, minted by ITS Start Editing.
         state.speleodb_note_lock_acquired(Some(ID));
 
-        state.speleodb_unwind_release("http://127.0.0.1:1/", "token", true, ID, entry_gen);
+        state.speleodb_unwind_release(&release_params(UNREACHABLE), entry_gen);
 
         assert!(
             state.speleodb_lock_acquired_here(ID),
@@ -1236,6 +1255,7 @@ mod tests {
         let elsewhere = super::LockReleaseParams {
             endpoint: "http://127.0.0.1:2/".to_owned(),
             token: "tok".to_owned(),
+            email: "diver@example.com".to_owned(),
             insecure_http: true,
             project_id: ID.to_owned(),
         };
@@ -1250,6 +1270,7 @@ mod tests {
         let here = super::LockReleaseParams {
             endpoint: UNREACHABLE.to_owned(),
             token: "tok".to_owned(),
+            email: "diver@example.com".to_owned(),
             insecure_http: true,
             project_id: ID.to_owned(),
         };
@@ -1474,6 +1495,7 @@ mod tests {
         let params = super::LockReleaseParams {
             endpoint: UNREACHABLE.to_owned(),
             token: "tok".to_owned(),
+            email: "diver@example.com".to_owned(),
             insecure_http: true,
             project_id: ID.to_owned(),
         };
@@ -1492,6 +1514,7 @@ mod tests {
         let params = super::LockReleaseParams {
             endpoint: UNREACHABLE.to_owned(),
             token: "tok".to_owned(),
+            email: "diver@example.com".to_owned(),
             insecure_http: true,
             project_id: ID.to_owned(),
         };
@@ -1741,12 +1764,19 @@ mod tests {
              span, which is reclaim-checked like the delete's captured release \
              and the janitor's"
         );
-        // The raw POST survives only as the no-managed-state fallback.
+        // No bare POST at all: even the no-managed-state fallback (tests,
+        // pre-setup), which cannot run the reclaim check, still asks the server
+        // who holds the lock first (lock#4).
         assert_eq!(
             body.matches("client::release_lock(").count(),
+            0,
+            "a lifecycle release is never sent without the holder check"
+        );
+        assert_eq!(
+            body.matches("release_if_held_by_us(&p)").count(),
             1,
-            "the only bare POST left is the fallback for when there is no app \
-             handle to reach managed state through (tests, pre-setup)"
+            "the fallback for when there is no app handle to reach managed state \
+             through is holder-checked"
         );
         assert!(
             !body.contains("self.set_edit_enabled("),

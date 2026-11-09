@@ -146,7 +146,7 @@ impl AppState {
         params: SpeleoPublishParams,
     ) -> Result<SpeleoPublishResult, SpeleoErrorDto> {
         let _lock_ops = self.speleodb_lock_ops_guard();
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let (endpoint, token, email) = self.speleodb_active_account().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
         // Guard rails BEFORE the irreversible create POST. The create is
@@ -309,8 +309,17 @@ impl AppState {
                     false,
                     generation,
                 );
-                // Release the lock regardless of the push outcome (best-effort).
-                self.speleodb_release_best_effort(&endpoint, &token, insecure_http, &project_id);
+                // Release the lock regardless of the push outcome (best-effort,
+                // holder-checked like every automatic release).
+                self.speleodb_release_best_effort(
+                    &super::speleodb_lock_release::LockReleaseParams {
+                        endpoint: endpoint.clone(),
+                        token: token.clone(),
+                        email,
+                        insecure_http,
+                        project_id: project_id.clone(),
+                    },
+                );
                 if let Err(e) = upload {
                     tracing::warn!(
                         error = ?e,

@@ -154,13 +154,11 @@ impl AppState {
         }
         match self.speleodb_open_link() {
             Ok(_) => {
+                // The claim ends when the release is sent: it is matched to the
+                // account the params were captured for, not the live session the
+                // instance switch is about to forget, so a failed release can
+                // still put it back (`speleodb_forget_claim_released_by`).
                 let release = self.speleodb_held_lock_release_params();
-                if let Some(params) = &release {
-                    // The claim ends now, as `speleodb_release_best_effort` ends it
-                    // before its POST: the session is about to be forgotten, and a
-                    // claim cleared after that could no longer be matched to it.
-                    self.speleodb_forget_lock_acquired_for(&params.project_id);
-                }
                 self.set_edit_enabled(false);
                 release
             }

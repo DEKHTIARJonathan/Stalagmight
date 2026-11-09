@@ -16,6 +16,16 @@
 //!
 //! Deferred releases remain scoped to the account, project, and session that
 //! initiated them, so they cannot release a successor editing session's lock.
+//!
+//! THE HOLDER CHECK (lock#4): no automatic release - close, switch, quit, the
+//! update restart, logout, an account switch, the explicit-abandon verbs, Start
+//! Editing's unwind or the stranded-claim janitor - is sent unless SpeleoDB first
+//! names this account as the lock's holder ([`release_if_held_by_us`]). Another
+//! account's lock, or no lock at all, just ends the local claim. An unreadable
+//! holder sends nothing and keeps the claim for a later holder-checked retry;
+//! there is no blind fallback. The server lets an admin release anybody's lock,
+//! so this check is the only thing standing between an admin's ordinary exit
+//! and a colleague's live edit session.
 
 use std::path::Path;
 use std::time::Duration;
@@ -39,6 +49,10 @@ pub(super) struct LockReleaseParams {
     pub(super) endpoint: String,
     /// The bearer token for that endpoint.
     pub(super) token: String,
+    /// The account `token` belongs to: the holder the server must name before
+    /// the release is sent (see [`release_if_held_by_us`]). Read in the same
+    /// session acquisition as the token, so the two describe one account.
+    pub(super) email: String,
     /// The persisted public-`http://` allowance, threaded to `tls::enforce`.
     pub(super) insecure_http: bool,
     /// The project whose write lock is being released.
@@ -64,6 +78,75 @@ enum ReleaseIntent {
     /// `speleodb_take_remote`): the user has said outright they are walking away
     /// from the local work, so there is no future push for the veto to protect.
     Abandon,
+}
+
+/// How long a release may spend asking SpeleoDB who holds the lock before it
+/// gives up WITHOUT releasing.
+///
+/// The holder check runs inside the callers' existing deadlines, never on top of
+/// them. The tightest is the app-exit / update-restart wait
+/// (`EXIT_LOCK_RELEASE_TIMEOUT`, 5 s, in the app crate): this leaves the release
+/// POST the rest of it. A healthy round trip takes a fraction of either.
+pub(super) const HOLDER_CHECK_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// What a holder-checked release did. Both are successes: either way this
+/// account holds no lock on the project any more, so its claim is over.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum HolderCheckedRelease {
+    /// SpeleoDB named this account as the holder, and the release was sent.
+    Released,
+    /// SpeleoDB named another account, or nobody (including a project it no
+    /// longer has): nothing was sent.
+    NotHeldByUs,
+}
+
+/// Release `params.project_id`'s write lock ONLY if SpeleoDB says the account
+/// in `params` holds it (lock#4).
+///
+/// The server lets an ADMIN release anybody's mutex, so a bare release from a
+/// session whose lock was force-unlocked on the web and taken by someone else
+/// frees that someone's live lock - and the next writer can lock and push over
+/// their work. Asking first is the only defence the client has: SpeleoDB has no
+/// compare-and-release, so a change between the probe and the POST remains a
+/// protocol limitation, over a window of one round trip.
+///
+/// A holder that cannot be read is an `Err`, and NOTHING is sent: a release that
+/// cannot be shown to be ours is never sent blind. Callers keep their claim on
+/// the error (it is the only local pointer to a mutex that may still be ours),
+/// so a later holder-checked release can retry it - the no-project janitor on
+/// the next status refresh, or the held-lock prompt after the next sign-in when
+/// the process is exiting. A 404 is not an error here: a project the server no
+/// longer has holds no lock to hand back.
+pub(super) fn release_if_held_by_us(
+    params: &LockReleaseParams,
+) -> Result<HolderCheckedRelease, SpeleoDbError> {
+    let holder = match client::get_project_probe_within(
+        &params.endpoint,
+        &params.token,
+        params.insecure_http,
+        &params.project_id,
+        HOLDER_CHECK_TIMEOUT,
+    ) {
+        Ok(project) => project.active_mutex.map(|mutex| mutex.user),
+        Err(SpeleoDbError::Status { status: 404, .. }) => None,
+        Err(e) => return Err(e),
+    };
+    if !super::speleodb::lock_held_by_me(holder.as_deref(), Some(&params.email)) {
+        tracing::info!(
+            project_id = %params.project_id,
+            held = holder.is_some(),
+            purpose = "never release another account's lock (lock#4)",
+            "speleodb: not releasing; the server says this account does not hold the lock"
+        );
+        return Ok(HolderCheckedRelease::NotHeldByUs);
+    }
+    client::release_lock(
+        &params.endpoint,
+        &params.token,
+        params.insecure_http,
+        &params.project_id,
+    )
+    .map(|_| HolderCheckedRelease::Released)
 }
 
 impl AppState {
@@ -143,8 +226,8 @@ impl AppState {
         // `Io("SpeleoDB session lock poisoned")` alongside the ordinary
         // `NotAuthenticated`, and a silently-dropped poisoned mutex here strands the
         // lock just as thoroughly.
-        let (endpoint, token) = match self.speleodb_active_token() {
-            Ok(pair) => pair,
+        let (endpoint, token, email) = match self.speleodb_active_account() {
+            Ok(account) => account,
             Err(SpeleoDbError::NotAuthenticated) => return None,
             Err(e) => {
                 tracing::warn!(
@@ -166,6 +249,7 @@ impl AppState {
         Some(LockReleaseParams {
             endpoint,
             token,
+            email,
             insecure_http: self.speleodb_insecure_http(),
             project_id: link.project_id,
         })
@@ -194,12 +278,7 @@ impl AppState {
     /// lifecycle transitions instead call the close/detached/bounded variants.
     pub fn speleodb_release_held_lock_best_effort(&self) {
         if let Some(p) = self.speleodb_held_lock_release_params() {
-            self.speleodb_release_best_effort(
-                &p.endpoint,
-                &p.token,
-                p.insecure_http,
-                &p.project_id,
-            );
+            self.speleodb_release_best_effort(&p);
         }
     }
 
@@ -239,12 +318,7 @@ impl AppState {
     /// no future push for the veto to protect.
     pub(crate) fn speleodb_release_held_lock_abandoning(&self) {
         if let Some(p) = self.speleodb_abandon_lock_release_params() {
-            self.speleodb_release_best_effort(
-                &p.endpoint,
-                &p.token,
-                p.insecure_http,
-                &p.project_id,
-            );
+            self.speleodb_release_best_effort(&p);
         }
     }
 
@@ -311,6 +385,21 @@ impl AppState {
         project_id: &str,
     ) -> Option<super::speleodb_session::LockClaim> {
         self.speleodb_forget_lock_acquired_inner(project_id, None)
+    }
+
+    /// [`AppState::speleodb_forget_lock_acquired_for`] for the account a release
+    /// was captured for, which is not necessarily the one signed in by the time
+    /// it runs: an instance switch captures the release, forgets the session,
+    /// and only then sends it. Matching the live session there found nothing, so
+    /// the claim could neither end on success nor come back on failure.
+    pub(super) fn speleodb_forget_claim_released_by(
+        &self,
+        params: &LockReleaseParams,
+    ) -> Option<super::speleodb_session::LockClaim> {
+        self.speleodb_forget_lock_acquired_inner(
+            &params.project_id,
+            Some((&params.endpoint, &params.email)),
+        )
     }
 
     /// Shared body of the two above. `as_account` overrides the identity the claim
@@ -466,12 +555,10 @@ impl AppState {
                 }))
             });
             if !ran {
-                // No managed state to consult (unit tests, pre-`setup`): the raw
-                // POST this always did.
-                let _ = tx.send(
-                    client::release_lock(&p.endpoint, &p.token, p.insecure_http, &p.project_id)
-                        .map(|_| ()),
-                );
+                // No managed state to consult (unit tests, pre-`setup`): no
+                // reclaim check is possible, but the holder check still is - a
+                // release is never sent for a lock the server does not say is ours.
+                let _ = tx.send(release_if_held_by_us(&p).map(|_| ()));
             }
         });
         Some(rx)
@@ -646,54 +733,21 @@ mod tests {
 
     const PID: &str = "22222222-2222-2222-2222-222222222222";
 
-    /// A loopback SpeleoDB that answers EVERY request 200 with a minimal project
-    /// body and records each request line, so a test can assert that a release
-    /// did - or did not - reach the server. Never blocks a test that expects no
-    /// traffic, unlike a one-shot stub whose `join` would wait forever.
+    /// A loopback SpeleoDB on which the fixture account (`u@x`) holds [`PID`]'s
+    /// lock, recording each request line so a test can assert whether a release
+    /// reached the server. Never blocks a test that expects no traffic, unlike a
+    /// one-shot stub whose `join` would wait forever.
     fn recording_server() -> (String, Arc<Mutex<Vec<String>>>) {
-        use std::io::{Read as _, Write as _};
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let port = listener.local_addr().expect("addr").port();
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let log = Arc::clone(&seen);
-        std::thread::spawn(move || {
-            while let Ok((mut stream, _)) = listener.accept() {
-                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
-                let mut req = Vec::new();
-                let mut chunk = vec![0u8; 8 * 1024];
-                while let Ok(n) = stream.read(&mut chunk) {
-                    if n == 0 {
-                        break;
-                    }
-                    req.extend_from_slice(&chunk[..n]);
-                }
-                let line = String::from_utf8_lossy(&req)
-                    .lines()
-                    .next()
-                    .unwrap_or_default()
-                    .to_owned();
-                log.lock().expect("log").push(line);
-                let body = crate::core::state::tests_support::sdk_fixture(&format!(
-                    r#"{{"id":"{PID}","name":"Remote"}}"#
-                ));
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(resp.as_bytes());
-                let _ = stream.flush();
-            }
-        });
-        (format!("http://127.0.0.1:{port}"), seen)
+        holder_server(Some("u@x"))
+    }
+
+    /// [`recording_server`] with the lock held by `holder` instead (or by nobody).
+    fn holder_server(holder: Option<&'static str>) -> (String, Arc<Mutex<Vec<String>>>) {
+        crate::core::state::tests_support::lock_server(PID, holder.map(str::to_owned))
     }
 
     fn release_requests(seen: &Arc<Mutex<Vec<String>>>) -> usize {
-        seen.lock()
-            .expect("log")
-            .iter()
-            .filter(|line| line.contains("/release"))
-            .count()
+        crate::core::state::tests_support::release_posts(seen)
     }
 
     /// An editing session on SpeleoDB project [`PID`] whose copy lives at the
@@ -771,15 +825,112 @@ mod tests {
 
     type Release = fn(&AppState);
 
-    fn every_lifecycle_release() -> [(&'static str, Release); 4] {
+    fn every_lifecycle_release() -> [(&'static str, Release); 5] {
         [
             ("close", AppState::speleodb_release_held_lock_on_close),
             ("switch", AppState::speleodb_release_held_lock_detached),
             ("exit / update restart", |state| {
-                state.speleodb_release_held_lock_bounded(std::time::Duration::from_secs(2));
+                state.speleodb_release_held_lock_bounded(std::time::Duration::from_secs(5));
             }),
             ("logout", AppState::speleodb_release_held_lock_best_effort),
+            // A settings save or reload that moves to another account or instance:
+            // the release is captured under the settings lock and sent after it.
+            ("account switch", |state| {
+                if let Some(params) = state.speleodb_logout_drop_gates_deferring_release() {
+                    state.speleodb_release_best_effort(&params);
+                }
+            }),
         ]
+    }
+
+    /// Whether the server was asked who holds the lock.
+    fn holder_reads(seen: &Arc<Mutex<Vec<String>>>) -> usize {
+        seen.lock()
+            .expect("log")
+            .iter()
+            .filter(|line| line.starts_with("GET") && line.contains(PID))
+            .count()
+    }
+
+    #[test]
+    fn no_lifecycle_release_frees_a_lock_this_account_does_not_hold() {
+        // lock#4: the server lets an ADMIN release anybody's mutex. A session whose
+        // lock was force-unlocked on the web and then taken by someone else used to
+        // POST the release anyway on close / quit / switch / logout - freeing the
+        // new holder's live lock for the next writer to lock and push over. Every
+        // lifecycle path now asks first, and sends nothing for a lock held by
+        // another account or by nobody; the local claim simply ends.
+        for (name, release) in every_lifecycle_release() {
+            for holder in [Some("someone.else@x"), None] {
+                let (server, seen) = holder_server(holder);
+                let (_temp, _root, _path, state) = managed_editing_session(&server);
+                release(&state);
+                settle();
+                assert!(
+                    holder_reads(&seen) >= 1,
+                    "{name} / {holder:?}: the holder was asked first"
+                );
+                assert_eq!(
+                    release_requests(&seen),
+                    0,
+                    "{name} / {holder:?}: nothing was released"
+                );
+                assert!(
+                    !state.speleodb_lock_acquired_here(PID),
+                    "{name} / {holder:?}: the local claim is over"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_unreadable_holder_is_never_released_blind() {
+        // When the holder cannot be read, the release is NOT sent - never a blind
+        // fallback. Where the caller is still around to keep it (close, logout,
+        // account switch), the claim survives as the pointer a later
+        // holder-checked retry needs: the no-project janitor, or the held-lock
+        // prompt after the next sign-in.
+        for (name, release) in every_lifecycle_release() {
+            let (server, seen) = crate::core::state::tests_support::lock_server_unreadable(PID);
+            let (_temp, _root, _path, state) = managed_editing_session(&server);
+            release(&state);
+            settle();
+            assert!(holder_reads(&seen) >= 1, "{name}: the holder was asked");
+            assert_eq!(release_requests(&seen), 0, "{name}: nothing sent blind");
+            if !matches!(name, "switch" | "exit / update restart") {
+                assert!(
+                    state.speleodb_lock_acquired_here(PID),
+                    "{name}: the claim is kept for a later retry"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_exit_holder_check_fits_inside_the_exit_budget() {
+        // A server that accepts the connection and never answers: the holder read
+        // must give up inside the exit wait (5 s) rather than eat all of it, and
+        // giving up must not turn into a release.
+        let silent = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let server = format!(
+            "http://127.0.0.1:{}",
+            silent.local_addr().expect("addr").port()
+        );
+        let (_temp, _root, _path, state) = managed_editing_session(&server);
+        let started = std::time::Instant::now();
+        state.speleodb_release_held_lock_bounded(std::time::Duration::from_secs(5));
+        let waited = started.elapsed();
+        assert!(
+            waited < std::time::Duration::from_millis(4_500),
+            "the holder read is bounded by HOLDER_CHECK_TIMEOUT, not the exit wait: {waited:?}"
+        );
+        assert!(
+            waited
+                >= super::HOLDER_CHECK_TIMEOUT
+                    .saturating_sub(std::time::Duration::from_millis(200)),
+            "and it really waited for the read rather than skipping it: {waited:?}"
+        );
+        drop(silent);
     }
 
     #[test]

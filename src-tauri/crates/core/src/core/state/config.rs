@@ -121,12 +121,7 @@ impl AppState {
     /// Best-effort, exactly like the logout release it is split from.
     fn finish_config_write(&self, after: AfterConfigWrite) {
         if let Some(params) = after.release {
-            self.speleodb_release_best_effort(
-                &params.endpoint,
-                &params.token,
-                params.insecure_http,
-                &params.project_id,
-            );
+            self.speleodb_release_best_effort(&params);
         }
     }
 

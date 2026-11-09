@@ -483,6 +483,18 @@ pub fn get_project_probe(
 ) -> Result<Project, SpeleoDbError> {
     get_project_inner(base, token, insecure, id, Duration::from_secs(5), false)
 }
+/// [`get_project_probe`] with a caller-chosen total budget, for a probe that has
+/// to fit inside a larger deadline (the lifecycle release's holder check runs
+/// inside the app-exit wait).
+pub fn get_project_probe_within(
+    base: &str,
+    token: &str,
+    insecure: bool,
+    id: &str,
+    timeout: Duration,
+) -> Result<Project, SpeleoDbError> {
+    get_project_inner(base, token, insecure, id, timeout, false)
+}
 fn get_project_inner(
     base: &str,
     token: &str,

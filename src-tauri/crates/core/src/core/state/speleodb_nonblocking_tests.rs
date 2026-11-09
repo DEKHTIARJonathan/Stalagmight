@@ -363,7 +363,11 @@ fn config_writes_do_not_wait_behind_an_instance_change_release() {
     // for it on the main thread.
     let dir = tempfile::tempdir().expect("temp dir");
     with_isolated_config(|| {
-        let server = ScriptedServer::start(vec![reply(200, &project_held_by(ME), true)]);
+        // The holder check answers first (lock#4), then the release POST is held.
+        let server = ScriptedServer::start(vec![
+            reply(200, &project_held_by(ME), false),
+            reply(200, &project_held_by(ME), true),
+        ]);
         let state = editing_session(dir.path(), &server.url);
         let config = ConfigHandoff::capture();
         let (done, finished) = mpsc::channel();

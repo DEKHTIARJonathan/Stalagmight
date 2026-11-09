@@ -1124,6 +1124,15 @@ impl AppState {
         //
         // Only that one failure keeps. Everything else answers as before, so a corrupt
         // dump with nothing local at stake still hands back a lock we took.
+        // Holder-checked against OUR email (lock#4): with no email to compare
+        // against, the server's holder can never match and nothing is released.
+        let unwind_params = super::speleodb_lock_release::LockReleaseParams {
+            endpoint: endpoint.clone(),
+            token: token.clone(),
+            email: me.clone().unwrap_or_default(),
+            insecure_http,
+            project_id: link.project_id.clone(),
+        };
         let release_unless_kept = |failure: Option<&SpeleoDbError>| {
             if keep_lock_on_unwind || failure.is_some_and(is_local_edits_refusal) {
                 return;
@@ -1131,13 +1140,7 @@ impl AppState {
             // Session-aware since F7/F8: same session releases exactly as before;
             // a moved one never touches the record and stands down for a
             // successor's claim. See `speleodb_unwind_release`.
-            self.speleodb_unwind_release(
-                &endpoint,
-                &token,
-                insecure_http,
-                &link.project_id,
-                entry_gen,
-            );
+            self.speleodb_unwind_release(&unwind_params, entry_gen);
         };
 
         // Acquire the lock. A 400 is the server's "someone else holds it" signal;
@@ -1512,18 +1515,19 @@ impl AppState {
     /// establish over a project with un-pushed edits, and for any lock whose unwind is
     /// the local-edits refusal - the pull cache answering that IT holds work the open
     /// project's link never carried (see there).
+    ///
+    /// Holder-checked like every automatic release (lock#4): the POST is sent only
+    /// when SpeleoDB names this account as the holder
+    /// ([`super::speleodb_lock_release::release_if_held_by_us`]).
     pub(super) fn speleodb_release_best_effort(
         &self,
-        endpoint: &str,
-        token: &str,
-        insecure_http: bool,
-        project_id: &str,
+        params: &super::speleodb_lock_release::LockReleaseParams,
     ) {
         // The shared sink for start-editing's abort arms, the publish push and -
-        // through `speleodb_release_held_lock_*` - close / logout / unlink /
-        // take-remote, so the acquisition record is dropped here whether or not the
-        // POST lands: a release we asked for ends the claim, and one that failed
-        // leaves a lock this process can no longer account for.
+        // through `speleodb_release_held_lock_*` - logout / unlink / take-remote /
+        // the instance switch, so this project's claim ends here: a lock the server
+        // confirms released, or confirms is not ours, is no longer this process's
+        // to account for.
         //
         // Keyed on `project_id`, like `speleodb_release_lock`. It used to clear
         // whatever was recorded, on the grounds that clearing a record naming some
@@ -1532,14 +1536,19 @@ impl AppState {
         // claim can be a live pointer to a mutex still held on another project
         // (the janitor's retry after a transient failure). This releases one
         // project's lock, so it may end one project's claim.
-        self.speleodb_forget_lock_acquired_for(project_id);
-        if let Err(e) = client::release_lock(endpoint, token, insecure_http, project_id) {
+        let claim = self.speleodb_forget_claim_released_by(params);
+        if let Err(e) = super::speleodb_lock_release::release_if_held_by_us(params) {
             tracing::warn!(
                 error = %e,
-                project_id,
-                purpose = "release a lock taken before a no-edit reconcile outcome",
-                "speleodb_start_editing: failed to release lock"
+                project_id = %params.project_id,
+                purpose = "release a held SpeleoDB write lock",
+                "speleodb: lock release failed; the claim is kept for a later holder-checked retry"
             );
+            // Unknown outcome: the holder could not be read, or the POST failed.
+            // The mutex may still be ours and the claim is the only local pointer
+            // to it, so it goes back - as a pointer, never as an edit session - for
+            // the next close or the no-project janitor to retry.
+            self.speleodb_restore_lock_claim(claim);
         }
     }
 
@@ -4046,6 +4055,7 @@ mod tests {
         let accept_on = listener.try_clone().expect("clone listener");
         let log = std::sync::Arc::clone(&seen);
         std::thread::spawn(move || {
+            let held = std::sync::Mutex::new(None);
             while let Ok((mut stream, _)) = accept_on.accept() {
                 // Drain the request until the socket goes quiet, then answer.
                 let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
@@ -4058,10 +4068,17 @@ mod tests {
                     req.extend_from_slice(&chunk[..n]);
                 }
                 let text = String::from_utf8_lossy(&req).into_owned();
+                let line = text.lines().next().unwrap_or_default().to_owned();
                 if let Ok(mut lines) = log.lock() {
-                    lines.push(text.lines().next().unwrap_or_default().to_owned());
+                    lines.push(line.clone());
                 }
-                let body = crate::core::state::tests_support::sdk_fixture(&body);
+                // The server's mutex follows this flow's own acquire and release,
+                // which the holder-checked release reads back (lock#4).
+                let body = crate::core::state::tests_support::sdk_fixture(
+                    &crate::core::state::tests_support::with_tracked_mutex(
+                        &line, body, &held, "u@x",
+                    ),
+                );
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -4101,6 +4118,7 @@ mod tests {
         let log = std::sync::Arc::clone(&seen);
         std::thread::spawn(move || {
             let probe_path = format!("/projects/{REMOTE_ID}/");
+            let held = std::sync::Mutex::new(None);
             while let Ok((mut stream, _)) = accept_on.accept() {
                 let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
                 let mut req = Vec::new();
@@ -4116,12 +4134,21 @@ mod tests {
                 if let Ok(mut lines) = log.lock() {
                     lines.push(line.clone());
                 }
-                let is_probe = line.starts_with("GET ")
+                // Only the PRE-acquire probe fails: once this flow's acquire has
+                // landed, the release's own holder check (lock#4) reads the
+                // recovered server, which reports the mutex this flow took.
+                let acquired = held.lock().is_ok_and(|held| held.is_some());
+                let is_probe = !acquired
+                    && line.starts_with("GET ")
                     && line
                         .split_whitespace()
                         .nth(1)
                         .is_some_and(|path| path.ends_with(&probe_path));
-                let body = crate::core::state::tests_support::sdk_fixture(&body);
+                let body = crate::core::state::tests_support::sdk_fixture(
+                    &crate::core::state::tests_support::with_tracked_mutex(
+                        &line, body, &held, "u@x",
+                    ),
+                );
                 let resp = if is_probe {
                     "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\
                      Connection: close\r\n\r\n"
