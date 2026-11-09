@@ -330,8 +330,9 @@ retention for failed writes. Error text is for display; it does not determine sy
 or ownership decisions. Diagnostic transport errors omit request URLs. A TLS
 handshake or certificate failure is classified as TLS from the typed `rustls`
 error. A 2xx body that does not match the SDK contract (for example a new server
-enum value) is a parse error: it keeps the SDK decoder detail, with quoted
-response strings redacted and the length capped, is logged with the endpoint
+enum value) is a parse error: it keeps the SDK decoder detail, with every
+response value redacted (serde's quoted strings and its backticked numbers,
+variants and field names) and the length capped, is logged with the endpoint
 kind, and is counted as its own `parse-error` traffic outcome (docs/telemetry.md).
 
 Revision times arrive as New York wall time with no zone (`YYYY/MM/DD HH:MM`).

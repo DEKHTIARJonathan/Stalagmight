@@ -930,7 +930,9 @@ fn a_contract_mismatch_keeps_the_sdk_decoder_detail_without_response_text() {
         detail.contains("response does not match the SpeleoDB SDK contract: "),
         "{detail}"
     );
-    assert!(detail.contains("unknown variant `ZZ`"), "{detail}");
+    // The kind of mismatch survives; the server's value does not.
+    assert!(detail.contains("unknown variant `...`"), "{detail}");
+    assert!(!detail.contains("ZZ"), "{detail}");
     assert!(
         detail.chars().count() <= 340,
         "the accepted-values list is capped: {detail}"
@@ -948,6 +950,17 @@ fn a_contract_mismatch_keeps_the_sdk_decoder_detail_without_response_text() {
     let detail = err.to_string();
     assert!(detail.contains("invalid type: string \"...\""), "{detail}");
     assert!(!detail.contains("sensitive"), "{detail}");
+
+    // serde prints a number in backticks, not quotes: a coordinate where a string
+    // belongs must not reach the log or the error either.
+    let mut number_for_text = project_json();
+    number_for_text["name"] = json!(20.48);
+    let s = Server::json(number_for_text);
+    let err = acquire_lock(&s.base, "t", false, ID).unwrap_err();
+    s.finish();
+    let detail = err.to_string();
+    assert!(detail.contains("floating point `...`"), "{detail}");
+    assert!(!detail.contains("20.48"), "{detail}");
 }
 
 #[test]
@@ -963,6 +976,32 @@ fn contract_mismatch_detail_is_redacted_and_bounded() {
         )),
         r#"response does not match the SpeleoDB SDK contract: invalid value: string "...", expected x at line 1 column 9"#
     );
+    // serde's backtick spans carry server values too: numbers, unknown variants
+    // and unknown field names. Backslashes in them are verbatim, not escapes.
+    for (message, expected) in [
+        (
+            "failed to deserialize 2xx response body: invalid type: floating point `20.48`, expected a string at line 1 column 42",
+            "invalid type: floating point `...`, expected a string at line 1 column 42",
+        ),
+        (
+            "invalid value: integer `-87`, expected u32",
+            "invalid value: integer `...`, expected u32",
+        ),
+        (
+            "unknown variant `Synthetic\\`, expected `PRIVATE` or `PUBLIC`",
+            "unknown variant `...`, expected `...` or `...`",
+        ),
+        (
+            "unknown field `coords`, then a string \"Cave \\\"A\\\"\"",
+            "unknown field `...`, then a string \"...\"",
+        ),
+    ] {
+        assert_eq!(
+            contract_mismatch(Some(message.into())),
+            format!("response does not match the SpeleoDB SDK contract: {expected}"),
+            "{message}"
+        );
+    }
     let long = format!(
         "unknown variant `ZZ`, expected one of {}",
         "`AA`, ".repeat(400)
@@ -1069,5 +1108,6 @@ fn a_profile_contract_mismatch_also_keeps_the_decoder_detail() {
     let err = fetch_user_email(&s.base, "t", false).unwrap_err();
     s.finish();
     assert!(matches!(&err, SpeleoDbError::Parse(_)), "got {err:?}");
-    assert!(err.to_string().contains("unknown variant `ZZ`"), "{err}");
+    assert!(err.to_string().contains("unknown variant `...`"), "{err}");
+    assert!(!err.to_string().contains("ZZ"), "{err}");
 }

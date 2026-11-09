@@ -336,11 +336,12 @@ const CONTRACT_DETAIL_LIMIT: usize = 240;
 
 /// The [`SpeleoDbError::Parse`] text for a 2xx reply the SDK could not decode.
 ///
-/// Keeps the SDK's decoder detail (which field or enum value failed, and where)
-/// so the log and the error dialog can name the mismatch (sdk#8). Quoted
-/// response strings are redacted - serde quotes the offending VALUE for a type
-/// mismatch, and that can be user text such as a project description - and the
-/// detail is capped at [`CONTRACT_DETAIL_LIMIT`] characters.
+/// Keeps the SDK's decoder detail (what kind of mismatch, and where) so the log
+/// and the error dialog can name it (sdk#8). Every response value in it is
+/// redacted: serde quotes a string value (`string "..."`, which can be user text
+/// such as a project description) and puts numbers, unknown variants and unknown
+/// field names in backticks (`` floating point `20.48` ``, which can be a cave's
+/// coordinates). The detail is capped at [`CONTRACT_DETAIL_LIMIT`] characters.
 fn contract_mismatch(detail: Option<String>) -> String {
     const MISMATCH: &str = "response does not match the SpeleoDB SDK contract";
     let Some(detail) = detail else {
@@ -348,19 +349,24 @@ fn contract_mismatch(detail: Option<String>) -> String {
     };
     let mut redacted = String::with_capacity(detail.len());
     let mut chars = detail.chars();
-    let mut quoted = false;
+    // The delimiter of the response value being skipped, while inside one.
+    let mut open: Option<char> = None;
     while let Some(c) = chars.next() {
-        match (quoted, c) {
-            (false, '"') => {
-                quoted = true;
-                redacted.push_str("\"...\"");
+        match (open, c) {
+            (None, '"' | '`') => {
+                open = Some(c);
+                redacted.push(c);
+                redacted.push_str("...");
+                redacted.push(c);
             }
-            (true, '"') => quoted = false,
-            (true, '\\') => {
+            (Some(delimiter), c) if c == delimiter => open = None,
+            // Only a quoted string escapes (it is Debug-formatted); a backtick span
+            // is the value verbatim.
+            (Some('"'), '\\') => {
                 chars.next();
             }
-            (true, _) => {}
-            (false, c) => redacted.push(c),
+            (Some(_), _) => {}
+            (None, c) => redacted.push(c),
         }
     }
     let detail = redacted
