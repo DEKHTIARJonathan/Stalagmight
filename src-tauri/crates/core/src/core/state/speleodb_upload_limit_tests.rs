@@ -82,7 +82,10 @@ fn a_snapshot_within_the_limit_uploads_unchanged() {
     let dir = tempfile::tempdir().expect("temp");
     let snapshot = snapshot_with_history(dir.path(), "within");
     let before = std::fs::read(&snapshot).expect("bytes");
-    assert!(undo_rows(&snapshot) > 0, "precondition: history in the copy");
+    assert!(
+        undo_rows(&snapshot) > 0,
+        "precondition: history in the copy"
+    );
 
     let omitted = fit_snapshot_to_upload_limit(&snapshot, true, size(&snapshot))
         .expect("a file at the limit fits");
@@ -160,10 +163,18 @@ fn the_too_large_refusal_reads_clearly_and_fails_closed() {
     );
     assert_eq!(dto.action, SpeleoDbAction::Fatal);
     assert_eq!(dto.status, None);
-    assert!(dto.message.contains("too large to upload"), "{}", dto.message);
+    assert!(
+        dto.message.contains("too large to upload"),
+        "{}",
+        dto.message
+    );
     assert!(dto.message.contains("31.2 MB"), "{}", dto.message);
     assert!(dto.message.contains("24.7 MB"), "{}", dto.message);
-    assert!(dto.message.contains("Nothing was uploaded"), "{}", dto.message);
+    assert!(
+        dto.message.contains("Nothing was uploaded"),
+        "{}",
+        dto.message
+    );
 }
 
 #[test]

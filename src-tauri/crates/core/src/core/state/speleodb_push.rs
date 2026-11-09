@@ -103,9 +103,9 @@ pub(super) fn fit_snapshot_to_upload_limit(
     limit: u64,
 ) -> Result<bool, SpeleoDbError> {
     let size_of = |path: &Path| {
-        std::fs::metadata(path).map(|m| m.len()).map_err(|e| {
-            SpeleoDbError::Io(format!("could not read the push snapshot size: {e}"))
-        })
+        std::fs::metadata(path)
+            .map(|m| m.len())
+            .map_err(|e| SpeleoDbError::Io(format!("could not read the push snapshot size: {e}")))
     };
     let size = size_of(snapshot)?;
     if size <= limit {

@@ -860,7 +860,10 @@ fn contract_mismatch_detail_is_redacted_and_bounded() {
         )),
         r#"response does not match the SpeleoDB SDK contract: invalid value: string "...", expected x at line 1 column 9"#
     );
-    let long = format!("unknown variant `ZZ`, expected one of {}", "`AA`, ".repeat(400));
+    let long = format!(
+        "unknown variant `ZZ`, expected one of {}",
+        "`AA`, ".repeat(400)
+    );
     let capped = contract_mismatch(Some(long));
     assert!(capped.ends_with("..."));
     assert!(capped.chars().count() < 320, "{capped}");
@@ -933,7 +936,13 @@ fn an_upload_over_the_server_limit_is_refused_before_any_request() {
     let s = Server::replies(Vec::new());
     let err = upload_stalx(&s.base, "t", false, ID, f.path(), "Too large").unwrap_err();
     assert!(
-        matches!(err, SpeleoDbError::UploadTooLarge { size: 30, limit: 16 }),
+        matches!(
+            err,
+            SpeleoDbError::UploadTooLarge {
+                size: 30,
+                limit: 16
+            }
+        ),
         "got {err:?}"
     );
     assert!(s.finish().is_empty(), "nothing may reach the server");
