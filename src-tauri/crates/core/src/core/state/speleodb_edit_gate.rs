@@ -278,6 +278,31 @@ impl AppState {
             .locks_acquired_here
             .push(LockClaim::taken(project_id, endpoint, email, false));
     }
+
+    /// [`Self::speleodb_record_unbound_claim`], marked KEPT: the pointer to a lock
+    /// held back on purpose because un-uploaded work stands behind it, which no
+    /// automatic release may hand back (the stranded-claim cleanup and the
+    /// lifecycle releases skip kept claims). Start Editing's unwind leaves one
+    /// when the cache copy refuses to be overwritten over its own un-uploaded
+    /// edits - the lock this call just took is then the one guarding that work,
+    /// and without a claim it was held with nothing local pointing at it. Only an
+    /// explicit Release, an abandon, or a new edit session's binding ends it.
+    pub(super) fn speleodb_record_kept_claim(&self, project_id: &str) {
+        self.speleodb_record_unbound_claim(project_id);
+        self.speleodb_keep_lock_deliberately(project_id);
+    }
+
+    /// Whether the signed-in account's claim on `project_id` is deliberately kept
+    /// (see `LockClaim::kept`).
+    pub(super) fn speleodb_claim_is_kept(&self, project_id: &str) -> bool {
+        self.speleodb_session_lock().is_ok_and(|session| {
+            session.locks_acquired_here.iter().any(|claim| {
+                claim.project_id == project_id
+                    && claim.is_kept()
+                    && claim.taken_by(session.endpoint.as_deref(), session.email.as_deref())
+            })
+        })
+    }
 }
 
 /// The account a fixture edit session is held by when the test signed nobody in.

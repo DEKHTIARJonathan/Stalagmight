@@ -290,19 +290,30 @@ Editing inherited it.
 - A claim whose release failed is kept as an unbound pointer for a later retry.
   It opens nothing.
 
-Every automatic release (close, project switch, quit, restart-to-update, logout,
-account switch, unlink, Take remote, delete, Start Editing's unwind and the
-stranded-claim cleanup) first reads the lock holder, capped at 2 seconds so it
-fits inside the 5-second exit and update-restart wait, and sends the release only
-when the server names the signed-in account. Another account's lock is never
-released, even when that account is an administrator's. When someone else or
-nobody holds the lock, the local claim ends and nothing is sent. When the holder
-cannot be read, nothing is sent: the claim is kept, the stranded-claim cleanup
-retries it on a later status refresh with no project open, and on quit or update
-the lock stays held for the next sign-in's held-lock prompt. These releases are
-decided from the claim, never from the gate, so a session whose gate a lost lock
-or a sign-out already shut still ends its claim. The un-uploaded-work rule above
-applies to all of them except the explicit discard paths.
+Every release - automatic (close, project switch, quit, restart-to-update, logout,
+account switch, unlink, Take remote, delete, Start Editing's unwind, the
+stranded-claim cleanup) or explicit (Save Changes and release with nothing to
+upload, the held-lock prompt's Release, Switch to Read Only) - first reads the lock
+holder and sends the release only when the server names the signed-in account.
+The automatic paths cap that read at 2 seconds so it fits inside the 5-second exit
+and update-restart wait. Another account's lock is never released, even when the
+signed-in account is an administrator, whom the server would let release anybody's.
+When someone else or nobody holds the lock, the local claim ends, the gate shuts
+and nothing is sent. When the holder cannot be read, nothing is sent and the claim
+is kept: an explicit verb reports the failure (Save Changes stays in editing), the
+stranded-claim cleanup retries on a later status refresh with no project open, and
+on quit or update the lock stays held for the next sign-in's held-lock prompt.
+Automatic releases are decided from the claim, never from the gate, so a session
+whose gate a lost lock or a sign-out already shut still ends its claim. The
+un-uploaded-work rule above applies to all of them except the explicit discard
+paths, and a claim deliberately kept (an earlier veto, Keep the lock, or the case
+below) is left alone by every automatic release.
+
+When Start Editing's fast-forward refuses to overwrite the managed cache copy
+because it holds un-uploaded work the open copy does not show, the lock it just
+took is kept, as before, and now also recorded as a kept claim, so it is no longer
+held with nothing local pointing at it. Only an explicit Release, an abandon or a
+new edit session ends it.
 
 An acquire that fails with a transport error, a 5xx or an unreadable reply may
 still have taken the lock. Start Editing then reads the holder again. If it is

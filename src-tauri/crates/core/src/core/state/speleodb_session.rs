@@ -305,6 +305,34 @@ impl AppState {
     /// Called ONLY from inside Start Editing's lock-ops span - hence the
     /// `_locked` reclaim variant; taking `speleodb_lock_ops` here would
     /// self-deadlock. Both arms are holder-checked (lock#4).
+    pub(super) fn speleodb_unwind_unless_kept(
+        &self,
+        keep_lock_on_unwind: bool,
+        failure: Option<&SpeleoDbError>,
+        params: &LockReleaseParams,
+        entry_gen: u64,
+    ) {
+        // Rule one (see Start Editing): an inherited lock, or one of unknown
+        // provenance over un-uploaded edits, is left exactly as it was found.
+        if keep_lock_on_unwind {
+            return;
+        }
+        // Rule two: the cache copy refused to be overwritten over its own
+        // un-uploaded work, so the lock this call took is the one guarding it.
+        // Keep it - and keep a pointer to it, marked kept so no automatic release
+        // hands it back over that work. It used to be kept with no claim at all:
+        // held, with nothing local left to find it.
+        if failure.is_some_and(super::speleodb::is_local_edits_refusal) {
+            self.speleodb_record_kept_claim(&params.project_id);
+            return;
+        }
+        // Session-aware since F7/F8: same session releases exactly as before; a
+        // moved one never touches the record and stands down for a successor's
+        // claim.
+        self.speleodb_unwind_release(params, entry_gen);
+    }
+
+    /// The release half of [`Self::speleodb_unwind_unless_kept`].
     pub(super) fn speleodb_unwind_release(&self, params: &LockReleaseParams, entry_gen: u64) {
         if self.speleodb_session_generation() == entry_gen {
             self.speleodb_release_best_effort(params);
@@ -1670,7 +1698,7 @@ mod tests {
             "both success arms must commit through the session guard"
         );
         assert!(
-            body.contains("self.speleodb_unwind_release("),
+            body.contains("self.speleodb_unwind_unless_kept("),
             "the unwind must route through the session-aware release"
         );
         assert!(

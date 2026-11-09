@@ -154,7 +154,7 @@ pub(super) fn lock_held_by_me(holder: Option<&str>, me: Option<&str>) -> bool {
 /// Both mean the same thing to a lock decision - work that exists only here may be
 /// behind that mutex - so both keep it. See `speleodb_start_editing`'s unwind, whose
 /// pre-acquire flag cannot see a copy other than the open project's.
-fn is_local_edits_refusal(err: &SpeleoDbError) -> bool {
+pub(super) fn is_local_edits_refusal(err: &SpeleoDbError) -> bool {
     matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. })
 }
 
@@ -1012,10 +1012,12 @@ impl AppState {
         // `speleodb_lock_release_params` already encodes: never silently release a
         // lock whose project still holds edits the server has not seen.
         //
-        // Nothing touches the acquisition record on the skip path, deliberately: the
-        // record is dropped by RELEASING (in `speleodb_release_best_effort`), and a
-        // release we declined to make ends no claim. `acquired_here` is false on both
-        // skip paths, so this call mints nothing either - record and lock stay in step.
+        // Nothing touches the acquisition record on the first rule's skip path,
+        // deliberately: the record is dropped by RELEASING (in
+        // `speleodb_release_best_effort`), and a release we declined to make ends no
+        // claim. `acquired_here` is false there, so this call mints nothing either -
+        // record and lock stay in step. (The second rule's skip leaves a kept
+        // pointer, below.)
         //
         // `failure` is the SECOND keep rule, and the reason this takes the error at
         // all. `keep_lock_on_unwind` is decided BEFORE the acquire and reads the OPEN
@@ -1030,7 +1032,13 @@ impl AppState {
         // per-probe because it is knowledge that only exists after the acquire.
         //
         // Only that one failure keeps. Everything else answers as before, so a corrupt
-        // dump with nothing local at stake still hands back a lock we took.
+        // dump with nothing local at stake still hands back a lock we took. And when it
+        // keeps a lock the FIRST rule would have released - one this call took, or
+        // unknown provenance over a clean open copy - it leaves a KEPT claim behind:
+        // without one that lock was held with nothing local pointing at it, so no
+        // close, cleanup or held-lock decision of this process could ever find it
+        // again. Kept, so no automatic release hands it back over the cache copy's
+        // un-uploaded work; an explicit Release, or the next edit session, ends it.
         // Holder-checked against OUR email (lock#4): with no email to compare
         // against, the server's holder can never match and nothing is released.
         let unwind_params = super::speleodb_lock_release::LockReleaseParams {
@@ -1041,13 +1049,12 @@ impl AppState {
             project_id: link.project_id.clone(),
         };
         let release_unless_kept = |failure: Option<&SpeleoDbError>| {
-            if keep_lock_on_unwind || failure.is_some_and(is_local_edits_refusal) {
-                return;
-            }
-            // Session-aware since F7/F8: same session releases exactly as before;
-            // a moved one never touches the record and stands down for a
-            // successor's claim. See `speleodb_unwind_release`.
-            self.speleodb_unwind_release(&unwind_params, entry_gen);
+            self.speleodb_unwind_unless_kept(
+                keep_lock_on_unwind,
+                failure,
+                &unwind_params,
+                entry_gen,
+            );
         };
 
         // Acquire the lock. A 400 is the server's "someone else holds it" signal;
@@ -1397,13 +1404,34 @@ impl AppState {
         // freshly acquired server mutex held and unaccounted for. Inside the
         // span the acquire runs wholly before this command or wholly after it.
         let _lock_ops = self.speleodb_lock_ops_guard();
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
-        self.speleodb_handle_auth(
-            Endpoint::Release,
-            client::release_lock(&endpoint, &token, insecure_http, &project_id),
-        )
-        .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
+        let (endpoint, token, email) = self.speleodb_active_account().map_err(local_dto)?;
+        // Holder-checked like every release (lock#4): an explicit Release is aimed
+        // at OUR lock, and the server would honour an admin's release of anybody's.
+        // A lock somebody else holds now (or nobody) is not ours to free, so the
+        // claim simply ends below; a holder that cannot be read is an error with
+        // nothing sent and the claim kept, never a blind release.
+        let released = self
+            .speleodb_handle_auth(
+                Endpoint::Release,
+                super::speleodb_lock_release::release_if_held_by_us(
+                    &super::speleodb_lock_release::LockReleaseParams {
+                        endpoint,
+                        token,
+                        email,
+                        insecure_http: self.speleodb_insecure_http(),
+                        project_id: project_id.clone(),
+                    },
+                ),
+            )
+            .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
+        if released == super::speleodb_lock_release::HolderCheckedRelease::NotHeldByUs {
+            tracing::info!(
+                project_id = %project_id,
+                purpose = "never release another account's lock (lock#4)",
+                "speleodb: release requested for a lock this account no longer holds; \
+                 ending the local claim only"
+            );
+        }
         // Whichever project's lock that was, this process no longer holds it, so an
         // acquisition recorded for it is over - and when it was the open project's
         // edit session, ending its claim shuts the gate with it
@@ -4327,6 +4355,72 @@ mod tests {
     }
 
     #[test]
+    fn a_lock_kept_for_the_cache_copys_work_leaves_a_kept_claim() {
+        // The stranded lock: Start Editing took the lock, the fast-forward's re-pull
+        // was refused because the CACHE copy holds un-uploaded work the clean open
+        // copy does not show, and the unwind rightly kept the lock - with no claim,
+        // so nothing in this process could ever find it again. Fed the REAL refusal.
+        let temp = TempDir::new().expect("temp dir");
+        let (server, seen) =
+            crate::core::state::tests_support::lock_server(GUARD_ID, Some("u@x".to_owned()));
+        let state = AppState::new().expect("state");
+        *state.speleodb.lock().expect("session lock") = authed_session_at(&server);
+        let dirty = temp.path().join("dirty.stalx");
+        seed_linked_stalx(&dirty, GUARD_ID, true);
+        let refused = state
+            .guard_local_edits(GUARD_ID, &dirty)
+            .expect_err("un-pushed edits veto the replace");
+        let params = super::super::speleodb_lock_release::LockReleaseParams {
+            endpoint: server.clone(),
+            token: "tok-1".to_owned(),
+            email: "u@x".to_owned(),
+            insecure_http: true,
+            project_id: GUARD_ID.to_owned(),
+        };
+
+        // `false`: the probe found the mutex free, so this call took the lock.
+        state.speleodb_unwind_unless_kept(
+            false,
+            Some(&refused),
+            &params,
+            state.speleodb_session_generation(),
+        );
+
+        let posts = || crate::core::state::tests_support::release_posts(&seen);
+        assert_eq!(posts(), 0, "the lock guarding that work is kept");
+        assert!(state.speleodb_holds_claim(GUARD_ID), "with a pointer to it");
+        assert!(state.speleodb_claim_is_kept(GUARD_ID), "marked kept");
+        assert!(
+            !state.speleodb_lock_acquired_here(GUARD_ID),
+            "and licensing no authorship"
+        );
+
+        // No automatic release hands it back over the cache copy's work: not the
+        // stranded-claim cleanup (no project is open here)...
+        state.speleodb_janitor_stranded_claim();
+        assert_eq!(posts(), 0);
+        assert!(state.speleodb_holds_claim(GUARD_ID));
+
+        // ...while an explicit Release still can (holder-checked: it is ours).
+        state
+            .speleodb_release_lock(GUARD_ID.to_owned())
+            .expect("explicit release");
+        assert_eq!(posts(), 1);
+        assert!(!state.speleodb_holds_claim(GUARD_ID));
+
+        // Any other failure hands back a lock this call took, exactly as before.
+        let corrupt = SpeleoDbError::Parse("invalid SQLite project".to_owned());
+        state.speleodb_unwind_unless_kept(
+            false,
+            Some(&corrupt),
+            &params,
+            state.speleodb_session_generation(),
+        );
+        assert_eq!(posts(), 2, "a corrupt download has nothing local at stake");
+        assert!(!state.speleodb_holds_claim(GUARD_ID));
+    }
+
+    #[test]
     fn the_fast_forward_unwind_decides_on_the_failure_it_is_unwinding() {
         // The site the two tests above meet at. `keep_lock_on_unwind` is computed
         // BEFORE the acquire from the OPEN project's link, and the fast-forward verdict
@@ -4374,7 +4468,20 @@ mod tests {
             "releasing without consulting the failure is the defect itself"
         );
         assert!(
-            start_editing.contains("failure.is_some_and(is_local_edits_refusal)"),
+            start_editing
+                .split_whitespace()
+                .collect::<String>()
+                .contains("self.speleodb_unwind_unless_kept(keep_lock_on_unwind,failure,"),
+            "the unwind decides through the shared method, handed the failure"
+        );
+        let session = include_str!("speleodb_session.rs");
+        let unwind = session
+            .split_once("fn speleodb_unwind_unless_kept")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n    }\n").next())
+            .expect("the unwind decision is present");
+        assert!(
+            unwind.contains("failure.is_some_and(super::speleodb::is_local_edits_refusal)"),
             "and the unwind must act on it: passing the failure in and ignoring it \
              releases just the same"
         );

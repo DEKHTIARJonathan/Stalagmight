@@ -203,7 +203,7 @@ impl AppState {
 
         self.speleodb_guard_older_version_push(&link, accept_older_version)?;
 
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let (endpoint, token, email) = self.speleodb_active_account().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
         // Dirty-bit gate: only push when there are un-pushed edits.
@@ -244,15 +244,39 @@ impl AppState {
                     return Ok(DoneResult::PushUnconfirmed);
                 }
                 // Edits are safely on the server; release the lock and go
-                // read-only. Drop the edit gate only after a confirmed release -
-                // if release fails the lock is still held, so a retry of Done
-                // (now a no-op push, dirty already cleared) re-attempts it.
-                self.speleodb_handle_auth(
-                    Endpoint::Release,
-                    client::release_lock(&endpoint, &token, insecure_http, &link.project_id),
-                )
-                .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
+                // read-only. Drop the edit gate only after the release is settled -
+                // if it fails (or the holder cannot be read) the lock may still be
+                // ours, so the session stays open and a retry of Done (now a no-op
+                // push, dirty already cleared) re-attempts it.
+                //
+                // Holder-checked (lock#4): the server lets an admin release anybody's
+                // mutex, and with nothing to upload no fresh ownership probe ran
+                // above, so a lock force-taken by someone else since Start Editing
+                // would be freed by a bare release. Somebody else's lock (or none)
+                // just ends this session: nothing of ours is held any more.
+                let released = self
+                    .speleodb_handle_auth(
+                        Endpoint::Release,
+                        super::speleodb_lock_release::release_if_held_by_us(
+                            &super::speleodb_lock_release::LockReleaseParams {
+                                endpoint,
+                                token,
+                                email,
+                                insecure_http,
+                                project_id: link.project_id.clone(),
+                            },
+                        ),
+                    )
+                    .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
                 let _project = self.speleodb_push_project_guard(generation)?;
+                if released == super::speleodb_lock_release::HolderCheckedRelease::NotHeldByUs {
+                    tracing::info!(
+                        project_id = %link.project_id,
+                        purpose = "never release another account's lock (lock#4)",
+                        "speleodb done: the lock is no longer this account's; ending the \
+                         edit session without releasing"
+                    );
+                }
                 // The lock this process took is back with the server; the edit session
                 // it licensed is over, and ending the claim shuts the gate with it
                 // (`speleodb_edit_gate`). This project's claim, not the account's whole

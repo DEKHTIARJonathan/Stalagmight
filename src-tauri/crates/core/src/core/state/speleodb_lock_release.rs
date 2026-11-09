@@ -17,10 +17,12 @@
 //! Deferred releases remain scoped to the account, project, and session that
 //! initiated them, so they cannot release a successor editing session's lock.
 //!
-//! THE HOLDER CHECK (lock#4): no automatic release - close, switch, quit, the
-//! update restart, logout, an account switch, the explicit-abandon verbs, Start
-//! Editing's unwind or the stranded-claim janitor - is sent unless SpeleoDB first
-//! names this account as the lock's holder ([`release_if_held_by_us`]). Another
+//! THE HOLDER CHECK (lock#4): no release - close, switch, quit, the update
+//! restart, logout, an account switch, the explicit-abandon verbs, Start Editing's
+//! unwind, the stranded-claim janitor, and the explicit verbs too (Done with
+//! nothing to upload, the per-project Release, the stale-context unwind; Switch to
+//! Read Only reads the holder itself) - is sent unless SpeleoDB first names this
+//! account as the lock's holder ([`release_if_held_by_us`]). Another
 //! account's lock, or no lock at all, just ends the local claim. An unreadable
 //! holder sends nothing and keeps the claim for a later holder-checked retry;
 //! there is no blind fallback. The server lets an admin release anybody's lock,
@@ -204,6 +206,20 @@ impl AppState {
             }
         };
         if !self.speleodb_holds_claim(&link.project_id) {
+            return None;
+        }
+        // A lock already held back on purpose stays held: an earlier veto, the exit
+        // prompt's "Keep the lock", or Start Editing keeping a lock it took because
+        // the cache copy holds un-uploaded work the open copy does not show. The
+        // open copy being clean says nothing about that work. Only an explicit
+        // abandon (or Release, or a new edit session's binding) ends a kept claim.
+        if intent != ReleaseIntent::Abandon && self.speleodb_claim_is_kept(&link.project_id) {
+            tracing::info!(
+                project_id = %link.project_id,
+                ?intent,
+                purpose = "honour a lock deliberately kept back",
+                "speleodb: keeping the write lock; it was deliberately kept"
+            );
             return None;
         }
         // The invariant (module doc): only an explicit abandon may release over
