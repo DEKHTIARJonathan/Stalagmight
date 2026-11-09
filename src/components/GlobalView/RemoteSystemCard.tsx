@@ -1,3 +1,4 @@
+import { RemoteUpdatedTime } from './RemoteUpdatedTime';
 import { type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
@@ -67,7 +68,8 @@ export default function RemoteSystemCard({
         <SpeleoProjectInfo lock={displayLock} summary={summary} testIdPrefix={`${testId}-speleo`} />
       </div>
 
-      <div className="mt-3 pt-3 border-t border-border flex items-center justify-end gap-2">
+      <div className="mt-3 pt-3 border-t border-border flex items-center justify-between gap-2">
+        <RemoteUpdatedTime date={summary.modified_date} />
         <Button
           variant="primary"
           onClick={(e: MouseEvent) => {

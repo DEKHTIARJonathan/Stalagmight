@@ -65,17 +65,14 @@ export function deriveRemoteItems(
 }
 
 /**
- * Build the combined list of rows: available local projects first (already sorted
- * by the caller), then remote SpeleoDB projects (#218), then unavailable
- * (missing) paths in config order. Missing + remote entries lack local metadata,
- * so they cannot participate in metadata-based sorting.
+ * Build the combined list before applying the selected sort to all row kinds.
  */
 export function buildRecentListItems(
-  sortedAvailable: ProjectMetadata[],
+  availableProjects: ProjectMetadata[],
   missingPaths: string[],
   remoteItems: RecentListItem[] = []
 ): RecentListItem[] {
-  const available: RecentListItem[] = sortedAvailable.filter((project) => !project.is_remote).map((project) => ({
+  const available: RecentListItem[] = availableProjects.filter((project) => !project.is_remote).map((project) => ({
     kind: 'available',
     filePath: project.file_path,
     project,

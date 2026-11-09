@@ -298,6 +298,7 @@ fn project(value: types::Project) -> Result<Project, SpeleoDbError> {
         },
     });
     Ok(Project {
+        modified_date: Some(value.modified_date.to_rfc3339()),
         id: value.id.to_string(),
         name: value.name,
         permission,
@@ -441,6 +442,7 @@ fn list_projection(value: serde_json::Value) -> Result<Vec<Project>, SpeleoDbErr
                 .map(str::to_owned)
         };
         projects.push(Project {
+            modified_date: optional("modified_date"),
             id: id.into(),
             name: name.into(),
             kind: "stalagmight".into(),

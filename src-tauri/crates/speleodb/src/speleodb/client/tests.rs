@@ -154,6 +154,11 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
     let s = Server::json(json!(projects));
     let listed = list_projects(&s.base, "t", false).unwrap();
     assert_eq!(listed.len(), 1);
+    let summary = super::super::models::SpeleoProjectSummary::from_project(listed[0].clone());
+    assert_eq!(
+        summary.modified_date.as_deref(),
+        Some("2026-01-01T00:00:00Z")
+    );
     assert_eq!(listed[0].kind, "stalagmight");
     assert_eq!(listed[0].permission, Some(Permission::Admin));
     assert!(s.finish()[0].starts_with("GET /api/v2/projects/ "));
@@ -168,6 +173,10 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
             get_project(&s.base, "t", false, ID)
         }
         .unwrap();
+        assert_eq!(
+            result.modified_date.as_deref(),
+            Some("2026-01-01T00:00:00+00:00")
+        );
         assert_eq!(result.permission, Some(Permission::ReadOnly));
         assert_eq!(result.active_mutex.unwrap().user, "other@example.com");
         assert!(s.finish()[0].starts_with(&format!("GET /api/v2/projects/{ID}/ ")));

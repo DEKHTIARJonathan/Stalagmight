@@ -52,6 +52,7 @@ impl AppState {
         validate_project_id(&link.project_id).map_err(admin_dto)?;
         // Unknown access (offline, signed out, another deployment) opens read-only.
         let fallback = SpeleoProjectSummary {
+            modified_date: None,
             id: link.project_id.clone(),
             name: path
                 .file_stem()

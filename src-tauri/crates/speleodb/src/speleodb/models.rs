@@ -221,6 +221,9 @@ pub struct ActiveMutex {
 /// parsed down to the fields the spike consumes.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Project {
+    /// Server update time, independent of the downloaded cache file.
+    #[serde(default)]
+    pub modified_date: Option<String>,
     pub id: String,
     pub name: String,
     /// Absent (not null) when the requesting user has no permission.
@@ -265,6 +268,10 @@ pub struct Project {
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export_to = "../../bindings/SpeleoProjectSummary.ts")]
 pub struct SpeleoProjectSummary {
+    /// Server update time; absent when server metadata is unavailable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub modified_date: Option<String>,
     pub id: String,
     pub name: String,
     pub permission: Option<Permission>,
@@ -307,6 +314,7 @@ pub struct SpeleoReleaseContext {
 impl SpeleoProjectSummary {
     pub fn from_project(p: Project) -> Self {
         Self {
+            modified_date: p.modified_date,
             id: p.id,
             name: p.name,
             permission: p.permission,
@@ -725,6 +733,7 @@ mod tests {
         })
         .expect("serialize session status");
         let summary = serde_json::to_string(&SpeleoProjectSummary {
+            modified_date: None,
             id: "11111111-1111-1111-1111-111111111111".to_owned(),
             name: "Cave".to_owned(),
             permission: Some(Permission::ReadOnly),

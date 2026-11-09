@@ -1,3 +1,4 @@
+import { RemoteUpdatedTime } from './RemoteUpdatedTime';
 import { SpeleoProjectInfo } from './SpeleoProjectInfo';
 import { type MouseEvent } from 'react';
 import { useSpeleoStore } from '../../store/speleoStore';
@@ -251,7 +252,8 @@ export function SystemTable({
                   {t('globalView.recent.remote.onSpeleoDb')}
                 </td>
                 <td className={cellClass}>
-                  <div className="flex items-center justify-end gap-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <RemoteUpdatedTime date={item.summary.modified_date} />
                     <button
                       type="button"
                       disabled={busy}

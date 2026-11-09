@@ -1,3 +1,4 @@
+import { sortRecentListItems } from './sortRecentListItems';
 import { LoadingSpinner } from '../common/LoadingSpinner';
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type MouseEvent, type ChangeEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -26,7 +27,7 @@ import { resolveSpeleoLock } from './SpeleoLockBadge';
 import GlobalViewMap, { type GlobalViewMapHandle } from './GlobalViewMap';
 import MetadataPanel from './MetadataPanel';
 import { RecentSortControl } from './RecentSortControl';
-import { useRecentSort, sortRecentProjects, defaultDirectionForField, type RecentSortField } from './useRecentSort';
+import { useRecentSort, defaultDirectionForField, type RecentSortField } from './useRecentSort';
 import { RecentDensityToggle } from './RecentDensityToggle';
 import { useRecentDensity } from './useRecentDensity';
 import SystemTable from './SystemTable';
@@ -582,10 +583,6 @@ export default function GlobalView() {
   // Recent-projects sort preference (persisted) and the sorted list for the
   // list view. The map view is intentionally unaffected by this.
   const recentSort = useRecentSort();
-  const sortedProjects = useMemo(
-    () => sortRecentProjects(recentProjects, recentSort.field, recentSort.direction),
-    [recentProjects, recentSort.field, recentSort.direction]
-  );
 
   // List view layout density (cards vs compact table), persisted.
   const [density, setDensity] = useRecentDensity();
@@ -619,8 +616,11 @@ export default function GlobalView() {
   );
   // Combined, then filtered by the search term (name / location / path).
   const listItems = useMemo(
-    () => buildRecentListItems(sortedProjects, missingPaths, remoteItems),
-    [sortedProjects, missingPaths, remoteItems]
+    () => sortRecentListItems(
+      buildRecentListItems(recentProjects, missingPaths, remoteItems),
+      recentProjects, recentSort.field, recentSort.direction,
+    ),
+    [recentProjects, missingPaths, remoteItems, recentSort.field, recentSort.direction]
   );
   const visibleItems = useMemo(
     () => filterRecentListItems(listItems, searchTerm),
@@ -964,7 +964,10 @@ export default function GlobalView() {
                   <RecentSortControl
                     field={recentSort.field}
                     direction={recentSort.direction}
-                    onFieldChange={recentSort.setField}
+                    onFieldChange={(field) => {
+                      recentSort.setField(field);
+                      recentSort.setDirection(defaultDirectionForField(field));
+                    }}
                     onToggleDirection={recentSort.toggleDirection}
                   />
                   <RecentDensityToggle density={density} onChange={setDensity} />
