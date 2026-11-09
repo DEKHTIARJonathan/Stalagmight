@@ -78,14 +78,18 @@ async function answer(page: Page, command: string, value: unknown) {
 
 /**
  * The tab's size and where its label sits inside it, to the sub-pixel, plus the
- * neighbouring tab's width. Relative to the tab, so a reflow of the whole dock
- * (the reload's toast and refresh can nudge it) is not mistaken for the spinner
- * moving the header.
+ * neighbouring tab's width and whether the tab's content overflows it. Relative
+ * to the tab, so a reflow of the whole dock (the reload's toast and refresh can
+ * nudge it) is not mistaken for the spinner moving the header.
  */
 async function tabGeometry(page: Page) {
   return page.getByTestId('workspace-tab-speleodb').evaluate((tab) => {
     const box = tab.getBoundingClientRect();
-    const label = Array.from(tab.childNodes).find((n) => n.nodeType === Node.TEXT_NODE && n.textContent?.trim());
+    const walker = document.createTreeWalker(tab, NodeFilter.SHOW_TEXT);
+    let label: Node | null = null;
+    while (walker.nextNode()) {
+      if (walker.currentNode.textContent?.trim() === 'SpeleoDB') { label = walker.currentNode; break; }
+    }
     const range = document.createRange();
     if (label) range.selectNodeContents(label);
     const text = range.getBoundingClientRect();
@@ -97,42 +101,86 @@ async function tabGeometry(page: Page) {
       labelRight: text.right - box.left,
       tablistWidth: tab.parentElement?.getBoundingClientRect().width,
       firstTabWidth: sibling?.width,
+      overflows: tab.scrollWidth > tab.clientWidth,
     };
   });
 }
 
-test('a slow reload shows the spinner beside the SpeleoDB tab without moving it, and locks conflicting actions', async ({ page }, testInfo) => {
-  await openEditingRemote(page);
-  const before = await tabGeometry(page);
+type Box = { x: number; y: number; width: number; height: number };
+const intersects = (a: Box, b: Box) =>
+  a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 
-  await hold(page, 'speleodb_update');
-  await page.getByTestId('speleodb-workspace-latest').click();
+/**
+ * Pin the left workspace to `width` px, the panel's narrowest floor, so the tab
+ * header is measured where it has the least room. Applied to the workspace root
+ * (React renders it with no style of its own), which is what the tab strip sizes
+ * against.
+ */
+async function pinWorkspaceWidth(page: Page, width: number) {
+  await page.getByRole('tablist', { name: 'Project workspace' }).evaluate((tablist, px) => {
+    const root = tablist.parentElement as HTMLElement;
+    root.style.width = `${px}px`;
+    root.style.minWidth = `${px}px`;
+    root.style.maxWidth = `${px}px`;
+  }, width);
+  await expect.poll(async () => Math.round((await page.getByRole('tablist', { name: 'Project workspace' }).boundingBox())!.width)).toBe(width);
+}
 
-  const spinner = page.getByTestId('workspace-tab-speleodb').getByTestId('speleodb-network-busy');
-  await expect(spinner).toBeVisible();
-  await expect(page.getByTestId('workspace-tab-speleodb')).toContainText('Talking to SpeleoDB...');
-  await expect(spinner).toHaveAttribute('title', 'Talking to SpeleoDB...');
-  const during = await tabGeometry(page);
-  expect(during).toEqual(before);
-  // Beside the label, inside the tab.
-  const tab = (await page.getByTestId('workspace-tab-speleodb').boundingBox())!;
-  const spin = (await spinner.boundingBox())!;
-  expect(spin.x - tab.x).toBeGreaterThanOrEqual(before.labelRight);
-  expect(spin.x + spin.width).toBeLessThanOrEqual(tab.x + tab.width);
-  expect(spin.y).toBeGreaterThanOrEqual(tab.y);
-  expect(spin.y + spin.height).toBeLessThanOrEqual(tab.y + tab.height);
-  await page.getByTestId('workspace-tab-speleodb').screenshot({ path: testInfo.outputPath('speleodb-tab-busy.png') });
+for (const width of [null, 230] as const) {
+  test(`a slow reload shows the spinner on the SpeleoDB tab without moving it, and locks conflicting actions (${width ? `${width}px panel` : 'default width'})`, async ({ page }, testInfo) => {
+    await openEditingRemote(page);
+    if (width) await pinWorkspaceWidth(page, width);
+    const before = await tabGeometry(page);
+    expect(before.overflows, 'the tab fits its content before anything is in flight').toBe(false);
 
-  for (const id of CONFLICTING) await expect(page.getByTestId(id), id).toBeDisabled();
-  // Navigation and the rest of the app stay usable.
-  await expect(page.getByTestId('speleodb-workspace-section-history')).toBeEnabled();
-  await expect(page.getByTestId('workspace-tab-sections')).toBeEnabled();
+    await hold(page, 'speleodb_update');
+    await page.getByTestId('speleodb-workspace-latest').click();
 
-  await answer(page, 'speleodb_update', { kind: 'up_to_date' });
-  await expect(page.getByTestId('speleodb-network-busy')).toHaveCount(0);
-  for (const id of CONFLICTING) await expect(page.getByTestId(id), id).toBeEnabled();
-  expect(await tabGeometry(page)).toEqual(before);
-});
+    const tabLocator = page.getByTestId('workspace-tab-speleodb');
+    const spinner = tabLocator.getByTestId('speleodb-network-busy');
+    await expect(spinner).toBeVisible();
+    await expect(tabLocator).toContainText('Talking to SpeleoDB...');
+    await expect(spinner).toHaveAttribute('title', 'Talking to SpeleoDB...');
+    const during = await tabGeometry(page);
+    expect(during, 'the spinner must not resize the tab or move its label').toEqual(before);
+
+    const tab = (await tabLocator.boundingBox())!;
+    const spin = (await spinner.boundingBox())!;
+    // Inside the tab.
+    expect(spin.x).toBeGreaterThanOrEqual(tab.x);
+    expect(spin.x + spin.width).toBeLessThanOrEqual(tab.x + tab.width);
+    expect(spin.y).toBeGreaterThanOrEqual(tab.y);
+    expect(spin.y + spin.height).toBeLessThanOrEqual(tab.y + tab.height);
+    const icon = tabLocator.getByTestId('workspace-tab-speleodb-icon');
+    if (await icon.count()) {
+      // With the tab icon present, the spinner overlays its top-left corner and
+      // stays clear of the state badge on the bottom-right corner.
+      await expect(spinner).toHaveAttribute('data-placement', 'icon');
+      const iconBox = (await icon.boundingBox())!;
+      expect(intersects(spin, iconBox), 'the spinner overlays the icon').toBe(true);
+      expect(spin.x).toBeLessThanOrEqual(iconBox.x + 1);
+      expect(spin.y).toBeLessThanOrEqual(iconBox.y + 1);
+      const badge = tabLocator.getByTestId('workspace-tab-speleodb-icon-state-badge');
+      if (await badge.count()) {
+        expect(intersects(spin, (await badge.boundingBox())!), 'the spinner never covers the state badge').toBe(false);
+      }
+    } else {
+      // No tab icon to overlay: the spinner sits after the label, not on it.
+      expect(spin.x - tab.x).toBeGreaterThanOrEqual(before.labelRight);
+    }
+    await tabLocator.screenshot({ path: testInfo.outputPath(`speleodb-tab-busy-${width ?? 'default'}.png`) });
+
+    for (const id of CONFLICTING) await expect(page.getByTestId(id), id).toBeDisabled();
+    // Navigation and the rest of the app stay usable.
+    await expect(page.getByTestId('speleodb-workspace-section-history')).toBeEnabled();
+    await expect(page.getByTestId('workspace-tab-sections')).toBeEnabled();
+
+    await answer(page, 'speleodb_update', { kind: 'up_to_date' });
+    await expect(page.getByTestId('speleodb-network-busy')).toHaveCount(0);
+    for (const id of CONFLICTING) await expect(page.getByTestId(id), id).toBeEnabled();
+    expect(await tabGeometry(page)).toEqual(before);
+  });
+}
 
 test('an exclusive call that holds no verb claim still locks the conflicting actions', async ({ page }) => {
   // Releasing another project's lock from the held-lock prompt runs outside the

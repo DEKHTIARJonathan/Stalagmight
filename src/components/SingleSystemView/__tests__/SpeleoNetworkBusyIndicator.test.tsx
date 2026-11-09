@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, within } from '@testing-library/react';
 import { LeftWorkspace } from '../LeftWorkspace';
 import { SpeleoNetworkBusyIndicator, SPELEO_NETWORK_BUSY_LABEL } from '../SpeleoNetworkBusyIndicator';
+import { SpeleoBadgedIcon } from '../../common/SpeleoBadgedIcon';
 import { useSpeleoNetworkStore } from '../../../store/speleoNetworkStore';
 import { useUIStore } from '../../../store/uiStore';
 
@@ -13,47 +14,75 @@ beforeEach(() => {
   useUIStore.setState({ appMode: 'survey', leftWorkspace: 'sections', surveyLeftWorkspace: 'sections' });
 });
 
+function startRead(): () => void {
+  let end!: () => void;
+  act(() => {
+    end = useSpeleoNetworkStore.getState().begin('read');
+  });
+  return () => act(() => end());
+}
+
+/** The tab icon as the SpeleoDB tab draws it: the mark with a bottom-right state badge. */
+const badgedIcon = (
+  <SpeleoBadgedIcon size={16} testIdPrefix="test-tab-icon" badge={<span>!</span>} badgeColor="text-warning" />
+);
+
 describe('SpeleoNetworkBusyIndicator', () => {
   it('shows nothing while idle but keeps its live region mounted', () => {
     render(<SpeleoNetworkBusyIndicator />);
     expect(screen.queryByTestId('speleodb-network-busy')).toBeNull();
-    const slot = screen.getByTestId('speleodb-network-busy-slot');
-    expect(slot).toHaveAttribute('role', 'status');
-    expect(slot).toHaveAttribute('aria-live', 'polite');
-    expect(slot).toBeEmptyDOMElement();
+    const status = screen.getByRole('status');
+    expect(status).toHaveAttribute('aria-live', 'polite');
+    expect(status).toBeEmptyDOMElement();
   });
 
   it('shows a labelled spinner while a call is in flight and hides it after', () => {
     render(<SpeleoNetworkBusyIndicator />);
-    let end!: () => void;
-    act(() => {
-      end = useSpeleoNetworkStore.getState().begin('read');
-    });
+    const end = startRead();
     const spinner = screen.getByTestId('speleodb-network-busy');
     expect(spinner).toHaveAttribute('title', SPELEO_NETWORK_BUSY_LABEL);
     expect(screen.getByRole('status')).toHaveTextContent(SPELEO_NETWORK_BUSY_LABEL);
     expect(SPELEO_NETWORK_BUSY_LABEL).toBe('Talking to SpeleoDB...');
-    act(() => end());
+    end();
     expect(screen.queryByTestId('speleodb-network-busy')).toBeNull();
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
   });
 
-  it('reserves no space: a zero-size slot with the spinner positioned off it', () => {
+  it('without an icon: a zero-size anchor with the spinner positioned off it', () => {
     render(<SpeleoNetworkBusyIndicator />);
-    act(() => {
-      useSpeleoNetworkStore.getState().begin('exclusive');
-    });
+    startRead();
     const slot = screen.getByTestId('speleodb-network-busy-slot');
     expect(slot.className).toMatch(/\bw-0\b/);
     expect(slot.className).toMatch(/\bh-0\b/);
     expect(slot.className).toMatch(/\brelative\b/);
-    expect(screen.getByTestId('speleodb-network-busy').className).toMatch(/\babsolute\b/);
+    const spinner = screen.getByTestId('speleodb-network-busy');
+    expect(spinner).toHaveAttribute('data-placement', 'anchor');
+    expect(spinner.className).toMatch(/\babsolute\b/);
+  });
+
+  it('over an icon: overlays its top-left corner, clear of the bottom-right state badge', () => {
+    render(<SpeleoNetworkBusyIndicator>{badgedIcon}</SpeleoNetworkBusyIndicator>);
+    startRead();
+    const slot = screen.getByTestId('speleodb-network-busy-slot');
+    // The icon is the frame's only in-flow child: the frame is exactly its size.
+    expect(slot.className).toMatch(/\binline-flex\b/);
+    expect(slot.className).not.toMatch(/\bw-0\b/);
+    expect(within(slot).getByTestId('test-tab-icon-logo')).toBeInTheDocument();
+    const spinner = screen.getByTestId('speleodb-network-busy');
+    expect(spinner).toHaveAttribute('data-placement', 'icon');
+    expect(spinner.className).toMatch(/\babsolute\b/);
+    expect(spinner.className).toMatch(/-left-1\b/);
+    expect(spinner.className).toMatch(/-top-1\b/);
+    // The badge owns the opposite corner, and the spinner never claims it.
+    const badge = screen.getByTestId('test-tab-icon-state-badge');
+    expect(badge.className).toMatch(/-bottom-1\b/);
+    expect(badge.className).toMatch(/-right-1\b/);
+    expect(spinner.className).not.toMatch(/bottom|right/);
   });
 
   it('draws the spinner filled, never stroked', () => {
     render(<SpeleoNetworkBusyIndicator />);
-    act(() => {
-      useSpeleoNetworkStore.getState().begin('read');
-    });
+    startRead();
     const svg = screen.getByTestId('speleodb-network-busy').querySelector('svg')!;
     expect(svg).toHaveAttribute('aria-hidden', 'true');
     for (const shape of svg.querySelectorAll('path')) {
@@ -66,9 +95,7 @@ describe('SpeleoNetworkBusyIndicator', () => {
 describe('LeftWorkspace busy indicator placement', () => {
   it('sits inside the SpeleoDB tab only', () => {
     render(<LeftWorkspace sections={<div />} />);
-    act(() => {
-      useSpeleoNetworkStore.getState().begin('read');
-    });
+    startRead();
     const speleo = screen.getByTestId('workspace-tab-speleodb');
     const sections = screen.getByTestId('workspace-tab-sections');
     expect(within(speleo).getByTestId('speleodb-network-busy')).toBeInTheDocument();
