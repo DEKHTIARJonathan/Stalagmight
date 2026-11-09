@@ -32,8 +32,10 @@ mod speleodb_project;
 mod speleodb_pull;
 mod speleodb_push;
 mod speleodb_reload;
+mod speleodb_revision_swap;
 mod speleodb_revisions;
 mod speleodb_session;
+mod speleodb_sidecars;
 mod speleodb_write_guard;
 mod undo;
 mod undo_capture;
@@ -127,6 +129,13 @@ mod reverse_tests;
     reason = "test module: panics on a failed assumption are the point"
 )]
 mod shot_uuid_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_install_sidecar_tests;
 #[cfg(test)]
 #[expect(
     clippy::unwrap_used,

@@ -107,6 +107,21 @@ refuse to overwrite unuploaded edits unless the user explicitly confirms discard
 When a revision is known, the download is pinned to that SHA; an undated HEAD
 download cannot be stamped with a stale project-list hint.
 
+SQLite finds a database's `-journal`, `-wal` and `-shm` by name only, so a sidecar
+left beside the cache copy by a kill mid-save would replay the old file's pages into
+whatever is installed under that name. Every install therefore moves the outgoing
+file's sidecars aside (durably, with no connection left on the file) before the
+rename, deletes them after it, and puts them back if the install fails. A hot
+rollback journal is part of the copy's committed state, so a copy that has one reads
+as unknown local state: a protected replacement refuses it, and only the confirmed
+discard removes it.
+
+A revision View or Restore is bound to the project open when it started. Its
+download can outlive a switch to another project, so it installs and reopens in one
+commit under the project lock, re-checking the session generation, the open link
+and the in-memory project there; if any moved, it replaces nothing, leaves the
+project open now untouched, and the frontend treats the late reply as stale.
+
 ## Authentication and transport
 
 Email/password login exchanges the supplied credentials for a token; pasted-token

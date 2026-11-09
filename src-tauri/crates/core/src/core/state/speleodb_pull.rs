@@ -125,7 +125,7 @@ impl AppState {
 
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
         // Download first so offline opens can recover unsynced cached work too.
-        // install_linked_download still refuses to replace any unpushed edits.
+        // install_linked_download_with_limits still refuses to replace unpushed edits.
 
         let tip = match self.speleodb_handle_auth(
             Endpoint::GetProject,
@@ -326,50 +326,44 @@ impl AppState {
         Ok(dest.to_string_lossy().into_owned())
     }
 
-    /// Validate and stamp the downloaded file before it can replace a working cache.
-    /// A failed link write must never turn a remote project into an editable local file.
-    pub(super) fn install_linked_download(
+    /// Validate the downloaded file at `source` and stamp `link` into it, before it
+    /// can replace a working cache. A failed link write must never turn a remote
+    /// project into an editable local file.
+    pub(super) fn stamp_downloaded_link(
         &self,
         source: &std::path::Path,
-        dest: &std::path::Path,
         link: crate::models::SpeleoLink,
-        policy: LocalEditsPolicy,
-        undo: InheritedUndo,
-    ) -> Result<(), SpeleoDbError> {
-        self.install_linked_download_with_limits(
-            source,
-            dest,
-            link,
-            policy,
-            undo,
-            DownloadOptions::default(),
-        )
+    ) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
+        self.stamp_downloaded_link_within(source, link, DownloadOptions::default().limits)
+    }
+
+    fn stamp_downloaded_link_within(
+        &self,
+        source: &std::path::Path,
+        mut link: crate::models::SpeleoLink,
+        limits: (i32, std::time::Duration),
+    ) -> Result<crate::models::SpeleoLink, SpeleoDbError> {
+        let db = crate::persistence::Database::open_existing_untrusted(source, limits.0, limits.1)
+            .map_err(super::speleodb_cache_install::downloaded_file_error)?;
+        // Decode the complete project before any working bytes are replaced.
+        db.load_project()
+            .map_err(|e| SpeleoDbError::Parse(format!("invalid downloaded project: {e}")))?;
+        link.undo_mode = Some(self.effective_undo_mode(preserved_undo_mode(&db)));
+        db.save_speleo_link(Some(&link))
+            .map_err(|e| SpeleoDbError::Io(format!("could not link downloaded project: {e}")))?;
+        Ok(link)
     }
 
     fn install_linked_download_with_limits(
         &self,
         source: &std::path::Path,
         dest: &std::path::Path,
-        mut link: crate::models::SpeleoLink,
+        link: crate::models::SpeleoLink,
         policy: LocalEditsPolicy,
         undo: InheritedUndo,
         options: DownloadOptions,
     ) -> Result<(), SpeleoDbError> {
-        {
-            let db = crate::persistence::Database::open_existing_untrusted(
-                source,
-                options.limits.0,
-                options.limits.1,
-            )
-            .map_err(super::speleodb_cache_install::downloaded_file_error)?;
-            // Decode the complete project before any working bytes are replaced.
-            db.load_project()
-                .map_err(|e| SpeleoDbError::Parse(format!("invalid downloaded project: {e}")))?;
-            link.undo_mode = Some(self.effective_undo_mode(preserved_undo_mode(&db)));
-            db.save_speleo_link(Some(&link)).map_err(|e| {
-                SpeleoDbError::Io(format!("could not link downloaded project: {e}"))
-            })?;
-        }
+        let link = self.stamp_downloaded_link_within(source, link, options.limits)?;
         let preserved_view = match options.generation {
             Some(generation) => self.replace_cache_for_session(
                 source,
@@ -800,12 +794,13 @@ mod tests {
 
             AppState::new()
                 .expect("state")
-                .install_linked_download(
+                .install_linked_download_with_limits(
                     &source,
                     &dest,
                     link(),
                     LocalEditsPolicy::Protect,
                     InheritedUndo::Drop,
+                    DownloadOptions::default(),
                 )
                 .expect("first download installs without a pre-existing cache");
 
@@ -839,12 +834,13 @@ mod tests {
             assert!(state.open_project(dest.clone()).success);
             let before = std::fs::read(&dest).expect("previous bytes");
             let err = state
-                .install_linked_download(
+                .install_linked_download_with_limits(
                     &source,
                     &dest,
                     link(),
                     LocalEditsPolicy::Protect,
                     InheritedUndo::Drop,
+                    DownloadOptions::default(),
                 )
                 .expect_err("a remote project must not open without its link");
             assert!(
@@ -884,12 +880,13 @@ mod tests {
             }
             AppState::new()
                 .expect("state")
-                .install_linked_download(
+                .install_linked_download_with_limits(
                     &source,
                     &dest,
                     link(),
                     LocalEditsPolicy::Protect,
                     InheritedUndo::Drop,
+                    DownloadOptions::default(),
                 )
                 .expect("install");
             let db = Database::open_existing(&dest).expect("installed");

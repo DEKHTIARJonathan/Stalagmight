@@ -537,7 +537,11 @@ impl AppState {
         validate_project_id(&project_id).map_err(local_dto)?;
         validate_hexsha(&hexsha).map_err(local_dto)?;
 
-        let open_link = self.speleodb_open_link().map_err(local_dto)?;
+        // Bound to the project open NOW, re-checked inside the commit that installs
+        // the revision: the download below can outlive a switch to another project,
+        // and the swap must then leave that project alone (`speleodb_revision_swap`).
+        let binding = self.speleodb_swap_binding().map_err(local_dto)?;
+        let open_link = &binding.link;
         if open_link.project_id != project_id {
             return Err(local_dto(SpeleoDbError::NoRemoteProject));
         }
@@ -553,7 +557,7 @@ impl AppState {
             )));
         }
         if keep_undo_history {
-            self.speleodb_guard_unwind(&open_link, discard_unpushed, chain_forward)?;
+            self.speleodb_guard_unwind(open_link, discard_unpushed, chain_forward)?;
             self.speleodb_verify_chain_target(&hexsha, chain_forward)?;
         }
 
@@ -622,41 +626,39 @@ impl AppState {
             last_verify_at: None,
             undo_mode: None,
         };
-        self.install_linked_download(
-            native.path(),
-            &dest,
-            link,
-            policy,
-            if keep_undo_history {
-                InheritedUndo::Keep
-            } else {
-                InheritedUndo::Drop
-            },
-        )
-        .map_err(local_dto)?;
 
         let local_path = dest.to_string_lossy().into_owned();
         let had_lock_record = self.speleodb_lock_acquired_here(&project_id);
-        self.close_project();
-        self.do_load_project_full(dest).map_err(|e| {
-            local_dto(SpeleoDbError::Io(format!(
-                "reload after restore failed: {e}"
-            )))
-        })?;
-        if restore {
-            self.set_edit_enabled(true);
-            if had_lock_record {
+        // Replace the cache file and reopen it in ONE commit, and only while the
+        // bound project is still the open one; a Restore keeps its edit gate open
+        // through that same commit (`restore` is the gate it lands with).
+        self.speleodb_swap_in_revision(
+            native.path(),
+            &dest,
+            link,
+            (
+                policy,
+                if keep_undo_history {
+                    InheritedUndo::Keep
+                } else {
+                    InheritedUndo::Drop
+                },
+            ),
+            binding,
+            restore,
+        )?;
+        self.while_swapped_in_project_is_open(&dest, &project_id, || {
+            if restore && had_lock_record {
                 self.speleodb_note_lock_acquired(Some(&project_id));
             }
-        }
-
-        if keep_undo_history {
-            self.speleodb_set_unwound_from(Some(&hexsha));
-            self.speleodb_stamp_inherited_watermark();
-        } else {
-            self.speleodb_set_unwound_from(None);
-            self.speleodb_set_inherited_through(None);
-        }
+            if keep_undo_history {
+                self.speleodb_set_unwound_from(Some(&hexsha));
+                self.speleodb_stamp_inherited_watermark();
+            } else {
+                self.speleodb_set_unwound_from(None);
+                self.speleodb_set_inherited_through(None);
+            }
+        });
 
         Ok(SpeleoOpenResult {
             local_path,
@@ -974,7 +976,7 @@ mod tests {
             .find("if keep_undo_history && chain_forward")
             .expect("the forward restore must re-check the downloaded child policy");
         let replace = restore
-            .find(".install_linked_download(")
+            .find(".speleodb_swap_in_revision(")
             .expect("the restore replaces the working copy");
         assert!(
             policy < replace,
@@ -1176,7 +1178,7 @@ mod tests {
             .map(|(_, rest)| rest)
             .expect("the swap verb is in this file");
         let reload = restore
-            .find("self.do_load_project_full(")
+            .find("self.speleodb_swap_in_revision(")
             .expect("the swap reloads in place");
         let record = restore
             .find("self.speleodb_set_unwound_from(Some(&hexsha));")
@@ -1213,8 +1215,8 @@ mod tests {
             .find("let had_lock_record")
             .expect("capture present (asserted above)");
         let reload = restore
-            .find("self.do_load_project_full(")
-            .expect("the in-place reload is what shuts the gate");
+            .find("self.speleodb_swap_in_revision(")
+            .expect("the in-place reload is what replaces the open project");
         let restore_back = restore
             .find("self.speleodb_note_lock_acquired(Some(&project_id));")
             .expect("re-record present (asserted above)");
@@ -1225,7 +1227,7 @@ mod tests {
              what the refresh in that window drops)"
         );
         assert!(
-            restore.contains("if had_lock_record {"),
+            restore.contains("if restore && had_lock_record {"),
             "and gate the hand-back on the captured record - re-recording \
              unconditionally would MINT provenance for an inherited lock"
         );

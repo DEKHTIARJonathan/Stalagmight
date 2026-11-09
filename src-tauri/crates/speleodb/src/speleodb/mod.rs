@@ -104,13 +104,15 @@ pub enum SpeleoDbError {
     /// update require one). Fails closed (Fatal).
     #[error("no open SpeleoDB project")]
     NoRemoteProject,
-    /// The open project changed - or went away - between the moment Start Editing
-    /// read it and the moment it was ready to open the edit gate (a delete, close,
-    /// project switch or logout landed inside the network window). Nothing was
-    /// committed: the gate stayed shut and no acquisition was recorded. Retrying in
+    /// The open project changed - or went away - between the moment a SpeleoDB
+    /// operation read it and the moment it was ready to commit (a delete, close,
+    /// project switch or logout landed inside the network window): Start Editing
+    /// opening the edit gate, or a revision View / Restore replacing the working
+    /// copy. Nothing was committed: no gate opened, no acquisition was recorded,
+    /// no file was replaced and the project open now was left alone. Retrying in
     /// the new world does the right thing, whatever that is.
     #[error(
-        "the project changed while Start Editing was in flight; nothing was changed - try again"
+        "the project changed while this request was in flight; nothing was changed - try again"
     )]
     SessionMoved,
     /// A re-pull would have overwritten a local copy that still holds edits the

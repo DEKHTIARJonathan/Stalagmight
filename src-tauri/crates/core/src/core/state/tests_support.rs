@@ -39,7 +39,7 @@ impl AppState {
 /// spread across the family - a scan that stops seeing a file stops guarding it, and
 /// an absence assertion goes on passing while it does.
 #[cfg(test)]
-fn speleodb_prod_sources() -> [(&'static str, &'static str); 16] {
+fn speleodb_prod_sources() -> [(&'static str, &'static str); 18] {
     [
         ("speleodb.rs", include_str!("speleodb.rs")),
         ("speleodb_admin.rs", include_str!("speleodb_admin.rs")),
@@ -71,10 +71,15 @@ fn speleodb_prod_sources() -> [(&'static str, &'static str); 16] {
         ("speleodb_reload.rs", include_str!("speleodb_reload.rs")),
         ("speleodb_push.rs", include_str!("speleodb_push.rs")),
         (
+            "speleodb_revision_swap.rs",
+            include_str!("speleodb_revision_swap.rs"),
+        ),
+        (
             "speleodb_revisions.rs",
             include_str!("speleodb_revisions.rs"),
         ),
         ("speleodb_session.rs", include_str!("speleodb_session.rs")),
+        ("speleodb_sidecars.rs", include_str!("speleodb_sidecars.rs")),
     ]
     .map(|(name, src)| {
         // Only the top-level test module ends production. `speleodb_push.rs` also has
