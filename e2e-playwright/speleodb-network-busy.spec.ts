@@ -130,10 +130,25 @@ async function pinWorkspaceWidth(page: Page, width: number) {
   await expect.poll(async () => Math.round((await page.getByRole('tablist', { name: 'Project workspace' }).boundingBox())!.width)).toBe(width);
 }
 
-for (const width of [null, 230] as const) {
-  test(`a slow reload shows the spinner on the SpeleoDB tab without moving it, and locks conflicting actions (${width ? `${width}px panel` : 'default width'})`, async ({ page }, testInfo) => {
+const LAYOUTS = [
+  { width: null, readOnly: false, name: 'default width' },
+  { width: 230, readOnly: false, name: '230px panel' },
+  // Read-only puts the lock badge on the tab icon's bottom-right corner.
+  { width: 230, readOnly: true, name: '230px panel, read-only badge' },
+] as const;
+
+for (const { width, readOnly, name } of LAYOUTS) {
+  test(`a slow reload shows the spinner on the SpeleoDB tab without moving it, and locks conflicting actions (${name})`, async ({ page }, testInfo) => {
     await openEditingRemote(page);
     if (width) await pinWorkspaceWidth(page, width);
+    if (readOnly) {
+      await page.evaluate(() => {
+        const store = (window as unknown as BusyWindow).__E2E_TEST__.speleoStore;
+        const link = store.getState().link!;
+        store.setState({ link: { ...link, editState: 'read-only', lockHolder: null } });
+      });
+      await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Resume editing');
+    }
     const before = await tabGeometry(page);
     expect(before.overflows, 'the tab fits its content before anything is in flight').toBe(false);
 
@@ -165,6 +180,7 @@ for (const width of [null, 230] as const) {
       expect(spin.x).toBeLessThanOrEqual(iconBox.x + 1);
       expect(spin.y).toBeLessThanOrEqual(iconBox.y + 1);
       const badge = tabLocator.getByTestId('workspace-tab-speleodb-icon-state-badge');
+      if (readOnly) await expect(badge).toBeVisible();
       if (await badge.count()) {
         expect(intersects(spin, (await badge.boundingBox())!), 'the spinner never covers the state badge').toBe(false);
       }
@@ -172,7 +188,7 @@ for (const width of [null, 230] as const) {
       // No tab icon to overlay: the spinner sits after the label, not on it.
       expect(spin.x - tab.x).toBeGreaterThanOrEqual(before.labelRight);
     }
-    await tabLocator.screenshot({ path: testInfo.outputPath(`speleodb-tab-busy-${width ?? 'default'}.png`) });
+    await tabLocator.screenshot({ path: testInfo.outputPath(`speleodb-tab-busy-${width ?? 'default'}${readOnly ? '-read-only' : ''}.png`) });
 
     for (const id of CONFLICTING) await expect(page.getByTestId(id), id).toBeDisabled();
     // Navigation and the rest of the app stay usable.
