@@ -78,10 +78,39 @@ test('window X during an upload waits for it, with a toast and progress, then cl
   // The quit is re-issued once the upload has landed...
   await expect.poll(async () => (await teardown(page)).close).toBe(1);
   await expect(wait).toHaveCount(0);
-  // ...and, with the work uploaded, nothing else stands in the way.
+  // ...and, with the work uploaded, the clean project's lock is handed back
+  // before the quit goes on (never strand a lock silently), then it closes.
+  await deliverCloseRequested(page);
+  await expect.poll(async () => (await teardown(page)).close).toBe(2);
   await deliverCloseRequested(page);
   await expect.poll(async () => (await teardown(page)).destroy).toBe(1);
   expect(await page.evaluate(() => (window as unknown as QuitWindow).__forcedExitArmed ?? 0)).toBe(0);
+});
+
+test('a quit that waited for the upload, then hits a failed lock release, asks instead of exiting', async ({ page }) => {
+  await startSlowUpload(page);
+  await page.evaluate(() => {
+    (window as unknown as QuitWindow).__MOCK_IPC_OVERRIDES__.speleodb_settle_open_lock = {
+      success: false, warnings: [], section_ids: [], lock_release: 'failed',
+      error: 'The SpeleoDB lock could not be handed back: SpeleoDB returned HTTP 503: synthetic',
+    };
+  });
+  await deliverCloseRequested(page);
+  await expect(page.getByTestId('quit-wait-dialog')).toBeVisible();
+  await page.evaluate(() => (window as unknown as QuitWindow).__finishUpload());
+  // The re-issued quit reaches the lock release, which fails: the question, not an exit.
+  await expect.poll(async () => (await teardown(page)).close).toBe(1);
+  await deliverCloseRequested(page);
+  const dialog = page.getByTestId('speleodb-release-failed-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(page.getByTestId('speleodb-release-failed-body')).toContainText('Stalagmight closes');
+  await page.waitForTimeout(300);
+  expect(await teardown(page)).toEqual({ destroy: 0, close: 1 });
+  await page.getByTestId('speleodb-release-failed-cancel').click();
+  await expect(dialog).toHaveCount(0);
+  await page.waitForTimeout(300);
+  expect(await teardown(page)).toEqual({ destroy: 0, close: 1 });
+  await expect(page.getByTestId('single-system-view')).toBeVisible();
 });
 
 test('Keep Stalagmight open calls the quit off and lets the upload finish', async ({ page }) => {
