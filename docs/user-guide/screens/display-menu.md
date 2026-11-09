@@ -1,3 +1,9 @@
+---
+title: Display menu
+description: "The Display menu controls what the survey map shows: color modes, grid and satellite, map elements, comments and labels, and the adjusted view."
+order: 15
+---
+
 # Display menu
 
 What the map shows. Opened by **Display** in the top right of the

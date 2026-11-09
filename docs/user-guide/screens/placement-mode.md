@@ -1,3 +1,9 @@
+---
+title: Placement mode
+description: "Placement mode: drop a new section on the map with one click, snap it to an existing station to merge, or press Esc to go back and change details."
+order: 5
+---
+
 # Placement mode
 
 After **Create Section**, the new section follows the pointer. Click the map to

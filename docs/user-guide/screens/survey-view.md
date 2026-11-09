@@ -1,3 +1,9 @@
+---
+title: Survey view
+description: "The main Stalagmight window: top bar, tools, Sections and Details panels, the data table and the map, with what every button and control does."
+order: 3
+---
+
 # Survey view
 
 The main window of an open project: the map, with **Sections** on the left,

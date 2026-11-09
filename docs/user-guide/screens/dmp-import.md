@@ -1,3 +1,9 @@
+---
+title: DMP import
+description: "Every step of importing an mNemo DMP file: section selection, zero datum, suggested connections from reference shots, and placing the rest by hand."
+order: 9
+---
+
 # DMP import
 
 Imports an mNemo `.dmp` file into the open project, in steps. Opened by

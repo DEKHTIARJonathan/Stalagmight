@@ -1,3 +1,9 @@
+---
+title: Errors and warnings
+description: "The difference between errors and warnings in Stalagmight, which checks are errors, and the per-project thresholds that decide when warnings appear."
+order: 2
+---
+
 # Errors and warnings
 
 - **Error** (red): the data is impossible, for example a shot shorter than its

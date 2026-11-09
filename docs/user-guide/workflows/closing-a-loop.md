@@ -1,3 +1,9 @@
+---
+title: Closing a loop
+description: "Record a loop closure between two stations that cannot be merged, check its misclosure error, view the adjusted survey, and remove the closure later."
+order: 7
+---
+
 # Closing a loop
 
 Use the **Merge** tool on two stations that cannot be merged: their sections

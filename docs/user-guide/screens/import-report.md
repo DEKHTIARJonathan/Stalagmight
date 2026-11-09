@@ -1,3 +1,9 @@
+---
+title: Import report
+description: "The report shown after an import from another format: what was imported, where the zero datum went, and anything that did not come in as it was."
+order: 12
+---
+
 # Import report
 
 Shown after an import from another format: what was imported, and anything that

@@ -1,3 +1,9 @@
+---
+title: Merging stations
+description: "Join two survey sections at a shared station with the Merge tool or the station menu, see which side moves, and unmerge stations again if needed."
+order: 6
+---
+
 # Merging stations
 
 Joins two sections at a shared station. Useful when a section could not be

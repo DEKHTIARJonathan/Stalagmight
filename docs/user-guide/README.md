@@ -39,6 +39,8 @@ How to use Stalagmight. Pages link to each other.
 - Link to a page instead of repeating it.
 - `workflows/` = tasks, `screens/` = one page per screen, `concepts/` = terms
   and ideas. New kind of page = new folder, listed above.
+- A new page goes in the lists above and in its folder's `index.md`, in the
+  same position.
 - Screenshots: `images/<what-it-shows>.png`, 1920x1080 window, clean profile (no
   recent projects, signed out of SpeleoDB). Use example data made for the docs,
   never a private survey or account details.

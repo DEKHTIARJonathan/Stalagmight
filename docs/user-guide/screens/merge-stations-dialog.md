@@ -1,3 +1,9 @@
+---
+title: Merge Stations dialog
+description: "The Merge Stations dialog confirms the two stations to merge, and explains which section moves, what stays fixed and when a merge is refused."
+order: 13
+---
+
 # Merge Stations dialog
 
 Confirms which two stations get merged. Opens after the second click with the

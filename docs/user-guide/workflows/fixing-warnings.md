@@ -1,3 +1,9 @@
+---
+title: Fixing warnings
+description: "Find and fix problems in survey data with the Warnings panel: see them colored on the map, then resolve each one with a suggested fix and preview."
+order: 3
+---
+
 # Fixing warnings
 
 1. Open the **Warnings** tab in the [survey view](../screens/survey-view.md).

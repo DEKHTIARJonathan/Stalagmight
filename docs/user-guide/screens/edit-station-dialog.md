@@ -1,3 +1,9 @@
+---
+title: Edit Station dialog
+description: "The Edit Station dialog: add a station comment or make the station a zero datum, with every GPS coordinate format and map link it accepts."
+order: 7
+---
+
 # Edit Station dialog
 
 Opened by **Edit Station** or **Set Zero Datum** in the

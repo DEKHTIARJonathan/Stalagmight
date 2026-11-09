@@ -1,3 +1,9 @@
+---
+title: Import Ariane Survey dialog
+description: "The Import Ariane Survey dialog: preview the survey, pick sections, and choose its position, how comments are kept and how virtual shots are read."
+order: 11
+---
+
 # Import Ariane Survey dialog
 
 Shows what is in an Ariane `.tml` / `.tmlu` file and imports it. Comes after

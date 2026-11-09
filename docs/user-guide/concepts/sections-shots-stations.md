@@ -1,3 +1,9 @@
+---
+title: Sections, shots and stations
+description: "Stalagmight's survey terms: stations, shots and their kinds (permanent, jump, reference), sections, LRUD, merging, loop closures and zero datums."
+order: 1
+---
+
 # Sections, shots and stations
 
 - **Station**: a tie-off.

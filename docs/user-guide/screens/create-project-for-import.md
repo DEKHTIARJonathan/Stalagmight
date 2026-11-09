@@ -1,3 +1,9 @@
+---
+title: Create Project for Import dialog
+description: "The Create Project for Import dialog: name the new project for a survey from another program, choose where the file is saved, and add a location."
+order: 10
+---
+
 # Create Project for Import dialog
 
 Opening a survey from another program (Ariane, mNemo, Compass, Walls, GPX) on

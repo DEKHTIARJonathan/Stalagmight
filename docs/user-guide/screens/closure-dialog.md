@@ -1,3 +1,9 @@
+---
+title: Create Loop Closure dialog
+description: "The Create Loop Closure dialog: the two stations that close a loop, the path length around it, and the misclosure error with its color bands."
+order: 14
+---
+
 # Create Loop Closure dialog
 
 Shows which two stations close the loop, and how far the survey misses. Opens

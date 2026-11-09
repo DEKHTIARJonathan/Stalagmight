@@ -1,3 +1,9 @@
+---
+title: Warnings panel
+description: "The Warnings panel lists errors and warnings in the survey data, colors them on the map, and offers fixes you can preview before applying them."
+order: 8
+---
+
 # Warnings panel
 
 The **Warnings** tab of the right panel. It lists problems in the survey

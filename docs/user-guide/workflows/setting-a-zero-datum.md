@@ -1,3 +1,9 @@
+---
+title: Setting a zero datum
+description: "Tie a station to its real-world GPS position by setting a zero datum from the station menu, using coordinates or a map link in any common format."
+order: 2
+---
+
 # Setting a zero datum
 
 A [zero datum](../concepts/sections-shots-stations.md) ties one station to a

@@ -1,3 +1,9 @@
+---
+title: Importing an Ariane survey
+description: "Turn an Ariane TML or TMLU survey into a new Stalagmight project: create the project, pick sections and placement, then review the import report."
+order: 5
+---
+
 # Importing an Ariane survey
 
 1. On the [start screen](../screens/start-screen.md), click **Open / Import**

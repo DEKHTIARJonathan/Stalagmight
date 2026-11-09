@@ -1,3 +1,9 @@
+---
+title: Start screen
+description: "The first screen you see in Stalagmight: start a new project, or open a Stalagmight project and import surveys from Ariane, mNemo, Compass, Walls or GPX."
+order: 1
+---
+
 # Start screen
 
 Shown at launch until you open a project. After that it lists recent projects.

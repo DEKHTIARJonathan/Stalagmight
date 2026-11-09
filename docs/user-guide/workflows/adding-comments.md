@@ -1,3 +1,9 @@
+---
+title: Adding comments
+description: "Add, edit or remove comments on stations and shots with the Comment tool, save with Enter, and show comments on the map from the Display menu."
+order: 8
+---
+
 # Adding comments
 
 1. In the [survey view](../screens/survey-view.md), pick **Comment** in the

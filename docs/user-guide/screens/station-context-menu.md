@@ -1,3 +1,9 @@
+---
+title: Station context menu
+description: "The menu that opens when you right-click a station: edit it, merge, add shots, set a zero datum, unmerge, remove closures, or delete stations."
+order: 6
+---
+
 # Station context menu
 
 Right-click a station on the map.

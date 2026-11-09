@@ -1,3 +1,9 @@
+---
+title: New Project dialog
+description: "The New Project dialog: name a new survey project, add its location, and choose whether the project file is saved now or once data is added."
+order: 2
+---
+
 # New Project dialog
 
 Names a new project. Opened by **New project** on the

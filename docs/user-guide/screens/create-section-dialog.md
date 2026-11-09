@@ -1,3 +1,9 @@
+---
+title: Import / Create Section dialog
+description: "The Import / Create Section dialog: enter a section's name, surveyor, date and color, then its shots, including length, azimuth, depths and LRUD."
+order: 4
+---
+
 # Import / Create Section dialog
 
 Creates a section from shots you type or paste in. Opened by **Add section** in

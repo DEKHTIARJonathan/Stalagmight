@@ -1,3 +1,9 @@
+---
+title: Creating a new survey
+description: "Create a new survey project in Stalagmight: name it, add a section by hand or import one, place it on the map and check the warnings."
+order: 1
+---
+
 # Creating a new survey
 
 1. On the [start screen](../screens/start-screen.md), click **New project**.
