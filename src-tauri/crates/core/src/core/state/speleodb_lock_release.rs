@@ -74,15 +74,7 @@ impl AppState {
     /// Shared body of the two snapshots above. `intent` is what separates a silent
     /// release from a deliberate one.
     fn speleodb_lock_release_params(&self, intent: ReleaseIntent) -> Option<LockReleaseParams> {
-        // #213: a force-editor is edit-enabled but holds NO lock, so there is nothing
-        // to release on close / app-exit / project-switch.
-        //
-        // A lock can survive a failed release or a fresh load with its edit gate
-        // still shut. `scanLocksOnOpen` checks the server on app open and login,
-        // so recovery does not depend on the gate or a local claim. Deliberately
-        // retained internal claims and the un-pushed-edits veto are protected by
-        // `LockClaim::kept`; normal user-facing close and quit release the lock.
-        if self.force_editing() || (intent != ReleaseIntent::Lifecycle && !self.edit_enabled()) {
+        if intent != ReleaseIntent::Lifecycle && !self.edit_enabled() {
             return None;
         }
         // A `.ok()?` here used to collapse REAL failures into the ordinary "nothing
@@ -160,17 +152,8 @@ impl AppState {
         })
     }
 
-    /// Record an internal close that deliberately retains the open project's lock.
-    ///
-    /// Called INSTEAD of a release, and before the teardown, because it reads
-    /// the link row the teardown is about to drop the handle on. A no-op when
-    /// there is no held lock to keep (a local project, a read-only open, a
-    /// force-editor). See [`LockClaim::kept`](super::speleodb_session::LockClaim)
-    /// for what the mark is for: without it the janitor cannot tell this from a
-    /// session that died holding a lock, and hands the mutex back on the next
-    /// status refresh.
     pub fn speleodb_keep_open_lock_deliberately(&self) {
-        if !self.edit_enabled() || self.force_editing() {
+        if !self.edit_enabled() {
             return;
         }
         if let Ok(link) = self.speleodb_open_link() {

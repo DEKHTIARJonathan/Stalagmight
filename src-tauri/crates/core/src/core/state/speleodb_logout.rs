@@ -106,23 +106,9 @@ impl AppState {
             return;
         }
         match self.speleodb_open_link() {
-            // Remote edit session: best-effort RELEASE the lock (needs the token, so
-            // before `forget`), then drop the gates. #213: a force-editor holds NO
-            // lock, so the release is a no-op there but the gates still drop.
-            //
-            // Through the SHARED gate, which vetoes the release when the project still
-            // has un-pushed edits (it also re-checks the force-edit case). Logging out
-            // is not the same act as giving up the lock: unlike unlink / take-remote -
-            // the two verbs that legitimately bypass the veto - a logout neither
-            // deletes the link row nor discards the local edits, so the asymmetry the
-            // veto exists for applies in full. A lock left held is recoverable (the
-            // re-login scan raises the held-lock prompt, which offers to resume it),
-            // whereas a lock freed over stranded edits lets a colleague lock and push,
-            // leaving weeks of local survey reachable only through a divergence.
             Ok(_) => {
                 self.speleodb_release_held_lock_best_effort();
                 self.set_edit_enabled(false);
-                self.set_force_editing(false);
             }
             // Local-only project (no hand-off link): no lock, nothing to push - keep
             // it editable.
@@ -134,7 +120,6 @@ impl AppState {
             // project_id available here, so no lock release.)
             Err(_) => {
                 self.set_edit_enabled(false);
-                self.set_force_editing(false);
             }
         }
     }

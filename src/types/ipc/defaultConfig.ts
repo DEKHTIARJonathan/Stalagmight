@@ -357,7 +357,6 @@ export const defaultConfig: Config = {
     "endpoint": null,
     "email": null,
     "insecure_http": false,
-    "allow_force_edit": false,
     "undo_mode": "full"
   }
 };

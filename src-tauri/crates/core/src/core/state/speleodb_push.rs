@@ -168,15 +168,6 @@ impl AppState {
     ) -> Result<DoneResult, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
 
-        // #213: a force-editor is edit-enabled but holds NO lock, so Done cannot push
-        // (the server would 403 the lockless upload). The FE offers "Reconnect to
-        // sync" (Start editing) instead; guard here as a backstop.
-        if self.force_editing() {
-            return Err(local_dto(SpeleoDbError::Io(
-                "reconnect to acquire the write lock before pushing".to_owned(),
-            )));
-        }
-
         // Edit-session gate: Done acts only on an ACTIVE edit session. The edit gate
         // is set true only by Start editing (after acquiring the lock) / its FF arm,
         // so `!edit_enabled` means we hold no lock - opened read-only, or already
@@ -275,14 +266,6 @@ impl AppState {
         accept_older_version: bool,
     ) -> Result<PushResult, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
-
-        // #213: a force-editor holds no lock, so a push would 403. Refuse with the
-        // same reconnect hint as Done (the FE never offers push in force-edit).
-        if self.force_editing() {
-            return Err(local_dto(SpeleoDbError::Io(
-                "reconnect to acquire the write lock before pushing".to_owned(),
-            )));
-        }
 
         // Push acts only on an ACTIVE edit session (a held lock); without it there
         // is no lock and nothing to push - answer locally rather than earn a
@@ -488,25 +471,7 @@ impl AppState {
         ) {
             ReconcileVerdict::UpToDate => Ok(UpdateResult::UpToDate),
             ReconcileVerdict::FastForward => {
-                // speleodb_fast_forward reloads in place, which re-derives the edit
-                // gate from is_remote (= false for a remote project). If the caller
-                // was mid-edit-session (gate on, lock held - reachable if the lock
-                // lapsed/was admin-released and another writer advanced the tip),
-                // a clean FF must NOT silently strip editability; restore it after
-                // the reload, mirroring speleodb_start_editing's FF arm. Captured
-                // BEFORE the reload (which sets the gate false). FF only fires with
-                // dirty == false, so there are no un-pushed edits to strand.
-                //
-                // The pair, not `edit_enabled` alone (#213, matching the release
-                // verbs): a force-editor is edit-enabled while holding NO lock, and
-                // the reload clears `force_editing`. Restoring on the gate alone
-                // therefore laundered a lockless force-edit session into an
-                // ordinary-looking editing one - editable, un-flagged, and with the
-                // big-red "this .stalx cannot be merged" banner gone. Only a genuine
-                // lock-holding session is restored; a force-editor lands read-only
-                // (nothing to strand - FF requires a clean copy) and re-enters
-                // deliberately via Start editing or Force edit.
-                let was_editing = self.edit_enabled() && !self.force_editing();
+                let was_editing = self.edit_enabled();
                 // Captured BEFORE the reload, which shuts the gate and lets a refresh
                 // landing in that window clear the record: this is the last point the
                 // pre-reload truth exists. Kept SEPARATE from `was_editing` on
@@ -585,6 +550,7 @@ impl AppState {
         message: Option<String>,
     ) -> Result<PushOutcome, SpeleoErrorDto> {
         let project_id = &link.project_id;
+        self.speleodb_require_owned_lock(link)?;
 
         // Authoritative server tip - the revision topology, NOT the unreliable
         // latest_commit field (see speleodb_server_head). The fetched history is
@@ -701,7 +667,7 @@ impl AppState {
             // describes the needle rather than quoting it.)
             match client::get_project(endpoint, token, insecure_http, project_id) {
                 Ok(fetched) => {
-                    self.speleodb_fold_local_name(&fetched.name);
+                    self.speleodb_fold_local_name(&fetched.name, project_id);
                     server_kind = Some(fetched.kind);
                 }
                 Err(e) => tracing::warn!(

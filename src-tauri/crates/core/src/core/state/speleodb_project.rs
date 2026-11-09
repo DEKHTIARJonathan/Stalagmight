@@ -125,6 +125,7 @@ impl AppState {
     /// confirmation states this). A 403 surfaces as an error the button reports.
     pub fn speleodb_set_exclude_geojson(&self, exclude: bool) -> Result<(), SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
+        self.speleodb_require_owned_lock(&link)?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
         let payload = serde_json::json!({ "exclude_geojson": exclude }).to_string();
@@ -167,6 +168,7 @@ impl AppState {
         patch: SpeleoProjectMetadataPatch,
     ) -> Result<SpeleoProjectMetadata, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
+        self.speleodb_require_owned_lock(&link)?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
@@ -201,7 +203,7 @@ impl AppState {
         // Fold the (possibly server-normalized) name into the open `.stalx` when it
         // was edited, so the embedded project name tracks SDB without dirtying.
         if patch.name.is_some() {
-            self.speleodb_fold_local_name(&updated.name);
+            self.speleodb_fold_local_name(&updated.name, &link.project_id);
         }
 
         Ok(SpeleoProjectMetadata::from_project(&updated))
@@ -213,38 +215,37 @@ impl AppState {
     /// touches the `speleo_link` table), and refresh the link's cached `project_name`.
     /// Best-effort - a failure is logged, never surfaced (the server write already
     /// landed). Locks project → database in that order (mirrors `speleodb_render_tml`).
-    pub(super) fn speleodb_fold_local_name(&self, name: &str) {
-        // Snapshot + update the in-memory name under the project lock, then release it
-        // before taking the database lock (project → database order).
-        let to_persist = match self.project.lock() {
-            Ok(mut proj_guard) => match proj_guard.as_mut() {
-                Some(project) if project.name != name => {
-                    project.name = name.to_owned();
-                    Some(project.clone())
-                }
-                _ => None,
-            },
-            Err(_) => None,
+    pub(super) fn speleodb_fold_local_name(&self, name: &str, project_id: &str) {
+        // Keep project -> database locked across the identity check and both writes.
+        // A late PATCH/GET response must never rename the replacement project.
+        let Ok(mut project_guard) = self.project.lock() else {
+            return;
         };
-        if let Some(project) = to_persist {
-            if let Ok(mut db_guard) = self.database.lock() {
-                if let Some(db) = db_guard.as_mut() {
-                    if let Err(e) = db.save_project(&project) {
-                        tracing::warn!(
-                            error = %e,
-                            purpose = "fold SDB-authoritative name into local .stalx",
-                            "speleodb: failed to persist folded project name"
-                        );
-                    }
-                }
+        let Some(open) = project_guard.as_mut() else {
+            return;
+        };
+        let Ok(mut database_guard) = self.database.lock() else {
+            return;
+        };
+        let Some(db) = database_guard.as_mut() else {
+            return;
+        };
+        let Ok(Some(mut link)) = db.load_speleo_link() else {
+            return;
+        };
+        if link.project_id != project_id {
+            return;
+        }
+        if open.name != name {
+            open.name = name.to_owned();
+            if let Err(error) = db.save_project(open) {
+                tracing::warn!(%error, "could not persist the SpeleoDB project name");
             }
         }
-        // Keep the cached link name in step (dirty bit deliberately untouched).
-        let _ = self.speleodb_mutate_link(|l| {
-            if l.project_name != name {
-                l.project_name = name.to_owned();
-            }
-        });
+        link.project_name = name.to_owned();
+        if let Err(error) = db.save_speleo_link(Some(&link)) {
+            tracing::warn!(%error, "could not persist the SpeleoDB link name");
+        }
     }
 
     /// [#207] Create the OPEN local project on SpeleoDB and push its first revision.

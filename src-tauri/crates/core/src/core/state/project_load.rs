@@ -323,8 +323,6 @@ impl AppState {
         // which came from the same handle before `db` moves.
         let is_remote = speleo_link.is_some();
         self.set_edit_enabled(!is_remote);
-        // #213: force-edit is per-session; a fresh open never starts force-editing.
-        self.set_force_editing(false);
 
         *self
             .database
@@ -988,8 +986,6 @@ impl AppState {
         // before `db` is moved into the handle slot.
         let is_remote = speleo_link.is_some();
         self.set_edit_enabled(!is_remote);
-        // #213: force-edit is per-session; a fresh open never starts force-editing.
-        self.set_force_editing(false);
 
         // Commit 2: Database handle mutation
         *self

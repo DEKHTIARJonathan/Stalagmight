@@ -210,42 +210,6 @@ impl AppState {
         Ok((generation, link))
     }
 
-    /// Start Editing's commit: open the edit gate, mint the acquisition record
-    /// (when `acquired_here`), and clear force-edit - IF the session the caller
-    /// started from is still the session on screen. All under one `project`
-    /// acquisition, which is what makes the check and the commit atomic against
-    /// every bump site (rule 1).
-    ///
-    /// `entry_generation`:
-    /// - `Some(gen)` - the UpToDate arm: refuse if ANY session boundary passed
-    ///   since the entry snapshot.
-    /// - `None` - the fast-forward arm, whose own in-place reload IS a session
-    ///   boundary (close + reopen), so a generation captured at entry is
-    ///   guaranteed stale by the time it commits. Identity does the work
-    ///   instead: the open project must still be linked to `project_id`. The
-    ///   residual this accepts is benign by construction - if a teardown AND a
-    ///   re-open of the SAME project raced the reload, the commit lands on a
-    ///   world where that project is open at its canonical path and this
-    ///   process genuinely holds its mutex (the acquire happened and nothing
-    ///   released it), so gate + record + lock still agree.
-    ///
-    ///   What makes identity ENOUGH is not identity: it is that the one boundary
-    ///   identity cannot see is excluded from the caller's span. Every other
-    ///   boundary moves the project slot (close, delete, switch), so the link
-    ///   comparison below catches it. LOGOUT does not - it ends the session and
-    ///   leaves the slot exactly where it was - and a logout landing after the
-    ///   reload therefore passed this check and reopened the edit gate for a
-    ///   signed-out user, on a remote project whose mutex this process still held
-    ///   (round 6). It cannot land there any more: logout takes
-    ///   `speleodb_lock_ops`, which Start Editing holds from before its first
-    ///   read through this commit, so it runs strictly before the flow (whose
-    ///   token read then fails) or strictly after it. Anything that gives a
-    ///   session boundary a way past that guard puts this arm back where it was.
-    ///
-    /// On refusal nothing has been committed: the gate stays as the successor
-    /// world set it, and no record is minted. The caller decides what to do
-    /// with the server lock it acquired - see
-    /// [`AppState::speleodb_unwind_release`].
     pub(super) fn speleodb_commit_editing(
         &self,
         entry_generation: Option<u64>,
@@ -284,14 +248,6 @@ impl AppState {
             // the account's claims it happened to find first.
             self.speleodb_note_acquisition_by_this_flow(project_id);
         }
-        // #213: we now genuinely hold the lock, so clear force-edit - the
-        // "reconnect" transition for a force-editor, a no-op otherwise.
-        self.set_force_editing(false);
-        // #202: a fresh-verdict commit (UpToDate) confirmed BASE == tip as of the
-        // acquire, so start the lazy re-verify window here (best-effort; a failed
-        // stamp just makes the first edit re-verify sooner). The fast-forward arm
-        // passes `None` and does NOT stamp here - its reload already re-stamped
-        // the link, `last_verify_at` included.
         if entry_generation.is_some() {
             let _ = self.speleodb_mutate_link(|l| {
                 l.last_verify_at = Some(chrono::Utc::now().to_rfc3339());
@@ -480,27 +436,6 @@ impl AppState {
             .is_ok()
     }
 
-    /// Whether a LIVE edit session currently accounts for `project_id`'s server
-    /// mutex: the open project is linked to it and the edit gate is open without
-    /// force-edit (a force-editor holds no lock by definition). Link and gate
-    /// are read under the `project` mutex so they describe one world.
-    ///
-    /// This is the reclaim check's second eye. A successor session that
-    /// INHERITED the account's lock never minted an acquisition record - its
-    /// probe saw the mutex already held (the capturing session's release had
-    /// not POSTed yet), and recording an inheritance as an acquisition is the
-    /// footgun the probe exists to prevent - so a reclaim check that reads only
-    /// `lock_acquired_here` frees the mutex out from under exactly the
-    /// successors the stand-down is for. The gate + link ARE that successor's
-    /// footprint: its commit opened the gate on a project linked to this id,
-    /// under the same lock-ops span that keeps this answer stable.
-    ///
-    /// `endpoint` is the DEPLOYMENT the captured release is for, and it is half
-    /// the question. A project id identifies a project on one server; a cloned
-    /// or restored deployment can hold the same UUID, and a session editing THAT
-    /// project accounts for nothing on the server whose mutex is about to be
-    /// left held. The link carries its own endpoint, so the comparison is
-    /// available and the id alone was never enough.
     pub(super) fn speleodb_live_session_accounts_for(
         &self,
         project_id: &str,
@@ -510,7 +445,7 @@ impl AppState {
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if !self.edit_enabled() || self.force_editing() {
+        if !self.edit_enabled() {
             return false;
         }
         self.speleodb_open_link().is_ok_and(|link| {
@@ -997,7 +932,7 @@ mod tests {
             .expect("nothing moved, so the commit lands");
 
         assert!(state.edit_enabled(), "the gate is open");
-        assert!(!state.force_editing(), "force-edit is cleared");
+
         assert!(
             state.speleodb_lock_acquired_here(ID),
             "the acquisition record was minted"

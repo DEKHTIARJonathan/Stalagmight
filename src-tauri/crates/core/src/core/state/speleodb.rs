@@ -1,27 +1,3 @@
-//! Orchestration tying the `crate::speleodb` primitives (HTTP client, token
-//! store, native SQLite transfer) to `AppState`, config, and the app cache directory.
-//!
-//! The `commands::speleodb` IPC layer is a thin wrapper over these methods.
-//!
-//! What lives here (the whole single-writer hand-off, #182):
-//! - **session**: login / logout / status, the lazy silent rehydration that
-//!   revives a saved token after a restart, and the centralized 401 auto-drop.
-//! - **pull**: list STALAGMIGHT projects and download native SQLite files into
-//!   the app cache (see `speleodb_cache` for the replacement boundary).
-//! - **lock + edit gate**: acquire on Start editing (with the reconcile verdict),
-//!   optimistic force-edit without a lock, periodic re-verify, and the
-//!   release paths (Done / logout / close / app-exit).
-//! - **take-remote**: abandoning local work for the server's copy.
-//! - **persistence**: the `speleo_link` row that makes a project remote (and
-//!   `speleodb_unlink`, which makes it plain again).
-//! - **project settings**: metadata PATCH, publish and lock release.
-//!
-//! Split out along this same axis, and no longer here: the **push** half - the
-//! BASE-SHA fence, snapshot sanitize, upload, the divergence / unconfirmed
-//! outcomes, and the Done / Push / Update verdicts - now lives in
-//! [`super::speleodb_push`] (#275). Revision history and the View / Restore swap
-//! live in [`super::speleodb_revisions`].
-
 use std::path::PathBuf;
 
 use super::speleodb_cache::LocalEditsPolicy;
@@ -354,16 +330,6 @@ impl AppState {
             .is_some_and(|c| c.speleodb.insecure_http)
     }
 
-    /// [#213] Read the persisted `allow_force_edit` opt-in under the config lock.
-    /// Gates `speleodb_force_edit`; defaults `false` (strict read-only-until-locked)
-    /// when the config lock is unavailable.
-    pub(super) fn speleodb_allow_force_edit(&self) -> bool {
-        self.config
-            .lock()
-            .ok()
-            .is_some_and(|c| c.speleodb.allow_force_edit)
-    }
-
     pub(super) fn speleodb_session_lock(
         &self,
     ) -> Result<std::sync::MutexGuard<'_, SpeleoDbSession>, SpeleoDbError> {
@@ -468,8 +434,6 @@ impl AppState {
                     // unconditional there), so report the global default and leave the
                     // control - which only renders for a remote project - unbothered.
                     undo_mode: self.undo_mode_status(),
-                    force_editing: self.force_editing(),
-                    allow_force_edit: self.speleodb_allow_force_edit(),
                     project_id: None,
                 });
             }
@@ -496,6 +460,7 @@ impl AppState {
         }
         let has_unpushed_edits = link.has_unpushed_edits;
 
+        let status_generation = self.speleodb_session_generation();
         // Best-effort network enrichment: the user's permission tier + lock holder
         // (get_project), and the remote-state reconcile verdict (revision topology,
         // the #202 freshness fold). Guard the request URL with the same project-id
@@ -514,6 +479,16 @@ impl AppState {
                             &link.project_id,
                         ) {
                             Ok(p) => {
+                                if self.speleodb_session_generation() == status_generation
+                                    && (!lock_held_by_me(
+                                        p.active_mutex.as_ref().map(|mutex| mutex.user.as_str()),
+                                        self.speleodb_my_email().as_deref(),
+                                    ) || p.permission.is_some_and(|permission| {
+                                        permission < crate::speleodb::Permission::ReadAndWrite
+                                    }))
+                                {
+                                    self.set_edit_enabled(false);
+                                }
                                 // Only now (the project is reachable) is the revision-
                                 // topology fold worth a SECOND round trip. On every
                                 // error arm below the remote state is Unknown anyway
@@ -544,11 +519,17 @@ impl AppState {
                             // collaborator on this managed project - flag it so the
                             // UI can offer converting to a local file (fix 10).
                             Err(SpeleoDbError::Status { status: 403, .. }) => {
+                                if self.speleodb_session_generation() == status_generation {
+                                    self.set_edit_enabled(false);
+                                }
                                 (None, None, RemoteState::Unknown, true, None, false)
                             }
                             // A 401 is a dead token (re-login) handled by the edit
                             // verbs; this passive probe must not nag about it.
                             Err(SpeleoDbError::Status { status: 401, .. }) => {
+                                if self.speleodb_session_generation() == status_generation {
+                                    self.set_edit_enabled(false);
+                                }
                                 (None, None, RemoteState::Unknown, false, None, false)
                             }
                             // Any OTHER status (a 404 for a deleted/renamed project,
@@ -574,6 +555,12 @@ impl AppState {
                 (None, None, RemoteState::Unknown, false, None, false)
             };
 
+        if self.speleodb_session_generation() != status_generation {
+            return Err(local_dto(SpeleoDbError::Io(
+                "project session changed during status refresh".to_owned(),
+            )));
+        }
+        let edit_enabled = self.edit_enabled();
         // Invariant: holding the write lock means we may edit. If we hold it but the
         // gate is off - e.g. we reopened a project we'd locked but not released, and
         // the load re-derived the gate as read-only from is_remote - resume editing
@@ -587,6 +574,8 @@ impl AppState {
         // free the mutex - leaving a session editing a remote project with no
         // server lock and no record of one.
         let edit_enabled = if !edit_enabled
+            && permission
+                .is_some_and(|permission| permission >= crate::speleodb::Permission::ReadAndWrite)
             && lock_held_by_me(lock_holder.as_deref(), self.speleodb_my_email().as_deref())
         {
             self.speleodb_reopen_gate_for_inherited_lock(&link)
@@ -612,13 +601,6 @@ impl AppState {
             // [#303] Resolved from the explicit project value. The global default is
             // consulted only while initializing a legacy NULL on open.
             undo_mode: self.undo_policy_for(Some(&link)).mode,
-            // #213: report force-edit so the FE renders the big-red banner + offers
-            // Reconnect. An online force-editor whose tip moved already surfaces via
-            // `remote_state` (RemoteAhead/Conflict); offline it stays Unknown (skipped).
-            force_editing: self.force_editing(),
-            allow_force_edit: self.speleodb_allow_force_edit(),
-            // #218: the open remote project's id, so the in-project menu can open its
-            // revision history without a separate id lookup.
             project_id: Some(link.project_id.clone()),
         })
     }
@@ -642,37 +624,8 @@ impl AppState {
         lock_holder: Option<&str>,
     ) -> RemoteState {
         let my_email = self.speleodb_my_email().unwrap_or_default();
-        // What licenses the authorship recovery in `status_verdict`: a commit in the
-        // BASE..tip gap can only be OUR unrecorded push if THIS process was the
-        // single writer when it was made.
-        //
-        // The edit gate is NOT that evidence, which is why it is not read here.
-        // `speleodb_link_status` re-derives the gate from the holder email itself, so
-        // pairing the two only reads one signal twice: a second session on the same
-        // account holds the real lock, the refresh opens this process's gate because the
-        // holder is "us", and the other session's commit gets explained away as our
-        // own unrecorded push. What this asks instead is whether THIS process took
-        // the lock on THIS project and is still editing under it - a claim only a
-        // successful Start editing makes, cleared on every release and on the first
-        // refresh that finds the gate shut. A lock inherited from an earlier run, or one
-        // a sibling session holds, records nothing and licenses nothing.
-        //
-        // A #213 force-edit session is excluded twice over: it records no acquisition
-        // (it opens the gate precisely because it could NOT take a lock), and the flag
-        // is re-checked here because force-edit can be entered after a release has
-        // shut the gate but before the refresh that clears the record has run.
-        // (The frontend's `holdsWriteLock` is the same shape: `editing &&
-        // !forceEditing`.)
-        //
-        // The gate is asked for TOO - not as evidence of authorship, but as a veto.
-        // The record can outlive a gate that shut underneath an in-flight refresh (a
-        // concurrent same-path reopen re-derives the gate from `is_remote` and the
-        // catch-all clear may not have run yet), and a session that may no longer
-        // edit must not still be handed a licence to explain a gap commit away as
-        // its own. Gate AND record AND holder, or no shortcut.
         let we_hold_the_lock = self.speleodb_lock_acquired_here(&link.project_id)
             && self.edit_enabled()
-            && !self.force_editing()
             && lock_holder.is_some_and(|holder| holder.eq_ignore_ascii_case(&my_email));
         match head_with_empty_retry(link.base_commit_sha.as_deref(), || {
             self.speleodb_server_head(endpoint, token, insecure_http, &link.project_id)
@@ -980,60 +933,6 @@ impl AppState {
         ))
     }
 
-    /// [#213] Optimistic force-edit (E2): enable editing on the open remote project
-    /// WITHOUT acquiring the server write lock - for surveying offline, or when
-    /// someone else holds the lock. Opt-in (gated on `allow_force_edit`); the FE
-    /// shows a big-red "this `.stalx` cannot be merged" warning before calling this.
-    ///
-    /// Changes nothing else about the state model: no acquire, no network, BASE
-    /// never moves; edits set the dirty bit through the normal gated-mutation path.
-    /// The user later reconnects via `speleodb_start_editing` (bare acquire + the same
-    /// BASE-vs-tip fence). A force-editor is exempt from the #202 lock re-verify and
-    /// from every lock-release path (it holds no lock).
-    pub fn speleodb_force_edit(&self) -> Result<(), SpeleoErrorDto> {
-        if !self.speleodb_allow_force_edit() {
-            return Err(local_dto(SpeleoDbError::Io(
-                "force-edit is disabled; enable it in SpeleoDB settings first".to_owned(),
-            )));
-        }
-        // Must be a remote project (a local project is already freely editable).
-        let _link = self.speleodb_validated_link()?;
-        // Refuse when we are already editing WITH the lock held (nothing to force).
-        if self.edit_enabled() && !self.force_editing() {
-            return Err(local_dto(SpeleoDbError::Io(
-                "already editing with the write lock held".to_owned(),
-            )));
-        }
-        // [#303] Clear-on-lock, best-effort arm (q24). A force-edit takes NO lock and
-        // runs no reconcile, so the "copy matches git" fence cannot be evaluated here -
-        // but a force-editor is starting an edit session all the same, and the stack it
-        // would start with is still whatever the last pusher shipped. Clearing
-        // unconditionally is the safe direction: force-edit already carries the big-red
-        // unmergeable-`.stalx` warning, so losing an inherited history is the least of
-        // what that session is accepting.
-        self.speleodb_clear_inherited_undo("force-edit session started without a lock");
-        self.set_edit_enabled(true);
-        self.set_force_editing(true);
-        Ok(())
-    }
-
-    /// Acquire the write lock on the open remote project and reconcile it against
-    /// the server (#194). On a clean reconcile the transient edit gate is enabled;
-    /// on divergence the freshly-taken lock is released and the user is asked to
-    /// reconcile; on contention the lock holder is reported. Errors (no
-    /// permission, an anomalous server state, network) surface as `SpeleoErrorDto`.
-    ///
-    /// Uses the base-SHA fence (#192) - NOT ancestry recovery (#193), which is the
-    /// push path's concern (#197): start-editing only reconciles, it never pushes.
-    /// `set_edit_enabled(true)` happens ONLY on a clean reconcile (UpToDate /
-    /// FastForward), and for FastForward it happens AFTER the in-place reload (the
-    /// reload re-derives the gate from `is_remote` and would otherwise re-disable).
-    ///
-    /// [#213] Doubles as the force-edit RECONNECT: when called while force-editing, a
-    /// clean reconcile (UpToDate / FastForward) clears the force-edit flag because we
-    /// now genuinely hold the lock, while the contention (400 `LockedBy`) and
-    /// `Diverged` arms leave both gates untouched - so a force-editor stays
-    /// force-editing (keeps their edits) rather than reverting to read-only.
     pub fn speleodb_start_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
         // The lock-ops span opens FIRST, before a single fact is read: everything
         // below is decided from facts (the session generation, the link, the
@@ -1272,11 +1171,6 @@ impl AppState {
             &commits,
         ) {
             ReconcileVerdict::UpToDate => {
-                // Gate + acquisition record + force-edit clear + the #202 verify
-                // stamp, committed under the session guard (F7): a teardown inside
-                // the network window above refuses HERE, with nothing committed,
-                // and the unwind hands the acquired lock back unless a successor
-                // session has reclaimed it. See `speleodb_commit_editing`.
                 if let Err(e) =
                     self.speleodb_commit_editing(Some(entry_gen), &link.project_id, acquired_here)
                 {
@@ -1429,12 +1323,7 @@ impl AppState {
             db.save_speleo_link(None)
                 .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
         }
-        // Now a local-only project: it edits freely (the read-only gate hung on the
-        // remote link, which is gone). Clear force_editing too (a force-editor can reach
-        // "save a local copy"): a local project holds no lock concept, and every
-        // force_editing reader assumes an open remote link, so don't leave the flag set.
         self.set_edit_enabled(true);
-        self.set_force_editing(false);
         Ok(())
     }
 
@@ -1500,38 +1389,11 @@ impl AppState {
             LocalEditsPolicy::Discard,
         );
         if result.is_err() {
-            // Unlike a lock release - where the gate drop is a side effect and a
-            // force-editor is exempt (see [`Self::speleodb_release_all_locks`]) - here
-            // the session ending IS what the user asked for: take-remote is them
-            // abandoning this local session in favour of the server tip, and the lock,
-            // if they held one, is already gone above. So drop to read-only even when
-            // the reset failed part-way. Keeping them editing would honour neither
-            // outcome: they would still be editing a project we have just told them we
-            // could not reconcile, over a local copy whose fate is now unclear.
-            // Read-only is also the recoverable direction - they re-enter deliberately
-            // via Start editing (or Force edit), whereas silently continuing piles more
-            // edits onto a tree the reset failed to replace. Their local edits are
-            // untouched on disk until then.
-            //
-            // BOTH gates, never just the first: `edit_enabled == false &&
-            // force_editing == true` must never be observable. `speleodb_link_status`
-            // reports the flag on every refresh, so a stranded one paints the big-red
-            // force-edit banner over a project that is read-only, and pre-empts the
-            // surface that would explain why.
             self.set_edit_enabled(false);
-            self.set_force_editing(false);
         }
         result.map_err(local_dto)
     }
 
-    /// Release the write lock on ONE project by id (#201 per-project "Release" in
-    /// the held-lock resume prompt). Unlike [`Self::speleodb_done`] this targets an
-    /// arbitrary held project (not necessarily the open one) and neither pushes nor
-    /// touches the open project's edit state - EXCEPT when the released lock is the
-    /// open project's own AND we were editing under it, in which case the edit gate
-    /// is dropped so the shell falls back to read-only (mirrors
-    /// [`Self::speleodb_release_all_locks`]). A #213 force-edit session holds no lock
-    /// and so survives untouched.
     pub fn speleodb_release_lock(&self, project_id: String) -> Result<(), SpeleoErrorDto> {
         // Validate the FE-supplied id BEFORE it is interpolated into the request URL
         // (it targets an arbitrary project, so unlike the open-project verbs it does
@@ -1554,13 +1416,7 @@ impl AppState {
             client::release_lock(&endpoint, &token, insecure_http, &project_id),
         )
         .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
-        // If we just released the OPEN project's own lock, drop the edit gate so the
-        // shell falls back to read-only; releasing some other project's lock leaves
-        // the open project untouched. Force-editors are exempt for the same reason as
-        // in [`Self::speleodb_release_all_locks`] - they hold no lock, so nothing
-        // released here was theirs to lose.
         if self.edit_enabled()
-            && !self.force_editing()
             && self
                 .speleodb_open_link()
                 .is_ok_and(|l| l.project_id == project_id)
@@ -1762,12 +1618,7 @@ impl AppState {
     /// - Transient / offline GET failure: stamp the attempt (keeps the <=3/hr bound)
     ///   and ALLOW the edit - offline editing stays first-class.
     pub(super) fn speleodb_verify_lock_if_expired(&self) -> Result<(), crate::core::CommandResult> {
-        // Only an active LOCK-HELD edit session on a remote project re-verifies. A
-        // read-only remote project (gate off) or a local project (no link row) never
-        // does. #213: a force-editor holds no lock, so there is nothing to re-verify -
-        // exempt it (the online tip-vs-BASE early warning is surfaced by
-        // speleodb_link_status instead, and skipped offline).
-        if !self.edit_enabled() || self.force_editing() {
+        if !self.edit_enabled() {
             return Ok(());
         }
         let Ok(link) = self.speleodb_open_link() else {
@@ -2902,37 +2753,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn forget_clears_force_editing_on_an_auto_dropped_force_edit_session() {
-        // #213 + the 401 auto-drop, together: the flag has to go with the gate it
-        // rides on. It did not, and `speleodb_link_status` reports it on every refresh -
-        // so the frontend cleared `forceEditing` on the token loss and the very next
-        // refresh re-seeded it true. Its big-red force-edit banner then pre-empted the
-        // durable "your changes are only on this computer" push-failure banner,
-        // hiding the Retry and the typed commit message behind a banner whose only
-        // control (Reconnect) 401s again - while `guard_mutation` refused every edit.
-        let (_temp, state) = remote_fixture_with_dirty_bit(true);
-        enable_force_edit_optin(&state);
-        state.speleodb_force_edit().expect("force-edit opted in");
-        assert!(
-            state.edit_enabled() && state.force_editing(),
-            "precondition: a live force-edit session"
-        );
-
-        state.speleodb_forget();
-
-        assert!(!state.edit_enabled(), "the auto-drop closes the edit gate");
-        assert!(
-            !state.force_editing(),
-            "and clears force-edit with it, so the push-failure surface is reachable"
-        );
-        // The work itself is untouched - the dirty bit is what the banner is about.
-        assert!(
-            state.speleodb_open_link().expect("link").has_unpushed_edits,
-            "the un-pushed edits survive the auto-drop"
-        );
-    }
-
     /// A read-only remote fixture (saved project + `speleo_link`) opened in a fresh
     /// `AppState`. Mirrors `forget_drops_gate_on_remote_edit_session`; the config
     /// opt-in is left OFF (a test enables it when needed). #213.
@@ -2965,7 +2785,7 @@ mod tests {
         let state = AppState::new().expect("state");
         assert!(state.open_project(path).success, "open remote fixture");
         assert!(!state.edit_enabled(), "remote opens read-only");
-        assert!(!state.force_editing(), "remote opens not force-editing");
+
         (temp, state)
     }
 
@@ -3042,80 +2862,6 @@ mod tests {
         );
     }
 
-    fn enable_force_edit_optin(state: &AppState) {
-        state
-            .config
-            .lock()
-            .expect("config lock")
-            .speleodb
-            .allow_force_edit = true;
-    }
-
-    #[test]
-    fn force_edit_refused_without_optin() {
-        // Off by default: a remote read-only project stays read-only; force-edit is
-        // refused and never flips either gate.
-        let (_temp, state) = remote_readonly_fixture();
-        assert!(state.speleodb_force_edit().is_err(), "opt-in is required");
-        assert!(
-            !state.edit_enabled(),
-            "still read-only after a refused force-edit"
-        );
-        assert!(!state.force_editing(), "the flag is never set on refusal");
-    }
-
-    #[test]
-    fn force_edit_flips_both_gates_when_opted_in() {
-        // Opt-in: force-edit enables editing WITHOUT a lock (edit_enabled +
-        // force_editing), no acquire, no network.
-        let (_temp, state) = remote_readonly_fixture();
-        enable_force_edit_optin(&state);
-        state
-            .speleodb_force_edit()
-            .expect("force-edit allowed once opted in");
-        assert!(state.edit_enabled(), "force-edit enables editing");
-        assert!(
-            state.force_editing(),
-            "and marks it as force-editing (no lock)"
-        );
-        // BASE is untouched (no acquire): the link's base_commit_sha is unchanged.
-        let link = state.speleodb_open_link().expect("link");
-        assert_eq!(link.base_commit_sha.as_deref(), Some("abc123"));
-    }
-
-    #[test]
-    fn force_edit_refused_when_already_lock_held() {
-        // If we already hold the lock (normal editing), there is nothing to force.
-        let (_temp, state) = remote_readonly_fixture();
-        enable_force_edit_optin(&state);
-        state.set_edit_enabled(true); // simulate Start editing acquiring the lock
-        assert!(
-            state.speleodb_force_edit().is_err(),
-            "no force-edit while genuinely lock-held"
-        );
-        assert!(
-            !state.force_editing(),
-            "lock-held editing is not force-editing"
-        );
-    }
-
-    #[test]
-    fn force_editing_exempts_reverify_and_lock_release() {
-        // A force-editor holds no lock: the #202 re-verify is a no-op and the
-        // close/exit/switch lock-release snapshot yields nothing to release.
-        let (_temp, state) = remote_readonly_fixture();
-        state.set_edit_enabled(true);
-        state.set_force_editing(true);
-        assert!(
-            state.speleodb_verify_lock_if_expired().is_ok(),
-            "re-verify never fires for a force-editor"
-        );
-        assert!(
-            state.speleodb_held_lock_release_params().is_none(),
-            "a force-editor has no held lock to release"
-        );
-    }
-
     /// An authenticated session pointed at `endpoint` (the loopback stub below, or
     /// any unreachable host), so the release paths get past `speleodb_active_token`.
     fn authed_session_at(endpoint: &str) -> SpeleoDbSession {
@@ -3134,15 +2880,6 @@ mod tests {
     /// The project id `remote_readonly_fixture` links to.
     const REMOTE_ID: &str = "11111111-1111-1111-1111-111111111111";
 
-    /// The remote fixture mid-edit-session: the write lock is held (edit gate on,
-    /// not force-editing) and a token is available, so the silent release gate has
-    /// everything it needs. Clean to start with - the dirty bit is the test's lever.
-    ///
-    /// The acquisition is recorded too, exactly as a successful Start editing does:
-    /// this fixture stands for a session that TOOK the lock, and that provenance -
-    /// not the edit gate - is what licenses the authorship shortcut in
-    /// `speleodb_remote_state`. (The session assignment resets it, so it is recorded
-    /// after.)
     fn editing_fixture(endpoint: &str) -> (TempDir, AppState) {
         let (temp, state) = remote_readonly_fixture();
         *state.speleodb.lock().expect("session lock") = authed_session_at(endpoint);
@@ -3237,9 +2974,6 @@ mod tests {
     #[test]
     fn lifecycle_release_does_not_release_unowned_or_foreign_locks() {
         let (_temp, state) = editing_fixture("https://x/");
-        state.set_force_editing(true);
-        assert!(state.speleodb_lifecycle_lock_release_params().is_none());
-        state.set_force_editing(false);
         state.set_edit_enabled(false);
         state.speleodb_forget_lock_acquired_for(REMOTE_ID);
         assert!(state.speleodb_lifecycle_lock_release_params().is_none());
@@ -3275,15 +3009,15 @@ mod tests {
     }
 
     #[test]
-    fn silent_lock_release_still_honours_the_force_edit_and_read_only_gates() {
+    fn silent_lock_release_honours_the_read_only_gate() {
         // The dirty-bit veto is additive: the pre-existing gates behave as before.
         let (_temp, state) = editing_fixture("https://x/");
-        state.set_force_editing(true);
+        state.set_edit_enabled(false);
         assert!(
             state.speleodb_held_lock_release_params().is_none(),
-            "a force-editor holds no lock to release (#213)"
+            "a read-only session cannot release an editing lock"
         );
-        state.set_force_editing(false);
+        state.set_edit_enabled(true);
         state.set_edit_enabled(false);
         assert!(
             state.speleodb_held_lock_release_params().is_none(),
@@ -3684,18 +3418,7 @@ mod tests {
     }
 
     #[test]
-    fn a_force_editor_does_not_claim_another_sessions_commit_as_its_own() {
-        // The authorship shortcut in `status_verdict` explains a commit in the BASE..tip
-        // gap as OUR unrecorded push, and it is licensed by holding the single-writer
-        // lock. A #213 force-editor holds NO lock - it opens the edit gate precisely
-        // because it could not take one - so `edit_enabled` alone was not the claim
-        // the comment above `we_hold_the_lock` said it was.
-        //
-        // The setup is the concurrent-session case `status_verdict` already refuses on
-        // its own inputs: a second session on the SAME account holds the real lock and
-        // has pushed, so the lock holder's email matches ours. Reported as UpToDate the
-        // status button keeps its resting state, and the divergence the user will
-        // actually hit on Reconnect goes unannounced.
+    fn a_read_only_session_does_not_claim_another_sessions_commit_as_its_own() {
         let (base, _listener) = always_answering_stub(
             r#"{"commits":[{"id":"def456","parent_ids":["abc123"],"author_email":"u@x"},
                            {"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#,
@@ -3712,15 +3435,15 @@ mod tests {
             undo_mode: None,
         };
 
-        state.set_force_editing(true);
+        state.set_edit_enabled(false);
         assert_eq!(
             state.speleodb_remote_state(&base, "tok-1", false, &link, Some("u@x")),
             RemoteState::Conflict,
-            "a force-editor holds no lock, so a gap commit carrying our email is the \
+            "a read-only session holds no lock, so a gap commit carrying our email is the \
              other session's - fail closed to the divergence prompt"
         );
 
-        state.set_force_editing(false);
+        state.set_edit_enabled(true);
         assert_eq!(
             state.speleodb_remote_state(&base, "tok-1", false, &link, Some("u@x")),
             RemoteState::UpToDate,
@@ -3781,17 +3504,6 @@ mod tests {
 
     #[test]
     fn a_shut_edit_gate_withdraws_the_shortcut_even_with_the_record_intact() {
-        // The record answers "did I take this lock?", the gate answers "may I edit?",
-        // and the shortcut needs BOTH. The refresh's catch-all clear is what normally
-        // keeps them in step, but it runs at the TOP of `speleodb_link_status` while
-        // the verdict is folded further down, after a network round trip - so a path
-        // that shuts the gate in between (a concurrent same-path reopen re-deriving it
-        // from `is_remote`) leaves a live record over a project that is no longer
-        // editable, and the shortcut was still granted. A session that may not edit
-        // must not be licensed to claim a gap commit as its own push.
-        //
-        // Same fixture and body as the force-editor sibling above: BASE behind the tip
-        // by one commit carrying our email, so the verdict flips on this input alone.
         let (base, _listener) = always_answering_stub(
             r#"{"commits":[{"id":"def456","parent_ids":["abc123"],"author_email":"u@x"},
                            {"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#,
@@ -3834,9 +3546,52 @@ mod tests {
     /// user - and the tip has moved one commit past BASE, authored by that account.
     const SAME_ACCOUNT_HOLDER_BODY: &str = r#"{
         "id":"11111111-1111-1111-1111-111111111111","name":"Remote",
-        "active_mutex":{"user":"u@x"},
+        "permission":"READ_AND_WRITE","active_mutex":{"user":"u@x"},
         "commits":[{"id":"def456","parent_ids":["abc123"],"author_email":"u@x"},
                    {"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
+
+    #[test]
+    fn remote_metadata_and_upload_require_an_acquired_session() {
+        let (_temp, state) = editing_fixture("https://unreachable.invalid/");
+        state.set_edit_enabled(false);
+        assert!(state.speleodb_set_exclude_geojson(false).is_err());
+        assert!(state
+            .speleodb_patch_project(crate::speleodb::SpeleoProjectMetadataPatch {
+                name: Some("Synthetic rename".to_owned()),
+                description: None,
+                country: None,
+                visibility: None,
+                coordinates_edited: false,
+                latitude: None,
+                longitude: None,
+            })
+            .is_err());
+        assert!(matches!(
+            state.speleodb_push_only(Some("Synthetic upload".to_owned())),
+            Ok(PushResult::NotEditing)
+        ));
+    }
+
+    #[test]
+    fn fresh_write_verification_closes_the_gate_on_confirmed_lock_or_permission_loss() {
+        for body in [
+            r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote","permission":"READ_AND_WRITE","active_mutex":{"user":"other@x"}}"#,
+            r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote","permission":"READ_ONLY","active_mutex":{"user":"u@x"}}"#,
+        ] {
+            let (base, _listener) = always_answering_stub(body);
+            let (_temp, state) = editing_fixture(&base);
+            state.mark_remote_dirty();
+            let link = state.speleodb_open_link().expect("remote link");
+            assert!(state.speleodb_require_owned_lock(&link).is_err());
+            assert!(!state.edit_enabled());
+            assert!(
+                state
+                    .speleodb_open_link()
+                    .expect("preserved link")
+                    .has_unpushed_edits
+            );
+        }
+    }
 
     #[test]
     fn a_second_session_on_the_same_account_never_inherits_the_holders_authorship() {
@@ -3943,7 +3698,7 @@ mod tests {
     /// keep-the-lock arm a unit test can reach.)
     const HELD_BY_SAME_ACCOUNT_AT_BASE_BODY: &str = r#"{
         "id":"11111111-1111-1111-1111-111111111111","name":"Remote",
-        "active_mutex":{"user":"u@x"},
+        "permission":"READ_AND_WRITE","active_mutex":{"user":"u@x"},
         "commits":[{"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
 
     #[test]
@@ -4300,19 +4055,6 @@ mod tests {
 
     #[test]
     fn update_restores_only_a_lock_holding_session_after_a_fast_forward() {
-        // `speleodb_update`'s fast-forward arm reloads in place, which shuts the edit
-        // gate AND clears `force_editing` (project_load re-derives both), then restores
-        // what it captured beforehand. Captured as `edit_enabled()` alone, a #213
-        // force-editor - edit-enabled while holding NO lock - came back out as an
-        // ordinary editing session: editable, `force_editing` false, and the big-red
-        // "this .stalx cannot be merged" banner gone, over a project whose lock was
-        // never acquired. The pair is what the release verbs on this branch ask, and
-        // what `holdsWriteLock` means on the frontend.
-        //
-        // Pinned structurally, like the BASE-advance and quiescent-push tripwires
-        // above: reaching that arm needs a successful fast-forward, and the reload
-        // resolves an app cache dir that only the env-gated live tests initialise, so
-        // there is no unit-level seam to observe the restore through.
         let prod = push_prod_source();
         let update = prod
             .split_once("fn speleodb_update")
@@ -4320,13 +4062,8 @@ mod tests {
             .and_then(|rest| rest.split("\n    fn ").next())
             .expect("speleodb_update body precedes the next method");
         assert!(
-            update.contains("self.edit_enabled() && !self.force_editing()"),
+            update.contains("self.edit_enabled()"),
             "the fast-forward restore must capture the lock-held PAIR, not the gate alone"
-        );
-        assert!(
-            !update.contains("let was_editing = self.edit_enabled();"),
-            "capturing `edit_enabled` alone launders a lockless force-edit session \
-             into an ordinary editable one (#213)"
         );
     }
 
@@ -4482,42 +4219,6 @@ mod tests {
             }
         });
         (format!("http://127.0.0.1:{port}"), listener)
-    }
-
-    #[test]
-    fn a_failed_take_remote_drops_both_gates_from_a_force_edit_session() {
-        // The one place a gate drop is NOT exempt for a force-editor, and why:
-        // take-remote is the user abandoning this local session for the server tip, so
-        // the session ending is the thing they asked for - not, as with a lock
-        // release, a side effect of surrendering a claim they never held. When the
-        // reset then fails part-way, dropping BOTH gates is the only outcome that
-        // honours the request AND keeps `edit_enabled == false && force_editing ==
-        // true` unobservable: `speleodb_link_status` reports the flag on every refresh,
-        // so a stranded one paints the big-red force-edit banner over a project that
-        // is now read-only.
-        //
-        // The stub answers every call with an empty revision history: enough for the
-        // head fetch (twice - a recorded BASE meeting an empty tip re-fetches once)
-        // and for take-remote's multi-head check to pass, after which the fast-forward
-        // receives that same JSON where it expects a SQLite file and fails at native SQLite validation.
-        // The force-editor holds no lock, so the abandoning release in between is a
-        // no-op and makes no request of its own.
-        let (base, _listener) = always_answering_stub(r#"{"commits":[]}"#);
-        let (_temp, state) = editing_fixture(&base);
-        state.set_force_editing(true);
-
-        state
-            .speleodb_take_remote()
-            .expect_err("a JSON body cannot be opened as a dump");
-
-        assert!(
-            !state.edit_enabled(),
-            "a failed take-remote still drops the edit gate"
-        );
-        assert!(
-            !state.force_editing(),
-            "and clears force-edit with it, so the two gates never disagree"
-        );
     }
 
     /// [`always_answering_stub`] that also RECORDS each request's first line
@@ -5020,8 +4721,9 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
         let port = listener.local_addr().expect("addr").port();
         let accept_on = listener.try_clone().expect("clone listener");
-        let first =
-            format!(r#"{{"id":"{project_id}","name":"Remote","active_mutex":{{"user":"u@x"}}}}"#);
+        let first = format!(
+            r#"{{"id":"{project_id}","name":"Remote","permission":"READ_AND_WRITE","active_mutex":{{"user":"u@x"}}}}"#
+        );
         let later = match later_holder {
             Some(user) => format!(
                 r#"{{"id":"{project_id}","name":"Remote","active_mutex":{{"user":"{user}"}}}}"#
@@ -5140,7 +4842,7 @@ mod tests {
                 .open_project_path()
                 .expect("precondition: the fixture is open and saved");
             assert!(
-                state.edit_enabled() && !state.force_editing(),
+                state.edit_enabled(),
                 "precondition: this session holds the write lock"
             );
 
@@ -5427,39 +5129,6 @@ mod tests {
             "and the deleted project's lock is STILL released - the record is what is \
              conditional here, never the release"
         );
-    }
-
-    #[test]
-    fn force_editing_blocks_done_and_push() {
-        // Done / push need the lock a force-editor doesn't hold; both are refused with
-        // the reconnect hint (the FE offers Reconnect instead).
-        let (_temp, state) = remote_readonly_fixture();
-        state.set_edit_enabled(true);
-        state.set_force_editing(true);
-        assert!(
-            state.speleodb_done(None).is_err(),
-            "Done is blocked in force-edit"
-        );
-        assert!(
-            state.speleodb_push_only(None).is_err(),
-            "push is blocked in force-edit"
-        );
-    }
-
-    #[test]
-    fn logout_drops_both_gates_when_force_editing() {
-        // Logging out of a force-edit session drops BOTH gates (no lock to release).
-        //
-        // Isolated because logout writes the config (clearing the rehydrate seed) and
-        // now reports a failure to do so, so it needs a config file of its own.
-        crate::test_helpers::with_isolated_config(|| {
-            let (_temp, state) = remote_readonly_fixture();
-            state.set_edit_enabled(true);
-            state.set_force_editing(true);
-            state.speleodb_logout().expect("logout");
-            assert!(!state.edit_enabled(), "logout drops the edit gate");
-            assert!(!state.force_editing(), "logout clears force-edit");
-        });
     }
 
     #[test]

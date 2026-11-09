@@ -5,16 +5,6 @@ use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::{client, SpeleoDbError, SpeleoErrorDto, SpeleoLoginResult};
 
 impl AppState {
-    /// Full local token clear (file + memory) + session reset -
-    /// the shared sink for the C5 auto-drop paths. Also drops the transient edit
-    /// gate AND the #213 force-edit flag: `guard_mutation` reads only
-    /// `edit_enabled`, so leaving it open after the token is gone would let the user
-    /// keep editing a remote project that can no longer be pushed. The server lock
-    /// is intentionally NOT released here - a 401 may be transient, and surrendering
-    /// the single-writer claim on a flaky blip is worse than holding it; a re-login
-    /// reconciles. (This is the AppState auto-drop sink; `Session::forget` is left
-    /// untouched so the login switch-account path does not spuriously close the
-    /// gate.)
     pub(super) fn speleodb_forget(&self) {
         let _project = self
             .project
@@ -36,20 +26,6 @@ impl AppState {
                 Err(_) => self.set_edit_enabled(false),
             }
         }
-        // #213: and the force-edit flag with it. Unconditional, unlike the gate
-        // above, because it can only ever be set on a remote force-edit session
-        // (`speleodb_force_edit` requires an open remote link) - so there is no local
-        // project for it to affect, and a dead token ends that session by definition.
-        //
-        // Left set, it OUTLIVED the gate it rides on: `speleodb_link_status` reports
-        // it on every poll, so the frontend re-seeded `forceEditing: true` right after
-        // clearing it, and its big-red force-edit banner then pre-empted the durable
-        // "your changes are only on this computer" push-failure banner - hiding the
-        // Retry and the typed commit message behind a banner whose only control
-        // (Reconnect) 401s again, while `guard_mutation` refused every edit. It
-        // self-healed only on close, or on a start_editing / unlink / restore that a
-        // dead token cannot reach.
-        self.set_force_editing(false);
         if let Ok(mut session) = self.speleodb_session_lock() {
             session.forget();
         }

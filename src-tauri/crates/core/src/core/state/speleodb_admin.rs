@@ -207,7 +207,6 @@ impl AppState {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if self.speleodb_session_generation() == generation
-                && !self.force_editing()
                 && self.speleodb_open_link().is_ok_and(|open| {
                     open.project_id == link.project_id && open.endpoint == link.endpoint
                 })
@@ -229,7 +228,6 @@ impl AppState {
             release()?;
         }
         if self.edit_enabled()
-            && !self.force_editing()
             && self.speleodb_open_link().is_ok_and(|open| {
                 open.project_id == link.project_id && open.endpoint == link.endpoint
             })

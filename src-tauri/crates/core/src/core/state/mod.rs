@@ -33,6 +33,7 @@ mod speleodb_pull;
 mod speleodb_push;
 mod speleodb_revisions;
 mod speleodb_session;
+mod speleodb_write_guard;
 mod undo;
 mod undo_capture;
 mod undo_policy;

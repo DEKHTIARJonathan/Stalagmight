@@ -24,13 +24,6 @@ pub struct SpeleoDbConfig {
     /// D-B19's scheme reject lives in `tls.rs`, not here.
     #[serde(default)]
     pub insecure_http: bool,
-    /// [#213] Opt-in: allow "force-edit" - editing a remote project WITHOUT holding
-    /// the server write lock (surveying offline / when someone else holds it), behind
-    /// a big-red unmergeable-`.stalx` warning. Off by default; #205 Settings owns the
-    /// warned toggle. When off, a remote project stays strictly read-only until the
-    /// lock is acquired (the only escape being "Save a local copy" / detach).
-    #[serde(default)]
-    pub allow_force_edit: bool,
     /// [#303] Default undo policy for SpeleoDB-linked projects, under any
     /// per-project `speleo_link.undo_mode` override. Default
     /// [`UndoMode::Full`] - the hybrid stack the issue exists to deliver.
@@ -50,7 +43,6 @@ impl Default for SpeleoDbConfig {
             token: super::auth::AuthToken::default(),
             preserve_unreadable_file: false,
             insecure_http: false,
-            allow_force_edit: false,
             undo_mode: crate::models::UndoMode::Full,
         }
     }

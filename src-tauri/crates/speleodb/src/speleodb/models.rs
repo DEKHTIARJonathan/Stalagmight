@@ -595,18 +595,6 @@ pub struct SpeleoLinkStatus {
     pub exclude_geojson: bool,
     /// [#303] The project's undo-history policy - what its next push will carry.
     pub undo_mode: crate::models::UndoMode,
-    /// [#213] The open remote project is being force-edited WITHOUT the write lock
-    /// (`edit_enabled` is also true, but no lock is held). Drives the persistent
-    /// big-red "unmergeable `.stalx`" banner + the "Reconnect to sync" action, and
-    /// tells the shell to offer Reconnect rather than Done. Transient; `false` for a
-    /// normal read-only or lock-held session.
-    pub force_editing: bool,
-    /// [#213] The user's `SpeleoDbConfig.allow_force_edit` opt-in, surfaced here so
-    /// the read-only shell can gate the "Edit without lock" affordance without a
-    /// separate config fetch. A copy of a global preference (not per-link), refreshed
-    /// on every refresh so a Settings change takes effect on the next status read. When
-    /// false, the force-edit menu item stays hidden and the backend also refuses.
-    pub allow_force_edit: bool,
     /// [#218] The open remote project's SpeleoDB project id, so the in-project menu
     /// can open the revision-history view for it (the FE otherwise has no way to name
     /// which remote project is open). `None` for a local project / none open.
@@ -791,8 +779,6 @@ mod tests {
             server_error: None,
             exclude_geojson: false,
             undo_mode: crate::models::UndoMode::Full,
-            force_editing: false,
-            allow_force_edit: false,
             project_id: Some("11111111-1111-1111-1111-111111111111".to_owned()),
         })
         .expect("serialize link status");

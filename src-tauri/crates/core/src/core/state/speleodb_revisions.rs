@@ -523,27 +523,6 @@ impl AppState {
             .collect())
     }
 
-    /// [#218] Check the open remote project's working copy out to a past revision.
-    /// Download the project tree AT `hexsha` (the server's `FileDownloadAtHashView`),
-    /// replace the cached `.stalx`, re-stamp the hand-off link, and reopen the swapped
-    /// tree in place. Two modes, keyed on `restore`:
-    ///
-    /// - `restore == true` (**Restore**, the user holds the lock): a git-FORWARD
-    ///   restore. BASE stays at the CURRENT server HEAD and `has_unpushed_edits` is set
-    ///   true, so the tree rides as an unpushed edit ON TOP of HEAD; editing is
-    ///   re-enabled. The normal push / Done flow lands the old content as a NEW commit,
-    ///   so project history is never rewritten (SpeleoDB exposes no server-side revert).
-    /// - `restore == false` (**View**, read-only, no lock): BASE = `hexsha` and the
-    ///   copy is stamped CLEAN, so the working tree IS that revision, behind tip. The
-    ///   project stays read-only and a later Update fast-forwards straight back to the
-    ///   latest - a non-destructive peek.
-    ///
-    /// Both ids are validated at the trust boundary before the download URL is built,
-    /// and the swap is BOUND to the open project (a mismatched id is refused). A
-    /// force-edit session (#213) is refused outright (both View and Restore), and
-    /// Restore additionally requires the write lock genuinely held - the backend never
-    /// trusts the FE's View/Restore choice. Returns the local path (like a pull); the
-    /// FE pulls the swapped geometry.
     pub fn speleodb_restore_revision(
         &self,
         project_id: String,
@@ -561,11 +540,6 @@ impl AppState {
         let open_link = self.speleodb_open_link().map_err(local_dto)?;
         if open_link.project_id != project_id {
             return Err(local_dto(SpeleoDbError::NoRemoteProject));
-        }
-        if self.force_editing() {
-            return Err(local_dto(SpeleoDbError::Io(
-                "finish or discard force-editing before viewing or restoring a revision".to_owned(),
-            )));
         }
         if restore && !self.edit_enabled() {
             return Err(local_dto(SpeleoDbError::Io(
@@ -675,7 +649,6 @@ impl AppState {
                 self.speleodb_note_lock_acquired(Some(&project_id));
             }
         }
-        self.set_force_editing(false);
 
         if keep_undo_history {
             self.speleodb_set_unwound_from(Some(&hexsha));
@@ -1218,18 +1191,6 @@ mod tests {
 
     #[test]
     fn restore_hands_the_acquisition_record_back_across_its_reload() {
-        // The THIRD in-place reload site, and the one that was missed. A Restore is
-        // only reachable with the write lock genuinely held (its entry guards refuse a
-        // force-editor and require an open gate), yet it closes the project and
-        // reloads it - and a fresh load of a remote project is read-only, so the gate
-        // is shut for the length of that reload. A status refresh landing in the window
-        // clears the acquisition record, and the `if restore` block reopened the GATE
-        // without it: the record was gone permanently, and our own next landed push
-        // came back as a Conflict.
-        //
-        // Structural for the same reason as its two siblings above: the reload
-        // resolves an app cache dir that only the env-gated live tests initialise, so
-        // there is no unit-level seam to observe the restore through.
         let restore = prod_source()
             .split_once("fn speleodb_restore_revision")
             .map(|(_, rest)| rest)

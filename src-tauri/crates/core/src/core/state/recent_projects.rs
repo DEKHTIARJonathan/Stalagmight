@@ -236,8 +236,8 @@ impl AppState {
         // and left the entire undo/redo stack in place so an undo could replay
         // against the deleted project. The teardown additionally drops the database
         // handle, clears the undo stack, drops the display-settings and
-        // adjusted-geometry caches, and resets the read-only edit gate plus the
-        // force-edit flag so neither leaks into the next open.
+        // adjusted-geometry caches, and resets the read-only edit gate so it cannot
+        // leak into the next open.
         //
         // ONE acquisition of the `project` lock covers BOTH the identity check and
         // the teardown, and that is load-bearing rather than tidiness. Reading the
