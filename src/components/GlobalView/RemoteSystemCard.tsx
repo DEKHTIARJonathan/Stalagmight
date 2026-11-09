@@ -63,9 +63,13 @@ export default function RemoteSystemCard({
         <SpeleoProjectInfo lock={displayLock} summary={summary} testIdPrefix={`${testId}-speleo`} />
       </div>
 
-      <div className="mt-3 pt-3 border-t border-border flex items-center justify-between gap-2">
-        <RemoteUpdatedTime date={summary.modified_date} />
-      </div>
+      {/* The footer held the Open button too; with only the time left, draw it
+          only when there is a time to show rather than leave an empty strip. */}
+      {summary.modified_date && Number.isFinite(Date.parse(summary.modified_date)) && (
+        <div className="mt-3 pt-3 border-t border-border flex items-center" data-testid={`${testId}-footer`}>
+          <RemoteUpdatedTime date={summary.modified_date} />
+        </div>
+      )}
     </div>
   );
 }

@@ -49,4 +49,11 @@ describe('RemoteSystemCard', () => {
     await userEvent.keyboard('{Enter}');
     expect(onOpen).not.toHaveBeenCalled();
   });
+
+  it('shows the updated-time footer only when the server reported a time', () => {
+    const { rerender } = render(<RemoteSystemCard summary={SUMMARY} lock={LOCK} onOpen={vi.fn()} />);
+    expect(screen.queryByTestId('system-card-remote-p1-footer')).not.toBeInTheDocument();
+    rerender(<RemoteSystemCard summary={{ ...SUMMARY, modified_date: '2026-10-01T10:00:00Z' }} lock={LOCK} onOpen={vi.fn()} />);
+    expect(screen.getByTestId('system-card-remote-p1-footer').querySelector('time')).not.toBeNull();
+  });
 });
