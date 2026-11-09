@@ -53,9 +53,9 @@ Without a usable session the cached copy opens read-only, with no network call:
   valid, or a 404, means the server says this account may not have the project. No
   cached copy is opened. TLS and invalid-download errors do not fall back either.
 
-A copy opened without a session says "Read-only copy - sign in to edit" on its home
-screen card or row, on the map's read-only pill (with a Sign in action that opens the
-SpeleoDB settings) and in the SpeleoDB workspace header. Signing in later does not
+A copy opened without a session says "Read-only copy - connect to SpeleoDB to edit" on
+its home screen card or row, on the map's read-only pill (with a Connect action that
+opens the SpeleoDB settings) and in the SpeleoDB workspace header. Signing in later does not
 change an open project by itself; Resume editing then takes the lock as usual. A
 signed-in account whose permission is below read-and-write sees "Read-only - your
 SpeleoDB access does not allow editing" in the same three places. The SpeleoDB tab's
@@ -292,13 +292,22 @@ missing host, user info and an invalid port. The check runs before every client
 call, on sign-in and when Settings saves a new server. A refused endpoint crosses IPC
 with a typed `endpoint_refusal` (`PlainHttp`, or `InvalidAddress` for an unusable
 address), and the UI shows a translated line that names the server and says what to
-change instead of the backend's English rule. The persisted `insecure_http` field
-(`SpeleoDbConfig`) lifts only the HTTP rule, never certificate verification; a
-hostname it lets through over HTTP is resolved before the client dials it, and one
-that does not resolve is the DNS transport failure (offline, with the cached open),
-not a refusal. It stays
-in the configuration so existing files load, release builds offer no control for it,
-and its development-build-only handling is being finalised by a follow-up commit. Redirects and implicit Reqwest
+change instead of the backend's English rule. The exception set is defined once
+(`is_automatic_http_exception`, described by `PLAIN_HTTP_RULE` beside it, and for the
+UI by the one `speleodb.httpExceptions` string the refusal lines nest).
+
+The persisted `insecure_http` field (`SpeleoDbConfig`) lifts only the HTTP rule, never
+certificate verification, and only in a development build: the transport policy
+(`tls::validate_endpoint` and the client's `enforce`) applies it only when
+`debug_assertions` is on (`INSECURE_HTTP_HONOURED`), so a release build - betas and
+release candidates included - ignores a stored `insecure_http = true` and any value a
+caller passes. The policy is the one place the value takes effect, so no caller has
+to remember the build. Settings shows the "Allow insecure HTTP" switch only in a
+development build (`import.meta.env.DEV`), where Connect sends the switch on screen; a
+release build sends no choice. The field stays in the configuration so existing files
+load in every build. In a development build, a hostname it lets through over HTTP is
+resolved before the client dials it, and one that does not resolve is the DNS transport
+failure (offline, with the cached open), not a refusal. Redirects and implicit Reqwest
 retries are disabled. Safe reads and token exchange retry transient transport/5xx
 failures twice, after 200 ms and 500 ms. Mutations are never automatically replayed.
 Metadata requests use 30 seconds and lock probes five seconds with no retries.
@@ -340,7 +349,7 @@ selection or scroll. Navigation never acquires or releases a lock.
 
 For managed projects, the persistent header shows identity, editing access, lock owner and
 connection status. Everyday controls are Save Changes, Switch to Read Only Mode or
-Resume editing (Sign in to resume editing while signed out), Reload Project, Close
+Resume editing (Connect to resume editing while signed out), Reload Project, Close
 Project and Open on SpeleoDB: equal-height, full-width buttons coloured by the kind
 of action (Save Changes primary, Resume editing green, Switch to Read Only Mode
 amber, Reload Project blue, Close Project red, and browser navigation purple with an
@@ -356,12 +365,18 @@ actions; revision editing remains Survey-only. It has no Unwind/Rewind controls.
 
 Account sign-in, endpoint and connection management live exclusively in application
 Settings under SpeleoDB. Every sign-in link opens that category. Settings' buttons
-say Connect and Disconnect (see "Immediate SpeleoDB connection settings" below);
-the rest of the SpeleoDB screens still say "sign in" and "sign out", and moving
-them to "connect" wording is a follow-up. Connect first runs the sign-out and
+say Connect and Disconnect (see "Immediate SpeleoDB connection settings" below), and
+the rest of the SpeleoDB screens use the same words: "connect to SpeleoDB" for the
+way back to editing, "Not connected" in the workspace header, "Disconnect" in the
+sign-out dialog a Disconnect raises. Connect first runs the sign-out and
 unsent-drafts questions an account change needs (`speleoStore.applyPendingAuth`),
-then signs in with the endpoint (and the insecure-HTTP value) on screen; the backend
-saves the connection with the session, and a failed sign-in saves no credentials.
+then saves the staged settings (its `beforeApply` step, so a cancelled question saves
+nothing), then signs in with the endpoint on screen (and, in a development build, the
+insecure-HTTP switch on screen); the backend saves the connection with the session, a
+failed sign-in saves no credentials, and saving a new server clears the previous
+server's email and token. A connected session is bound to its server: a sign-in or a
+settings write that would change servers is refused with its own error,
+`ServerChangeWhileConnected` ("Disconnect from SpeleoDB before changing servers").
 A failure is shown in an in-app error dialog; a transport error names the server on
 screen, which is the one that was tried. Disconnect runs the sign-out flow below
 before the session ends. A blocked save
@@ -422,7 +437,7 @@ discard-only edits: the work is first saved to the local copy (the backend
   Close goes on to close.
 
 The upload dialog's blocked panel (shown whenever upload is not allowed) offers
-Save on this computer beside Sign in / Resume editing. Sign-in and Resume editing
+Save on this computer beside Connect in Settings / Resume editing. Connecting and Resume editing
 recover access without uploading automatically; the user confirms the upload
 afterward. A clean linked project reports No changes to upload, without creating
 an empty revision.
@@ -537,11 +552,15 @@ quit through.
 
 ### Signing out
 
+Disconnect in Settings is the only way to sign out from the UI, and it never logs out
+directly: it first raises the sign-out dialog ("Before you disconnect") over Settings.
+Cancel there leaves the user connected, with Settings open and nothing staged.
+
 Signing out first resolves what the account still holds (`utils/speleoSignOut`): the
 open project's un-uploaded work under our lock (Upload / Keep my changes on this
 computer / Discard), other cached copies with un-uploaded work (Open to upload /
 Keep my changes on this computer / Discard), and the remaining locks, handed back
-with Try again / Sign out anyway when a release fails. There is no keep-the-lock
+with Try again / Disconnect anyway when a release fails. There is no keep-the-lock
 answer. Discard of a copy that is not open (`speleodb_discard_cached_copy`) carries
 the user's confirmed choice as an explicit flag (`discard_unpushed`): the backend
 refuses a copy with un-uploaded or unreadable work without it, and refuses a copy
@@ -729,9 +748,11 @@ operation.
 
 ## Immediate SpeleoDB connection settings
 
-Connect saves changed preferences and authenticates immediately. Success closes
-Settings and refreshes the project listing. Disconnect takes effect immediately,
-clears the remote listing and stays on the SpeleoDB Settings tab. Neither action
+Connect saves changed preferences and authenticates immediately, after the
+account-change questions (see "Account sign-in" above). Success closes Settings and
+refreshes the project listing. Disconnect runs the sign-out flow first (see "Signing
+out"); once it goes ahead it takes effect immediately, clears the remote listing and
+stays on the SpeleoDB Settings tab. Neither action
 requires a subsequent Save. While connected, the server endpoint and both reset
 controls are disabled; backend requests to change instances are also refused.
 Disconnect first, including when the current server is temporarily unavailable.
@@ -743,6 +764,7 @@ unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
 
 HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
 address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16` (see
-Authentication and transport). Settings has no insecure-HTTP control. An endpoint
+Authentication and transport). Only a development build shows the "Allow insecure
+HTTP" switch, next to the server and locked with it while connected. An endpoint
 the policy refuses produces an error dialog when connecting, or when saving a new
 server. Certificate verification and redirect restrictions remain.
