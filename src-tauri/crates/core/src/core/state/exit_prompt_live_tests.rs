@@ -182,8 +182,7 @@ fn close_keep(state: &AppState) {
     assert!(state.execute(Command::CloseProject).success);
 }
 fn close_release(state: &AppState) {
-    state.speleodb_release_held_lock_on_close();
-    assert!(state.execute(Command::CloseProject).success);
+    assert!(state.speleodb_close_releasing_lock().success);
 }
 
 fn done(state: &AppState, message: &str) {

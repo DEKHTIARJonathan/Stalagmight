@@ -28,12 +28,20 @@
 //! there is no blind fallback. The server lets an admin release anybody's lock,
 //! so this check is the only thing standing between an admin's ordinary exit
 //! and a colleague's live edit session.
+//!
+//! NEVER STRAND A LOCK SILENTLY: the releases the user drives - a close, and the
+//! settlement a project switch or a quit runs before leaving the project - report
+//! what they came to ([`crate::core::LockReleaseOutcome`]) on the reply of the
+//! call that released. One that failed or is uncertain closes nothing: the claim
+//! stays (unbound, so editing is paused) and the frontend asks "Couldn't hand back
+//! the lock" (Retry / Close and keep the lock / Cancel). Only the exits the app
+//! cannot intercept still release silently and bounded (`RunEvent::ExitRequested`).
 
 use std::path::Path;
 use std::time::Duration;
 
 use super::AppState;
-use crate::core::{CommandResult, ValidationWarning, WarningSeverity};
+use crate::core::{Command, CommandResult, LockReleaseOutcome, ValidationWarning, WarningSeverity};
 use crate::speleodb::client;
 use crate::speleodb::SpeleoDbError;
 
@@ -143,13 +151,34 @@ pub(super) fn release_if_held_by_us(
         );
         return Ok(HolderCheckedRelease::NotHeldByUs);
     }
-    client::release_lock(
+    let released = client::release_lock(
         &params.endpoint,
         &params.token,
         params.insecure_http,
         &params.project_id,
-    )
-    .map(|_| HolderCheckedRelease::Released)
+    )?;
+    // A 200 is not proof by itself: the reply is the project after the release,
+    // and one that still names this account as the holder released nothing. That
+    // is an uncertain release, never a success - the lock may well still be ours.
+    if super::speleodb::lock_held_by_me(
+        released
+            .active_mutex
+            .as_ref()
+            .map(|mutex| mutex.user.as_str()),
+        Some(&params.email),
+    ) {
+        return Err(SpeleoDbError::Parse(
+            "the release was answered, but SpeleoDB still names this account as the lock holder"
+                .to_owned(),
+        ));
+    }
+    Ok(HolderCheckedRelease::Released)
+}
+
+/// The user-facing reason a release of the open project's lock did not happen,
+/// carried as the `error` of a result whose `lock_release` is `Failed`.
+fn release_failure_message(error: &SpeleoDbError) -> String {
+    format!("The SpeleoDB lock could not be handed back: {error}")
 }
 
 impl AppState {
@@ -163,11 +192,6 @@ impl AppState {
         self.speleodb_lock_release_params(ReleaseIntent::Silent)
     }
 
-    /// Snapshot for close/switch/exit, which release without publishing saved edits.
-    pub(super) fn speleodb_lifecycle_lock_release_params(&self) -> Option<LockReleaseParams> {
-        self.speleodb_lock_release_params(ReleaseIntent::Lifecycle)
-    }
-
     /// The same snapshot WITHOUT the un-pushed-edits veto, for a deliberate
     /// abandon (see [`AppState::speleodb_release_held_lock_abandoning`]).
     pub(super) fn speleodb_abandon_lock_release_params(&self) -> Option<LockReleaseParams> {
@@ -175,7 +199,18 @@ impl AppState {
     }
 
     /// Shared body of the snapshots above. `intent` is what separates a silent
-    /// release from a deliberate one.
+    /// release from a deliberate one. A release that should happen but cannot be
+    /// attempted (see [`Self::speleodb_lock_release_decision`]) is `None` here, as
+    /// it always was for these callers: they have no one to ask.
+    fn speleodb_lock_release_params(&self, intent: ReleaseIntent) -> Option<LockReleaseParams> {
+        self.speleodb_lock_release_decision(intent).unwrap_or(None)
+    }
+
+    /// What a release of the open project's lock needs, `Ok(None)` when there is
+    /// nothing to release, or an `Err` when a lock this account may hold cannot be
+    /// released now - which the user-driven releases report instead of folding it
+    /// into "nothing to release" (a close then stays open, see
+    /// [`Self::speleodb_release_held_lock_on_close`]).
     ///
     /// Decided from the CLAIM, never from the edit gate. The gate is a function of
     /// the claim (`speleodb_edit_gate`), so every open gate has one; and a session
@@ -183,7 +218,10 @@ impl AppState {
     /// still holds the claim a release has to end. No claim, no release: a lock
     /// this process cannot account for - another account's, or one this read-only
     /// open never took - is not this path's to hand back.
-    fn speleodb_lock_release_params(&self, intent: ReleaseIntent) -> Option<LockReleaseParams> {
+    fn speleodb_lock_release_decision(
+        &self,
+        intent: ReleaseIntent,
+    ) -> Result<Option<LockReleaseParams>, SpeleoDbError> {
         // A `.ok()?` here used to collapse REAL failures into the ordinary "nothing
         // to release" no-op with no trace at all: `speleodb_open_link` returns
         // `Io("database lock poisoned")` as readily as `NoRemoteProject`. A poisoned
@@ -193,7 +231,7 @@ impl AppState {
         // un-pushed-edits veto below has always logged; so must this.
         let link = match self.speleodb_open_link() {
             Ok(link) => link,
-            Err(SpeleoDbError::NoRemoteProject) => return None,
+            Err(SpeleoDbError::NoRemoteProject) => return Ok(None),
             Err(e) => {
                 tracing::warn!(
                     error = %e,
@@ -202,25 +240,40 @@ impl AppState {
                     "speleodb: could not read the open project's link; the server lock \
                      (if any) is being left held"
                 );
-                return None;
+                return Err(e);
             }
         };
-        if !self.speleodb_holds_claim(&link.project_id) {
-            return None;
-        }
+        // Same reasoning for the claim: an unreadable (poisoned) session cannot say
+        // whether this account holds the lock, which is not the same as "it does
+        // not".
+        let kept = match self.speleodb_open_claim_kept(&link.project_id) {
+            Ok(Some(kept)) => kept,
+            Ok(None) => return Ok(None),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    project_id = %link.project_id,
+                    ?intent,
+                    purpose = "release a held SpeleoDB write lock",
+                    "speleodb: could not read the lock claims; the server lock (if any) is \
+                     being left held"
+                );
+                return Err(e);
+            }
+        };
         // A lock already held back on purpose stays held: an earlier veto, the exit
         // prompt's "Keep the lock", or Start Editing keeping a lock it took because
         // the cache copy holds un-uploaded work the open copy does not show. The
         // open copy being clean says nothing about that work. Only an explicit
         // abandon (or Release, or a new edit session's binding) ends a kept claim.
-        if intent != ReleaseIntent::Abandon && self.speleodb_claim_is_kept(&link.project_id) {
+        if intent != ReleaseIntent::Abandon && kept {
             tracing::info!(
                 project_id = %link.project_id,
                 ?intent,
                 purpose = "honour a lock deliberately kept back",
                 "speleodb: keeping the write lock; it was deliberately kept"
             );
-            return None;
+            return Ok(None);
         }
         // The invariant (module doc): only an explicit abandon may release over
         // edits the server has not seen. Logout, close, switch, quit and the update
@@ -238,15 +291,17 @@ impl AppState {
             // mutex this veto just protected, freeing the project for the next
             // editor to lock and push over work that is still only local.
             self.speleodb_keep_lock_deliberately(&link.project_id);
-            return None;
+            return Ok(None);
         }
         // Same reasoning as the link read above: `speleodb_active_token` returns
         // `Io("SpeleoDB session lock poisoned")` alongside the ordinary
         // `NotAuthenticated`, and a silently-dropped poisoned mutex here strands the
-        // lock just as thoroughly.
+        // lock just as thoroughly. `NotAuthenticated` is not logged as a fault, but
+        // it is still an `Err`: the signed-in account holds this claim and has no
+        // usable token to hand it back with.
         let (endpoint, token, email) = match self.speleodb_active_account() {
             Ok(account) => account,
-            Err(SpeleoDbError::NotAuthenticated) => return None,
+            Err(e @ SpeleoDbError::NotAuthenticated) => return Err(e),
             Err(e) => {
                 tracing::warn!(
                     error = %e,
@@ -256,21 +311,32 @@ impl AppState {
                     "speleodb: could not read the session token; the server lock is \
                      being left held"
                 );
-                return None;
+                return Err(e);
             }
         };
         if crate::speleodb::auth::normalize_endpoint(&endpoint)
             != crate::speleodb::auth::normalize_endpoint(&link.endpoint)
         {
-            return None;
+            return Ok(None);
         }
-        Some(LockReleaseParams {
+        Ok(Some(LockReleaseParams {
             endpoint,
             token,
             email,
             insecure_http: self.speleodb_insecure_http(),
             project_id: link.project_id,
-        })
+        }))
+    }
+
+    /// Whether the signed-in account holds a claim on `project_id` (`None` when it
+    /// does not) and whether that claim is kept - or an `Err` when the session
+    /// cannot be read at all, which the two predicates read as "no claim".
+    fn speleodb_open_claim_kept(&self, project_id: &str) -> Result<Option<bool>, SpeleoDbError> {
+        drop(self.speleodb_session_lock()?);
+        if !self.speleodb_holds_claim(project_id) {
+            return Ok(None);
+        }
+        Ok(Some(self.speleodb_claim_is_kept(project_id)))
     }
 
     /// Record that the open project's lock is being kept on purpose (the exit
@@ -300,14 +366,88 @@ impl AppState {
         }
     }
 
-    /// Release on a normal project close without uploading or deleting local work.
+    /// The open project's lifecycle release - holder-checked, never over
+    /// un-uploaded work, never sent blind - REPORTING what it came to, for the
+    /// releases the user drives: a close, and the settlement a project switch or a
+    /// quit runs before it leaves the project ([`Self::speleodb_settle_open_lock`]).
     /// Reclaim checks protect a newer session if another open wins the transition.
-    pub fn speleodb_release_held_lock_on_close(&self) {
-        let Some((params, claim, generation)) = self.speleodb_capture_lifecycle_release() else {
-            return;
+    ///
+    /// - `Ok(None)`: nothing to release (a local project, no claim, a lock kept on
+    ///   purpose or over un-uploaded work).
+    /// - `Ok(Some(Released | NotHeld))`: the lock is not this account's any more,
+    ///   and the claim is over.
+    /// - `Err`: the release failed or its outcome is unknown, or it could not be
+    ///   attempted (an unreadable link or session, no usable credential). The lock
+    ///   may still be ours: the claim stays (put back UNBOUND after a failed
+    ///   attempt) and the edit gate is shut, so editing is paused. Nothing is
+    ///   closed - the caller reports `Failed` and the user decides.
+    pub fn speleodb_release_held_lock_on_close(
+        &self,
+    ) -> Result<Option<LockReleaseOutcome>, SpeleoDbError> {
+        let captured = match self.speleodb_capture_lifecycle_release_checked() {
+            Ok(captured) => captured,
+            Err(error) => {
+                // Not even attempted, and the lock may be ours: pause editing over
+                // it exactly as a failed attempt does.
+                self.speleodb_shut_edit_gate();
+                return Err(error);
+            }
         };
-        if let Err(error) = self.speleodb_stand_down_and_release(&params, generation, claim) {
-            tracing::warn!(%error, project_id = %params.project_id, "SpeleoDB lock release on close failed");
+        let Some((params, claim, generation)) = captured else {
+            return Ok(None);
+        };
+        match self.speleodb_stand_down_and_release(&params, generation, claim) {
+            Ok(HolderCheckedRelease::Released) => Ok(Some(LockReleaseOutcome::Released)),
+            Ok(HolderCheckedRelease::NotHeldByUs) => Ok(Some(LockReleaseOutcome::NotHeld)),
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    project_id = %params.project_id,
+                    purpose = "hand back the open project's lock before leaving it",
+                    "speleodb: lock release failed; the project stays open and the claim is kept"
+                );
+                Err(error)
+            }
+        }
+    }
+
+    /// `close_project`'s default: hand the open project's lock back
+    /// ([`Self::speleodb_release_held_lock_on_close`]), then close - and only then.
+    /// A release that failed or is uncertain closes NOTHING: the result is a
+    /// failure whose `lock_release` is `Failed`, the project stays open with
+    /// editing paused, and the frontend asks "Couldn't hand back the lock" (Retry,
+    /// which is this call again; Close and keep the lock, which is `close_project`
+    /// with `release_lock: false`; Cancel).
+    pub fn speleodb_close_releasing_lock(&self) -> CommandResult {
+        match self.speleodb_release_held_lock_on_close() {
+            Ok(outcome) => self
+                .execute(Command::CloseProject)
+                .with_lock_release(outcome),
+            Err(error) => CommandResult::failure(release_failure_message(&error))
+                .with_lock_release(Some(LockReleaseOutcome::Failed)),
+        }
+    }
+
+    /// Settle the open project's lock BEFORE a project switch or a quit leaves it,
+    /// without closing anything: the release with its outcome reported
+    /// (`release: true`, the same release a close runs), or "Close and keep the
+    /// lock" (`release: false`: the claim is marked kept, so neither the switch's
+    /// own release nor the exit's hands it back, and the lock waits for the next
+    /// sign-in's held-lock prompt).
+    ///
+    /// A failed or uncertain release fails the call with `lock_release: Failed`;
+    /// the switch or quit then waits for the user's answer. A successful one shuts
+    /// the edit gate (the claim is over), so a switch that is then cancelled or
+    /// fails leaves the project open read-only.
+    pub fn speleodb_settle_open_lock(&self, release: bool) -> CommandResult {
+        if !release {
+            self.speleodb_keep_open_lock_deliberately();
+            return CommandResult::success();
+        }
+        match self.speleodb_release_held_lock_on_close() {
+            Ok(outcome) => CommandResult::success().with_lock_release(outcome),
+            Err(error) => CommandResult::failure(release_failure_message(&error))
+                .with_lock_release(Some(LockReleaseOutcome::Failed)),
         }
     }
 
@@ -318,13 +458,32 @@ impl AppState {
         Option<super::speleodb_session::LockClaim>,
         u64,
     )> {
+        self.speleodb_capture_lifecycle_release_checked()
+            .unwrap_or(None)
+    }
+
+    /// The capture behind every lifecycle release: decided, and the claim taken
+    /// out, under the `project` mutex - with a release that cannot be attempted
+    /// reported as an `Err` for the callers that tell the user.
+    fn speleodb_capture_lifecycle_release_checked(
+        &self,
+    ) -> Result<
+        Option<(
+            LockReleaseParams,
+            Option<super::speleodb_session::LockClaim>,
+            u64,
+        )>,
+        SpeleoDbError,
+    > {
         let _project = self
             .project
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let params = self.speleodb_lifecycle_lock_release_params()?;
+        let Some(params) = self.speleodb_lock_release_decision(ReleaseIntent::Lifecycle)? else {
+            return Ok(None);
+        };
         let claim = self.speleodb_forget_lock_acquired_for(&params.project_id);
-        Some((params, claim, self.speleodb_session_generation()))
+        Ok(Some((params, claim, self.speleodb_session_generation())))
     }
 
     /// Release a held lock for a caller that is ABANDONING the project's SpeleoDB
@@ -557,7 +716,11 @@ impl AppState {
                 let tx = tx.clone();
                 let p = p.clone();
                 sink.with_app_state(Box::new(move |state| {
-                    let _ = tx.send(state.speleodb_stand_down_and_release(&p, entry_gen, claim));
+                    let _ = tx.send(
+                        state
+                            .speleodb_stand_down_and_release(&p, entry_gen, claim)
+                            .map(|_| ()),
+                    );
                 }))
             });
             if !ran {
@@ -840,7 +1003,9 @@ mod tests {
 
     fn every_lifecycle_release() -> [(&'static str, Release); 5] {
         [
-            ("close", AppState::speleodb_release_held_lock_on_close),
+            ("close", |state| {
+                let _ = state.speleodb_release_held_lock_on_close();
+            }),
             ("switch", AppState::speleodb_release_held_lock_detached),
             ("exit / update restart", |state| {
                 state.speleodb_release_held_lock_bounded(std::time::Duration::from_secs(5));
@@ -1013,8 +1178,12 @@ mod tests {
         let (server, seen) = recording_server();
         let (_temp, _root, path, state) = managed_editing_session(&server);
         let before = std::fs::read(&path).expect("saved project");
-        state.speleodb_release_held_lock_on_close();
-        assert!(state.execute(crate::core::Command::CloseProject).success);
+        let closed = state.speleodb_close_releasing_lock();
+        assert!(closed.success);
+        assert_eq!(
+            closed.lock_release,
+            Some(crate::core::LockReleaseOutcome::Released)
+        );
         assert_eq!(release_requests(&seen), 1);
         assert!(holder_reads(&seen) >= 1, "asked who holds the lock first");
         assert!(state.get_project_state().is_none());
@@ -1027,8 +1196,9 @@ mod tests {
         // network call or credentials.
         let state = AppState::new().expect("state");
         state.set_project_for_tests(Project::new("Synthetic local".into(), None));
-        state.speleodb_release_held_lock_on_close();
-        assert!(state.execute(crate::core::Command::CloseProject).success);
+        let closed = state.speleodb_close_releasing_lock();
+        assert!(closed.success);
+        assert_eq!(closed.lock_release, None, "nothing was released");
         assert!(state.get_project_state().is_none());
     }
 
@@ -1040,7 +1210,12 @@ mod tests {
         let (_temp, _root, _path, state) = managed_editing_session(&server);
         set_unpushed_edits(&state);
         state.set_edit_enabled(false);
-        state.speleodb_release_held_lock_on_close();
+        assert_eq!(
+            state
+                .speleodb_release_held_lock_on_close()
+                .expect("a veto is no failure"),
+            None
+        );
         assert_eq!(release_requests(&seen), 0);
         assert!(claim_is_kept(&state));
     }
@@ -1265,7 +1440,7 @@ mod tests {
         // neither read may be a bare `.ok()?` again, and each must have a `warn!`.
         let src = include_str!("speleodb_lock_release.rs");
         let start = src
-            .find("fn speleodb_lock_release_params")
+            .find("fn speleodb_lock_release_decision")
             .expect("the shared body is present");
         let body = &src[start..];
         let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
@@ -1283,8 +1458,9 @@ mod tests {
         }
         assert_eq!(
             body.matches("tracing::warn!").count(),
-            2,
-            "both the link read and the token read must warn on an unexpected failure"
+            3,
+            "the link read, the claim read and the token read must each warn on an \
+             unexpected failure"
         );
     }
 

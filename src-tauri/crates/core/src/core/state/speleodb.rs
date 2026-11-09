@@ -3013,7 +3013,9 @@ mod tests {
         // `speleodb_lock_release`, pinned by its own tests); a clean session is
         // released and its file left exactly as it was.
         for release in [
-            AppState::speleodb_release_held_lock_on_close,
+            |state: &AppState| {
+                let _ = state.speleodb_release_held_lock_on_close();
+            },
             AppState::speleodb_release_held_lock_detached,
             |state: &AppState| {
                 state.speleodb_release_held_lock_bounded(std::time::Duration::from_secs(5));
@@ -3057,7 +3059,12 @@ mod tests {
             crate::core::state::tests_support::lock_server(REMOTE_ID, Some("u@x".into()));
         let (_temp, state) = editing_fixture(&base);
         state.set_edit_enabled(false);
-        state.speleodb_release_held_lock_on_close();
+        assert_eq!(
+            state
+                .speleodb_release_held_lock_on_close()
+                .expect("released"),
+            Some(crate::core::LockReleaseOutcome::Released)
+        );
         assert_eq!(crate::core::state::tests_support::release_posts(&seen), 1);
         assert!(!state.speleodb_lock_acquired_here(REMOTE_ID));
     }
@@ -3067,10 +3074,16 @@ mod tests {
         let (_temp, state) = editing_fixture("https://x/");
         state.set_edit_enabled(false);
         state.speleodb_forget_lock_acquired_for(REMOTE_ID);
-        assert!(state.speleodb_lifecycle_lock_release_params().is_none());
+        assert!(
+            matches!(state.speleodb_release_held_lock_on_close(), Ok(None)),
+            "no claim: nothing to release, and nothing to report"
+        );
         state.set_edit_enabled(true);
         *state.speleodb.lock().expect("session") = authed_session_at("https://another.example/");
-        assert!(state.speleodb_lifecycle_lock_release_params().is_none());
+        assert!(
+            matches!(state.speleodb_release_held_lock_on_close(), Ok(None)),
+            "another deployment's session accounts for no lock here"
+        );
     }
 
     #[test]
@@ -4614,6 +4627,8 @@ mod tests {
         let port = listener.local_addr().expect("addr").port();
         let body =
             format!(r#"{{"id":"{project_id}","name":"Remote","active_mutex":{{"user":"u@x"}}}}"#);
+        // The release's reply: the project after the release, with no holder.
+        let released = format!(r#"{{"id":"{project_id}","name":"Remote"}}"#);
         let hits = std::sync::Arc::new(AtomicUsize::new(0));
         let accept_on = listener.try_clone().expect("clone listener");
         let counter = std::sync::Arc::clone(&hits);
@@ -4631,10 +4646,15 @@ mod tests {
                 }
                 let text = String::from_utf8_lossy(&req);
                 let line = text.lines().next().unwrap_or_default();
-                if line.starts_with("POST") && line.contains("/release") {
+                let release = line.starts_with("POST") && line.contains("/release");
+                if release {
                     counter.fetch_add(1, Ordering::SeqCst);
                 }
-                let body = crate::core::state::tests_support::sdk_fixture(&body);
+                let body = crate::core::state::tests_support::sdk_fixture(if release {
+                    &released
+                } else {
+                    &body
+                });
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                     body.len()

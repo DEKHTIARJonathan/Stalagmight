@@ -282,6 +282,12 @@ fn lock_server_with(
     let body = sdk_fixture(&format!(
         r#"{{"id":"{project_id}","name":"Remote","permission":"READ_AND_WRITE"{mutex}}}"#
     ));
+    // The release's reply is the project AFTER the release, as SpeleoDB sends it:
+    // no holder. (A reply that still names the releasing account is a release
+    // that did nothing, which the holder-checked release reports as a failure.)
+    let released = sdk_fixture(&format!(
+        r#"{{"id":"{project_id}","name":"Remote","permission":"READ_AND_WRITE"}}"#
+    ));
     std::thread::spawn(move || {
         while let Ok((mut stream, _)) = listener.accept() {
             let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
@@ -303,10 +309,15 @@ fn lock_server_with(
                  Connection: close\r\n\r\n"
                     .to_owned()
             } else {
+                let reply = if line.starts_with("POST") && line.contains("/release") {
+                    &released
+                } else {
+                    &body
+                };
                 format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
                 )
             };
             if let Ok(mut log) = log.lock() {

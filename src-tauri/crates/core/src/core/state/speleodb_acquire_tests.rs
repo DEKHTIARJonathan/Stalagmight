@@ -267,8 +267,9 @@ fn an_unknowable_acquire_leaves_a_provisional_claim_and_never_releases_blind() {
     );
     assert_eq!(stub.requests("/release/"), 0, "nothing was released blind");
 
-    // The close's lifecycle release asks again, still cannot tell, and keeps it.
-    state.speleodb_release_held_lock_on_close();
+    // The close's lifecycle release asks again, still cannot tell, and keeps it -
+    // reporting the uncertainty, so the close stays open for the user to decide.
+    assert!(state.speleodb_release_held_lock_on_close().is_err());
     assert_eq!(stub.requests("/release/"), 0);
     assert!(state.speleodb_holds_claim(ID));
 }
@@ -288,7 +289,12 @@ fn a_provisional_claim_is_handed_back_once_the_holder_is_readable() {
     assert!(state.speleodb_holds_claim(ID), "a provisional claim");
     assert!(!state.edit_enabled());
 
-    state.speleodb_release_held_lock_on_close();
+    assert_eq!(
+        state
+            .speleodb_release_held_lock_on_close()
+            .expect("the holder is readable"),
+        Some(crate::core::LockReleaseOutcome::Released)
+    );
 
     assert_eq!(
         stub.requests("/release/"),

@@ -70,7 +70,7 @@
 use std::sync::atomic::Ordering;
 
 use super::speleodb::local_dto;
-use super::speleodb_lock_release::LockReleaseParams;
+use super::speleodb_lock_release::{HolderCheckedRelease, LockReleaseParams};
 use super::AppState;
 use crate::speleodb::auth::normalize_endpoint;
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
@@ -367,6 +367,7 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.speleodb_release_unless_reclaimed_locked(params)
+            .map(|_| ())
     }
 
     /// The body of [`Self::speleodb_release_unless_reclaimed`], for callers that
@@ -392,7 +393,7 @@ impl AppState {
     pub(super) fn speleodb_release_unless_reclaimed_locked(
         &self,
         params: &LockReleaseParams,
-    ) -> Result<(), SpeleoDbError> {
+    ) -> Result<HolderCheckedRelease, SpeleoDbError> {
         if self.speleodb_claim_on_deployment(&params.endpoint, &params.project_id) {
             tracing::info!(
                 project_id = %params.project_id,
@@ -400,12 +401,14 @@ impl AppState {
                 "speleodb: standing down a captured release; a live session has \
                  reclaimed this project's lock"
             );
-            return Ok(());
+            // The releasing session holds nothing any more: the lock is the
+            // successor's to account for.
+            return Ok(HolderCheckedRelease::NotHeldByUs);
         }
         // No successor accounts for it, so it is ours to hand back - if the
         // server still says it is ours at all (lock#4). Not held by us is a
         // success: the caller's claim is over either way.
-        super::speleodb_lock_release::release_if_held_by_us(params).map(|_| ())
+        super::speleodb_lock_release::release_if_held_by_us(params)
     }
 
     /// A deferred release, from the moment it can finally be decided: stand the
@@ -430,7 +433,7 @@ impl AppState {
         params: &LockReleaseParams,
         entry_gen: u64,
         claim: Option<LockClaim>,
-    ) -> Result<(), SpeleoDbError> {
+    ) -> Result<HolderCheckedRelease, SpeleoDbError> {
         let _lock_ops = self.speleodb_lock_ops_guard();
         {
             let _proj_guard = self

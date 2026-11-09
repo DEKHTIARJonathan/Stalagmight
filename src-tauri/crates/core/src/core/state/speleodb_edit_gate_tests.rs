@@ -169,10 +169,9 @@ fn every_way_out_of_an_edit_session_leaves_the_gate_shut() {
         ("close", |state| {
             assert!(state.close_project().success);
         }),
-        (
-            "lifecycle release on close",
-            AppState::speleodb_release_held_lock_on_close,
-        ),
+        ("lifecycle release on close", |state| {
+            let _ = state.speleodb_release_held_lock_on_close();
+        }),
         ("reopen the same file", |state| {
             let path = state.open_project_path().expect("path");
             assert!(state.open_project(path).success);
@@ -262,7 +261,10 @@ fn a_restored_claim_after_a_failed_release_opens_nothing() {
     // that failed must not reopen the gate it was shutting.
     let temp = tempfile::TempDir::new().expect("temp");
     let (state, _path) = open_editing(temp.path(), UNREACHABLE);
-    state.speleodb_release_held_lock_on_close();
+    assert!(
+        state.speleodb_release_held_lock_on_close().is_err(),
+        "an unreadable holder is reported, not folded into success"
+    );
     assert!(state.speleodb_holds_claim(ID), "kept for a retry");
     assert!(!state.edit_enabled(), "but not as an edit session");
     assert_gate_needs_a_bound_claim(&state, "restored claim");

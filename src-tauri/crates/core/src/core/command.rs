@@ -472,6 +472,36 @@ pub struct CommandResult {
     /// non-import command.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub import_receipt: Option<ImportReceipt>,
+    /// What handing back the open project's SpeleoDB write lock came to, for the
+    /// commands that leave a project (`close_project`, and the lock settlement a
+    /// project switch or a quit runs first). Absent when no release was attempted:
+    /// a local project, no lock claim, or a lock deliberately kept (the
+    /// un-uploaded-work veto, an earlier Keep the lock).
+    ///
+    /// Reported on the reply of the call that released, so the frontend decides
+    /// on the outcome (go on, or ask "Couldn't hand back the lock") without a
+    /// second round trip to find out what happened. Same wire contract as the
+    /// optional fields above (`skip_serializing_if` + `default`).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub lock_release: Option<LockReleaseOutcome>,
+}
+
+/// What one holder-checked release of the open project's lock came to (see
+/// [`CommandResult::lock_release`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum LockReleaseOutcome {
+    /// SpeleoDB named this account as the holder, and confirmed the release.
+    Released,
+    /// SpeleoDB named another account, or nobody: there was nothing of ours to
+    /// hand back, so nothing was sent.
+    NotHeld,
+    /// The release failed or its outcome is unknown: the holder could not be
+    /// read, the release POST failed or its reply was lost, SpeleoDB still names
+    /// this account after the release, or the release could not be attempted
+    /// (no usable credential, an unreadable session). The lock may still be ours:
+    /// the claim is kept, unbound, so editing is paused and nothing was closed.
+    Failed,
 }
 
 /// Result of an explicit "repair project integrity" action. `fixed` and
@@ -532,6 +562,7 @@ impl CommandResult {
             unlinked_copy_path: None,
             reversed_sections: None,
             import_receipt: None,
+            lock_release: None,
         }
     }
 
@@ -548,6 +579,7 @@ impl CommandResult {
             unlinked_copy_path: None,
             reversed_sections: None,
             import_receipt: None,
+            lock_release: None,
         }
     }
 
@@ -612,6 +644,13 @@ impl CommandResult {
     /// Attach an import receipt to this result.
     pub fn with_import_receipt(mut self, receipt: ImportReceipt) -> Self {
         self.import_receipt = Some(receipt);
+        self
+    }
+
+    /// Attach what handing back the open project's lock came to (see
+    /// [`CommandResult::lock_release`]); `None` leaves the key off the wire.
+    pub fn with_lock_release(mut self, outcome: Option<LockReleaseOutcome>) -> Self {
+        self.lock_release = outcome;
         self
     }
 
