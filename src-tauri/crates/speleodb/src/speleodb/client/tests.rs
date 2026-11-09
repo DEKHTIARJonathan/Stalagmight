@@ -799,6 +799,90 @@ fn downloads_allow_healthy_progress_beyond_the_idle_budget_but_reject_stalls() {
 }
 
 #[test]
+fn download_deadline_scales_with_the_size_and_is_bounded_by_the_native_limit() {
+    let grace = TRANSFER_TIMEOUT;
+    assert_eq!(download_deadline(grace, DOWNLOAD_MIN_RATE, 0), grace);
+    assert_eq!(
+        download_deadline(grace, DOWNLOAD_MIN_RATE, 4 * 1024),
+        grace + Duration::from_secs(1)
+    );
+    assert_eq!(
+        download_deadline(grace, DOWNLOAD_MIN_RATE, 20 * 1024 * 1024),
+        grace + Duration::from_secs(5120)
+    );
+    // Generous: a quarter of the upload budget's rate, so never shorter than it.
+    assert!(
+        download_deadline(grace, DOWNLOAD_MIN_RATE, 20 * 1024 * 1024)
+            >= upload_timeout(20 * 1024 * 1024)
+    );
+    // The most a download can receive bounds it, Content-Length or not.
+    assert_eq!(
+        download_deadline(grace, DOWNLOAD_MIN_RATE, NATIVE_LIMIT),
+        grace + Duration::from_secs(NATIVE_LIMIT / DOWNLOAD_MIN_RATE)
+    );
+}
+
+/// A server that trickles a byte well inside the read timeout used to hold the
+/// download (and the app's exit waiting for it) for ever: only a read timeout
+/// applied. The total deadline stops it, as a timeout.
+#[test]
+fn a_download_trickling_below_the_minimum_rate_is_stopped_by_its_total_deadline() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let worker = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut request = [0; 4096];
+        assert!(stream.read(&mut request).unwrap() > 0, "an HTTP request");
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 1048576\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        // 20 bytes a second, each well inside the read timeout.
+        let until = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+            if stream.write_all(b"x").is_err() {
+                break;
+            }
+        }
+    });
+    let c = SdkClient::new(
+        &base,
+        Some("synthetic"),
+        false,
+        Duration::ZERO,
+        Settings {
+            retries: 0,
+            download_grace: Duration::from_millis(300),
+            download_min_rate: 1024,
+            ..Settings::default()
+        },
+    )
+    .unwrap();
+    let started = Instant::now();
+    let result = c.download(ID, None);
+    let took = started.elapsed();
+    assert!(
+        matches!(
+            result,
+            Err(SpeleoDbError::Transport {
+                cause: TransportCause::Timeout,
+                ..
+            })
+        ),
+        "{:?}",
+        result.err()
+    );
+    assert!(
+        took < Duration::from_secs(5),
+        "stopped by the total deadline, not the 120 s read timeout: {took:?}"
+    );
+    worker.join().unwrap();
+}
+
+#[test]
 fn dns_failure_keeps_its_typed_cause_for_offline_open() {
     struct OfflineDns;
     impl reqwest::dns::Resolve for OfflineDns {

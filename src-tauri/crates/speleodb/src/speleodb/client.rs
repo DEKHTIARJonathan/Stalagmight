@@ -24,6 +24,23 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 fn upload_timeout(bytes: usize) -> Duration {
     TRANSFER_TIMEOUT + Duration::from_secs((bytes as u64).div_ceil(16 * 1024))
 }
+
+/// The slowest average rate a download may keep up once its grace
+/// ([`TRANSFER_TIMEOUT`]) has run, in bytes per second: 32 kbit/s, a quarter of
+/// the upload budget's rate. Generous on purpose - a download only has a read
+/// timeout otherwise, so a server trickling a byte now and then held the transfer
+/// (and, through the quit-after-work wait, the app's exit) for ever.
+const DOWNLOAD_MIN_RATE: u64 = 4 * 1024;
+
+/// How long a download may have run once it has received `bytes`: `grace` plus
+/// `bytes` at `min_rate`, the shape of [`upload_timeout`]. The SDK's stream does
+/// not expose the reply's `Content-Length`, so the size is what has arrived so
+/// far: a download of N bytes must end within `grace + N / min_rate` of its start,
+/// and none can outlast the deadline at the native size limit, the most it may
+/// receive.
+fn download_deadline(grace: Duration, min_rate: u64, bytes: u64) -> Duration {
+    grace + Duration::from_millis(bytes.saturating_mul(1000) / min_rate.max(1))
+}
 const JSON_LIMIT: usize = 10 * 1024 * 1024;
 pub(crate) const NATIVE_LIMIT: u64 = 512 * 1024 * 1024;
 
@@ -45,6 +62,10 @@ struct Settings {
     retries: u32,
     native_limit: u64,
     upload_limit: u64,
+    /// A download's total deadline ([`download_deadline`]): its grace, and the
+    /// minimum average rate after it.
+    download_grace: Duration,
+    download_min_rate: u64,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -53,6 +74,8 @@ impl Default for Settings {
             retries: 2,
             native_limit: NATIVE_LIMIT,
             upload_limit: SERVER_UPLOAD_LIMIT_BYTES,
+            download_grace: TRANSFER_TIMEOUT,
+            download_min_rate: DOWNLOAD_MIN_RATE,
         }
     }
 }
@@ -156,38 +179,59 @@ impl SdkClient {
 
     fn download(&self, id: &str, revision: Option<&str>) -> Result<NativeFile, SpeleoDbError> {
         self.call(Endpoint::DownloadStalx, true, || async {
+            // The total deadline, on top of the read timeout: see `download_deadline`.
+            let started = tokio::time::Instant::now();
+            let deadline = |received: u64| {
+                started
+                    + download_deadline(
+                        self.settings.download_grace,
+                        self.settings.download_min_rate,
+                        received,
+                    )
+            };
             let file = NativeFile::new()?;
             let mut output = tokio::fs::File::create(file.path())
                 .await
                 .map_err(io_error)?;
-            let stream: std::pin::Pin<
-                Box<dyn futures_util::Stream<Item = Result<_, reqwest::Error>>>,
-            > = match revision {
-                Some(sha) => Box::pin(
-                    self.http
-                        .v2_projects_download_retrieve_by_format_at_hash_binary_stream(
-                            "stalagmight",
-                            sha,
-                            id,
-                            None,
-                        )
-                        .await
-                        .map_err(api_error)?,
-                ),
-                None => Box::pin(
-                    self.http
-                        .v2_projects_download_retrieve_by_format_binary_stream(
-                            "stalagmight",
-                            id,
-                            None,
-                        )
-                        .await
-                        .map_err(api_error)?,
-                ),
+            let request = async {
+                let chunks: std::pin::Pin<
+                    Box<dyn futures_util::Stream<Item = Result<_, reqwest::Error>>>,
+                > = match revision {
+                    Some(sha) => Box::pin(
+                        self.http
+                            .v2_projects_download_retrieve_by_format_at_hash_binary_stream(
+                                "stalagmight",
+                                sha,
+                                id,
+                                None,
+                            )
+                            .await
+                            .map_err(api_error)?,
+                    ),
+                    None => Box::pin(
+                        self.http
+                            .v2_projects_download_retrieve_by_format_binary_stream(
+                                "stalagmight",
+                                id,
+                                None,
+                            )
+                            .await
+                            .map_err(api_error)?,
+                    ),
+                };
+                Ok::<_, SpeleoDbError>(chunks)
             };
-            let mut stream = stream;
+            let mut stream = tokio::time::timeout_at(deadline(0), request)
+                .await
+                .map_err(|_| download_too_slow())??;
             let mut received = 0_u64;
-            while let Some(chunk) = stream.next().await {
+            loop {
+                let Some(chunk) = tokio::time::timeout_at(deadline(received), stream.next())
+                    .await
+                    .map_err(|_| download_too_slow())?
+                else {
+                    break;
+                };
                 let chunk = chunk.map_err(network_error)?;
                 received = received.saturating_add(chunk.len() as u64);
                 if received > self.settings.native_limit {
@@ -222,6 +266,14 @@ fn unreachable_result<T>() -> Result<T, SpeleoDbError> {
 }
 fn io_error(error: std::io::Error) -> SpeleoDbError {
     SpeleoDbError::Io(error.to_string())
+}
+/// A download that ran past its total deadline ([`download_deadline`]): a
+/// timeout, like the read timeout that a trickling server stays inside.
+fn download_too_slow() -> SpeleoDbError {
+    SpeleoDbError::Transport {
+        cause: TransportCause::Timeout,
+        detail: "the download was too slow to finish in time".into(),
+    }
 }
 /// `true` when a TLS handshake or certificate check is what failed: a typed
 /// `rustls::Error` anywhere in the error tree. tokio-rustls reports it inside an

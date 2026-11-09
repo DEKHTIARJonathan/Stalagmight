@@ -314,8 +314,12 @@ failure (offline, with the cached open), not a refusal. Redirects and implicit R
 retries are disabled. Safe reads and token exchange retry transient transport/5xx
 failures twice, after 200 ms and 500 ms. Mutations are never automatically replayed.
 Metadata requests use 30 seconds and lock probes five seconds with no retries.
-Downloads have a 30-second connection limit and a 120-second read inactivity limit,
-with no total transfer deadline. Buffered multipart uploads have a size-aware total
+Downloads have a 30-second connection limit, a 120-second read inactivity limit
+and a size-aware total deadline: 120 seconds plus the bytes received at 4 KiB/s
+(the SDK's stream does not expose the reply's length, so a download of N bytes ends
+within 120 s + N / 4 KiB/s, and the 512 MiB native limit bounds every download). A
+server trickling bytes inside the read limit is stopped as a timeout instead of
+holding the transfer, and a quit waiting for it, for ever. Buffered multipart uploads have a size-aware total
 budget of 120 seconds plus transfer time at 16 KiB/s. Response-read timeouts are not
 upload-progress timeouts. JSON responses are capped at 10 MiB. Production settings
 do not read the live-test environment variables.
