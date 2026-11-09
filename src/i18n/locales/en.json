@@ -3495,6 +3495,12 @@
         "unpushedWork": "Hand the open project back to SpeleoDB first - it still has work that has not been uploaded, and opening {{name}} would close it and leave that work only on this computer."
       }
     },
+    "reloadConfirm": {
+      "title": "Reload Project",
+      "body": "Discard changes removes unsaved and unuploaded modifications. Save first using Save Changes to preserve your work. Cancel keeps everything.",
+      "discard": "Discard changes",
+      "cancel": "Cancel"
+    },
     "lockState": {
       "youAreEditing": "You are editing",
       "beingEditedBy": "Currently being edited by {{email}}",

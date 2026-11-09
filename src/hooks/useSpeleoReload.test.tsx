@@ -5,7 +5,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 const mocks = vi.hoisted(() => ({ ipc: vi.fn(), confirm: vi.fn(), replace: vi.fn() }));
 vi.mock('../utils/ipc', () => ({ invokeIpc: mocks.ipc, getErrorMessage: String }));
-vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: mocks.confirm }));
+vi.mock('../utils/speleoReloadConfirm', () => ({ confirmSpeleoReloadDiscard: mocks.confirm }));
 vi.mock('../utils/speleoTreeReplacement', () => ({ applySpeleoTreeReplacement: mocks.replace }));
 const expected = { session_generation: 'synthetic', project_modified_at: 'synthetic' };
 const load = vi.fn();
@@ -26,7 +26,7 @@ it('reload cancellation preserves pending work without network, save or release'
   await act(() => result.current.update());
   expect(mocks.ipc).not.toHaveBeenCalled();
   expect(useProjectStore.getState().isDirty).toBe(true);
-  expect(mocks.confirm).toHaveBeenCalledWith(expect.stringContaining('unsaved and unuploaded'), expect.objectContaining({ okLabel: 'Discard changes', cancelLabel: 'Cancel' }));
+  expect(mocks.confirm).toHaveBeenCalledOnce();
 });
 it('explicit discard is bound to the inspected session and reload suppresses acquisition', async () => {
   useProjectStore.setState({ isDirty: true });
