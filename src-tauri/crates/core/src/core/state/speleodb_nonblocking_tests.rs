@@ -360,7 +360,9 @@ fn a_partial_write_keeps_the_live_speleodb_section() {
 fn config_writes_do_not_wait_behind_an_instance_change_release() {
     // Saving a new instance while editing hands the old project's lock back. That
     // POST used to run under `config_write_lock`, so the next panel resize waited
-    // for it on the main thread.
+    // for it on the main thread. `update_config` now refuses an instance change
+    // while connected (Disconnect first), so this drives the write behind it, as a
+    // sign-in landing after that check would reach it.
     let dir = tempfile::tempdir().expect("temp dir");
     with_isolated_config(|| {
         // The holder check answers first (lock#4), then the release POST is held.
@@ -376,7 +378,7 @@ fn config_writes_do_not_wait_behind_an_instance_change_release() {
                 let _config = config.adopt();
                 let mut moved = state.get_config();
                 moved.speleodb.endpoint = Some("https://other.example.com".to_owned());
-                state.update_config(moved)
+                state.write_whole_config(moved)
             });
             let request = server.wait_for_held_request();
             assert!(

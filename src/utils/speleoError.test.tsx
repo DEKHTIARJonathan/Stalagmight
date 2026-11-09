@@ -95,7 +95,7 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
   });
 
   it('names the server the call was made to when the caller knows it', () => {
-    // Settings' "Sign in now" tries the address on screen, not the session's.
+    // Settings' Connect tries the address on screen, not the session's.
     const line = humanizeSpeleoError(dto({ transport: 'Refused' }), 'Could not sign in to SpeleoDB', {
       endpoint: 'https://unsaved.example/',
     });
@@ -132,17 +132,17 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
 });
 
 describe('humanizeSpeleoError - an endpoint the policy refused', () => {
-  const refused = (endpoint_refusal: 'PublicHttp' | 'InvalidAddress') => dto({
-    message: 'refusing to use an insecure SpeleoDB endpoint: http://192.0.2.1/',
+  const refused = (endpoint_refusal: 'PlainHttp' | 'InvalidAddress') => dto({
+    message: 'HTTPS is required. HTTP is allowed only on localhost, 127.0.0.1 or 192.168.x.x. Rejected endpoint: http://192.0.2.1/',
     action: 'Fatal', transport: null, endpoint_refusal,
   });
 
-  it('points a public http:// server at "Allow insecure HTTP", never the backend text', () => {
-    const line = humanizeSpeleoError(refused('PublicHttp'), 'Could not sign in to SpeleoDB', { endpoint: 'http://192.0.2.1/' });
+  it('names the automatic HTTP exceptions for a plain http:// server, never the backend text', () => {
+    const line = humanizeSpeleoError(refused('PlainHttp'), 'Could not sign in to SpeleoDB', { endpoint: 'http://192.0.2.1/' });
     expect(line).toContain('http://192.0.2.1/');
-    expect(line).toContain('"Allow insecure HTTP"');
+    expect(line).toContain('192.168.x.x');
     expect(line).toContain('https://');
-    expect(line).not.toContain('refusing');
+    expect(line).not.toContain('Rejected endpoint');
     expect(line).not.toContain('Could not sign in to SpeleoDB:');
   });
 
@@ -153,8 +153,8 @@ describe('humanizeSpeleoError - an endpoint the policy refused', () => {
   });
 
   it('ignores a refusal field that is not one it knows', () => {
-    const line = humanizeSpeleoError({ ...refused('PublicHttp'), endpoint_refusal: 'Other' }, 'Prefix');
-    expect(line).toBe('Prefix: refusing to use an insecure SpeleoDB endpoint: http://192.0.2.1/');
+    const line = humanizeSpeleoError({ ...refused('PlainHttp'), endpoint_refusal: 'Other' }, 'Prefix');
+    expect(line).toBe('Prefix: HTTPS is required. HTTP is allowed only on localhost, 127.0.0.1 or 192.168.x.x. Rejected endpoint: http://192.0.2.1/');
   });
 });
 

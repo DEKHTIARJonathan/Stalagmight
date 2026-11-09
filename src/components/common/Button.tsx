@@ -1,6 +1,6 @@
 import { type ReactNode, type ButtonHTMLAttributes, forwardRef } from 'react';
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'highlight';
+type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'highlight' | 'warning' | 'success' | 'info' | 'external';
 type ButtonSize = 'sm' | 'md' | 'lg';
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -20,6 +20,10 @@ const variantStyles: Record<ButtonVariant, string> = {
   // theme's warning yellow. `--cc-warning-on` is the per-theme text colour that
   // reads at WCAG AA on that yellow (pinned in tokens.test.ts).
   highlight: 'bg-warning text-warning-on hover:bg-warning-90',
+  warning: 'bg-warning-20 border border-warning text-warning hover:bg-warning-30',
+  success: 'bg-success-10 border border-success text-success hover:bg-success-30',
+  info: 'bg-sky-100 border border-sky-500 text-sky-900 hover:bg-sky-200',
+  external: 'bg-violet-700 border border-violet-600 text-white hover:bg-violet-800',
 };
 
 const sizeStyles: Record<ButtonSize, string> = {

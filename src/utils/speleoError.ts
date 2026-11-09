@@ -72,7 +72,7 @@ function serverName(tried?: string | null): string {
 function endpointRefusalOf(e: unknown): EndpointRefusal | null {
   if (!e || typeof e !== 'object' || !('endpoint_refusal' in e)) return null;
   const refusal = (e as Partial<SpeleoErrorDto>).endpoint_refusal;
-  return refusal === 'PublicHttp' || refusal === 'InvalidAddress' ? refusal : null;
+  return refusal === 'PlainHttp' || refusal === 'InvalidAddress' ? refusal : null;
 }
 
 /**
@@ -83,8 +83,8 @@ function endpointRefusalOf(e: unknown): EndpointRefusal | null {
  * e.g. `Could not sign in to SpeleoDB: …`, `Unable to open the project: …` - except on
  * transport errors, which are replaced wholesale by the humanized #270 line (it
  * is already self-framed and would otherwise read as "Login failed: Network
- * error…"), and on an endpoint the policy refused, which says which setting to
- * change instead of the backend's "refusing to use an insecure SpeleoDB endpoint".
+ * error…"), and on an endpoint the policy refused, which says what to change
+ * instead of the backend's English rule.
  *
  * `opts.endpoint` is the server the call was made to, when the caller knows it
  * better than the session does (see {@link serverName}).
@@ -98,8 +98,8 @@ export function humanizeSpeleoError(
   if (cause) return transportMessage(cause, opts.endpoint);
   const refusal = endpointRefusalOf(e);
   if (refusal) {
-    return i18n.t(refusal === 'PublicHttp'
-      ? 'speleodb.endpointRefused.publicHttp'
+    return i18n.t(refusal === 'PlainHttp'
+      ? 'speleodb.endpointRefused.plainHttp'
       : 'speleodb.endpointRefused.invalidAddress', { endpoint: serverName(opts.endpoint) });
   }
   // #649: a download a newer Stalagmight saved. Self-framed like the transport

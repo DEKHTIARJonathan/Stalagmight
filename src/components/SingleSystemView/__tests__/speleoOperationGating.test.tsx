@@ -121,16 +121,15 @@ describe('SpeleoDB settings', () => {
     );
   }
 
-  it('locks the endpoint, connection and sign-out while an exclusive call runs', () => {
+  it('locks Disconnect while an exclusive call runs; the server stays locked while connected', () => {
     renderSettings();
-    expect(screen.getByTestId('input-speleodb-endpoint')).toBeEnabled();
+    // Connected: the server box is locked until Disconnect (#668).
+    expect(screen.getByTestId('input-speleodb-endpoint')).toBeDisabled();
     expect(screen.getByTestId('speleodb-settings-logout')).toBeEnabled();
     const end = startCall('exclusive');
-    expect(screen.getByTestId('input-speleodb-endpoint')).toBeDisabled();
-    expect(screen.getByTestId('toggle-speleodb-insecure-http')).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByTestId('speleodb-settings-logout')).toBeDisabled();
     end();
-    expect(screen.getByTestId('input-speleodb-endpoint')).toBeEnabled();
+    expect(screen.getByTestId('speleodb-settings-logout')).toBeEnabled();
   });
 
   it('locks the sign-in form while an exclusive call runs', () => {
@@ -140,16 +139,18 @@ describe('SpeleoDB settings', () => {
     });
     renderSettings();
     expect(screen.getByTestId('speleodb-settings-try-login')).toBeEnabled();
+    expect(screen.getByTestId('input-speleodb-endpoint')).toBeEnabled();
     const end = startCall('exclusive');
     expect(screen.getByTestId('speleodb-settings-try-login')).toBeDisabled();
     expect(screen.getByTestId('speleodb-settings-email')).toBeDisabled();
+    expect(screen.getByTestId('input-speleodb-endpoint')).toBeDisabled();
     end();
+    expect(screen.getByTestId('input-speleodb-endpoint')).toBeEnabled();
   });
 
   it('leaves the account controls alone during a read', () => {
     renderSettings();
     const end = startCall('read');
-    expect(screen.getByTestId('input-speleodb-endpoint')).toBeEnabled();
     expect(screen.getByTestId('speleodb-settings-logout')).toBeEnabled();
     end();
   });

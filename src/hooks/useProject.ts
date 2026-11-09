@@ -90,6 +90,8 @@ export function useProject() {
     const t1 = performance.now();
     if (result.success) {
       setView('global');
+    } else if (result.error !== 'Cancelled' && result.error !== 'Superseded' && result.error !== 'Already closing') {
+      openDialog('error', { title: 'Close Project failed', message: result.error || 'The project is still open. Try again.' });
     }
     const t2 = performance.now();
     const { recordPerfTiming } = await import('../utils/memoryProbe');

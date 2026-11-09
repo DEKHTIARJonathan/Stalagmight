@@ -59,6 +59,23 @@ impl AppState {
             .map_err(local_dto)?;
         // [Track A] #187: thread the override into every client call.
         let insecure_http = insecure_http.unwrap_or_else(|| self.speleodb_insecure_http());
+        // Refuse an address the transport policy would refuse before anything else
+        // reads as a sign-in attempt.
+        crate::speleodb::validate_endpoint(&endpoint, insecure_http).map_err(local_dto)?;
+        // A connected session is bound to its server: switching servers is a
+        // Disconnect (with its own sign-out flow) and a fresh Connect, never a
+        // sign-in that silently replaces the session underneath open work.
+        let current = self.speleodb_session_status()?;
+        if current.logged_in
+            && current.endpoint.as_deref().is_some_and(|old| {
+                crate::speleodb::auth::normalize_endpoint(old)
+                    != crate::speleodb::auth::normalize_endpoint(&endpoint)
+            })
+        {
+            return Err(local_dto(SpeleoDbError::Io(
+                "Disconnect from SpeleoDB before changing servers.".into(),
+            )));
+        }
 
         let (token, email) =
             if let Some(t) = token.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()) {
@@ -188,7 +205,7 @@ mod tests {
         set_saved_insecure_http(&state, true);
         let error = password_login_error(&state, "http://8.8.8.8/", Some(false))
             .expect("public http is refused under the on-screen choice");
-        assert!(error.contains("insecure"), "{error}");
+        assert!(error.contains("HTTPS is required"), "{error}");
         assert!(saved_insecure_http(&state), "a failed login saves nothing");
         assert_ne!(
             state
@@ -208,32 +225,40 @@ mod tests {
         set_saved_insecure_http(&state, false);
         let error = password_login_error(&state, "http://8.8.8.8/", None)
             .expect("public http is refused by default");
-        assert!(error.contains("insecure"), "{error}");
+        assert!(error.contains("HTTPS is required"), "{error}");
     }
 
     #[test]
     fn a_successful_login_saves_the_on_screen_choice_with_the_session() {
-        for on_screen in [true, false] {
-            let base = answering_stub(r#"{"email":"synthetic@example.com"}"#);
-            let state = AppState::new().expect("state");
-            set_saved_insecure_http(&state, !on_screen);
-            state
-                .speleodb_login(
-                    Some(base.clone()),
-                    Some(on_screen),
-                    None,
-                    None,
-                    Some("<your_token_here>".to_owned()),
-                )
-                .expect("login");
-            let saved = state.config.lock().expect("config").speleodb.clone();
-            assert_eq!(saved.insecure_http, on_screen);
-            assert_eq!(saved.endpoint.as_deref(), Some(base.as_str()));
-            let reloaded = crate::config::Config::load().expect("reload");
-            assert_eq!(
-                reloaded.speleodb.insecure_http, on_screen,
-                "persisted, not only held in memory"
-            );
-        }
+        // One server for both rounds: the second round's state restores the first
+        // round's saved session, and a connected session is bound to its server.
+        let base = answering_stub(r#"{"email":"synthetic@example.com"}"#);
+        crate::test_helpers::with_isolated_config(|| {
+            for on_screen in [true, false] {
+                login_saving_the_choice(&base, on_screen);
+            }
+        });
+    }
+
+    fn login_saving_the_choice(base: &str, on_screen: bool) {
+        let state = AppState::new().expect("state");
+        set_saved_insecure_http(&state, !on_screen);
+        state
+            .speleodb_login(
+                Some(base.to_owned()),
+                Some(on_screen),
+                None,
+                None,
+                Some("<your_token_here>".to_owned()),
+            )
+            .expect("login");
+        let saved = state.config.lock().expect("config").speleodb.clone();
+        assert_eq!(saved.insecure_http, on_screen);
+        assert_eq!(saved.endpoint.as_deref(), Some(base));
+        let reloaded = crate::config::Config::load().expect("reload");
+        assert_eq!(
+            reloaded.speleodb.insecure_http, on_screen,
+            "persisted, not only held in memory"
+        );
     }
 }

@@ -34,10 +34,10 @@ Only a DNS, connection-unavailable or timeout failure allows opening an existing
 cache, whose stored project ID and endpoint must match. The UI announces that
 offline fallback and preserves the cached unsynced-edit state. Authentication,
 permission, missing remote project, TLS and invalid-download errors do not fall
-back to the cache (but see the no-session rules below). An `http://` hostname
-endpoint that does not resolve is offline, not insecure: the endpoint policy
-reports it as the same DNS failure, so it falls back exactly as an `https://`
-endpoint does (see Authentication and transport). If a successful download would
+back to the cache (but see the no-session rules below). An `http://` endpoint the
+transport policy allows (see Authentication and transport) falls back exactly as an
+`https://` endpoint does; one it refuses is refused before any request, without
+DNS. If a successful download would
 overwrite unsynced edits, the user can cancel or explicitly confirm replacing
 them; the prompt offers no online local-copy shortcut.
 
@@ -243,16 +243,23 @@ for both authentication paths. Saved tokens are managed by the backend and do no
 cross the frontend as profile data. Session generations
 and per-account lock claims continue to guard late responses and account changes.
 
-The existing HTTP policy permits loopback/private deployments and requires HTTPS
-elsewhere unless explicitly configured otherwise. An `http://` hostname is resolved
-first and allowed only if every address is loopback, private or link-local; a
-resolvable public host is refused. A host that does not resolve is never dialed and
-is reported as the DNS transport failure, not as an insecure endpoint, so offline
-handling matches `https://`. A refused endpoint crosses IPC with a typed
-`endpoint_refusal` (`PublicHttp`, or `InvalidAddress` for a missing or unknown scheme
-or no host), and the UI shows a translated line that names the server and says what to
-change: an `https://` address, or "Allow insecure HTTP" for a trusted public `http://`
-server. It never shows the backend's refusal text. Redirects and implicit Reqwest
+HTTPS is required (`speleodb/tls.rs`, `validate_endpoint`). Plain HTTP is allowed
+only to the automatic exceptions, compared as written and without DNS: the exact
+host `localhost` (any letter case), the exact IPv4 address `127.0.0.1`, and IPv4
+literals in `192.168.0.0/16`, on any valid port. HTTP to anything else (hostnames,
+public addresses, the other private ranges, IPv6 literals, localhost aliases or
+subdomains) is refused before any request, as are a missing or unknown scheme, a
+missing host, user info and an invalid port. The check runs before every client
+call, on sign-in and when Settings saves a new server. A refused endpoint crosses IPC
+with a typed `endpoint_refusal` (`PlainHttp`, or `InvalidAddress` for an unusable
+address), and the UI shows a translated line that names the server and says what to
+change instead of the backend's English rule. The persisted `insecure_http` field
+(`SpeleoDbConfig`) lifts only the HTTP rule, never certificate verification; a
+hostname it lets through over HTTP is resolved before the client dials it, and one
+that does not resolve is the DNS transport failure (offline, with the cached open),
+not a refusal. It stays
+in the configuration so existing files load, release builds offer no control for it,
+and its development-build-only handling is being finalised by a follow-up commit. Redirects and implicit Reqwest
 retries are disabled. Safe reads and token exchange retry transient transport/5xx
 failures twice, after 200 ms and 500 ms. Mutations are never automatically replayed.
 Metadata requests use 30 seconds and lock probes five seconds with no retries.
@@ -294,26 +301,31 @@ selection or scroll. Navigation never acquires or releases a lock.
 
 For managed projects, the persistent header shows identity, editing access, lock owner and
 connection status. Everyday controls are Save Changes, Switch to Read Only Mode or
-Resume editing (Sign in to resume editing while signed out), Reload Project and Open
-on SpeleoDB. The primary (filled) one follows the state: Save Changes while editing
-or with unsaved edits, and with un-uploaded edits while signed in; Sign in while
-signed out; Resume editing when it can apply and nothing waits; none for view-only
-or no access. A disabled control says why in its tooltip (signed out, no access,
-view-only, or another SpeleoDB operation running). History is the only expandable section. Close Project sits below Reload Project,
+Resume editing (Sign in to resume editing while signed out), Reload Project, Close
+Project and Open on SpeleoDB: equal-height, full-width buttons coloured by the kind
+of action (Save Changes primary, Resume editing green, Switch to Read Only Mode
+amber, Reload Project blue, Close Project red, and browser navigation purple with an
+external-link icon). A disabled control says why in its tooltip (signed out, no
+access, view-only, or another SpeleoDB operation running). The colours, the
+one-filled-button-per-state rule (`speleoPrimaryAction`) and a neutral Close
+Project are being finalised by follow-up commits. Revision History is the only
+expandable section; its "Revision History on SpeleoDB" button opens the project's
+revision list on the web. Close Project sits below Reload Project,
 warns about unsaved work, releases the editing lock on confirmed close and returns
-to the project listing. History includes inspection, restore/revert and
-Unwind/Rewind; revision editing remains Survey-only.
+to the project listing. Revision History includes inspection and restore/revert
+actions; revision editing remains Survey-only. It has no Unwind/Rewind controls.
 
 Account sign-in, endpoint and connection management live exclusively in application
-Settings under SpeleoDB. Every sign-in link opens that category. The SpeleoDB
-screens say "sign in" and "sign out" throughout. "Sign in now" uses
-the endpoint and insecure-HTTP choice on screen and, on success, saves them with the
-session; Settings stays open when other tabs still hold unsaved edits (see
-[configuration](configuration.md)). A failed sign-in (from Sign in now or from Save)
-shows its error under the account controls, right after the button, as an alert, and
-scrolls it into view; a transport error names the server on screen, which is the one
-that was tried. Editing the credentials, the server or the insecure-HTTP choice clears
-that error. A blocked save
+Settings under SpeleoDB. Every sign-in link opens that category. Settings' buttons
+say Connect and Disconnect (see "Immediate SpeleoDB connection settings" below);
+the rest of the SpeleoDB screens still say "sign in" and "sign out", and moving
+them to "connect" wording is a follow-up. Connect first runs the sign-out and
+unsent-drafts questions an account change needs (`speleoStore.applyPendingAuth`),
+then signs in with the endpoint (and the insecure-HTTP value) on screen; the backend
+saves the connection with the session, and a failed sign-in saves no credentials.
+A failure is shown in an in-app error dialog; a transport error names the server on
+screen, which is the one that was tried. Disconnect runs the sign-out flow below
+before the session ends. A blocked save
 retains its project, validated description and Save-and-Close intent while Settings
 is open. Authentication returns to confirmation without saving or uploading.
 Changing project or account invalidates the continuation.
@@ -347,8 +359,12 @@ The overlay expires after 120 seconds with a timeout explanation and an enabled
 Close action; an in-flight request cannot be submitted again. Account/project
 changes and newer edits still invalidate stale results.
 On confirmation, the project is saved and its first revision uploaded, then a fresh
-server copy is downloaded and opened as a managed project. Editing is acquired once
-through the shared verified acquisition flow. Unconfirmed uploads preserve the
+server copy is downloaded and opened as a managed project. After successful
+reopening, its original local Recent Projects reference is removed. The original
+`.stalx` file is retained; unsuccessful conversions keep their original recent
+reference. If removing the recent reference cannot be persisted, the reference
+remains available for a later manual retry and the original file stays intact.
+Editing is acquired once through the shared verified acquisition flow. Unconfirmed uploads preserve the
 linked working copy for Save Changes; failed downloads preserve the remote identity
 and offer Reload Project. Retrying recovery never creates a second server project.
 
@@ -409,10 +425,17 @@ any work) and in `client::upload_stalx`, so no caller can send one
 Save and Close carries its close intent through recovery and closes only after a
 confirmed upload and successful release, with no newer local changes. Cancellation,
 conflict, uncertainty and release failure leave the project open. Plain Close,
-project switching and Quit release a clean session's lock silently. When the lock
-is held over work SpeleoDB has not seen, they ask the one in-app exit prompt
-(Upload / Keep the lock / Discard / Cancel, `utils/speleoExit`); the backend never
-releases over un-uploaded edits unless the close carries the confirmed discard.
+including Hamburger Menu -> Close Project, project switching and Quit release a
+clean session's lock silently, through the holder check (only a lock SpeleoDB says
+this account holds is released). When the lock is held over work SpeleoDB has not
+seen, they ask the one in-app exit prompt (Upload / Keep the lock / Discard /
+Cancel, `utils/speleoExit`); the backend never releases over un-uploaded edits
+unless the close carries the confirmed discard. A close the backend reports as
+failed keeps the project open with a visible error and pauses editing until the
+link status is refreshed. A clean close whose release fails or is uncertain
+currently still closes and keeps the claim for a later holder-checked retry; the
+in-app "Couldn't hand back the lock" dialog (Retry / Close and keep the lock /
+Cancel) for close, switch and quit is being finalised by a follow-up commit.
 Without the lock, unsaved survey work gets the unsaved-changes dialog with Save on
 this computer / Discard / Cancel (see above). Saved unuploaded work remains in the
 local file.
@@ -658,3 +681,23 @@ restores retry and dismissal without an error. A replaced managed-file prompt re
 ownership of its own controls. A superseded discard-and-open in the unpushed-local
 prompt similarly restores retry and dismissal without resetting a replacement prompt's
 operation.
+
+## Immediate SpeleoDB connection settings
+
+Connect saves changed preferences and authenticates immediately. Success closes
+Settings and refreshes the project listing. Disconnect takes effect immediately,
+clears the remote listing and stays on the SpeleoDB Settings tab. Neither action
+requires a subsequent Save. While connected, the server endpoint and both reset
+controls are disabled; backend requests to change instances are also refused.
+Disconnect first, including when the current server is temporarily unavailable.
+
+The SpeleoDB tab has a Close button instead of Save/Cancel. Closing validates and
+saves preference changes, including changes in other categories, without connecting.
+Connection and persistence errors keep Settings open. The ordinary Settings
+unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
+
+HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
+address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16` (see
+Authentication and transport). Settings has no insecure-HTTP control. An endpoint
+the policy refuses produces an error dialog when connecting, or when saving a new
+server. Certificate verification and redirect restrictions remain.

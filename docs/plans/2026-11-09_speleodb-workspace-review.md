@@ -2,7 +2,6 @@
 
 Static review of the workspace redesign from `68437dafb` through `9343bcf96`,
 followed by review of the corrective changes. The review-agent skill was used.
-The user's instruction to run no tests overrides the skill's test and prek steps.
 
 ## Findings and corrections
 
@@ -28,7 +27,7 @@ persistent forms, browser state, retries and focus. The resulting diffs were rea
 again for stale callbacks, lock ordering and unintended project retargeting.
 
 Rust sources were formatted and `git diff --check` was used for whitespace review.
-No tests, builds, typechecks, lint gates, prek runs or application sessions were
+No tests, builds, typechecks, lint gates or application sessions were
 executed for these corrections. Existing test call sites and a synthetic response
 were adjusted for the tightened internal contracts; no tests were added. Runtime
 behavior and compatibility with the existing suites remain unverified for this

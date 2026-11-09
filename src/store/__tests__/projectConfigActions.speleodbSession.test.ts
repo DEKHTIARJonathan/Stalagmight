@@ -5,11 +5,6 @@ import { useSpeleoStore } from '../speleoStore';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
-// Moving a signed-in session off its server ends it like a sign-out, so the save
-// first runs the sign-out guard (its own suite covers what it asks); here it says
-// "go ahead", or "cancelled" where a case asks it to.
-const guardSignOutMock = vi.hoisted(() => vi.fn(async (_kind: string) => true));
-vi.mock('../../utils/speleoSignOut', () => ({ guardSpeleoSignOut: guardSignOutMock }));
 
 const initialProjectState = useProjectStore.getState();
 const initialSpeleoState = useSpeleoStore.getState();
@@ -26,7 +21,6 @@ const signIn = (endpoint: string) => useSpeleoStore.getState().setSessionFromLog
 
 beforeEach(() => {
   invokeIpcMock.mockReset();
-  guardSignOutMock.mockClear();
   useProjectStore.setState({ config: configFor(endpointA) });
   useSpeleoStore.setState({ session: null, sessionGeneration: 0 });
   invokeIpcMock.mockImplementation(async (command: string) => {
@@ -52,41 +46,21 @@ describe('settings save after SpeleoDB authentication', () => {
     expect(useSpeleoStore.getState().sessionGeneration).toBe(generation);
   });
 
-  it('clears the old session when settings move its server', async () => {
+  it('preserves authentication when the backend rejects an instance change', async () => {
     signIn(endpointA);
-
-    expect((await useProjectStore.getState().updateConfig(configFor(endpointB))).success).toBe(true);
-
-    expect(guardSignOutMock).toHaveBeenCalledWith('switch');
-    expect(useSpeleoStore.getState().session).toBeNull();
-  });
-
-  it('a server move the sign-out guard cancels saves nothing and keeps the session', async () => {
-    signIn(endpointA);
-    guardSignOutMock.mockResolvedValueOnce(false);
-
+    invokeIpcMock.mockRejectedValueOnce(new Error('Disconnect before changing servers.'));
     expect((await useProjectStore.getState().updateConfig(configFor(endpointB))).success).toBe(false);
 
-    expect(invokeIpcMock).not.toHaveBeenCalledWith('update_config', expect.anything(), expect.anything());
-    expect(useSpeleoStore.getState().session?.loggedIn).toBe(true);
+    expect(useSpeleoStore.getState().session?.endpoint).toBe(endpointA);
   });
 
-  it('an inline login on the NEW server is not signed out by its own settings save', async () => {
-    signIn(endpointB);
-    guardSignOutMock.mockClear();
-
-    await useProjectStore.getState().updateConfig(configFor(endpointB));
-
-    expect(guardSignOutMock).not.toHaveBeenCalled();
-  });
-
-  it('compares the live session even when cached settings already match the requested server', async () => {
+  it('retains the live session when stale settings target a different instance', async () => {
     useProjectStore.setState({ config: configFor(endpointB) });
     signIn(endpointA);
 
     await useProjectStore.getState().updateConfig(configFor(endpointB));
 
-    expect(useSpeleoStore.getState().session).toBeNull();
+    expect(useSpeleoStore.getState().session?.endpoint).toBe(endpointA);
   });
 
   it('preserves equivalent spellings of the authenticated server', async () => {
@@ -107,8 +81,6 @@ describe('settings save after SpeleoDB authentication', () => {
     });
 
     const saving = useProjectStore.getState().updateConfig(configFor(endpointB));
-    // The save is in flight (past the sign-out guard) before the newer login lands.
-    await vi.waitFor(() => expect(invokeIpcMock).toHaveBeenCalledWith('update_config', expect.anything(), expect.anything()));
     signIn(endpointA);
     const generation = useSpeleoStore.getState().sessionGeneration;
     finishSave();

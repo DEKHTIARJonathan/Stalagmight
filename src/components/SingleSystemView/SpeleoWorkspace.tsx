@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { SpeleoHistorySteps } from './SpeleoHistorySteps';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
@@ -12,15 +11,14 @@ import { canResumeSpeleoEditing, permissionAtLeast } from '../../utils/speleoPer
 import { dispatchProjectSave } from '../../utils/dispatchProjectSave';
 import { SpeleoRevisionHistory } from '../Dialogs/settings/SpeleoRevisionHistory';
 import { useProject } from '../../hooks/useProject';
-import { useProjectStore } from '../../store/projectStore';
 import type { SpeleoLinkState } from '../../store/speleoStore';
 import { Button } from '../common/Button';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { RefreshGlyph } from '../common/SpeleoBadgedIcon';
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, ExternalLinkIcon, LockIcon, PencilIcon, SaveIcon, SignInIcon } from '../common/icons';
-import { SpeleoWorkspaceHeader } from './SpeleoWorkspaceHeader';
+import { SpeleoWorkspaceHeader, workspaceActionClass as actionClass } from './SpeleoWorkspaceHeader';
 
-const areas = [['history', 'History']] as const;
+const areas = [['history', 'Revision History']] as const;
 /** Icon size for the workspace's action buttons. */
 const ICON = 16;
 
@@ -33,6 +31,10 @@ const ICON = 16;
  * - signed in, able to resume, nothing waiting: Resume editing;
  * - signed in with saved but un-uploaded edits: Save Changes (it takes the lock);
  * - otherwise (view-only access, no access): none.
+ *
+ * Not applied to the buttons yet: they take #668's colour-by-kind variants. The
+ * one-filled-button-per-state rule (the owner's reconciliation of #668) builds on
+ * this.
  */
 export function speleoPrimaryAction(
   link: SpeleoLinkState,
@@ -75,7 +77,6 @@ function disabledReasons(
 export function SpeleoWorkspace() {
   const { t } = useTranslation();
   const link = useSpeleoStore((s) => s.link);
-  const isDirty = useProjectStore((s) => s.isDirty);
   const session = useSpeleoStore((s) => s.session);
   const expanded = useUIStore((s) => s.speleoWorkspaceSection);
   const [visited, setVisited] = useState(() => new Set<string>());
@@ -104,7 +105,6 @@ export function SpeleoWorkspace() {
   const editing = link.editState === 'editing';
   const signedIn = session?.loggedIn === true;
   const canResume = canResumeSpeleoEditing(link, session);
-  const primary = speleoPrimaryAction(link, signedIn, canResume, isDirty);
   const why = disabledReasons(t, link, signedIn, busy, web.url !== null);
   const editingDisabled = busy || (signedIn && !canResume && !editing);
   const reloadDisabled = busy || why.reload !== undefined;
@@ -112,10 +112,10 @@ export function SpeleoWorkspace() {
     <div className="h-full min-h-0 flex flex-col gap-3 p-3 text-sm" data-testid="speleodb-workspace">
       <SpeleoWorkspaceHeader link={link} />
       <div className="shrink-0 grid gap-2" data-testid="speleodb-workspace-everyday">
-        <Button variant={primary === 'save' ? 'primary' : 'secondary'} onClick={() => void dispatchProjectSave()} disabled={busy}
+        <Button variant="primary" className={actionClass} onClick={() => void dispatchProjectSave()} disabled={busy}
           title={busy ? why.busy : undefined}
           icon={<SaveIcon size={ICON} />} data-testid="speleodb-workspace-upload">Save Changes</Button>
-        <Button variant={primary === 'editing' ? 'primary' : 'secondary'}
+        <Button variant={editing ? 'warning' : 'success'} className={actionClass}
           onClick={() => editing ? void releaseOpenProjectLock() : canResume ? void startEditing() : useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })}
           disabled={editingDisabled}
           title={!editingDisabled ? undefined : busy ? why.busy : why.editing}
@@ -123,12 +123,12 @@ export function SpeleoWorkspace() {
           data-testid="speleodb-workspace-editing">
           {editing ? 'Switch to Read Only Mode' : signedIn ? 'Resume editing' : 'Sign in to resume editing'}
         </Button>
-        <Button onClick={() => void update()} disabled={reloadDisabled}
+        <Button variant="info" className={actionClass} onClick={() => void update()} disabled={reloadDisabled}
           title={!reloadDisabled ? undefined : why.reload ?? why.busy}
           icon={<RefreshGlyph size={ICON} />} data-testid="speleodb-workspace-latest">Reload Project</Button>
-        <Button onClick={() => void handleCloseProject()} disabled={busy} title={busy ? why.busy : undefined}
+        <Button variant="danger" className={actionClass} onClick={() => void handleCloseProject()} disabled={busy} title={busy ? why.busy : undefined}
           icon={<CloseIcon size={ICON} />} data-testid="speleodb-workspace-close">Close Project</Button>
-        <Button onClick={web.open} disabled={!web.url} title={why.web}
+        <Button variant="external" className={actionClass} onClick={web.open} disabled={!web.url} title={why.web}
           icon={<ExternalLinkIcon size={ICON} />} data-testid="speleodb-workspace-open-web">Open on SpeleoDB</Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto" data-testid="speleodb-workspace-sections">
@@ -143,7 +143,7 @@ export function SpeleoWorkspace() {
           </button>
           <div id={`speleodb-area-${id}`} hidden={expanded !== id} className="space-y-3">
             {(visited.has(id) || expanded === id) && <>
-            {id === 'history' && <><SpeleoHistorySteps /><SpeleoRevisionHistory /></>}
+            {id === 'history' && <SpeleoRevisionHistory />}
             </>}
           </div>
         </section>

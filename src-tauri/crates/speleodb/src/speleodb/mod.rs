@@ -33,8 +33,9 @@ pub mod metrics;
 pub mod models;
 // [P1] #192/#193 pure sync-engine logic: base-SHA fence + ancestry recovery.
 pub mod sync;
-// [Track A] #187 http/https private-network TLS policy (pure classify_addr + enforce).
+// [Track A] #187 http/https transport policy (automatic http exceptions).
 pub(crate) mod tls;
+pub use tls::validate_endpoint;
 
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
 pub use contract::{EndpointRefusal, SpeleoDbAction, TransportCause};
@@ -97,13 +98,13 @@ pub enum SpeleoDbError {
     /// [`SpeleoDbError::InvalidProjectId`].
     #[error("invalid SpeleoDB revision id")]
     InvalidRevision,
-    // [Track A] #187: the endpoint scheme/host failed the http private-network
-    // policy (public `http://`, a missing/unknown scheme, or no host). An
-    // unresolvable host is NOT this error: it is `Transport { cause: Dns }`
-    // (offline, sdk#6). Non-retryable by construction - `tls::enforce` errors
-    // before the SDK client exists, so `SdkClient::call` never loops on it.
-    // `refusal` says which rule refused it, for the frontend's translated line.
-    #[error("refusing to use an insecure SpeleoDB endpoint: {endpoint}")]
+    // [Track A] #187: the endpoint failed the transport policy
+    // (`tls::validate_endpoint`): plain `http://` outside the automatic
+    // exceptions, or an unusable address (no/unknown scheme, no host, user info,
+    // bad port). Decided without DNS. Non-retryable by construction - the policy
+    // errors before the SDK client exists, so `SdkClient::call` never loops on
+    // it. `refusal` says which rule refused it, for the frontend's translated line.
+    #[error("{} Rejected endpoint: {endpoint}", .refusal.reason())]
     InsecureEndpoint {
         endpoint: String,
         refusal: EndpointRefusal,

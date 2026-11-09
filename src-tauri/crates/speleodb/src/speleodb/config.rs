@@ -17,11 +17,12 @@ pub struct SpeleoDbConfig {
     #[serde(skip)]
     #[ts(skip)]
     pub preserve_unreadable_file: bool,
-    /// [Track C] (#187/D-B10/D-B19): allow an `http://` endpoint to a PUBLIC host.
-    /// Off by default. Relaxes ONLY the public-http scheme block in
-    /// `speleodb::tls::enforce` (Track A #187) - NEVER TLS cert verification
-    /// (self-signed / internal CAs stay rejected). Pre-wired for #205 Settings;
-    /// D-B19's scheme reject lives in `tls.rs`, not here.
+    /// Allow an `http://` endpoint outside the automatic exceptions (`localhost`,
+    /// `127.0.0.1`, `192.168.x.x`; see `speleodb::tls`). Off by default. Relaxes
+    /// ONLY the http scheme rule in `speleodb::tls::validate_endpoint` - NEVER TLS cert
+    /// verification (self-signed / internal CAs stay rejected). Kept in the schema
+    /// so existing configs load and so a development build can offer the option;
+    /// release builds offer no control for it.
     #[serde(default)]
     pub insecure_http: bool,
     /// [#303] Default undo policy for SpeleoDB-linked projects, under any

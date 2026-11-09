@@ -267,3 +267,42 @@ The `save_project` backend command returns the save path as a string in `Command
 | `src-tauri/crates/persistence/src/persistence/sqlite.rs` | SQLite database operations |
 | `docs/undo-redo.md` | Undo/redo stack persistence details |
 | `docs/configuration.md` | Auto-save config options |
+
+## Immediate SpeleoDB connection settings
+
+Connect saves changed preferences and authenticates immediately. Success closes
+Settings and refreshes the project listing. Disconnect takes effect immediately,
+clears the remote listing and stays on the SpeleoDB Settings tab. Neither action
+requires a subsequent Save. While connected, the server endpoint and both reset
+controls are disabled; backend requests to change instances are also refused.
+Disconnect first, including when the current server is temporarily unavailable.
+
+The SpeleoDB tab has a Close button instead of Save/Cancel. Closing validates and
+saves preference changes, including changes in other categories, without connecting.
+Connection and persistence errors keep Settings open. The ordinary Settings
+unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
+
+HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
+address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
+allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
+missing schemes and malformed addresses are rejected, without any DNS lookup. An
+endpoint the policy refuses produces an error dialog when connecting, or when saving
+a new server. `insecure_http` lifts only the HTTP rule (never certificate
+verification); it stays in the file so existing configurations load, Settings has
+no control for it, and its development-build-only handling is being finalised by a
+follow-up commit. Certificate verification and redirect restrictions remain.
+
+### Confirmed project close
+
+Hamburger Menu -> Close Project and the SpeleoDB workspace Close action share the
+same close command. A clean close releases the lock only when SpeleoDB names this
+account as its holder; over un-uploaded work the exit prompt decides (Upload / Keep
+the lock / Discard / Cancel) and the backend never releases without the confirmed
+discard. A close the backend reports as failed keeps the project open with a visible
+error and pauses editing until the link status is refreshed. A release that fails
+or is uncertain currently still closes and keeps the claim for a later
+holder-checked retry; the in-app "Couldn't hand back the lock" dialog (Retry / Close
+and keep the lock / Cancel) is being finalised by a follow-up commit. Local files
+and saved unpublished changes remain intact. The API has no atomic
+compare-and-release, so a server-side ownership change between the holder check and
+the POST remains a protocol limitation.

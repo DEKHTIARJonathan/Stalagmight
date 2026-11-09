@@ -171,6 +171,9 @@ fn conversion_saves_unsaved_survey_uploads_once_and_requires_verified_editing_af
             .load_speleo_link()
             .expect("original link")
             .is_none());
+        state
+            .speleodb_logout()
+            .expect("disconnect before next synthetic server");
         stop.store(true, Ordering::SeqCst);
         server.join().expect("server shutdown");
         let requests = requests.lock().expect("request log");

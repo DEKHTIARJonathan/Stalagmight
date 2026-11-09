@@ -338,8 +338,10 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * the server mutex (fix 1) - but never over un-uploaded edits, which keep it.
    * `releaseLock: false` is the exit prompt's "Keep the lock"; `discardLocal: true`
    * its confirmed "Discard changes" (local copy removed, then the lock released).
+   * A close the backend reports as failed leaves the project open: editing is shown
+   * paused until the link status is refreshed, and the caller shows the error.
    */
-  closeProject: (opts?: { releaseLock?: boolean; discardLocal?: boolean; request?: number; isCurrent?: () => boolean }) => Promise<CommandResult>;
+  closeProject:(opts?: { releaseLock?: boolean; discardLocal?: boolean; request?: number; isCurrent?: () => boolean }) => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
   /**
    * Mark the project dirty (unsaved changes) without running a command. The DMP
@@ -1434,11 +1436,25 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const request = opts?.request ?? reserveProjectRequest();
     set({ isClosing: true });
     return runProjectSwitch(async () => {
+      const closeContext = useSpeleoStore.getState();
+      let dispatched = false;
+      const reconcileFailedClose = () => {
+        const current = useSpeleoStore.getState();
+        if (!dispatched || !isProjectMutationCurrent(request)
+          || current.sessionGeneration !== closeContext.sessionGeneration
+          || current.remoteProjectId !== closeContext.remoteProjectId || !current.link) return;
+        // A release may have succeeded even when its response was lost. Stop
+        // presenting editing immediately; refresh the backend gate without
+        // delaying the actionable close error behind another network request.
+        useSpeleoStore.setState({ link: { ...current.link, editState: 'read-only' } });
+        void useSpeleoStore.getState().refreshLinkStatus();
+      };
       try {
         const current = () => isProjectRequestCurrent(request) && (opts?.isCurrent?.() ?? true);
         if (!current()) return emptyCommandResult(false, 'Superseded');
         if (!await confirmWorkspaceDrafts(current)) return emptyCommandResult(false, current() ? 'Cancelled' : 'Superseded');
         if (!current()) return emptyCommandResult(false, 'Superseded');
+        dispatched = true;
         const result = await invokeIpc<CommandResult>(
           'close_project',
           // Default: release a held SpeleoDB lock (never over un-uploaded edits -
@@ -1449,8 +1465,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         );
         if (result.success && isProjectMutationCurrent(request)) {
           clearOpenProjectState(set);
+        } else if (!result.success) {
+          reconcileFailedClose();
         }
         return result;
+      } catch (error) {
+        reconcileFailedClose();
+        return emptyCommandResult(false, String(error));
       } finally {
         set({ isClosing: false });
       }

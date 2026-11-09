@@ -55,7 +55,7 @@ pub(super) struct LockReleaseParams {
     /// the release is sent (see [`release_if_held_by_us`]). Read in the same
     /// session acquisition as the token, so the two describe one account.
     pub(super) email: String,
-    /// The persisted public-`http://` allowance, threaded to `tls::enforce`.
+    /// The persisted plain-`http://` allowance, threaded to `tls::validate_endpoint`.
     pub(super) insecure_http: bool,
     /// The project whose write lock is being released.
     pub(super) project_id: String,
@@ -997,6 +997,32 @@ mod tests {
                 "{name}: the claim is over"
             );
         }
+    }
+
+    #[test]
+    fn a_close_hands_the_lock_back_once_and_leaves_the_saved_file_as_is() {
+        // #668 scenario: a clean close releases through the holder check, then
+        // closes, and the saved project file is byte-identical afterwards.
+        let (server, seen) = recording_server();
+        let (_temp, _root, path, state) = managed_editing_session(&server);
+        let before = std::fs::read(&path).expect("saved project");
+        state.speleodb_release_held_lock_on_close();
+        assert!(state.execute(crate::core::Command::CloseProject).success);
+        assert_eq!(release_requests(&seen), 1);
+        assert!(holder_reads(&seen) >= 1, "asked who holds the lock first");
+        assert!(state.get_project_state().is_none());
+        assert_eq!(std::fs::read(&path).expect("file remains"), before);
+    }
+
+    #[test]
+    fn closing_a_local_project_needs_no_server() {
+        // #668 scenario: a project with no SpeleoDB link closes without any
+        // network call or credentials.
+        let state = AppState::new().expect("state");
+        state.set_project_for_tests(Project::new("Synthetic local".into(), None));
+        state.speleodb_release_held_lock_on_close();
+        assert!(state.execute(crate::core::Command::CloseProject).success);
+        assert!(state.get_project_state().is_none());
     }
 
     #[test]

@@ -7,8 +7,8 @@ import { setIpcOverrides } from './helpers/ipcOverrides';
  *
  * - The Open from SpeleoDB browser cannot be dismissed while an open is in flight,
  *   and the open's 401 is shown (frontend#3).
- * - Settings' "Sign in now" uses the connection on screen and keeps Settings open
- *   while other tabs hold staged edits (security#4).
+ * - Settings' Connect saves the staged settings first, then signs in with the
+ *   connection on screen, and reports a failure in an in-app dialog (security#4).
  * - Unsent SpeleoDB input is asked about in-app before the app closes (frontend#10).
  */
 
@@ -78,43 +78,36 @@ test('the SpeleoDB browser stays open while an open is in flight, then shows its
   await expect(dialog).toBeHidden();
 });
 
-test.describe('Settings "Sign in now"', () => {
+test.describe('Settings Connect', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await page.getByTestId('global-speleodb-button').click();
     await expect(page.getByTestId('settings-panel-speleodb')).toBeVisible();
   });
 
-  async function logInNow(page: Page): Promise<void> {
+  async function connect(page: Page): Promise<void> {
     await page.getByTestId('speleodb-settings-email').fill('test@example.com');
     await page.getByTestId('speleodb-settings-password').fill('synthetic-secret');
     await page.getByTestId('speleodb-settings-try-login').click();
   }
 
-  test('logs in over the endpoint and insecure-HTTP choice on screen, then closes', async ({ page }) => {
-    await page.getByTestId('input-speleodb-endpoint').fill('http://lab.example/');
-    await page.getByTestId('toggle-speleodb-insecure-http').click();
-    await logInNow(page);
+  test('connects over the endpoint on screen, then closes', async ({ page }) => {
+    await page.getByTestId('input-speleodb-endpoint').fill('https://lab.example/');
+    await connect(page);
     await expect(page.getByTestId('settings-dialog')).toBeHidden();
     expect((await calls(page, 'speleodb_login')).map((c) => c.args)).toEqual([
-      expect.objectContaining({ endpoint: 'http://lab.example/', insecureHttp: true }),
+      expect.objectContaining({ endpoint: 'https://lab.example/', insecureHttp: false }),
     ]);
   });
 
-  test('stays open while another tab holds staged edits, which Save then writes', async ({ page }) => {
-    await page.getByTestId('toggle-speleodb-insecure-http').click();
+  test('saves another tab\'s staged edits before it connects, then closes', async ({ page }) => {
     await page.getByTestId('settings-tab-general').click();
     const autoSave = page.getByTestId('toggle-auto-save');
     const before = await autoSave.getAttribute('aria-checked');
     await autoSave.click();
     await page.getByTestId('settings-tab-speleodb').click();
-    await logInNow(page);
+    await connect(page);
 
-    await expect(page.getByTestId('speleodb-account-signed-in')).toBeVisible();
-    await expect(page.getByTestId('settings-dialog')).toBeVisible();
-    await page.getByTestId('settings-tab-general').click();
-    await expect(page.getByTestId('toggle-auto-save')).not.toHaveAttribute('aria-checked', before ?? '');
-    await page.getByTestId('settings-save-button').click();
     await expect(page.getByTestId('settings-dialog')).toBeHidden();
     const saved = await page.evaluate(async () => (window as unknown as {
       __TAURI_INTERNALS__: { invoke: (cmd: string) => Promise<{ general: { auto_save: boolean } }> };
@@ -123,7 +116,7 @@ test.describe('Settings "Sign in now"', () => {
     expect(await calls(page, 'speleodb_login')).toHaveLength(1);
   });
 
-  test('a failure shows next to the button, in view, with the panel scrolled to Connection', async ({ page }) => {
+  test('a failure shows in an in-app dialog naming the server on screen, and Settings stays open', async ({ page }) => {
     // The server on screen cannot be reached.
     await page.evaluate(() => {
       const w = window as unknown as { __MOCK_IPC_OVERRIDES__?: Record<string, unknown> };
@@ -138,27 +131,20 @@ test.describe('Settings "Sign in now"', () => {
       });
       w.__MOCK_IPC_OVERRIDES__ = overrides;
     });
-    await page.setViewportSize({ width: 1024, height: 560 });
-    await page.getByTestId('speleodb-settings-email').fill('test@example.com');
-    await page.getByTestId('speleodb-settings-password').fill('synthetic-secret');
-    // Scrolled down to edit the server: the Account section's top is out of view.
-    const endpoint = page.getByTestId('input-speleodb-endpoint');
-    await endpoint.scrollIntoViewIfNeeded();
-    await endpoint.fill('https://unsaved.example/');
-    await expect(page.getByTestId('section-speleodb-account').getByRole('heading')).not.toBeInViewport();
-    await page.getByTestId('speleodb-settings-try-login').click();
+    await page.getByTestId('input-speleodb-endpoint').fill('https://unsaved.example/');
+    await connect(page);
 
-    const error = page.getByRole('alert').filter({ hasText: 'Could not connect to SpeleoDB' });
-    await expect(error).toHaveAttribute('data-testid', 'speleodb-account-settings-error');
-    await expect(error).toBeInViewport({ ratio: 1 });
-    // Named for the server that was tried: the one on screen, not yet saved.
+    const error = page.getByTestId('speleodb-connection-error');
+    await expect(error).toBeVisible();
+    await expect(error).toBeInViewport();
+    // Named for the server that was tried: the one on screen.
+    await expect(error).toContainText('Could not connect to SpeleoDB');
     await expect(error).toContainText('https://unsaved.example/');
     await expect(error).not.toContainText('configured server');
+    await page.getByTestId('speleodb-connection-error-close').click();
+    await expect(error).toBeHidden();
     await expect(page.getByTestId('settings-dialog')).toBeVisible();
-
-    // Editing the server makes that error stale.
-    await endpoint.fill('https://other.example/');
-    await expect(page.getByTestId('speleodb-account-settings-error')).toHaveCount(0);
+    await expect(page.getByTestId('speleodb-account-login-form')).toBeVisible();
   });
 });
 

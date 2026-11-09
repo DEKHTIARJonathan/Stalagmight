@@ -6903,20 +6903,72 @@ fn test_remove_recent_projects_fails_when_lock_poisoned() {
 
 #[test]
 fn test_remove_recent_project_removes_present_entry() {
-    // Isolated because `remove_from_recent_projects` persists the trimmed list and
-    // reports a save failure as `success: false`, so this assert is only about the
-    // removal if the save has a writable config file of its own to land in.
     crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("local.stalx");
+        let managed = temp.path().join("managed.stalx");
+        let original = b"synthetic original survey file";
+        std::fs::write(&local, original).unwrap();
+        std::fs::write(&managed, b"synthetic managed survey file").unwrap();
         let state = AppState::new().unwrap();
-        {
-            let mut recent = state.recent_projects.lock().unwrap();
-            *recent = vec![PathBuf::from("/a.stalx"), PathBuf::from("/b.stalx")];
-        }
-
-        let result = state.remove_from_recent_projects(PathBuf::from("/a.stalx"));
+        *state.recent_projects.lock().unwrap() = vec![local.clone(), managed.clone()];
+        let result = state.remove_from_recent_projects(local.clone());
         assert!(result.success);
-        let recent = state.recent_projects.lock().unwrap();
-        assert_eq!(*recent, vec![PathBuf::from("/b.stalx")]);
+        assert_eq!(
+            *state.recent_projects.lock().unwrap(),
+            vec![managed.clone()]
+        );
+        assert_eq!(
+            crate::config::Config::load()
+                .unwrap()
+                .general
+                .recent_projects,
+            vec![managed.clone()]
+        );
+        assert_eq!(std::fs::read(&local).unwrap(), original);
+        assert_eq!(
+            std::fs::read(&managed).unwrap(),
+            b"synthetic managed survey file"
+        );
+    });
+}
+
+#[test]
+fn test_remove_recent_project_failed_save_preserves_retry_and_original_file() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().unwrap();
+        let local = temp.path().join("synthetic-local.stalx");
+        std::fs::write(&local, b"synthetic original survey file").unwrap();
+        let state = AppState::new().unwrap();
+        *state.recent_projects.lock().unwrap() = vec![local.clone()];
+        {
+            let mut config = state.config.lock().unwrap();
+            config.general.recent_projects = vec![local.clone()];
+            config.save().unwrap();
+        }
+        let config_path = crate::config::Config::config_path().unwrap();
+        let before = std::fs::read(&config_path).unwrap();
+        // A directory at the destination makes atomic replacement fail on every OS.
+        std::fs::remove_file(&config_path).unwrap();
+        std::fs::create_dir(&config_path).unwrap();
+        assert!(!state.remove_from_recent_projects(local.clone()).success);
+        assert_eq!(*state.recent_projects.lock().unwrap(), vec![local.clone()]);
+        assert_eq!(
+            state.get_config().general.recent_projects,
+            vec![local.clone()]
+        );
+        std::fs::remove_dir(&config_path).unwrap();
+        std::fs::write(&config_path, before).unwrap();
+        assert!(state.remove_from_recent_projects(local.clone()).success);
+        assert!(crate::config::Config::load()
+            .unwrap()
+            .general
+            .recent_projects
+            .is_empty());
+        assert_eq!(
+            std::fs::read(&local).unwrap(),
+            b"synthetic original survey file"
+        );
     });
 }
 

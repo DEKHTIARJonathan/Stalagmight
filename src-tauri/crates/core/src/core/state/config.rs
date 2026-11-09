@@ -78,17 +78,46 @@ impl AppState {
         normalize(&self.get_config().speleodb.endpoint) != normalize(&incoming.speleodb.endpoint)
     }
 
-    /// Update config from a whole-`Config` payload.
+    /// Refuse a config write that moves the app to another SpeleoDB instance while a
+    /// session is connected: changing servers is a Disconnect (the frontend's
+    /// sign-out flow, which protects un-uploaded work and hands locks back) and a
+    /// fresh Connect, never a settings write underneath the session. Also refuses an
+    /// address the transport policy refuses, before it is saved. The instance-change
+    /// handling below stays as defence in depth for a sign-in racing this check.
+    ///
+    /// Called only for a write that changes the instance, and never under the
+    /// `config` lock (the session status reads it).
+    fn speleodb_check_instance_change(&self, incoming: &Config) -> Result<()> {
+        if self.speleodb_session_status().is_ok_and(|s| s.logged_in) {
+            anyhow::bail!("Disconnect from SpeleoDB before changing servers.");
+        }
+        if let Some(endpoint) = incoming.speleodb.endpoint.as_deref() {
+            crate::speleodb::validate_endpoint(endpoint, incoming.speleodb.insecure_http)?;
+        }
+        Ok(())
+    }
+
+    /// Update config from a whole-`Config` payload. A change of SpeleoDB instance is
+    /// refused while connected ([`Self::speleodb_check_instance_change`]).
+    pub fn update_config(&self, config: Config) -> Result<()> {
+        if self.speleodb_instance_changes(&config) {
+            self.speleodb_check_instance_change(&config)?;
+        }
+        self.write_whole_config(config)
+    }
+
+    /// The write behind [`Self::update_config`], after its connected-instance check.
     ///
     /// Takes the SpeleoDB lock-ops span ONLY when the payload changes the instance:
     /// that ends the session (a logout) and can release the open project's lock, so
-    /// it must not land inside another lock operation's span. Every other save is a
-    /// plain local write and must not queue behind an upload or a download, which
-    /// hold lock-ops for minutes. Lock-ops is OUTERMOST, so it is taken before
-    /// `config_write_lock`. A sign-in that lands after the check and turns this into
-    /// an instance change is caught under the `config` lock, before anything is
-    /// written, and sends the save round again to take the span first.
-    pub fn update_config(&self, mut config: Config) -> Result<()> {
+    /// it must not land inside another lock operation's span. With the check in
+    /// front, that is defence in depth for a sign-in that lands after it. Every other
+    /// save is a plain local write and must not queue behind an upload or a
+    /// download, which hold lock-ops for minutes. Lock-ops is OUTERMOST, so it is
+    /// taken before `config_write_lock`. A sign-in that lands after the check and
+    /// turns this into an instance change is caught under the `config` lock, before
+    /// anything is written, and sends the save round again to take the span first.
+    pub(super) fn write_whole_config(&self, mut config: Config) -> Result<()> {
         let mut lock_ops = None;
         loop {
             if lock_ops.is_none() && self.speleodb_instance_changes(&config) {
@@ -304,6 +333,9 @@ impl AppState {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let new_config = Config::load()?;
             let previous = self.get_config();
+            if speleodb_identity(&previous).0 != speleodb_identity(&new_config).0 {
+                self.speleodb_check_instance_change(&new_config)?;
+            }
             let auth_changed = speleodb_identity(&previous) != speleodb_identity(&new_config);
             if auth_changed && lock_ops.is_none() {
                 drop(write);
@@ -439,19 +471,19 @@ mod tests {
     }
 
     #[test]
-    fn changing_instance_clears_saved_and_live_credentials() {
+    fn changing_instance_requires_disconnect_without_mutating_credentials() {
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_state();
             let mut settings = state.get_config();
             settings.speleodb.endpoint = Some("https://other.example.com".to_owned());
-            state.update_config(settings).unwrap();
-            assert!(!state.speleodb_session_status().unwrap().logged_in);
+            assert!(state.update_config(settings).is_err());
+            assert!(state.speleodb_session_status().unwrap().logged_in);
             let loaded = Config::load().unwrap();
             assert_eq!(
                 loaded.speleodb.endpoint.as_deref(),
-                Some("https://other.example.com")
+                Some("https://sdb.example.com")
             );
-            assert!(loaded.speleodb.token.0.is_none());
+            assert!(loaded.speleodb.token.0.is_some());
         });
     }
 
@@ -597,33 +629,58 @@ mod tests {
             assert!(state.speleodb_session_status().unwrap().logged_in);
             for (endpoint, email, token) in [
                 (
-                    "https://other.example.com",
+                    "https://sdb.example.com",
                     "diver@example.com",
                     "synthetic-test-token",
                 ),
                 (
-                    "https://other.example.com",
+                    "https://sdb.example.com",
                     "another@example.com",
                     "synthetic-test-token",
                 ),
                 (
-                    "https://other.example.com",
+                    "https://sdb.example.com",
                     "another@example.com",
                     "replacement-token",
                 ),
             ] {
                 let mut changed = state.get_config();
+                let expected_change = changed.speleodb.email.as_deref() != Some(email)
+                    || changed.speleodb.token.0.as_deref() != Some(token);
                 changed.speleodb.endpoint = Some(endpoint.to_owned());
                 changed.speleodb.email = Some(email.to_owned());
                 changed.speleodb.token.0 = Some(token.to_owned());
                 changed.save().unwrap();
-                assert!(state.reload_config().unwrap().1);
+                assert_eq!(state.reload_config().unwrap().1, expected_change);
                 let actual = state.speleodb_active_account().unwrap();
                 assert_eq!(
                     actual,
                     (endpoint.to_owned(), token.to_owned(), email.to_owned())
                 );
             }
+        });
+    }
+    #[test]
+    fn direct_login_and_reload_cannot_switch_a_connected_instance() {
+        crate::test_helpers::with_isolated_config(|| {
+            let state = signed_in_state();
+            assert!(state
+                .speleodb_login(
+                    Some("https://other.example.com".into()),
+                    None,
+                    None,
+                    None,
+                    Some("synthetic-token".into())
+                )
+                .is_err());
+            let mut changed = state.get_config();
+            changed.speleodb.endpoint = Some("https://other.example.com".into());
+            changed.save().unwrap();
+            assert!(state.reload_config().is_err());
+            assert_eq!(
+                state.speleodb_session_status().unwrap().endpoint.as_deref(),
+                Some("https://sdb.example.com")
+            );
         });
     }
 }

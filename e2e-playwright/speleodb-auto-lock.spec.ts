@@ -1,5 +1,5 @@
 import { test, expect, type Page } from './fixtures/coverage';
-import { setupMockedPage } from './helpers/app';
+import { setupMockedPage, openAppMenu } from './helpers/app';
 import { openSpeleoFromMenu, openSpeleoTab } from './helpers/speleoWorkspace';
 import { LEFT_WORKSPACE_MIN_WIDTH } from '../src/components/SingleSystemView/layoutConstants';
 import type { useUIStore } from '../src/store/uiStore';
@@ -76,12 +76,21 @@ test('contended open shows one read-only modal naming the actual editor', async 
 });
 
 
-test('workspace contains everyday controls and History without project or settings tabs', async ({ page }) => {
+test('workspace contains everyday controls and Revision History without history-step controls', async ({ page }) => {
   await openRemote(page, false);
   await openSpeleoTab(page);
   await expect(page.getByTestId('speleodb-workspace-upload')).toHaveText('Save Changes');
   await expect(page.getByTestId('speleodb-workspace-latest')).toHaveText('Reload Project');
-  await expect(page.getByTestId('speleodb-workspace-section-history')).toBeVisible();
+  const history = page.getByTestId('speleodb-workspace-section-history');
+  await expect(history).toContainText('Revision History');
+  await history.click();
+  await expect(page.getByTestId('speleodb-revisions').getByRole('heading')).toHaveCount(0);
+  await expect(page.getByTestId('speleodb-history-back')).toHaveCount(0);
+  await expect(page.getByTestId('speleodb-history-forward')).toHaveCount(0);
+  const webHistory = page.getByTestId('speleodb-web-revisions');
+  await expect(webHistory).toHaveText('Revision History on SpeleoDB');
+  await expect(webHistory).toHaveCSS('height', '44px');
+  await expect(webHistory.locator('svg')).toBeVisible();
   await expect(page.getByTestId('speleodb-workspace-section-projects')).toHaveCount(0);
   await expect(page.getByTestId('speleodb-workspace-close')).toHaveText('Close Project');
   await expect(page.getByTestId('speleodb-workspace-section-settings')).toHaveCount(0);
@@ -295,4 +304,94 @@ test('Reload Project asks in the in-app dialog and Cancel keeps the work', async
   await page.getByTestId('speleodb-reload-confirm-discard').click();
   await expect(dialog).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => (window as unknown as { __updateCalls: number }).__updateCalls)).toBe(1);
+});
+
+for (const theme of ['dark', 'light'] as const) {
+  test(`workspace buttons have consistent geometry and semantic colors in ${theme} theme`, async ({ page }, testInfo) => {
+    await openRemote(page, false);
+    await page.evaluate((theme) => {
+      const stores = (window as unknown as TestWindow).__E2E_TEST__;
+      const appearance = stores.projectStore.getState().config!.appearance;
+      stores.uiStore.getState().setThemePreview({ ...appearance, theme });
+    }, theme);
+    await openSpeleoTab(page);
+    const controls = page.getByTestId('speleodb-workspace-everyday');
+    await expect(controls).toBeVisible();
+    await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
+    const buttons = controls.getByRole('button');
+    await expect(buttons).toHaveCount(5);
+    const styles = await buttons.evaluateAll((nodes) => nodes.map((node) => {
+      const style = getComputedStyle(node);
+      const box = node.getBoundingClientRect();
+      return { background: style.backgroundColor, height: box.height, width: box.width };
+    }));
+    for (const style of styles) {
+      expect(style.height).toBe(styles[0].height);
+      expect(style.width).toBe(styles[0].width);
+      expect(style.background).not.toBe('rgba(0, 0, 0, 0)');
+    }
+    expect(styles[1].background).not.toBe(styles[2].background);
+    expect(new Set(styles.map((style) => style.background)).size).toBe(5);
+    await expect(page.getByTestId('speleodb-workspace-open-web').locator('svg')).toBeVisible();
+    await page.getByTestId('speleodb-workspace').screenshot({ path: testInfo.outputPath(`speleodb-buttons-${theme}.png`) });
+    await page.getByTestId('speleodb-workspace-editing').click();
+    await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Resume editing');
+    await expect.poll(() => page.getByTestId('speleodb-workspace-editing').evaluate((node) => getComputedStyle(node).backgroundColor)).not.toBe(styles[1].background);
+  });
+}
+
+async function traceMenuClose(page: Page, failFirst: boolean) {
+  await page.evaluate((fail) => {
+    const w = window as unknown as TestWindow & {
+      __TAURI_INTERNALS__: { invoke: (command: string, args?: unknown) => Promise<unknown> };
+      __menuCloseRequests: unknown[];
+    };
+    w.__menuCloseRequests = [];
+    const invoke = w.__TAURI_INTERNALS__.invoke;
+    w.__TAURI_INTERNALS__.invoke = async (command, args) => {
+      if (command === 'close_project') {
+        w.__menuCloseRequests.push(args);
+        if (fail && w.__menuCloseRequests.length === 1) return { success: false, error: 'Synthetic lock release failed. The project is still open.', warnings: [], section_ids: [] };
+      }
+      return invoke(command, args);
+    };
+  }, failFirst);
+}
+
+for (const dirty of [false, true]) {
+  test(`hamburger Close Project requires lock release with unsaved changes ${dirty}`, async ({ page }) => {
+    await openRemote(page, false);
+    await traceMenuClose(page, false);
+    await page.evaluate((isDirty) => (window as unknown as TestWindow).__E2E_TEST__.projectStore.setState({ isDirty }), dirty);
+    await openAppMenu(page);
+    await page.getByTestId('back-button').click();
+    if (dirty) {
+      await expect(page.getByTestId('speleodb-exit-dialog')).toBeVisible();
+      await page.getByTestId('speleodb-exit-cancel').click();
+      expect(await page.evaluate(() => (window as unknown as { __menuCloseRequests: unknown[] }).__menuCloseRequests)).toEqual([]);
+      await openAppMenu(page);
+      await page.getByTestId('back-button').click();
+      await page.getByTestId('speleodb-exit-discard').click();
+      await page.getByTestId('speleodb-exit-discard-confirm').click();
+    }
+    await expect(page.getByTestId('global-view')).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as { __menuCloseRequests: unknown[] }).__menuCloseRequests))
+      .toEqual([{ releaseLock: true, discardLocal: dirty }]);
+  });
+}
+
+test('hamburger Close Project keeps the project open on lock release failure and supports retry', async ({ page }) => {
+  await openRemote(page, false);
+  await traceMenuClose(page, true);
+  await openAppMenu(page);
+  await page.getByTestId('back-button').click();
+  await expect(page.getByTestId('error-dialog')).toContainText('Synthetic lock release failed');
+  await expect(page.getByTestId('single-system-view')).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.getState().project?.file_path)).toBe('/projects/cave-alpha.stalx');
+  await page.getByTestId('error-dialog').getByRole('button', { name: 'OK', exact: true }).click();
+  await openAppMenu(page);
+  await page.getByTestId('back-button').click();
+  await expect(page.getByTestId('global-view')).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __menuCloseRequests: unknown[] }).__menuCloseRequests))
+    .toEqual([{ releaseLock: true, discardLocal: false }, { releaseLock: true, discardLocal: false }]);
 });

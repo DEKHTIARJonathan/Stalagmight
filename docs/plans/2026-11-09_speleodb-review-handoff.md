@@ -18,6 +18,16 @@ and the bugs found while implementing and testing the fixes are collected in #67
 lock claim, holder-checked releases, quit-after-work, cached copies on Home,
 upload limits). The fuzzer port stays on its own test-only branch.
 
+PR #668 (SpeleoDB UX: Connect / Disconnect in Settings, automatic endpoint rules,
+workspace buttons, confirmed close) was then merged into this branch with the
+owner's reconciliation decisions: #668's endpoint rules, Settings model and
+workspace layout; this branch's backend lock model (holder-checked release, edit
+gate from the claim, release veto, exit prompt) in place of #668's close-release
+retry context; the `insecure_http` field kept. The dev-build-only insecure-HTTP
+option, the "connect" wording across the SpeleoDB screens, the "Couldn't hand back
+the lock" dialog and the token-based workspace button colours follow in later
+commits.
+
 The rest of this document is the original hand-off, kept as the design record.
 
 ## Original hand-off

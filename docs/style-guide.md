@@ -28,8 +28,13 @@ This guide captures the current UI conventions and design tokens for Stalagmight
   - `primary`: the single main action in a view or dialog.
   - `secondary`: default action style.
   - `ghost`: low-emphasis actions in dense UI or toolbars.
-  - `danger`: destructive actions.
   - `highlight`: the main action of a panel that has no `primary`, in the theme's warning yellow with `text-warning-on` (the per-theme dark text that reads at WCAG AA on it). Example: Open project in the home screen's project details. Yellow also marks un-uploaded SpeleoDB changes, so keep it to one such button per view.
+  - `danger`: destructive actions and exiting a project.
+  - `warning`: transitions that can replace content or relinquish editing access.
+  - `success`: enabling editing.
+  - `info`: reload and read-only inspection.
+  - `external`: purple browser navigation, paired with an external-link icon.
+  - The `warning`, `success`, `info` and `external` variants (from #668) and the SpeleoDB tab's use of `danger` for Close Project are being reworked onto theme tokens, with one filled button per state, by a follow-up commit.
 - Use `icon` on `Button` for leading icons.
 - Use `IconButton` for icon-only actions; always include `aria-label` and, when helpful, `tooltip`.
 
@@ -68,3 +73,9 @@ This guide captures the current UI conventions and design tokens for Stalagmight
   burst of taps is one write). `WizardMapPanel` is the reference
   implementation; the SingleSystemView resizers have not been retrofitted yet
   (#396).
+
+SpeleoDB workspace actions use equal-height, full-width buttons. Save uses the
+theme's primary accent, Resume editing is green, read-only/history changes are
+amber, Reload and inspection use a blue button, Close is red, and browser
+navigation is purple with an external-link icon.
+Labels and confirmations explain the action independently of color.

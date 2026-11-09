@@ -40,8 +40,8 @@ describe('SpeleoDB tab button icons', () => {
     const workspace = screen.getByTestId('speleodb-workspace');
     await waitFor(() => expect(screen.getByTestId('speleodb-revision-view-bbbbbbbb2222')).toBeInTheDocument());
     const buttons = within(workspace).getAllByRole('button');
-    // Header recovery x2, everyday x5, History disclosure, steps x2, web link, View + Revert.
-    expect(buttons.length).toBeGreaterThanOrEqual(13);
+    // Header recovery x2, everyday x5, Revision History disclosure, web link, View + Revert.
+    expect(buttons.length).toBeGreaterThanOrEqual(11);
     for (const button of buttons) {
       expect(iconOf(button), button.textContent ?? button.outerHTML).not.toBeNull();
     }

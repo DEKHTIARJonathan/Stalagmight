@@ -339,9 +339,11 @@ impl AppState {
     }
 
     /// [Track A] #187/D-B10: read the persisted `insecure_http` override under the
-    /// config lock. It is threaded into every client call → `with_retry` →
-    /// `tls::enforce`, where it relaxes ONLY the public-`http://` scheme block.
-    /// Defaults `false` (the secure default) when the config lock is unavailable.
+    /// config lock. It is threaded into every client call →
+    /// `tls::validate_endpoint`, where it relaxes ONLY the plain-`http://` rule
+    /// (the automatic exceptions apply without it). The one place every call
+    /// reads the stored value. Defaults `false` (the secure default) when the
+    /// config lock is unavailable.
     pub(super) fn speleodb_insecure_http(&self) -> bool {
         self.config
             .lock()

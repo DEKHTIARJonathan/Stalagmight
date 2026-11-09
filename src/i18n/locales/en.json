@@ -73,6 +73,7 @@
     "loading": "Loading configuration...",
     "categoryHeader": "{{category}} Settings",
     "resetToDefaults": "Reset to Defaults",
+    "saveErrorTitle": "Cannot save Settings",
     "sidebar": {
       "ariaLabel": "Settings categories",
       "general": "General",
@@ -657,33 +658,28 @@
       },
       "endpoint": {
         "label": "Server endpoint",
-        "help": "The SpeleoDB server to connect to (e.g. https://www.speleodb.org/). Saving a different server signs you out. Sign in now connects to the server entered here immediately.",
+        "help": "HTTPS is required except for localhost, 127.0.0.1 and 192.168.x.x.",
+        "disconnectFirst": "Disconnect before changing servers.",
         "aria": "SpeleoDB server endpoint"
       },
       "insecureHttp": {
         "label": "Allow insecure HTTP",
-        "help": "By default only HTTPS (or HTTP to a private/loopback address) is allowed.",
+        "help": "By default HTTPS is required, except for localhost, 127.0.0.1 and 192.168.x.x.",
         "aria": "Allow insecure HTTP endpoints",
-        "warning": "Allowing plain HTTP to a public address sends your token unencrypted. Only enable this for a trusted local server."
+        "warning": "Allowing plain HTTP to another address sends your token unencrypted. Only enable this for a trusted local server."
       },
       "account": {
-        "appliesOnSave": "Sign in and sign out apply when you press Save.",
         "signedInAs": "Signed in as {{email}}",
         "signedInAsAt": "Signed in as {{email}} at {{endpoint}}",
-        "logout": "Sign out",
-        "willSignOut": "You'll be signed out when you press Save.",
-        "willSignIn": "Sign in now to check your details, or they'll be applied when you press Save.",
+        "logout": "Disconnect",
         "replacesSession": "This will replace your current session ({{email}}).",
-        "undo": "Undo",
         "email": "Email",
         "password": "Password",
         "token": "Token",
         "useToken": "Paste an existing token instead of a password",
-        "tryLogin": "Sign in now",
-        "tryingLogin": "Signing in…"
-      },
-      "credentials": {
-        "fileStorage": "SpeleoDB settings and your API token are saved in speleodb/speleodb.conf in the app configuration folder. The token is stored as plaintext."
+        "tryLogin": "Connect",
+        "tryingLogin": "Connecting…",
+        "connectionErrorTitle": "SpeleoDB connection error"
       }
     },
     "advanced": {
@@ -3485,7 +3481,7 @@
       "thisServer": "the configured server"
     },
     "endpointRefused": {
-      "publicHttp": "Did not connect to {{endpoint}}: it uses plain HTTP on a public address, which would send your sign-in unencrypted. Use an https:// address, or, if you trust this server, turn on \"Allow insecure HTTP\" under Connection in the SpeleoDB settings.",
+      "plainHttp": "Did not connect to {{endpoint}}: HTTPS is required. Plain HTTP is allowed only on localhost, 127.0.0.1 or a 192.168.x.x address, because it would send your sign-in unencrypted. Use an https:// address.",
       "invalidAddress": "{{endpoint}} is not a server address Stalagmight can use. Enter the full address, starting with https:// (or http:// for a server on your own network)."
     },
     "banner": {
@@ -3671,7 +3667,7 @@
     },
     "web": {
       "openProject": "Open project on the web",
-      "openRevisions": "Open revision history on the web",
+      "openRevisions": "Revision History on SpeleoDB",
       "unavailable": "Sign in to SpeleoDB to open this project on the web.",
       "failed": "Could not open your browser"
     },
@@ -3689,6 +3685,7 @@
       "submitting": "Publishing…",
       "success": "Project published to SpeleoDB.",
       "failed": "Could not publish to SpeleoDB",
+      "recentCleanupFailed": "Converted to SpeleoDB, but the local shortcut could not be removed from Recent Projects. You can remove it manually; the original file is unchanged.",
       "reloadFailed": "The project was created on SpeleoDB, but a fresh server copy could not be reopened. Use Reload Project to retry.",
       "descriptionRequired": "A description is required to publish.",
       "name": "Name",

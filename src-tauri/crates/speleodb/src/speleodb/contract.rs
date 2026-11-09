@@ -83,18 +83,35 @@ pub enum TransportCause {
     Unknown,
 }
 
-/// Why the endpoint policy (`tls::enforce`) refused a server address before any
-/// request was made. Crosses IPC on [`SpeleoErrorDto::endpoint_refusal`] so the
-/// frontend says what to change in a translated line (an `https://` address, or
-/// "Allow insecure HTTP" for a public `http://` server) instead of the backend's
-/// "refusing to use an insecure SpeleoDB endpoint".
+/// Why the endpoint policy (`tls::validate_endpoint`) refused a server address
+/// before any request was made. Crosses IPC on
+/// [`SpeleoErrorDto::endpoint_refusal`] so the frontend says what to change in a
+/// translated line instead of the backend's English sentence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub enum EndpointRefusal {
-    /// A plain `http://` server on a public address, with "Allow insecure HTTP" off.
-    PublicHttp,
-    /// Not a usable server address: no or an unknown scheme, or no host.
+    /// A plain `http://` server outside the automatic exceptions (`localhost`,
+    /// `127.0.0.1`, `192.168.x.x`), with the insecure-HTTP override off.
+    PlainHttp,
+    /// Not a usable server address: no or an unknown scheme, no host, user info,
+    /// or an invalid port.
     InvalidAddress,
+}
+
+impl EndpointRefusal {
+    /// The rule, in English, for the error's Display text (logs, and callers that
+    /// show the backend message as is).
+    #[must_use]
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::PlainHttp => {
+                "HTTPS is required. HTTP is allowed only on localhost, 127.0.0.1 or 192.168.x.x."
+            }
+            Self::InvalidAddress => {
+                "Not a usable SpeleoDB address: it needs an http:// or https:// scheme, a host and a valid port."
+            }
+        }
+    }
 }
 
 /// The SpeleoDB endpoint a status came from, so [`map_status`] can apply the
@@ -486,7 +503,7 @@ mod tests {
     #[test]
     fn an_endpoint_refusal_is_fatal_and_says_why() {
         use super::EndpointRefusal;
-        for refusal in [EndpointRefusal::PublicHttp, EndpointRefusal::InvalidAddress] {
+        for refusal in [EndpointRefusal::PlainHttp, EndpointRefusal::InvalidAddress] {
             let dto = dto_for_error(
                 Endpoint::Login,
                 &SpeleoDbError::InsecureEndpoint {

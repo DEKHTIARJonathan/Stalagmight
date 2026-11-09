@@ -121,11 +121,11 @@ test('signed out: every cached copy is listed read-only and opens without taking
   expect(commands.filter((c) => c.includes('Command: speleodb_start_editing'))).toHaveLength(0);
   expect((await calls(page, 'speleodb_open_project')).map((c) => c.args?.projectId)).toEqual([MINE]);
 
-  // The SpeleoDB tab: signed in again is the way forward, so that is the primary
-  // action, and what cannot run says why.
+  // The SpeleoDB tab: signing in again is the way forward, and what cannot run
+  // says why. (Which button is filled follows the one-filled-button follow-up.)
   await openSpeleoTab(page);
-  await expect(page.getByTestId('speleodb-workspace-editing')).toHaveAttribute('data-primary-action', '');
-  await expect(page.getByTestId('speleodb-workspace-upload')).not.toHaveAttribute('data-primary-action', '');
+  await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Sign in to resume editing');
+  await expect(page.getByTestId('speleodb-workspace-editing')).toBeEnabled();
   await expect(page.getByTestId('speleodb-workspace-latest')).toBeDisabled();
   await expect(page.getByTestId('speleodb-workspace-latest')).toHaveAttribute('title', /Sign in to SpeleoDB/);
   await expect(page.getByTestId('speleodb-workspace-open-web')).toHaveAttribute('title', /Sign in to SpeleoDB/);

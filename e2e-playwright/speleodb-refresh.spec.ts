@@ -98,7 +98,7 @@ test('failed login keeps Settings open for correction', async ({ page }) => {
   await page.getByTestId('speleodb-settings-email').fill('test@example.com');
   await page.getByTestId('speleodb-settings-password').fill('synthetic-password');
   await page.getByTestId('speleodb-settings-try-login').click();
-  await expect(page.getByTestId('speleodb-account-settings-error')).toBeVisible();
+  await expect(page.getByTestId('speleodb-connection-error')).toBeVisible();
   await expect(page.getByTestId('settings-panel-speleodb')).toBeVisible();
   await expect(page.getByTestId('globalview-speleo-refresh-spinner')).toHaveCount(0);
 });

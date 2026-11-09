@@ -258,3 +258,94 @@ Clippy retains existing repository warnings. Ignored and environment-gated check
 are not equivalent to executed coverage; native desktop UAT and live-server
 acceptance were not separately verified. No external fixtures were added or
 committed. Logs and browser failure artifacts are under `/tmp/stalagmight-*`.
+
+## Immediate SpeleoDB connection settings
+
+Connect saves changed preferences and authenticates immediately. Success closes
+Settings and refreshes the project listing. Disconnect takes effect immediately,
+clears the remote listing and stays on the SpeleoDB Settings tab. Neither action
+requires a subsequent Save. While connected, the server endpoint and both reset
+controls are disabled; backend requests to change instances are also refused.
+Disconnect first, including when the current server is temporarily unavailable.
+
+The SpeleoDB tab has a Close button instead of Save/Cancel. Closing validates and
+saves preference changes, including changes in other categories, without connecting.
+Connection and persistence errors keep Settings open. The ordinary Settings
+unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
+
+HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
+address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
+allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
+missing schemes and malformed addresses are rejected, without any DNS lookup. An
+endpoint the policy refuses produces an error dialog when connecting, or when saving
+a new server. `insecure_http` lifts only the HTTP rule (never certificate
+verification); it stays in the file so existing configurations load, Settings has
+no control for it, and its development-build-only handling is being finalised by a
+follow-up commit. Certificate verification and redirect restrictions remain.
+
+The verification notes below record PR #668 as reviewed on its own branch. On
+the reconciliation with the review-fixes branch its close-release retry context,
+pending-close state and close serialisation were dropped in favour of the
+holder-checked release model (docs/SpeleoDB.md), and the `insecure_http` field
+stayed in the configuration; its close scenarios were ported onto that model.
+
+### Connection workflow verification (2026-11-09)
+
+Full Vitest: 408 files and 5,701 tests passed; an additional immediate-disconnect
+regression test passed separately. Full Rust workspace with telemetry: 3,581
+passed and 41 ignored, including documentation tests. The narrower transport
+policy replaces the former address-classification and override tests. Seven
+selected headless Chromium cases passed for the two-action discard prompt and
+SpeleoDB Close saving the endpoint without connecting. All three typechecks,
+nine non-test lint gates, root/member formatting checks and workspace Clippy
+with telemetry and all targets passed. Existing repository warnings remain.
+No full browser-suite or native desktop acceptance is claimed for this change.
+
+### Focused adversarial review (2026-11-09)
+
+Reviewed all five commits above master for connection settings and automatic
+transport policy. Corrected ownership checks around preference persistence and
+Connect, category navigation during authentication, late save success/error
+handling, newer endpoint edits, and rebasing account-owned fields after logout.
+Nine focused component regression cases passed across the connection panel and
+Settings dialog. No full test suite or browser suite was rerun for this review.
+
+All three typechecks, nine non-test lint gates, root/member Rust formatting and
+workspace Clippy with telemetry and all targets passed. Existing Clippy warnings
+remain.
+
+### Hamburger Close Project release verification (2026-11-09)
+
+Three selected headless Chromium cases exercise Hamburger Menu -> Close Project:
+clean close, unsaved-work cancellation/discard, and visible release failure with
+retry. They verify `close_project` is invoked with `releaseLock: true`. Four
+focused Rust cases exercise the shared close backend using synthetic HTTP: confirmed
+release, rejected release/retry, a 200 response still reporting the owned mutex,
+foreign ownership, closed editing gates, missing credentials, local close and
+unchanged detached/bounded cleanup. Project and command guards
+remain held through release; saved file bytes remain unchanged. One focused Vitest
+case verifies IPC rejection preserves project/export state and resets the close guard.
+Close failures must not navigate to the project listing or silently drop the session.
+
+One mistakenly broad Rust filter also ran 102 SpeleoDB module cases, all passing.
+The final confirmation used explicit `confirmed_close_` and
+`lifecycle_release_preserves_saved_unpublished_files` filters. No full suite ran.
+
+### Twelve-commit adversarial review (2026-11-09)
+
+Reviewed the twelve commits above master. Uncertain close-release responses now
+pause editing and retain a project/account/session-bound retry context, including
+inherited locks without acquisition provenance. Resume verifies ownership before
+editing reopens; unreadable retry state refuses teardown. Failed recent-reference
+persistence leaves both in-memory lists unchanged so manual retry persists the
+removal without touching the original project file.
+
+Five focused Rust cases and three focused Vitest cases passed. They cover lost
+release responses, foreign successors, inherited ownership, retry-context identity
+and poisoned session guards, verified resume, failed recent-save/retry, immediate
+frontend read-only state, and stale account replies. No full suites were rerun.
+All three typechecks, nine non-test lint gates, root/member formatting and workspace
+Clippy with telemetry and all targets passed; existing repository warnings remain.
+`prek run -a` was attempted and exited 2 because neither this repository nor its
+parents contains a prek/pre-commit configuration. Existing validation commands
+were executed directly.

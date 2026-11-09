@@ -124,6 +124,8 @@ export default function PublishToSpeleoDbDialog() {
       const withNote = (message: string) => (historyNote ? `${message} ${historyNote}` : message);
       if (outcome === 'upload_pending') {
         showToast(withNote(t('speleodb.publish.uploadPending')), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
+      } else if (outcome === 'recent_cleanup_failed') {
+        showToast(withNote(t('speleodb.publish.recentCleanupFailed')), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
       } else if (outcome === 'reload_failed') {
         showToast(withNote(t('speleodb.publish.reloadFailed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
       } else if (historyNote) {
@@ -280,7 +282,7 @@ export default function PublishToSpeleoDbDialog() {
         </div>
       </div>
     </DialogWrapper>
-    {blocking && <SpeleoProgressOverlay title="Publishing to SpeleoDB" description="Saving your survey and opening your shared project." testId="speleodb-publish-progress" />}
+    {blocking && <SpeleoProgressOverlay title="Publishing to SpeleoDB" description="One sec, teaching your project some manners..." testId="speleodb-publish-progress" />}
     </>
   );
 }

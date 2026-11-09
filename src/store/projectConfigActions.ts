@@ -1,9 +1,5 @@
-import { protectAccountTransition } from '../utils/protectAccountTransition';
-import { guardSpeleoSignOut } from '../utils/speleoSignOut';
 import type { StoreApi } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
-import { endpointsMatch } from '../utils/speleoEndpoint';
-import { useSpeleoStore } from './speleoStore';
 import type { Config } from '../types/config';
 import type { GasConfig } from '../types/ipc.generated';
 import type { CommandResult } from '../types/commands';
@@ -50,31 +46,12 @@ export function createProjectConfigActions(
 
     updateConfig: async (config: Config) => {
       try {
-        const serverChange = !endpointsMatch(get().config?.speleodb.endpoint, config.speleodb.endpoint);
-        // Moving the live session off its server ends it like a sign-out (see the
-        // clearSession below), so it must not strand that account's locks either.
-        const live = useSpeleoStore.getState().session;
-        if (live?.loggedIn && !endpointsMatch(live.endpoint, config.speleodb.endpoint) &&
-            !await guardSpeleoSignOut('switch')) return emptyCommandResult(false, 'Cancelled');
-        // Unsent SpeleoDB input survives the sign-out a server change is; the next
-        // sign-in asks about it if it cannot follow (speleoStore.applyPendingAuth).
-        if (serverChange && get().isDirty && !await protectAccountTransition({ unsaved: true })) return emptyCommandResult(false, 'Cancelled');
-        const sessionGeneration = useSpeleoStore.getState().sessionGeneration;
         const routingBefore = get().config?.gas.include_reference_legs;
         await invokeIpc<void>(
           'update_config',
           { config },
           { purpose: 'persist user settings' },
         );
-        // "Sign in now" updates the live session before this settings snapshot is
-        // refreshed. Compare that identity, and do not erase a newer login when
-        // an older settings request finishes after it.
-        const speleo = useSpeleoStore.getState();
-        if (speleo.sessionGeneration === sessionGeneration &&
-            speleo.session?.loggedIn &&
-            !endpointsMatch(speleo.session.endpoint, config.speleodb.endpoint)) {
-          speleo.clearSession();
-        }
         // Re-fetch config to get backend-normalized values (e.g., zoom_step clamped to valid range)
         await get().loadConfig();
         // The closure-adjustment sigmas feed the adjusted solve, so a settings change

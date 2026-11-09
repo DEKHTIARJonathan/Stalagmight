@@ -1,7 +1,8 @@
 /**
- * The SpeleoDB tab's everyday actions: the primary (filled) one follows the state
- * of the open copy, and a disabled one says why in its tooltip (style guide: one
- * primary action per view; a disabled control must not be a dead end).
+ * The SpeleoDB tab's everyday actions: a disabled one says why in its tooltip (a
+ * disabled control must not be a dead end), and `speleoPrimaryAction` names the
+ * one action that makes sense now. The buttons take #668's colour-by-kind
+ * variants for now; filling only that action is the follow-up (see the todo).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
@@ -25,7 +26,6 @@ const save = () => screen.getByTestId('speleodb-workspace-upload');
 const editing = () => screen.getByTestId('speleodb-workspace-editing');
 const reload = () => screen.getByTestId('speleodb-workspace-latest');
 const web = () => screen.getByTestId('speleodb-workspace-open-web');
-const primaries = () => screen.getByTestId('speleodb-workspace-everyday').querySelectorAll('[data-primary-action]');
 
 beforeEach(() => {
   ipc.mockReset();
@@ -50,47 +50,42 @@ describe('speleoPrimaryAction', () => {
 });
 
 describe('SpeleoDB tab everyday actions', () => {
-  it('signed out on a read-only copy: Sign in is the primary action, and the disabled ones say why', () => {
+  it.todo('fills only the action speleoPrimaryAction names, every other button an outline or tint');
+
+  it('signed out on a read-only copy: the disabled ones say why', () => {
     useSpeleoStore.setState({ session: null });
     render(<SpeleoWorkspace />);
     expect(editing()).toHaveTextContent('Sign in to resume editing');
-    expect(editing()).toHaveAttribute('data-primary-action');
-    expect(save()).not.toHaveAttribute('data-primary-action');
-    expect(primaries()).toHaveLength(1);
     expect(reload()).toBeDisabled();
     expect(reload()).toHaveAttribute('title', 'Sign in to SpeleoDB to reload this project from the server.');
     expect(web()).toBeDisabled();
     expect(web()).toHaveAttribute('title', 'Sign in to SpeleoDB to open this project on the web.');
   });
 
-  it('editing: Save Changes is the primary action and nothing carries a reason', () => {
+  it('editing: nothing carries a reason', () => {
     useSpeleoStore.setState({ link: { ...LINK, editState: 'editing' } });
     render(<SpeleoWorkspace />);
-    expect(save()).toHaveAttribute('data-primary-action');
-    expect(primaries()).toHaveLength(1);
     for (const button of [save(), editing(), reload(), web()]) {
       expect(button).toBeEnabled();
       expect(button).not.toHaveAttribute('title');
     }
   });
 
-  it('signed in and able to resume: Resume editing is the primary action', () => {
+  it('signed in and able to resume: Resume editing is offered and enabled', () => {
     render(<SpeleoWorkspace />);
     expect(editing()).toHaveTextContent('Resume editing');
-    expect(editing()).toHaveAttribute('data-primary-action');
-    expect(primaries()).toHaveLength(1);
+    expect(editing()).toBeEnabled();
   });
 
   it.each([
     ['view-only access', { permission: 'READ_ONLY' as const }, 'Read-only - your SpeleoDB access does not allow editing'],
     ['no access', { noAccess: true }, 'Your SpeleoDB account has no access to this project.'],
     ['permission not known yet', { permission: null }, 'SpeleoDB has not said yet whether your account can edit this project.'],
-  ])('signed in with %s: Resume editing is disabled and says why, and nothing is primary', (_label, link, reason) => {
+  ])('signed in with %s: Resume editing is disabled and says why', (_label, link, reason) => {
     useSpeleoStore.setState({ link: { ...LINK, ...link } });
     render(<SpeleoWorkspace />);
     expect(editing()).toBeDisabled();
     expect(editing()).toHaveAttribute('title', reason);
-    expect(primaries()).toHaveLength(0);
   });
 
   it('while another SpeleoDB operation runs, the disabled buttons say to wait', () => {

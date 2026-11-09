@@ -202,6 +202,10 @@ fn revision_bytes(dir: &Path) -> Vec<u8> {
 /// A signed-in state with linked project `P` open from its cache copy, edit gate
 /// open (as after Start Editing). Returns the cache path.
 fn open_p(state: &AppState, project_id: &str, base: &str) -> PathBuf {
+    // Every case serves its own stub, and the config the cases share may still
+    // name an earlier one. A connected session is bound to its server, so start
+    // disconnected rather than switch servers under a session.
+    state.speleodb_logout().expect("start disconnected");
     state
         .speleodb_login(
             Some(base.to_owned()),

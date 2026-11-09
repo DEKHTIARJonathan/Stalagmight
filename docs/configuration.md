@@ -34,7 +34,7 @@ undo_mode = "full"
 ```
 
 The endpoint and email are optional until configured. The token is optional until
-sign-in and is removed on sign-out or when changing instances. There is one
+sign-in and is removed on disconnect; disconnect before changing instances. There is one
 instance and one saved account. Tokens are plaintext, with atomic replacement and
 owner-only file permissions (0600) on Unix; Windows uses the user's profile ACLs.
 Passwords are never saved. Tokens remain backend-only and are omitted from IPC
@@ -61,15 +61,13 @@ file from `speleodb/tokens`, without reading or importing it. Other accounts are
 untouched; cleanup failures are reported. No keychain access is restored.
 `DEV_SPELEODB_URL` still overrides the instance for development, but a saved token
 is restored only when the resolved instance matches its configured endpoint.
-Reloading configuration applies a changed endpoint, account or token to the live
-session and resets its edit gate; unrelated preference reloads retain the session.
-Projects refresh at startup and immediately after sign-in. "Sign in now" in Settings
-signs in over the connection on screen, including its insecure-HTTP choice (never the
-saved one, so a public `http://` server stays refused unless the box on screen is
-ticked). On success the backend saves that endpoint and `insecure_http` with the
-token, which applies the SpeleoDB tab; Settings then closes and shows the project
-listing, unless other tabs hold unsaved edits, in which case it stays open with
-those edits still staged. A failed login saves nothing. Refreshes display a spinner until
+Reloading configuration refuses a different endpoint while connected. Same-instance
+credential reloads reset the edit gate; unrelated preference reloads retain the session.
+Projects refresh at startup and immediately after sign-in. Connect in Settings saves
+the staged settings, then signs in over the connection on screen, including its
+`insecure_http` value (never the saved one). On success the backend saves that
+endpoint and `insecure_http` with the token, and Settings closes and shows the
+project listing. A failed sign-in saves no credentials. Refreshes display a spinner until
 they finish, including failed requests. Use the refresh button
 on the home screen to reload the listing, or Refresh in the open project's
 SpeleoDB workspace. No periodic SpeleoDB refresh runs in the background.
@@ -586,3 +584,27 @@ not where any log file was written.
 
 The obsolete lockless-edit preference is ignored when loading older files and is
 omitted when saving. It cannot enable editing.
+
+## Immediate SpeleoDB connection settings
+
+Connect saves changed preferences and authenticates immediately. Success closes
+Settings and refreshes the project listing. Disconnect takes effect immediately,
+clears the remote listing and stays on the SpeleoDB Settings tab. Neither action
+requires a subsequent Save. While connected, the server endpoint and both reset
+controls are disabled; backend requests to change instances are also refused.
+Disconnect first, including when the current server is temporarily unavailable.
+
+The SpeleoDB tab has a Close button instead of Save/Cancel. Closing validates and
+saves preference changes, including changes in other categories, without connecting.
+Connection and persistence errors keep Settings open. The ordinary Settings
+unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
+
+HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
+address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
+allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
+missing schemes and malformed addresses are rejected, without any DNS lookup. An
+endpoint the policy refuses produces an error dialog when connecting, or when saving
+a new server. `insecure_http` lifts only the HTTP rule (never certificate
+verification); it stays in the file so existing configurations load, Settings has
+no control for it, and its development-build-only handling is being finalised by a
+follow-up commit. Certificate verification and redirect restrictions remain.

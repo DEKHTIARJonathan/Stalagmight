@@ -874,11 +874,12 @@ mod tests {
 
     #[test]
     fn an_offline_http_hostname_endpoint_opens_its_cached_copy() {
-        // sdk#6: an `http://` hostname endpoint whose host does not resolve (an
-        // internal deployment seen from an offline laptop) used to fail the
-        // endpoint policy with a fatal InsecureEndpoint before any request, so the
-        // cached copy never opened. The real client path now reports the DNS
-        // transport failure, which is offline-eligible exactly as it is for https.
+        // sdk#6: an `http://` endpoint the transport policy allows behaves like
+        // `https://` when it is offline. A hostname is outside the automatic HTTP
+        // exceptions, so it is allowed only with the insecure-HTTP override; then a
+        // host that does not resolve is the DNS transport failure, which is
+        // offline-eligible exactly as it is for https. Without the override it is
+        // refused before any request, and that refusal never opens the cache.
         // `.invalid` never resolves (RFC 6761), so this is offline by construction.
         let endpoint = "http://speleodb-offline.invalid:8000";
         let mut cached_link = link();
@@ -891,7 +892,18 @@ mod tests {
         db.save_speleo_link(Some(&cached_link)).expect("link");
         drop(db);
 
-        let error = client::download_stalx(endpoint, "token", false, &cached_link.project_id)
+        let refused = client::download_stalx(endpoint, "token", false, &cached_link.project_id)
+            .expect_err("a plain-http hostname is refused without the override");
+        assert!(
+            matches!(refused, SpeleoDbError::InsecureEndpoint { .. }),
+            "{refused:?}"
+        );
+        assert!(
+            offline_open_result(&dest, endpoint, &cached_link.project_id, &refused).is_none(),
+            "a refused endpoint is not offline"
+        );
+
+        let error = client::download_stalx(endpoint, "token", true, &cached_link.project_id)
             .expect_err("an unresolvable host cannot be downloaded from");
         assert!(
             matches!(
