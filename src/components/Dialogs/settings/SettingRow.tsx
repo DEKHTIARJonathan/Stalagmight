@@ -1,5 +1,6 @@
 import { useId, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
+import { Button } from '../../common/Button';
 
 interface SettingRowProps {
   /** Label text for the setting */
@@ -69,12 +70,24 @@ export function SettingRow({
         {/* Control + Reset button */}
         <div className="flex items-center gap-2 flex-shrink-0" aria-labelledby={labelId}>
           {children}
-          {onReset && (
+          {onReset && (resetLabel ? (
+            <Button
+              type="button"
+              variant="warning"
+              size="sm"
+              onClick={onReset}
+              disabled={isDefault}
+              title={t('settings.common.resetToDefault')}
+              data-testid={`${dataTestId ?? 'setting-row'}-reset`}
+            >
+              {resetLabel}
+            </Button>
+          ) : (
             <button
               type="button"
               onClick={onReset}
               disabled={isDefault}
-              className={`${resetLabel ? 'px-2 py-1 text-xs border border-border' : 'p-1'} rounded hover:bg-panel transition-colors ${
+              className={`p-1 rounded hover:bg-panel transition-colors ${
                 !isDefault
                   ? 'text-text-secondary hover:text-text-primary'
                   : 'text-border cursor-not-allowed'
@@ -82,7 +95,7 @@ export function SettingRow({
               title={t('settings.common.resetToDefault')}
               data-testid={dataTestId ? `${dataTestId}-reset` : undefined}
             >
-              {resetLabel ?? <svg
+              <svg
                 className="w-3.5 h-3.5"
                 fill="none"
                 stroke="currentColor"
@@ -94,9 +107,9 @@ export function SettingRow({
                   strokeWidth={2}
                   d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                 />
-              </svg>}
+              </svg>
             </button>
-          )}
+          ))}
         </div>
       </div>
     </div>
