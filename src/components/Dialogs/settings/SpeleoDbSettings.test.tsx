@@ -96,3 +96,23 @@ it('keeps typed and pasted server endpoints lowercase with keyboard corrections 
     speleodb: { ...defaultConfig.speleodb, endpoint: null },
   });
 });
+
+it('disconnects immediately and keeps Settings open with the endpoint disabled while connected', async () => {
+  const apply = vi.fn(async () => ({ ok: true }));
+  useSpeleoStore.setState({ session: { loggedIn: true, endpoint: 'https://example.com', userEmail: 'test@example.com' }, pendingAuth: null, applyPendingAuth: apply });
+  render(<SpeleoDbSettings config={defaultConfig} onChange={onChange} changedFields={new Set()} onValidationError={vi.fn()} panelIdBase="immediate" />);
+  expect(screen.getByTestId('input-speleodb-endpoint')).toBeDisabled();
+  expect(screen.getByTestId('setting-speleodb-endpoint-reset')).toBeDisabled();
+  await act(async () => fireEvent.click(screen.getByTestId('speleodb-settings-logout')));
+  expect(apply).toHaveBeenCalledOnce();
+  expect(useSpeleoStore.getState().pendingAuth).toEqual({ kind: 'logout' });
+  expect(closeDialog).not.toHaveBeenCalled();
+});
+
+it('shows connection rejection in a modal and preserves Settings', async () => {
+  useSpeleoStore.setState({ applyPendingAuth: vi.fn(async () => ({ ok: false, error: { message: 'HTTPS is required.', action: 'Fatal' } })) });
+  startLogin();
+  await act(async () => {});
+  expect(screen.getByTestId('speleodb-connection-error')).toBeVisible();
+  expect(closeDialog).not.toHaveBeenCalled();
+});

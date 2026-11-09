@@ -1,7 +1,7 @@
 import { finishSpeleoSettings } from '../../../utils/finishSpeleoSettings';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Toggle } from '../../common/Toggle';
+import { AlertDialog } from '../AlertDialog';
 import { Button } from '../../common/Button';
 import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
@@ -9,7 +9,6 @@ import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import {
   isFieldChanged,
-  createToggleHandler,
 } from './types';
 import { defaultConfig } from '../../../types/config';
 import { useSpeleoStore, type PendingLogin } from '../../../store/speleoStore';
@@ -22,15 +21,15 @@ export function SpeleoDbSettings({
   onChange,
   changedFields,
   panelIdBase,
+  saveBeforeConnect,
+  onConnectionBusyChange,
 }: SettingsCategoryProps) {
   const { t } = useTranslation();
   const session = useSpeleoStore((s) => s.session);
   const refreshSession = useSpeleoStore((s) => s.refreshSession);
   const pendingAuth = useSpeleoStore((s) => s.pendingAuth);
   const setPendingAuth = useSpeleoStore((s) => s.setPendingAuth);
-  const clearPendingAuth = useSpeleoStore((s) => s.clearPendingAuth);
   const applyPendingAuth = useSpeleoStore((s) => s.applyPendingAuth);
-  const setAuthError = useSpeleoStore((s) => s.setAuthError);
   const authError = useSpeleoStore((s) => s.authError);
   const busy = useSpeleoStore((s) => s.busy);
 
@@ -38,6 +37,8 @@ export function SpeleoDbSettings({
   const connectionRef = useRef(speleo);
   connectionRef.current = speleo;
   const [loggingIn, setLoggingIn] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  useEffect(() => { onConnectionBusyChange?.(loggingIn); }, [loggingIn, onConnectionBusyChange]);
   useEffect(() => {
     void refreshSession();
   }, [refreshSession]);
@@ -49,8 +50,7 @@ export function SpeleoDbSettings({
       : { kind: 'login', email: '', password: '', token: '', useToken: false };
   const updateLogin = (patch: Partial<PendingLogin>) => setPendingAuth({ ...login, ...patch });
 
-  const stagedLogout = pendingAuth?.kind === 'logout';
-  const showLoginForm = pendingAuth?.kind === 'login' || (!stagedLogout && !session?.loggedIn);
+  const showLoginForm = pendingAuth?.kind === 'login' || !session?.loggedIn;
 
   // Log in NOW (don't wait for Save) so the user can verify their credentials
   // against the staged endpoint. Applies the same login `applyPendingAuth` runs on
@@ -65,6 +65,7 @@ export function SpeleoDbSettings({
     const issuedDialog = useUIStore.getState().dialogData;
     setLoggingIn(true);
     try {
+      if (saveBeforeConnect && !await saveBeforeConnect()) return;
       const result = await applyPendingAuth(speleo.endpoint);
       if (result.cancelled) return;
       // A slow login may finish after Settings was dismissed or replaced.
@@ -76,21 +77,17 @@ export function SpeleoDbSettings({
         if (endpoint && connectionRef.current === speleo) onChange({ speleodb: { ...speleo, endpoint } });
         finishSpeleoSettings();
       } else {
-        setAuthError(humanizeSpeleoError(result.error, t('speleodb.errors.loginFailed')));
+        setFailure(humanizeSpeleoError(result.error, t('speleodb.errors.loginFailed')));
       }
     } finally {
       setLoggingIn(false);
     }
   };
 
-  // --- connection (staged config) ---
-  // Editing is staged. Saving a different server signs out the current session;
-  // "Log in now" instead authenticates against the staged server immediately.
+  // Endpoint preferences are saved on Connect or Close.
   const handleEndpointChange = (v: string) =>
     onChange({ speleodb: { ...speleo, endpoint: v.length > 0 ? v.toLowerCase() : null } });
-  const handleInsecureHttpToggle = createToggleHandler(onChange, (v) => ({
-    speleodb: { ...speleo, insecure_http: v },
-  }));
+
 
   return (
     <div
@@ -105,9 +102,6 @@ export function SpeleoDbSettings({
         title={t('settings.speleodb.sections.account')}
         data-testid="section-speleodb-account"
       >
-        <p className="mb-3 text-xs text-text-secondary">
-          {t('settings.speleodb.account.appliesOnSave')}
-        </p>
 
         {authError && (
           <div
@@ -118,16 +112,7 @@ export function SpeleoDbSettings({
           </div>
         )}
 
-        {stagedLogout ? (
-          <div className="space-y-2" data-testid="speleodb-account-staged-logout">
-            <p className="text-sm text-text-primary">
-              {t('settings.speleodb.account.willSignOut')}
-            </p>
-            <Button onClick={clearPendingAuth} data-testid="speleodb-settings-undo-logout">
-              {t('settings.speleodb.account.undo')}
-            </Button>
-          </div>
-        ) : session?.loggedIn && !showLoginForm ? (
+        {session?.loggedIn && !showLoginForm ? (
           <div className="space-y-2" data-testid="speleodb-account-signed-in">
             <p className="text-sm text-text-primary break-all">
               {session.endpoint
@@ -139,8 +124,14 @@ export function SpeleoDbSettings({
             </p>
             <Button
               variant="danger"
-              disabled={busy}
-              onClick={() => setPendingAuth({ kind: 'logout' })}
+              disabled={busy || loggingIn}
+              onClick={() => {
+                setLoggingIn(true);
+                setPendingAuth({ kind: 'logout' });
+                void applyPendingAuth(speleo.endpoint).then((result) => {
+                  if (!result.ok && !result.cancelled) setFailure(humanizeSpeleoError(result.error));
+                }).finally(() => setLoggingIn(false));
+              }}
               data-testid="speleodb-settings-logout"
             >
               {t('settings.speleodb.account.logout')}
@@ -148,9 +139,6 @@ export function SpeleoDbSettings({
           </div>
         ) : (
           <div className="space-y-3" data-testid="speleodb-account-login-form">
-            <p className="text-xs text-text-secondary">
-              {t('settings.speleodb.account.willSignIn')}
-            </p>
             {!login.useToken && (
               <div>
                 <label className="block text-sm text-text-secondary mb-1">
@@ -237,11 +225,11 @@ export function SpeleoDbSettings({
       >
         <SettingRow
           label={t('settings.speleodb.endpoint.label')}
-          helpText={t('settings.speleodb.endpoint.help')}
+          helpText={session?.loggedIn ? 'Disconnect before changing servers.' : t('settings.speleodb.endpoint.help')}
           isChanged={isFieldChanged(changedFields, 'speleodb.endpoint')}
           onReset={() => onChange({ speleodb: { ...speleo, endpoint: defaultConfig.speleodb.endpoint } })}
           resetLabel={t('common.actions.reset')}
-          isDefault={speleo.endpoint === defaultConfig.speleodb.endpoint}
+          isDefault={busy || loggingIn || session?.loggedIn === true || speleo.endpoint === defaultConfig.speleodb.endpoint}
           data-testid="setting-speleodb-endpoint"
         >
           <input
@@ -250,8 +238,8 @@ export function SpeleoDbSettings({
             autoCapitalize="none"
             autoCorrect="off"
             spellCheck={false}
-            disabled={busy}
-            value={speleo.endpoint ?? ''}
+            disabled={busy || loggingIn || session?.loggedIn === true}
+            value={(session?.loggedIn ? session.endpoint : speleo.endpoint) ?? ''}
             onChange={(e) => handleEndpointChange(e.target.value)}
             className="w-full max-w-64 px-2 py-1 bg-background border border-border rounded text-sm"
             placeholder="https://www.speleodb.org/"
@@ -260,34 +248,11 @@ export function SpeleoDbSettings({
           />
         </SettingRow>
 
-        <SettingRow
-          label={t('settings.speleodb.insecureHttp.label')}
-          helpText={t('settings.speleodb.insecureHttp.help')}
-          isChanged={isFieldChanged(changedFields, 'speleodb.insecure_http')}
-          onReset={() =>
-            onChange({ speleodb: { ...speleo, insecure_http: defaultConfig.speleodb.insecure_http } })
-          }
-          isDefault={speleo.insecure_http === defaultConfig.speleodb.insecure_http}
-          data-testid="setting-speleodb-insecure-http"
-        >
-          <Toggle
-            disabled={busy}
-            checked={speleo.insecure_http}
-            onChange={handleInsecureHttpToggle}
-            aria-label={t('settings.speleodb.insecureHttp.aria')}
-            data-testid="toggle-speleodb-insecure-http"
-          />
-        </SettingRow>
-        {speleo.insecure_http && (
-          <div
-            className="mb-2 p-3 bg-warning-20 text-warning rounded text-xs"
-            data-testid="speleodb-insecure-http-warning"
-          >
-            {t('settings.speleodb.insecureHttp.warning')}
-          </div>
-        )}
 
       </SettingsSection>
+      <AlertDialog open={failure !== null} title="SpeleoDB connection error" onClose={() => setFailure(null)} closeOnBackdropClick={false} data-testid="speleodb-connection-error" actions={<Button variant="primary" onClick={() => setFailure(null)} data-testid="speleodb-connection-error-close">Close</Button>}>
+        <p className="text-error">{failure}</p>
+      </AlertDialog>
     </div>
   );
 }

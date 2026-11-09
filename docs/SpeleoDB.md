@@ -279,3 +279,25 @@ restores retry and dismissal without an error. A replaced managed-file prompt re
 ownership of its own controls. A superseded discard-and-open in the unpushed-local
 prompt similarly restores retry and dismissal without resetting a replacement prompt's
 operation.
+
+## Immediate SpeleoDB connection settings
+
+Connect saves changed preferences and authenticates immediately. Success closes
+Settings and refreshes the project listing. Disconnect takes effect immediately,
+clears the remote listing and stays on the SpeleoDB Settings tab. Neither action
+requires a subsequent Save. While connected, the server endpoint and both reset
+controls are disabled; backend requests to change instances are also refused.
+Disconnect first, including when the current server is temporarily unavailable.
+
+The SpeleoDB tab has a Close button instead of Save/Cancel. Closing validates and
+saves preference changes, including changes in other categories, without connecting.
+Connection and persistence errors keep Settings open. The ordinary Settings
+unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
+
+HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
+address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
+allowed. Other private ranges, IPv6, localhost aliases/subdomains, public hosts,
+missing schemes and malformed addresses are rejected. No DNS-based exception or
+insecure-HTTP override exists. Invalid endpoints produce an error modal when
+connecting or saving; existing legacy override fields are ignored and omitted
+from subsequent saves. Certificate verification and redirect restrictions remain.

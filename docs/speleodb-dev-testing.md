@@ -250,3 +250,37 @@ Clippy retains existing repository warnings. Ignored and environment-gated check
 are not equivalent to executed coverage; native desktop UAT and live-server
 acceptance were not separately verified. No external fixtures were added or
 committed. Logs and browser failure artifacts are under `/tmp/stalagmight-*`.
+
+## Immediate SpeleoDB connection settings
+
+Connect saves changed preferences and authenticates immediately. Success closes
+Settings and refreshes the project listing. Disconnect takes effect immediately,
+clears the remote listing and stays on the SpeleoDB Settings tab. Neither action
+requires a subsequent Save. While connected, the server endpoint and both reset
+controls are disabled; backend requests to change instances are also refused.
+Disconnect first, including when the current server is temporarily unavailable.
+
+The SpeleoDB tab has a Close button instead of Save/Cancel. Closing validates and
+saves preference changes, including changes in other categories, without connecting.
+Connection and persistence errors keep Settings open. The ordinary Settings
+unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
+
+HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
+address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
+allowed. Other private ranges, IPv6, localhost aliases/subdomains, public hosts,
+missing schemes and malformed addresses are rejected. No DNS-based exception or
+insecure-HTTP override exists. Invalid endpoints produce an error modal when
+connecting or saving; existing legacy override fields are ignored and omitted
+from subsequent saves. Certificate verification and redirect restrictions remain.
+
+### Connection workflow verification (2026-11-09)
+
+Full Vitest: 408 files and 5,701 tests passed; an additional immediate-disconnect
+regression test passed separately. Full Rust workspace with telemetry: 3,581
+passed and 41 ignored, including documentation tests. The narrower transport
+policy replaces the former address-classification and override tests. Seven
+selected headless Chromium cases passed for the two-action discard prompt and
+SpeleoDB Close saving the endpoint without connecting. All three typechecks,
+nine non-test lint gates, root/member formatting checks and workspace Clippy
+with telemetry and all targets passed. Existing repository warnings remain.
+No full browser-suite or native desktop acceptance is claimed for this change.
