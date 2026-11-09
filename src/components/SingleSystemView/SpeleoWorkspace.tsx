@@ -11,9 +11,13 @@ import { SpeleoRevisionHistory } from '../Dialogs/settings/SpeleoRevisionHistory
 import { useProject } from '../../hooks/useProject';
 import { Button } from '../common/Button';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
+import { RefreshGlyph } from '../common/SpeleoBadgedIcon';
+import { ChevronDownIcon, ChevronRightIcon, CloseIcon, ExternalLinkIcon, LockIcon, PencilIcon, SaveIcon, SignInIcon } from '../common/icons';
 import { SpeleoWorkspaceHeader } from './SpeleoWorkspaceHeader';
 
 const areas = [['history', 'History']] as const;
+/** Icon size for the workspace's action buttons. */
+const ICON = 16;
 
 /** Single persistent body: accordion navigation hides content without unmounting drafts. */
 export function SpeleoWorkspace() {
@@ -37,6 +41,7 @@ export function SpeleoWorkspace() {
         </p>
         <Button variant="primary" onClick={() => useUIStore.getState().openDialog('publish-to-speleodb')}
           className="mt-6 w-full px-3 py-3 text-sm leading-snug" disabled={busy}
+          icon={<SpeleoDbLogo size={ICON} />}
           data-testid="speleodb-workspace-convert">Convert to a SpeleoDB project</Button>
       </div>
     </div>
@@ -47,23 +52,26 @@ export function SpeleoWorkspace() {
     <div className="h-full min-h-0 flex flex-col gap-3 p-3 text-sm" data-testid="speleodb-workspace">
       <SpeleoWorkspaceHeader link={link} />
       <div className="shrink-0 grid gap-2" data-testid="speleodb-workspace-everyday">
-        <Button variant="primary" onClick={() => void dispatchProjectSave()} disabled={busy} data-testid="speleodb-workspace-upload">Save Changes</Button>
+        <Button variant="primary" onClick={() => void dispatchProjectSave()} disabled={busy} icon={<SaveIcon size={ICON} />} data-testid="speleodb-workspace-upload">Save Changes</Button>
         <Button onClick={() => editing ? void releaseOpenProjectLock() : canResume ? void startEditing() : useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })}
-          disabled={busy || (session?.loggedIn === true && !canResume && !editing)} data-testid="speleodb-workspace-editing">
+          disabled={busy || (session?.loggedIn === true && !canResume && !editing)}
+          icon={editing ? <LockIcon size={ICON} /> : session?.loggedIn ? <PencilIcon size={ICON} /> : <SignInIcon size={ICON} />}
+          data-testid="speleodb-workspace-editing">
           {editing ? 'Switch to Read Only Mode' : session?.loggedIn ? 'Resume editing' : 'Sign in to resume editing'}
         </Button>
-        <Button onClick={() => void update()} disabled={busy || !session?.loggedIn || link.noAccess || (link.permission !== null && !permissionAtLeast(link.permission, 'READ_ONLY'))} data-testid="speleodb-workspace-latest">Reload Project</Button>
-        <Button onClick={() => void handleCloseProject()} disabled={busy} data-testid="speleodb-workspace-close">Close Project</Button>
-        <Button onClick={web.open} disabled={!web.url} data-testid="speleodb-workspace-open-web">Open on SpeleoDB</Button>
+        <Button onClick={() => void update()} disabled={busy || !session?.loggedIn || link.noAccess || (link.permission !== null && !permissionAtLeast(link.permission, 'READ_ONLY'))} icon={<RefreshGlyph size={ICON} />} data-testid="speleodb-workspace-latest">Reload Project</Button>
+        <Button onClick={() => void handleCloseProject()} disabled={busy} icon={<CloseIcon size={ICON} />} data-testid="speleodb-workspace-close">Close Project</Button>
+        <Button onClick={web.open} disabled={!web.url} icon={<ExternalLinkIcon size={ICON} />} data-testid="speleodb-workspace-open-web">Open on SpeleoDB</Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto" data-testid="speleodb-workspace-sections">
       {areas.map(([id, label]) => (
         <section key={id} className="border-t border-border pt-2">
           <button type="button" aria-expanded={expanded === id} aria-controls={`speleodb-area-${id}`}
-            className="w-full text-left font-medium py-2 focus-visible:outline focus-visible:outline-accent"
+            className="w-full flex items-center gap-1.5 text-left font-medium py-2 focus-visible:outline focus-visible:outline-accent"
             data-testid={`speleodb-workspace-section-${id}`}
             onClick={() => useUIStore.setState({ speleoWorkspaceSection: expanded === id ? null : id })}>
-            {expanded === id ? 'v' : '>'} {label}
+            {expanded === id ? <ChevronDownIcon size={ICON} /> : <ChevronRightIcon size={ICON} />}
+            {label}
           </button>
           <div id={`speleodb-area-${id}`} hidden={expanded !== id} className="space-y-3">
             {(visited.has(id) || expanded === id) && <>

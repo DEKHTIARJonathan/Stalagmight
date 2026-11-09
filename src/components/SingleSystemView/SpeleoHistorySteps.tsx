@@ -3,6 +3,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { Button } from '../common/Button';
+import { RedoIcon, UndoIcon } from '../common/icons';
 
 function HistoryStep({ direction }: { direction: ChainDirection }) {
   const editing = useSpeleoStore((s) => s.link?.editState === 'editing');
@@ -12,6 +13,7 @@ function HistoryStep({ direction }: { direction: ChainDirection }) {
   const enabled = editing && survey && !canLocal;
   const { target } = useUnwindTarget(enabled, direction);
   return <Button disabled={!enabled || !target || busy} data-testid={`speleodb-history-${direction}`}
+    icon={direction === 'back' ? <UndoIcon size={16} /> : <RedoIcon size={16} />}
     onClick={() => {
       if (!target || !enabled) return;
       useUIStore.getState().openDialog('speleodb-unwind', {

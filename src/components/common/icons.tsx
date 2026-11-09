@@ -885,3 +885,19 @@ export function SectionsIcon(props: IconProps) {
     </BaseIcon>
   );
 }
+
+/** Sign in: an arrow entering a door frame. Filled bars (no strokes). */
+export function SignInIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      {/* Door frame, open on the left */}
+      <Bar x1={11.5} y1={3.5} x2={16} y2={3.5} />
+      <Bar x1={16} y1={3.5} x2={16} y2={16.5} />
+      <Bar x1={16} y1={16.5} x2={11.5} y2={16.5} />
+      {/* Arrow going in */}
+      <Bar x1={3.5} y1={10} x2={12} y2={10} />
+      <Bar x1={8.5} y1={6.5} x2={12} y2={10} />
+      <Bar x1={12} y1={10} x2={8.5} y2={13.5} />
+    </BaseIcon>
+  );
+}

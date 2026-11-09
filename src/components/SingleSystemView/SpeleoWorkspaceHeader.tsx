@@ -5,6 +5,7 @@ import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { permissionAtLeast } from '../../utils/speleoPermission';
 import { Button } from '../common/Button';
+import { AlertTriangleIcon, LinkOffIcon } from '../common/icons';
 
 /**
  * Plain-language lock state for the open project, in the same words as the
@@ -32,8 +33,8 @@ export function SpeleoWorkspaceHeader({ link }: { link: SpeleoLinkState }) {
       <h2 className="font-semibold break-words">{projectName}</h2>
       <p data-testid="speleodb-workspace-lock-state">{speleoLockStateLabel(link, t)}</p>
       <p className="text-text-secondary">{!session?.loggedIn ? 'Signed out' : link.serverError ? link.serverError.message : link.remoteState === 'unknown' ? 'Connection unavailable' : 'Connected'}</p>
-      {link.noAccess && <Button onClick={() => useUIStore.getState().openDialog('speleodb-no-permission')} data-testid="speleodb-workspace-no-access">Keep a local project</Button>}
-      {link.remoteState === 'conflict' && <Button onClick={() => useUIStore.getState().openDialog('speleodb-divergence')} data-testid="speleodb-workspace-resolve">Resolve synchronization conflict</Button>}
+      {link.noAccess && <Button onClick={() => useUIStore.getState().openDialog('speleodb-no-permission')} icon={<LinkOffIcon size={16} />} data-testid="speleodb-workspace-no-access">Keep a local project</Button>}
+      {link.remoteState === 'conflict' && <Button onClick={() => useUIStore.getState().openDialog('speleodb-divergence')} icon={<AlertTriangleIcon size={16} />} data-testid="speleodb-workspace-resolve">Resolve synchronization conflict</Button>}
       {link.hasUnpushedEdits && <p className="text-warning">Changes on this computer have not been uploaded.</p>}
     </div>
   );
