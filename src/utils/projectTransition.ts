@@ -10,6 +10,7 @@ import type { LoadProjectOutcome } from '../store/projectStore';
  * the replacement wait until its frontend reconciliation is complete.
  */
 let requestGeneration = 0;
+let mutationRequest = 0;
 
 /** Reserve ownership before any asynchronous preflight or replacement wait. */
 export function reserveProjectRequest(): number {
@@ -20,11 +21,24 @@ export function isProjectRequestCurrent(request: number): boolean {
   return request === requestGeneration;
 }
 
+/** A confirmed operation owns backend completion until another mutation begins. */
+export function beginProjectMutation(request: number): boolean {
+  if (!isProjectRequestCurrent(request) && mutationRequest !== request) return false;
+  mutationRequest = request;
+  return true;
+}
+export function isProjectMutationCurrent(request: number): boolean {
+  return mutationRequest === request;
+}
+
 let replacementTail: Promise<void> = Promise.resolve();
 let switchTail: Promise<void> = Promise.resolve();
 
-export function runProjectSwitch<T>(work: (request: number) => Promise<T>, request = reserveProjectRequest()): Promise<T> {
-  const result = replacementTail.then(() => work(request));
+export function runProjectSwitch<T>(work: (request: number) => Promise<T>, request = reserveProjectRequest(), preflightOnly = false): Promise<T> {
+  const result = replacementTail.then(() => {
+    if (!preflightOnly) beginProjectMutation(request);
+    return work(request);
+  });
   switchTail = Promise.allSettled([switchTail, result]).then(() => undefined);
   return result;
 }
@@ -58,7 +72,7 @@ export function runConfirmedProjectSwitch(
   work: () => Promise<LoadProjectOutcome>,
   request = reserveProjectRequest(),
 ): Promise<LoadProjectOutcome> {
-  const current = () => isProjectRequestCurrent(request);
+  const current = () => isProjectRequestCurrent(request) || (accessConfirmed === true && isProjectMutationCurrent(request));
   const superseded: LoadProjectOutcome = { success: false, superseded: true };
   return runProjectSwitch(async () => {
     if (!current()) return superseded;
@@ -76,7 +90,7 @@ export function runConfirmedProjectSwitch(
         return { success: false };
       }
     }
-    if (!current()) return superseded;
+    if (!current() || !beginProjectMutation(request)) return superseded;
     return work();
-  }, request);
+  }, request, true);
 }

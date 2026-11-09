@@ -187,3 +187,27 @@ describe('restricted native file preflight', () => {
     expect(confirmMock).not.toHaveBeenCalled();
   });
 });
+
+it('settles an already-dispatched load when a newer restricted-file warning is cancelled', async () => {
+  mockLoad(false);
+  const payload = await loadBinaryMock();
+  let finish!: (value: unknown) => void;
+  loadBinaryMock.mockReset().mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+  invokeIpcMock.mockImplementation(async (command, args) => {
+    if (command === 'speleodb_project_access_at' && args.path === '/restricted.stalx') {
+      return { project: { name: 'Restricted B', permission: 'READ_ONLY', lock_holder: null }, verification: 'verified', endpoint: 'https://example.com' };
+    }
+    if (command === 'list_recent_projects' || command === 'take_unrecognised_shot_kinds') return [];
+    return undefined;
+  });
+  const opening = useProjectStore.getState().loadProject('/mock/loaded.stalx');
+  await vi.waitFor(() => expect(loadBinaryMock).toHaveBeenCalledOnce());
+  expect(useProjectStore.getState().loading.isLoading).toBe(true);
+  confirmMock.mockResolvedValue(false);
+  expect(await useProjectStore.getState().loadProject('/restricted.stalx')).toEqual({ success: false });
+  finish(payload);
+  expect(await opening).toEqual({ success: true });
+  expect(useProjectStore.getState().loading.isLoading).toBe(false);
+  expect(useProjectStore.getState().project?.file_path).toBe('/mock/loaded.stalx');
+  expect(loadBinaryMock).toHaveBeenCalledExactlyOnceWith('/mock/loaded.stalx');
+});

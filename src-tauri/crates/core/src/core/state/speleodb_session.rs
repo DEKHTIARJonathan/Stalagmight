@@ -59,6 +59,8 @@
 //!    into the slot (open / create / the fast-forward reload), clearing it
 //!    (close, which delete and project-switch route through), and logout
 //!    (which ends the edit session without touching the slot - footgun 5.8).
+//!    Cancelling native loading also invalidates older cache-writing downloads,
+//!    including when the newly confirmed file fails to open.
 //! 3. NOT a bump: an undo rollback (`restore_snapshot_into` restores the SAME
 //!    open project - footgun 5.7), and every save (`save_project` never
 //!    replaces the slot; a Save a Copy does not even move `file_path`).
@@ -1705,6 +1707,7 @@ mod tests {
         assert_eq!(
             bumping,
             vec![
+                "app_state.rs",
                 "project_create.rs",
                 "project_io.rs",
                 "project_load.rs",

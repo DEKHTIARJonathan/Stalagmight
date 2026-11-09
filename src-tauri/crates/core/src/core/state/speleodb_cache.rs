@@ -90,7 +90,7 @@ pub(super) fn preserved_undo_mode(
 ///
 /// Fatal while the file is still staged. A downloaded database is never installed until
 /// all inherited history metadata has been removed successfully.
-fn drop_inherited_undo(dest: &Path) -> Result<(), SpeleoDbError> {
+pub(super) fn drop_inherited_undo(dest: &Path) -> Result<(), SpeleoDbError> {
     crate::persistence::Database::clear_undo_history_at(dest).map_err(|e| {
         SpeleoDbError::Io(format!(
             "could not clear inherited history from {}: {e}",
@@ -99,6 +99,7 @@ fn drop_inherited_undo(dest: &Path) -> Result<(), SpeleoDbError> {
     })
 }
 
+#[cfg(test)]
 fn sanitized_download_path(dest: &Path) -> std::path::PathBuf {
     let mut name = dest
         .file_name()
@@ -274,106 +275,24 @@ impl AppState {
         dest: &Path,
         undo: InheritedUndo,
     ) -> Result<HashMap<String, String>, SpeleoDbError> {
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                SpeleoDbError::Io(format!("could not create the project cache directory: {e}"))
-            })?;
-        }
+        let staged = super::speleodb_cache_install::stage_download(
+            source,
+            dest,
+            undo,
+            super::speleodb_cache_install::sync_staged_file,
+        )?;
         let preserved_view = preserved_display_settings(dest);
-        // Closing BEFORE the replacement is the point (a live mmap must not survive into
-        // the rename), so the failure path cannot simply reorder the two - it has to
-        // undo the close. Left un-undone, a failed copy returned `Err` with the
-        // project already closed backend-side while the frontend still displayed it:
-        // every later command, auto-save included, then failed with "no project
-        // open". The copy stages to a sibling temp and renames, so on failure
-        // `dest` is still the file we just closed and re-opening restores the
-        // pre-call state (bar the undo history, which the close spent either way).
         let closed = self.close_project_if_open_at(dest);
-        let staged = sanitized_download_path(dest);
-        let _ = std::fs::remove_file(&staged);
-        match std::fs::copy(source, &staged).map_err(|e| SpeleoDbError::Io(e.to_string())) {
-            Ok(_) => {
-                // A server `.stalx` is input from outside: refuse a hostile schema
-                // before the history cleanup below fires a trigger it carries, and
-                // before it can replace the cache (#608).
-                if let Err(e) = crate::persistence::Database::check_schema_at(&staged) {
-                    let _ = std::fs::remove_file(&staged);
-                    if closed {
-                        let _ = self.open_project(dest.to_path_buf());
-                    }
-                    return Err(SpeleoDbError::Parse(format!(
-                        "the downloaded project file was refused: {e:#}"
-                    )));
-                }
-                // A file a newer Stalagmight saved must not replace the cache either:
-                // this build could neither open it nor save it without dropping what
-                // it does not know (#649). Same place, same clean-up.
-                if let Err(newer) = crate::persistence::Database::check_not_newer_at(&staged) {
-                    let _ = std::fs::remove_file(&staged);
-                    if closed {
-                        let _ = self.open_project(dest.to_path_buf());
-                    }
-                    // The check read the staged copy, whose name is ours; name the
-                    // file as it is on SpeleoDB.
-                    return Err(SpeleoDbError::NewerSchema(
-                        crate::persistence::NewerSchema {
-                            file: Path::new(entry)
-                                .file_name()
-                                .map(|name| name.to_string_lossy().into_owned())
-                                .unwrap_or_default(),
-                            ..newer
-                        },
-                    ));
-                }
-                // [#303] THE chokepoint. Every server `.stalx` that becomes the local
-                // cache file passes through here, so dropping the inherited history in
-                // one place is what makes "a pulled stack is never silently adopted"
-                // true of the pull, the fast-forward AND the revision swap at once,
-                // without each of them having to remember.
-                if matches!(undo, InheritedUndo::Drop) {
-                    if let Err(e) = drop_inherited_undo(&staged) {
-                        let _ = std::fs::remove_file(&staged);
-                        if closed {
-                            let _ = self.open_project(dest.to_path_buf());
-                        }
-                        return Err(e);
-                    }
-                }
-                if let Err(e) = std::fs::rename(&staged, dest) {
-                    let _ = std::fs::remove_file(&staged);
-                    if closed {
-                        let _ = self.open_project(dest.to_path_buf());
-                    }
-                    return Err(SpeleoDbError::Io(format!(
-                        "could not install sanitized download at {}: {e}",
-                        dest.display()
-                    )));
-                }
-                Ok(preserved_view)
+        if let Err(error) = std::fs::rename(&staged, dest) {
+            if closed {
+                let _ = self.open_project(dest.to_path_buf());
             }
-            Err(e) => {
-                if closed {
-                    let reopened = self.open_project(dest.to_path_buf());
-                    if reopened.success {
-                        tracing::info!(
-                            path = %dest.display(),
-                            purpose = "undo the pre-replace close after a failed copy",
-                            "speleodb: re-opened the project the failed replace had closed"
-                        );
-                    } else {
-                        // Nothing left to try: report it loudly, because the shell is
-                        // now showing a project the backend does not have open.
-                        tracing::error!(
-                            path = %dest.display(),
-                            error = ?reopened.error,
-                            purpose = "undo the pre-replace close after a failed copy",
-                            "speleodb: could not re-open the project after a failed replace"
-                        );
-                    }
-                }
-                Err(e.into())
-            }
+            return Err(SpeleoDbError::Io(format!(
+                "could not install sanitized download: {error}"
+            )));
         }
+        super::speleodb_cache_install::sync_cache_directory(dest);
+        Ok(preserved_view)
     }
 }
 

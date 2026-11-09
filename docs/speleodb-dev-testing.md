@@ -135,8 +135,11 @@ UI regression coverage must include:
 - Cancelling an open warning performs no download, lock release or project
   replacement, including a switch initiated through the close dialog.
 - Deferred open/create setup, remote downloads, and reconciliation cannot replay
-  older selections over newer requests. Stale successes and failures leave the newer
-  loading state, link, dialog, and telemetry intact.
+  older selections over newer mutations. Cancelling a newer preflight warning does
+  not strand an older already-dispatched load; it reconciles and settles loading.
+  Stale successes and failures leave the newer loading state, link, dialog and
+  telemetry intact. Backend session fences prevent late downloads from closing
+  a newer same-cache open.
 - Routine session refreshes do not abort close operations. Login/logout, project
   replacement, and dialog replacement invalidate close and older-version confirmation
   continuations before further side effects. Cancelled or superseded remote opens

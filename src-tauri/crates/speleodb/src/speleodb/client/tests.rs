@@ -698,7 +698,8 @@ fn downloads_allow_healthy_progress_beyond_the_idle_budget_but_reject_stalls() {
                 .set_read_timeout(Some(Duration::from_secs(2)))
                 .unwrap();
             let mut request = [0; 4096];
-            stream.read(&mut request).unwrap();
+            let received = stream.read(&mut request).unwrap();
+            assert!(received > 0, "the fake server must receive an HTTP request");
             stream
                 .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 12\r\nConnection: close\r\n\r\n")
                 .unwrap();

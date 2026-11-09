@@ -22,8 +22,22 @@ pub(super) fn usable_tip(tip: Option<String>, project_id: &str) -> Option<String
     None
 }
 
-const DOWNLOADED_VALUE_LIMIT: i32 = 64 * 1024 * 1024;
-const DOWNLOADED_PROCESSING_DEADLINE: std::time::Duration = std::time::Duration::from_secs(30);
+pub(super) const DOWNLOADED_VALUE_LIMIT: i32 = 64 * 1024 * 1024;
+pub(super) const DOWNLOADED_PROCESSING_DEADLINE: std::time::Duration =
+    std::time::Duration::from_secs(30);
+
+struct DownloadOptions {
+    limits: (i32, std::time::Duration),
+    generation: Option<u64>,
+}
+impl Default for DownloadOptions {
+    fn default() -> Self {
+        Self {
+            limits: (DOWNLOADED_VALUE_LIMIT, DOWNLOADED_PROCESSING_DEADLINE),
+            generation: None,
+        }
+    }
+}
 
 impl AppState {
     pub fn speleodb_list_projects(&self) -> Result<Vec<SpeleoProjectSummary>, SpeleoErrorDto> {
@@ -73,6 +87,13 @@ impl AppState {
         latest_commit_sha: Option<String>,
         policy: LocalEditsPolicy,
     ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
+        let generation = {
+            let _project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.speleodb_session_generation()
+        };
         validate_project_id(&project_id).map_err(local_dto)?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
@@ -127,14 +148,24 @@ impl AppState {
             last_verify_at: None,
             undo_mode: None,
         };
-        self.install_linked_download(native.path(), &dest, link, policy, InheritedUndo::Drop)
-            .map_err(local_dto)?;
-
         let concurrent_session = {
             let holder = self.speleodb_lock_holder(&endpoint, &token, insecure_http, &project_id);
             self.speleodb_my_email()
                 .is_some_and(|me| sync::concurrent_session_notice(holder.as_deref(), &me))
         };
+
+        self.install_linked_download_with_limits(
+            native.path(),
+            &dest,
+            link,
+            policy,
+            InheritedUndo::Drop,
+            DownloadOptions {
+                generation: Some(generation),
+                ..DownloadOptions::default()
+            },
+        )
+        .map_err(local_dto)?;
 
         Ok(SpeleoOpenResult {
             local_path: dest.to_string_lossy().into_owned(),
@@ -199,7 +230,7 @@ impl AppState {
             link,
             policy,
             undo,
-            (DOWNLOADED_VALUE_LIMIT, DOWNLOADED_PROCESSING_DEADLINE),
+            DownloadOptions::default(),
         )
     }
 
@@ -210,21 +241,31 @@ impl AppState {
         mut link: crate::models::SpeleoLink,
         policy: LocalEditsPolicy,
         undo: InheritedUndo,
-        limits: (i32, std::time::Duration),
+        options: DownloadOptions,
     ) -> Result<(), SpeleoDbError> {
         {
-            let db =
-                crate::persistence::Database::open_existing_untrusted(source, limits.0, limits.1)
-                    .map_err(|e| {
-                    SpeleoDbError::Io(format!("could not open downloaded project: {e}"))
-                })?;
+            let db = crate::persistence::Database::open_existing_untrusted(
+                source,
+                options.limits.0,
+                options.limits.1,
+            )
+            .map_err(|e| SpeleoDbError::Io(format!("could not open downloaded project: {e}")))?;
             link.undo_mode = Some(self.effective_undo_mode(preserved_undo_mode(&db)));
             db.save_speleo_link(Some(&link)).map_err(|e| {
                 SpeleoDbError::Io(format!("could not link downloaded project: {e}"))
             })?;
         }
-        let preserved_view =
-            self.replace_cache_stalx_with(source, dest, &link.project_id, policy, undo)?;
+        let preserved_view = match options.generation {
+            Some(generation) => self.replace_cache_for_session(
+                source,
+                dest,
+                &link.project_id,
+                policy,
+                undo,
+                generation,
+            )?,
+            None => self.replace_cache_stalx_with(source, dest, &link.project_id, policy, undo)?,
+        };
         let db = crate::persistence::Database::open_existing(dest)
             .map_err(|e| SpeleoDbError::Io(format!("could not reopen downloaded project: {e}")))?;
         restore_display_settings(&db, &preserved_view);
@@ -295,13 +336,137 @@ mod tests {
                             link(),
                             LocalEditsPolicy::Protect,
                             InheritedUndo::Drop,
-                            limits
+                            DownloadOptions {
+                                limits,
+                                generation: None
+                            }
                         )
                         .is_err(),
                     "{case} must be refused"
                 );
                 assert_eq!(std::fs::read(&dest).expect("cache bytes"), before, "{case}");
             }
+        });
+    }
+
+    #[test]
+    fn delayed_download_cannot_close_a_newer_open_of_the_same_cache() {
+        crate::test_helpers::with_isolated_config(|| {
+            let dir = tempfile::tempdir().expect("temp");
+            let source = dir.path().join("download.stalx");
+            let dest = dir.path().join("working.stalx");
+            for (path, name) in [(&source, "Remote replacement"), (&dest, "Newer local open")] {
+                let mut db = Database::open(path).expect("database");
+                db.save_project(&Project::new(name.into(), None))
+                    .expect("project");
+                db.save_speleo_link(Some(&link())).expect("link");
+            }
+            let state = AppState::new().expect("state");
+            let generation = state.speleodb_session_generation();
+            let (download_started, started) = std::sync::mpsc::channel();
+            let (finish_download, finished) = std::sync::mpsc::channel();
+            std::thread::scope(|scope| {
+                let state = &state;
+                let source = &source;
+                let dest = &dest;
+                let pull = scope.spawn(move || {
+                    download_started.send(()).expect("start");
+                    finished.recv().expect("download completion");
+                    state.install_linked_download_with_limits(
+                        source,
+                        dest,
+                        link(),
+                        LocalEditsPolicy::Protect,
+                        InheritedUndo::Drop,
+                        DownloadOptions {
+                            generation: Some(generation),
+                            ..DownloadOptions::default()
+                        },
+                    )
+                });
+                started.recv().expect("download pending");
+                assert!(state.open_project(dest.clone()).success);
+                let before = std::fs::read(dest).expect("newer cache");
+                finish_download.send(()).expect("finish");
+                assert!(matches!(
+                    pull.join().expect("thread"),
+                    Err(SpeleoDbError::SessionMoved)
+                ));
+                assert_eq!(std::fs::read(dest).expect("unchanged"), before);
+                assert_eq!(
+                    state.get_project_state().expect("still open").name,
+                    "Newer local open"
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn a_confirmed_native_transition_invalidates_older_downloads_even_without_a_commit() {
+        crate::test_helpers::with_isolated_config(|| {
+            let dir = tempfile::tempdir().expect("temp");
+            let source = dir.path().join("download.stalx");
+            let dest = dir.path().join("working.stalx");
+            for path in [&source, &dest] {
+                let mut db = Database::open(path).expect("database");
+                db.save_project(&Project::new("Synthetic".into(), None))
+                    .expect("project");
+                db.save_speleo_link(Some(&link())).expect("link");
+            }
+            let state = AppState::new().expect("state");
+            let generation = state.speleodb_session_generation();
+            state.cancel_loading(); // Every confirmed native open crosses this boundary.
+            let before = std::fs::read(&dest).expect("cache");
+            assert!(matches!(
+                state.install_linked_download_with_limits(
+                    &source,
+                    &dest,
+                    link(),
+                    LocalEditsPolicy::Protect,
+                    InheritedUndo::Drop,
+                    DownloadOptions {
+                        generation: Some(generation),
+                        ..DownloadOptions::default()
+                    }
+                ),
+                Err(SpeleoDbError::SessionMoved)
+            ));
+            assert_eq!(std::fs::read(dest).expect("unchanged"), before);
+        });
+    }
+
+    #[test]
+    fn a_pending_native_reader_excludes_cache_replacement() {
+        crate::test_helpers::with_isolated_config(|| {
+            let dir = tempfile::tempdir().expect("temp");
+            let source = dir.path().join("download.stalx");
+            let dest = dir.path().join("working.stalx");
+            for path in [&source, &dest] {
+                let mut db = Database::open(path).expect("database");
+                db.save_project(&Project::new("Synthetic".into(), None))
+                    .expect("project");
+                db.save_speleo_link(Some(&link())).expect("link");
+            }
+            let state = AppState::new().expect("state");
+            let generation = state.speleodb_session_generation();
+            let token = state.start_new_load();
+            let before = std::fs::read(&dest).expect("cache");
+            assert!(matches!(
+                state.install_linked_download_with_limits(
+                    &source,
+                    &dest,
+                    link(),
+                    LocalEditsPolicy::Protect,
+                    InheritedUndo::Drop,
+                    DownloadOptions {
+                        generation: Some(generation),
+                        ..DownloadOptions::default()
+                    }
+                ),
+                Err(SpeleoDbError::SessionMoved)
+            ));
+            assert_eq!(std::fs::read(dest).expect("unchanged"), before);
+            state.clear_active_load(&token);
         });
     }
 

@@ -27,6 +27,20 @@ fn downloaded_revision_undo_mode(
     source: &std::path::Path,
     scratch_base: &std::path::Path,
 ) -> Result<UndoMode, SpeleoDbError> {
+    downloaded_revision_undo_mode_with_limits(
+        source,
+        scratch_base,
+        super::speleodb_pull::DOWNLOADED_VALUE_LIMIT,
+        super::speleodb_pull::DOWNLOADED_PROCESSING_DEADLINE,
+    )
+}
+
+fn downloaded_revision_undo_mode_with_limits(
+    source: &std::path::Path,
+    scratch_base: &std::path::Path,
+    value_limit: i32,
+    deadline: std::time::Duration,
+) -> Result<UndoMode, SpeleoDbError> {
     let mut name = scratch_base
         .file_name()
         .unwrap_or_else(|| std::ffi::OsStr::new("project.stalx"))
@@ -39,11 +53,13 @@ fn downloaded_revision_undo_mode(
 
     let result = (|| {
         std::fs::copy(source, &probe).map_err(|e| SpeleoDbError::Io(e.to_string()))?;
-        let db = crate::persistence::Database::open_for_metadata(&probe).map_err(|e| {
-            SpeleoDbError::Io(format!(
-                "could not open the downloaded revision to read its undo policy: {e}"
-            ))
-        })?;
+        let db =
+            crate::persistence::Database::open_existing_untrusted(&probe, value_limit, deadline)
+                .map_err(|e| {
+                    SpeleoDbError::Io(format!(
+                        "could not open the downloaded revision to read its undo policy: {e}"
+                    ))
+                })?;
         let stored_mode = db
             .load_speleo_link()
             .map_err(|e| {
@@ -684,8 +700,8 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        downloaded_revision_undo_mode, revision_swap_base, unwind_discards_unpushed,
-        validate_hexsha, AppState,
+        downloaded_revision_undo_mode, downloaded_revision_undo_mode_with_limits,
+        revision_swap_base, unwind_discards_unpushed, validate_hexsha, AppState,
     };
     use crate::models::{Project, SpeleoLink, UndoMode};
     use crate::persistence::Database;
@@ -782,6 +798,39 @@ mod tests {
                 assert_eq!(leftovers, 0, "the policy probe must clean up its `.stalx`");
             }
         });
+    }
+
+    #[test]
+    fn downloaded_policy_probe_rejects_oversized_values_and_expired_deadlines() {
+        let native = revision_stalx_with_undo_mode(Some(UndoMode::Full));
+        let temp = tempfile::tempdir().expect("temp");
+        let scratch = temp.path().join("project.stalx");
+        rusqlite::Connection::open(native.path())
+            .expect("database")
+            .execute(
+                "UPDATE speleo_link SET project_name = ?1",
+                ["X".repeat(8192)],
+            )
+            .expect("oversized synthetic name");
+        assert!(downloaded_revision_undo_mode_with_limits(
+            native.path(),
+            &scratch,
+            1024,
+            std::time::Duration::from_secs(30)
+        )
+        .is_err());
+        assert!(downloaded_revision_undo_mode_with_limits(
+            native.path(),
+            &scratch,
+            64 * 1024 * 1024,
+            std::time::Duration::ZERO
+        )
+        .is_err());
+        assert_eq!(
+            std::fs::read_dir(temp.path()).expect("directory").count(),
+            0,
+            "both failed probes clean up their private copies"
+        );
     }
 
     #[test]

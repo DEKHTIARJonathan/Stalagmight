@@ -61,7 +61,7 @@ import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 import { createProjectHistoryBannerActions, HISTORY_BANNER_CLEARED, type ProjectHistoryBannerActions, type ProjectHistoryBannerState } from './projectHistoryBannerActions';
-import { runProjectSwitch, runConfirmedProjectSwitch, reserveProjectRequest, isProjectRequestCurrent } from '../utils/projectTransition';
+import { runProjectSwitch, runConfirmedProjectSwitch, reserveProjectRequest, isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent } from '../utils/projectTransition';
 import { TOAST_KEYS } from '../utils/toastKeys';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
@@ -970,7 +970,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // reserved before preflight; operation IDs protect dispatched loads afterward.
   loadProject: (path: string, opts?: { accessConfirmed?: boolean; request?: number }) =>
     runDeduplicatedProjectLoad(path, opts?.request, (request) => {
-    const current = () => isProjectRequestCurrent(request);
+    const actionSource = peekProjectActionSource();
+    let dispatched = false;
+    const current = () => dispatched ? isProjectMutationCurrent(request) :
+      isProjectRequestCurrent(request) || (opts?.accessConfirmed === true && isProjectMutationCurrent(request));
     const superseded: LoadProjectOutcome = { success: false, superseded: true };
 
     const promise: Promise<LoadProjectOutcome> = runConfirmedProjectSwitch(path, () => get().project?.file_path, opts?.accessConfirmed, async () => {
@@ -984,6 +987,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
       // Clear GlobalView geometry cache to cancel pending loads and free memory
       useGlobalViewStore.getState().clearGeometryCache();
+
+      if (!beginProjectMutation(request)) return superseded;
+      dispatched = true;
 
       // ALWAYS cancel first - NO isLoading guard
       // cancel_loading is idempotent on backend
@@ -1022,7 +1028,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // loads. The source is still armed (setView clears it below). Deduped
         // same-path calls returned before the async body ran, so this fires once
         // per actual load.
-        trackCommand('load_project_full', peekProjectActionSource());
+        trackCommand('load_project_full', actionSource);
 
         // Set backend loadingId from result for event correlation
         get().setLoadingProgress({ loadingId: result.loadingId });
@@ -1261,7 +1267,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // Project operations - uses consolidated create_project_full command
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) =>
     runProjectSwitch(async (request) => {
-    const current = () => isProjectRequestCurrent(request);
+    let dispatched = false;
+    const current = () => dispatched ? isProjectMutationCurrent(request) : isProjectRequestCurrent(request);
     if (!current()) return emptyCommandResult(false, 'Superseded');
     // ALWAYS cancel first - NO isLoading guard
     await get().cancelLoading();
@@ -1277,6 +1284,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // flow also fires import_sections, which peeks the same source).
       const actionSource = peekProjectActionSource();
       if (actionSource) setSource(actionSource);
+      dispatched = true;
       const result = await invokeIpc<CreateProjectFullResult>(
         'create_project_full',
         {

@@ -78,11 +78,18 @@ result is its top-level `hexsha`; an HTTP 304 remains the existing no-change out
 An uncertain upload does not clear dirty state or automatically release the lock.
 
 Downloads stream to an owned temporary file, with a 512 MiB limit. The cache
-installer opens the temporary copy through `open_existing_untrusted`, with a
-64 MiB SQLite value limit and a 30-second processing deadline, checks the schema, stages the replacement, strips inherited undo
-unless an explicit Unwind requires it, and preserves local display preferences.
+installer and downloaded-revision policy probes open private copies through
+`open_existing_untrusted`, with a 64 MiB SQLite value limit and a 30-second
+processing deadline. The installer checks the schema, stages the replacement,
+strips inherited undo unless an explicit Unwind requires it, and preserves local
+display preferences.
 The downloaded copy receives its validated SpeleoDB link before replacement. A
-failed download, validation or link write leaves the existing cache intact. Replacements
+failed download, validation, link write or staged-file synchronization leaves the
+existing cache intact. Finished staging files are synchronized before atomic rename;
+the parent directory is synchronized where supported. Ordinary pulls capture backend
+session ownership before downloading, then check it under the project lock before
+replacement. Native load cancellation invalidates old downloads even if the newer
+open fails; pending native readers also exclude replacement. Replacements
 refuse to overwrite unuploaded edits unless the user explicitly confirms discard.
 When a revision is known, the download is pinned to that SHA; an undated HEAD
 download cannot be stamped with a stale project-list hint.
@@ -151,15 +158,18 @@ also disappear from browser mocks and telemetry.
 ## Opening and closing request ownership
 
 Project switches reserve a shared request generation before access metadata or
-replacement queues are awaited. The newest request owns the transition, even if
-its warning is cancelled. Older probes cannot raise warnings, load a project,
-surface errors, or clear the newer request's telemetry. Same-path opens share an
-execution only while current; A-B-A selects the final A. Tree replacement retains
-its ordering contract while independent access probes can proceed concurrently.
-Remote opens reserve that same token before their native warning and download, then
-carry it into the file load. A stale pull cannot seed access state, replace a newer
-selection, or raise an error over its dialog. Create-project operations check ownership
-through cancellation, creation, and reconciliation as well.
+replacement queues are awaited. Newer preflight requests suppress older probes,
+warnings and undispatched work, even if the newer warning is cancelled. A confirmed
+operation that already dispatched backend work reconciles its result until a newer
+mutation begins. Thus cancelling a newer warning cannot leave a completed native
+load hidden behind an indefinite loading overlay. Same-path opens share execution
+only while current; A-B-A selects the final A. Tree replacement retains its ordering
+contract while independent access probes can proceed concurrently.
+Remote opens carry ownership through warning, download and file load. A newer
+confirmed native transition invalidates the backend download's cache-write authority
+as well as its frontend continuation, so a late pull cannot close the newer cache.
+Create-project operations distinguish preflight cancellation from dispatched-work
+reconciliation in the same way.
 
 The close dialog becomes busy before probing its destination and stays busy through
 saving, upload/release, and hand-back. Dismissal and editable choices are disabled;

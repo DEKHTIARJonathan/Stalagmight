@@ -1,4 +1,4 @@
-import { isProjectRequestCurrent, reserveProjectRequest } from '../utils/projectTransition';
+import { isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent, reserveProjectRequest } from '../utils/projectTransition';
 import { useCallback } from 'react';
 import { confirmSpeleoOpen } from '../utils/confirmSpeleoOpen';
 import { useTranslation } from 'react-i18next';
@@ -49,8 +49,13 @@ interface UseOpenRemoteProjectOpts {
 function reserveRemoteOpen() {
   const request = reserveProjectRequest();
   const sessionGeneration = useSpeleoStore.getState().sessionGeneration;
-  return { request, current: () => isProjectRequestCurrent(request) &&
-    useSpeleoStore.getState().sessionGeneration === sessionGeneration };
+  let dispatched = false;
+  return { request,
+    latest: () => isProjectRequestCurrent(request) && useSpeleoStore.getState().sessionGeneration === sessionGeneration,
+    dispatch: () => { dispatched = beginProjectMutation(request); return dispatched; },
+    current: () => (dispatched ? isProjectMutationCurrent(request) : isProjectRequestCurrent(request)) &&
+      useSpeleoStore.getState().sessionGeneration === sessionGeneration };
+
 }
 
 /** Pull a native project, seed its access state, load it, and roll back a failed load. */
@@ -385,13 +390,14 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       try {
         if (!await confirmSpeleoOpen(summary) || !ownership.current()) return { status: 'cancelled' };
       } catch (e) {
-        if (!ownership.current()) return { status: 'cancelled' };
+        if (!ownership.latest()) return { status: 'cancelled' };
         return { status: 'error', message: humanizeSpeleoError(e, t('speleodb.errors.openFailed')), reLogin: false };
       }
       const afterWarning = handBackRefusal(summary);
       if (afterWarning) return { status: 'error', message: afterWarning, reLogin: false };
       let result: SpeleoOpenResult;
       try {
+        if (!ownership.dispatch()) return { status: 'cancelled' };
         result = await invokeIpc<SpeleoOpenResult>('speleodb_open_project', {
           // [Track B] (#189) pass name + latest SHA so the backend stamps the
           // speleo_link row (is_remote) on the pulled .stalx.
@@ -400,7 +406,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           latestCommitSha: summary.latest_commit_sha ?? null,
         });
       } catch (e) {
-        if (!ownership.current()) return { status: 'cancelled' };
+        if (!ownership.latest()) return { status: 'cancelled' };
         const unpushed = unpushedLocalEdits(e);
         if (unpushed) {
           openDialog('speleodb-unpushed-local', {
@@ -536,13 +542,14 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       const ownership = reserveRemoteOpen();
       let result: SpeleoOpenResult;
       try {
+        if (!ownership.dispatch()) return { status: 'cancelled' };
         result = await invokeIpc<SpeleoOpenResult>('speleodb_open_project_discarding_local', {
           projectId: summary.id,
           projectName: summary.name,
           latestCommitSha: summary.latest_commit_sha ?? null,
         });
       } catch (e) {
-        if (!ownership.current()) return { status: 'cancelled' };
+        if (!ownership.latest()) return { status: 'cancelled' };
         return {
           status: 'error',
           message: humanizeSpeleoError(e, t('speleodb.errors.openFailed')),
