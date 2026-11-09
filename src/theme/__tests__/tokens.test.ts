@@ -666,3 +666,34 @@ describe('index.html anti-flash cover', () => {
     expect(htmlRules).not.toMatch(/@media[^{]*prefers-color-scheme/i);
   });
 });
+
+/**
+ * The `highlight` Button variant paints `--cc-warning` with `--cc-warning-on` text
+ * (and `--cc-warning-90` on hover, composited over the panel it sits on). Every
+ * theme must keep that text readable: WCAG AA for normal text, 4.5:1.
+ */
+describe('highlight button (warning) contrast', () => {
+  /** `#rrggbb`, or `rgba(r, g, b, a)` composited over `under` (a `#rrggbb`). */
+  function solid(value: string, under: string): string {
+    if (value.startsWith('#')) return value;
+    const m = /^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)$/.exec(value);
+    if (!m) throw new Error(`unparsed colour ${value}`);
+    const alpha = Number(m[4]);
+    const base = [1, 3, 5].map((i) => parseInt(under.slice(i, i + 2), 16));
+    return `#${[m[1], m[2], m[3]]
+      .map((c, i) => Math.round(alpha * Number(c) + (1 - alpha) * base[i]!))
+      .map((c) => c.toString(16).padStart(2, '0'))
+      .join('')}`;
+  }
+
+  for (const theme of ALL_THEME_NAMES) {
+    it(`${theme}: warning-on reads at AA on warning and on its hover`, () => {
+      const tokens = themeTokens[theme] as Record<string, string>;
+      const on = tokens['--cc-warning-on']!;
+      const panel = tokens['--cc-panel']!;
+      expect(on).toMatch(/^#[0-9a-fA-F]{6}$/);
+      expect(contrast(tokens['--cc-warning']!, on)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(solid(tokens['--cc-warning-90']!, panel), on)).toBeGreaterThanOrEqual(4.5);
+    });
+  }
+});
