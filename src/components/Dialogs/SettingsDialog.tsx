@@ -389,7 +389,9 @@ export default function SettingsDialog() {
     (dialogData?.initialCategory as SettingsCategory) || 'general'
   );
   // Focused category index for roving tabindex
-  const [focusedIndex, setFocusedIndex] = useState(0);
+  const [focusedIndex, setFocusedIndex] = useState(() =>
+    Math.max(0, CATEGORIES.findIndex((category) => category.id === activeCategory))
+  );
 
   // Local config copy for editing
   const [localConfig, setLocalConfig] = useState<Config | null>(config);
