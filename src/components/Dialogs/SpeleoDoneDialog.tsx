@@ -85,7 +85,16 @@ export default function SpeleoDoneDialog() {
   const needsMessage = mode === 'push' || unpushed || unsaved;
   // sdk#2: a description SpeleoDB cannot store is never sent (the backend refuses it too).
   const messageTooLong = commitMessageTooLong(message);
-  const dismiss = () => { if (!uploading) setUploadContinuation(null); closeDialog(); };
+  // Closed by the user while the upload runs (allowed once the 120-second notice
+  // shows): the result that lands later is then reported here (frontend#2). Any
+  // other way the dialog goes away (the older-version confirmation replacing it,
+  // a divergence) has its own surface for the outcome.
+  const walkedAway = useRef(false);
+  const dismiss = () => {
+    if (uploading) walkedAway.current = true;
+    else setUploadContinuation(null);
+    closeDialog();
+  };
 
   // frontend#6: Save opened this dialog for a project we were not editing, after
   // saving it on this computer (`dispatchProjectSave`). Take the editing lock
@@ -141,14 +150,17 @@ export default function SpeleoDoneDialog() {
     const dialogOpen = () => useUIStore.getState().activeDialog === 'speleodb-done' &&
       useUIStore.getState().dialogData === dialogData;
     const current = () => sessionCurrent() && dialogOpen();
-    /** The dialog was walked away from mid-upload: report what it would have. */
+    /** The dialog is gone: if the user walked away mid-upload, report what it would have. */
     const settledAfterDismiss = (resolved: { kind: string } | null): boolean => {
       if (!sessionCurrent()) return true;
       if (dialogOpen()) return false;
-      if (resolved?.kind === 'pushed' || resolved?.kind === 'released') setUploadContinuation(null);
-      toastLateUploadOutcome(resolved);
+      if (walkedAway.current) {
+        if (resolved?.kind === 'pushed' || resolved?.kind === 'released') setUploadContinuation(null);
+        toastLateUploadOutcome(resolved);
+      }
       return true;
     };
+    walkedAway.current = false;
     try {
       if (mode === 'push') {
         let saved;

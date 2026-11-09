@@ -322,6 +322,20 @@ it('a failure that lands after the dialog was closed raises the banner and a toa
   } finally { vi.useRealTimers(); }
 });
 
+it('the older-version confirmation replacing the dialog is not a walked-away upload: no late toast', async () => {
+  useUIStore.setState({
+    dialogData: { mode: 'push' },
+    // The single dialog slot: the confirmation evicts this dialog.
+    openDialog: ((name: string) => useUIStore.setState({ activeDialog: name, dialogData: {} })) as never,
+  });
+  useSpeleoStore.setState({ link: { ...LINK, unwound: true } });
+  render(<SpeleoDoneDialog />);
+  fillCommitMessage();
+  await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
+  await waitFor(() => expect(useUIStore.getState().activeDialog).toBe('speleodb-unwound-push'));
+  expect(useUIStore.getState().showToast).not.toHaveBeenCalledWith(expect.anything(), 'speleodb-late-upload', expect.anything());
+});
+
 it('Finish editing applies a release that lands after the dialog was closed (frontend#2)', async () => {
   useUIStore.setState({ dialogData: {} });
   let released!: (value: { kind: 'released' }) => void;
