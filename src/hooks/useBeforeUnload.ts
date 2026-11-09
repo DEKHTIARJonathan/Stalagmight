@@ -127,29 +127,30 @@ export function useBeforeUnload(
             return;
           }
 
-          // Unsent SpeleoDB input (frontend#10) next - after the tier-0 wait, so a
-          // re-issued quit asks it against the settled state, and before any tier
-          // below can upload, release or discard. Declining abandons the quit
-          // outright, like declining tier 1: an update restart or a forced quit
-          // riding on it goes too, and so does a pre-confirmed answer.
-          if (!await confirmWorkspaceDrafts()) {
-            consumeQuitConfirmation();
-            tier1Confirmed.current = false;
-            abandonUpdateRestart();
-            abandonForcedQuit();
-            return;
-          }
-
           // A quit the user already confirmed in-app (performQuit) comes back
           // through this same event. Consume the one-shot so the in-app guard
           // below is skipped for THIS close only - otherwise e.g. "Discard &
-          // Quit" would re-open the dialog it came from, forever.
+          // Quit" would re-open the dialog it came from, forever. Read as the
+          // event arrives: its deadline bounds the close round trip, not the
+          // questions below, which the user may take any time to answer.
           const preConfirmed = consumeQuitConfirmation();
 
           // A close request that is NOT pre-confirmed starts a fresh quit attempt,
           // so any tier-1 answer left over from one the user abandoned at a tier-2
           // dialog must not carry into it.
           if (!preConfirmed) tier1Confirmed.current = false;
+
+          // Unsent SpeleoDB input (frontend#10) next - after the tier-0 wait, so a
+          // re-issued quit asks it against the settled state, and before any tier
+          // below can upload, release or discard. Declining abandons the quit
+          // outright, like declining tier 1: an update restart or a forced quit
+          // riding on it goes too, and so does a pre-confirmed answer.
+          if (!await confirmWorkspaceDrafts()) {
+            tier1Confirmed.current = false;
+            abandonUpdateRestart();
+            abandonForcedQuit();
+            return;
+          }
 
           // Tier 1: the in-memory states with no in-app dialog of their own (an
           // import wizard mid-flight, a dirty dive plan). Deliberately NOT skipped
@@ -192,13 +193,19 @@ export function useBeforeUnload(
           // write lock, then unsaved-to-disk changes). Opening a dialog abandons
           // this close; the dialog's own action re-issues it via performQuit,
           // which arms `preConfirmed` so we land past this branch next time.
+          // "Quit now" re-issues its close pre-confirmed, so it never reaches the
+          // guard; a close that does is another attempt, and a forced-quit arm
+          // left from "Quit now" goes with it - a re-issued quit waits for the
+          // work again rather than cutting it.
           if (!preConfirmed && guardRef.current?.()) {
+            abandonForcedQuit();
             debugLog('[useBeforeUnload] In-app guard opened a dialog, aborting close');
             return;
           }
 
           // Tier 0 again: work that started while a question above was on screen
-          // is waited for the same way, before anything one-way happens below.
+          // is waited for the same way, before anything one-way happens below. A
+          // forced quit still armed passes, however long the questions took.
           if (deferQuitUntilWorkDone()) {
             tier1Confirmed.current = false;
             return;
@@ -225,7 +232,9 @@ export function useBeforeUnload(
 
           // lock#6: the user chose "Quit now" over a running transfer. Tell the
           // backend right before the window goes, so its exit hook cuts the
-          // operation instead of holding the exit until it finishes.
+          // operation instead of holding the exit until it finishes. Here and not
+          // at the click: the backend's arm covers one hop (seconds), and the
+          // questions above may have been on screen far longer.
           if (consumeForcedQuit()) await armForcedExit();
 
           // [#579] An update restart armed by `requestUpdateRestart` has now

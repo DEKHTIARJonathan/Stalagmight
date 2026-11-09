@@ -569,8 +569,13 @@ before any question:
 - Quit now is an explicit choice behind a warning (the transfer is cut off and may
   or may not reach SpeleoDB; the project can stay locked until it is opened
   again). It saves unsaved edits on this computer first (a failed save stops it),
-  then quits without waiting, and right before the window goes it calls
-  `arm_forced_exit` so the backend may cut the operation.
+  then quits without waiting and without the exit questions the wait would have
+  re-asked; the unsent-input and the import / dive-plan questions still run, for
+  as long as the user takes to answer them. The frontend arm is a one-shot, not a
+  deadline: the quit consumes it, and declining either question, a refused window
+  close or a guard taking the close over drops it, so a later quit waits again.
+  Right before the window goes it calls `arm_forced_exit` so the backend may cut
+  the operation.
 
 The backend exit hook (`commands/exit_wait.rs`, from `RunEvent::ExitRequested`) is
 the backstop for a user-visible transfer still running when the exit arrives anyway.

@@ -8,7 +8,7 @@
  * skips the wait and tells the backend it may cut the operation.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const listeners = vi.hoisted(() => [] as Array<() => Promise<void> | void>);
@@ -39,7 +39,14 @@ vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock, getErrorMessage: S
 import { useBeforeUnload } from '../useBeforeUnload';
 import QuitWaitDialog from '../../components/Dialogs/QuitWaitDialog';
 import { resetQuitConfirmationForTests, requestUpdateRestart, resetUpdateRestartForTests } from '../../utils/quit';
-import { QUIT_SETTLE_MS, holdQuitDuring, resetQuitWaitForTests, useQuitWait } from '../../utils/quitAfterWork';
+import {
+  QUIT_SETTLE_MS,
+  forceQuitNow,
+  holdQuitDuring,
+  resetQuitWaitForTests,
+  setQuitWaitStep,
+  useQuitWait,
+} from '../../utils/quitAfterWork';
 import { useSpeleoNetworkStore } from '../../store/speleoNetworkStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -198,6 +205,107 @@ describe('quit after in-flight work', () => {
     expect(await screen.findByTestId('quit-wait-error')).toHaveTextContent('Synthetic disk failure');
     expect(destroyMock).not.toHaveBeenCalled();
     expect(invokeIpcMock).not.toHaveBeenCalledWith('arm_forced_exit', undefined, expect.anything());
+  });
+
+  describe('Quit now is a one-shot, not a deadline', () => {
+    /** Put the app in the waiting prompt with an upload in flight, then press Quit now. */
+    async function quitNowOverAnUpload(): Promise<void> {
+      useSpeleoNetworkStore.getState().begin('exclusive');
+      await act(closeRequested);
+      expect(useQuitWait.getState().waiting).toBe(true);
+      await act(async () => {
+        setQuitWaitStep('force');
+        await forceQuitNow();
+      });
+    }
+
+    /** A question that stays on screen until the test answers it. */
+    function heldQuestion(): (yes: boolean) => void {
+      let answer: ((yes: boolean) => void) | null = null;
+      confirmMock.mockImplementation(() => new Promise<boolean>((resolve) => { answer = resolve; }));
+      return (yes) => {
+        expect(answer, 'the question is on screen').not.toBeNull();
+        answer?.(yes);
+      };
+    }
+
+    const armed = () => invokeIpcMock.mock.calls.filter(([command]) => command === 'arm_forced_exit').length;
+
+    afterEach(() => vi.useRealTimers());
+
+    // The forced quit still asks these two questions, and a wall-clock arm used to
+    // run out while one was open: the close that came back after a slow "yes" fell
+    // into the waiting prompt again. The backend is armed only as the window goes.
+    for (const question of ['unsent SpeleoDB input', 'import / dive plan'] as const) {
+      it(`a ${question} question answered after a minute still quits and arms the backend at the exit`, async () => {
+        let unregister = () => {};
+        if (question === 'import / dive plan') {
+          cleanup();
+          listeners.length = 0;
+          render(<Harness guard={guard} shouldBlock />);
+          await flush();
+        } else {
+          unregister = registerWorkspaceDraft({ label: () => 'the synthetic form', dirty: () => true, discard: vi.fn() });
+        }
+        // The real guard would raise the exit prompt for saved, un-uploaded work
+        // under the lock; the answered quit must not reach it, however late.
+        guard.mockReturnValue(true);
+        const answer = heldQuestion();
+        vi.useFakeTimers();
+        await quitNowOverAnUpload();
+        expect(confirmMock).toHaveBeenCalledOnce();
+
+        await act(() => vi.advanceTimersByTimeAsync(60_000));
+        expect(destroyMock).not.toHaveBeenCalled();
+        expect(armed(), 'not armed at the click').toBe(0);
+
+        await act(async () => {
+          answer(true);
+          await vi.advanceTimersByTimeAsync(50);
+        });
+        unregister();
+        expect(armed()).toBe(1);
+        expect(destroyMock).toHaveBeenCalledOnce();
+        const armedAt = invokeIpcMock.mock.invocationCallOrder[
+          invokeIpcMock.mock.calls.findIndex(([command]) => command === 'arm_forced_exit')
+        ];
+        expect(armedAt).toBeLessThan(destroyMock.mock.invocationCallOrder[0]);
+        expect(guard).not.toHaveBeenCalled();
+        expect(useQuitWait.getState().waiting).toBe(false);
+      });
+    }
+
+    it('declining a question drops the arm: the next quit waits for the work again', async () => {
+      const unregister = registerWorkspaceDraft({ label: () => 'the synthetic form', dirty: () => true, discard: vi.fn() });
+      const answer = heldQuestion();
+      await quitNowOverAnUpload();
+      await act(async () => {
+        answer(false);
+        await flush();
+      });
+      unregister();
+      expect(destroyMock).not.toHaveBeenCalled();
+
+      confirmMock.mockResolvedValue(true);
+      await act(closeRequested);
+      expect(useQuitWait.getState().waiting).toBe(true);
+      expect(destroyMock).not.toHaveBeenCalled();
+      expect(armed()).toBe(0);
+    });
+
+    it('a refused close drops the arm: the next quit waits for the work again', async () => {
+      closeMock.mockRejectedValueOnce(new Error('synthetic close refusal'));
+      const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+      await quitNowOverAnUpload();
+      await act(flush);
+      error.mockRestore();
+      expect(destroyMock).not.toHaveBeenCalled();
+
+      await act(closeRequested);
+      expect(useQuitWait.getState().waiting).toBe(true);
+      expect(destroyMock).not.toHaveBeenCalled();
+      expect(armed()).toBe(0);
+    });
   });
 
   it('an ordinary quit never arms the forced exit', async () => {

@@ -83,14 +83,16 @@ function requestWindowClose(onRejected?: () => void): void {
  *
  * The one-shot flag above tells the close listener this quit is already confirmed,
  * so it skips {@link guardQuit} instead of re-prompting. A rejected close un-arms
- * the flag, so the next close request is guarded again.
+ * the flag, so the next close request is guarded again; `onRejected` lets the
+ * caller drop whatever else it armed for this close.
  *
  * Call this only AFTER any exit confirmation - it does NOT prompt.
  */
-export function performQuit(): void {
+export function performQuit(onRejected?: () => void): void {
   quitConfirmedUntil = Date.now() + QUIT_CONFIRMATION_TTL_MS;
   requestWindowClose(() => {
     quitConfirmedUntil = 0;
+    onRejected?.();
   });
 }
 

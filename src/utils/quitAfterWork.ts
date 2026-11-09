@@ -126,10 +126,21 @@ function watchUntilDrained(): void {
   check();
 }
 
-/** Until when an explicit "Quit now" lets the close through without waiting. */
-let forcedQuitUntil = 0;
-/** Same bound as the in-app quit confirmation: one close round trip. */
-const FORCED_QUIT_TTL_MS = 10_000;
+/**
+ * Set by "Quit now" ({@link forceQuitNow}) for the quit attempt it starts: that
+ * close goes through without waiting, and the backend is told it may cut the
+ * operation in flight.
+ *
+ * A one-shot, NOT a deadline. The attempt still asks the unsent-input question
+ * and the import / dive-plan question, and the user may take as long as they like
+ * over either; a wall-clock bound ran out under them, and the close that came
+ * back after a slow "yes" fell into the waiting prompt again instead of quitting.
+ * Like the update restart's arm (`updateRestartArmed` in `utils/quit`), it is
+ * consumed at the point of no return ({@link consumeForcedQuit}) and dropped by
+ * every path that abandons the attempt ({@link abandonForcedQuit}): either
+ * question declined, a guard taking the close over, the close request refused.
+ */
+let forcedQuitArmed = false;
 
 /**
  * The close listener's first gate. Returns true when it took the close over
@@ -138,7 +149,7 @@ const FORCED_QUIT_TTL_MS = 10_000;
  * showing, since the quit is going ahead anyway.
  */
 export function deferQuitUntilWorkDone(): boolean {
-  if (Date.now() < forcedQuitUntil || !quitBlockingWorkInFlight()) {
+  if (forcedQuitArmed || !quitBlockingWorkInFlight()) {
     if (useQuitWait.getState().waiting) endWait();
     return false;
   }
@@ -167,25 +178,29 @@ export function setQuitWaitStep(step: 'wait' | 'force'): void {
 /**
  * Read AND clear the forced-quit arm, at the point of no return in the close
  * listener: when it was set, the backend is told the exit may cut the operation
- * in flight (`arm_forced_exit`) before the window goes.
+ * in flight (`arm_forced_exit`) right before the window goes - not when "Quit
+ * now" was pressed, so the backend's own short arm cannot run out while a
+ * question is still on screen.
  */
 export function consumeForcedQuit(): boolean {
-  const forced = Date.now() < forcedQuitUntil;
-  forcedQuitUntil = 0;
+  const forced = forcedQuitArmed;
+  forcedQuitArmed = false;
   return forced;
 }
 
-/** A forced quit that did not happen after all (a later question was declined). */
+/** A forced quit that did not happen after all (a question declined, a guard took over). */
 export function abandonForcedQuit(): void {
-  forcedQuitUntil = 0;
+  forcedQuitArmed = false;
 }
 
 /**
  * "Quit now", after its warning. Unsaved edits are saved on this computer first
  * (a failed save stops here and says why); then the quit goes on WITHOUT
- * waiting and without the exit questions the wait would have re-asked - only
- * the import / dive-plan question still runs. Saved but un-uploaded SpeleoDB
- * work keeps its lock (the backend never releases over it).
+ * waiting and without the exit questions the wait would have re-asked (the
+ * SpeleoDB exit prompt, unsaved changes, the lock hand-back). The unsent SpeleoDB
+ * input question and the import / dive-plan question still run, for as long as
+ * the user takes to answer, and declining either calls the quit off. Saved but
+ * un-uploaded SpeleoDB work keeps its lock (the backend never releases over it).
  */
 export async function forceQuitNow(): Promise<void> {
   if (!useQuitWait.getState().waiting) return;
@@ -201,9 +216,10 @@ export async function forceQuitNow(): Promise<void> {
       return;
     }
   }
-  forcedQuitUntil = Date.now() + FORCED_QUIT_TTL_MS;
+  forcedQuitArmed = true;
   useQuitWait.setState({ waiting: false, step: 'wait', error: null });
-  performQuit();
+  // A refused close never reaches the listener, so nothing else would drop the arm.
+  performQuit(abandonForcedQuit);
 }
 
 /** Tell the backend this exit may cut the operation in flight. Best-effort. */
@@ -222,7 +238,7 @@ export function resetQuitWaitForTests(): void {
   stopWatching?.();
   stopWatching = null;
   clearSettleTimer();
-  forcedQuitUntil = 0;
+  forcedQuitArmed = false;
   useQuitHolds.setState({ count: 0 });
   useQuitWait.setState({ waiting: false, step: 'wait', error: null });
 }
