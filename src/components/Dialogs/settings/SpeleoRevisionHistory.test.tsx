@@ -230,4 +230,72 @@ describe('SpeleoRevisionHistory (#218)', () => {
     expect(screen.getByTestId('speleodb-revision-revert-bbbbbbbb2222')).toBeEnabled();
   });
 
+  /**
+   * View lives in the persistent workspace with no blocking overlay, so the user can
+   * open another project while the revision downloads. The backend then refuses the
+   * swap rather than closing that project; the late refusal must not toast an error
+   * over the project the user is now working in.
+   */
+  it('a View refused after the user opened another project stays silent', async () => {
+    seed('read-only');
+    const sessionMoved = {
+      message:
+        'the project changed while this request was in flight; nothing was changed - try again',
+      action: 'Retry',
+      status: null,
+      transport: null,
+      unpushed_local: null,
+      newer_schema: null,
+    };
+    let reply: (() => void) | undefined;
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd !== 'speleodb_restore_revision') return REVISIONS;
+      await new Promise<void>((resolve) => {
+        reply = resolve;
+      });
+      throw sessionMoved;
+    });
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByTestId('speleodb-revision-view-bbbbbbbb2222'));
+    await waitFor(() => expect(reply).toBeDefined());
+    // The user opens a local project; the workspace's SpeleoDB section goes away.
+    useSpeleoStore.setState({ remoteProjectId: null, link: null });
+    reply?.();
+
+    await waitFor(() =>
+      expect(screen.queryByTestId('speleodb-revisions')).not.toBeInTheDocument(),
+    );
+    // Let the rejected request settle before asserting nothing was shown.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(showToastMock).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();
+  });
+
+  it('a View refused while its project is still open is reported', async () => {
+    // The text is the backend's own "nothing was changed - try again" (asserted in
+    // the Rust integration test); `getErrorMessage` is stubbed in this file.
+    seed('read-only');
+    const sessionMoved = {
+      message:
+        'the project changed while this request was in flight; nothing was changed - try again',
+      action: 'Retry',
+      status: null,
+      transport: null,
+      unpushed_local: null,
+      newer_schema: null,
+    };
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_restore_revision') throw sessionMoved;
+      return REVISIONS;
+    });
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByTestId('speleodb-revision-view-bbbbbbbb2222'));
+    await waitFor(() => expect(showToastMock).toHaveBeenCalledTimes(1));
+    expect(showToastMock.mock.calls[0]?.[2]).toBe('error');
+    expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();
+  });
 });
