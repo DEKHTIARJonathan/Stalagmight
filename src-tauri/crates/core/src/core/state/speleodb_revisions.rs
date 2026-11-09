@@ -705,10 +705,9 @@ mod tests {
             .expect("stamp the fixture link");
 
         let state = AppState::new().expect("construct AppState");
+        // Installed without an open; the fixture setter derives the edit gate from
+        // the link the way an open would (read-only until a claim is bound).
         state.set_database_for_tests(db);
-        // Installed without an open, so say what is open the way an open would:
-        // a managed project, read-only until an edit session binds a claim.
-        state.speleodb_set_open_gate(Some(&link));
         (state, temp)
     }
 

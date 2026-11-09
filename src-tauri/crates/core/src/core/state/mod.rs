@@ -133,6 +133,12 @@ mod shot_uuid_tests;
 #[cfg(test)]
 #[expect(
     clippy::expect_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod speleodb_edit_gate_tests;
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
     clippy::panic,
     reason = "test module: panics on a failed assumption are the point"
 )]

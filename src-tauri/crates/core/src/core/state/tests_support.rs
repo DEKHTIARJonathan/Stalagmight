@@ -17,11 +17,17 @@ impl AppState {
         }
     }
 
+    /// Install `db` as the open project's database, and say what that makes the
+    /// open project the way an open would: a linked database is a SpeleoDB
+    /// project, read-only until an edit session binds a lock claim
+    /// (`speleodb_edit_gate`) - for which a fixture runs Start Editing.
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_database_for_tests(&self, db: Database) {
+        let link = db.load_speleo_link().ok().flatten();
         if let Ok(mut guard) = self.database.lock() {
             *guard = Some(db);
         }
+        self.speleodb_set_open_gate(link.as_ref());
     }
 
     #[cfg(any(test, feature = "test-support"))]

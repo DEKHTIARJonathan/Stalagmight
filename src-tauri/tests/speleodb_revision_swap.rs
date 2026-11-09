@@ -11,7 +11,7 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{mpsc, Arc, OnceLock};
 
 use serde_json::json;
@@ -93,6 +93,8 @@ fn read_request(stream: &mut TcpStream) -> String {
 struct Stub {
     base: String,
     stop: Arc<AtomicBool>,
+    /// How many release requests reached the server.
+    releases: Arc<AtomicUsize>,
 }
 
 impl Drop for Stub {
@@ -107,12 +109,26 @@ fn serve(project_id: &str, revision: Vec<u8>, gate: Option<Gate>) -> Stub {
     let base = format!("http://{}", listener.local_addr().expect("addr"));
     let stop = Arc::new(AtomicBool::new(false));
     let server_stop = Arc::clone(&stop);
+    let releases = Arc::new(AtomicUsize::new(0));
+    let server_releases = Arc::clone(&releases);
     let project = json!({"id":project_id,"name":"P","description":"Synthetic","country":"US",
         "type":"STALAGMIGHT","visibility":"PRIVATE","permission":"READ_AND_WRITE","color":"#123456",
         "commit_count":2,"created_by":"test@example.com","creation_date":"2026-01-01T00:00:00Z",
         "modified_date":"2026-01-01T00:00:00Z","exclude_geojson":false,"fork_from":null,"is_active":true,
         "active_mutex":null,"latest_commit":null});
+    let probe_route = format!("/{project_id}/ HTTP/1.1");
     std::thread::spawn(move || {
+        // The server's mutex: taken by an acquire, freed by a release, and what
+        // every project read (Start Editing's probe, a release's holder check)
+        // reports.
+        let mut held = false;
+        let with_holder = |held: bool| {
+            let mut body = project.clone();
+            if held {
+                body["active_mutex"] = json!("test@example.com");
+            }
+            body
+        };
         while !server_stop.load(Ordering::SeqCst) {
             let Ok((mut stream, _)) = listener.accept() else {
                 std::thread::sleep(std::time::Duration::from_millis(5));
@@ -131,7 +147,18 @@ fn serve(project_id: &str, revision: Vec<u8>, gate: Option<Gate>) -> Stub {
                 stream.write_all(&revision).expect("body");
                 continue;
             }
-            let (code, body) = if route.contains("/user/") {
+            // Start Editing's probe and acquire: the lock is free until the acquire
+            // takes it for the signed-in account.
+            let (code, body) = if route.contains("/acquire/") {
+                held = true;
+                (200, with_holder(held))
+            } else if route.contains("/release/") {
+                held = false;
+                server_releases.fetch_add(1, Ordering::SeqCst);
+                (200, with_holder(held))
+            } else if route.starts_with("GET") && route.ends_with(&probe_route) {
+                (200, with_holder(held))
+            } else if route.contains("/user/") {
                 (
                     200,
                     json!({"email":"test@example.com","name":"Test","country":"US",
@@ -155,7 +182,11 @@ fn serve(project_id: &str, revision: Vec<u8>, gate: Option<Gate>) -> Stub {
                 .expect("reply");
         }
     });
-    Stub { base, stop }
+    Stub {
+        base,
+        stop,
+        releases,
+    }
 }
 
 /// The bytes the server hands out for [`REV`].
@@ -201,6 +232,15 @@ fn open_p(state: &AppState, project_id: &str, base: &str) -> PathBuf {
     p.file_path = Some(cache.clone());
     state.set_project_for_tests(p);
     state.set_database_for_tests(Database::open_existing(&cache).expect("open P"));
+    // The edit gate opens only through a lock claim, so take the lock the way the
+    // app does: BASE is the server tip, so the reconcile is UpToDate.
+    assert!(
+        matches!(
+            state.speleodb_start_editing(),
+            Ok(stalagmight_lib::speleodb::StartEditingResult::Editing)
+        ),
+        "the fixture starts editing P"
+    );
     cache
 }
 
@@ -388,4 +428,40 @@ fn an_unraced_view_and_restore_still_swap_the_open_tree() {
         }
         drop(stub);
     }
+}
+
+/// data#3 regression: Take remote releases the lock and reloads the server tip.
+/// The reload used to copy the old edit gate across, so the project came back
+/// "editing" with no lock held - edits dirtied the link while anyone else could
+/// lock and push. The gate is the lock claim now: Take remote hands the lock back
+/// (the server still says it is ours, so the release is sent) and the project it
+/// reopens is read-only.
+#[test]
+fn take_remote_reopens_the_server_version_read_only() {
+    let id = "33333333-3333-3333-3333-333333333331";
+    let temp = tempfile::tempdir().expect("temp");
+    let stub = serve(id, revision_bytes(temp.path()), None);
+    let state = AppState::new().expect("state");
+    state.set_event_sink(Arc::new(NullSink));
+    let cache = open_p(&state, id, &stub.base);
+    assert!(gate_open(&state), "precondition: an edit session on P");
+
+    let local_path = state.speleodb_take_remote().expect("take remote");
+
+    assert_eq!(Path::new(&local_path), cache.as_path());
+    assert_eq!(
+        open_name(&state).as_deref(),
+        Some("Revision X"),
+        "the server version replaced the local copy"
+    );
+    assert_eq!(
+        stub.releases.load(Ordering::SeqCst),
+        1,
+        "the held lock was handed back"
+    );
+    assert!(
+        !gate_open(&state),
+        "with the lock released, the reloaded project must be read-only"
+    );
+    drop(stub);
 }
