@@ -24,6 +24,33 @@ impl AppState {
     where
         F: FnOnce() -> std::result::Result<(), crate::speleodb::SpeleoErrorDto>,
     {
+        self.open_project_prepared_inner(path, expected, before_commit, None)
+    }
+
+    /// Fully prepare a downloaded project before installing its bytes and state.
+    pub(super) fn open_project_download(
+        &self,
+        source: PathBuf,
+        dest: PathBuf,
+        expected: (u64, Vec<u8>),
+        editing: bool,
+    ) -> std::result::Result<CommandResult, crate::speleodb::SpeleoErrorDto> {
+        self.open_project_prepared_inner(dest, Some(expected), || Ok(()), Some((source, editing)))
+    }
+
+    fn open_project_prepared_inner<F>(
+        &self,
+        path: PathBuf,
+        expected: Option<(u64, Vec<u8>)>,
+        before_commit: F,
+        download: Option<(PathBuf, bool)>,
+    ) -> std::result::Result<CommandResult, crate::speleodb::SpeleoErrorDto>
+    where
+        F: FnOnce() -> std::result::Result<(), crate::speleodb::SpeleoErrorDto>,
+    {
+        let source = download
+            .as_ref()
+            .map_or(path.as_path(), |(source, _)| source.as_path());
         tracing::info!(
             path = ?path,
             purpose = "resume editing",
@@ -40,7 +67,7 @@ impl AppState {
         // forward-compatible hardening, not live folder-access guidance; the
         // production UI opens via `loadProject` → `load_project_full`, whose
         // structured `LoadError::permission` is handled there.
-        match path.try_exists() {
+        match source.try_exists() {
             Ok(true) => {}
             Ok(false) => {
                 tracing::warn!(
@@ -83,7 +110,7 @@ impl AppState {
         }
 
         // Use open_existing which validates the file is a valid Stalagmight project
-        let db = match Database::open_existing(&path) {
+        let db = match Database::open_existing(source) {
             Ok(db) => db,
             Err(e) => {
                 tracing::error!(
@@ -309,6 +336,21 @@ impl AppState {
                 ));
             }
         }
+        let db = if let Some((source, _)) = &download {
+            if self
+                .active_loading
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+            {
+                return Err(super::speleodb::local_dto(
+                    crate::speleodb::SpeleoDbError::SessionMoved,
+                ));
+            }
+            self.install_prepared_database(source, &path, db, proj_guard.as_ref())?
+        } else {
+            db
+        };
         *proj_guard = Some(project);
         // A session boundary (a project committed into the slot), bumped under
         // the guard per the `speleodb_session` rule.
@@ -322,7 +364,11 @@ impl AppState {
         // local-only ⇒ enabled (see do_load_project_full). Off the link read above,
         // which came from the same handle before `db` moves.
         let is_remote = speleo_link.is_some();
-        self.set_edit_enabled(!is_remote);
+        self.set_edit_enabled(
+            download
+                .as_ref()
+                .map_or(!is_remote, |(_, editing)| *editing),
+        );
 
         *self
             .database

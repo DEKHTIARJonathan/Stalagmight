@@ -301,10 +301,11 @@ pub enum SpeleoAccessVerification {
     Unavailable,
 }
 
-/// Consent to release local unpushed work belongs to this account and project.
+/// A transition belongs to this account, project session and local edit version.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub struct SpeleoReleaseContext {
+    pub project_modified_at: String,
     pub session_generation: String,
     pub project_id: String,
     pub endpoint: String,
@@ -336,8 +337,7 @@ pub struct SpeleoLoginResult {
 }
 
 /// [#206] The editable SpeleoDB project metadata, returned to the webview by
-/// `speleodb_get_project_metadata` (to prefill the Project Settings tab) and by
-/// `speleodb_patch_project` (the post-edit server truth). `description`/`country`
+/// `speleodb_get_project_metadata` for read-only project details. `description`/`country`
 /// are required server-side; `latitude`/`longitude` are the optional both-or-neither
 /// location pin.
 #[derive(Debug, Clone, Serialize, TS)]
@@ -367,22 +367,6 @@ impl SpeleoProjectMetadata {
             exclude_geojson: p.exclude_geojson,
         }
     }
-}
-
-/// [#206] A partial metadata edit from the webview. The frontend sends only the
-/// fields the user changed; the orchestration folds the `Some` fields into the
-/// `PATCH /projects/{id}/` body. `coordinates_edited` gates the location pin
-/// (both-or-neither): when true, `latitude`+`longitude` are sent (both `Some` =
-/// set the pin, both `None` = clear it); when false the pin is untouched.
-#[derive(Debug, Clone, Deserialize, TS)]
-pub struct SpeleoProjectMetadataPatch {
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub country: Option<String>,
-    pub visibility: Option<Visibility>,
-    pub coordinates_edited: bool,
-    pub latitude: Option<f64>,
-    pub longitude: Option<f64>,
 }
 
 /// [#207] Parameters for creating + publishing a local project on SpeleoDB. The

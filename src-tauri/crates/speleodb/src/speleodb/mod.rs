@@ -38,10 +38,10 @@ pub use contract::{SpeleoDbAction, TransportCause};
 pub use models::{
     DoneResult, Permission, PushResult, RemoteState, SpeleoAccessVerification, SpeleoErrorDto,
     SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult,
-    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary,
-    SpeleoPublishParams, SpeleoPublishResult, SpeleoReleaseContext, SpeleoRevision,
-    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult,
-    UnpushedLocalEdits, UpdateResult, Visibility,
+    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectSummary, SpeleoPublishParams,
+    SpeleoPublishResult, SpeleoReleaseContext, SpeleoRevision, SpeleoRewindTarget,
+    SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult, UnpushedLocalEdits, UpdateResult,
+    Visibility,
 };
 
 /// Errors from the SpeleoDB client and native-file handling.

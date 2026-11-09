@@ -1170,7 +1170,7 @@
       "title": "Settings"
     },
     "projectSettings": {
-      "title": "Project Settings",
+      "title": "Local settings",
       "noProject": "No project is open.",
       "saveFailed": "Failed to save project settings.",
       "tabs": {
@@ -2045,7 +2045,7 @@
       "zeroDatums": "Zero datums"
     },
     "projectSettings": {
-      "open": "Project Settings"
+      "open": "Local settings"
     },
     "closures": {
       "title": "Loop closures",
@@ -2667,7 +2667,7 @@
       "saveACopy": "Save a Copy",
       "saveAndClose": "Save and Close",
       "closeProject": "Close Project",
-      "projectSettings": "Project Settings",
+      "projectSettings": "Local settings",
       "projectDetails": "Project Details",
       "debug": "Debug",
       "devStats": "Dev Stats",
@@ -3408,12 +3408,14 @@
         "tookRemote": "Reset to the SpeleoDB version.",
         "takeRemoteFailed": "Could not take the SpeleoDB version",
         "notEditing": "Nothing was uploaded - you are not editing this project right now. Start editing again (signing in first if needed) to upload your changes."
-      }
+      },
+      "push": "Save Changes",
+      "unlock": "Switch to Read Only Mode"
     },
     "done": {
       "title": "Finish editing",
       "description": "Upload your changes to SpeleoDB and release the write lock.",
-      "pushTitle": "Push changes",
+      "pushTitle": "Save Changes",
       "pushDescription": "Upload your changes to SpeleoDB and keep the write lock so you can carry on editing.",
       "messageLabel": "Commit message",
       "messagePlaceholder": "Describe your changes…",
@@ -3463,11 +3465,6 @@
     "banner": {
       "pushUnconfirmed": "The upload could not be confirmed. Your changes are kept - click Done again to retry.",
       "renderingDisabled": "Web-map rendering is turned off for this project on SpeleoDB, so the online map won't refresh (it may show older geometry).",
-      "enableRendering": "Enable rendering",
-      "enableRenderingConfirm": "Rendering refreshes on your NEXT push, not right now (this does not re-render the current version). Enable it?",
-      "enableRenderingConfirmAction": "Enable rendering",
-      "enableRenderingBusy": "Enabling…",
-      "enableRenderingFailed": "Could not enable rendering",
       "pushFailed": "Your changes were NOT uploaded and are still only on this computer. {{message}}",
       "retryPush": "Retry upload",
       "startEditingToRetry": "Start editing to upload",
@@ -3564,31 +3561,6 @@
       "openRevisions": "Open revision history on the web",
       "unavailable": "Sign in to SpeleoDB to open this project on the web.",
       "failed": "Could not open your browser"
-    },
-    "projectSettings": {
-      "title": "Project details",
-      "loading": "Loading project details from SpeleoDB…",
-      "loadFailed": "Could not load project details",
-      "retry": "Retry",
-      "readOnlyBadge": "Read-only access",
-      "saveButton": "Save to SpeleoDB",
-      "saving": "Saving…",
-      "saveFailed": "Could not save to SpeleoDB",
-      "saved": "Saved to SpeleoDB.",
-      "coordinatesHint": "Latitude and longitude go together - fill in both or leave both blank.",
-      "fields": {
-        "name": "Name",
-        "description": "Description",
-        "country": "Country",
-        "latitude": "Latitude",
-        "longitude": "Longitude"
-      },
-      "rendering": {
-        "label": "Web-map rendering",
-        "enabledNote": "Rendering is enabled - the online map refreshes on each push.",
-        "enableButton": "Enable rendering",
-        "enabled": "Rendering enabled."
-      }
     },
     "publish": {
       "title": "Publish to SpeleoDB",

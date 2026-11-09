@@ -9,6 +9,7 @@
 
 use crate::core::undo::MAX_PERSISTED_HISTORY_ROWS;
 use crate::models::{SpeleoLink, UndoMode, UndoPolicy};
+#[cfg(test)]
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 
 use super::AppState;
@@ -65,6 +66,7 @@ impl AppState {
     ///
     /// Re-arms the depth bound immediately, so switching to Disabled starts trimming to
     /// the count window without waiting for a reload.
+    #[cfg(test)]
     pub fn speleodb_set_undo_mode(&self, mode: UndoMode) -> Result<(), SpeleoErrorDto> {
         // Save rewrites the whole database while holding `project`, then renames the
         // fresh file over the live one. Hold the same lock through this database edit so

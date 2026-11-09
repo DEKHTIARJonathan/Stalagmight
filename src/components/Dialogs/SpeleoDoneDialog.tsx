@@ -1,6 +1,5 @@
 import { permissionAtLeast } from '../../utils/speleoPermission';
 import { captureUploadOwner, getUploadContinuation, setUploadContinuation, uploadOwnerStillCurrent } from '../../utils/uploadContinuation';
-import { SpeleoWorkspaceAccount } from '../SingleSystemView/SpeleoWorkspaceAccount';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useEffect, useRef, useState } from 'react';
@@ -140,7 +139,7 @@ export default function SpeleoDoneDialog() {
       <div className="space-y-4">
         {!uploadAllowed && <div className="space-y-3" data-testid="speleodb-upload-blocked">
           <p role="status">Upload requires sign-in, write permission and the editing lock. Your work remains on this computer.</p>
-          {!loggedIn ? <SpeleoWorkspaceAccount /> : <Button onClick={() => void startEditing()} disabled={busyAny || link?.noAccess} data-testid="speleodb-upload-resume">Resume editing</Button>}
+          {!loggedIn ? <Button onClick={() => useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })} data-testid="speleodb-upload-sign-in">Sign in in Settings</Button> : <Button onClick={() => void startEditing()} disabled={busyAny || link?.noAccess} data-testid="speleodb-upload-resume">Resume editing</Button>}
         </div>}
         <p className="text-sm text-text-secondary">
           {mode === 'push' ? t('speleodb.done.pushDescription') : t('speleodb.done.description')}

@@ -347,16 +347,16 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
     const loadProject = vi.fn(async () => ({ success: true }));
     const refreshProjectState = vi.fn(async () => {});
     const refreshLinkStatus = vi.fn(async () => {});
-    useProjectStore.setState({ loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
-    useSpeleoStore.setState({ applyUpdate: vi.fn(), refreshLinkStatus });
-    invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/x.stalx' });
+    useProjectStore.setState({ isDirty: false, loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
+    useSpeleoStore.setState({ link: { hasUnpushedEdits: false } as never, applyUpdate: vi.fn(), refreshLinkStatus });
+    invokeIpcMock.mockImplementation(async (cmd) => cmd === 'speleodb_project_access_at' ? { release_context: {} } : { kind: 'fast_forwarded', local_path: '/x.stalx' });
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
       await result.current.update();
     });
 
-    expect(loadProject).toHaveBeenCalledWith('/x.stalx');
+    expect(loadProject).toHaveBeenCalledWith('/x.stalx', { acquireLock: false });
     expect(refreshProjectState).toHaveBeenCalled();
     expect(refreshLinkStatus).toHaveBeenCalled();
   });
@@ -376,7 +376,7 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
       await result.current.startEditing();
     });
 
-    expect(loadProject).toHaveBeenCalledWith('/y.stalx');
+    expect(loadProject).toHaveBeenCalledWith('/y.stalx', { acquireLock: false });
     expect(refreshProjectState).toHaveBeenCalled();
     expect(refreshLinkStatus).toHaveBeenCalled();
   });
@@ -416,9 +416,9 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
     const loadProject = vi.fn(async () => ({ success: false, superseded: true }));
     const refreshProjectState = vi.fn(async () => {});
     const refreshLinkStatus = vi.fn(async () => {});
-    useProjectStore.setState({ loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
-    useSpeleoStore.setState({ applyUpdate: vi.fn(), refreshLinkStatus });
-    invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/x.stalx' });
+    useProjectStore.setState({ isDirty: false, loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
+    useSpeleoStore.setState({ link: { hasUnpushedEdits: false } as never, applyUpdate: vi.fn(), refreshLinkStatus });
+    invokeIpcMock.mockImplementation(async (cmd) => cmd === 'speleodb_project_access_at' ? { release_context: {} } : { kind: 'fast_forwarded', local_path: '/x.stalx' });
     const { result } = renderHook(() => useSpeleoActions());
 
     await act(async () => {
@@ -543,7 +543,7 @@ describe('useSpeleoActions - discard routes every StartEditingResult (#303)', ()
 
     expect(outcome).toBe('editing');
     expect(applyStartEditing).toHaveBeenCalledWith(fastForwarded);
-    expect(loadProject).toHaveBeenCalledWith('/tip.stalx');
+    expect(loadProject).toHaveBeenCalledWith('/tip.stalx', { acquireLock: false });
 
     const divergence = { kind: 'divergence_needed' } as const;
     invokeIpcMock.mockResolvedValueOnce(divergence);

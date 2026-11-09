@@ -50,7 +50,7 @@ All paths below are relative to `/api/v2/`.
 | GET | `projects/` | List accessible native projects and lock states |
 | GET | `projects/{id}/` | Metadata, permission, mutex and short lock probes |
 | POST | `projects/` | Create a private/public project from publish metadata |
-| PATCH | `projects/{id}/` | Metadata, rendering and managed-type updates |
+| PATCH | `projects/{id}/` | Internal managed-type updates and publishing compatibility |
 | GET | `projects/{id}/revisions/` | Revision history and ancestry checks |
 | POST | `projects/{id}/acquire/` | Acquire the write lock |
 | POST | `projects/{id}/release/` | Release the individual project lock |
@@ -141,20 +141,31 @@ Opening SpeleoDB from the fullscreen table exits fullscreen without clearing tab
 selection or scroll. Navigation never acquires or releases a lock.
 
 The persistent header shows project identity, editing access, lock owner and
-connection status. Everyday controls are Upload changes, Release editing lock or
-Resume editing, Get latest version and Open on SpeleoDB. Expandable History,
-Project settings, Projects, and Account & connection sections hold the remaining
-controls. Only one section is expanded at a time. History includes inspection,
-restore/revert and Unwind/Rewind; revision editing remains Survey-only.
+connection status. Everyday controls are Save Changes, Switch to Read Only Mode or
+Resume editing, Reload Project and Open on SpeleoDB. History is the only expandable section. Close Project sits below Reload Project,
+warns about unsaved work, releases the editing lock on confirmed close and returns
+to the project listing. History includes inspection, restore/revert and
+Unwind/Rewind; revision editing remains Survey-only.
+
+Account sign-in, endpoint and connection management live exclusively in application
+Settings under SpeleoDB. Every sign-in link opens that category. A blocked save
+retains its project, validated description and Save-and-Close intent while Settings
+is open. Authentication returns to confirmation without saving or uploading.
+Changing project or account invalidates the continuation.
+
+Local settings retains project validation and elevation settings. Linked names are
+server-managed and cannot be renamed through local-settings IPC. There are no
+remote metadata, rendering, per-project undo-policy or administrative lock-recovery
+controls. Existing persisted undo-policy values remain respected. Creation and
+publishing retain their initial metadata inputs.
 
 The left dock reuses Sections' saved width and pin/hover preferences. SpeleoDB has
 a 320px minimum and a 400px maximum; constrained layouts float the dock over the
 map. Programmatic opening focuses the selected tab without changing the saved
 pin/hover preference. Keyboard focus inside keeps a floating dock accessible.
-Tabs, collapsed sections and hidden docks preserve drafts and scroll positions.
-Invalid drafts still require Discard changes / Cancel protection at project,
-account or server replacement and Quit. Metadata and connection changes require
-explicit Save/Apply. Status refreshes never submit or reset drafts.
+Tabs, collapsed sections and hidden docks preserve history state.
+Navigation never submits changes. Local settings remains available from the menu;
+Home retains local-project rename.
 
 Project-editor SpeleoDB menus and the old settings dialog are replaced by this
 workspace. Home retains sign-in, browsing, creation and local-project publishing.
@@ -162,7 +173,7 @@ Local project editors have no SpeleoDB tab.
 
 ## Save, switching and exit
 
-Menu Save, Cmd/Ctrl+S and Upload changes share one dispatcher. Local projects retain
+Menu Save, Cmd/Ctrl+S and Save Changes share one dispatcher. Local projects retain
 local Save. Linked projects open the upload dialog, including a blocked explanation
 when the editing lock is missing. Sign-in and Resume editing recover access without
 uploading automatically; the user confirms the upload afterward. A clean linked
@@ -183,10 +194,33 @@ Saved unuploaded work remains in the local file. Backend release consent remains
 scoped to the project, authenticated account and session generation. Another
 account's lock is never released by an ordinary exit.
 
-Explicit administrative lock recovery is separate and permission checked. The
-server has no atomic compare-and-release operation, so ownership changes between
-the final probe and POST remain a protocol limitation. An unreachable server or
-forcibly terminated process cannot guarantee server-side release.
+Switch to Read Only Mode refuses unsaved or unuploaded work, including direct IPC
+calls: "Save your changes using Save Changes before switching to read-only mode."
+It never discards or uploads. The clean check and release are serialized against
+mutations, and consent is bound to the project, account, session and edit version.
+Only the signed-in account's lock can be released. The server has no atomic
+compare-and-release operation; changes between the ownership probe and release
+remain a protocol limitation. Offline release failures leave the project open.
+
+Reload Project verifies live revision history without acquiring a lock. Pending
+work requires Discard changes / Cancel, explaining that saving first preserves it.
+Discard removes unsaved and unuploaded modifications. Historical checkouts and
+explicit discard return to the server version even if BASE already equals the tip.
+Equal clean revisions need no download. Reload preserves the existing editing mode;
+a failed download or validation preserves the current tree and pending work.
+
+Opening, Resume editing, held-lock resume and authentication recovery requesting
+editing all use Start Editing. It acquires or confirms the lock, fetches fresh
+revision history, resolves the tip from parent topology and reconciles BASE. Only
+verified newer descendants are downloaded, by exact revision. Cached listing
+metadata cannot prove freshness. Ambiguous history and unavailable verification
+cannot open the editing gate. Status refresh may close editing on confirmed lock
+or permission loss, but never enables editing. An already acquired session may
+continue local editing through transient disconnection. Offline opening remains
+read-only. In-place frontend reconciliation suppresses automatic acquisition.
+
+An unreachable server or forcibly terminated process cannot guarantee server-side
+release. Close, Quit and Save-and-Close retain their separate lifecycle behavior.
 
 ## Verification
 

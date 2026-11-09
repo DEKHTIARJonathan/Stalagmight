@@ -153,7 +153,7 @@ UI regression coverage must include:
   message and local edits available for retry.
 - Switching projects, closing a project, or quitting releases the editing lock
   automatically. These exits do not upload changes. The SpeleoDB workspace offers
-  Release editing lock to remain in the project read-only; Resume editing
+  Switch to Read Only Mode only when locally saved and uploaded; Resume editing
   retries editing when it becomes available. A different holder is never released.
   Local release/acquire/refresh operations are serialized.
 - Read-only users cannot acquire or upload; another user's mutex does not become
@@ -176,3 +176,18 @@ release failure. Verify ordinary upload retains the lock, Save and Close waits f
 confirmed upload/release, and autosave retry remains local-only. Inspect light and
 dark themes. Record real-app and live-server results separately from mocked browser
 checks in [the workspace acceptance record](plans/2026-11-08_speleodb-workspace.md).
+
+For the reduced workspace, verify Save Changes, Reload Project, Close Project and History,
+and absence of a Projects tab and metadata, rendering, undo-policy, account and admin forms. Sign-in
+must open application Settings and preserve the originating description and
+Save-and-Close intent without automatically uploading on return. Local settings
+remains available and direct IPC cannot rename a linked project.
+
+Acquisition tests must observe a live revisions request after acquire and no download
+for equal revisions. Cover stale listing hints, verified descendants, ambiguous
+history, failed downloads and status refresh never opening editing. Reload tests
+must cover cancellation, acknowledged discard, historical checkouts, mode preservation
+and safe failure. Direct read-only/reload calls and concurrent project/account/edit
+changes must reject stale consent. Use only synthetic data. Run only newly created
+or modified cases with explicit file and test-name filters, plus static gates;
+selected acceptance does not imply full-suite acceptance.

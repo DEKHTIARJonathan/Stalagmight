@@ -4,7 +4,7 @@
 
 Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. Saves are triggered manually (Ctrl+S), automatically via a frontend debounced timer, or by the first import into a new project whose initial save was deferred (`finalize_deferred_import` in `src-tauri/src/commands/import.rs`). A failed deferred-import save degrades to a successful import carrying a warning, never a hard failure, so the imported data stays in memory under the close-guard. The save pipeline is optimized to return quickly by deferring non-critical work to background threads and avoiding unnecessary recomputation.
 
-Menu Save, Cmd/Ctrl+S and the SpeleoDB workspace's Upload changes action share
+Menu Save, Cmd/Ctrl+S and the SpeleoDB workspace's Save Changes action share
 `dispatchProjectSave`. Local projects use the existing local save flow. Linked
 projects collect a required change description, save locally, then upload only with
 fresh permission and editing-lock verification. Missing locks show an explanation
@@ -19,6 +19,19 @@ the project open. Plain Close, project switching and Quit retain automatic lock
 release without upload and Discard changes / Cancel protection for unsaved work,
 including invalid workspace form drafts. Saved unuploaded work remains local. See
 [SpeleoDB integration](SpeleoDB.md) for navigation, ownership and offline behavior.
+
+Switch to Read Only Mode requires a clean local file and no unuploaded work. It
+refuses pending changes with Save Changes guidance and performs no implicit upload
+or discard. Reload Project offers Discard changes / Cancel for unsaved or unuploaded
+work and explains that saving first preserves it. Reload checks fresh revision
+history and returns historical checkouts to the server version without acquiring a
+lock or changing editing mode. Failure preserves current work. Consent and release
+are guarded against project/account changes and newer edits.
+
+Sign-in and connection management open application Settings on SpeleoDB. The Save
+description and Save-and-Close intent survive recovery for the originating project
+and account. Returning from Settings reopens confirmation; it never saves or uploads
+automatically. Local settings has no SpeleoDB metadata or account controls.
 
 Every import-into-new-project flow now creates its project deferred, so the
 `.stalx` appears on the first import rather than at the moment the name is typed

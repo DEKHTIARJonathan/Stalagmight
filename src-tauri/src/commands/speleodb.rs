@@ -23,13 +23,11 @@ use crate::core::AppState;
 // the typed SpeleoDbAction) instead of a flattened String, so the FE branches on
 // `err.action`. The orchestration `AppState::speleodb_*` methods build the DTO at
 // the call site where the endpoint is known.
-use crate::models::UndoMode;
 use crate::speleodb::{
     DoneResult, PushResult, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus,
     SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
-    SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
-    SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget,
-    StartEditingResult, UpdateResult,
+    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
+    SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -159,8 +157,15 @@ pub async fn speleodb_done(
 /// Read-only refresh of the open project against the server (#197): no lock is
 /// taken (UpToDate / FastForward / DivergenceNeeded).
 #[tauri::command]
-pub async fn speleodb_update(app: AppHandle) -> Result<UpdateResult, SpeleoErrorDto> {
-    run_blocking(app, AppState::speleodb_update).await
+pub async fn speleodb_update(
+    app: AppHandle,
+    discard_changes: Option<bool>,
+    expected: Option<stalagmight_core::speleodb::SpeleoReleaseContext>,
+) -> Result<UpdateResult, SpeleoErrorDto> {
+    run_blocking(app, move |s| {
+        s.speleodb_reload(discard_changes.unwrap_or(false), expected)
+    })
+    .await
 }
 
 /// Push the open project's edits to SpeleoDB WITHOUT releasing the lock (T2d):
@@ -365,28 +370,6 @@ pub async fn speleodb_rewind_target(
     run_blocking(app, AppState::speleodb_rewind_target).await
 }
 
-/// [#303] Set the open project's per-project undo-history policy
-/// (`speleo_link.undo_mode`).
-///
-/// EDIT-SESSION-REQUIRED: this writes the `.stalx`, which is project state that rides to
-/// the server in the next push, so every collaborator inherits it. It requires
-/// an acquired editing session.
-#[tauri::command]
-pub async fn speleodb_set_undo_mode(app: AppHandle, mode: UndoMode) -> Result<(), SpeleoErrorDto> {
-    run_blocking(app, move |s| s.speleodb_set_undo_mode(mode)).await
-}
-
-/// Set the open project's server-side `exclude_geojson` flag (#200
-/// Enable-rendering): `PATCH /projects/{id}/`, with fresh permission and lock verification. Passing
-/// `false` re-enables web-viewer GeoJSON, effective on the next push.
-#[tauri::command]
-pub async fn speleodb_set_exclude_geojson(
-    app: AppHandle,
-    exclude: bool,
-) -> Result<(), SpeleoErrorDto> {
-    run_blocking(app, move |s| s.speleodb_set_exclude_geojson(exclude)).await
-}
-
 /// Report whether the backend already holds a usable token (and for whom). The
 /// dialog calls this on open to restore the project list instead of re-prompting
 /// for credentials - the in-memory token outlives the dialog's React state.
@@ -445,18 +428,6 @@ pub async fn speleodb_get_project_metadata(
     run_blocking(app, AppState::speleodb_get_project_metadata).await
 }
 
-/// PATCH the open remote project's metadata with only the changed fields (#206):
-/// `PATCH /projects/{id}/`, permission-gated (READ_AND_WRITE), no lock. On a name
-/// change the SDB-authoritative name is folded into the local `.stalx` without
-/// dirtying. Returns the post-edit server truth.
-#[tauri::command]
-pub async fn speleodb_patch_project(
-    app: AppHandle,
-    patch: SpeleoProjectMetadataPatch,
-) -> Result<SpeleoProjectMetadata, SpeleoErrorDto> {
-    run_blocking(app, move |s| s.speleodb_patch_project(patch)).await
-}
-
 /// Create the open local project on SpeleoDB and push its first revision (#207):
 /// `POST /projects/` → relocate into the cache → acquire → upload → release. Returns
 /// the new project id, endpoint, and cache `local_path` the frontend reloads.
@@ -470,25 +441,13 @@ pub async fn speleodb_publish(
 
 // Release the open project's lock.
 
-/// Release the lock on the linked project (own lock, or an ADMIN force-release of
-/// another user's lock). Does not push; a recovery action for a stuck lock.
+/// Switch a clean linked project to read-only, releasing only our own lock.
 #[tauri::command]
 pub async fn speleodb_release_current_lock(
     app: AppHandle,
-    own_only: Option<bool>,
-    allow_unpushed: Option<bool>,
     expected: Option<stalagmight_core::speleodb::SpeleoReleaseContext>,
-    discard_unsaved: Option<bool>,
 ) -> Result<(), SpeleoErrorDto> {
-    run_blocking(app, move |s| {
-        s.speleodb_release_current_lock_with_discard(
-            own_only.unwrap_or(false),
-            allow_unpushed.unwrap_or(false),
-            expected,
-            discard_unsaved.unwrap_or(false),
-        )
-    })
-    .await
+    run_blocking(app, move |s| s.speleodb_release_current_lock(expected)).await
 }
 
 /// Read access restrictions before opening a linked SQLite project from disk.

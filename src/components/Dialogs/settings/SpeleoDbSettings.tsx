@@ -1,4 +1,4 @@
-import { registerWorkspaceDraft } from '../../../utils/workspaceDrafts';
+import { finishSpeleoSettings } from '../../../utils/finishSpeleoSettings';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Toggle } from '../../common/Toggle';
@@ -22,11 +22,8 @@ export function SpeleoDbSettings({
   onChange,
   changedFields,
   panelIdBase,
-  embedded = false,
-  isApplying,
-}: SettingsCategoryProps & { embedded?: boolean; isApplying?: () => boolean }) {
+}: SettingsCategoryProps) {
   const { t } = useTranslation();
-  const closeDialog = useUIStore((s) => s.closeDialog);
   const session = useSpeleoStore((s) => s.session);
   const refreshSession = useSpeleoStore((s) => s.refreshSession);
   const pendingAuth = useSpeleoStore((s) => s.pendingAuth);
@@ -41,21 +38,6 @@ export function SpeleoDbSettings({
   const connectionRef = useRef(speleo);
   connectionRef.current = speleo;
   const [loggingIn, setLoggingIn] = useState(false);
-  const loggingRef = useRef(false);
-  const draft = useRef({ pendingAuth, isApplying });
-  draft.current = { pendingAuth, isApplying };
-  useEffect(() => {
-    if (!embedded) return;
-    return registerWorkspaceDraft({
-      dirty: () => {
-        const value = draft.current.pendingAuth;
-        return !loggingRef.current && !draft.current.isApplying?.() && value?.kind === 'login' &&
-          !!(value.email || value.password || value.token);
-      },
-      discard: () => useSpeleoStore.getState().clearPendingAuth(),
-    });
-  }, [embedded]);
-
   useEffect(() => {
     void refreshSession();
   }, [refreshSession]);
@@ -81,7 +63,6 @@ export function SpeleoDbSettings({
     // (zustand `set` is synchronous, so the subsequent read sees this).
     if (pendingAuth?.kind !== 'login') setPendingAuth(login);
     const issuedDialog = useUIStore.getState().dialogData;
-    loggingRef.current = true;
     setLoggingIn(true);
     try {
       const result = await applyPendingAuth(speleo.endpoint);
@@ -89,16 +70,15 @@ export function SpeleoDbSettings({
       // A slow login may finish after Settings was dismissed or replaced.
       // Its session still applies, but it must not close or edit the new dialog.
       const currentDialog = useUIStore.getState();
-      if (!embedded && (currentDialog.activeDialog !== 'settings' || currentDialog.dialogData !== issuedDialog)) return;
+      if (currentDialog.activeDialog !== 'settings' || currentDialog.dialogData !== issuedDialog) return;
       if (result.ok) {
         const endpoint = useSpeleoStore.getState().session?.endpoint;
         if (endpoint && connectionRef.current === speleo) onChange({ speleodb: { ...speleo, endpoint } });
-        if (!embedded) closeDialog();
+        finishSpeleoSettings();
       } else {
         setAuthError(humanizeSpeleoError(result.error, t('speleodb.errors.loginFailed')));
       }
     } finally {
-      loggingRef.current = false;
       setLoggingIn(false);
     }
   };
@@ -114,9 +94,9 @@ export function SpeleoDbSettings({
 
   return (
     <div
-      role={embedded ? undefined : 'tabpanel'}
+      role="tabpanel"
       id={getPanelId(panelIdBase, 'speleodb')}
-      aria-labelledby={embedded ? undefined : getTabId(panelIdBase, 'speleodb')}
+      aria-labelledby={getTabId(panelIdBase, 'speleodb')}
       data-testid="settings-panel-speleodb"
     >
       <h2 className="text-lg font-medium mb-4">{t('settings.speleodb.title')}</h2>

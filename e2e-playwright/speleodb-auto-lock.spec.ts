@@ -51,7 +51,7 @@ test('opening acquires silently; workspace release stays open and does not reacq
   await openRemote(page, false);
   const status = page.getByTestId('speleodb-status-button');
   await status.click();
-  await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Release editing lock');
+  await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Switch to Read Only Mode');
   await expect(page.getByTestId('speleodb-read-only-dialog')).toHaveCount(0);
   await page.getByTestId('speleodb-workspace-editing').click();
   await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Resume editing');
@@ -59,7 +59,7 @@ test('opening acquires silently; workspace release stays open and does not reacq
   expect(await page.evaluate(() => (window as unknown as { __lockCalls: string[] }).__lockCalls)).toEqual(['acquire', 'release']);
   await status.click();
   await page.getByTestId('speleodb-workspace-editing').click();
-  await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Release editing lock');
+  await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Switch to Read Only Mode');
 });
 
 test('contended open shows one read-only modal naming the actual editor', async ({ page }) => {
@@ -75,20 +75,17 @@ test('contended open shows one read-only modal naming the actual editor', async 
 });
 
 
-test('Sections-first tabs preserve metadata drafts and keyboard navigation without taking locks', async ({ page }) => {
+test('workspace contains everyday controls and History without project or settings tabs', async ({ page }) => {
   await openRemote(page, false);
-  await expect(page.getByTestId('workspace-tab-sections')).toHaveAttribute('aria-selected', 'true');
   await page.getByTestId('speleodb-status-button').click();
-  await expect(page.getByTestId('workspace-tab-speleodb')).toBeFocused();
-  await page.getByTestId('speleodb-workspace-section-settings').click();
-  const name = page.getByTestId('speleodb-settings-name');
-  await name.fill('Unfinished synthetic draft');
-  await page.getByTestId('workspace-tab-sections').click();
-  await page.getByTestId('workspace-tab-sections').press('ArrowRight');
-  await expect(name).toHaveValue('Unfinished synthetic draft');
-  await page.getByTestId('speleodb-workspace-section-settings').click();
-  await page.getByTestId('speleodb-workspace-section-settings').click();
-  await expect(name).toHaveValue('Unfinished synthetic draft');
+  await expect(page.getByTestId('speleodb-workspace-upload')).toHaveText('Save Changes');
+  await expect(page.getByTestId('speleodb-workspace-latest')).toHaveText('Reload Project');
+  await expect(page.getByTestId('speleodb-workspace-section-history')).toBeVisible();
+  await expect(page.getByTestId('speleodb-workspace-section-projects')).toHaveCount(0);
+  await expect(page.getByTestId('speleodb-workspace-close')).toHaveText('Close Project');
+  await expect(page.getByTestId('speleodb-workspace-section-settings')).toHaveCount(0);
+  await expect(page.getByTestId('speleodb-workspace-section-account')).toHaveCount(0);
+  await expect(page.getByTestId('speleodb-settings-name')).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as { __lockCalls: string[] }).__lockCalls)).toEqual(['acquire']);
 });
 
@@ -144,42 +141,71 @@ test('upload saves locally, retains the lock, and a released lock blocks a subse
   await page.getByTestId('speleodb-done-message').fill('Synthetic survey update');
   await page.getByTestId('speleodb-done-confirm').click();
   await expect(page.getByTestId('speleodb-done-dialog')).toHaveCount(0);
-  await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Release editing lock');
+  await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Switch to Read Only Mode');
   await page.getByTestId('speleodb-workspace-editing').click();
   await page.getByTestId('speleodb-workspace-upload').click();
   await expect(page.getByTestId('speleodb-upload-blocked')).toBeVisible();
   await expect(page.getByTestId('speleodb-done-confirm')).toBeDisabled();
 });
 
-test('invalid metadata drafts protect close, project replacement and server changes', async ({ page }) => {
+test('read-only switching refuses unuploaded work and sign-in opens application Settings', async ({ page }) => {
   await openRemote(page, false);
+  await page.evaluate(() => {
+    const store = (window as unknown as TestWindow).__E2E_TEST__.speleoStore;
+    store.setState({ link: { ...store.getState().link!, hasUnpushedEdits: true } });
+  });
   await page.getByTestId('speleodb-status-button').click();
-  await page.getByTestId('speleodb-workspace-section-settings').click();
-  await page.getByTestId('speleodb-settings-latitude').fill('91');
-  await expect(page.getByTestId('speleodb-settings-save')).toBeDisabled();
+  await page.getByTestId('speleodb-workspace-editing').click();
+  await expect(page.getByTestId('error-dialog')).toContainText('Save your changes using Save Changes');
+  expect(await page.evaluate(() => (window as unknown as { __lockCalls: string[] }).__lockCalls)).toEqual(['acquire']);
   await page.evaluate(() => {
     const w = window as unknown as TestWindow;
-    w.__MOCK_IPC_OVERRIDES__['plugin:dialog|confirm'] = false;
-    w.__MOCK_IPC_OVERRIDES__.speleodb_list_projects = [{
-      id: 'synthetic-next', name: 'Synthetic next project', type_tag: 'stalx',
-      latest_commit_sha: null, permission: 'READ_AND_WRITE', lock_holder: null,
-    }];
+    w.__E2E_TEST__.uiStore.getState().closeDialog();
+    w.__MOCK_IPC_OVERRIDES__.speleodb_session = { logged_in: false, user_email: null, endpoint: 'https://example.com' };
+    w.__E2E_TEST__.speleoStore.setState({ session: null, link: { ...w.__E2E_TEST__.speleoStore.getState().link!, editState: 'read-only' } });
   });
-  const closed = await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.getState().closeProject());
-  expect(closed.success).toBe(false);
-  await expect(page.getByTestId('speleodb-settings-latitude')).toHaveValue('91');
-  await page.getByTestId('speleodb-workspace-section-projects').click();
-  const open = page.getByTestId('open-from-speleodb-open-synthetic-next');
-  await expect(open).toBeEnabled();
-  await open.click();
-  await expect(open).toBeEnabled();
-  await expect(page.getByTestId('open-from-speleodb-error')).toHaveCount(0);
-  await page.getByTestId('speleodb-workspace-section-account').click();
-  await page.getByTestId('input-speleodb-endpoint').fill('https://different.synthetic.example');
-  await page.getByTestId('speleodb-workspace-apply-connection').click();
-  await expect(page.getByTestId('speleodb-workspace-apply-connection')).toBeEnabled();
-  await page.getByTestId('speleodb-workspace-section-settings').click();
-  await expect(page.getByTestId('speleodb-settings-latitude')).toHaveValue('91');
-  await expect(page.getByTestId('speleodb-settings-save')).toBeDisabled();
+  await page.getByTestId('speleodb-workspace-editing').click();
+  await expect(page.getByTestId('settings-panel-speleodb')).toBeVisible();
+  await expect(page.getByTestId('speleodb-account-login-form')).toBeVisible();
+});
+
+
+test('workspace Close Project warns for unsaved work, cancels safely and closes to the listing', async ({ page }) => {
+  await openRemote(page, false);
+  await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.setState({ isDirty: true }));
+  await page.getByTestId('speleodb-status-button').click();
+  await page.getByTestId('speleodb-workspace-close').click();
+  await expect(page.getByTestId('speleodb-close-dialog')).toBeVisible();
+  await page.getByTestId('speleodb-close-cancel').click();
+  await expect(page.getByTestId('single-system-view')).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.getState().isDirty)).toBe(true);
+  await page.getByTestId('speleodb-workspace-close').click();
+  await page.getByTestId('speleodb-close-discard').click();
+  await expect(page.getByTestId('global-view')).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.getState().project)).toBeNull();
+});
+
+
+test('Settings authentication returns the Save description and close intent without uploading', async ({ page }) => {
+  await openRemote(page, false);
+  await page.evaluate(() => {
+    const w = window as unknown as TestWindow;
+    w.__MOCK_IPC_OVERRIDES__.speleodb_session = { logged_in: false, user_email: null, endpoint: 'https://example.com' };
+    w.__MOCK_IPC_OVERRIDES__.speleodb_login = { user_email: 'me@example.com', endpoint: 'https://example.com' };
+    for (const cmd of ['speleodb_push', 'speleodb_done', 'save_project']) {
+      Object.defineProperty(w.__MOCK_IPC_OVERRIDES__, cmd, { get: () => { throw new Error('Authentication must not save or upload'); } });
+    }
+    w.__E2E_TEST__.speleoStore.setState({ session: null, link: { ...w.__E2E_TEST__.speleoStore.getState().link!, editState: 'read-only', hasUnpushedEdits: true } });
+    w.__E2E_TEST__.uiStore.getState().openDialog('speleodb-done', { mode: 'push', closeAfterSave: true });
+  });
+  await page.getByTestId('speleodb-done-message').fill('Validated synthetic survey update');
+  await page.getByTestId('speleodb-upload-sign-in').click();
+  await expect(page.getByTestId('settings-panel-speleodb')).toBeVisible();
+  await page.getByTestId('speleodb-settings-email').fill('me@example.com');
+  await page.getByTestId('speleodb-settings-password').fill('synthetic-password');
+  await page.getByTestId('speleodb-settings-try-login').click();
+  await expect(page.getByTestId('speleodb-done-dialog')).toBeVisible();
+  await expect(page.getByTestId('speleodb-done-message')).toHaveValue('Validated synthetic survey update');
+  expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.uiStore.getState().dialogData.closeAfterSave)).toBe(true);
   await expect(page.getByTestId('single-system-view')).toBeVisible();
 });

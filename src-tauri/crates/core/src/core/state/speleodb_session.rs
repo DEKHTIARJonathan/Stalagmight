@@ -37,8 +37,6 @@
 //!   before the earliest of them, not at the acquire.
 //! - Every reclaim-checked release, across check -> POST, so a claim cannot
 //!   be minted between a release's decision and its network call.
-//! - The status refresh's inherited-lock gate reopen, across its holder re-read
-//!   and the gate ([`AppState::speleodb_reopen_gate_for_inherited_lock`]).
 //! - LOGOUT, which ends an edit session and hands its mutex back. It is the
 //!   one boundary the identity check cannot see (the project slot never
 //!   moves), so excluding it from the spans above is what lets the
@@ -368,86 +366,7 @@ impl AppState {
         self.speleodb_release_unless_reclaimed_locked(params)
     }
 
-    /// The status refresh's inherited-lock gate reopen: enable editing on the open
-    /// remote project because the SERVER says this account already holds its
-    /// mutex - re-asked and committed inside the lock-ops span, so the answer
-    /// cannot go stale between the asking and the gate.
-    ///
-    /// The refresh's own `get_project` cannot license this. It is one read in a
-    /// sequence of several, and a captured or janitor release for this very
-    /// project can complete between that read and the gate: the release's
-    /// reclaim check looks for a claim record (none - the refresh never minted one)
-    /// and a live edit session (none - the gate is still SHUT, which is exactly
-    /// why the refresh is here), so it rightly POSTs and frees the mutex. Opening
-    /// the gate from the earlier read then leaves a session editing a remote
-    /// project with no server lock behind it and no record saying so - the one
-    /// state the whole lock protocol is built to prevent.
-    ///
-    /// So the holder is read AGAIN under `speleodb_lock_ops`, and the gate opens
-    /// in the same span. A release either finished first (the re-read finds the
-    /// mutex free or someone else's, and the gate stays shut - the user can
-    /// Start Editing to take it properly) or has not started (it will find the
-    /// open gate and stand down, per
-    /// [`Self::speleodb_live_session_accounts_for`]).
-    ///
-    /// Commits through [`Self::speleodb_commit_editing`] with `acquired_here`
-    /// false: an inherited lock is an edit session, never an acquisition. A
-    /// failed re-read declines to reopen - "cannot say" must not enable editing.
-    pub(super) fn speleodb_reopen_gate_for_inherited_lock(
-        &self,
-        link: &crate::models::SpeleoLink,
-    ) -> bool {
-        // The guard comes FIRST, before the account is read. Everything after it
-        // - the account, the holder, the gate - describes one moment, and a
-        // LOGIN is what can move that moment: it swaps the whole session in one
-        // write, and it takes this same guard (see `speleodb_login`). Reading
-        // the account before the guard let a sign-in as somebody else land in
-        // between, so this went on to confirm the PREVIOUS account's lock with
-        // the previous account's token and opened the edit gate for the new one -
-        // free to mutate a project whose mutex their credentials do not hold.
-        let _lock_ops = self.speleodb_lock_ops_guard();
-        // One read, so the holder comparison below cannot pair one account's
-        // endpoint with another's email (`speleodb_active_account`).
-        let Ok((generation, open)) = self.speleodb_session_snapshot() else {
-            return false;
-        };
-        if open.project_id != link.project_id || open.endpoint != link.endpoint {
-            return false;
-        }
-        let Ok((endpoint, token, me)) = self.speleodb_active_account() else {
-            return false;
-        };
-        if normalize_endpoint(&endpoint) != normalize_endpoint(&link.endpoint) {
-            return false;
-        }
-        let insecure_http = self.speleodb_insecure_http();
-        let remote = match client::get_project(&endpoint, &token, insecure_http, &link.project_id) {
-            Ok(remote) => remote,
-            Err(e) => {
-                tracing::debug!(
-                    error = %e,
-                    project_id = %link.project_id,
-                    purpose = "confirm we still hold the lock before reopening the gate",
-                    "speleodb: could not re-read the lock holder; leaving the project read-only"
-                );
-                return false;
-            }
-        };
-        let holder = remote
-            .active_mutex
-            .as_ref()
-            .map(|mutex| mutex.user.as_str());
-        if !remote
-            .permission
-            .is_some_and(|permission| permission >= crate::speleodb::Permission::ReadAndWrite)
-            || !super::speleodb::lock_held_by_me(holder, Some(me.as_str()))
-        {
-            return false;
-        }
-        self.speleodb_commit_editing(Some(generation), &link.project_id, false)
-            .is_ok()
-    }
-
+    /// A live edit session protects an inherited lock without claiming authorship.
     pub(super) fn speleodb_live_session_accounts_for(
         &self,
         project_id: &str,
@@ -512,15 +431,8 @@ impl AppState {
     /// releasing session down from the lock, then hand it back - all inside ONE
     /// lock-ops span.
     ///
-    /// The stand-down is the gate, and it belongs here rather than at the point
-    /// the release was spawned. The status refresh reopens a shut gate whenever the
-    /// server says this account still holds the mutex
-    /// ([`Self::speleodb_reopen_gate_for_inherited_lock`]), and between spawning
-    /// a release and running it that is exactly the state a caller-side shut
-    /// would leave behind - the refresh takes the guard first, resurrects the gate,
-    /// and the reclaim check below then stands down for a session the switch or
-    /// the exit is about to destroy. Inside this span there is no such window:
-    /// the gate closes and the decision is made without anything in between.
+    /// Closing the gate and deciding release share one lock-ops span so a new
+    /// Start Editing cannot resume the session between these operations.
     ///
     /// `entry_gen` is the session generation read when the release was decided.
     /// Unchanged, the gate still belongs to the session that decided to hand the

@@ -440,12 +440,12 @@ interface UIStore {
   // Left workspace navigation is session-only and never changes lock ownership.
   leftWorkspace: 'sections' | 'speleodb';
   surveyLeftWorkspace: 'sections' | 'speleodb';
-  speleoWorkspaceSection: 'history' | 'settings' | 'projects' | 'account' | null;
+  speleoWorkspaceSection: 'history' | null;
   speleoRevealNonce: number;
   speleoOutsideSurvey: boolean;
   leftWorkspaceVisible: boolean;
   selectLeftWorkspace: (tab: 'sections' | 'speleodb') => void;
-  openSpeleoWorkspace: (section?: 'history' | 'settings' | 'projects' | 'account') => void;
+  openSpeleoWorkspace: (section?: 'history') => void;
   resetLeftWorkspace: () => void;
 
   // Panel state
@@ -2023,14 +2023,10 @@ export const useUIStore = create<UIStore>((set) => ({
   dialogData: {},
   dmpImportWizardPhase: null,
   openDialog: (activeDialog, dialogData = {}) => {
-    if (activeDialog === 'speleodb-projects') {
-      useUIStore.getState().closeDialog();
-      useUIStore.getState().openSpeleoWorkspace('projects');
-      return;
-    }
+    if (activeDialog === 'speleodb-projects') activeDialog = 'open-from-speleodb';
     if (activeDialog === 'speleodb-project') {
       useUIStore.getState().closeDialog();
-      useUIStore.getState().openSpeleoWorkspace(dialogData.tab === 'history' ? 'history' : 'settings');
+      useUIStore.getState().openSpeleoWorkspace('history');
       return;
     }
     const prev = useUIStore.getState().activeDialog;

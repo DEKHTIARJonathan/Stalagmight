@@ -1,33 +1,18 @@
 import { useEffect, useState } from 'react';
 import { SpeleoHistorySteps } from './SpeleoHistorySteps';
-import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { useSpeleoWebLink } from '../../hooks/useSpeleoWebLink';
-import { useSpeleoProjectMetadata, type SpeleoProjectMetadataState } from '../../hooks/useSpeleoProjectMetadata';
 import { releaseOpenProjectLock } from '../../utils/releaseOpenProjectLock';
 import { permissionAtLeast } from '../../utils/speleoPermission';
 import { dispatchProjectSave } from '../../utils/dispatchProjectSave';
-import { SpeleoDbGeneralTab } from '../Dialogs/settings/SpeleoDbGeneralTab';
-import { SpeleoAdminTab } from '../Dialogs/settings/SpeleoAdminTab';
 import { SpeleoRevisionHistory } from '../Dialogs/settings/SpeleoRevisionHistory';
-import OpenFromSpeleoDbDialog from '../Dialogs/OpenFromSpeleoDbDialog';
-import { SpeleoWorkspaceAccount } from './SpeleoWorkspaceAccount';
+import { useProject } from '../../hooks/useProject';
 import { Button } from '../common/Button';
 
-const areas = [
-  ['history', 'History'], ['settings', 'Project settings'],
-  ['projects', 'Projects'], ['account', 'Account & connection'],
-] as const;
-
-function MetadataSave({ metadata, busy }: { metadata: SpeleoProjectMetadataState; busy: boolean }) {
-  const { t } = useTranslation();
-  return <Button onClick={() => void metadata.handleSave()} disabled={!metadata.canSave || busy} data-testid="speleodb-settings-save">
-    {t('speleodb.projectSettings.saveButton')}
-  </Button>;
-}
+const areas = [['history', 'History']] as const;
 
 /** Single persistent body: accordion navigation hides content without unmounting drafts. */
 export function SpeleoWorkspace() {
@@ -38,8 +23,8 @@ export function SpeleoWorkspace() {
   const [visited, setVisited] = useState(() => new Set<string>());
   useEffect(() => { if (expanded) setVisited((old) => new Set([...old, expanded])); }, [expanded]);
   const { busy, startEditing, update } = useSpeleoActions();
+  const { handleCloseProject } = useProject();
   const web = useSpeleoWebLink();
-  const metadata = useSpeleoProjectMetadata();
   if (!link) return null;
   const editing = link.editState === 'editing';
   const canResume = session?.loggedIn && !link.noAccess && permissionAtLeast(link.permission, 'READ_AND_WRITE');
@@ -54,12 +39,13 @@ export function SpeleoWorkspace() {
         {link.hasUnpushedEdits && <p className="text-warning">Changes on this computer have not been uploaded.</p>}
       </div>
       <div className="shrink-0 grid gap-2" data-testid="speleodb-workspace-everyday">
-        <Button variant="primary" onClick={() => void dispatchProjectSave()} disabled={busy} data-testid="speleodb-workspace-upload">Upload changes</Button>
-        <Button onClick={() => editing ? void releaseOpenProjectLock() : canResume ? void startEditing() : useUIStore.getState().openSpeleoWorkspace('account')}
+        <Button variant="primary" onClick={() => void dispatchProjectSave()} disabled={busy} data-testid="speleodb-workspace-upload">Save Changes</Button>
+        <Button onClick={() => editing ? void releaseOpenProjectLock() : canResume ? void startEditing() : useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })}
           disabled={busy || (session?.loggedIn === true && !canResume && !editing)} data-testid="speleodb-workspace-editing">
-          {editing ? 'Release editing lock' : session?.loggedIn ? 'Resume editing' : 'Sign in to resume editing'}
+          {editing ? 'Switch to Read Only Mode' : session?.loggedIn ? 'Resume editing' : 'Sign in to resume editing'}
         </Button>
-        <Button onClick={() => void update()} disabled={busy || !session?.loggedIn || link.noAccess || (link.permission !== null && !permissionAtLeast(link.permission, 'READ_ONLY'))} data-testid="speleodb-workspace-latest">Get latest version</Button>
+        <Button onClick={() => void update()} disabled={busy || !session?.loggedIn || link.noAccess || (link.permission !== null && !permissionAtLeast(link.permission, 'READ_ONLY'))} data-testid="speleodb-workspace-latest">Reload Project</Button>
+        <Button onClick={() => void handleCloseProject()} disabled={busy} data-testid="speleodb-workspace-close">Close Project</Button>
         <Button onClick={web.open} disabled={!web.url} data-testid="speleodb-workspace-open-web">Open on SpeleoDB</Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto" data-testid="speleodb-workspace-sections">
@@ -74,14 +60,6 @@ export function SpeleoWorkspace() {
           <div id={`speleodb-area-${id}`} hidden={expanded !== id} className="space-y-3">
             {(visited.has(id) || expanded === id) && <>
             {id === 'history' && <><SpeleoHistorySteps /><SpeleoRevisionHistory /></>}
-            {id === 'settings' && <>
-              <SpeleoDbGeneralTab metadata={metadata} />
-              {metadata.saveError && <p role="alert" className="text-error">{metadata.saveError}</p>}
-              <MetadataSave metadata={metadata} busy={busy} />
-              {(editing || link.permission === 'ADMIN') && <SpeleoAdminTab />}
-            </>}
-            {id === 'projects' && <OpenFromSpeleoDbDialog embedded />}
-            {id === 'account' && <SpeleoWorkspaceAccount />}
             </>}
           </div>
         </section>

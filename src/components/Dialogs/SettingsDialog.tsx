@@ -1,3 +1,4 @@
+import { finishSpeleoSettings } from '../../utils/finishSpeleoSettings';
 import { useState, useEffect, useCallback, useRef, useMemo, useId } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -367,7 +368,7 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
 
 export default function SettingsDialog() {
   const { t } = useTranslation();
-  const { closeDialog } = useUIStore();
+  const closeDialog = finishSpeleoSettings;
   const resolvedTheme = useUIStore((s) => s.resolvedTheme);
   const setThemePreview = useUIStore((s) => s.setThemePreview);
   const setSyntacticHighlightPreview = useUIStore((s) => s.setSyntacticHighlightPreview);

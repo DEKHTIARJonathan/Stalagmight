@@ -367,7 +367,10 @@ impl AppState {
             insecure_http,
             link,
             tip,
-            LocalEditsPolicy::Discard,
+            (
+                LocalEditsPolicy::Discard,
+                self.speleodb_session_generation(),
+            ),
         )
         .map_err(local_dto)
     }
@@ -437,7 +440,8 @@ impl AppState {
         if !keep_lock {
             // Hand it back. `None` rather than a fabricated editing result, so no caller
             // can mistake a released project for one it may still write to.
-            self.speleodb_release_current_lock(true, false, None)?;
+            self.speleodb_release_held_lock_best_effort();
+            self.set_edit_enabled(false);
             return Ok(None);
         }
         // Re-acquire through the ordinary verb rather than by hand, so the fence, the
@@ -447,93 +451,88 @@ impl AppState {
         self.speleodb_start_editing().map(Some)
     }
 
-    /// Read-only refresh of the open project against the server (#197): no lock is
-    /// taken. UpToDate / FastForward (re-pull + reload) / DivergenceNeeded.
+    /// Reload never acquires a lock. Discard consent belongs to one backend session.
+    pub fn speleodb_reload(
+        &self,
+        discard_changes: bool,
+        expected: Option<crate::speleodb::SpeleoReleaseContext>,
+    ) -> Result<UpdateResult, SpeleoErrorDto> {
+        let _lock_ops = self.speleodb_lock_ops_guard();
+        let _commands = self
+            .command_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.speleodb_check_expected_context(expected.as_ref())?;
+        self.speleodb_reload_locked(discard_changes)
+    }
+
+    #[cfg(test)]
     pub fn speleodb_update(&self) -> Result<UpdateResult, SpeleoErrorDto> {
+        self.speleodb_reload_locked(false)
+    }
+
+    fn speleodb_reload_locked(
+        &self,
+        discard_changes: bool,
+    ) -> Result<UpdateResult, SpeleoErrorDto> {
+        let generation = self.speleodb_session_generation();
+        if !discard_changes {
+            let project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.speleodb_require_clean_project(project.as_ref())?;
+        }
         let link = self.speleodb_validated_link()?;
+        if link.has_unpushed_edits && !discard_changes {
+            return Err(local_dto(SpeleoDbError::Io(
+                "Reload Project requires confirmation to discard unsaved and unuploaded changes. Saving first preserves your work.".into(),
+            )));
+        }
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
-
         let (tip, commits) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
             self.speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
         })
         .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
-
-        // [#303] A copy that is dirty ONLY because a chain step walked it back is not a
-        // reconciliation problem, it is a copy sitting somewhere the user asked to look.
-        // "Refresh from SpeleoDB" should therefore do what it says and return them to the
-        // tip - so it discards the walk rather than consulting the verdict.
-        //
-        // The verdict cannot help here anyway: a restore stamps BASE at the server tip, so
-        // BASE == tip and `reconcile_verdict` answers UpToDate. Update then reported
-        // "already up to date" while the user was staring at an older survey, which is the
-        // least useful true statement available.
-        if link.has_unpushed_edits && self.speleodb_unwound_from().is_some() {
-            tracing::info!(
-                project_id = %link.project_id,
-                purpose = "refresh from SpeleoDB while mid-walk (#303)",
-                "discarding an unwound copy and returning to the server tip"
-            );
-            let local_path = self.speleodb_return_to_tip_discarding(
+        if generation != self.speleodb_session_generation() {
+            return Err(local_dto(SpeleoDbError::SessionMoved));
+        }
+        if tip.is_none() && !commits.is_empty() {
+            return Ok(UpdateResult::DivergenceNeeded);
+        }
+        let verdict = sync::reconcile_verdict(
+            link.base_commit_sha.as_deref(),
+            tip.as_deref(),
+            link.has_unpushed_edits,
+            &commits,
+        );
+        let replace = discard_changes || self.speleodb_unwound_from().is_some();
+        if !replace {
+            match verdict {
+                ReconcileVerdict::UpToDate => return Ok(UpdateResult::UpToDate),
+                ReconcileVerdict::Diverged => return Ok(UpdateResult::DivergenceNeeded),
+                ReconcileVerdict::FastForward => {}
+            }
+        }
+        let local_path = self
+            .speleodb_fast_forward(
                 &endpoint,
                 &token,
                 insecure_http,
                 &link,
                 tip.as_deref(),
-            )?;
-            return Ok(UpdateResult::FastForwarded { local_path });
-        }
-
-        match sync::reconcile_verdict(
-            link.base_commit_sha.as_deref(),
-            tip.as_deref(),
-            link.has_unpushed_edits,
-            &commits,
-        ) {
-            ReconcileVerdict::UpToDate => Ok(UpdateResult::UpToDate),
-            ReconcileVerdict::FastForward => {
-                let was_editing = self.edit_enabled();
-                // Captured BEFORE the reload, which shuts the gate and lets a refresh
-                // landing in that window clear the record: this is the last point the
-                // pre-reload truth exists. Kept SEPARATE from `was_editing` on
-                // purpose - the gate is a permission ("may I edit?"), the record is
-                // provenance ("did I take this lock?"), and the refresh at the bottom of
-                // `speleodb_link_status` can re-derive the gate from nothing but a
-                // matching holder email. Restoring the record from the gate would
-                // therefore mint provenance for a lock this process never took - an
-                // inherited or sibling-session lock - and license it to explain away
-                // another session's commit as our own unrecorded push.
-                let had_lock_record = self.speleodb_lock_acquired_here(&link.project_id);
-                let local_path = self
-                    .speleodb_fast_forward(
-                        &endpoint,
-                        &token,
-                        insecure_http,
-                        &link,
-                        tip.as_deref(),
-                        LocalEditsPolicy::Protect,
-                    )
-                    .map_err(local_dto)?;
-                if was_editing {
-                    self.set_edit_enabled(true);
-                    // Restore the record only where there was one to restore: the
-                    // reload shut the gate, and a status refresh landing in that window
-                    // drops the record (as start-editing's FF arm re-records for the
-                    // same reason). A session that held no record keeps none - the
-                    // gate is restored either way, so an inherited lock stays as
-                    // editable as it was, just without an authorship claim it never
-                    // earned.
-                    if had_lock_record {
-                        self.speleodb_note_lock_acquired(Some(&link.project_id));
-                    }
-                }
-                Ok(UpdateResult::FastForwarded { local_path })
-            }
-            // A fork, a moved tip our BASE isn't an ancestor of, OR a server
-            // inconsistency (non-linear / multi-root / a recorded BASE with no tip):
-            // surface the divergence prompt, never a hard error (#193 b2).
-            ReconcileVerdict::Diverged => Ok(UpdateResult::DivergenceNeeded),
-        }
+                (
+                    if discard_changes {
+                        LocalEditsPolicy::Discard
+                    } else {
+                        LocalEditsPolicy::Protect
+                    },
+                    generation,
+                ),
+            )
+            .map_err(local_dto)?;
+        Ok(UpdateResult::FastForwarded { local_path })
     }
 
     /// Resolve the server's TRUE HEAD and return it with the full revision

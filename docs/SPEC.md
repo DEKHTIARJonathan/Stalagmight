@@ -48,9 +48,11 @@ The dock retains resize/pin/hover behavior, uses a 320px SpeleoDB minimum within
 400px maximum, and floats at constrained widths. Programmatic opening focuses the
 selected tab and exits fullscreen table mode while preserving table state.
 
-The persistent project header and everyday upload, release/resume, latest-version
-and web controls sit above exclusive expandable History, Project settings,
-Projects, and Account & connection sections. Home retains its entry points. The
+The persistent project header and everyday Save Changes, Switch to Read Only Mode/Resume editing, Reload Project
+and web controls sit above an expandable History section. Close Project sits below Reload Project and returns
+to the project listing after unsaved-work confirmation and lock release. Account and
+connection forms live exclusively in application Settings. Local settings retains
+validation and elevation editing; linked project names remain server-managed. Home retains its entry points. The
 project-editor SpeleoDB menus, remote settings dialog and undo-menu revision
 controls are replaced by workspace navigation. Critical access, lock-loss,
 upload-failure and unuploaded-work indicators remain visible outside the tab.
@@ -61,7 +63,7 @@ transient disconnection after acquisition permits local editing. Confirmed lock
 loss, permission loss or sign-out closes the editing gate. Backend direct mutation
 and upload calls enforce the same ownership requirements.
 
-Explicit Save, its shortcut and Upload changes share a dispatcher: local Save for
+Explicit Save, its shortcut and Save Changes share a dispatcher: local Save for
 local projects, upload confirmation for linked ones, and a blocked explanation
 without the lock. Upload needs a description, local save and fresh server ownership
 verification; ordinary upload keeps the lock. Clean projects do not upload empty
@@ -69,6 +71,12 @@ revisions. Autosave and autosave retry remain local-only. Save and Close continu
 only after confirmed upload and release, with no newer unuploaded changes. Other
 exits automatically release without upload, protecting unsaved survey and form
 drafts with Discard changes / Cancel. Dirtiness is independent of validity.
+Switch to read-only refuses unsaved or unuploaded changes, with Save Changes guidance.
+Reload requires explicit Discard changes / Cancel for pending work, preserves mode,
+and never acquires a lock. Historical checkouts return to the live server version.
+Start Editing is the only acquisition/reconciliation flow; fresh revision topology
+is checked after acquisition. Status refresh cannot enable editing. Failed downloads,
+validation, stale sessions and newer edits preserve the current project.
 See [SpeleoDB](SpeleoDB.md) and [Saving](saving.md) for failure and recovery rules.
 
 ## 1. Overview
@@ -192,7 +200,7 @@ See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
 
 ### 2.9 Settings
 - Global settings in the Settings dialog, plus a per-project subset (project name,
-  validation thresholds, SpeleoDB) stored in the `.stalx`
+  validation thresholds) stored in the `.stalx`
 - Changes are staged and applied on Save, not live (section 10.4)
 - Reset to defaults per category
 

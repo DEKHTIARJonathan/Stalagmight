@@ -589,27 +589,7 @@ impl AppState {
             )));
         }
         let edit_enabled = self.edit_enabled();
-        // Invariant: holding the write lock means we may edit. If we hold it but the
-        // gate is off - e.g. we reopened a project we'd locked but not released, and
-        // the load re-derived the gate as read-only from is_remote - resume editing
-        // now, so the project isn't stuck read-only under our own lock. (A same-
-        // account concurrent session is warned about separately at open time.)
-        //
-        // The holder read above only decides whether to ASK: the gate itself opens
-        // in `speleodb_reopen_gate_for_inherited_lock`, which re-reads the holder
-        // and commits inside the lock-ops span. Opening it straight from the read
-        // above let a captured release for this same project land in between and
-        // free the mutex - leaving a session editing a remote project with no
-        // server lock and no record of one.
-        let edit_enabled = if !edit_enabled
-            && permission
-                .is_some_and(|permission| permission >= crate::speleodb::Permission::ReadAndWrite)
-            && lock_held_by_me(lock_holder.as_deref(), self.speleodb_my_email().as_deref())
-        {
-            self.speleodb_reopen_gate_for_inherited_lock(&link)
-        } else {
-            edit_enabled
-        };
+        // Status may close an existing session, but only Start Editing may open one.
 
         if self.speleodb_session_generation() != status_generation {
             return Err(local_dto(SpeleoDbError::SessionMoved));
@@ -988,6 +968,9 @@ impl AppState {
         // onto a torn-down world (F7). See `speleodb_session`.
         let (entry_gen, link) = self.speleodb_session_snapshot()?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        if normalize_endpoint(&endpoint) != normalize_endpoint(&link.endpoint) {
+            return Err(local_dto(SpeleoDbError::SessionMoved));
+        }
         let insecure_http = self.speleodb_insecure_http();
 
         // Whether the acquire below is OURS to claim - probed BEFORE it, because the
@@ -1256,7 +1239,7 @@ impl AppState {
                     insecure_http,
                     &link,
                     tip.as_deref(),
-                    LocalEditsPolicy::Protect,
+                    (LocalEditsPolicy::Protect, entry_gen),
                 ) {
                     Ok(p) => p,
                     Err(e) => {
@@ -1264,12 +1247,13 @@ impl AppState {
                         return Err(local_dto(e));
                     }
                 };
-                // As in the UpToDate arm, but identity-only (`None`): the reload
-                // just above IS a session boundary, so a generation comparison
-                // would always refuse - the open project still being linked to P
-                // is the check that matters here. See `speleodb_commit_editing`.
-                if let Err(e) = self.speleodb_commit_editing(None, &link.project_id, acquired_here)
-                {
+                // The prepared replacement commits exactly one session boundary.
+                // Refuse a later close/reopen even when it names the same project.
+                if let Err(e) = self.speleodb_commit_editing(
+                    Some(entry_gen.wrapping_add(1)),
+                    &link.project_id,
+                    acquired_here,
+                ) {
                     release_unless_kept(Some(&e));
                     return Err(local_dto(e));
                 }
@@ -1373,7 +1357,7 @@ impl AppState {
     /// the edit gate back to read-only. They resume via Start editing, which
     /// re-acquires the lock and now reconciles cleanly (BASE has advanced to the tip).
     pub fn speleodb_take_remote(&self) -> Result<String, SpeleoErrorDto> {
-        let link = self.speleodb_validated_link()?;
+        let (generation, link) = self.speleodb_session_snapshot()?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
@@ -1418,7 +1402,7 @@ impl AppState {
             insecure_http,
             &link,
             tip.as_deref(),
-            LocalEditsPolicy::Discard,
+            (LocalEditsPolicy::Discard, generation),
         );
         if result.is_err() {
             self.set_edit_enabled(false);
@@ -3104,103 +3088,6 @@ mod tests {
     }
 
     #[test]
-    fn release_discards_only_unsaved_state_after_validating_the_saved_copy() {
-        crate::test_helpers::with_isolated_config(|| {
-            let (base, handle) = release_stub(REMOTE_ID);
-            let (_temp, state) = editing_fixture(&base);
-            state.mark_remote_dirty();
-            let expected = crate::speleodb::SpeleoReleaseContext {
-                session_generation: state.speleodb_session_generation().to_string(),
-                project_id: REMOTE_ID.into(),
-                endpoint: base,
-                user_email: "u@x".into(),
-            };
-            state
-                .project
-                .lock()
-                .expect("project")
-                .as_mut()
-                .expect("open")
-                .name = "Unsaved name".into();
-            state
-                .speleodb_release_current_lock_with_discard(false, true, Some(expected), true)
-                .expect("discard and release");
-            handle.join().expect("release request");
-            assert_eq!(state.get_project_state().expect("project").name, "Remote");
-            assert!(!state.edit_enabled());
-            assert!(
-                state
-                    .speleodb_open_link()
-                    .expect("saved link")
-                    .has_unpushed_edits
-            );
-        });
-    }
-
-    #[test]
-    fn failed_saved_copy_validation_never_releases_or_replaces_live_state() {
-        let (base, _listener, seen) =
-            recording_stub(r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote"}"#);
-        let (_temp, state) = editing_fixture(&base);
-        let expected = crate::speleodb::SpeleoReleaseContext {
-            session_generation: state.speleodb_session_generation().to_string(),
-            project_id: REMOTE_ID.into(),
-            endpoint: base,
-            user_email: "u@x".into(),
-        };
-        let path = state
-            .get_project_state()
-            .expect("project")
-            .file_path
-            .expect("path");
-        std::fs::rename(&path, path.with_extension("saved-backup"))
-            .expect("make saved path unavailable");
-        state
-            .project
-            .lock()
-            .expect("project")
-            .as_mut()
-            .expect("open")
-            .name = "Unsaved name".into();
-        assert!(state
-            .speleodb_release_current_lock_with_discard(false, true, Some(expected), true)
-            .is_err());
-        assert_eq!(
-            state.get_project_state().expect("project kept").name,
-            "Unsaved name"
-        );
-        assert!(state.edit_enabled());
-        assert!(seen.lock().expect("requests").is_empty());
-    }
-
-    #[test]
-    fn failed_release_does_not_commit_a_prepared_discard() {
-        let (base, _listener, _seen) = recording_stub("not valid JSON");
-        let (_temp, state) = editing_fixture(&base);
-        let expected = crate::speleodb::SpeleoReleaseContext {
-            session_generation: state.speleodb_session_generation().to_string(),
-            project_id: REMOTE_ID.into(),
-            endpoint: base,
-            user_email: "u@x".into(),
-        };
-        state
-            .project
-            .lock()
-            .expect("project")
-            .as_mut()
-            .expect("open")
-            .name = "Unsaved name".into();
-        assert!(state
-            .speleodb_release_current_lock_with_discard(false, true, Some(expected), true)
-            .is_err());
-        assert_eq!(
-            state.get_project_state().expect("project kept").name,
-            "Unsaved name"
-        );
-        assert!(state.edit_enabled());
-    }
-
-    #[test]
     fn prepared_discard_rejects_a_concurrent_project_edit() {
         let (_temp, state) = editing_fixture("https://x/");
         let path = state
@@ -3231,57 +3118,6 @@ mod tests {
     }
 
     #[test]
-    fn release_requires_scoped_unpushed_consent_before_network() {
-        let (base, _listener, seen) = recording_stub(
-            r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote","active_mutex":{"user":"u@x"}}"#,
-        );
-        let (_temp, state) = editing_fixture(&base);
-        state.mark_remote_dirty();
-        assert!(state
-            .speleodb_release_current_lock(true, false, None)
-            .is_err());
-        assert!(state
-            .speleodb_release_current_lock(true, true, None)
-            .is_err());
-        let context = |id: &str, email: &str| crate::speleodb::SpeleoReleaseContext {
-            session_generation: state.speleodb_session_generation().to_string(),
-            project_id: id.into(),
-            endpoint: base.clone(),
-            user_email: email.into(),
-        };
-        assert!(state
-            .speleodb_release_current_lock(
-                true,
-                true,
-                Some(context("22222222-2222-2222-2222-222222222222", "u@x"))
-            )
-            .is_err());
-        assert!(state
-            .speleodb_release_current_lock(true, true, Some(context(REMOTE_ID, "another@x")))
-            .is_err());
-        let mut stale = context(REMOTE_ID, "u@x");
-        stale.session_generation = "stale".into();
-        assert!(state
-            .speleodb_release_current_lock(true, true, Some(stale))
-            .is_err());
-        assert!(seen.lock().expect("requests").is_empty());
-        state
-            .speleodb_release_current_lock(true, true, Some(context(REMOTE_ID, "u@x")))
-            .expect("acknowledged release");
-        assert!(seen
-            .lock()
-            .expect("requests")
-            .iter()
-            .any(|line| line.starts_with("POST ")));
-        assert!(
-            state
-                .speleodb_open_link()
-                .expect("local link")
-                .has_unpushed_edits
-        );
-    }
-
-    #[test]
     fn local_only_access_inspection_never_contacts_the_current_server() {
         let (base, _listener, seen) = recording_stub("{}");
         let (temp, state) = editing_fixture(&base);
@@ -3302,50 +3138,6 @@ mod tests {
         assert!(result.project.permission.is_none());
         assert!(seen.lock().expect("requests").is_empty());
         assert!(state.edit_enabled());
-    }
-
-    #[test]
-    fn automatic_release_only_releases_our_current_lock_and_clears_its_claim() {
-        for (holder, posts) in [("u@x", 1), ("other@x", 0)] {
-            let body = if holder == "u@x" {
-                r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote","permission":"ADMIN","active_mutex":{"user":"u@x"}}"#
-            } else {
-                r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote","permission":"ADMIN","active_mutex":{"user":"other@x"}}"#
-            };
-            let (base, _listener, seen) = recording_stub(body);
-            let (_temp, state) = editing_fixture(&base);
-            state
-                .speleodb_release_current_lock(true, false, None)
-                .expect("release own lock only");
-            assert!(!state.edit_enabled());
-            assert!(!state.speleodb_lock_acquired_here(REMOTE_ID));
-            assert_eq!(
-                seen.lock()
-                    .expect("requests")
-                    .iter()
-                    .filter(|line| line.starts_with("POST "))
-                    .count(),
-                posts
-            );
-        }
-    }
-
-    #[test]
-    fn manual_release_still_allows_admin_recovery_and_rejects_another_endpoint() {
-        let (base, _listener, seen) = recording_stub(
-            r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote","active_mutex":{"user":"other@x"}}"#,
-        );
-        let (_temp, state) = editing_fixture(&base);
-        state
-            .speleodb_release_current_lock(false, false, None)
-            .expect("manual release");
-        assert!(!state.speleodb_lock_acquired_here(REMOTE_ID));
-        assert!(seen.lock().expect("requests")[0].starts_with("POST "));
-        *state.speleodb.lock().expect("session") = authed_session_at("https://another.example");
-        assert!(state
-            .speleodb_release_current_lock(true, false, None)
-            .is_err());
-        assert_eq!(seen.lock().expect("requests").len(), 1);
     }
 
     #[test]
@@ -3378,75 +3170,6 @@ mod tests {
             .expect("requests")
             .iter()
             .all(|line| line.starts_with("GET ")));
-    }
-
-    #[test]
-    fn a_release_that_lands_after_an_unlink_leaves_the_gate_open() {
-        // `speleodb_release_current_lock` used to sample "was this lock ours?" BEFORE
-        // its blocking release and apply the answer after it, holding nothing across
-        // the round trip. Dismiss the Settings dialog and unlink the same project in
-        // that window and the two collide: the unlink makes it a plain local project
-        // and reopens the edit gate, and this stale completion closes it again.
-        // Nothing reopens it from there - status refreshing needs a link the project no
-        // longer has - so an ordinary local project was stuck read-only until it was
-        // closed and reopened.
-        //
-        // The unlink runs FROM the stub, between the request arriving and the response
-        // going out, which is exactly the window and needs no timing luck. The
-        // listener is dropped first so the unlink's own best-effort lock release is
-        // refused instantly (`release_lock` is a non-idempotent POST - one attempt, no
-        // backoff), which is just the offline no-op that path is written for.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
-        let base = format!(
-            "http://127.0.0.1:{}",
-            listener.local_addr().expect("addr").port()
-        );
-        let (_temp, state) = editing_fixture(&base);
-        assert!(state.edit_enabled(), "precondition: we hold the lock");
-
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                use std::io::{Read as _, Write as _};
-                let Ok((mut stream, _)) = listener.accept() else {
-                    return;
-                };
-                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
-                let mut chunk = vec![0u8; 8 * 1024];
-                while let Ok(n) = stream.read(&mut chunk) {
-                    if n == 0 {
-                        break;
-                    }
-                }
-                drop(listener);
-                assert!(
-                    state.speleodb_lock_ops.try_lock().is_err(),
-                    "release must serialize refreshing and acquisition"
-                );
-                state.speleodb_unlink().expect("unlink mid-flight");
-                let body = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote"}"#;
-                let body = crate::core::state::tests_support::sdk_fixture(&body);
-                let resp = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
-                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(resp.as_bytes());
-                let _ = stream.flush();
-            });
-            state
-                .speleodb_release_current_lock(false, false, None)
-                .expect("the release itself succeeds");
-        });
-
-        assert!(
-            state.speleodb_open_link().is_err(),
-            "precondition: the project is no longer linked"
-        );
-        assert!(
-            state.edit_enabled(),
-            "a release completing over a project that is no longer remote must not \
-             close the gate the unlink just opened"
-        );
     }
 
     #[test]
@@ -3634,28 +3357,6 @@ mod tests {
     }
 
     #[test]
-    fn remote_metadata_and_upload_require_an_acquired_session() {
-        let (_temp, state) = editing_fixture("https://unreachable.invalid/");
-        state.set_edit_enabled(false);
-        assert!(state.speleodb_set_exclude_geojson(false).is_err());
-        assert!(state
-            .speleodb_patch_project(crate::speleodb::SpeleoProjectMetadataPatch {
-                name: Some("Synthetic rename".to_owned()),
-                description: None,
-                country: None,
-                visibility: None,
-                coordinates_edited: false,
-                latitude: None,
-                longitude: None,
-            })
-            .is_err());
-        assert!(matches!(
-            state.speleodb_push_only(Some("Synthetic upload".to_owned())),
-            Ok(PushResult::NotEditing)
-        ));
-    }
-
-    #[test]
     fn fresh_write_verification_closes_the_gate_on_confirmed_lock_or_permission_loss() {
         for body in [
             r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote","permission":"READ_AND_WRITE","active_mutex":{"user":"other@x"}}"#,
@@ -3737,7 +3438,7 @@ mod tests {
     }
 
     #[test]
-    fn only_an_acquire_made_by_this_process_records_the_authorship_licence() {
+    fn workspace_only_an_acquire_made_by_this_process_records_the_authorship_licence() {
         // The provenance is written by the acquire itself and given back with the
         // lock. A history whose tip IS our BASE reconciles UpToDate, so Start editing
         // keeps the lock it just took without a fast-forward (which a unit test cannot
@@ -3748,6 +3449,9 @@ mod tests {
         );
         let (_temp, state) = remote_readonly_fixture();
         *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        state
+            .speleodb_mutate_link(|link| link.endpoint = base.clone())
+            .expect("bind synthetic endpoint");
         assert!(
             !state.speleodb_lock_acquired_here(REMOTE_ID),
             "a read-only open records nothing"
@@ -3785,7 +3489,7 @@ mod tests {
         "commits":[{"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
 
     #[test]
-    fn a_successful_acquire_over_an_inherited_lock_records_no_authorship() {
+    fn workspace_a_successful_acquire_over_an_inherited_lock_records_no_authorship() {
         // A 200 from `acquire` is NOT proof that this process took the lock:
         // re-acquiring a lock the ACCOUNT already holds is a successful server-side
         // no-op (only ANOTHER holder produces the 400), and `ActiveMutex` carries no
@@ -3801,6 +3505,9 @@ mod tests {
         let (base, _listener) = always_answering_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
         let (_temp, state) = remote_readonly_fixture();
         *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        state
+            .speleodb_mutate_link(|link| link.endpoint = base.clone())
+            .expect("bind synthetic endpoint");
 
         assert!(
             matches!(
@@ -3822,7 +3529,7 @@ mod tests {
     }
 
     #[test]
-    fn resuming_an_inherited_lock_over_a_diverged_tip_never_hands_it_back() {
+    fn workspace_resuming_an_inherited_lock_over_a_diverged_tip_never_hands_it_back() {
         // The held-lock prompt's "Continue editing" is a RESUME: the mutex is already
         // ours (a crashed run, a second window, a session the app never got to end),
         // the acquire is a server-side no-op, and the un-pushed work on this machine
@@ -3845,6 +3552,9 @@ mod tests {
         let (base, _listener, seen) = recording_stub(SAME_ACCOUNT_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
         *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        state
+            .speleodb_mutate_link(|link| link.endpoint = base.clone())
+            .expect("bind synthetic endpoint");
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -3893,7 +3603,7 @@ mod tests {
                    {"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
 
     #[test]
-    fn a_freshly_taken_lock_is_still_released_on_divergence() {
+    fn workspace_a_freshly_taken_lock_is_still_released_on_divergence() {
         // The other side of the line the test above draws, and the reason the fix is
         // "release what we took" rather than "never release": when the probe finds the
         // mutex UNHELD, the lock the acquire produced is this call's own, and walking
@@ -3905,6 +3615,9 @@ mod tests {
         let (base, _listener, seen) = recording_stub(FREE_MUTEX_DIVERGED_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
         *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        state
+            .speleodb_mutate_link(|link| link.endpoint = base.clone())
+            .expect("bind synthetic endpoint");
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -3933,7 +3646,7 @@ mod tests {
                    {"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
 
     #[test]
-    fn a_lock_another_holder_released_just_before_our_acquire_is_still_handed_back() {
+    fn workspace_a_lock_another_holder_released_just_before_our_acquire_is_still_handed_back() {
         // The probe answers "held", which used to be read as INHERITED on the strength
         // of the mutex being non-empty alone - discarding WHO held it. But another
         // holder who is still holding never reaches these arms (the acquire 400s and
@@ -3948,6 +3661,9 @@ mod tests {
         let (base, _listener, seen) = recording_stub(OTHER_HOLDER_DIVERGED_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
         *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        state
+            .speleodb_mutate_link(|link| link.endpoint = base.clone())
+            .expect("bind synthetic endpoint");
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -3981,7 +3697,7 @@ mod tests {
         "commits":[{"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
 
     #[test]
-    fn a_lock_another_holder_released_just_before_our_acquire_records_authorship() {
+    fn workspace_a_lock_another_holder_released_just_before_our_acquire_records_authorship() {
         // The other half of the same race. Classifying it as inherited also withheld
         // the authorship record from a lock this process demonstrably took, and the
         // shortcut in `speleodb_remote_state` hangs on that record: without it, our own
@@ -3990,6 +3706,9 @@ mod tests {
         let (base, _listener, seen) = recording_stub(HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY);
         let (_temp, state) = remote_readonly_fixture();
         *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        state
+            .speleodb_mutate_link(|link| link.endpoint = base.clone())
+            .expect("bind synthetic endpoint");
 
         assert!(
             matches!(
@@ -4023,7 +3742,7 @@ mod tests {
                    {"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
 
     #[test]
-    fn a_holder_differing_only_in_case_is_still_our_own_inherited_lock() {
+    fn workspace_a_holder_differing_only_in_case_is_still_our_own_inherited_lock() {
         // DO-NOT-REGRESS: passes before the who-holds-it split as well as after, and
         // exists to pin the direction the split must NOT be taken in. Now that the
         // held-mutex arm compares the holder against our email, a case-SENSITIVE
@@ -4034,6 +3753,9 @@ mod tests {
         let (base, _listener, seen) = recording_stub(SAME_ACCOUNT_UPPERCASE_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
         *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        state
+            .speleodb_mutate_link(|link| link.endpoint = base.clone())
+            .expect("bind synthetic endpoint");
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -4136,20 +3858,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn update_restores_only_a_lock_holding_session_after_a_fast_forward() {
-        let prod = push_prod_source();
-        let update = prod
-            .split_once("fn speleodb_update")
-            .map(|(_, rest)| rest)
-            .and_then(|rest| rest.split("\n    fn ").next())
-            .expect("speleodb_update body precedes the next method");
-        assert!(
-            update.contains("self.edit_enabled()"),
-            "the fast-forward restore must capture the lock-held PAIR, not the gate alone"
-        );
-    }
-
     /// The production region of this file, split out of the test module so the
     /// source-level tripwires below cannot match their own assertions.
     fn prod_source() -> &'static str {
@@ -4171,47 +3879,6 @@ mod tests {
             .split("\n#[cfg(test)]")
             .next()
             .expect("production region precedes the test module")
-    }
-
-    #[test]
-    fn update_restores_the_acquisition_record_only_where_one_existed() {
-        // Sibling of the tripwire above, on the OTHER half of the same restore. The
-        // gate and the record answer different questions - "may I edit?" versus "did I
-        // take this lock?" - and `speleodb_link_status` re-derives the gate from
-        // nothing but a matching lock-holder email. Restoring the record from
-        // `was_editing` therefore MINTED provenance: a session that inherited a lock
-        // (an earlier run, or a second window on the same account) came out of a
-        // fast-forward holding an authorship claim it never earned, and the shortcut
-        // in `speleodb_remote_state` would then explain the other session's commit
-        // away as our own unrecorded push.
-        //
-        // Structural for the same reason as the sibling: reaching this arm needs a
-        // successful fast-forward, whose reload resolves an app cache dir that only
-        // the env-gated live tests initialise.
-        let update = push_prod_source()
-            .split_once("fn speleodb_update")
-            .map(|(_, rest)| rest)
-            .and_then(|rest| rest.split("\n    fn ").next())
-            .expect("speleodb_update body precedes the next method");
-        assert!(
-            update.contains("let had_lock_record = self.speleodb_lock_acquired_here("),
-            "the fast-forward must capture the RECORD as well as the gate"
-        );
-        assert!(
-            update.contains("if had_lock_record {"),
-            "and must gate the restore on it, not on `was_editing` alone"
-        );
-        let capture = update
-            .find("let had_lock_record")
-            .expect("capture present (asserted above)");
-        let reload = update
-            .find(".speleodb_fast_forward(")
-            .expect("the fast-forward call is what this arm is named for");
-        assert!(
-            capture < reload,
-            "the capture must precede the reload - the reload shuts the gate, and a \
-             refresh landing in that window is exactly what clears the record"
-        );
     }
 
     #[test]
@@ -4421,7 +4088,7 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_probe_over_unpushed_edits_keeps_the_lock() {
+    fn workspace_an_unreadable_probe_over_unpushed_edits_keeps_the_lock() {
         // The third probe state, and the one neither test above covers: the pre-acquire
         // GET fails while the acquire itself succeeds. Provenance is then UNKNOWN - the
         // acquire's 200 is equally the no-op of re-taking a lock this account already
@@ -4438,6 +4105,9 @@ mod tests {
         let (base, _listener, seen) = stub_failing_the_lock_probe(SAME_ACCOUNT_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
         *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        state
+            .speleodb_mutate_link(|link| link.endpoint = base.clone())
+            .expect("bind synthetic endpoint");
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -4481,7 +4151,7 @@ mod tests {
         "commits":[{"id":"zzz999","parent_ids":[],"author_email":"u@x"}]}"#;
 
     #[test]
-    fn an_unreadable_probe_over_a_clean_copy_still_releases_the_lock() {
+    fn workspace_an_unreadable_probe_over_a_clean_copy_still_releases_the_lock() {
         // The other half of the unknown-probe rule, and the reason it is not a blanket
         // "keep on unknown": with NOTHING un-pushed there is no work to strand, and a
         // lock this call may well have just taken would be left held over an edit
@@ -4493,6 +4163,9 @@ mod tests {
         let (base, _listener, seen) = stub_failing_the_lock_probe(CLEAN_DIVERGED_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(false);
         *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        state
+            .speleodb_mutate_link(|link| link.endpoint = base.clone())
+            .expect("bind synthetic endpoint");
 
         let result = state.speleodb_start_editing().expect("start editing");
         assert!(
@@ -4848,18 +4521,20 @@ mod tests {
     }
 
     #[test]
-    fn the_refresh_resumes_editing_when_the_lock_is_still_ours_as_it_opens_the_gate() {
-        // The invariant the reopen exists for: a project reopened while we still
-        // hold its mutex must not sit read-only under our own lock.
+    fn workspace_status_never_opens_editing_even_when_the_lock_is_ours() {
+        // Ownership alone cannot prove that this copy matches server revisions.
         let (base, _listener) = holder_changes_after_the_first_read(REMOTE_ID, Some("u@x"));
-        let (_temp, state) = remote_readonly_fixture();
-        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        let (_temp, state) = editing_fixture(&base);
+        state.set_edit_enabled(false);
         assert!(!state.edit_enabled(), "fixture opens read-only");
 
         let status = state.speleodb_link_status().expect("status");
 
-        assert!(status.edit_enabled, "our own lock resumes the edit session");
-        assert!(state.edit_enabled(), "and the gate really is open");
+        assert!(
+            !status.edit_enabled,
+            "status cannot resume an editing session"
+        );
+        assert!(!state.edit_enabled(), "the gate remains shut");
     }
 
     #[test]
@@ -5476,4 +5151,5 @@ mod tests {
             Err(SpeleoDbError::NotAuthenticated)
         ));
     }
+    include!("speleodb_workspace_tests.rs");
 }

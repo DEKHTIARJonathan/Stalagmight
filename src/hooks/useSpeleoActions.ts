@@ -1,3 +1,4 @@
+import { confirm } from '@tauri-apps/plugin-dialog';
 import { showSpeleoReadOnlyNotice } from '../utils/autoAcquireSpeleoLock';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -19,6 +20,7 @@ import { TOAST_KEYS } from '../utils/toastKeys';
 import type {
   DoneResult,
   PushResult,
+  SpeleoFileAccess,
   StartEditingResult,
   UpdateResult,
 } from '../types/ipc.generated';
@@ -167,7 +169,7 @@ export function useSpeleoActions(): SpeleoActions {
           }
           return { editing: true, treeReplaced: false, landed: true };
         case 'fast_forwarded': {
-          const loaded = await loadProject(result.local_path);
+          const loaded = await loadProject(result.local_path, { acquireLock: false });
           if (!speleoProjectSessionStillCurrent(issuedFor)) {
             return { editing: false, treeReplaced: false, landed: false };
           }
@@ -255,9 +257,27 @@ export function useSpeleoActions(): SpeleoActions {
     const issuedFor = speleoProjectSessionIssuedFor(
       useSpeleoStore.getState().remoteProjectId,
     );
+    const project = useProjectStore.getState();
+    const path = project.project?.file_path;
+    const tree = project.projectTreeGeneration;
+    const current = () => speleoProjectSessionStillCurrent(issuedFor) &&
+      useProjectStore.getState().project?.file_path === path &&
+      useProjectStore.getState().projectTreeGeneration === tree;
+    const pending = project.isDirty || useSpeleoStore.getState().link?.hasUnpushedEdits;
     const busyToken = beginBusy();
     try {
-      const result = await invokeIpc<UpdateResult>('speleodb_update');
+      let discardChanges = false;
+      if (pending) {
+        discardChanges = await confirm('Discard changes removes unsaved and unuploaded modifications. Save first using Save Changes to preserve your work. Cancel keeps everything.', {
+          title: 'Reload Project', kind: 'warning', okLabel: 'Discard changes', cancelLabel: 'Cancel',
+        });
+        if (!discardChanges || !current()) return;
+      }
+      if (!current() || !path) return;
+      const access = await invokeIpc<SpeleoFileAccess | null>('speleodb_project_access_at', { path, localOnly: true });
+      if (!current()) return;
+      if (!access?.release_context) throw new Error('The project or account changed. Try again.');
+      const result = await invokeIpc<UpdateResult>('speleodb_update', { discardChanges, expected: access.release_context });
       if (!speleoProjectSessionStillCurrent(issuedFor)) return;
       applyUpdate(result);
       switch (result.kind) {
@@ -279,7 +299,7 @@ export function useSpeleoActions(): SpeleoActions {
             // unguarded `refreshProjectState` below - which overwrites
             // project/stations/surveyData wholesale - must not paint this
             // project's state over whatever the user actually opened.
-            const loaded = await loadProject(result.local_path);
+            const loaded = await loadProject(result.local_path, { acquireLock: false });
             if (!loaded.success) break;
           }
           await applySpeleoTreeReplacement(issuedFor, true);

@@ -218,9 +218,22 @@ impl AppState {
         insecure_http: bool,
         link: &crate::models::SpeleoLink,
         tip: Option<&str>,
-        policy: LocalEditsPolicy,
+        transition: (LocalEditsPolicy, u64),
     ) -> Result<String, SpeleoDbError> {
+        let (policy, generation) = transition;
+        let bytes = {
+            let project = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if generation != self.speleodb_session_generation() {
+                return Err(SpeleoDbError::SessionMoved);
+            }
+            serde_json::to_vec(&*project).map_err(|e| SpeleoDbError::Io(e.to_string()))?
+        };
+        let was_editing = self.edit_enabled();
         let project_id = &link.project_id;
+        // A verified revision must be downloaded by its exact identifier.
         let pinned = usable_tip(tip.map(str::to_owned), project_id);
         let native = self.speleodb_handle_auth(
             Endpoint::DownloadStalx,
@@ -232,7 +245,10 @@ impl AppState {
             },
         )?;
         let dest = self.speleodb_cache_path(project_id)?;
-        let new_link = crate::models::SpeleoLink {
+        if policy == LocalEditsPolicy::Protect {
+            self.guard_local_edits(project_id, &dest)?;
+        }
+        let mut new_link = crate::models::SpeleoLink {
             endpoint: endpoint.to_owned(),
             project_id: project_id.clone(),
             project_name: link.project_name.clone(),
@@ -242,15 +258,51 @@ impl AppState {
             last_verify_at: Some(chrono::Utc::now().to_rfc3339()),
             undo_mode: None,
         };
-        self.install_linked_download(native.path(), &dest, new_link, policy, InheritedUndo::Drop)?;
-
-        let local_path = dest.to_string_lossy().into_owned();
-        self.close_project();
-        self.do_load_project_full(dest)
-            .map_err(|e| SpeleoDbError::Io(format!("reload after fast-forward failed: {e}")))?;
+        {
+            let db = crate::persistence::Database::open_existing_untrusted(
+                native.path(),
+                DOWNLOADED_VALUE_LIMIT,
+                DOWNLOADED_PROCESSING_DEADLINE,
+            )
+            .map_err(super::speleodb_cache_install::downloaded_file_error)?;
+            db.load_project()
+                .map_err(|e| SpeleoDbError::Parse(format!("invalid downloaded project: {e}")))?;
+            new_link.undo_mode = Some(self.effective_undo_mode(preserved_undo_mode(&db)));
+            db.save_speleo_link(Some(&new_link))
+                .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
+        }
+        let staged = super::speleodb_cache_install::stage_download(
+            native.path(),
+            &dest,
+            InheritedUndo::Drop,
+            super::speleodb_cache_install::sync_staged_file,
+        )?;
+        {
+            let db = crate::persistence::Database::open_existing(&staged)
+                .map_err(|e| SpeleoDbError::Io(e.to_string()))?;
+            restore_display_settings(
+                &db,
+                &super::speleodb_cache::preserved_display_settings(&dest),
+            );
+        }
+        let result = self
+            .open_project_download(
+                staged.to_path_buf(),
+                dest.clone(),
+                (generation, bytes),
+                was_editing,
+            )
+            .map_err(|e| SpeleoDbError::Io(e.message))?;
+        if !result.success {
+            return Err(SpeleoDbError::Io(
+                result
+                    .error
+                    .unwrap_or_else(|| "Could not reload project".into()),
+            ));
+        }
         self.speleodb_set_unwound_from(None);
         self.speleodb_set_inherited_through(None);
-        Ok(local_path)
+        Ok(dest.to_string_lossy().into_owned())
     }
 
     /// Validate and stamp the downloaded file before it can replace a working cache.
@@ -289,6 +341,9 @@ impl AppState {
                 options.limits.1,
             )
             .map_err(super::speleodb_cache_install::downloaded_file_error)?;
+            // Decode the complete project before any working bytes are replaced.
+            db.load_project()
+                .map_err(|e| SpeleoDbError::Parse(format!("invalid downloaded project: {e}")))?;
             link.undo_mode = Some(self.effective_undo_mode(preserved_undo_mode(&db)));
             db.save_speleo_link(Some(&link)).map_err(|e| {
                 SpeleoDbError::Io(format!("could not link downloaded project: {e}"))

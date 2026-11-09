@@ -192,6 +192,16 @@ impl AppState {
         if let Err(f) = self.guard_mutation("Update project settings") {
             return f;
         }
+        if self.speleodb_open_link().is_ok()
+            && self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .is_some_and(|project| project.name != name)
+        {
+            return CommandResult::failure("Linked project names are managed by SpeleoDB".into());
+        }
         let before_snapshot = self.capture_project_snapshot().ok();
         {
             let mut guard = match self.project.lock() {

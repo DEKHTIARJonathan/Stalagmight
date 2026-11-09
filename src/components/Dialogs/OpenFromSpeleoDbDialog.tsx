@@ -167,7 +167,7 @@ export default function OpenFromSpeleoDbDialog({ embedded = false }: { embedded?
     }
   };
 
-  const goToLogin = () => embedded ? useUIStore.getState().openSpeleoWorkspace('account') : openDialog('settings', { initialCategory: 'speleodb' });
+  const goToLogin = () => openDialog('settings', { initialCategory: 'speleodb' });
 
   const content = (
       <div className="space-y-4">

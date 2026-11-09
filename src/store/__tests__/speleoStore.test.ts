@@ -709,24 +709,7 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().banner).toEqual({ kind: 'no_anchor' });
     });
 
-    it('enableRendering clears the rendering-disabled banner and PATCHes exclude=false', async () => {
-      useSpeleoStore.setState({ banner: { kind: 'rendering_disabled' } });
-      // set_exclude_geojson returns null; the follow-up refreshLinkStatus reads status.
-      invokeIpcMock.mockImplementation(async (cmd: string) =>
-        cmd === 'speleodb_link_status' ? status({ exclude_geojson: false }) : null,
-      );
-      await useSpeleoStore.getState().enableRendering();
-      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_set_exclude_geojson', { exclude: false });
-      expect(useSpeleoStore.getState().banner).toBeNull();
-    });
 
-    it('enableRendering rethrows and leaves the banner intact so the caller can surface it', async () => {
-      useSpeleoStore.setState({ banner: { kind: 'rendering_disabled' } });
-      invokeIpcMock.mockRejectedValue(new Error('403'));
-      await expect(useSpeleoStore.getState().enableRendering()).rejects.toThrow('403');
-      // The banner must stay up so SpeleoBanner keeps itself open to show the error.
-      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'rendering_disabled' });
-    });
   });
 
   // #201 refinements: the resume/release prompt fires only on login + app-open (not

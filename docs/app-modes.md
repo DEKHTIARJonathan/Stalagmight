@@ -147,6 +147,14 @@ and docks over the freshly loaded ones. `uiStore.planDocks.test.ts` pins it.
 Sections remains Survey-only. Linked projects expose SpeleoDB navigation in every
 mode through the full toolbar button. Plan/Export keep the left dock hidden until
 requested unless SpeleoDB was selected before leaving Survey. Returning restores
-the Survey tab. Synchronization and account navigation remain accessible in every
+the Survey tab. History, synchronization and Close Project controls and links to application Settings remain accessible in every
 mode; survey and revision editing stay Survey-only. Hidden tab bodies retain their
 state, and tab navigation does not acquire or release a lock.
+
+Only Start Editing can open the remote edit gate, after acquiring the lock and
+verifying live revision history. Status refresh can close a lost session but cannot
+resume one. Switch to Read Only Mode requires locally saved and uploaded work.
+Reload Project preserves the existing mode and does not acquire a lock; pending
+work requires Discard changes / Cancel. Local settings retains validation and
+elevation gates, while linked names remain immutable. Account and connection forms
+exist only in application Settings. Local project editors expose no SpeleoDB controls.

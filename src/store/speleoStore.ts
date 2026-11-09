@@ -567,7 +567,6 @@ interface SpeleoStore {
       web-viewer GeoJSON on the NEXT push (not retroactively). Clears the
       rendering-disabled banner and re-seeds link status. Throws on failure so the
       banner can surface it. */
-  enableRendering: () => Promise<void>;
   /** [#303] Set the open project's explicit undo-history policy. LOCK-REQUIRED: the value
       lands in the `.stalx` and rides to the server on the next push, so it becomes
       every collaborator's. Throws on refusal (no lock, or a local project) so the
@@ -1375,14 +1374,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   clearPushFailedBanner: () =>
     set((state) => (state.banner?.kind === 'push_failed' ? { banner: null } : {})),
 
-  enableRendering: async () => {
-    // Throws on failure so the banner keeps itself open and shows the error.
-    await invokeIpc<null>('speleodb_set_exclude_geojson', { exclude: false });
-    // Drop the rendering-disabled banner (this resolved it) and re-seed from the
-    // server so the flag reflects the change.
-    set((state) => (state.banner?.kind === 'rendering_disabled' ? { banner: null } : {}));
-    await get().refreshLinkStatus();
-  },
+
 
   setUndoMode: async (mode) => {
     // [#303] Throws on failure so the caller (the settings control) renders the
