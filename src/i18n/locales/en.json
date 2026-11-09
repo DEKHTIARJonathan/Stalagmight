@@ -657,7 +657,7 @@
       },
       "endpoint": {
         "label": "Server endpoint",
-        "help": "The SpeleoDB server to connect to (e.g. https://www.speleodb.org/). Saving a different server signs you out. Log in now connects to the server entered here immediately.",
+        "help": "Saving a different server signs you out. Log in now uses this address immediately.",
         "aria": "SpeleoDB server endpoint"
       },
       "insecureHttp": {
@@ -681,9 +681,6 @@
         "useToken": "Paste an existing token instead of a password",
         "tryLogin": "Log in now",
         "tryingLogin": "Logging in…"
-      },
-      "credentials": {
-        "fileStorage": "SpeleoDB settings and your API token are saved in speleodb/speleodb.conf in the app configuration folder. The token is stored as plaintext."
       }
     },
     "advanced": {

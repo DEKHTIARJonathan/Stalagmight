@@ -229,9 +229,6 @@ export function SpeleoDbSettings({
           </div>
         )}
 
-        <p className="mt-4 text-xs text-text-secondary" data-testid="speleodb-credential-storage">
-          {t('settings.speleodb.credentials.fileStorage')}
-        </p>
       </SettingsSection>
 
       <SettingsSection
@@ -243,6 +240,7 @@ export function SpeleoDbSettings({
           helpText={t('settings.speleodb.endpoint.help')}
           isChanged={isFieldChanged(changedFields, 'speleodb.endpoint')}
           onReset={() => onChange({ speleodb: { ...speleo, endpoint: defaultConfig.speleodb.endpoint } })}
+          resetLabel={t('common.actions.reset')}
           isDefault={speleo.endpoint === defaultConfig.speleodb.endpoint}
           data-testid="setting-speleodb-endpoint"
         >

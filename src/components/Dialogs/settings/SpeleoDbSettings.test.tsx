@@ -70,6 +70,7 @@ it('keeps typed and pasted server endpoints lowercase with keyboard corrections 
   }
   render(<SettingsHarness />);
   const endpoint = screen.getByTestId('input-speleodb-endpoint');
+  expect(screen.queryByTestId('speleodb-credential-storage')).not.toBeInTheDocument();
   expect(endpoint).toHaveAttribute('autocapitalize', 'none');
   expect(endpoint).toHaveAttribute('autocorrect', 'off');
   expect(endpoint).toHaveAttribute('spellcheck', 'false');
@@ -83,6 +84,12 @@ it('keeps typed and pasted server endpoints lowercase with keyboard corrections 
     speleodb: { ...defaultConfig.speleodb, endpoint: 'https://www.speleodb.org/api/' },
   });
 
+  const reset = screen.getByTestId('setting-speleodb-endpoint-reset');
+  expect(reset).toHaveTextContent('Reset');
+  fireEvent.click(reset);
+  expect(endpoint).toHaveValue(defaultConfig.speleodb.endpoint ?? '');
+  expect(reset).toBeDisabled();
+  fireEvent.change(endpoint, { target: { value: 'Https://' } });
   fireEvent.change(endpoint, { target: { value: '' } });
   expect(endpoint).toHaveValue('');
   expect(onChange).toHaveBeenLastCalledWith({

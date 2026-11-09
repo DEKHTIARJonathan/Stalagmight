@@ -16,6 +16,8 @@ interface SettingRowProps {
   'data-testid'?: string;
   /** Callback to reset this setting to its default value */
   onReset?: () => void;
+  /** Visible text for a labeled reset button instead of the default icon. */
+  resetLabel?: string;
   /** Whether the setting is currently at its default value (disables reset button) */
   isDefault?: boolean;
 }
@@ -32,6 +34,7 @@ export function SettingRow({
   children,
   'data-testid': dataTestId,
   onReset,
+  resetLabel,
   isDefault = true,
 }: SettingRowProps) {
   const { t } = useTranslation();
@@ -71,7 +74,7 @@ export function SettingRow({
               type="button"
               onClick={onReset}
               disabled={isDefault}
-              className={`p-1 rounded hover:bg-panel transition-colors ${
+              className={`${resetLabel ? 'px-2 py-1 text-xs border border-border' : 'p-1'} rounded hover:bg-panel transition-colors ${
                 !isDefault
                   ? 'text-text-secondary hover:text-text-primary'
                   : 'text-border cursor-not-allowed'
@@ -79,7 +82,7 @@ export function SettingRow({
               title={t('settings.common.resetToDefault')}
               data-testid={dataTestId ? `${dataTestId}-reset` : undefined}
             >
-              <svg
+              {resetLabel ?? <svg
                 className="w-3.5 h-3.5"
                 fill="none"
                 stroke="currentColor"
@@ -91,7 +94,7 @@ export function SettingRow({
                   strokeWidth={2}
                   d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
                 />
-              </svg>
+              </svg>}
             </button>
           )}
         </div>
