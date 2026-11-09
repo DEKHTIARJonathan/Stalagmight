@@ -28,8 +28,9 @@ vi.mock('@tauri-apps/api/window', () => ({
   getCurrentWindow: () => ({ destroy: destroyMock, close: vi.fn(async () => {}) }),
 }));
 
+// The tier-1 question is the in-app exit confirm now, not the native one.
 const confirmMock = vi.hoisted(() => vi.fn(async () => true));
-vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
+vi.mock('../../utils/exitConfirm', () => ({ askExitConfirm: confirmMock }));
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));

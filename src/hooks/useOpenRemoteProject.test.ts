@@ -24,6 +24,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore, selectSpeleoReadOnly, type SpeleoLinkState } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import { guardQuit } from '../utils/quit';
+import { resetSpeleoExitPromptForTests, useSpeleoExitPrompt } from '../utils/speleoExit';
 import type { SpeleoProjectSummary } from '../types/ipc.generated';
 
 // The genuine store action, captured before `beforeEach` swaps in the spy - so one
@@ -80,6 +81,7 @@ beforeEach(() => {
     session: { loggedIn: true, userEmail: "me@example.com", endpoint: "https://example.com" },
   });
   useUIStore.setState({ showToast: vi.fn(), openDialog: vi.fn() });
+  resetSpeleoExitPromptForTests();
 });
 
 const hook = (opts: Parameters<typeof useOpenRemoteProject>[0] = {}) =>
@@ -408,9 +410,41 @@ describe('useOpenRemoteProject (#218)', () => {
       useProjectStore.setState({ project: { file_path: '/cache/p9.stalx' } as never, isDirty: false });
     });
 
-    it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)('%s does not prompt for a held lock or saved unpushed work', async (action) => {
+    // Saved but un-uploaded work under our lock used to be walked away from here,
+    // with the backend then releasing the lock over it. It now raises the exit
+    // prompt BEFORE anything is downloaded; cancelling it leaves everything as it was.
+    it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)('%s raises the exit prompt for un-uploaded work under our lock', async (action) => {
       useSpeleoStore.setState({ link: openLink({ editState: 'editing', hasUnpushedEdits: true }) });
+      const pending = hook()[action](SUMMARY);
+      await vi.waitFor(() => expect(useSpeleoExitPrompt.getState().request?.reason).toBe('switch'));
+      expect(invokeIpcMock).not.toHaveBeenCalled();
+      useSpeleoExitPrompt.getState().request?.settle(false);
+      expect(await pending).toEqual({ status: 'cancelled' });
+      expect(confirmMock).not.toHaveBeenCalled();
+      expect(loadProjectMock).not.toHaveBeenCalled();
+    });
+
+    it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)('%s continues once the exit prompt has closed the project', async (action) => {
+      useSpeleoStore.setState({ link: openLink({ editState: 'editing', hasUnpushedEdits: true }) });
+      const pending = hook()[action](SUMMARY);
+      await vi.waitFor(() => expect(useSpeleoExitPrompt.getState().request).not.toBeNull());
+      // The prompt closes the project before it reports success.
+      useProjectStore.setState({ project: null, isDirty: false });
+      useSpeleoExitPrompt.getState().request?.settle(true);
+      expect(await pending).toEqual({ status: 'opened' });
+      expect(loadProjectMock).toHaveBeenCalled();
+    });
+
+    it('reopening the project already on screen is not leaving it: no prompt', async () => {
+      useSpeleoStore.setState({ link: openLink({ editState: 'editing', hasUnpushedEdits: true }), remoteProjectId: 'p1' });
+      expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+      expect(useSpeleoExitPrompt.getState().request).toBeNull();
+    });
+
+    it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)('%s does not prompt for a clean held lock', async (action) => {
+      useSpeleoStore.setState({ link: openLink({ editState: 'editing', hasUnpushedEdits: false }) });
       expect(await hook()[action](SUMMARY)).toEqual({ status: 'opened' });
+      expect(useSpeleoExitPrompt.getState().request).toBeNull();
       expect(confirmMock).not.toHaveBeenCalled();
       expect(loadProjectMock).toHaveBeenCalled();
     });
@@ -588,4 +622,34 @@ it('does not continue a remote download across login/logout', async () => {
   download.resolve({ local_path: '/cache/p1.stalx' });
   expect(await pending).toEqual({ status: 'cancelled' });
   expect(loadProjectMock).not.toHaveBeenCalled();
+});
+
+/**
+ * "Open my local copy" - the refused-open prompt's non-destructive answer. It opens
+ * the copy already on this computer as it is: nothing is downloaded and nothing is
+ * replaced, and the dirty bit rides into the seed so the shell knows the work is
+ * there. The load's own Start Editing then re-acquires and runs the divergence check.
+ */
+describe('openLocalCopy', () => {
+  const LOCAL = { project_id: 'p1', local_path: '/cache/p1/project.stalx', last_edit_at: null };
+
+  it('loads the local copy without downloading, seeded as carrying un-uploaded edits', async () => {
+    expect(await hook().openLocalCopy(SUMMARY, LOCAL)).toEqual({ status: 'opened' });
+    expect(invokeIpcMock.mock.calls.map((c) => c[0])).not.toContain('speleodb_open_project');
+    expect(invokeIpcMock.mock.calls.map((c) => c[0])).not.toContain('speleodb_open_project_discarding_local');
+    expect(setLinkOnOpenMock).toHaveBeenCalledWith(expect.objectContaining({
+      forPath: LOCAL.local_path, hasUnpushedEdits: true, projectId: 'p1',
+    }));
+    expect(loadProjectMock).toHaveBeenCalledWith(LOCAL.local_path, { accessConfirmed: true, request: expect.any(Number) });
+  });
+
+  it('still asks before leaving un-uploaded work under our lock in ANOTHER project', async () => {
+    useProjectStore.setState({ project: { file_path: '/cache/p9.stalx' } as never });
+    useSpeleoStore.setState({ link: openLink({ editState: 'editing', hasUnpushedEdits: true }), remoteProjectId: 'p9' });
+    const pending = hook().openLocalCopy(SUMMARY, LOCAL);
+    await vi.waitFor(() => expect(useSpeleoExitPrompt.getState().request).not.toBeNull());
+    useSpeleoExitPrompt.getState().request?.settle(false);
+    expect(await pending).toEqual({ status: 'cancelled' });
+    expect(loadProjectMock).not.toHaveBeenCalled();
+  });
 });

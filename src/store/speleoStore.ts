@@ -1426,6 +1426,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
  */
 export const PUSH_FAILURE_DIALOGS: readonly string[] = [
   'speleodb-done',
+  'speleodb-close',
+  'speleodb-quit',
   'speleodb-revert',
   'speleodb-unwound-push',
 ];
