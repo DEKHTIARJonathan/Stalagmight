@@ -304,8 +304,8 @@ describe('SpeleoRevisionHistory revision times (sdk#7)', () => {
   it('shows the server New York wall time as a local time with its GMT offset', async () => {
     seed('read-only');
     invokeIpcMock.mockResolvedValue([
-      { ...REVISIONS[0], authored_date: '2026/11/09 04:15' },
-      { ...REVISIONS[1], authored_date: 'not a date' },
+      { id: 'aaaaaaaa1111', parent_ids: ['bbbbbbbb2222'], author_email: 'me@x', authored_date: '2026/11/09 04:15', message: 'second' },
+      { id: 'bbbbbbbb2222', parent_ids: [], author_email: 'you@x', authored_date: 'not a date', message: 'root' },
     ] satisfies SpeleoRevision[]);
     render(<SpeleoRevisionHistory />);
     await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());

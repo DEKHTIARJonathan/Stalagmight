@@ -43,13 +43,14 @@ function zoneOffsetMs(instant: number, timeZone: string): number {
     });
     partsFormatters.set(timeZone, fmt);
   }
-  const part: Record<string, number> = {};
+  const part: Partial<Record<Intl.DateTimeFormatPartTypes, number>> = {};
   for (const p of fmt.formatToParts(new Date(instant))) {
     if (p.type !== 'literal') part[p.type] = Number(p.value);
   }
+  const get = (type: Intl.DateTimeFormatPartTypes) => part[type] ?? 0;
   // Some engines still answer 24 for midnight despite `h23`.
-  const hour = part.hour === 24 ? 0 : part.hour;
-  const wall = Date.UTC(part.year, part.month - 1, part.day, hour, part.minute, part.second);
+  const hour = get('hour') % 24;
+  const wall = Date.UTC(get('year'), get('month') - 1, get('day'), hour, get('minute'), get('second'));
   return wall - Math.floor(instant / 1000) * 1000;
 }
 
