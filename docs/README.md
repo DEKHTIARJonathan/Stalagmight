@@ -54,6 +54,7 @@ in determines how you write it, and picking wrong is the most common rework.
 | [map-renderer.md](map-renderer.md) | The custom WebGL survey renderer (a MapLibre `CustomLayerInterface`): tessellation, shaders, labels, incremental updates. |
 | [gas-planning.md](gas-planning.md) | Plan mode's gas engine: gas-weighted reachability over the survey graph, turnaround and stage-drop points. |
 | [move-tools.md](move-tools.md) | Move Station / Shot / Segment: scope of each, the shared drag-preview engine, Ctrl+drag panning, immovable stations. |
+| [SpeleoDB.md](SpeleoDB.md) | Complete SpeleoDB exchange contract: API calls and callers, artifacts, authentication, permissions, mutexes, revision fences, recovery, and workflow diagrams. |
 | [telemetry.md](telemetry.md) | Opt-in anonymous counters: the event registry, source tracking, and how to add events for a new feature. |
 | [style-guide.md](style-guide.md) | UI conventions: design tokens, typography, buttons, panels, tables, forms, accessibility. |
 | [notifications.md](notifications.md) | Which surface (toast, banner, dialog, log) an event gets: the decision tree, severity, dedup keys, copy rules. |
