@@ -278,8 +278,12 @@ as sent.
 
 ## Project workspace
 
-The full **SpeleoDB logo + SpeleoDB** toolbar button opens the left dock for local and managed
-projects, including signed-out and read-only projects. Survey starts on Sections;
+The SpeleoDB workspace is the left dock's
+SpeleoDB tab, for local and managed projects, including signed-out and read-only
+projects; the project menu's SpeleoDB row opens it from anywhere (Plan, Export, the
+fullscreen table). Its icon carries the project's state as a badge: a yellow "!"
+for un-uploaded changes, a lock for read-only (see the read-only prose above for
+its tooltip). Survey starts on Sections;
 Sections and SpeleoDB use accessible tabs with arrow-key navigation. Plan and Export
 retain SpeleoDB on request, and returning to Survey restores its previous tab.
 Opening SpeleoDB from the fullscreen table exits fullscreen without clearing table
@@ -287,7 +291,12 @@ selection or scroll. Navigation never acquires or releases a lock.
 
 For managed projects, the persistent header shows identity, editing access, lock owner and
 connection status. Everyday controls are Save Changes, Switch to Read Only Mode or
-Resume editing, Reload Project and Open on SpeleoDB. History is the only expandable section. Close Project sits below Reload Project,
+Resume editing (Sign in to resume editing while signed out), Reload Project and Open
+on SpeleoDB. The primary (filled) one follows the state: Save Changes while editing
+or with unsaved edits, and with un-uploaded edits while signed in; Sign in while
+signed out; Resume editing when it can apply and nothing waits; none for view-only
+or no access. A disabled control says why in its tooltip (signed out, no access,
+view-only, or another SpeleoDB operation running). History is the only expandable section. Close Project sits below Reload Project,
 warns about unsaved work, releases the editing lock on confirmed close and returns
 to the project listing. History includes inspection, restore/revert and
 Unwind/Rewind; revision editing remains Survey-only.
@@ -315,9 +324,10 @@ publishing retain their initial metadata inputs. The server's web-rendering flag
 retired, so the only informational banner left is the dismissable no-zero-datum
 notice.
 
-The left dock reuses Sections' saved width and pin/hover preferences. SpeleoDB has
-a 320px minimum and a 400px maximum; constrained layouts float the dock over the
-map. Programmatic opening focuses the selected tab without changing the saved
+The left dock reuses Sections' saved width and pin/hover preferences: one width for
+both tabs, so switching tabs never resizes it, with a 230px minimum
+(`LEFT_WORKSPACE_MIN_WIDTH`) and Sections' 400px maximum; constrained layouts float
+the dock over the map. Programmatic opening focuses the selected tab without changing the saved
 pin/hover preference. Keyboard focus inside keeps a floating dock accessible.
 Tabs, collapsed sections and hidden docks preserve history state.
 Navigation never submits changes. Local settings remains available from the menu;

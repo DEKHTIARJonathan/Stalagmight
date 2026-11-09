@@ -16,6 +16,7 @@
  */
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
+import { openSpeleoTab } from './helpers/speleoWorkspace';
 
 const MINE = '11111111-1111-1111-1111-111111111111';
 const THEIRS = '22222222-2222-2222-2222-222222222222';
@@ -119,6 +120,15 @@ test('signed out: every cached copy is listed read-only and opens without taking
   await expect(pill.getByTestId('speleodb-readonly-resume')).toHaveCount(0);
   expect(commands.filter((c) => c.includes('Command: speleodb_start_editing'))).toHaveLength(0);
   expect((await calls(page, 'speleodb_open_project')).map((c) => c.args?.projectId)).toEqual([MINE]);
+
+  // The SpeleoDB tab: signed in again is the way forward, so that is the primary
+  // action, and what cannot run says why.
+  await openSpeleoTab(page);
+  await expect(page.getByTestId('speleodb-workspace-editing')).toHaveAttribute('data-primary-action', '');
+  await expect(page.getByTestId('speleodb-workspace-upload')).not.toHaveAttribute('data-primary-action', '');
+  await expect(page.getByTestId('speleodb-workspace-latest')).toBeDisabled();
+  await expect(page.getByTestId('speleodb-workspace-latest')).toHaveAttribute('title', /Sign in to SpeleoDB/);
+  await expect(page.getByTestId('speleodb-workspace-open-web')).toHaveAttribute('title', /Sign in to SpeleoDB/);
 
   // "Sign in" goes to the SpeleoDB settings.
   await pill.getByTestId('speleodb-readonly-login').click();

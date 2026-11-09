@@ -3520,6 +3520,14 @@
         "unpushedWork": "Hand the open project back to SpeleoDB first - it still has work that has not been uploaded, and opening {{name}} would close it and leave that work only on this computer."
       }
     },
+    "workspace": {
+      "disabled": {
+        "busy": "Wait for the current SpeleoDB operation to finish.",
+        "noAccess": "Your SpeleoDB account has no access to this project.",
+        "permissionUnknown": "SpeleoDB has not said yet whether your account can edit this project.",
+        "reloadSignedOut": "Sign in to SpeleoDB to reload this project from the server."
+      }
+    },
     "workspaceTab": {
       "tablist": "Project workspace",
       "sections": "Sections",
