@@ -116,3 +116,31 @@ it('shows connection rejection in a modal and preserves Settings', async () => {
   expect(screen.getByTestId('speleodb-connection-error')).toBeVisible();
   expect(closeDialog).not.toHaveBeenCalled();
 });
+
+it.each(['dialog', 'draft', 'session'] as const)('does not authenticate after a pending preference save loses its %s owner', async (owner) => {
+  let finishSave!: (saved: boolean) => void;
+  const saveBeforeConnect = vi.fn(() => new Promise<boolean>((resolve) => { finishSave = resolve; }));
+  const apply = vi.fn(async () => ({ ok: true }));
+  useSpeleoStore.setState({ applyPendingAuth: apply });
+  render(<SpeleoDbSettings config={defaultConfig} onChange={onChange} changedFields={new Set()} onValidationError={vi.fn()} panelIdBase="save-owner" saveBeforeConnect={saveBeforeConnect} />);
+  fireEvent.click(screen.getByTestId('speleodb-settings-try-login'));
+  await act(async () => {
+    if (owner === 'dialog') useUIStore.setState({ activeDialog: 'settings', dialogData: { replacement: true } });
+    if (owner === 'draft') useSpeleoStore.getState().setPendingAuth({ kind: 'login', email: 'replacement@example.com', password: 'synthetic', token: '', useToken: false });
+    if (owner === 'session') useSpeleoStore.setState((state) => ({ sessionGeneration: state.sessionGeneration + 1 }));
+    finishSave(true);
+  });
+  expect(apply).not.toHaveBeenCalled();
+  expect(closeDialog).not.toHaveBeenCalled();
+});
+
+it('releases the parent busy state when the connection panel unmounts', async () => {
+  const onConnectionBusyChange = vi.fn();
+  const view = render(<SpeleoDbSettings config={defaultConfig} onChange={onChange} changedFields={new Set()} onValidationError={vi.fn()} panelIdBase="busy-owner" onConnectionBusyChange={onConnectionBusyChange} />);
+  fireEvent.click(screen.getByTestId('speleodb-settings-try-login'));
+  expect(onConnectionBusyChange).toHaveBeenLastCalledWith(true);
+  view.unmount();
+  expect(onConnectionBusyChange).toHaveBeenLastCalledWith(false);
+  await act(async () => finishLogin());
+  expect(closeDialog).not.toHaveBeenCalled();
+});

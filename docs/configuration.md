@@ -47,8 +47,8 @@ credential bytes (or prior absence) are restored with private permissions. A fai
 rollback is reported explicitly; two files cannot provide crash-atomic updates.
 
 When `speleodb/speleodb.conf` is genuinely absent, the legacy `[speleodb]` table
-supplies endpoint, email and `undo_mode`. Normalization still applies, including the
-polling floor. Passwords, tokens and obsolete credential-storage options are ignored;
+supplies endpoint, email and `undo_mode`. Obsolete HTTP overrides, polling settings,
+passwords, tokens and credential-storage options are ignored;
 sign in again to store a token. The separate file always takes precedence, including
 when damaged or unreadable. Malformed legacy preferences are logged without source
 values and retained on unrelated saves for recovery. A successful two-file save
@@ -596,7 +596,7 @@ unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
 
 HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
 address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
-allowed. Other private ranges, IPv6, localhost aliases/subdomains, public hosts,
+allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
 missing schemes and malformed addresses are rejected. No DNS-based exception or
 insecure-HTTP override exists. Invalid endpoints produce an error modal when
 connecting or saving; existing legacy override fields are ignored and omitted

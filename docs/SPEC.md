@@ -2659,7 +2659,7 @@ unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
 
 HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
 address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
-allowed. Other private ranges, IPv6, localhost aliases/subdomains, public hosts,
+allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
 missing schemes and malformed addresses are rejected. No DNS-based exception or
 insecure-HTTP override exists. Invalid endpoints produce an error modal when
 connecting or saving; existing legacy override fields are ignored and omitted

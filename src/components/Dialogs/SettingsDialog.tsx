@@ -365,6 +365,28 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
   return result;
 }
 
+/** Account actions own these fields even while unrelated preferences are staged. */
+function rebaseSpeleoOwnedFields(current: Config, saved: Config, previous: Config): Config {
+  const session = useSpeleoStore.getState().session;
+  return {
+    ...current,
+    general: {
+      ...current.general,
+      ...(JSON.stringify(saved.general.recent_projects) !== JSON.stringify(previous.general.recent_projects)
+        ? { recent_projects: saved.general.recent_projects }
+        : {}),
+    },
+    speleodb: {
+      ...current.speleodb,
+      email: saved.speleodb.email,
+      ...(saved.speleodb.endpoint !== previous.speleodb.endpoint &&
+          (current.speleodb.endpoint === previous.speleodb.endpoint || session?.loggedIn)
+        ? { endpoint: saved.speleodb.endpoint }
+        : {}),
+    },
+  };
+}
+
 export default function SettingsDialog() {
   const { t } = useTranslation();
   const closeDialog = finishSpeleoSettings;
@@ -391,6 +413,10 @@ export default function SettingsDialog() {
 
   // Local config copy for editing
   const [localConfig, setLocalConfig] = useState<Config | null>(config);
+  const localConfigRef = useRef(localConfig);
+  localConfigRef.current = localConfig;
+  const backendConfigRef = useRef(config);
+  const draftRevision = useRef(0);
   // Reference to original config for change detection
   const originalConfigRef = useRef<Config | null>(config);
 
@@ -462,6 +488,20 @@ export default function SettingsDialog() {
     }
   }, [config, localConfig]);
 
+  useEffect(() => {
+    const previous = backendConfigRef.current;
+    backendConfigRef.current = config;
+    if (!config || !previous || config === previous) return;
+    if (originalConfigRef.current) {
+      originalConfigRef.current = rebaseSpeleoOwnedFields(originalConfigRef.current, config, previous);
+    }
+    if (localConfigRef.current) {
+      const rebased = rebaseSpeleoOwnedFields(localConfigRef.current, config, previous);
+      localConfigRef.current = rebased;
+      setLocalConfig(rebased);
+    }
+  }, [config]);
+
   // Live-preview theme changes: apply immediately on selection, revert on unmount/cancel
   useEffect(() => {
     if (localConfig) {
@@ -494,9 +534,12 @@ export default function SettingsDialog() {
 
   // Handle config changes from category components
   const handleConfigChange = useCallback((updates: Partial<Config>) => {
+    draftRevision.current += 1;
     setLocalConfig((prev) => {
       if (!prev) return prev;
-      return mergeConfig(prev, updates);
+      const next = mergeConfig(prev, updates);
+      localConfigRef.current = next;
+      return next;
     });
   }, []);
 
@@ -526,6 +569,7 @@ export default function SettingsDialog() {
 
   // Handle category change from sidebar
   const handleCategoryChange = useCallback((category: SettingsCategory) => {
+    if (connectionBusy || savingSettings.current) return;
     setActiveCategory(category);
     // Also update focused index to match
     const index = CATEGORIES.findIndex((c) => c.id === category);
@@ -536,28 +580,42 @@ export default function SettingsDialog() {
     if (contentRef.current) {
       contentRef.current.scrollTop = 0;
     }
-  }, []);
+  }, [connectionBusy]);
 
   // Handle focus change from sidebar
   const handleFocusChange = useCallback((index: number) => {
     setFocusedIndex(index);
   }, []);
 
-  // Persist the config (if changed) then apply any staged SpeleoDB account action
-  // (A2). Returns true only if everything succeeded (so the caller may close). On
-  // an auth failure the config is already saved; we surface the error in the
-  // SpeleoDB panel and keep the dialog open for a retry.
+  // Never close over a replacement dialog or edits made while persistence waited.
   const commitSettings = useCallback(async (): Promise<boolean> => {
-    if (!localConfig || savingSettings.current) return false;
+    const draft = localConfigRef.current;
+    if (!draft || savingSettings.current) return false;
+    const issuedRevision = draftRevision.current;
+    const issuedDialog = useUIStore.getState().dialogData;
+    const issuedGeneration = useSpeleoStore.getState().sessionGeneration;
+    const ownsDialog = () => {
+      const current = useUIStore.getState();
+      return current.activeDialog === 'settings' && current.dialogData === issuedDialog &&
+        useSpeleoStore.getState().sessionGeneration === issuedGeneration;
+    };
     savingSettings.current = true;
     try {
-    if (isDirty) {
-      const result = await updateConfig(localConfig);
-      if (!result.success) { setSaveError(result.error ?? 'Could not save Settings.'); return false; }
+      if (isDirty) {
+        const saved = useProjectStore.getState().config;
+        const previous = backendConfigRef.current;
+        const next = saved && previous ? rebaseSpeleoOwnedFields(draft, saved, previous) : draft;
+        const result = await updateConfig(next);
+        if (!result.success) {
+          if (ownsDialog()) setSaveError(result.error ?? 'Could not save Settings.');
+          return false;
+        }
+      }
+      return ownsDialog() && draftRevision.current === issuedRevision;
+    } finally {
+      savingSettings.current = false;
     }
-    return true;
-    } finally { savingSettings.current = false; }
-  }, [localConfig, isDirty, updateConfig]);
+  }, [isDirty, updateConfig]);
 
   // Save settings
   const handleSave = useCallback(async () => {
@@ -623,15 +681,19 @@ export default function SettingsDialog() {
 
   // Reset to defaults for current category
   const handleResetToDefaults = useCallback(() => {
+    if (connectionBusy || savingSettings.current) return;
     setShowResetConfirm(true);
-  }, []);
+  }, [connectionBusy]);
 
   // Confirm reset to defaults
   const handleConfirmReset = useCallback(() => {
     if (!localConfig) return;
 
     const defaults = getCategoryDefaults(activeCategory, resolvedTheme, localConfig);
-    setLocalConfig(mergeConfig(localConfig, defaults));
+    draftRevision.current += 1;
+    const next = mergeConfig(localConfig, defaults);
+    localConfigRef.current = next;
+    setLocalConfig(next);
     setShowResetConfirm(false);
   }, [localConfig, activeCategory, resolvedTheme]);
 
@@ -736,7 +798,7 @@ export default function SettingsDialog() {
                   <Button
                     variant="secondary"
                     onClick={handleResetToDefaults}
-                    disabled={activeCategory === 'speleodb' && useSpeleoStore.getState().session?.loggedIn === true}
+                    disabled={connectionBusy || (activeCategory === 'speleodb' && useSpeleoStore.getState().session?.loggedIn === true)}
                     data-testid="reset-category-defaults"
                   >
                     {t('settings.resetToDefaults')}

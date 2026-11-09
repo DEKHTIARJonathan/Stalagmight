@@ -36,9 +36,17 @@ export function SpeleoDbSettings({
   const speleo = config.speleodb;
   const connectionRef = useRef(speleo);
   connectionRef.current = speleo;
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const [loggingIn, setLoggingIn] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  useEffect(() => { onConnectionBusyChange?.(loggingIn); }, [loggingIn, onConnectionBusyChange]);
+  useEffect(() => {
+    onConnectionBusyChange?.(loggingIn);
+    return () => onConnectionBusyChange?.(false);
+  }, [loggingIn, onConnectionBusyChange]);
   useEffect(() => {
     void refreshSession();
   }, [refreshSession]);
@@ -52,26 +60,28 @@ export function SpeleoDbSettings({
 
   const showLoginForm = pendingAuth?.kind === 'login' || !session?.loggedIn;
 
-  // Log in NOW (don't wait for Save) so the user can verify their credentials
-  // against the staged endpoint. Applies the same login `applyPendingAuth` runs on
-  // Save; on success it closes Settings while the project listing refreshes,
-  // on failure it surfaces the error. The credentials required (email or token) -
-  // an empty form just reports the backend's "missing credentials".
+  // Persist preferences first, then authenticate only the request this form issued.
   const canTryLogin = login.useToken ? login.token.trim().length > 0 : login.email.trim().length > 0;
   const handleTryLogin = async () => {
     // Ensure the typed credentials are staged before applyPendingAuth reads them
     // (zustand `set` is synchronous, so the subsequent read sees this).
     if (pendingAuth?.kind !== 'login') setPendingAuth(login);
     const issuedDialog = useUIStore.getState().dialogData;
+    const issuedAuth = useSpeleoStore.getState().pendingAuth;
+    const issuedGeneration = useSpeleoStore.getState().sessionGeneration;
     setLoggingIn(true);
     try {
       if (saveBeforeConnect && !await saveBeforeConnect()) return;
+      const beforeAuth = useUIStore.getState();
+      const account = useSpeleoStore.getState();
+      if (!mounted.current || beforeAuth.activeDialog !== 'settings' || beforeAuth.dialogData !== issuedDialog ||
+          account.pendingAuth !== issuedAuth || account.sessionGeneration !== issuedGeneration) return;
       const result = await applyPendingAuth(speleo.endpoint);
       if (result.cancelled) return;
       // A slow login may finish after Settings was dismissed or replaced.
       // Its session still applies, but it must not close or edit the new dialog.
       const currentDialog = useUIStore.getState();
-      if (currentDialog.activeDialog !== 'settings' || currentDialog.dialogData !== issuedDialog) return;
+      if (!mounted.current || currentDialog.activeDialog !== 'settings' || currentDialog.dialogData !== issuedDialog) return;
       if (result.ok) {
         const endpoint = useSpeleoStore.getState().session?.endpoint;
         if (endpoint && connectionRef.current === speleo) onChange({ speleodb: { ...speleo, endpoint } });

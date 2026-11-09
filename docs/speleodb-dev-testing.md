@@ -267,7 +267,7 @@ unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
 
 HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
 address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
-allowed. Other private ranges, IPv6, localhost aliases/subdomains, public hosts,
+allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
 missing schemes and malformed addresses are rejected. No DNS-based exception or
 insecure-HTTP override exists. Invalid endpoints produce an error modal when
 connecting or saving; existing legacy override fields are ignored and omitted
@@ -284,3 +284,18 @@ SpeleoDB Close saving the endpoint without connecting. All three typechecks,
 nine non-test lint gates, root/member formatting checks and workspace Clippy
 with telemetry and all targets passed. Existing repository warnings remain.
 No full browser-suite or native desktop acceptance is claimed for this change.
+
+### Focused adversarial review (2026-11-09)
+
+Reviewed all five commits above master for connection settings and automatic
+transport policy. Corrected ownership checks around preference persistence and
+Connect, category navigation during authentication, late save success/error
+handling, newer endpoint edits, and rebasing account-owned fields after logout.
+Nine focused component regression cases passed across the connection panel and
+Settings dialog. No full test suite or browser suite was rerun for this review.
+
+All three typechecks, nine non-test lint gates, root/member Rust formatting and
+workspace Clippy with telemetry and all targets passed. Existing Clippy warnings
+remain. `prek run -a` was attempted but exited with code 2 because this repository
+and its parent directories have neither `prek.toml` nor `.pre-commit-config.yaml`.
+The repository's existing validation commands were run directly instead.
