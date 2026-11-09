@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { SettingsSection } from './SettingsSection';
 import { Button } from '../../common/Button';
 import { ExternalLinkIcon } from '../../common/icons';
 import { useUIStore } from '../../../store/uiStore';
@@ -120,9 +119,7 @@ export function SpeleoRevisionHistory() {
   if (!projectId) return null;
 
   return (
-    <SettingsSection title={t('speleodb.revisions.title')} data-testid="speleodb-revisions">
-      {/* Sits under the section heading rather than in it: SettingsSection takes a
-          plain string title. */}
+    <div data-testid="speleodb-revisions">
       <div className="flex justify-end">
         <Button
           variant="external"
@@ -283,6 +280,6 @@ export function SpeleoRevisionHistory() {
           })}
         </ul>
       )}
-    </SettingsSection>
+    </div>
   );
 }

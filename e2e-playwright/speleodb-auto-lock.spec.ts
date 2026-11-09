@@ -83,6 +83,7 @@ test('workspace contains everyday controls and Revision History without history-
   const history = page.getByTestId('speleodb-workspace-section-history');
   await expect(history).toContainText('Revision History');
   await history.click();
+  await expect(page.getByTestId('speleodb-revisions').getByRole('heading')).toHaveCount(0);
   await expect(page.getByTestId('speleodb-history-back')).toHaveCount(0);
   await expect(page.getByTestId('speleodb-history-forward')).toHaveCount(0);
   const webHistory = page.getByTestId('speleodb-web-revisions');
