@@ -134,20 +134,26 @@ describe('deriveRemoteItems', () => {
 });
 
 describe('hideOtherAccountsCopies', () => {
+  const P1 = '11111111-1111-1111-1111-111111111111';
+  const P2 = '22222222-2222-2222-2222-222222222222';
+  const cachePath = (id: string) => `/home/u/.cache/app/speleodb/${id}/project.stalx`;
   const recents = [
     project({ file_path: '/local.stalx' }),
-    project({ file_path: '/cache/p1/project.stalx', is_remote: true, speleodb_project_id: 'p1' }),
-    project({ file_path: '/cache/p2/project.stalx', is_remote: true, speleodb_project_id: 'p2' }),
-    project({ file_path: '/elsewhere.stalx', is_remote: true, speleodb_project_id: 'p3' }),
+    project({ file_path: cachePath(P1), is_remote: true, speleodb_project_id: P1 }),
+    project({ file_path: cachePath(P2), is_remote: true, speleodb_project_id: P2 }),
+    // A stray linked copy of the hidden project, outside the cache: not a cached copy.
+    project({ file_path: '/elsewhere.stalx', is_remote: true, speleodb_project_id: P2 }),
   ];
 
-  it('drops only the recents whose cached copy belongs to another account', () => {
-    const kept = hideOtherAccountsCopies(recents, [copy('p1', 'Mine', 'mine'), copy('p2', 'Theirs', 'other_account')]);
-    expect(kept.map((p) => p.file_path)).toEqual(['/local.stalx', '/cache/p1/project.stalx', '/elsewhere.stalx']);
+  it('drops only the cached files that belong to another account', () => {
+    const kept = hideOtherAccountsCopies(recents, [copy(P1, 'Mine', 'mine'), copy(P2, 'Theirs', 'other_account')]);
+    expect(kept.map((p) => p.file_path)).toEqual(['/local.stalx', cachePath(P1), '/elsewhere.stalx']);
+    // ...and the hidden cache path never resurfaces as an "unavailable" row.
+    expect(deriveMissingPaths(recents.map((p) => p.file_path), kept)).toEqual([]);
   });
 
   it('keeps everything when nothing is hidden (signed out)', () => {
-    expect(hideOtherAccountsCopies(recents, [copy('p1', 'A', 'signed_out'), copy('p2', 'B', 'signed_out')]))
+    expect(hideOtherAccountsCopies(recents, [copy(P1, 'A', 'signed_out'), copy(P2, 'B', 'signed_out')]))
       .toBe(recents);
   });
 });

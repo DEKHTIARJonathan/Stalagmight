@@ -34,8 +34,12 @@ export function deriveMissingPaths(
   const have = new Set(available.map((p) => p.file_path));
   // Managed cache files are represented by their remote project, never by local
   // missing-file actions. Their cache path is fixed by the backend.
-  const managedCache = /[/\\]speleodb[/\\][0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[/\\]project\.stalx$/i;
-  return recentPaths.filter((p) => !have.has(p) && !managedCache.test(p));
+  return recentPaths.filter((p) => !have.has(p) && !isManagedCachePath(p));
+}
+
+/** `<cache>/speleodb/<project uuid>/project.stalx`: the one place a managed copy lives. */
+function isManagedCachePath(path: string): boolean {
+  return /[/\\]speleodb[/\\][0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}[/\\]project\.stalx$/i.test(path);
 }
 
 /** All SpeleoDB projects use the same remote entry, including cached projects.
@@ -83,7 +87,12 @@ export function hideOtherAccountsCopies(
 ): ProjectMetadata[] {
   const hidden = new Set(copies.filter((copy) => !isListedCachedCopy(copy)).map((copy) => copy.project_id));
   if (hidden.size === 0) return recents;
-  return recents.filter((p) => !(p.is_remote && p.speleodb_project_id && hidden.has(p.speleodb_project_id)));
+  // Only the cached file itself: a stray linked copy elsewhere is not a cached copy
+  // (opening it routes to the managed copy), and hiding it would turn its recents
+  // entry into an "unavailable" row.
+  return recents.filter((p) => !(
+    p.is_remote && p.speleodb_project_id && hidden.has(p.speleodb_project_id) && isManagedCachePath(p.file_path)
+  ));
 }
 
 export function deriveRemoteItems(
