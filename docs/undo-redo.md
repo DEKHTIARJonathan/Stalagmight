@@ -764,10 +764,15 @@ One lock sits OUTSIDE even that: `speleodb_lock_ops`
 operation** against every other and is deliberately held across network calls.
 Start Editing takes it before its first read (generation, link, token, holder)
 and holds it through the commit; so do the reclaim-checked releases, the status
-refresh's inherited-lock gate reopen, and logout - each of which can invalidate a
-fact another one of them is mid-way through acting on. Nothing holding `project` / `database` / `undo_stack` may
+refresh's inherited-lock gate reopen, logout, and a settings save or reload that
+moves to another SpeleoDB instance (taken before `config_write_lock`) - each of
+which can invalidate a fact another one of them is mid-way through acting on.
+Nothing holding `project` / `database` / `undo_stack` / `config_write_lock` may
 block on it - its users decide under `project`, drop that guard, and only then
-take it. The SpeleoDB session generation (`speleodb_session_generation`) is
+take it. No synchronous Tauri command may block on it either: those run on the
+main thread, and the span lasts as long as an upload or download. The partial
+config writes never take it, and Switch to Read Only Mode drops `command_lock`
+and `project` before its release request. The SpeleoDB session generation (`speleodb_session_generation`) is
 likewise only ever bumped while holding `project`; see the module doc in
 `speleodb_session.rs` for the rules.
 

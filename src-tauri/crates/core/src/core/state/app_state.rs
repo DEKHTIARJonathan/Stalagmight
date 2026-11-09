@@ -204,8 +204,9 @@ pub struct AppState {
     /// "stale release frees the successor's mutex" interleaving cannot fit in
     /// between. ORDER: this mutex is OUTERMOST - it is held across network calls,
     /// and code holding `project`/`database`/`undo_stack` must never block on it
-    /// (decide under `project`, drop it, then take this). See
-    /// `core::state::speleodb_session`.
+    /// (decide under `project`, drop it, then take this). Nor may a synchronous
+    /// Tauri command: those run on the main thread, and an upload or download
+    /// holds this for minutes. See `core::state::speleodb_session`.
     pub(super) speleodb_lock_ops: Mutex<()>,
     /// The #202 lock re-verify running in the background, if any: started by one
     /// edit, collected by a later one, so `execute()` never waits on the network.
