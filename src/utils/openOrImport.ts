@@ -42,6 +42,7 @@ import { extractFilename } from './path';
 import { openDialog, openOrImportFilters, DMP_EXTENSION } from './fileDialogs';
 import { clearProjectActionSource } from './telemetry';
 import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from './speleoExit';
+import { confirmSpeleoFileOpen } from './confirmSpeleoOpen';
 import { TOAST_KEYS } from './toastKeys';
 import i18n from '../i18n';
 
@@ -335,7 +336,13 @@ export async function routeOpenedFile(
       // The prompt closes the project per the user's answer; the open then runs
       // here, so the user's Ctrl+O is not swallowed by the prompt it raised.
       if (store.project && openProjectNeedsSpeleoExitPrompt()) {
-        if (await askSpeleoExit('switch')) await useProjectStore.getState().loadProject(path);
+        // The destination's disk preflight runs BEFORE anything is given up: a file
+        // that cannot be opened must fail here (the catch below reports it), not
+        // after the user has answered the prompt and the project is closed.
+        await confirmSpeleoFileOpen(path);
+        if (await askSpeleoExit('switch')) {
+          await useProjectStore.getState().loadProject(path, { accessConfirmed: true });
+        }
       } else if (store.project && store.isDirty) {
         ui.openDialog('unsaved-changes', { pendingOpenPath: path });
         handedOff = true;

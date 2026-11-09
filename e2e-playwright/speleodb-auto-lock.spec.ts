@@ -170,17 +170,18 @@ test('read-only switching refuses unuploaded work and sign-in opens application 
 });
 
 
-test('workspace Close Project warns for unsaved work, cancels safely and closes to the listing', async ({ page }) => {
+test('workspace Close Project asks about unsaved work, cancels safely and closes to the listing', async ({ page }) => {
   await openRemote(page, false);
   await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.setState({ isDirty: true }));
   await page.getByTestId('speleodb-status-button').click();
   await page.getByTestId('speleodb-workspace-close').click();
-  await expect(page.getByTestId('speleodb-close-dialog')).toBeVisible();
-  await page.getByTestId('speleodb-close-cancel').click();
+  await expect(page.getByTestId('speleodb-exit-dialog')).toBeVisible();
+  await page.getByTestId('speleodb-exit-cancel').click();
   await expect(page.getByTestId('single-system-view')).toBeVisible();
   expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.getState().isDirty)).toBe(true);
   await page.getByTestId('speleodb-workspace-close').click();
-  await page.getByTestId('speleodb-close-discard').click();
+  await page.getByTestId('speleodb-exit-discard').click();
+  await page.getByTestId('speleodb-exit-discard-confirm').click();
   await expect(page.getByTestId('global-view')).toBeVisible();
   expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.getState().project)).toBeNull();
 });

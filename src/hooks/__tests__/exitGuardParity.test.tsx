@@ -203,7 +203,8 @@ describe('an answered prompt continues the exit the user asked for', () => {
 
   it('opening another file then opens it', async () => {
     await answered(() => routeOpenedFile(OTHER));
-    expect(loadProject).toHaveBeenCalledWith(OTHER);
+    // The destination preflight ran before the prompt, so the load skips it.
+    expect(loadProject).toHaveBeenCalledWith(OTHER, { accessConfirmed: true });
   });
 
   it('New Project then opens the New Project dialog', async () => {
