@@ -75,17 +75,19 @@ function fillCommitMessage() {
 }
 
 beforeEach(() => {
-  invokeIpcMock.mockReset();
+  invokeIpcMock.mockReset().mockImplementation(async (command) => command === 'speleodb_project_access_at'
+    ? { release_context: { project_id: 'synthetic', endpoint: 'https://example.com', user_email: 'u@x', session_generation: '1' } }
+    : null);
   confirmMock.mockReset().mockResolvedValue(true);
   performQuitMock.mockReset();
   saveProject = vi.fn(async () => ({ success: true }) as never);
   // A georeferenced zero datum keeps the unrelated `no_anchor` notice out of the
   // banner slot, so banner assertions are about the push failure only.
   useProjectStore.setState({
-    project: { zero_datums: [{}] } as never,
+    project: { zero_datums: [{}], file_path: '/synthetic/remote.stalx' } as never,
     isDirty: false,
     saveProject: saveProject as never,
-    closeProject: vi.fn(async () => ({ success: true })) as never,
+    closeProject: vi.fn(async () => { useProjectStore.setState({ project: null }); return { success: true }; }) as never,
   });
   useSpeleoStore.setState({ link: { ...LINK }, banner: null, busy: false });
   useUIStore.setState({
@@ -144,7 +146,7 @@ describe('SpeleoQuitDialog - retain local edits and release on quit', () => {
     await userEvent.click(screen.getByTestId('speleodb-quit-release'));
 
     await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
-    expect(calledCommands()).toEqual(['speleodb_release_current_lock']);
+    expect(calledCommands()).toEqual(['speleodb_project_access_at', 'speleodb_release_current_lock']);
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_release_current_lock', expect.objectContaining({ ownOnly: true, allowUnpushed: true }));
   });
 
@@ -156,7 +158,7 @@ describe('SpeleoQuitDialog - retain local edits and release on quit', () => {
 
     await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
     expect(saveProject).toHaveBeenCalledTimes(1);
-    expect(calledCommands()).toEqual(['speleodb_release_current_lock']);
+    expect(calledCommands()).toEqual(['speleodb_project_access_at', 'speleodb_release_current_lock']);
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_release_current_lock', expect.objectContaining({ ownOnly: true, allowUnpushed: true }));
   });
 });
@@ -166,14 +168,14 @@ describe('SpeleoQuitDialog - keep-lock exit', () => {
     render(<SpeleoQuitDialog />);
     await userEvent.click(screen.getByTestId('speleodb-quit-keep-lock'));
     await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
-    expect(useProjectStore.getState().closeProject).toHaveBeenCalledWith({ releaseLock: false });
+    expect(useProjectStore.getState().closeProject).toHaveBeenCalledWith({ releaseLock: false, request: expect.any(Number) });
     expect(invokeIpcMock).not.toHaveBeenCalled();
   });
   it('does not release or quit when acknowledgment is cancelled', async () => {
     confirmMock.mockResolvedValue(false);
     render(<SpeleoQuitDialog />);
     await userEvent.click(screen.getByTestId('speleodb-quit-release'));
-    expect(invokeIpcMock).not.toHaveBeenCalled();
+    expect(calledCommands()).toEqual(['speleodb_project_access_at']);
     expect(performQuitMock).not.toHaveBeenCalled();
   });
   it('focuses the keep-lock action by default', () => {
@@ -532,4 +534,16 @@ describe('quit release safety', () => {
     await waitFor(() => expect(useUIStore.getState().showToast).toHaveBeenCalled());
     expect(performQuitMock).not.toHaveBeenCalled();
   });
+});
+
+it('never quits a replacement project after an earlier local close completes', async () => {
+  let finish!: (value: { success: boolean }) => void;
+  useProjectStore.setState({ closeProject: vi.fn(() => new Promise((resolve) => { finish = resolve; })) as never });
+  render(<SpeleoQuitDialog />);
+  fireEvent.click(screen.getByTestId('speleodb-quit-keep-lock'));
+  await waitFor(() => expect(useProjectStore.getState().closeProject).toHaveBeenCalledOnce());
+  useProjectStore.setState({ project: { file_path: '/replacement.stalx' } as never });
+  finish({ success: true });
+  await waitFor(() => expect(screen.getByTestId('speleodb-quit-keep-lock')).toBeEnabled());
+  expect(performQuitMock).not.toHaveBeenCalled();
 });

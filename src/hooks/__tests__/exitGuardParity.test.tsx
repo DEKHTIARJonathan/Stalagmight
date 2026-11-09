@@ -18,10 +18,7 @@
  * `hasUnpushedSpeleoWork`, and the matrix below is the contract that keeps them
  * from drifting apart again.
  *
- * The ONE deliberate asymmetry is (lock held, nothing unpushed): quit does not prompt,
- * because the backend's exit-time release is safe with nothing outstanding (aab5121d);
- * the three hand-back exits must, because the app keeps running and the server mutex
- * would be left stranded.
+ * A held lock also prompts when clean, so every exit offers deliberate retention.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';

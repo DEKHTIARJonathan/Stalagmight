@@ -3394,6 +3394,7 @@ mod tests {
             .speleodb_release_current_lock(true, true, None)
             .is_err());
         let context = |id: &str, email: &str| crate::speleodb::SpeleoReleaseContext {
+            session_generation: state.speleodb_session_generation().to_string(),
             project_id: id.into(),
             endpoint: base.clone(),
             user_email: email.into(),
@@ -3407,6 +3408,11 @@ mod tests {
             .is_err());
         assert!(state
             .speleodb_release_current_lock(true, true, Some(context(REMOTE_ID, "another@x")))
+            .is_err());
+        let mut stale = context(REMOTE_ID, "u@x");
+        stale.session_generation = "stale".into();
+        assert!(state
+            .speleodb_release_current_lock(true, true, Some(stale))
             .is_err());
         assert!(seen.lock().expect("requests").is_empty());
         state

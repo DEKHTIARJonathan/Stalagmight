@@ -1,4 +1,5 @@
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { isProjectRequestCurrent, reserveProjectRequest } from '../../utils/projectTransition';
+import { releaseSpeleoLock } from '../../utils/releaseSpeleoLock';
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
@@ -6,7 +7,7 @@ import { useSpeleoStore, isUnwoundNotEdited } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
-import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { getErrorMessage } from '../../utils/ipc';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 import { abandonUpdateRestart, holdsWriteLock, performQuit } from '../../utils/quit';
 import { Button } from '../common/Button';
@@ -83,24 +84,26 @@ export default function SpeleoQuitDialog() {
   const [message, setMessage] = useState('');
   const needsMessage = isDirtyLocal || (link?.hasUnpushedEdits ?? false);
   const [releasing, setReleasing] = useState(false);
-  // The destructive option is two-step on purpose: the first press only arms it.
+  // Guard all asynchronous exit operations against duplicate submissions.
   const operation = useRef(false);
   const busyAny = busy || saving || releasing;
 
-  const runQuit = async (work: (current: () => boolean) => Promise<void>) => {
+  const runQuit = async (work: (current: () => boolean, request: number) => Promise<void>) => {
     if (operation.current || busyAny) return;
     operation.current = true;
     setReleasing(true);
+    const request = reserveProjectRequest();
     const state = useProjectStore.getState();
     const path = state.project?.file_path;
     const op = state.loading.clientOpId;
     const generation = useSpeleoStore.getState().sessionGeneration;
-    const current = () => useProjectStore.getState().project?.file_path === path &&
+    const current = () => isProjectRequestCurrent(request) && useProjectStore.getState().project?.file_path === path &&
       useProjectStore.getState().loading.clientOpId === op &&
       useSpeleoStore.getState().sessionGeneration === generation &&
       useUIStore.getState().activeDialog === 'speleodb-quit' &&
       useUIStore.getState().dialogData === dialogData;
-    try { await work(current); }
+    try { await work(current, request); }
+    catch (error) { if (current()) showToast(getErrorMessage(error), TOAST_KEYS.SPELEODB_LOCK, 'error'); }
     finally { operation.current = false; setReleasing(false); }
   };
 
@@ -152,10 +155,12 @@ export default function SpeleoQuitDialog() {
     }
   });
 
-  const keepLockAndQuit = () => runQuit(async (current) => {
+  const keepLockAndQuit = () => runQuit(async (current, request) => {
+    const generation = useSpeleoStore.getState().sessionGeneration;
     if (!await maybeSaveLocally(current) || !current()) return;
-    const result = await useProjectStore.getState().closeProject({ releaseLock: false });
-    if (!result.success) return;
+    const result = await useProjectStore.getState().closeProject({ releaseLock: false, request });
+    if (!result.success || !isProjectRequestCurrent(request) || useProjectStore.getState().project !== null ||
+      useSpeleoStore.getState().sessionGeneration !== generation || useUIStore.getState().dialogData !== dialogData) return;
     closeDialog();
     performQuit();
   });
@@ -164,13 +169,10 @@ export default function SpeleoQuitDialog() {
   const releaseWithoutUploadAndQuit = () => runQuit(async (current) => {
     if (!(await maybeSaveLocally(current)) || !current()) return;
     if (holdsLock) {
-      const session = useSpeleoStore.getState().session;
-      const expected = { project_id: useSpeleoStore.getState().remoteProjectId, endpoint: session?.endpoint, user_email: session?.userEmail };
-      if (!await confirm('Release without uploading? Your edits remain local. Another collaborator may advance the remote project.', { kind: 'warning', okLabel: 'Release without uploading', cancelLabel: t('common.actions.cancel') }) || !current()) return;
-      setReleasing(true);
       try {
-        await invokeIpc<null>('speleodb_release_current_lock', { ownOnly: true, allowUnpushed: true, expected });
+        if (!await releaseSpeleoLock(current)) return;
       } catch (e) {
+        if (!current()) return;
         showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), TOAST_KEYS.SPELEODB_LOCK, 'error');
         return;
       }
@@ -208,6 +210,7 @@ export default function SpeleoQuitDialog() {
           <label className="flex items-center gap-2 text-sm">
             <input
               type="checkbox"
+              disabled={busyAny}
               checked={saveLocally}
               onChange={(e) => setSaveLocally(e.target.checked)}
               className="rounded"
@@ -235,7 +238,7 @@ export default function SpeleoQuitDialog() {
         {holdsLock && needsMessage && (
           <div>
             <label htmlFor="speleodb-quit-message" className="block text-sm text-text-secondary mb-1">{t('speleodb.done.messageLabel')}</label>
-            <textarea id="speleodb-quit-message" value={message} onChange={(e) => setMessage(e.target.value)} rows={3} className="w-full px-2 py-1 bg-background border border-border rounded text-sm" data-testid="speleodb-quit-message" />
+            <textarea id="speleodb-quit-message" disabled={busyAny} value={message} onChange={(e) => setMessage(e.target.value)} rows={3} className="w-full px-2 py-1 bg-background border border-border rounded text-sm" data-testid="speleodb-quit-message" />
           </div>
         )}
         <SpeleoPushFailureNotice />
@@ -251,9 +254,6 @@ export default function SpeleoQuitDialog() {
           )}
           {holdsLock ? (
             <>
-              {/* [#303] On an unwound copy the roles swap: leaving without uploading
-                  preserves the server survey, so THAT becomes the default a stray
-                  Enter reaches. Same swap as SpeleoCloseDialog. */}
               <Button
                 variant="secondary"
                 onClick={() => void releaseWithoutUploadAndQuit()}
@@ -263,11 +263,6 @@ export default function SpeleoQuitDialog() {
               >
                 {t('speleodb.quit.releaseWithoutUpload')}
               </Button>
-              {/* Primary + [data-primary-action]: DialogWrapper's initial-focus
-                  heuristic lands here, so a stray Enter pushes - it can never
-                  discard or release. Except on an unwound copy, where pushing IS the
-                  destructive answer (it records the older survey over the newer one),
-                  so it hands the default to "release without uploading" above and turns danger. */}
               <Button
                 variant={unwound ? 'danger' : 'secondary'}
                 onClick={() => void pushReleaseThenQuit()}

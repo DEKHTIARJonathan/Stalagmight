@@ -64,13 +64,13 @@ function fillCommitMessage() {
 beforeEach(() => {
   confirmMock.mockReset().mockResolvedValue(true);
   invokeIpcMock.mockReset();
-  invokeIpcMock.mockImplementation(async (command) => command === 'speleodb_project_access_at' ? null : { kind: 'released' });
+  invokeIpcMock.mockImplementation(async (command, args) => command === 'speleodb_project_access_at' ? (args.path === '/synthetic/remote.stalx' ? { release_context: { session_generation: '1' } } : null) : { kind: 'released' });
   closeProject = vi.fn(async () => ({ success: true }));
   saveProject = vi.fn(async () => ({ success: true }));
   closeDialog = vi.fn();
   useProjectStore.setState({
     // A georeferenced zero datum keeps the unrelated no-anchor notice quiet.
-    project: { zero_datums: [{}] } as never,
+    project: { zero_datums: [{}], file_path: '/synthetic/remote.stalx' } as never,
     isDirty: false,
     closeProject: closeProject as never,
     saveProject: saveProject as never,
@@ -386,7 +386,7 @@ it('continues after an ordinary save refreshes the project object', async () => 
 it.each(['speleodb-close-release', 'speleodb-close-push-release'])('continues %s across a benign session refresh', async (button) => {
   let resolve!: (value: unknown) => void;
   const probe = new Promise((yes) => { resolve = yes; });
-  invokeIpcMock.mockImplementation((command) => command === 'speleodb_project_access_at' ? probe : Promise.resolve({ kind: 'released' }));
+  invokeIpcMock.mockImplementation((command, args) => command === 'speleodb_project_access_at' ? (args.path === '/synthetic/remote.stalx' ? Promise.resolve({ release_context: { session_generation: '1' } }) : probe) : Promise.resolve({ kind: 'released' }));
   useSpeleoStore.getState().setSession({ logged_in: true, user_email: 'synthetic@example.com', endpoint: 'https://synthetic.example' });
   useUIStore.setState({ dialogData: { pendingOpenPath: '/synthetic/destination.stalx' } });
   render(<SpeleoCloseDialog />);
@@ -395,4 +395,41 @@ it.each(['speleodb-close-release', 'speleodb-close-push-release'])('continues %s
   useSpeleoStore.getState().setSession({ logged_in: true, user_email: 'synthetic@example.com', endpoint: 'https://synthetic.example' });
   await act(async () => { resolve(null); });
   await waitFor(() => expect(closeProject).toHaveBeenCalledOnce());
+});
+
+it.each([false, true])('keeps the lock locally without a server call, dirty=%s', async (dirty) => {
+  useProjectStore.setState({ isDirty: dirty });
+  render(<SpeleoCloseDialog />);
+  await userEvent.click(screen.getByTestId('speleodb-close-keep-lock'));
+  await waitFor(() => expect(closeProject).toHaveBeenCalledOnce());
+  expect(closeProject).toHaveBeenCalledWith({ releaseLock: false, request: expect.any(Number) });
+  expect(saveProject).toHaveBeenCalledTimes(dirty ? 1 : 0);
+  expect(invokeIpcMock).not.toHaveBeenCalled();
+});
+it('keeps the project open when the requested keep-lock local save fails', async () => {
+  useProjectStore.setState({ isDirty: true });
+  saveProject.mockResolvedValue({ success: false, error: 'Synthetic disk failure' });
+  render(<SpeleoCloseDialog />);
+  await userEvent.click(screen.getByTestId('speleodb-close-keep-lock'));
+  expect(closeProject).not.toHaveBeenCalled();
+  expect(invokeIpcMock).not.toHaveBeenCalled();
+});
+it('opens an available linked destination using only a local access inspection', async () => {
+  const load = vi.fn(async () => ({ success: true }));
+  useProjectStore.setState({ loadProject: load as never });
+  useUIStore.setState({ dialogData: { pendingOpenPath: '/destination.stalx' } });
+  invokeIpcMock.mockResolvedValue({ project: { name: 'Synthetic destination', permission: null, lock_holder: null }, verification: 'unavailable', endpoint: 'https://example.com' });
+  render(<SpeleoCloseDialog />);
+  await userEvent.click(screen.getByTestId('speleodb-close-keep-lock'));
+  await waitFor(() => expect(load).toHaveBeenCalledOnce());
+  expect(invokeIpcMock).toHaveBeenCalledExactlyOnceWith('speleodb_project_access_at', { path: '/destination.stalx', localOnly: true });
+  expect(closeProject).toHaveBeenCalledWith({ releaseLock: false, request: expect.any(Number) });
+});
+it('continues New after keeping the current lock without any access probe', async () => {
+  const open = vi.fn();
+  useUIStore.setState({ dialogData: { pendingNewProject: true }, openDialog: open });
+  render(<SpeleoCloseDialog />);
+  await userEvent.click(screen.getByTestId('speleodb-close-keep-lock'));
+  await waitFor(() => expect(open).toHaveBeenCalledWith('new-project'));
+  expect(invokeIpcMock).not.toHaveBeenCalled();
 });

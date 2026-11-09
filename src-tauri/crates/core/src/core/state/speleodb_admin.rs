@@ -63,10 +63,31 @@ impl AppState {
             type_tag: "STALAGMIGHT".to_owned(),
             latest_commit_sha: None,
         };
+        let release_context =
+            self.speleodb_session_snapshot()
+                .ok()
+                .and_then(|(generation, open)| {
+                    if open.project_id != link.project_id || open.endpoint != link.endpoint {
+                        return None;
+                    }
+                    let (endpoint, _, user_email) = self.speleodb_active_account().ok()?;
+                    if crate::speleodb::auth::normalize_endpoint(&endpoint)
+                        != crate::speleodb::auth::normalize_endpoint(&link.endpoint)
+                    {
+                        return None;
+                    }
+                    Some(crate::speleodb::SpeleoReleaseContext {
+                        project_id: open.project_id,
+                        endpoint,
+                        user_email,
+                        session_generation: generation.to_string(),
+                    })
+                });
         let unavailable = || SpeleoFileAccess {
             project: fallback.clone(),
             endpoint: link.endpoint.clone(),
             verification: SpeleoAccessVerification::Unavailable,
+            release_context: release_context.clone(),
         };
         if local_only {
             return Ok(Some(unavailable()));
@@ -90,6 +111,7 @@ impl AppState {
                     project: SpeleoProjectSummary::from_project(project),
                     endpoint: link.endpoint,
                     verification: SpeleoAccessVerification::Verified,
+                    release_context: release_context.clone(),
                 },
                 Err(_) => unavailable(),
             },
@@ -109,7 +131,8 @@ impl AppState {
         let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
         if let Some(expected) = &expected {
             let (_, _, email) = self.speleodb_active_account().map_err(admin_dto)?;
-            if expected.project_id != link.project_id
+            if expected.session_generation != generation.to_string()
+                || expected.project_id != link.project_id
                 || crate::speleodb::auth::normalize_endpoint(&expected.endpoint)
                     != crate::speleodb::auth::normalize_endpoint(&endpoint)
                 || !super::speleodb::lock_held_by_me(Some(&expected.user_email), Some(&email))

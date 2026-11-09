@@ -130,7 +130,7 @@ can be inspected locally; a remote-only project still requires downloading.
 The dialogs also allow uploading before release, or explicitly confirmed release
 without upload. The latter retains local edits and warns that collaborators may
 advance the remote project. Backend consent is default-false and scoped to the
-expected project and authenticated account. A failed save, upload or explicit release
+expected project, authenticated account and backend session generation. A failed save, upload or explicit release
 prevents the confirmed exit from continuing. Clean shutdown also has a bounded
 best-effort backend release; an unreachable server or forcibly terminated process
 cannot guarantee that the server has observed a release. Confirmed close/quit

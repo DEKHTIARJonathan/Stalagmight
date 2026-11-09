@@ -1,4 +1,4 @@
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { releaseSpeleoLock } from '../../utils/releaseSpeleoLock';
 import { isProjectRequestCurrent, reserveProjectRequest } from '../../utils/projectTransition';
 import { confirmSpeleoFileOpen } from '../../utils/confirmSpeleoOpen';
 import { useEffect, useRef, useState } from 'react';
@@ -8,7 +8,7 @@ import { useSpeleoStore, isUnwoundNotEdited } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
-import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { getErrorMessage } from '../../utils/ipc';
 import { handBackProject, holdsWriteLock, type PendingExit } from '../../utils/quit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -184,12 +184,8 @@ export default function SpeleoCloseDialog() {
     if (!await confirmDestination(current) || !current()) return;
     if (!(await maybeSaveLocally(current)) || !current()) return;
     if (holdsLock) {
-      const session = useSpeleoStore.getState().session;
-      const expected = { project_id: useSpeleoStore.getState().remoteProjectId, endpoint: session?.endpoint, user_email: session?.userEmail };
-      if (!await confirm('Release without uploading? Your edits remain local. Another collaborator may advance the remote project.', { kind: 'warning', okLabel: 'Release without uploading', cancelLabel: t('common.actions.cancel') }) || !current()) return;
-      setSaving(true);
       try {
-        await invokeIpc<null>('speleodb_release_current_lock', { ownOnly: true, allowUnpushed: true, expected });
+        if (!await releaseSpeleoLock(current)) return;
       } catch (e) {
         if (!current()) return;
         openDialog('error', { title: t('speleodb.lock.releaseFailed'), message: getErrorMessage(e) });

@@ -401,12 +401,8 @@ export function guardQuit(): boolean {
   if (!project) return false;
 
   const link = useSpeleoStore.getState().link;
-  // Keyed on the WORK AT RISK only - see {@link hasUnpushedSpeleoWork}. Whether we
-  // still hold the write lock changes which choices the dialog can offer (it
-  // adapts), not whether the user should be told. Holding the lock with nothing
-  // unpushed needs no prompt at QUIT time specifically: the backend's exit-time
-  // release is safe then, and vetoes itself otherwise (aab5121d). The close flow
-  // does not get that for free, so it guards on the lock as well.
+  // A held lock always offers a deliberate local keep-lock exit, including when
+  // nothing is pending. Unpushed work still prompts after loss of editing access.
   if (needsSpeleoHandBackPrompt(link)) {
     openExitPrompt('speleodb-quit');
     return true;

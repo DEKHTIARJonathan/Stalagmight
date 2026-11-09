@@ -283,6 +283,7 @@ pub struct SpeleoFileAccess {
     pub project: SpeleoProjectSummary,
     pub endpoint: String,
     pub verification: SpeleoAccessVerification,
+    pub release_context: Option<SpeleoReleaseContext>,
 }
 
 #[derive(Debug, Clone, Serialize, TS)]
@@ -294,9 +295,10 @@ pub enum SpeleoAccessVerification {
 }
 
 /// Consent to release local unpushed work belongs to this account and project.
-#[derive(Debug, Clone, Deserialize, TS)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../bindings/")]
 pub struct SpeleoReleaseContext {
+    pub session_generation: String,
     pub project_id: String,
     pub endpoint: String,
     pub user_email: String,

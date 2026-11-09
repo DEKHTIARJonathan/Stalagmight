@@ -428,6 +428,9 @@ test.describe('Window Close Protection', () => {
     await expect(dialog.getByTestId('speleodb-quit-release')).not.toHaveAttribute('data-primary-action', '');
     await expect(dialog.getByTestId('speleodb-quit-push-release')).not.toHaveAttribute('data-primary-action', '');
     await dialog.getByTestId('speleodb-quit-keep-lock').click();
+    await expect.poll(() => windowTeardownCounts(page)).toMatchObject({ close: 1 });
+    // The mock records close(); explicitly deliver the event the native backend emits.
+    await pressWindowCloseButton(page);
     await expect.poll(() => windowTeardownCounts(page)).toMatchObject({ destroy: 1 });
   });
 

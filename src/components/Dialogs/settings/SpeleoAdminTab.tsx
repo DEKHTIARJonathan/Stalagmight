@@ -4,6 +4,8 @@ import { SettingsSection } from './SettingsSection';
 import { Button } from '../../common/Button';
 import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
+import { releaseSpeleoLock } from '../../../utils/releaseSpeleoLock';
+import { useProjectStore } from '../../../store/projectStore';
 import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
 import { holdsWriteLock } from '../../../utils/quit';
@@ -24,7 +26,16 @@ export function SpeleoAdminTab() {
   const handleRelease = useCallback(async () => {
     setReleasing(true);
     try {
-      await invokeIpc('speleodb_release_current_lock');
+      const session = useSpeleoStore.getState().sessionGeneration;
+      const path = useProjectStore.getState().project?.file_path;
+      const current = () => useSpeleoStore.getState().sessionGeneration === session &&
+        useProjectStore.getState().project?.file_path === path;
+      if (useSpeleoStore.getState().link?.hasUnpushedEdits) {
+        if (!await releaseSpeleoLock(current, false)) return;
+      } else {
+        await invokeIpc('speleodb_release_current_lock');
+      }
+      if (!current()) return;
       await refreshLinkStatus();
       showToast(t('speleodb.lock.released'), TOAST_KEYS.SPELEODB_LOCK, 'success');
     } catch (e) {
