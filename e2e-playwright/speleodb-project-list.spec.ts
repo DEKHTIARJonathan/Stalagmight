@@ -42,7 +42,7 @@ for (const density of ['cards', 'table'] as const) {
     await expect(cached).toContainText('Downloaded cave');
     await expect(cached).toContainText('SpeleoDB');
     await expect(cached).toContainText('Permission: Read and write');
-    await expect(cached).toContainText('Not locked');
+    await expect(cached).toContainText('Ready for editing');
     await expect(cached).not.toContainText('Old cached name');
     await expect(cached).not.toContainText(CACHE_PATH);
     expect(await cached.getAttribute('class')).toBe(await remote.getAttribute('class'));

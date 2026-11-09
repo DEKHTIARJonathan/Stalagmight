@@ -3495,10 +3495,16 @@
         "unpushedWork": "Hand the open project back to SpeleoDB first - it still has work that has not been uploaded, and opening {{name}} would close it and leave that work only on this computer."
       }
     },
+    "lockState": {
+      "youAreEditing": "You are editing",
+      "beingEditedBy": "Currently being edited by {{email}}",
+      "readyForEditing": "Ready for editing",
+      "readOnly": "Read-only"
+    },
     "recentBadge": {
       "remote": "Linked to SpeleoDB",
-      "lockedByYou": "Linked to SpeleoDB - write lock held by you",
-      "lockedByOther": "Linked to SpeleoDB - write lock held by {{email}}"
+      "lockedByYou": "Linked to SpeleoDB - you are editing",
+      "lockedByOther": "Linked to SpeleoDB - currently being edited by {{email}}"
     },
     "projectListing": {
       "permission": "Permission: {{permission}}",
@@ -3509,16 +3515,16 @@
         "ADMIN": "Admin",
         "unknown": "Unknown"
       },
-      "lockedBy": "LOCKED by {{email}}",
-      "lockedByYou": "LOCKED by you ({{email}})",
-      "unlocked": "Not locked",
-      "lockUnknown": "Lock status unknown",
+      "lockedBy": "Currently being edited by {{email}}",
+      "lockedByYou": "You are editing",
+      "unlocked": "Ready for editing",
+      "lockUnknown": "Editing status unknown",
       "offlineCopy": "SpeleoDB is unreachable. Opened the last downloaded copy; it may be out of date."
     },
     "recentInfo": {
       "prefix": "SpeleoDB: {{name}}",
-      "lockedByYou": "Write-locked by you",
-      "lockedByOther": "Write-locked by {{email}}"
+      "lockedByYou": "You are editing",
+      "lockedByOther": "Currently being edited by {{email}}"
     },
     "browser": {
       "title": "Open from SpeleoDB",
@@ -3530,10 +3536,10 @@
       "listUnavailable": "Your projects could not be loaded. Check your connection and use Refresh to try again.",
       "noMatches": "No projects match your filter.",
       "noAccess": "NO ACCESS",
-      "lockedBy": "Locked by {{email}}",
+      "lockedBy": "Currently being edited by {{email}}",
       "readOnly": "Read-only",
       "readOnlyWarning": "This project will open read-only. Uploading changes requires write access and the project lock.",
-      "lockedWarning": "This project is locked by {{email}}. It will open read-only. Editing requires the write lock.",
+      "lockedWarning": "This project is currently being edited by {{email}}. It will open read-only.",
       "open": "Open",
       "refresh": "Refresh",
       "signedInAs": "Signed in as {{email}}",
