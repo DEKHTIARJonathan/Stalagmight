@@ -270,12 +270,13 @@ fn config_writes_complete_while_a_lock_operation_holds_the_span() {
                 state.update_config(whole).expect("whole write, same instance");
                 done.send(started.elapsed()).expect("report");
             });
-            let took = finished
-                .recv_timeout(PROMPT)
-                .expect("config writes must not wait for the lock-ops span");
+            let outcome = finished.recv_timeout(PROMPT);
+            // Let a writer that (wrongly) queued go before asserting, so a
+            // regression fails here instead of deadlocking the scope's join.
+            drop(lock_ops);
+            let took = outcome.expect("config writes must not wait for the lock-ops span");
             assert!(took < PROMPT, "took {took:?}");
         });
-        drop(lock_ops);
         let saved = Config::load().expect("load");
         assert_eq!(saved.panels.sections_panel_width, 333);
         assert_eq!(saved.general.undo_history_limit, 77);
