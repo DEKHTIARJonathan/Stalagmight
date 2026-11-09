@@ -78,30 +78,9 @@ test('the SpeleoDB browser stays open while an open is in flight, then shows its
   await expect(dialog).toBeHidden();
 });
 
-/**
- * The browser mock's default config omits sections the real backend always sends,
- * and Settings fills them in on the first edit - which would read as an edit in
- * another tab. Save the complete config (the generated defaults under the mock's
- * values) first, as the real backend would have it.
- */
-async function seedCompleteConfig(page: Page): Promise<void> {
-  await page.evaluate(async () => {
-    const w = window as unknown as {
-      __TAURI_INTERNALS__: { invoke: (cmd: string, args?: unknown) => Promise<Record<string, unknown>> };
-      __E2E_TEST__: { projectStore: { getState: () => { loadConfig: () => Promise<void> } } };
-    };
-    const url = '/src/types/ipc/defaultConfig.ts';
-    const { defaultConfig } = await import(/* @vite-ignore */ url) as { defaultConfig: Record<string, unknown> };
-    const current = await w.__TAURI_INTERNALS__.invoke('get_config');
-    await w.__TAURI_INTERNALS__.invoke('update_config', { config: { ...defaultConfig, ...current } });
-    await w.__E2E_TEST__.projectStore.getState().loadConfig();
-  });
-}
-
 test.describe('Settings "Log in now"', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
-    await seedCompleteConfig(page);
     await page.getByTestId('global-speleodb-button').click();
     await expect(page.getByTestId('settings-panel-speleodb')).toBeVisible();
   });

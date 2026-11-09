@@ -4147,6 +4147,33 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 preset: 'default',
                 overrides: {},
               },
+              // The real get_config always sends these sections (Rust Config::default,
+              // mirrored in src/types/ipc/defaultConfig.ts). Without them, Settings
+              // fills them in on the first edit and reports them as changed.
+              import: {
+                overlap_mode: 'import_data',
+              },
+              placement_suggestion: {
+                azimuth_sigma: 18.0,
+                length_sigma: 0.8,
+                depth_sigma: 0.35,
+                azimuth_weight: 0.35,
+                length_weight: 0.25,
+                depth_in_weight: 0.2,
+                depth_out_weight: 0.2,
+                min_shot_score: 0.15,
+                min_aggregate_score: 0.45,
+                max_reference_shots: 5,
+                max_suggestions: 10,
+                min_partial_ratio: 0.15,
+                short_shot_threshold: 0.5,
+                single_shot_penalty: 0.6,
+                max_azimuth_error_full: 25.0,
+                max_azimuth_error_partial: 35.0,
+                max_depth_error: 0.3,
+                max_length_error_fraction: 0.03,
+                max_length_error_floor: 0.4,
+              },
               // SpeleoDB config block: the real get_config always returns this
               // (Rust SpeleoDbConfig::default); Settings reads it directly.
               speleodb: {
