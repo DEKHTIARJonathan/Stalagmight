@@ -728,7 +728,7 @@ impl AppState {
     /// so a user restoring a removed copy can tell which one it is.
     fn remove_cached_copy_files(&self, root: &Path, project_id: &str) -> CommandResult {
         let path = cache_path_in(root, project_id);
-        let trash_name = cached_copy_name(&path).as_deref().and_then(trash_file_name);
+        let trash_name = cached_copy_trash_name(&path);
         let result = self.delete_project_as(path, trash_name.as_deref());
         if !result.success {
             return result;
@@ -767,20 +767,28 @@ pub(super) fn cached_copy_name(copy: &Path) -> Option<String> {
     }
 }
 
+/// The name the cached copy at `copy` goes to the trash under ([`trash_file_name`]
+/// of [`cached_copy_name`]). Every removal of a managed copy uses it: Home's
+/// "Remove local copy", the purge, the exit prompt's and sign-out's Discard.
+pub(super) fn cached_copy_trash_name(copy: &Path) -> Option<String> {
+    cached_copy_name(copy).as_deref().and_then(trash_file_name)
+}
+
 /// The file name a removed copy is trashed under: the project's name made safe on
 /// every desktop OS, plus `.stalx`. `None` when nothing usable is left (the copy is
 /// then trashed as `project.stalx`).
 ///
-/// Path separators, the characters Windows forbids and control characters become
-/// `_`; leading and trailing dots and spaces go (Windows strips the trailing ones, a
-/// leading dot hides the file); a Windows device name (`CON`, `COM1`, ...) gets a
-/// `_` suffix; and the name is cut to 150 bytes, well inside every file system's
-/// 255-byte limit.
+/// Path separators, the characters Windows forbids, control characters and
+/// Unicode format characters become `_`; leading and trailing dots and spaces go
+/// (Windows strips the trailing ones, a leading dot hides the file); a Windows
+/// device name (`CON`, `COM1`, ...) gets a `_` suffix; and the name is cut to 150
+/// bytes, well inside every file system's 255-byte limit.
 pub(super) fn trash_file_name(project_name: &str) -> Option<String> {
     const MAX_BYTES: usize = 150;
     let mut stem = String::new();
     for c in project_name.chars() {
         let c = if c.is_control()
+            || is_format_char(c)
             || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|')
         {
             '_'
@@ -811,6 +819,37 @@ pub(super) fn trash_file_name(project_name: &str) -> Option<String> {
     } else {
         format!("{stem}.stalx")
     })
+}
+
+/// A Unicode format character (general category Cf, as of Unicode 15.1). They are
+/// invisible, and some reorder the text around them: with U+202E RIGHT-TO-LEFT
+/// OVERRIDE a server-chosen name can show a different extension in a file
+/// manager than the file has, so none is kept in a trash name.
+fn is_format_char(c: char) -> bool {
+    matches!(
+        u32::from(c),
+        0x00AD
+            | 0x0600..=0x0605
+            | 0x061C
+            | 0x06DD
+            | 0x070F
+            | 0x0890..=0x0891
+            | 0x08E2
+            | 0x180E
+            | 0x200B..=0x200F
+            | 0x202A..=0x202E
+            | 0x2060..=0x2064
+            | 0x2066..=0x206F
+            | 0xFEFF
+            | 0xFFF9..=0xFFFB
+            | 0x110BD
+            | 0x110CD
+            | 0x13430..=0x1343F
+            | 0x1BCA0..=0x1BCA3
+            | 0x1D173..=0x1D17A
+            | 0xE0001
+            | 0xE0020..=0xE007F
+    )
 }
 
 /// The removal verdict for one copy.

@@ -818,7 +818,10 @@ impl AppState {
             purpose = "discard un-uploaded local changes on exit (user confirmed)",
             "speleodb: discarding the local copy and releasing the write lock"
         );
-        let result = self.delete_project(path);
+        // Into the trash under the project's name, like every removal of a managed
+        // copy (the open file's own link names it; no second read of the file).
+        let trash_name = super::speleodb_cached::trash_file_name(&link.project_name);
+        let result = self.delete_project_as(path, trash_name.as_deref());
         if result.success || result.session_closed != Some(true) {
             return result;
         }
@@ -889,7 +892,9 @@ impl AppState {
             purpose = "discard un-uploaded changes before signing out (user confirmed)",
             "speleodb: discarding a cached copy"
         );
-        self.delete_project(super::speleodb_local_state::cache_path_in(root, project_id))
+        let path = super::speleodb_local_state::cache_path_in(root, project_id);
+        let trash_name = super::speleodb_cached::cached_copy_trash_name(&path);
+        self.delete_project_as(path, trash_name.as_deref())
     }
 }
 
@@ -967,6 +972,14 @@ mod tests {
         state.set_edit_enabled(true);
         state.speleodb_note_lock_acquired(Some(PID));
         (temp, root, path, state)
+    }
+
+    /// The file names this thread handed to the trash since the last call.
+    fn trashed_names() -> Vec<String> {
+        super::super::recent_projects::take_trashed_for_tests()
+            .iter()
+            .filter_map(|path| path.file_name()?.to_str().map(str::to_owned))
+            .collect()
     }
 
     /// Stamp the open copy's dirty bit directly, as a fixture: the forward-edit
@@ -1244,10 +1257,16 @@ mod tests {
         let (server, seen) = recording_server();
         let (_temp, root, path, state) = managed_editing_session(&server);
         set_unpushed_edits(&state);
+        super::super::recent_projects::take_trashed_for_tests();
         let result = state.speleodb_close_discarding_local_in(&root);
         assert!(result.success, "discard closes: {:?}", result.error);
         assert_eq!(result.session_closed, Some(true));
         assert!(!path.exists(), "the local copy is gone");
+        assert_eq!(
+            trashed_names(),
+            vec!["Remote.stalx".to_owned()],
+            "trashed under the project's name, not as project.stalx"
+        );
         assert!(state.get_project_state().is_none(), "the project is closed");
         assert_eq!(release_requests(&seen), 1, "the lock was handed back");
         assert!(!state.speleodb_lock_acquired_here(PID));
@@ -1291,9 +1310,15 @@ mod tests {
         );
         assert!(path.exists());
         assert!(state.close_project().success);
+        super::super::recent_projects::take_trashed_for_tests();
         let result = state.speleodb_discard_cached_copy_in(&root, PID, true);
         assert!(result.success, "{:?}", result.error);
         assert!(!path.exists(), "the un-uploaded copy is gone");
+        assert_eq!(
+            trashed_names(),
+            vec!["Remote.stalx".to_owned()],
+            "trashed under the project's name, not as project.stalx"
+        );
         settle();
         assert_eq!(
             release_requests(&seen),

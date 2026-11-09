@@ -617,7 +617,22 @@ fn send_to_trash(path: &Path) -> Result<(), String> {
 
 #[cfg(any(test, all(feature = "test-support", debug_assertions)))]
 fn send_to_trash(path: &Path) -> Result<(), String> {
+    #[cfg(test)]
+    TRASHED.with(|trashed| trashed.borrow_mut().push(path.to_path_buf()));
     std::fs::remove_file(path).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every path this thread handed to the test build's [`send_to_trash`]: the
+    /// name a file went to the trash under, which the removal leaves no trace of.
+    static TRASHED: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Test-only: take the paths this thread has handed to the trash so far.
+#[cfg(test)]
+pub(super) fn take_trashed_for_tests() -> Vec<PathBuf> {
+    TRASHED.with(std::cell::RefCell::take)
 }
 
 /// Hand `path` to `trash` under the bare file name `name`, when given: the file is

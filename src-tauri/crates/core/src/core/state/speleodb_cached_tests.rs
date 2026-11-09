@@ -292,6 +292,12 @@ fn a_removed_copy_is_trashed_under_its_project_name() {
         ("Console", Some("Console.stalx")),
         ("", None),
         (" ... ", None),
+        // Unicode format characters (Cf) are invisible, and a right-to-left
+        // override would show this as "cave" + "xlsx..." reversed in a file manager.
+        ("cave\u{202E}xslx.stalx", Some("cave_xslx.stalx.stalx")),
+        ("\u{FEFF}Cave\u{200B}A", Some("_Cave_A.stalx")),
+        ("soft\u{AD}hyphen\u{2066}", Some("soft_hyphen_.stalx")),
+        ("tag\u{E0041}", Some("tag_.stalx")),
     ] {
         assert_eq!(trash_file_name(name).as_deref(), expected, "{name:?}");
     }

@@ -141,9 +141,11 @@ not list then anyway; signed out, any copy can be removed. The project open righ
 now is never removed. Removal sends the `.stalx` to the OS trash where there is
 one, drops its recents row, and deletes the rest of its directory (owner record and
 SQLite sidecars). The file goes to the trash under the project's name (for example
-`Synthetic Cave.stalx`, made a safe file name on every OS) rather than as one more
+`Synthetic Cave.stalx`, made a safe file name on every OS, with invisible Unicode
+format characters such as a right-to-left override replaced) rather than as one more
 `project.stalx`, so a user can tell which copy to restore; it is renamed in place
 just before the trash, never over another file, and renamed back if the trash fails.
+The exit prompt's and sign-out's Discard trash their copy under the same name.
 
 Removing a copy does not strand a lock. After a successful removal, when the session
 is the copy's account on its instance (owner recorded as this account, or no owner
