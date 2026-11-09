@@ -77,18 +77,37 @@ signed-in account opens the copy online (download, or the fast-forward local ope
 after the server showed that account the history) and when a project is published.
 It is not written for offline or signed-out opens.
 
-Un-uploaded work belongs to the account that made it. The online open takes the
-fast-forward (local edits whose base is the server tip open as they are, with no
-download) only for a copy whose owner record names the signed-in account on the
-signed-in instance. Another account's copy, or one recorded on another instance,
-goes through the guarded download instead: it refuses to replace the un-uploaded
-edits and shows the existing prompt (Open my local copy / Cancel / take the server
-copy after a confirmation), and its owner record is left as it is. A copy with no
-owner record (downloaded before the record existed) is treated the same way when it
-holds un-uploaded edits: nothing tells whose they are, so it is never claimed
-silently. It keeps no owner until a download replaces it (once its work is uploaded,
-or after the confirmed take-the-server-copy); a clean owner-less copy just downloads
-and records the account as before.
+Un-uploaded work belongs to the account that made it, and no other account ever
+takes it over:
+
+- The online open takes the fast-forward (local edits whose base is the server tip
+  open as they are, with no download) only for a copy whose owner record names the
+  signed-in account on the signed-in instance.
+- Another account's copy with un-uploaded edits (or one recorded on another
+  instance) goes through the guarded download instead, which refuses to replace the
+  edits, and its owner record is left as it is. The prompt names that account
+  instead of saying "your changes", and its non-destructive answer is "Open it
+  read-only": the copy loads without downloading anything and without taking the
+  lock, and a toast says whose changes they are. The user can look at them and save
+  a copy of the project. Cancel, or take the server copy after a confirmation, work
+  as before (taking the server copy discards the other account's changes and
+  records the signed-in account).
+- An offline open of such a copy opens it read-only too, with the same toast.
+- Start Editing (and with it Resume editing and the held-lock prompt's resume)
+  refuses an open cache copy whose owner record names another account while it
+  holds un-uploaded edits, before any request is sent: "this copy holds changes
+  <account> made that were never uploaded to SpeleoDB. Only <account> can edit and
+  upload them...". The copy stays open read-only. A clean copy recorded for another
+  account holds only the server's content, so Start Editing goes ahead and records
+  the signed-in account as its owner.
+- A copy with no owner record (downloaded before the record existed) is not claimed
+  silently when it holds un-uploaded edits: nothing tells whose they are, so it
+  takes the guarded download and its prompt (with "Open my local copy", which still
+  opens it for editing as before). It keeps no owner until a download replaces it
+  (once its work is uploaded, or after the confirmed take-the-server-copy); a clean
+  owner-less copy just downloads and records the account as before.
+- Signed out, every cached copy opens read-only anyway; signing in later does not
+  let Start Editing take over another account's work, by the rule above.
 
 The home screen lists the cached copies by owner:
 
@@ -116,8 +135,10 @@ menu: Open project, Zoom to system (when the project is on the map) and Remove l
 copy. Removing a copy goes through an in-app confirmation that first re-reads the
 copy. A copy with un-uploaded edits, or one whose state cannot be read, gets a
 warning and a "Remove copy and lose my changes" button. Only that confirmation tells
-the backend to remove such a copy; without it the backend refuses. The project open
-right now is never removed. Removal sends the `.stalx` to the OS trash where there is
+the backend to remove such a copy; without it the backend refuses. Signed in, the
+backend also refuses another account's (or another instance's) copy, which Home does
+not list then anyway; signed out, any copy can be removed. The project open right
+now is never removed. Removal sends the `.stalx` to the OS trash where there is
 one, drops its recents row, and deletes the rest of its directory (owner record and
 SQLite sidecars). The file goes to the trash under the project's name (for example
 `Synthetic Cave.stalx`, made a safe file name on every OS) rather than as one more
