@@ -342,6 +342,62 @@ fn cleanup_created<T, E>(
     (released, deleted)
 }
 
+struct TestProjectRun<T, E> {
+    result: std::thread::Result<Result<T, E>>,
+    released: Result<(), E>,
+    deleted: Result<(), E>,
+}
+fn run_test_project<T, E>(
+    operation: impl FnOnce() -> Result<T, E> + std::panic::UnwindSafe,
+    release: impl FnOnce() -> Result<(), E>,
+    delete: impl FnOnce() -> Result<(), E>,
+) -> TestProjectRun<T, E> {
+    let result = std::panic::catch_unwind(operation);
+    let (released, deleted) = cleanup_created(release, delete);
+    TestProjectRun {
+        result,
+        released,
+        deleted,
+    }
+}
+
+#[test]
+#[expect(
+    clippy::panic,
+    reason = "controlled panic injection verifies live-test cleanup"
+)]
+fn test_project_cleanup_runs_after_success_api_error_and_assertion_panic() {
+    for mode in ["success", "error", "panic"] {
+        let calls = std::cell::RefCell::new(Vec::new());
+        let TestProjectRun {
+            result,
+            released,
+            deleted,
+        } = run_test_project(
+            || match mode {
+                "error" => Err("original API failure"),
+                "panic" => panic!("synthetic assertion failure"),
+                _ => Ok(()),
+            },
+            || {
+                calls.borrow_mut().push(("release", ID));
+                Ok(())
+            },
+            || {
+                calls.borrow_mut().push(("delete", ID));
+                Ok(())
+            },
+        );
+        assert_eq!(*calls.borrow(), vec![("release", ID), ("delete", ID)]);
+        assert!(released.is_ok() && deleted.is_ok());
+        match mode {
+            "error" => assert_eq!(result.unwrap().unwrap_err(), "original API failure"),
+            "panic" => assert!(result.is_err()),
+            _ => assert!(result.unwrap().is_ok()),
+        }
+    }
+}
+
 #[test]
 fn live_configuration_is_opt_in_and_validates_every_input_without_network() {
     let file =
@@ -454,80 +510,99 @@ fn live_used_api_calls_with_email_and_token() {
         .expect("TOKEN profile")
         .eq_ignore_ascii_case(&email));
     for (label, token) in [("EMAIL", login_token), ("TOKEN", provided_token)] {
-        let project=create_project_with(&base,&token,false,&json!({"name":format!("Stalagmight SDK test {}",uuid::Uuid::new_v4()),"description":"Synthetic native-file API test; deleted after execution","country":"US","type":"STALAGMIGHT","visibility":"PRIVATE"}).to_string()).expect("create test-owned project");
+        let created = create_project_with(
+            &base,
+            &token,
+            false,
+            &json!({
+                "name": format!("Stalagmight SDK test {}", uuid::Uuid::new_v4()),
+                "description": "Synthetic native-file API test; deleted after execution",
+                "country": "US", "type": "STALAGMIGHT", "visibility": "PRIVATE",
+            })
+            .to_string(),
+        );
+        if created.is_err() {
+            eprintln!("{label}: creation was not confirmed. If the server created a project but its response was lost, its unknown ID cannot safely be cleaned up automatically.");
+        }
+        let project = created.expect("create test-owned project");
         let id = &project.id;
         eprintln!("{label}: created test project {id}");
-        let result = std::panic::catch_unwind(|| {
-            (|| -> Result<(), SpeleoDbError> {
-                assert!(list_projects(&base, &token, false)?
-                    .iter()
-                    .any(|p| p.id == *id));
-                get_project(&base, &token, false, id)?;
-                get_project_probe(&base, &token, false, id)?;
-                patch_project(
-                    &base,
-                    &token,
-                    false,
-                    id,
-                    r#"{"description":"Native SQLite round trip"}"#,
-                )?;
-                acquire_lock(&base, &token, false, id)?;
-                let dir = tempfile::tempdir().unwrap();
-                let path = dir.path().join("project.stalx");
-                {
-                    let mut db =
-                        stalagmight_persistence::persistence::Database::open(&path).unwrap();
-                    db.save_project(&crate::models::Project::new(
-                        "Synthetic first revision".into(),
-                        None,
-                    ))
-                    .unwrap();
-                }
-                let first_bytes = std::fs::read(&path).unwrap();
-                eprintln!("{label}: uploading first native file");
-                let first =
-                    upload_stalx(&base, &token, false, id, &path, "First synthetic revision")?
-                        .latest_commit
-                        .expect("first SHA")
-                        .id;
-                assert_eq!(
-                    std::fs::read(download_stalx(&base, &token, false, id)?.path()).unwrap(),
-                    first_bytes
-                );
-                assert!(matches!(
-                    upload_stalx(&base, &token, false, id, &path, "No changes"),
-                    Err(SpeleoDbError::Status { status: 304, .. })
-                ));
-                {
-                    let mut db =
-                        stalagmight_persistence::persistence::Database::open(&path).unwrap();
-                    db.save_project(&crate::models::Project::new(
-                        "Synthetic second revision".into(),
-                        None,
-                    ))
-                    .unwrap();
-                }
-                eprintln!("{label}: uploading second native file");
-                let second =
-                    upload_stalx(&base, &token, false, id, &path, "Second synthetic revision")?
-                        .latest_commit
-                        .expect("second SHA")
-                        .id;
-                assert_ne!(first, second);
-                let history = get_revisions(&base, &token, false, id)?;
-                assert!(history.commits.iter().any(|c| c.id == first));
-                assert!(history.commits.iter().any(|c| c.id == second));
-                assert_eq!(
-                    std::fs::read(download_stalx_at_hash(&base, &token, false, id, &first)?.path())
+        let TestProjectRun {
+            result,
+            released,
+            deleted,
+        } = run_test_project(
+            || {
+                (|| -> Result<(), SpeleoDbError> {
+                    assert!(list_projects(&base, &token, false)?
+                        .iter()
+                        .any(|p| p.id == *id));
+                    get_project(&base, &token, false, id)?;
+                    get_project_probe(&base, &token, false, id)?;
+                    patch_project(
+                        &base,
+                        &token,
+                        false,
+                        id,
+                        r#"{"description":"Native SQLite round trip"}"#,
+                    )?;
+                    acquire_lock(&base, &token, false, id)?;
+                    let dir = tempfile::tempdir().unwrap();
+                    let path = dir.path().join("project.stalx");
+                    {
+                        let mut db =
+                            stalagmight_persistence::persistence::Database::open(&path).unwrap();
+                        db.save_project(&crate::models::Project::new(
+                            "Synthetic first revision".into(),
+                            None,
+                        ))
+                        .unwrap();
+                    }
+                    let first_bytes = std::fs::read(&path).unwrap();
+                    eprintln!("{label}: uploading first native file");
+                    let first =
+                        upload_stalx(&base, &token, false, id, &path, "First synthetic revision")?
+                            .latest_commit
+                            .expect("first SHA")
+                            .id;
+                    assert_eq!(
+                        std::fs::read(download_stalx(&base, &token, false, id)?.path()).unwrap(),
+                        first_bytes
+                    );
+                    assert!(matches!(
+                        upload_stalx(&base, &token, false, id, &path, "No changes"),
+                        Err(SpeleoDbError::Status { status: 304, .. })
+                    ));
+                    {
+                        let mut db =
+                            stalagmight_persistence::persistence::Database::open(&path).unwrap();
+                        db.save_project(&crate::models::Project::new(
+                            "Synthetic second revision".into(),
+                            None,
+                        ))
+                        .unwrap();
+                    }
+                    eprintln!("{label}: uploading second native file");
+                    let second =
+                        upload_stalx(&base, &token, false, id, &path, "Second synthetic revision")?
+                            .latest_commit
+                            .expect("second SHA")
+                            .id;
+                    assert_ne!(first, second);
+                    let history = get_revisions(&base, &token, false, id)?;
+                    assert!(history.commits.iter().any(|c| c.id == first));
+                    assert!(history.commits.iter().any(|c| c.id == second));
+                    assert_eq!(
+                        std::fs::read(
+                            download_stalx_at_hash(&base, &token, false, id, &first)?.path()
+                        )
                         .unwrap(),
-                    first_bytes
-                );
-                Ok(())
-            })()
-        });
-        // Only IDs returned by this invocation may be deleted. Always attempt both
-        // cleanup operations, including after an assertion panic or release failure.
-        let (released, deleted) = cleanup_created(
+                        first_bytes
+                    );
+                    Ok(())
+                })()
+            },
+            // Only IDs returned by this invocation may be deleted, after every outcome.
             || release_lock(&base, &token, false, id).map(|_| ()),
             || {
                 client(&base, Some(&token), false, READ_TIMEOUT).and_then(|c| {
@@ -610,4 +685,57 @@ fn upload_budget_scales_for_slow_buffered_transfers() {
     assert_eq!(upload_timeout(16 * 1024), Duration::from_secs(121));
     assert_eq!(upload_timeout(16 * 1024 + 1), Duration::from_secs(122));
     assert_eq!(upload_timeout(64 * 1024 * 1024), Duration::from_secs(4216));
+}
+
+#[test]
+fn downloads_allow_healthy_progress_beyond_the_idle_budget_but_reject_stalls() {
+    for stall in [false, true] {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let worker = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = [0; 4096];
+            stream.read(&mut request).unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 12\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            for _ in 0..12 {
+                std::thread::sleep(Duration::from_millis(if stall { 800 } else { 50 }));
+                if stream.write_all(b"x").is_err() {
+                    break;
+                }
+            }
+        });
+        let c = SdkClient::new(
+            &base,
+            Some("synthetic"),
+            false,
+            Duration::ZERO,
+            Settings {
+                timeout: Some(Duration::from_millis(400)),
+                retries: 0,
+                ..Settings::default()
+            },
+        )
+        .unwrap();
+        let result = c.download(ID, None);
+        if stall {
+            assert!(matches!(
+                result,
+                Err(SpeleoDbError::Transport {
+                    cause: TransportCause::Timeout,
+                    ..
+                })
+            ));
+        } else {
+            assert_eq!(
+                std::fs::read(result.unwrap().path()).unwrap(),
+                b"xxxxxxxxxxxx"
+            );
+        }
+        worker.join().unwrap();
+    }
 }
