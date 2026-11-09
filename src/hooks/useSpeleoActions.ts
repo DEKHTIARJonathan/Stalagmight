@@ -1,4 +1,3 @@
-import { confirm } from '@tauri-apps/plugin-dialog';
 import { showSpeleoReadOnlyNotice } from '../utils/autoAcquireSpeleoLock';
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -16,6 +15,7 @@ import { invokeIpc } from '../utils/ipc';
 import { openExitPrompt, type PendingExit } from '../utils/quit';
 import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
 import { applySpeleoTreeReplacement } from '../utils/speleoTreeReplacement';
+import { confirmSpeleoReloadDiscard } from '../utils/speleoReloadConfirm';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import type {
   DoneResult,
@@ -268,9 +268,7 @@ export function useSpeleoActions(): SpeleoActions {
     try {
       let discardChanges = false;
       if (pending) {
-        discardChanges = await confirm('Discard changes removes unsaved and unuploaded modifications. Save first using Save Changes to preserve your work. Cancel keeps everything.', {
-          title: 'Reload Project', kind: 'warning', okLabel: 'Discard changes', cancelLabel: 'Cancel',
-        });
+        discardChanges = await confirmSpeleoReloadDiscard();
         if (!discardChanges || !current()) return;
       }
       if (!current() || !path) return;

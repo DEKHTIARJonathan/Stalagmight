@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { LeftWorkspace } from '../LeftWorkspace';
+import { useProjectStore } from '../../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
 vi.mock('../../../utils/ipc', () => ({ invokeIpc: vi.fn(), getErrorMessage: String }));
@@ -53,5 +54,74 @@ describe('Left workspace', () => {
     act(() => useUIStore.getState().openSpeleoWorkspace());
     expect(useUIStore.getState().dataTableFullScreen).toBe(false);
     expect(useUIStore.getState().selection).toEqual({ type: 'section', sectionId: 42 });
+  });
+});
+
+describe('Left workspace tab icons and SpeleoDB state', () => {
+  const speleoTab = () => screen.getByRole('tab', { name: 'SpeleoDB' });
+  const badge = () => screen.queryByTestId('workspace-tab-speleodb-icon-state-badge');
+  beforeEach(() => useProjectStore.setState({ isDirty: false }));
+
+  it('gives Sections its icon and SpeleoDB the bare mark while editing', () => {
+    useSpeleoStore.setState({ link: { ...link, editState: 'editing' } });
+    render(<LeftWorkspace sections={<div />} />);
+    const sections = screen.getByRole('tab', { name: 'Sections' });
+    expect(sections.querySelector('[data-testid="workspace-tab-sections-icon"]')).not.toBeNull();
+    expect(speleoTab()).toContainElement(screen.getByTestId('workspace-tab-speleodb-icon-logo'));
+    expect(speleoTab()).toHaveAttribute('data-state', 'normal');
+    expect(badge()).toBeNull();
+    expect(speleoTab()).not.toHaveAttribute('aria-describedby');
+    expect(speleoTab().className).not.toContain('text-warning');
+  });
+
+  it('a local project shows the bare mark (no SpeleoDB state to report)', () => {
+    useSpeleoStore.setState({ link: null });
+    render(<LeftWorkspace sections={<div />} />);
+    expect(speleoTab()).toHaveAttribute('data-state', 'normal');
+    expect(badge()).toBeNull();
+  });
+
+  it('read-only (no write lock) badges the mark with a lock and says so', () => {
+    render(<LeftWorkspace sections={<div />} />);
+    expect(speleoTab()).toHaveAttribute('data-state', 'read-only');
+    expect(badge()).not.toBeNull();
+    expect(badge()).not.toHaveClass('text-warning');
+    expect(speleoTab()).toHaveAccessibleDescription(/Read-only/);
+    expect(speleoTab().className).not.toContain('text-warning');
+  });
+
+  it.each([
+    ['saved but not uploaded', () => useSpeleoStore.setState({ link: { ...link, editState: 'editing', hasUnpushedEdits: true } })],
+    ['unsaved edits', () => { useSpeleoStore.setState({ link: { ...link, editState: 'editing' } }); useProjectStore.setState({ isDirty: true }); }],
+  ])('un-uploaded changes (%s) get the yellow "!" and the warning tab treatment', (_label, seed) => {
+    seed();
+    render(<LeftWorkspace sections={<div />} />);
+    expect(speleoTab()).toHaveAttribute('data-state', 'unuploaded');
+    expect(badge()).toHaveClass('text-warning');
+    expect(speleoTab()).toHaveClass('text-warning');
+    expect(speleoTab()).toHaveAccessibleDescription('Changes on this computer have not been uploaded to SpeleoDB yet.');
+    expect(speleoTab()).toHaveAttribute('title', 'Changes on this computer have not been uploaded to SpeleoDB yet.');
+  });
+
+  it('the warning wins over read-only when both apply', () => {
+    useSpeleoStore.setState({ link: { ...link, editState: 'read-only', hasUnpushedEdits: true } });
+    render(<LeftWorkspace sections={<div />} />);
+    expect(speleoTab()).toHaveAttribute('data-state', 'unuploaded');
+    expect(badge()).toHaveClass('text-warning');
+    expect(speleoTab()).toHaveAccessibleDescription(/not been uploaded/);
+  });
+
+  it('a copy only stepped back to an older version is not flagged as un-uploaded (#303)', () => {
+    useSpeleoStore.setState({ link: { ...link, editState: 'editing', hasUnpushedEdits: true, unwound: true } });
+    render(<LeftWorkspace sections={<div />} />);
+    expect(speleoTab()).toHaveAttribute('data-state', 'normal');
+  });
+
+  it('keeps the warning visible from Plan and Export, where only the SpeleoDB tab exists', () => {
+    useSpeleoStore.setState({ link: { ...link, hasUnpushedEdits: true } });
+    useUIStore.setState({ appMode: 'plan', leftWorkspace: 'speleodb' });
+    render(<LeftWorkspace sections={<div />} />);
+    expect(screen.queryByRole('tab', { name: 'Sections' })).toBeNull();
+    expect(speleoTab()).toHaveAttribute('data-state', 'unuploaded');
   });
 });

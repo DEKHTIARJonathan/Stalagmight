@@ -42,6 +42,19 @@ beforeEach(() => {
   useUIStore.setState({ activeDialog: null, dialogData: {}, speleoWorkspaceSection: null });
 });
 
+describe('SpeleoBanner read-only state', () => {
+  it.each([
+    ['free lock', {}],
+    ['someone else editing', { lockHolder: 'editor@example.com', lockedByOther: true }],
+    ['no project access', { noAccess: true }],
+  ])('draws no top bar for a read-only project (%s) without a banner', (_label, o) => {
+    seedLink({ editState: 'read-only', ...o });
+    const { container } = render(<SpeleoBanner />);
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByTestId('speleodb-access-notice')).not.toBeInTheDocument();
+  });
+});
+
 describe('SpeleoBanner push failure (#260)', () => {
   const seedFailure = (origin: 'push' | 'done', pushMessage: string | null = null) => {
     seedLink({ });

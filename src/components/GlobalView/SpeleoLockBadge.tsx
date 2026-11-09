@@ -111,7 +111,8 @@ export type RecentAccent = 'unpushed' | 'lock-mine' | 'lock-other' | 'none';
  * than stacked, and un-pushed edits outrank lock state: the lock is recoverable
  * (ask, or wait) while work that exists only on this computer is the thing that can
  * actually be lost. Lock state stays legible on a row that loses the bar - the badge
- * and "Write-locked by you / by {email}" in `SpeleoRecentInfo` say it in words.
+ * and "You are editing" / "Currently being edited by {email}" in `SpeleoRecentInfo`
+ * say it in words.
  *
  * Lock accents are gated on `isRemote` so a local project can never pick one up from
  * a stale holder field.
@@ -261,7 +262,7 @@ export function SpeleoLockBadge({
  * irrelevant for a linked project, so in its place we show the SpeleoDB mark plus
  * "SpeleoDB: {name}" - the server-side project name (falling back to the local
  * `name` when the scan hasn't resolved it) - then, when the lock is held, a middot
- * and "Write-locked by you" / "Write-locked by {email}". Returns `null` for a local project
+ * and "You are editing" / "Currently being edited by {email}". Returns `null` for a local project
  * (the caller shows the path instead). The last-edited time is not repeated here -
  * it has its own column / card footer.
  */

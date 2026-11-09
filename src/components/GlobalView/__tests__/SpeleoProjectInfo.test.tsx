@@ -20,19 +20,19 @@ describe('SpeleoDB listing information', () => {
     show(null);
     expect(screen.getByText('SpeleoDB')).toBeVisible();
     expect(screen.getByTestId('project-permission')).toHaveTextContent('Permission: Admin');
-    expect(screen.getByTestId('project-lock')).toHaveTextContent('Not locked');
+    expect(screen.getByTestId('project-lock')).toHaveTextContent('Ready for editing');
   });
-  it('identifies our own lock using the account email', () => {
+  it('recognises our own lock by the account email, whatever its case', () => {
     show('ME@example.com');
-    expect(screen.getByTestId('project-lock')).toHaveTextContent('LOCKED by you (ME@example.com)');
+    expect(screen.getByTestId('project-lock')).toHaveTextContent(/^You are editing$/);
   });
   it('names another lock owner', () => {
     show('other@example.com');
-    expect(screen.getByTestId('project-lock')).toHaveTextContent('LOCKED by other@example.com');
+    expect(screen.getByTestId('project-lock')).toHaveTextContent('Currently being edited by other@example.com');
   });
   it('does not invent permission or unlocked state before the server answers', () => {
     show(undefined, null);
     expect(screen.getByTestId('project-permission')).toHaveTextContent('Permission: Unknown');
-    expect(screen.getByTestId('project-lock')).toHaveTextContent('Lock status unknown');
+    expect(screen.getByTestId('project-lock')).toHaveTextContent('Editing status unknown');
   });
 });

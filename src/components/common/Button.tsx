@@ -1,6 +1,6 @@
 import { type ReactNode, type ButtonHTMLAttributes, forwardRef } from 'react';
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
+type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'highlight';
 type ButtonSize = 'sm' | 'md' | 'lg';
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -16,6 +16,10 @@ const variantStyles: Record<ButtonVariant, string> = {
   secondary: 'bg-panel border border-border text-text-primary hover:bg-border',
   ghost: 'text-text-primary hover:bg-panel',
   danger: 'bg-error text-accent-on hover:bg-error-90',
+  // The main action of a panel that has no `primary` of its own, picked out in the
+  // theme's warning yellow. `--cc-warning-on` is the per-theme text colour that
+  // reads at WCAG AA on that yellow (pinned in tokens.test.ts).
+  highlight: 'bg-warning text-warning-on hover:bg-warning-90',
 };
 
 const sizeStyles: Record<ButtonSize, string> = {

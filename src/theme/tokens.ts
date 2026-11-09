@@ -9,6 +9,7 @@ export const themeTokens = {
     '--cc-accent': '#4ecdc4',
     '--cc-accent-on': '#1a1a2e',
     '--cc-warning': '#ffcb77',
+    '--cc-warning-on': '#1a1a2e',
     '--cc-error': '#ff6b6b',
     '--cc-success': '#95e1d3',
     '--cc-lock-other': '#5aa9ff',
@@ -121,6 +122,7 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(255, 203, 119, 0.1)',
     '--cc-warning-20': 'rgba(255, 203, 119, 0.2)',
     '--cc-warning-30': 'rgba(255, 203, 119, 0.3)',
+    '--cc-warning-90': 'rgba(255, 203, 119, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(149, 225, 211, 0.05)',
@@ -137,6 +139,7 @@ export const themeTokens = {
     '--cc-accent': '#3a8a82',
     '--cc-accent-on': '#ffffff',
     '--cc-warning': '#b8860b',
+    '--cc-warning-on': '#1a120b',
     '--cc-error': '#c0392b',
     '--cc-success': '#27764e',
     '--cc-lock-other': '#1f6feb',
@@ -229,6 +232,7 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(184, 134, 11, 0.1)',
     '--cc-warning-20': 'rgba(184, 134, 11, 0.2)',
     '--cc-warning-30': 'rgba(184, 134, 11, 0.3)',
+    '--cc-warning-90': 'rgba(184, 134, 11, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(39, 118, 78, 0.05)',
@@ -245,6 +249,7 @@ export const themeTokens = {
     '--cc-accent': '#a89060',
     '--cc-accent-on': '#0e0d0c',
     '--cc-warning': '#b89848',
+    '--cc-warning-on': '#0e0d0c',
     '--cc-error': '#b85048',
     '--cc-success': '#48986a',
     '--cc-lock-other': '#6f9ccf',
@@ -334,6 +339,7 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(184, 152, 72, 0.1)',
     '--cc-warning-20': 'rgba(184, 152, 72, 0.2)',
     '--cc-warning-30': 'rgba(184, 152, 72, 0.3)',
+    '--cc-warning-90': 'rgba(184, 152, 72, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(72, 152, 106, 0.05)',
@@ -353,6 +359,7 @@ export const themeTokens = {
     '--cc-accent': '#bd93f9',
     '--cc-accent-on': '#282a36',
     '--cc-warning': '#ffb86c',
+    '--cc-warning-on': '#282a36',
     '--cc-error': '#ff5555',
     '--cc-success': '#50fa7b',
     '--cc-lock-other': '#6d9eeb',
@@ -444,6 +451,7 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(255, 184, 108, 0.1)',
     '--cc-warning-20': 'rgba(255, 184, 108, 0.2)',
     '--cc-warning-30': 'rgba(255, 184, 108, 0.3)',
+    '--cc-warning-90': 'rgba(255, 184, 108, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(80, 250, 123, 0.05)',
@@ -462,6 +470,7 @@ export const themeTokens = {
     '--cc-accent': '#61afef',
     '--cc-accent-on': '#282c34',
     '--cc-warning': '#e5c07b',
+    '--cc-warning-on': '#282c34',
     '--cc-error': '#e06c75',
     '--cc-success': '#98c379',
     '--cc-lock-other': '#5c7cfa',
@@ -555,6 +564,7 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(229, 192, 123, 0.1)',
     '--cc-warning-20': 'rgba(229, 192, 123, 0.2)',
     '--cc-warning-30': 'rgba(229, 192, 123, 0.3)',
+    '--cc-warning-90': 'rgba(229, 192, 123, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(152, 195, 121, 0.05)',
@@ -573,6 +583,7 @@ export const themeTokens = {
     '--cc-accent': '#268bd2',
     '--cc-accent-on': '#fdf6e3',
     '--cc-warning': '#b58900',
+    '--cc-warning-on': '#002b36',
     '--cc-error': '#dc322f',
     '--cc-success': '#859900',
     '--cc-lock-other': '#1a6496',
@@ -634,6 +645,7 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(181, 137, 0, 0.1)',
     '--cc-warning-20': 'rgba(181, 137, 0, 0.2)',
     '--cc-warning-30': 'rgba(181, 137, 0, 0.3)',
+    '--cc-warning-90': 'rgba(181, 137, 0, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(133, 153, 0, 0.05)',
@@ -652,6 +664,7 @@ export const themeTokens = {
     '--cc-accent': '#1e66f5',
     '--cc-accent-on': '#eff1f5',
     '--cc-warning': '#df8e1d',
+    '--cc-warning-on': '#1e1e2e',
     '--cc-error': '#d20f39',
     '--cc-success': '#40a02b',
     '--cc-lock-other': '#7287fd',
@@ -713,6 +726,7 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(223, 142, 29, 0.1)',
     '--cc-warning-20': 'rgba(223, 142, 29, 0.2)',
     '--cc-warning-30': 'rgba(223, 142, 29, 0.3)',
+    '--cc-warning-90': 'rgba(223, 142, 29, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(64, 160, 43, 0.05)',
@@ -732,6 +746,7 @@ export const themeTokens = {
     '--cc-accent': '#88c0d0',
     '--cc-accent-on': '#2e3440',
     '--cc-warning': '#ebcb8b',
+    '--cc-warning-on': '#2e3440',
     '--cc-error': '#bf616a',
     '--cc-success': '#a3be8c',
     '--cc-lock-other': '#6c92d8',
@@ -823,6 +838,7 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(235, 203, 139, 0.1)',
     '--cc-warning-20': 'rgba(235, 203, 139, 0.2)',
     '--cc-warning-30': 'rgba(235, 203, 139, 0.3)',
+    '--cc-warning-90': 'rgba(235, 203, 139, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(163, 190, 140, 0.05)',
@@ -841,6 +857,7 @@ export const themeTokens = {
     '--cc-accent': '#89b4fa',
     '--cc-accent-on': '#1e1e2e',
     '--cc-warning': '#f9e2af',
+    '--cc-warning-on': '#1e1e2e',
     '--cc-error': '#f38ba8',
     '--cc-success': '#a6e3a1',
     '--cc-lock-other': '#74c7ec',
@@ -931,6 +948,7 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(249, 226, 175, 0.1)',
     '--cc-warning-20': 'rgba(249, 226, 175, 0.2)',
     '--cc-warning-30': 'rgba(249, 226, 175, 0.3)',
+    '--cc-warning-90': 'rgba(249, 226, 175, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(166, 227, 161, 0.05)',
@@ -947,6 +965,7 @@ export const themeTokens = {
     '--cc-accent': '#0050a0',
     '--cc-accent-on': '#ffffff',
     '--cc-warning': '#cc7700',
+    '--cc-warning-on': '#000000',
     '--cc-error': '#cc0000',
     '--cc-success': '#007a2f',
     '--cc-lock-other': '#0066cc',
@@ -1034,6 +1053,7 @@ export const themeTokens = {
     '--cc-warning-10': '#fdf2e0',
     '--cc-warning-20': '#fae4c2',
     '--cc-warning-30': '#f8d7a3',
+    '--cc-warning-90': '#d1851a',
 
     // Opacity Variants: success (pre-composited against #ffffff)
     '--cc-success-5': '#f0faf3',

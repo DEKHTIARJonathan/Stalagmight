@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { FitToViewIcon, LockIcon } from '../common/icons';
+import { RawDataResumeButton, SpeleoResumeEditingButton } from './MapReadOnlyResume';
 
 /**
  * The map's top-left overlay row: the fit-to-view / exit-focus button, and the
@@ -78,6 +79,7 @@ export function MapTopLeftOverlay({
         >
           <LockIcon size={13} />
           <span className="text-accent font-medium">{t('speleodb.map.readOnlyBadge')}</span>
+          <SpeleoResumeEditingButton />
         </div>
       )}
 
@@ -120,6 +122,10 @@ export function MapTopLeftOverlay({
               )}
             </span>
           )}
+          {/* Leaving the computed view applies whether or not the solve is still
+              running; outside Survey (Plan/Export force it) the notice is off and
+              so is this. */}
+          {showClosureReadOnly && <RawDataResumeButton />}
         </div>
       )}
     </div>

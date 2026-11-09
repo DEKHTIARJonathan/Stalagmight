@@ -15,6 +15,7 @@ import { useUIStore } from '../../store/uiStore';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem } from '../common/appMenuItems';
+import { SpeleoBadgedIcon } from '../common/SpeleoBadgedIcon';
 import type { AppMenuItem } from '../common/AppMenu';
 import {
   SaveIcon,
@@ -23,7 +24,6 @@ import {
   SlidersIcon,
   InfoIcon,
   DatabaseIcon,
-  BugIcon,
   LayersIcon,
   MapIcon,
   TargetIcon,
@@ -143,48 +143,51 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         iconColor: MENU_ICON_COLORS.projectDetails,
         onClick: showProjectDetails,
       },
-      { id: 'project-menu-sep-4', label: '', separator: true },
-      ...serviceMenuItems(t, { onSettings: () => openDialog('settings'), onDebug: () => openDialog('debug') }),
       {
-        id: 'debug-menu',
-        label: t('singleView.menu.debug'),
-        icon: <BugIcon size={sz} />,
-        iconColor: MENU_ICON_COLORS.debug,
-        submenu: [
-          {
-            id: 'display-toggle-showDevStats',
-            label: t('singleView.menu.devStats'),
-            icon: <DatabaseIcon size={sz} />,
-            iconColor: MENU_ICON_COLORS.debug,
-            checked: showDevStats,
-            onClick: () => toggleDisplay('showDevStats'),
-          },
-          {
-            id: 'display-toggle-showMemoryStats',
-            label: t('singleView.menu.memoryStats'),
-            icon: <LayersIcon size={sz} />,
-            iconColor: MENU_ICON_COLORS.debug,
-            checked: showMemoryStats,
-            onClick: () => toggleDisplay('showMemoryStats'),
-          },
-          {
-            id: 'display-toggle-showMapStats',
-            label: t('singleView.menu.mapStats'),
-            icon: <MapIcon size={sz} />,
-            iconColor: MENU_ICON_COLORS.debug,
-            checked: showMapStats,
-            onClick: () => toggleDisplay('showMapStats'),
-          },
-          {
-            id: 'display-toggle-showZoomStats',
-            label: t('singleView.menu.zoomStats'),
-            icon: <TargetIcon size={sz} />,
-            iconColor: MENU_ICON_COLORS.debug,
-            checked: showZoomStats,
-            onClick: () => toggleDisplay('showZoomStats'),
-          },
-        ],
+        // The SpeleoDB tab of the left panel is the SpeleoDB entry point, but Plan and
+        // Export show no left panel until it is opened, and the fullscreen table covers
+        // it: this row reaches it from anywhere (local projects get the conversion
+        // offer). Always enabled - navigation, not a SpeleoDB action.
+        id: 'project-menu-speleodb',
+        label: t('speleodb.workspaceTab.menuOpen'),
+        icon: <SpeleoBadgedIcon size={sz} testIdPrefix="project-menu-speleodb-icon" />,
+        onClick: () => useUIStore.getState().openSpeleoWorkspace(),
       },
+      { id: 'project-menu-sep-4', label: '', separator: true },
+      ...serviceMenuItems(t, { onSettings: () => openDialog('settings'), onDebug: () => openDialog('debug') }, [
+        {
+          id: 'display-toggle-showDevStats',
+          label: t('singleView.menu.devStats'),
+          icon: <DatabaseIcon size={sz} />,
+          iconColor: MENU_ICON_COLORS.debug,
+          checked: showDevStats,
+          onClick: () => toggleDisplay('showDevStats'),
+        },
+        {
+          id: 'display-toggle-showMemoryStats',
+          label: t('singleView.menu.memoryStats'),
+          icon: <LayersIcon size={sz} />,
+          iconColor: MENU_ICON_COLORS.debug,
+          checked: showMemoryStats,
+          onClick: () => toggleDisplay('showMemoryStats'),
+        },
+        {
+          id: 'display-toggle-showMapStats',
+          label: t('singleView.menu.mapStats'),
+          icon: <MapIcon size={sz} />,
+          iconColor: MENU_ICON_COLORS.debug,
+          checked: showMapStats,
+          onClick: () => toggleDisplay('showMapStats'),
+        },
+        {
+          id: 'display-toggle-showZoomStats',
+          label: t('singleView.menu.zoomStats'),
+          icon: <TargetIcon size={sz} />,
+          iconColor: MENU_ICON_COLORS.debug,
+          checked: showZoomStats,
+          onClick: () => toggleDisplay('showZoomStats'),
+        },
+      ]),
       { id: 'project-menu-sep-5', label: '', separator: true },
       {
         id: 'back-button',

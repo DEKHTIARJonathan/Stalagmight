@@ -32,6 +32,30 @@ test.describe('GlobalView Metadata Panel', () => {
     });
   });
 
+  test('Open project is the yellow highlight action, readable in every theme', async ({ page }) => {
+    await page.getByTestId(ALPHA_CARD).click();
+    const open = page.getByTestId('metadata-open-button');
+    await expect(open).toBeVisible({ timeout: 5000 });
+    const themes = ['dark', 'light', 'cave', 'dracula', 'one_dark', 'solarized_light',
+      'catppuccin_latte', 'nord', 'catppuccin_mocha', 'kaleido_eink'];
+    for (const theme of themes) {
+      await page.evaluate((name) => { document.documentElement.dataset.theme = name; }, theme);
+      // The button animates colour changes (transition-colors), so poll until it
+      // settles on the theme's tokens, resolved through an un-animated probe.
+      await expect.poll(() => open.evaluate((el) => {
+        const probe = document.createElement('div');
+        probe.style.backgroundColor = 'var(--cc-warning)';
+        probe.style.color = 'var(--cc-warning-on)';
+        document.body.appendChild(probe);
+        const want = getComputedStyle(probe);
+        const got = getComputedStyle(el);
+        const same = got.backgroundColor === want.backgroundColor && got.color === want.color;
+        probe.remove();
+        return same;
+      }), { message: theme }).toBe(true);
+    }
+  });
+
   test.describe('Project Selection from List', () => {
     test('should show project details when card is clicked', async ({ page }) => {
       // Click on a system card to select it

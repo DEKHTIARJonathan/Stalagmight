@@ -55,19 +55,24 @@ describe('SystemTable remote row (#218)', () => {
     expect(screen.getByText('Remote Cave')).toBeInTheDocument();
   });
 
-  it('Open pulls the project via onOpenRemote', async () => {
+  it('the row itself opens (pulls) the project on click and on Enter; no Open button', async () => {
     const { onOpenRemote } = renderTable();
-    await userEvent.click(screen.getByTestId('system-row-remote-open-p1'));
+    expect(screen.queryByTestId('system-row-remote-open-p1')).not.toBeInTheDocument();
+    const row = screen.getByTestId('system-row-remote-p1');
+    await userEvent.click(row);
     expect(onOpenRemote).toHaveBeenCalledWith(SUMMARY);
+    row.focus();
+    await userEvent.keyboard('{Enter}');
+    expect(onOpenRemote).toHaveBeenCalledTimes(2);
   });
 
-  it('gates the row + Open button while busy (no concurrent open)', async () => {
+  it('gates the row while busy (no concurrent open)', async () => {
     const { onOpenRemote } = renderTable({ busy: true });
-    const openButton = screen.getByTestId('system-row-remote-open-p1');
-    expect(openButton).toBeDisabled();
-    // Clicking the disabled button, or the row body, must not fire a second open.
-    await userEvent.click(openButton);
-    await userEvent.click(screen.getByTestId('system-row-remote-p1'));
+    const row = screen.getByTestId('system-row-remote-p1');
+    expect(row).toHaveAttribute('aria-disabled', 'true');
+    await userEvent.click(row);
+    row.focus();
+    await userEvent.keyboard('{Enter}');
     expect(onOpenRemote).not.toHaveBeenCalled();
   });
 });

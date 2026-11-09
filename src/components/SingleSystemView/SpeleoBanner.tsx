@@ -1,4 +1,3 @@
-import { SpeleoAccessNotice } from './SpeleoAccessNotice';
 import { useTranslation } from 'react-i18next';
 import {
   useSpeleoStore,
@@ -28,7 +27,10 @@ export function SpeleoBanner() {
     s.activeDialog !== null && PUSH_FAILURE_DIALOGS.includes(s.activeDialog),
   );
   const busy = useSpeleoStore((s) => s.busy);
-  if (!banner) return <SpeleoAccessNotice />;
+  // No banner, no bar. Read-only on its own is NOT a banner state: the map's
+  // read-only pill and the SpeleoDB tab's lock badge already say it, and the pill
+  // carries the Resume editing action.
+  if (!banner) return null;
   // #260: the failure is on screen inside the dialog that caused it - never both.
   if (banner.kind === 'push_failed' && dialogOwnsFailure) return null;
 

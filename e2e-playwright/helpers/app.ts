@@ -247,16 +247,17 @@ export async function openSettingsFromMenu(page: Page): Promise<void> {
   await expect(page.getByTestId('settings-dialog')).toBeVisible({ timeout: 5000 });
 }
 
-/** Open the Debug Logs dialog via the hamburger menu (global view). */
+/**
+ * Open the Debug Logs dialog via the hamburger menu. Debug Logs is the first row
+ * of the "Debug" submenu in both hamburgers (home screen and in-project).
+ */
 export async function openDebugFromMenu(page: Page): Promise<void> {
-  await openAppMenu(page);
-  await page.getByTestId('global-debug-button').click();
+  await openDebugStatsMenu(page, 'global-debug-button');
 }
 
 /**
- * Open the hamburger Debug submenu (Dev/Memory/Map/Zoom Stats toggles) and
- * click a specific item in it. Not to be confused with `openDebugFromMenu`,
- * which opens the unrelated Debug Logs dialog.
+ * Open the hamburger Debug submenu (Debug Logs, plus the Dev/Memory/Map/Zoom
+ * Stats toggles in-project) and click a specific item in it.
  *
  * Its toggle rows are checkable, so the submenu stays open after a click
  * (see AppMenu's activateLeaf) - clicking the "Debug" parent row again would

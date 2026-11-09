@@ -533,7 +533,7 @@ interface SpeleoStore {
    * restore off tip), so mirroring a forward edit through `markDirty` was a total no-op:
    * `unwound` survived until the next `speleodb_link_status` refresh.
    * Inside that window {@link isUnwoundNotEdited} still
-   * held, so SpeleoStatusButton, the lock menu, the `done()` guard and both exit prompts
+   * held, so the SpeleoDB status UI, the lock menu, the `done()` guard and both exit prompts
    * offered "Discard and take the latest" over work the user had just drawn.
    *
    * Undo/redo keeps `markDirty`: the backend deliberately does NOT drop the chain pointer

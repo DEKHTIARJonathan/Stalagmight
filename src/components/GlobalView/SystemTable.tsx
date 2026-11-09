@@ -251,22 +251,10 @@ export function SystemTable({
                 <td className={`${cellClass} text-text-tertiary text-right`} colSpan={2}>
                   {t('globalView.recent.remote.onSpeleoDb')}
                 </td>
+                {/* The row itself is the Open action (click, Enter/Space), like the
+                    card grid's remote cards and every local row; no separate button. */}
                 <td className={cellClass}>
-                  <div className="flex items-center justify-between gap-3">
-                    <RemoteUpdatedTime date={item.summary.modified_date} />
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (!busy) onOpenRemote(item.summary);
-                      }}
-                      className="text-xs text-accent hover:underline disabled:opacity-60 disabled:no-underline"
-                      data-testid={`system-row-remote-open-${item.projectId}`}
-                    >
-                      {t('speleodb.browser.open')}
-                    </button>
-                  </div>
+                  <RemoteUpdatedTime date={item.summary.modified_date} />
                 </td>
               </tr>
             );

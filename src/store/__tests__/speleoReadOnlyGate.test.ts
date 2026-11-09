@@ -99,7 +99,7 @@ describe('a remote project without the write lock (#270)', () => {
   it('seeds a pessimistic link so the status button still offers the way out', () => {
     useSpeleoStore.getState().syncProjectLink(true);
     const link = useSpeleoStore.getState().link;
-    // A null link hides SpeleoStatusButton entirely (and with it the actions that
+    // A null link hides the SpeleoDB workspace's actions entirely (the ones that
     // allow manual recovery), so a remote project must never be left without one.
     expect(link).not.toBeNull();
     expect(link?.editState).toBe('read-only');

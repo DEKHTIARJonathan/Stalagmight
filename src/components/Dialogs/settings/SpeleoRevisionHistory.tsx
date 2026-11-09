@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SettingsSection } from './SettingsSection';
 import { Button } from '../../common/Button';
+import { DownloadIcon, ExternalLinkIcon, EyeIcon, UndoIcon } from '../../common/icons';
 import { useUIStore } from '../../../store/uiStore';
 import {
   useSpeleoStore,
@@ -128,9 +129,10 @@ export function SpeleoRevisionHistory() {
           disabled={web.url === null}
           title={web.url === null ? t('speleodb.web.unavailable') : undefined}
           onClick={web.open}
-          className="text-xs text-accent hover:underline disabled:opacity-50 disabled:no-underline"
+          className="inline-flex items-center gap-1 text-xs text-accent hover:underline disabled:opacity-50 disabled:no-underline"
           data-testid="speleodb-web-revisions"
         >
+          <ExternalLinkIcon size={12} />
           {t('speleodb.web.openRevisions')}
         </button>
       </div>
@@ -228,6 +230,7 @@ export function SpeleoRevisionHistory() {
                         message: rev.message ?? '',
                       })
                     }
+                    icon={<DownloadIcon size={14} />}
                     data-testid={`speleodb-revision-restore-${rev.id}`}
                   >
                     {t('speleodb.revisions.restore')}
@@ -239,6 +242,7 @@ export function SpeleoRevisionHistory() {
                     size="sm"
                     disabled={pendingId !== null}
                     onClick={() => void handleView(rev)}
+                    icon={<EyeIcon size={14} />}
                     data-testid={`speleodb-revision-view-${rev.id}`}
                   >
                     {pendingId === rev.id
@@ -271,6 +275,7 @@ export function SpeleoRevisionHistory() {
                         returnData: { tab: 'history' },
                       })
                     }
+                    icon={<UndoIcon size={14} />}
                     data-testid={`speleodb-revision-revert-${rev.id}`}
                   >
                     {t('speleodb.revert.action')}

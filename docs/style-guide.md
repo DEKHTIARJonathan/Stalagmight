@@ -28,6 +28,7 @@ This guide captures the current UI conventions and design tokens for Stalagmight
   - `secondary`: default action style.
   - `ghost`: low-emphasis actions in dense UI or toolbars.
   - `danger`: destructive actions.
+  - `highlight`: the main action of a panel that has no `primary`, in the theme's warning yellow with `text-warning-on` (the per-theme dark text that reads at WCAG AA on it). Example: Open project in the home screen's project details. Yellow also marks un-uploaded SpeleoDB changes, so keep it to one such button per view.
 - Use `icon` on `Button` for leading icons.
 - Use `IconButton` for icon-only actions; always include `aria-label` and, when helpful, `tooltip`.
 
