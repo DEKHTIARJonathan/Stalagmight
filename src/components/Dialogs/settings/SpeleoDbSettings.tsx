@@ -138,6 +138,7 @@ export function SpeleoDbSettings({
                 : t('settings.speleodb.account.signedInAs', { email: session.userEmail ?? '' })}
             </p>
             <Button
+              variant="danger"
               onClick={() => setPendingAuth({ kind: 'logout' })}
               data-testid="speleodb-settings-logout"
             >

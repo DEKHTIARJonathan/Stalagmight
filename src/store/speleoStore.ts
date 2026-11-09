@@ -733,6 +733,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         } finally {
           set({ pendingAuth: null, authError: null });
           get().clearSession();
+          const projects = useProjectStore.getState();
+          await Promise.all([projects.loadRecentProjects(), projects.loadConfig()]);
         }
       } else {
         const r = await invokeIpc<SpeleoLoginResult>('speleodb_login', {

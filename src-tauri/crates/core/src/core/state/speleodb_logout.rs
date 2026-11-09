@@ -60,7 +60,32 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .forget();
-        self.speleodb_clear_saved_token()
+        // Attempt both cleanups even when credential persistence fails.
+        let token_result = self.speleodb_clear_saved_token();
+        let recent_result = self.speleodb_forget_recent_projects();
+        token_result.and(recent_result)
+    }
+
+    /// Forget only confirmed SpeleoDB references. Metadata reads never modify the
+    /// project files; unreadable/missing entries are retained rather than guessed.
+    fn speleodb_forget_recent_projects(&self) -> Result<(), SpeleoErrorDto> {
+        let mut recent = self
+            .recent_projects
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        recent.retain(|path| {
+            !crate::persistence::Database::open_for_metadata(path)
+                .and_then(|db| db.load_speleo_link())
+                .is_ok_and(|link| link.is_some())
+        });
+        let mut config = self
+            .config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        config.general.recent_projects.clone_from(&recent);
+        config.save().map_err(|_| local_dto(SpeleoDbError::Io(
+            "Signed out, but SpeleoDB project references could not be saved. Try signing out again.".into()
+        )))
     }
 
     pub(super) fn speleodb_logout_drop_gates(&self) {
@@ -122,6 +147,64 @@ impl AppState {
 )]
 mod tests {
     use super::*;
+    #[test]
+    fn logout_forgets_only_speleodb_references_and_preserves_files() {
+        crate::test_helpers::with_isolated_config(|| {
+            let dir = tempfile::tempdir().expect("temp");
+            let state = AppState::new().expect("state");
+            let local = dir.path().join("local.stalx");
+            let missing = dir.path().join("missing.stalx");
+            let unreadable = dir.path().join("unreadable.stalx");
+            std::fs::write(&unreadable, b"synthetic invalid database").expect("write");
+            let mut paths = vec![local.clone(), missing, unreadable];
+            for (name, endpoint) in [
+                ("local", None),
+                ("remote-a", Some("https://a.example/")),
+                ("remote-b", Some("https://b.example/")),
+            ] {
+                let path = dir.path().join(format!("{name}.stalx"));
+                let mut db = crate::persistence::Database::open(&path).expect("db");
+                db.save_project(&crate::models::Project::new(name.into(), None))
+                    .expect("project");
+                if let Some(endpoint) = endpoint {
+                    db.save_speleo_link(Some(&crate::models::SpeleoLink {
+                        endpoint: endpoint.into(),
+                        project_id: uuid::Uuid::new_v4().to_string(),
+                        project_name: name.into(),
+                        base_commit_sha: None,
+                        has_unpushed_edits: true,
+                        last_edit_at: None,
+                        last_verify_at: None,
+                        undo_mode: None,
+                    }))
+                    .expect("link");
+                    paths.push(path);
+                }
+            }
+            let preserved: Vec<_> = paths.iter().map(|path| std::fs::read(path).ok()).collect();
+            *state.recent_projects.lock().expect("recents") = paths.clone();
+            state.config.lock().expect("config").general.recent_projects = paths.clone();
+            assert!(state.open_project(local).success);
+            state.speleodb_logout().expect("logout");
+            assert_eq!(*state.recent_projects.lock().expect("recents"), paths[..3]);
+            assert_eq!(state.get_config().general.recent_projects, paths[..3]);
+            assert_eq!(
+                crate::config::Config::load()
+                    .expect("reload")
+                    .general
+                    .recent_projects,
+                paths[..3]
+            );
+            assert!(state.get_project_state().is_some());
+            assert!(state.edit_enabled());
+            for (path, before) in paths.iter().zip(preserved) {
+                assert_eq!(std::fs::read(path).ok(), before, "{}", path.display());
+            }
+            state.speleodb_logout().expect("repeated logout");
+            assert_eq!(*state.recent_projects.lock().expect("recents"), paths[..3]);
+        });
+    }
+
     #[test]
     fn logout_removes_only_the_current_accounts_obsolete_plaintext_file() {
         crate::test_helpers::with_isolated_config(|| {

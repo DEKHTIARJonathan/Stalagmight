@@ -6,6 +6,7 @@ import {
   speleoProjectSessionIssuedFor,
   speleoProjectSessionStillCurrent,
 } from '../speleoStore';
+import { useProjectStore } from '../projectStore';
 import type { SpeleoLinkStatus } from '../../types/ipc.generated';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -163,6 +164,23 @@ describe('speleoStore', () => {
       expect(s.link?.permission).toBe('READ_AND_WRITE');
       expect(s.divergence).toBeNull();
       expect(s.banner).toBeNull();
+    });
+
+    it.each([false, true])('refreshes project references after logout (failure: %s)', async (fails) => {
+      const recent = vi.spyOn(useProjectStore.getState(), 'loadRecentProjects').mockResolvedValue();
+      const config = vi.spyOn(useProjectStore.getState(), 'loadConfig').mockResolvedValue();
+      try {
+        useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
+        if (fails) invokeIpcMock.mockRejectedValueOnce(new Error('cleanup failed'));
+        else invokeIpcMock.mockResolvedValueOnce(null);
+        const result = await useSpeleoStore.getState().applyPendingAuth(null);
+        expect(result.ok).toBe(!fails);
+        expect(recent).toHaveBeenCalledOnce();
+        expect(config).toHaveBeenCalledOnce();
+      } finally {
+        recent.mockRestore();
+        config.mockRestore();
+      }
     });
 
     it('applyPendingAuth clears the session even when the logout command rejects', async () => {
