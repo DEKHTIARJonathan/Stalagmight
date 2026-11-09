@@ -2,9 +2,10 @@ import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
 import type { useSpeleoStore } from '../src/store/speleoStore';
 import type { useProjectStore } from '../src/store/projectStore';
+import type { useUIStore } from '../src/store/uiStore';
 
 type BusyWindow = Window & {
-  __E2E_TEST__: { speleoStore: typeof useSpeleoStore; projectStore: typeof useProjectStore };
+  __E2E_TEST__: { speleoStore: typeof useSpeleoStore; projectStore: typeof useProjectStore; uiStore: typeof useUIStore };
   __MOCK_IPC_OVERRIDES__: Record<string, unknown>;
   __MOCK_SET_PROJECT_IS_REMOTE__: (remote: boolean) => void;
   /** Answer a held command: `__answer[cmd](value)`. */
@@ -62,7 +63,10 @@ async function openEditingRemote(page: Page) {
     await w.__E2E_TEST__.speleoStore.getState().refreshSession();
     await w.__E2E_TEST__.projectStore.getState().loadProject('/projects/cave-alpha.stalx');
   });
-  await page.getByTestId('speleodb-status-button').click();
+  // The store action every SpeleoDB entry point uses (opens the dock on the tab),
+  // rather than one particular button, which the toolbar no longer has to carry.
+  await page.evaluate(() => (window as unknown as BusyWindow).__E2E_TEST__.uiStore.getState().openSpeleoWorkspace());
+  await expect(page.getByTestId('workspace-tab-speleodb')).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Switch to Read Only Mode');
   await expect(page.getByTestId('speleodb-network-busy')).toHaveCount(0);
 }
