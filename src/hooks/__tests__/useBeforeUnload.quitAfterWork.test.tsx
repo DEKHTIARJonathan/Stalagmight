@@ -269,7 +269,7 @@ describe('quit after in-flight work', () => {
         const armedAt = invokeIpcMock.mock.invocationCallOrder[
           invokeIpcMock.mock.calls.findIndex(([command]) => command === 'arm_forced_exit')
         ];
-        expect(armedAt).toBeLessThan(destroyMock.mock.invocationCallOrder[0]);
+        expect(armedAt).toBeLessThan(destroyMock.mock.invocationCallOrder[0] ?? 0);
         expect(guard).not.toHaveBeenCalled();
         expect(useQuitWait.getState().waiting).toBe(false);
       });
