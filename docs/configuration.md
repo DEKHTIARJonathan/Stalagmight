@@ -29,12 +29,11 @@ All SpeleoDB settings and the API token are stored in a separate TOML file:
 endpoint = "https://www.speleodb.org"
 email = "you@example.com"
 token = "<API token>"
-insecure_http = false
 undo_mode = "full"
 ```
 
 The endpoint and email are optional until configured. The token is optional until
-sign-in and is removed on sign-out or when changing instances. There is one
+sign-in and is removed on disconnect; disconnect before changing instances. There is one
 instance and one saved account. Tokens are plaintext, with atomic replacement and
 owner-only file permissions (0600) on Unix; Windows uses the user's profile ACLs.
 Passwords are never saved. Tokens remain backend-only and are omitted from IPC
@@ -48,9 +47,8 @@ credential bytes (or prior absence) are restored with private permissions. A fai
 rollback is reported explicitly; two files cannot provide crash-atomic updates.
 
 When `speleodb/speleodb.conf` is genuinely absent, the legacy `[speleodb]` table
-supplies endpoint, email, `insecure_http`,
-`poll_interval_seconds` and `undo_mode`. Normalization still applies, including the
-polling floor. Passwords, tokens and obsolete credential-storage options are ignored;
+supplies endpoint, email and `undo_mode`. Obsolete HTTP overrides, polling settings,
+passwords, tokens and credential-storage options are ignored;
 sign in again to store a token. The separate file always takes precedence, including
 when damaged or unreadable. Malformed legacy preferences are logged without source
 values and retained on unrelated saves for recovery. A successful two-file save
@@ -61,9 +59,9 @@ file from `speleodb/tokens`, without reading or importing it. Other accounts are
 untouched; cleanup failures are reported. No keychain access is restored.
 `DEV_SPELEODB_URL` still overrides the instance for development, but a saved token
 is restored only when the resolved instance matches its configured endpoint.
-Reloading configuration applies a changed endpoint, account or token to the live
-session and resets its edit gate; unrelated preference reloads retain the session.
-Projects refresh at startup and immediately after sign-in. Successful "Log in now"
+Reloading configuration refuses a different endpoint while connected. Same-instance
+credential reloads reset the edit gate; unrelated preference reloads retain the session.
+Projects refresh at startup and immediately after sign-in. Successful Connect
 closes Settings and shows the project listing. Refreshes display a spinner until
 they finish, including failed requests. Use the refresh button
 on the home screen to reload the listing, or Refresh in the open project's
@@ -581,3 +579,25 @@ not where any log file was written.
 
 The obsolete lockless-edit preference is ignored when loading older files and is
 omitted when saving. It cannot enable editing.
+
+## Immediate SpeleoDB connection settings
+
+Connect saves changed preferences and authenticates immediately. Success closes
+Settings and refreshes the project listing. Disconnect takes effect immediately,
+clears the remote listing and stays on the SpeleoDB Settings tab. Neither action
+requires a subsequent Save. While connected, the server endpoint and both reset
+controls are disabled; backend requests to change instances are also refused.
+Disconnect first, including when the current server is temporarily unavailable.
+
+The SpeleoDB tab has a Close button instead of Save/Cancel. Closing validates and
+saves preference changes, including changes in other categories, without connecting.
+Connection and persistence errors keep Settings open. The ordinary Settings
+unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
+
+HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
+address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
+allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
+missing schemes and malformed addresses are rejected. No DNS-based exception or
+insecure-HTTP override exists. Invalid endpoints produce an error modal when
+connecting or saving; existing legacy override fields are ignored and omitted
+from subsequent saves. Certificate verification and redirect restrictions remain.

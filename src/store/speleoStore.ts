@@ -154,7 +154,7 @@ export interface SpeleoLinkState {
 
 /**
  * A staged login intent (A2): entered in the Settings account panel but applied
- * only when the dialog's Save is pressed. Credentials are transient - cleared on
+ * by an explicit connection action, never Settings Save. Credentials are cleared on
  * apply, cancel, or dialog close (never persisted).
  */
 export interface PendingLogin {
@@ -412,7 +412,7 @@ interface SpeleoStore {
   closeHeldLockPrompt: () => void;
 
   // --- staged account actions (Settings #205, A2/A3) ---
-  /** The login/logout the user staged; applied on the dialog's Save. */
+  /** Transient credential draft or immediate account operation. Never applied on Save. */
   pendingAuth: PendingAuth;
   /** Error from the last apply-on-save (already humanized), shown in the panel. */
   authError: string | null;
@@ -704,7 +704,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     const p = get().pendingAuth;
     if (!p) return { ok: true };
     const request = ++authRequestSeq;
-    const generation = get().sessionGeneration;
+    let generation = get().sessionGeneration;
     const current = () => request === authRequestSeq && get().sessionGeneration === generation;
     const previous = useProjectStore.getState().config?.speleodb;
     const previousEmail = get().session?.userEmail ?? previous?.email;
@@ -718,12 +718,14 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     if (!current()) return { ok: false, cancelled: true };
     try {
       if (p.kind === 'logout') {
+        // Remove the old account listing immediately; stale replies lose ownership.
+        get().clearSession();
+        generation = get().sessionGeneration;
         try {
           await invokeIpc<null>('speleodb_logout');
         } finally {
           if (current()) {
             set((state) => ({ pendingAuth: state.pendingAuth === p ? null : state.pendingAuth, authError: null }));
-            get().clearSession();
             const projects = useProjectStore.getState();
             await Promise.all([projects.loadRecentProjects(), projects.loadConfig()]);
           }

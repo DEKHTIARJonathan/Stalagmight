@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { SpeleoHistorySteps } from './SpeleoHistorySteps';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
@@ -11,9 +10,12 @@ import { dispatchProjectSave } from '../../utils/dispatchProjectSave';
 import { SpeleoRevisionHistory } from '../Dialogs/settings/SpeleoRevisionHistory';
 import { useProject } from '../../hooks/useProject';
 import { Button } from '../common/Button';
+import { ExternalLinkIcon } from '../common/icons';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 
-const areas = [['history', 'History']] as const;
+const actionClass = 'w-full h-11 px-3 py-2.5 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
+
+const areas = [['history', 'Revision History']] as const;
 
 /** Single persistent body: accordion navigation hides content without unmounting drafts. */
 export function SpeleoWorkspace() {
@@ -50,19 +52,19 @@ export function SpeleoWorkspace() {
         <h2 className="font-semibold break-words">{projectName}</h2>
         <p>{editing ? 'Editing' : 'Read-only'}{link.lockHolder ? ` - ${link.lockHolder}` : ''}</p>
         <p className="text-text-secondary">{!session?.loggedIn ? 'Signed out' : link.serverError ? link.serverError.message : link.remoteState === 'unknown' ? 'Connection unavailable' : 'Connected'}</p>
-        {link.noAccess && <Button onClick={() => useUIStore.getState().openDialog('speleodb-no-permission')} data-testid="speleodb-workspace-no-access">Keep a local project</Button>}
-        {link.remoteState === 'conflict' && <Button onClick={() => useUIStore.getState().openDialog('speleodb-divergence')} data-testid="speleodb-workspace-resolve">Resolve synchronization conflict</Button>}
+        {link.noAccess && <Button variant="warning" className={actionClass} onClick={() => useUIStore.getState().openDialog('speleodb-no-permission')} data-testid="speleodb-workspace-no-access">Keep a local project</Button>}
+        {link.remoteState === 'conflict' && <Button variant="warning" className={actionClass} onClick={() => useUIStore.getState().openDialog('speleodb-divergence')} data-testid="speleodb-workspace-resolve">Resolve synchronization conflict</Button>}
         {link.hasUnpushedEdits && <p className="text-warning">Changes on this computer have not been uploaded.</p>}
       </div>
       <div className="shrink-0 grid gap-2" data-testid="speleodb-workspace-everyday">
-        <Button variant="primary" onClick={() => void dispatchProjectSave()} disabled={busy} data-testid="speleodb-workspace-upload">Save Changes</Button>
-        <Button onClick={() => editing ? void releaseOpenProjectLock() : canResume ? void startEditing() : useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })}
+        <Button variant="primary" className={actionClass} onClick={() => void dispatchProjectSave()} disabled={busy} data-testid="speleodb-workspace-upload">Save Changes</Button>
+        <Button variant={editing ? 'warning' : 'success'} className={actionClass} onClick={() => editing ? void releaseOpenProjectLock() : canResume ? void startEditing() : useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })}
           disabled={busy || (session?.loggedIn === true && !canResume && !editing)} data-testid="speleodb-workspace-editing">
           {editing ? 'Switch to Read Only Mode' : session?.loggedIn ? 'Resume editing' : 'Sign in to resume editing'}
         </Button>
-        <Button onClick={() => void update()} disabled={busy || !session?.loggedIn || link.noAccess || (link.permission !== null && !permissionAtLeast(link.permission, 'READ_ONLY'))} data-testid="speleodb-workspace-latest">Reload Project</Button>
-        <Button onClick={() => void handleCloseProject()} disabled={busy} data-testid="speleodb-workspace-close">Close Project</Button>
-        <Button onClick={web.open} disabled={!web.url} data-testid="speleodb-workspace-open-web">Open on SpeleoDB</Button>
+        <Button variant="info" className={actionClass} onClick={() => void update()} disabled={busy || !session?.loggedIn || link.noAccess || (link.permission !== null && !permissionAtLeast(link.permission, 'READ_ONLY'))} data-testid="speleodb-workspace-latest">Reload Project</Button>
+        <Button variant="danger" className={actionClass} onClick={() => void handleCloseProject()} disabled={busy} data-testid="speleodb-workspace-close">Close Project</Button>
+        <Button variant="external" icon={<ExternalLinkIcon size={16} />} className={actionClass} onClick={web.open} disabled={!web.url} data-testid="speleodb-workspace-open-web">Open on SpeleoDB</Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto" data-testid="speleodb-workspace-sections">
       {areas.map(([id, label]) => (
@@ -75,7 +77,7 @@ export function SpeleoWorkspace() {
           </button>
           <div id={`speleodb-area-${id}`} hidden={expanded !== id} className="space-y-3">
             {(visited.has(id) || expanded === id) && <>
-            {id === 'history' && <><SpeleoHistorySteps /><SpeleoRevisionHistory /></>}
+            {id === 'history' && <SpeleoRevisionHistory />}
             </>}
           </div>
         </section>

@@ -34,7 +34,6 @@ import type { ResolvedTheme } from '../../store/uiStore';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { isValidationConfigValid } from '../../utils/validation';
 import { useSpeleoStore } from '../../store/speleoStore';
-import { humanizeSpeleoError } from '../../utils/speleoError';
 import { AboutMapImagery } from './AboutMapImagery';
 import { runAppUpdateCheck } from '../../hooks/useAppUpdate';
 import { buildDefaultUpdateTrack } from '../../utils/updateTrack';
@@ -366,6 +365,28 @@ function mergeConfig(base: Config, updates: Partial<Config>): Config {
   return result;
 }
 
+/** Account actions own these fields even while unrelated preferences are staged. */
+function rebaseSpeleoOwnedFields(current: Config, saved: Config, previous: Config): Config {
+  const session = useSpeleoStore.getState().session;
+  return {
+    ...current,
+    general: {
+      ...current.general,
+      ...(JSON.stringify(saved.general.recent_projects) !== JSON.stringify(previous.general.recent_projects)
+        ? { recent_projects: saved.general.recent_projects }
+        : {}),
+    },
+    speleodb: {
+      ...current.speleodb,
+      email: saved.speleodb.email,
+      ...(saved.speleodb.endpoint !== previous.speleodb.endpoint &&
+          (current.speleodb.endpoint === previous.speleodb.endpoint || session?.loggedIn)
+        ? { endpoint: saved.speleodb.endpoint }
+        : {}),
+    },
+  };
+}
+
 export default function SettingsDialog() {
   const { t } = useTranslation();
   const closeDialog = finishSpeleoSettings;
@@ -374,12 +395,8 @@ export default function SettingsDialog() {
   const setSyntacticHighlightPreview = useUIStore((s) => s.setSyntacticHighlightPreview);
   const { config, updateConfig } = useProjectStore();
 
-  // Staged SpeleoDB account action (A2): applied on Save alongside the config.
-  const pendingAuth = useSpeleoStore((s) => s.pendingAuth);
-  const applyPendingAuth = useSpeleoStore((s) => s.applyPendingAuth);
+  // Credential drafts are transient and are never applied by Settings Save.
   const clearPendingAuth = useSpeleoStore((s) => s.clearPendingAuth);
-  const setAuthError = useSpeleoStore((s) => s.setAuthError);
-  const hasPendingAuth = pendingAuth !== null;
 
   // Panel ID base for ARIA associations
   const panelIdBase = useId();
@@ -396,6 +413,10 @@ export default function SettingsDialog() {
 
   // Local config copy for editing
   const [localConfig, setLocalConfig] = useState<Config | null>(config);
+  const localConfigRef = useRef(localConfig);
+  localConfigRef.current = localConfig;
+  const backendConfigRef = useRef(config);
+  const draftRevision = useRef(0);
   // Reference to original config for change detection
   const originalConfigRef = useRef<Config | null>(config);
 
@@ -412,6 +433,9 @@ export default function SettingsDialog() {
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Custom unsaved changes dialog state
+  const [connectionBusy, setConnectionBusy] = useState(false);
+  const savingSettings = useRef(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
   // Reset confirmation dialog state
   const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -464,6 +488,20 @@ export default function SettingsDialog() {
     }
   }, [config, localConfig]);
 
+  useEffect(() => {
+    const previous = backendConfigRef.current;
+    backendConfigRef.current = config;
+    if (!config || !previous || config === previous) return;
+    if (originalConfigRef.current) {
+      originalConfigRef.current = rebaseSpeleoOwnedFields(originalConfigRef.current, config, previous);
+    }
+    if (localConfigRef.current) {
+      const rebased = rebaseSpeleoOwnedFields(localConfigRef.current, config, previous);
+      localConfigRef.current = rebased;
+      setLocalConfig(rebased);
+    }
+  }, [config]);
+
   // Live-preview theme changes: apply immediately on selection, revert on unmount/cancel
   useEffect(() => {
     if (localConfig) {
@@ -496,9 +534,12 @@ export default function SettingsDialog() {
 
   // Handle config changes from category components
   const handleConfigChange = useCallback((updates: Partial<Config>) => {
+    draftRevision.current += 1;
     setLocalConfig((prev) => {
       if (!prev) return prev;
-      return mergeConfig(prev, updates);
+      const next = mergeConfig(prev, updates);
+      localConfigRef.current = next;
+      return next;
     });
   }, []);
 
@@ -528,6 +569,7 @@ export default function SettingsDialog() {
 
   // Handle category change from sidebar
   const handleCategoryChange = useCallback((category: SettingsCategory) => {
+    if (connectionBusy || savingSettings.current) return;
     setActiveCategory(category);
     // Also update focused index to match
     const index = CATEGORIES.findIndex((c) => c.id === category);
@@ -538,50 +580,56 @@ export default function SettingsDialog() {
     if (contentRef.current) {
       contentRef.current.scrollTop = 0;
     }
-  }, []);
+  }, [connectionBusy]);
 
   // Handle focus change from sidebar
   const handleFocusChange = useCallback((index: number) => {
     setFocusedIndex(index);
   }, []);
 
-  // Persist the config (if changed) then apply any staged SpeleoDB account action
-  // (A2). Returns true only if everything succeeded (so the caller may close). On
-  // an auth failure the config is already saved; we surface the error in the
-  // SpeleoDB panel and keep the dialog open for a retry.
+  // Never close over a replacement dialog or edits made while persistence waited.
   const commitSettings = useCallback(async (): Promise<boolean> => {
-    if (!localConfig) return false;
-    if (isDirty) {
-      const result = await updateConfig(localConfig);
-      if (!result.success) return false;
-    }
-    if (hasPendingAuth) {
-      const kind = pendingAuth?.kind;
-      const auth = await applyPendingAuth(localConfig.speleodb.endpoint);
-      if (auth.cancelled) return false;
-      if (!auth.ok) {
-        setAuthError(
-          humanizeSpeleoError(auth.error, kind === 'login' ? t('speleodb.errors.loginFailed') : undefined),
-        );
-        setActiveCategory('speleodb');
-        return false;
+    const draft = localConfigRef.current;
+    if (!draft || savingSettings.current) return false;
+    const issuedRevision = draftRevision.current;
+    const issuedDialog = useUIStore.getState().dialogData;
+    const issuedGeneration = useSpeleoStore.getState().sessionGeneration;
+    const ownsDialog = () => {
+      const current = useUIStore.getState();
+      return current.activeDialog === 'settings' && current.dialogData === issuedDialog &&
+        useSpeleoStore.getState().sessionGeneration === issuedGeneration;
+    };
+    savingSettings.current = true;
+    try {
+      if (isDirty) {
+        const saved = useProjectStore.getState().config;
+        const previous = backendConfigRef.current;
+        const next = saved && previous ? rebaseSpeleoOwnedFields(draft, saved, previous) : draft;
+        const result = await updateConfig(next);
+        if (!result.success) {
+          if (ownsDialog()) setSaveError(result.error ?? 'Could not save Settings.');
+          return false;
+        }
       }
+      return ownsDialog() && draftRevision.current === issuedRevision;
+    } finally {
+      savingSettings.current = false;
     }
-    return true;
-  }, [localConfig, isDirty, hasPendingAuth, pendingAuth, updateConfig, applyPendingAuth, setAuthError, t]);
+  }, [isDirty, updateConfig]);
 
   // Save settings
   const handleSave = useCallback(async () => {
-    if (!localConfig || (!isDirty && !hasPendingAuth) || hasAnyError) return;
+    if (!localConfig || !isDirty || hasAnyError) return;
     if (await commitSettings()) {
       trackDialogComplete('settings');
       closeDialog();
     }
-  }, [localConfig, isDirty, hasPendingAuth, hasAnyError, commitSettings, closeDialog]);
+  }, [localConfig, isDirty, hasAnyError, commitSettings, closeDialog]);
 
   // Request close - show custom dialog if dirty
   // Short-circuit if an overlay is already open to prevent Escape conflicts
   const handleRequestClose = useCallback(() => {
+    if (connectionBusy) return;
     // If an overlay is open, close it instead of the main dialog
     if (showAbout) {
       setShowAbout(false);
@@ -595,24 +643,27 @@ export default function SettingsDialog() {
       setShowUnsavedDialog(false);
       return;
     }
-    // Normal close logic - a staged (unsaved) account action counts as dirty.
-    if (isDirty || hasPendingAuth) {
+    if (activeCategory === 'speleodb') {
+      if (hasAnyError) {
+        const first = CATEGORIES.find((category) => combinedCategoryErrors[category.id]);
+        if (first) setActiveCategory(first.id);
+        return;
+      }
+      const issued = useUIStore.getState().dialogData;
+      void commitSettings().then((ok) => {
+        const current = useUIStore.getState();
+        if (ok && current.activeDialog === 'settings' && current.dialogData === issued) closeDialog();
+      });
+      return;
+    }
+    // Other categories retain the explicit discard prompt.
+    if (isDirty) {
       setShowUnsavedDialog(true);
     } else {
       trackDialogComplete('settings');
       closeDialog();
     }
-  }, [isDirty, hasPendingAuth, closeDialog, showAbout, showResetConfirm, showUnsavedDialog]);
-
-  // Handle custom unsaved dialog - Save
-  const handleSaveAndClose = useCallback(async () => {
-    if (!localConfig) return;
-    if (await commitSettings()) {
-      setShowUnsavedDialog(false);
-      trackDialogComplete('settings');
-      closeDialog();
-    }
-  }, [localConfig, commitSettings, closeDialog]);
+  }, [connectionBusy, activeCategory, hasAnyError, combinedCategoryErrors, commitSettings, isDirty, closeDialog, showAbout, showResetConfirm, showUnsavedDialog]);
 
   // Handle custom unsaved dialog - Discard
   const handleDiscardAndClose = useCallback(() => {
@@ -630,15 +681,19 @@ export default function SettingsDialog() {
 
   // Reset to defaults for current category
   const handleResetToDefaults = useCallback(() => {
+    if (connectionBusy || savingSettings.current) return;
     setShowResetConfirm(true);
-  }, []);
+  }, [connectionBusy]);
 
   // Confirm reset to defaults
   const handleConfirmReset = useCallback(() => {
     if (!localConfig) return;
 
     const defaults = getCategoryDefaults(activeCategory, resolvedTheme, localConfig);
-    setLocalConfig(mergeConfig(localConfig, defaults));
+    draftRevision.current += 1;
+    const next = mergeConfig(localConfig, defaults);
+    localConfigRef.current = next;
+    setLocalConfig(next);
     setShowResetConfirm(false);
   }, [localConfig, activeCategory, resolvedTheme]);
 
@@ -695,7 +750,7 @@ export default function SettingsDialog() {
       case 'cache':
         return <CacheSettings {...commonProps} />;
       case 'speleodb':
-        return <SpeleoDbSettings {...commonProps} />;
+        return <SpeleoDbSettings {...commonProps} onConnectionBusyChange={setConnectionBusy} saveBeforeConnect={async () => { if (hasAnyError) { const first = CATEGORIES.find((category) => combinedCategoryErrors[category.id]); if (first) setActiveCategory(first.id); return false; } return commitSettings(); }} />;
       case 'appearance':
         return <AppearanceSettings {...commonProps} />;
       case 'advanced':
@@ -743,6 +798,7 @@ export default function SettingsDialog() {
                   <Button
                     variant="secondary"
                     onClick={handleResetToDefaults}
+                    disabled={connectionBusy || (activeCategory === 'speleodb' && useSpeleoStore.getState().session?.loggedIn === true)}
                     data-testid="reset-category-defaults"
                   >
                     {t('settings.resetToDefaults')}
@@ -769,23 +825,26 @@ export default function SettingsDialog() {
                 {t('dialogs.about.title')}
               </Button>
               <div className="flex gap-2">
+                {activeCategory === 'speleodb' ? <Button variant="primary" onClick={requestClose} disabled={connectionBusy} data-testid="settings-close-button">{t('common.actions.close')}</Button> : <>
                 <Button onClick={requestClose} data-testid="settings-cancel-button">
                   {t('common.actions.cancel')}
                 </Button>
                 <Button
                   variant="primary"
                   onClick={handleSave}
-                  disabled={(!isDirty && !hasPendingAuth) || hasAnyError}
+                  disabled={!isDirty || hasAnyError}
                   data-testid="settings-save-button"
                 >
                   {t('common.actions.save')}
                 </Button>
+                </>}
               </div>
             </div>
           </div>
         )}
       </DialogWrapper>
 
+      <AlertDialog open={saveError !== null} title="Cannot save Settings" onClose={() => setSaveError(null)} closeOnBackdropClick={false} data-testid="settings-save-error" actions={<Button variant="primary" onClick={() => setSaveError(null)} data-testid="settings-save-error-close">Close</Button>}><p className="text-error">{saveError}</p></AlertDialog>
       <AlertDialog
         open={showUnsavedDialog}
         title={t('dialogs.unsaved.title')}
@@ -793,24 +852,17 @@ export default function SettingsDialog() {
         data-testid="unsaved-changes-dialog"
         actions={
           <>
-            <Button onClick={handleCancelClose} data-testid="unsaved-cancel">
+            <Button variant="danger" onClick={handleCancelClose} data-testid="unsaved-cancel">
               {t('common.actions.cancel')}
             </Button>
             <Button
-              variant="danger"
+              variant="primary"
               onClick={handleDiscardAndClose}
               data-testid="unsaved-discard"
             >
               {t('dialogs.unsaved.discard')}
             </Button>
-            <Button
-              variant="primary"
-              onClick={handleSaveAndClose}
-              disabled={hasAnyError}
-              data-testid="unsaved-save"
-            >
-              {t('common.actions.save')}
-            </Button>
+
           </>
         }
       >

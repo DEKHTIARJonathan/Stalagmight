@@ -334,7 +334,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   saveAfterImport: () => Promise<boolean>;
   /**
    * Close the open project. By default (`releaseLock` unset/true) the backend
-   * best-effort releases a held SpeleoDB write lock first so the close can't strand
+   * confirms release of a held SpeleoDB write lock first so the close cannot strand
    * the server mutex (fix 1). The release opt-out is reserved for internal tree
    * replacements that retain the same project's edit session.
    */
@@ -1433,11 +1433,25 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const request = opts?.request ?? reserveProjectRequest();
     set({ isClosing: true });
     return runProjectSwitch(async () => {
+      const closeContext = useSpeleoStore.getState();
+      let dispatched = false;
+      const reconcileFailedClose = () => {
+        const current = useSpeleoStore.getState();
+        if (!dispatched || !isProjectMutationCurrent(request)
+          || current.sessionGeneration !== closeContext.sessionGeneration
+          || current.remoteProjectId !== closeContext.remoteProjectId || !current.link) return;
+        // A release may have succeeded even when its response was lost. Stop
+        // presenting editing immediately; refresh the backend gate without
+        // delaying the actionable close error behind another network request.
+        useSpeleoStore.setState({ link: { ...current.link, editState: 'read-only' } });
+        void useSpeleoStore.getState().refreshLinkStatus();
+      };
       try {
         const current = () => isProjectRequestCurrent(request) && (opts?.isCurrent?.() ?? true);
         if (!current()) return emptyCommandResult(false, 'Superseded');
         if (!await confirmWorkspaceDrafts(current)) return emptyCommandResult(false, current() ? 'Cancelled' : 'Superseded');
         if (!current()) return emptyCommandResult(false, 'Superseded');
+        dispatched = true;
         const result = await invokeIpc<CommandResult>(
           'close_project',
           // Default: release a held SpeleoDB lock so the close doesn't strand it
@@ -1447,8 +1461,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         );
         if (result.success && isProjectMutationCurrent(request)) {
           clearOpenProjectState(set);
+        } else if (!result.success) {
+          reconcileFailedClose();
         }
         return result;
+      } catch (error) {
+        reconcileFailedClose();
+        return emptyCommandResult(false, String(error));
       } finally {
         set({ isClosing: false });
       }

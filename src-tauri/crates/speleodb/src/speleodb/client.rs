@@ -65,11 +65,10 @@ impl SdkClient {
     fn new(
         base: &str,
         token: Option<&str>,
-        insecure: bool,
         timeout: Duration,
         settings: Settings,
     ) -> Result<Self, SpeleoDbError> {
-        super::tls::enforce(base, insecure)?;
+        super::validate_endpoint(base)?;
         let mut builder = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -316,25 +315,15 @@ fn project(value: types::Project) -> Result<Project, SpeleoDbError> {
         longitude: value.longitude,
     })
 }
-fn client(
-    base: &str,
-    token: Option<&str>,
-    insecure: bool,
-    timeout: Duration,
-) -> Result<SdkClient, SpeleoDbError> {
+fn client(base: &str, token: Option<&str>, timeout: Duration) -> Result<SdkClient, SpeleoDbError> {
     let settings = Settings::default();
     #[cfg(test)]
     let settings = TEST_SETTINGS.with(|value| value.get()).unwrap_or(settings);
-    SdkClient::new(base, token, insecure, timeout, settings)
+    SdkClient::new(base, token, timeout, settings)
 }
 
-pub fn login(
-    base: &str,
-    insecure: bool,
-    email: &str,
-    password: &str,
-) -> Result<String, SpeleoDbError> {
-    let c = client(base, None, insecure, READ_TIMEOUT)?;
+pub fn login(base: &str, email: &str, password: &str) -> Result<String, SpeleoDbError> {
+    let c = client(base, None, READ_TIMEOUT)?;
     login_with(&c, email, password)
 }
 fn login_with(c: &SdkClient, email: &str, password: &str) -> Result<String, SpeleoDbError> {
@@ -350,8 +339,8 @@ fn login_with(c: &SdkClient, email: &str, password: &str) -> Result<String, Spel
             .map_err(api_error)
     })
 }
-pub fn fetch_user_email(base: &str, token: &str, insecure: bool) -> Result<String, SpeleoDbError> {
-    let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
+pub fn fetch_user_email(base: &str, token: &str) -> Result<String, SpeleoDbError> {
+    let c = client(base, Some(token), READ_TIMEOUT)?;
     c.call(Endpoint::FetchUser, true, || async {
         match c.http.v2_user_retrieve(None).await {
             Ok(user) => Ok(user.email),
@@ -377,12 +366,8 @@ pub fn fetch_user_email(base: &str, token: &str, insecure: bool) -> Result<Strin
         }
     })
 }
-pub fn list_projects(
-    base: &str,
-    token: &str,
-    insecure: bool,
-) -> Result<Vec<Project>, SpeleoDbError> {
-    let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
+pub fn list_projects(base: &str, token: &str) -> Result<Vec<Project>, SpeleoDbError> {
+    let c = client(base, Some(token), READ_TIMEOUT)?;
     c.call(Endpoint::ListProjects, true, || async {
         match c.http.v2_projects_list(None).await {
             Ok(values) => list_projection(
@@ -467,31 +452,20 @@ fn list_projection(value: serde_json::Value) -> Result<Vec<Project>, SpeleoDbErr
     Ok(projects)
 }
 
-pub fn get_project(
-    base: &str,
-    token: &str,
-    insecure: bool,
-    id: &str,
-) -> Result<Project, SpeleoDbError> {
-    get_project_inner(base, token, insecure, id, READ_TIMEOUT, true)
+pub fn get_project(base: &str, token: &str, id: &str) -> Result<Project, SpeleoDbError> {
+    get_project_inner(base, token, id, READ_TIMEOUT, true)
 }
-pub fn get_project_probe(
-    base: &str,
-    token: &str,
-    insecure: bool,
-    id: &str,
-) -> Result<Project, SpeleoDbError> {
-    get_project_inner(base, token, insecure, id, Duration::from_secs(5), false)
+pub fn get_project_probe(base: &str, token: &str, id: &str) -> Result<Project, SpeleoDbError> {
+    get_project_inner(base, token, id, Duration::from_secs(5), false)
 }
 fn get_project_inner(
     base: &str,
     token: &str,
-    insecure: bool,
     id: &str,
     timeout: Duration,
     retry: bool,
 ) -> Result<Project, SpeleoDbError> {
-    let c = client(base, Some(token), insecure, timeout)?;
+    let c = client(base, Some(token), timeout)?;
     c.call(Endpoint::GetProject, retry, || async {
         project(
             c.http
@@ -501,13 +475,8 @@ fn get_project_inner(
         )
     })
 }
-pub fn get_revisions(
-    base: &str,
-    token: &str,
-    insecure: bool,
-    id: &str,
-) -> Result<RevisionHistory, SpeleoDbError> {
-    let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
+pub fn get_revisions(base: &str, token: &str, id: &str) -> Result<RevisionHistory, SpeleoDbError> {
+    let c = client(base, Some(token), READ_TIMEOUT)?;
     c.call(Endpoint::GetRevisions, true, || async {
         let value = c
             .http
@@ -529,13 +498,8 @@ pub fn get_revisions(
         })
     })
 }
-pub fn acquire_lock(
-    base: &str,
-    token: &str,
-    insecure: bool,
-    id: &str,
-) -> Result<Project, SpeleoDbError> {
-    let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
+pub fn acquire_lock(base: &str, token: &str, id: &str) -> Result<Project, SpeleoDbError> {
+    let c = client(base, Some(token), READ_TIMEOUT)?;
     c.call(Endpoint::Acquire, false, || async {
         project(
             c.http
@@ -545,13 +509,8 @@ pub fn acquire_lock(
         )
     })
 }
-pub fn release_lock(
-    base: &str,
-    token: &str,
-    insecure: bool,
-    id: &str,
-) -> Result<Project, SpeleoDbError> {
-    let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
+pub fn release_lock(base: &str, token: &str, id: &str) -> Result<Project, SpeleoDbError> {
+    let c = client(base, Some(token), READ_TIMEOUT)?;
     c.call(Endpoint::Release, false, || async {
         project(
             c.http
@@ -564,12 +523,11 @@ pub fn release_lock(
 pub fn create_project_with(
     base: &str,
     token: &str,
-    insecure: bool,
     payload: &str,
 ) -> Result<Project, SpeleoDbError> {
     let request: types::V2ProjectsCreateWithJsonRequest =
         serde_json::from_str(payload).map_err(|e| SpeleoDbError::Parse(e.to_string()))?;
-    let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
+    let c = client(base, Some(token), READ_TIMEOUT)?;
     c.call(Endpoint::CreateProject, false, || async {
         project(
             c.http
@@ -582,13 +540,12 @@ pub fn create_project_with(
 pub fn patch_project(
     base: &str,
     token: &str,
-    insecure: bool,
     id: &str,
     payload: &str,
 ) -> Result<Project, SpeleoDbError> {
     let request: types::V2ProjectsPartialUpdateWithJsonRequest =
         serde_json::from_str(payload).map_err(|e| SpeleoDbError::Parse(e.to_string()))?;
-    let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
+    let c = client(base, Some(token), READ_TIMEOUT)?;
     c.call(Endpoint::PatchProject, false, || async {
         project(
             c.http
@@ -601,7 +558,6 @@ pub fn patch_project(
 pub fn upload_stalx(
     base: &str,
     token: &str,
-    insecure: bool,
     id: &str,
     path: &Path,
     message: &str,
@@ -612,7 +568,7 @@ pub fn upload_stalx(
         ));
     }
     let content = std::fs::read(path).map_err(io_error)?;
-    let c = client(base, Some(token), insecure, upload_timeout(content.len()))?;
+    let c = client(base, Some(token), upload_timeout(content.len()))?;
     c.call(Endpoint::Upload, false, || async {
         let request = types::ProjectUploadRequestRequest {
             message: message.into(),
@@ -638,22 +594,16 @@ pub fn upload_stalx(
         Ok(value)
     })
 }
-pub fn download_stalx(
-    base: &str,
-    token: &str,
-    insecure: bool,
-    id: &str,
-) -> Result<NativeFile, SpeleoDbError> {
-    client(base, Some(token), insecure, Duration::ZERO)?.download(id, None)
+pub fn download_stalx(base: &str, token: &str, id: &str) -> Result<NativeFile, SpeleoDbError> {
+    client(base, Some(token), Duration::ZERO)?.download(id, None)
 }
 pub fn download_stalx_at_hash(
     base: &str,
     token: &str,
-    insecure: bool,
     id: &str,
     sha: &str,
 ) -> Result<NativeFile, SpeleoDbError> {
-    client(base, Some(token), insecure, Duration::ZERO)?.download(id, Some(sha))
+    client(base, Some(token), Duration::ZERO)?.download(id, Some(sha))
 }
 
 #[cfg(test)]

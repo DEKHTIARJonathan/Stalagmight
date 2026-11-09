@@ -111,7 +111,7 @@ impl Server {
 fn both_authentication_paths_use_the_sdk_contract() {
     let s = Server::json(json!({"token":"test-token","user":"test@example.com"}));
     assert_eq!(
-        login(&s.base, false, "test@example.com", "test-password").unwrap(),
+        login(&s.base, "test@example.com", "test-password").unwrap(),
         "test-token"
     );
     let requests = s.finish();
@@ -123,7 +123,7 @@ fn both_authentication_paths_use_the_sdk_contract() {
     );
     let s = Server::json(user_json());
     assert_eq!(
-        fetch_user_email(&s.base, "test-token", false).unwrap(),
+        fetch_user_email(&s.base, "test-token").unwrap(),
         "test@example.com"
     );
     let r = s.finish();
@@ -152,7 +152,7 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
     .collect();
     projects.insert(2, project_json());
     let s = Server::json(json!(projects));
-    let listed = list_projects(&s.base, "t", false).unwrap();
+    let listed = list_projects(&s.base, "t").unwrap();
     assert_eq!(listed.len(), 1);
     let summary = super::super::models::SpeleoProjectSummary::from_project(listed[0].clone());
     assert_eq!(
@@ -168,9 +168,9 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
     for probe in [false, true] {
         let s = Server::json(p.clone());
         let result = if probe {
-            get_project_probe(&s.base, "t", false, ID)
+            get_project_probe(&s.base, "t", ID)
         } else {
-            get_project(&s.base, "t", false, ID)
+            get_project(&s.base, "t", ID)
         }
         .unwrap();
         assert_eq!(
@@ -185,7 +185,6 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
     create_project_with(
         &s.base,
         "t",
-        false,
         &json!({"name":"Synthetic","description":"Test","country":"US","type":"STALAGMIGHT"})
             .to_string(),
     )
@@ -195,7 +194,6 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
     patch_project(
         &s.base,
         "t",
-        false,
         ID,
         r#"{"name":"Renamed","latitude":null,"longitude":null}"#,
     )
@@ -209,9 +207,9 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
     for (acquire, route) in [(true, "acquire"), (false, "release")] {
         let s = Server::json(project_json());
         if acquire {
-            acquire_lock(&s.base, "t", false, ID)
+            acquire_lock(&s.base, "t", ID)
         } else {
-            release_lock(&s.base, "t", false, ID)
+            release_lock(&s.base, "t", ID)
         }
         .unwrap();
         assert!(s.finish()[0].starts_with(&format!("POST /api/v2/projects/{ID}/{route}/ ")));
@@ -222,18 +220,15 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
 fn revisions_and_native_file_routes_are_exact() {
     let commit = json!({"id":SHA,"parent_ids":[],"author_email":"test@example.com","author_name":"Test","authored_date":"2026/01/01 00:00","dt_since":"now","message":"Test","formats":[],"tree":[],"url":null});
     let s = Server::json(json!({"project":project_json(),"commits":[commit]}));
-    assert_eq!(
-        get_revisions(&s.base, "t", false, ID).unwrap().commits[0].id,
-        SHA
-    );
+    assert_eq!(get_revisions(&s.base, "t", ID).unwrap().commits[0].id, SHA);
     assert!(s.finish()[0].starts_with(&format!("GET /api/v2/projects/{ID}/revisions/ ")));
     let bytes = b"SQLite format 3\0synthetic bytes";
     for revision in [None, Some(SHA)] {
         let s = Server::replies(vec![(200, bytes.to_vec())]);
         let native = if let Some(sha) = revision {
-            download_stalx_at_hash(&s.base, "t", false, ID, sha)
+            download_stalx_at_hash(&s.base, "t", ID, sha)
         } else {
-            download_stalx(&s.base, "t", false, ID)
+            download_stalx(&s.base, "t", ID)
         }
         .unwrap();
         assert_eq!(std::fs::read(native.path()).unwrap(), bytes);
@@ -251,7 +246,7 @@ fn revisions_and_native_file_routes_are_exact() {
         json!({"project":project_json(),"hexsha":SHA,"files":["project.stalx"],"geojson_status":"skipped","message":"Saved","browser_url":null}),
     );
     assert_eq!(
-        upload_stalx(&s.base, "t", false, ID, f.path(), "My commit")
+        upload_stalx(&s.base, "t", ID, f.path(), "My commit")
             .unwrap()
             .latest_commit
             .unwrap()
@@ -270,18 +265,18 @@ fn revisions_and_native_file_routes_are_exact() {
 fn status_errors_and_malformed_success_remain_distinct() {
     for status in [304, 400, 401, 403, 404, 409, 429, 500] {
         let s = Server::replies(vec![(status, br#"{"detail":"Test failure"}"#.to_vec())]);
-        let err = release_lock(&s.base, "t", false, ID).unwrap_err();
+        let err = release_lock(&s.base, "t", ID).unwrap_err();
         assert!(matches!(err,SpeleoDbError::Status {status:s,..} if s==status));
         assert_eq!(s.finish().len(), 1, "mutations must never retry");
     }
     let s = Server::json(json!({"unexpected":"sensitive response text"}));
-    let err = get_project(&s.base, "t", false, ID).unwrap_err();
+    let err = get_project(&s.base, "t", ID).unwrap_err();
     assert!(matches!(err, SpeleoDbError::Parse(_)));
     assert!(!err.to_string().contains("sensitive"));
     assert_eq!(s.finish().len(), 1);
     for status in [400, 401] {
         let s = Server::replies(vec![(status, b"{}".to_vec())]);
-        assert!(login(&s.base, false, "bad@example.com", "bad").is_err());
+        assert!(login(&s.base, "bad@example.com", "bad").is_err());
         assert_eq!(s.finish().len(), 1);
     }
 }
@@ -292,13 +287,12 @@ fn reads_retry_transient_failures_and_native_streams_enforce_a_limit() {
         (503, b"{}".to_vec()),
         (200, user_json().to_string().into_bytes()),
     ]);
-    assert!(fetch_user_email(&s.base, "t", false).is_ok());
+    assert!(fetch_user_email(&s.base, "t").is_ok());
     assert_eq!(s.finish().len(), 2);
     let s = Server::replies(vec![(200, vec![0; 1024])]);
     let c = SdkClient::new(
         &s.base,
         Some("t"),
-        false,
         READ_TIMEOUT,
         Settings {
             native_limit: 10,
@@ -540,18 +534,17 @@ fn live_used_api_calls_with_email_and_token() {
     let [base, provided_token, email, password] = inputs;
     eprintln!("live SpeleoDB API tests executing EMAIL and TOKEN authentication paths");
     let _settings = TestSettings::install(live_settings(&value));
-    let login_token = login(&base, false, &email, &password).expect("EMAIL authentication");
-    assert!(fetch_user_email(&base, &login_token, false)
+    let login_token = login(&base, &email, &password).expect("EMAIL authentication");
+    assert!(fetch_user_email(&base, &login_token)
         .expect("EMAIL profile")
         .eq_ignore_ascii_case(&email));
-    assert!(fetch_user_email(&base, &provided_token, false)
+    assert!(fetch_user_email(&base, &provided_token)
         .expect("TOKEN profile")
         .eq_ignore_ascii_case(&email));
     for (label, token) in [("EMAIL", login_token), ("TOKEN", provided_token)] {
         let created = create_project_with(
             &base,
             &token,
-            false,
             &json!({
                 "name": format!("Stalagmight SDK test {}", uuid::Uuid::new_v4()),
                 "description": "Synthetic native-file API test; deleted after execution",
@@ -572,19 +565,16 @@ fn live_used_api_calls_with_email_and_token() {
         } = run_test_project(
             || {
                 (|| -> Result<(), SpeleoDbError> {
-                    assert!(list_projects(&base, &token, false)?
-                        .iter()
-                        .any(|p| p.id == *id));
-                    get_project(&base, &token, false, id)?;
-                    get_project_probe(&base, &token, false, id)?;
+                    assert!(list_projects(&base, &token)?.iter().any(|p| p.id == *id));
+                    get_project(&base, &token, id)?;
+                    get_project_probe(&base, &token, id)?;
                     patch_project(
                         &base,
                         &token,
-                        false,
                         id,
                         r#"{"description":"Native SQLite round trip"}"#,
                     )?;
-                    acquire_lock(&base, &token, false, id)?;
+                    acquire_lock(&base, &token, id)?;
                     let dir = tempfile::tempdir().unwrap();
                     let path = dir.path().join("project.stalx");
                     {
@@ -598,17 +588,16 @@ fn live_used_api_calls_with_email_and_token() {
                     }
                     let first_bytes = std::fs::read(&path).unwrap();
                     eprintln!("{label}: uploading first native file");
-                    let first =
-                        upload_stalx(&base, &token, false, id, &path, "First synthetic revision")?
-                            .latest_commit
-                            .expect("first SHA")
-                            .id;
+                    let first = upload_stalx(&base, &token, id, &path, "First synthetic revision")?
+                        .latest_commit
+                        .expect("first SHA")
+                        .id;
                     assert_eq!(
-                        std::fs::read(download_stalx(&base, &token, false, id)?.path()).unwrap(),
+                        std::fs::read(download_stalx(&base, &token, id)?.path()).unwrap(),
                         first_bytes
                     );
                     assert!(matches!(
-                        upload_stalx(&base, &token, false, id, &path, "No changes"),
+                        upload_stalx(&base, &token, id, &path, "No changes"),
                         Err(SpeleoDbError::Status { status: 304, .. })
                     ));
                     {
@@ -622,28 +611,26 @@ fn live_used_api_calls_with_email_and_token() {
                     }
                     eprintln!("{label}: uploading second native file");
                     let second =
-                        upload_stalx(&base, &token, false, id, &path, "Second synthetic revision")?
+                        upload_stalx(&base, &token, id, &path, "Second synthetic revision")?
                             .latest_commit
                             .expect("second SHA")
                             .id;
                     assert_ne!(first, second);
-                    let history = get_revisions(&base, &token, false, id)?;
+                    let history = get_revisions(&base, &token, id)?;
                     assert!(history.commits.iter().any(|c| c.id == first));
                     assert!(history.commits.iter().any(|c| c.id == second));
                     assert_eq!(
-                        std::fs::read(
-                            download_stalx_at_hash(&base, &token, false, id, &first)?.path()
-                        )
-                        .unwrap(),
+                        std::fs::read(download_stalx_at_hash(&base, &token, id, &first)?.path())
+                            .unwrap(),
                         first_bytes
                     );
                     Ok(())
                 })()
             },
             // Only IDs returned by this invocation may be deleted, after every outcome.
-            || release_lock(&base, &token, false, id).map(|_| ()),
+            || release_lock(&base, &token, id).map(|_| ()),
             || {
-                client(&base, Some(&token), false, READ_TIMEOUT).and_then(|c| {
+                client(&base, Some(&token), READ_TIMEOUT).and_then(|c| {
                     runtime()?
                         .block_on(c.http.v2_projects_destroy(id, None, None::<&str>))
                         .map(|_| ())
@@ -671,16 +658,13 @@ fn profile_accepts_unset_country_but_rejects_other_invalid_profiles() {
     let mut profile = user_json();
     profile["country"] = json!("");
     let s = Server::json(profile.clone());
-    assert_eq!(
-        fetch_user_email(&s.base, "t", false).unwrap(),
-        "test@example.com"
-    );
+    assert_eq!(fetch_user_email(&s.base, "t").unwrap(), "test@example.com");
     assert_eq!(s.finish().len(), 1);
     for country in ["invalid", ""] {
         profile["country"] = json!(country);
         profile["email"] = json!("");
         let s = Server::json(profile.clone());
-        assert!(fetch_user_email(&s.base, "t", false).is_err());
+        assert!(fetch_user_email(&s.base, "t").is_err());
         assert_eq!(s.finish().len(), 1);
     }
 }
@@ -694,7 +678,7 @@ fn list_only_projection_tolerates_unknown_enums_without_granting_permissions() {
     let mut unknown_type = project_json();
     unknown_type["type"] = json!("FUTURE_TYPE");
     let s = Server::json(json!([project_json(), future.clone(), unknown_type]));
-    let rows = list_projects(&s.base, "t", false).unwrap();
+    let rows = list_projects(&s.base, "t").unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].permission, Some(Permission::Admin));
     assert_eq!(rows[1].permission, None);
@@ -705,12 +689,12 @@ fn list_only_projection_tolerates_unknown_enums_without_granting_permissions() {
         json!([{"id":"invalid", "name":"Bad ID", "type":"STALAGMIGHT"}]),
     ] {
         let s = Server::json(invalid);
-        assert!(list_projects(&s.base, "t", false).is_err());
+        assert!(list_projects(&s.base, "t").is_err());
         s.finish();
     }
     let s = Server::json(future);
     assert!(
-        get_project(&s.base, "t", false, ID).is_err(),
+        get_project(&s.base, "t", ID).is_err(),
         "detail and mutations stay strict"
     );
     s.finish();
@@ -751,7 +735,6 @@ fn downloads_allow_healthy_progress_beyond_the_idle_budget_but_reject_stalls() {
         let c = SdkClient::new(
             &base,
             Some("synthetic"),
-            false,
             Duration::ZERO,
             Settings {
                 timeout: Some(Duration::from_millis(400)),

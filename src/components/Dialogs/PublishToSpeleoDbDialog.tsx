@@ -110,6 +110,8 @@ export default function PublishToSpeleoDbDialog() {
       if (ownsDialog()) closeDialog();
       if (result === 'upload_pending') {
         showToast(t('speleodb.publish.uploadPending'), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
+      } else if (result === 'recent_cleanup_failed') {
+        showToast(t('speleodb.publish.recentCleanupFailed'), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
       } else if (result === 'reload_failed') {
         showToast(t('speleodb.publish.reloadFailed'), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
       }
@@ -264,7 +266,7 @@ export default function PublishToSpeleoDbDialog() {
         </div>
       </div>
     </DialogWrapper>
-    {blocking && <SpeleoProgressOverlay title="Publishing to SpeleoDB" description="Saving your survey and opening your shared project." testId="speleodb-publish-progress" />}
+    {blocking && <SpeleoProgressOverlay title="Publishing to SpeleoDB" description="One sec, teaching your project some manners..." testId="speleodb-publish-progress" />}
     </>
   );
 }

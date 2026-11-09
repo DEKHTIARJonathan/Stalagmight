@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { SettingsSection } from './SettingsSection';
 import { Button } from '../../common/Button';
+import { ExternalLinkIcon } from '../../common/icons';
 import { useUIStore } from '../../../store/uiStore';
 import {
   useSpeleoStore,
@@ -119,20 +119,19 @@ export function SpeleoRevisionHistory() {
   if (!projectId) return null;
 
   return (
-    <SettingsSection title={t('speleodb.revisions.title')} data-testid="speleodb-revisions">
-      {/* Sits under the section heading rather than in it: SettingsSection takes a
-          plain string title. */}
+    <div data-testid="speleodb-revisions">
       <div className="flex justify-end">
-        <button
-          type="button"
+        <Button
+          variant="external"
+          icon={<ExternalLinkIcon size={16} />}
           disabled={web.url === null}
           title={web.url === null ? t('speleodb.web.unavailable') : undefined}
           onClick={web.open}
-          className="text-xs text-accent hover:underline disabled:opacity-50 disabled:no-underline"
+          className="w-full h-11 px-3 py-2.5 shadow-sm"
           data-testid="speleodb-web-revisions"
         >
           {t('speleodb.web.openRevisions')}
-        </button>
+        </Button>
       </div>
       <div className="mb-2 space-y-1" data-testid="speleodb-revisions-hint">
         <p className="text-xs text-text-secondary">{t('speleodb.revisions.restoreHint')}</p>
@@ -217,7 +216,7 @@ export function SpeleoRevisionHistory() {
                 </div>
                 {!isCurrent && iHoldLock && survey && (
                   <Button
-                    variant="secondary"
+                    variant="warning"
                     size="sm"
                     onClick={() =>
                       openDialog(TOAST_KEYS.SPELEODB_RESTORE, {
@@ -235,7 +234,7 @@ export function SpeleoRevisionHistory() {
                 )}
                 {!isCurrent && !iHoldLock && !viewBlocked && (
                   <Button
-                    variant="secondary"
+                    variant="info"
                     size="sm"
                     disabled={pendingId !== null}
                     onClick={() => void handleView(rev)}
@@ -253,7 +252,7 @@ export function SpeleoRevisionHistory() {
                     explicit consent for replacing their un-pushed work. */}
                 {!isCurrent && !iHoldLock && canRevert && (
                   <Button
-                    variant="secondary"
+                    variant="danger"
                     size="sm"
                     onClick={() =>
                       openDialog('speleodb-revert', {
@@ -281,6 +280,6 @@ export function SpeleoRevisionHistory() {
           })}
         </ul>
       )}
-    </SettingsSection>
+    </div>
   );
 }

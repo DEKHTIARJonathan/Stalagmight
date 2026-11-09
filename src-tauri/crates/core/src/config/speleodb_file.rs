@@ -36,12 +36,7 @@ pub(super) fn load_legacy(
     };
     // Import preferences only; obsolete password/keychain/token fields are ignored.
     if let Some(table) = legacy.as_table_mut() {
-        table.retain(|key, _| {
-            matches!(
-                key,
-                "endpoint" | "email" | "insecure_http" | "poll_interval_seconds" | "undo_mode"
-            )
-        });
+        table.retain(|key, _| matches!(key, "endpoint" | "email" | "undo_mode"));
     }
     match legacy.try_into::<SpeleoDbConfig>() {
         Ok(migrated) => *settings = migrated,
@@ -187,7 +182,9 @@ mod tests {
             Some("https://legacy.example.com")
         );
         assert_eq!(loaded.speleodb.email.as_deref(), Some("legacy@example.com"));
-        assert!(loaded.speleodb.insecure_http);
+        assert!(!serde_json::to_string(&loaded.speleodb)
+            .unwrap()
+            .contains("insecure_http"));
         assert!(!toml::to_string(&loaded.speleodb)
             .unwrap()
             .contains("allow_force_edit"));

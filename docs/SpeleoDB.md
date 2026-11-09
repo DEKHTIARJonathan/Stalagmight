@@ -142,10 +142,10 @@ selection or scroll. Navigation never acquires or releases a lock.
 
 For managed projects, the persistent header shows identity, editing access, lock owner and
 connection status. Everyday controls are Save Changes, Switch to Read Only Mode or
-Resume editing, Reload Project and Open on SpeleoDB. History is the only expandable section. Close Project sits below Reload Project,
+Resume editing, Reload Project and Open on SpeleoDB. Revision History is the only expandable section. Close Project sits below Reload Project,
 warns about unsaved work, releases the editing lock on confirmed close and returns
-to the project listing. History includes inspection, restore/revert and
-Unwind/Rewind; revision editing remains Survey-only.
+to the project listing. Revision History includes inspection and restore/revert
+actions; revision editing remains Survey-only. It has no Unwind/Rewind controls.
 
 Account sign-in, endpoint and connection management live exclusively in application
 Settings under SpeleoDB. Every sign-in link opens that category. A blocked save
@@ -178,8 +178,12 @@ The overlay expires after 120 seconds with a timeout explanation and an enabled
 Close action; an in-flight request cannot be submitted again. Account/project
 changes and newer edits still invalidate stale results.
 On confirmation, the project is saved and its first revision uploaded, then a fresh
-server copy is downloaded and opened as a managed project. Editing is acquired once
-through the shared verified acquisition flow. Unconfirmed uploads preserve the
+server copy is downloaded and opened as a managed project. After successful
+reopening, its original local Recent Projects reference is removed. The original
+`.stalx` file is retained; unsuccessful conversions keep their original recent
+reference. If removing the recent reference cannot be persisted, the reference
+remains available for a later manual retry and the original file stays intact.
+Editing is acquired once through the shared verified acquisition flow. Unconfirmed uploads preserve the
 linked working copy for Save Changes; failed downloads preserve the remote identity
 and offer Reload Project. Retrying recovery never creates a second server project.
 
@@ -203,8 +207,13 @@ retry write only to the local SQLite file.
 Save and Close carries its close intent through recovery and closes only after a
 confirmed upload and successful release, with no newer local changes. Cancellation,
 conflict, uncertainty and release failure leave the project open. Plain Close,
-project switching and Quit automatically release the session's lock without
-uploading. Unsaved survey work and form drafts require Discard changes / Cancel.
+including Hamburger Menu -> Close Project, verifies current ownership and confirms
+release before teardown. Failed verification, rejected release or a response still
+reporting this account as holder keeps the project open with a visible error and
+allows retry. An uncertain release attempt pauses editing and retains a retry
+context scoped to the project, account and session. Retry checks current ownership;
+it never treats that context as acquisition provenance. Release and teardown
+serialize against mutations and new editing sessions. Project switching and Quit retain their separate cleanup policies. Unsaved survey work and form drafts require Discard changes / Cancel.
 Saved unuploaded work remains in the local file. Backend release consent remains
 scoped to the project, authenticated account and session generation. Another
 account's lock is never released by an ordinary exit.
@@ -279,3 +288,25 @@ restores retry and dismissal without an error. A replaced managed-file prompt re
 ownership of its own controls. A superseded discard-and-open in the unpushed-local
 prompt similarly restores retry and dismissal without resetting a replacement prompt's
 operation.
+
+## Immediate SpeleoDB connection settings
+
+Connect saves changed preferences and authenticates immediately. Success closes
+Settings and refreshes the project listing. Disconnect takes effect immediately,
+clears the remote listing and stays on the SpeleoDB Settings tab. Neither action
+requires a subsequent Save. While connected, the server endpoint and both reset
+controls are disabled; backend requests to change instances are also refused.
+Disconnect first, including when the current server is temporarily unavailable.
+
+The SpeleoDB tab has a Close button instead of Save/Cancel. Closing validates and
+saves preference changes, including changes in other categories, without connecting.
+Connection and persistence errors keep Settings open. The ordinary Settings
+unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
+
+HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
+address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
+allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
+missing schemes and malformed addresses are rejected. No DNS-based exception or
+insecure-HTTP override exists. Invalid endpoints produce an error modal when
+connecting or saving; existing legacy override fields are ignored and omitted
+from subsequent saves. Certificate verification and redirect restrictions remain.

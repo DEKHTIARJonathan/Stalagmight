@@ -15,20 +15,19 @@ fn admin_dto(err: SpeleoDbError) -> SpeleoErrorDto {
 }
 
 impl AppState {
-    /// Resolve the `(link, endpoint, token, insecure_http)` tuple every admin call
+    /// Resolve the `(link, endpoint, token)` tuple every admin call
     /// needs: the open project's persisted link plus the active session, or an IPC
     /// error DTO when there is no remote project / no usable token.
     fn speleodb_admin_context(
         &self,
-    ) -> Result<(crate::models::SpeleoLink, String, String, bool), SpeleoErrorDto> {
+    ) -> Result<(crate::models::SpeleoLink, String, String), SpeleoErrorDto> {
         let link = self.speleodb_open_link().map_err(admin_dto)?;
         // Route-traversal guard on the persisted project_id before it reaches any
         // `projects/{id}/...` URL (the same check `speleodb_validated_link` runs for
         // the edit verbs; reused so this entry point can't forget it).
         validate_project_id(&link.project_id).map_err(admin_dto)?;
         let (endpoint, token) = self.speleodb_active_token().map_err(admin_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
-        Ok((link, endpoint, token, insecure_http))
+        Ok((link, endpoint, token))
     }
 
     /// Inspect a linked SQLite file before replacing the open project. Reads only
@@ -109,12 +108,7 @@ impl AppState {
             return Ok(Some(unavailable()));
         }
         Ok(Some(
-            match client::get_project_probe(
-                &endpoint,
-                &token,
-                self.speleodb_insecure_http(),
-                &link.project_id,
-            ) {
+            match client::get_project_probe(&endpoint, &token, &link.project_id) {
                 Ok(project) => SpeleoFileAccess {
                     project: SpeleoProjectSummary::from_project(project),
                     endpoint: link.endpoint,
@@ -139,7 +133,7 @@ impl AppState {
         self.speleodb_check_expected_context(expected.as_ref())
             .map_err(admin_dto)?;
         let generation = self.speleodb_session_generation();
-        let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        let (link, endpoint, token) = self.speleodb_admin_context()?;
         if link.has_unpushed_edits {
             return Err(admin_dto(SpeleoDbError::Io(
                 "Save your changes using Save Changes before switching to read-only mode.".into(),
@@ -155,7 +149,7 @@ impl AppState {
         }
         let (_, _, email) = self.speleodb_active_account().map_err(admin_dto)?;
         let holder = self
-            .speleodb_lock_holder_checked(&endpoint, &token, insecure_http, &link.project_id)
+            .speleodb_lock_holder_checked(&endpoint, &token, &link.project_id)
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
         // Hold project through clean check, release and gate close. Mutations and
         // session boundaries cannot slip between the check and the transition.
@@ -176,7 +170,7 @@ impl AppState {
         self.speleodb_require_clean_project(project.as_ref())
             .map_err(admin_dto)?;
         if super::speleodb::lock_held_by_me(holder.as_deref(), Some(&email)) {
-            client::release_lock(&endpoint, &token, insecure_http, &link.project_id)
+            client::release_lock(&endpoint, &token, &link.project_id)
                 .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
         }
         self.set_edit_enabled(false);

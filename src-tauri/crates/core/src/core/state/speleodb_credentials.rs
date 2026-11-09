@@ -55,12 +55,23 @@ impl AppState {
             .speleodb_resolve_endpoint(override_endpoint.as_deref())
             .ok_or(SpeleoDbError::NoEndpoint)
             .map_err(local_dto)?;
+        crate::speleodb::validate_endpoint(&endpoint).map_err(local_dto)?;
+        let current = self.speleodb_session_status()?;
+        if current.logged_in
+            && current.endpoint.as_deref().is_some_and(|old| {
+                crate::speleodb::auth::normalize_endpoint(old)
+                    != crate::speleodb::auth::normalize_endpoint(&endpoint)
+            })
+        {
+            return Err(local_dto(SpeleoDbError::Io(
+                "Disconnect from SpeleoDB before changing servers.".into(),
+            )));
+        }
         // [Track A] #187: read the override and thread it into every client call.
-        let insecure_http = self.speleodb_insecure_http();
 
         let (token, email) =
             if let Some(t) = token.map(|t| t.trim().to_owned()).filter(|t| !t.is_empty()) {
-                let email = client::fetch_user_email(&endpoint, &t, insecure_http)
+                let email = client::fetch_user_email(&endpoint, &t)
                     .map_err(|e| dto_for_error(Endpoint::User, &e))?;
                 (t, email)
             } else {
@@ -71,7 +82,7 @@ impl AppState {
                 if email.is_empty() || password.is_empty() {
                     return Err(local_dto(SpeleoDbError::MissingCredentials));
                 }
-                let token = client::login(&endpoint, insecure_http, &email, &password)
+                let token = client::login(&endpoint, &email, &password)
                     .map_err(|e| dto_for_error(Endpoint::Login, &e))?;
                 (token, email)
             };

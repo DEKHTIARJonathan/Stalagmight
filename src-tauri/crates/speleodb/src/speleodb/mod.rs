@@ -32,6 +32,7 @@ pub mod models;
 pub mod sync;
 // [Track A] #187 http/https private-network TLS policy (pure classify_addr + enforce).
 pub(crate) mod tls;
+pub use tls::validate_endpoint;
 
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
 pub use contract::{SpeleoDbAction, TransportCause};
@@ -98,7 +99,7 @@ pub enum SpeleoDbError {
     // policy (public `http://`, a missing/unknown scheme, or an unresolvable
     // host). Non-retryable by construction - `tls::enforce` errors before any
     // request attempt, so `with_retry` never loops on it.
-    #[error("refusing to use an insecure SpeleoDB endpoint: {endpoint}")]
+    #[error("HTTPS is required. HTTP is allowed only on localhost, 127.0.0.1 or 192.168.x.x. Rejected endpoint: {endpoint}")]
     InsecureEndpoint { endpoint: String },
     /// [P1] No open remote SpeleoDB project to act on (start editing / done /
     /// update require one). Fails closed (Fatal).

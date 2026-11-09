@@ -27,7 +27,7 @@ pub(super) struct LockReleaseParams {
     /// The bearer token for that endpoint.
     pub(super) token: String,
     /// The persisted public-`http://` allowance, threaded to `tls::enforce`.
-    pub(super) insecure_http: bool,
+
     /// The project whose write lock is being released.
     pub(super) project_id: String,
 }
@@ -50,6 +50,100 @@ enum ReleaseIntent {
 }
 
 impl AppState {
+    /// User-visible close is atomic with lock release. A failed ownership probe or
+    /// release leaves the project open for retry. Once release is attempted, an
+    /// uncertain response keeps editing disabled until ownership is reconciled.
+    pub fn close_project_with_lock_release(
+        &self,
+        release_lock: bool,
+    ) -> crate::core::CommandResult {
+        let _lock_ops = self.speleodb_lock_ops_guard();
+        let _commands = self
+            .command_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut project = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if release_lock {
+            if let Err(error) = self.speleodb_release_for_confirmed_close() {
+                return crate::core::CommandResult::failure(format!("Could not release the SpeleoDB editing lock. The project is still open. {error}"));
+            }
+        } else {
+            self.speleodb_keep_open_lock_deliberately();
+        }
+        self.close_open_project_locked(&mut project)
+    }
+
+    // Caller holds project, command and lock-operation guards through teardown.
+    fn speleodb_release_for_confirmed_close(&self) -> Result<(), SpeleoDbError> {
+        let link = match self.speleodb_open_link() {
+            Ok(link) => link,
+            Err(SpeleoDbError::NoRemoteProject) => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let generation = self.speleodb_session_generation();
+        if !self.edit_enabled()
+            && !self.speleodb_lock_acquired_here(&link.project_id)
+            && !self.speleodb_has_pending_close_release(&link.project_id)?
+        {
+            return Ok(());
+        }
+        let (endpoint, token, email) = self.speleodb_active_account()?;
+        if crate::speleodb::auth::normalize_endpoint(&endpoint)
+            != crate::speleodb::auth::normalize_endpoint(&link.endpoint)
+        {
+            return Err(SpeleoDbError::SessionMoved);
+        }
+        let holder = self.speleodb_lock_holder_checked(&endpoint, &token, &link.project_id)?;
+        if super::speleodb::lock_held_by_me(holder.as_deref(), Some(&email)) {
+            // The server can release the lock even if its response never arrives.
+            // Preserve retry ownership separately from acquisition provenance, including
+            // when this editing session inherited a lock from an earlier process.
+            self.speleodb
+                .lock()
+                .map_err(|_| SpeleoDbError::Io("SpeleoDB session lock poisoned".into()))?
+                .pending_close_release = Some((
+                generation,
+                super::speleodb_session::LockClaim::taken(
+                    &link.project_id,
+                    endpoint.clone(),
+                    email.clone(),
+                ),
+            ));
+            self.set_edit_enabled(false);
+            let released = client::release_lock(&endpoint, &token, &link.project_id)?;
+            if released
+                .active_mutex
+                .as_ref()
+                .is_some_and(|mutex| mutex.user.eq_ignore_ascii_case(&email))
+            {
+                return Err(SpeleoDbError::Io(
+                    "SpeleoDB still reports this account holding the editing lock.".into(),
+                ));
+            }
+        }
+        self.speleodb
+            .lock()
+            .map_err(|_| SpeleoDbError::Io("SpeleoDB session lock poisoned".into()))?
+            .pending_close_release = None;
+        self.speleodb_forget_lock_acquired_for(&link.project_id);
+        Ok(())
+    }
+
+    fn speleodb_has_pending_close_release(&self, project_id: &str) -> Result<bool, SpeleoDbError> {
+        let session = self.speleodb_session_lock()?;
+        Ok(session
+            .pending_close_release
+            .as_ref()
+            .is_some_and(|(generation, claim)| {
+                *generation == self.speleodb_session_generation()
+                    && claim.project_id == project_id
+                    && claim.taken_by(session.endpoint.as_deref(), session.email.as_deref())
+            }))
+    }
+
     /// Snapshot of what a best-effort lock release needs, or `None` when no held
     /// remote edit session is active - or when releasing would strand local work.
     /// Cheap + non-blocking (reads the open link + config, no network), so a caller
@@ -101,7 +195,13 @@ impl AppState {
         // A failed reconciliation can shut the edit gate while leaving an owned
         // claim. Lifecycle cleanup still releases that claim; an ordinary read-only
         // open without one never gains permission to release another user's lock.
-        if !self.edit_enabled() && !self.speleodb_lock_acquired_here(&link.project_id) {
+        if !self.edit_enabled()
+            && !self.speleodb_lock_acquired_here(&link.project_id)
+            && !self.speleodb_has_pending_close_release(&link.project_id).unwrap_or_else(|error| {
+                tracing::warn!(%error, project_id = %link.project_id, "speleodb: cannot inspect pending close release; leaving lock held");
+                false
+            })
+        {
             return None;
         }
         // Logout keeps its existing unpublished-work protection. Close/switch/exit
@@ -147,7 +247,7 @@ impl AppState {
         Some(LockReleaseParams {
             endpoint,
             token,
-            insecure_http: self.speleodb_insecure_http(),
+
             project_id: link.project_id,
         })
     }
@@ -170,23 +270,7 @@ impl AppState {
     /// lifecycle transitions instead call the close/detached/bounded variants.
     pub fn speleodb_release_held_lock_best_effort(&self) {
         if let Some(p) = self.speleodb_held_lock_release_params() {
-            self.speleodb_release_best_effort(
-                &p.endpoint,
-                &p.token,
-                p.insecure_http,
-                &p.project_id,
-            );
-        }
-    }
-
-    /// Release on a normal project close without uploading or deleting local work.
-    /// Reclaim checks protect a newer session if another open wins the transition.
-    pub fn speleodb_release_held_lock_on_close(&self) {
-        let Some((params, claim, generation)) = self.speleodb_capture_lifecycle_release() else {
-            return;
-        };
-        if let Err(error) = self.speleodb_stand_down_and_release(&params, generation, claim) {
-            tracing::warn!(%error, project_id = %params.project_id, "SpeleoDB lock release on close failed");
+            self.speleodb_release_best_effort(&p.endpoint, &p.token, &p.project_id);
         }
     }
 
@@ -215,12 +299,7 @@ impl AppState {
     /// no future push for the veto to protect.
     pub(crate) fn speleodb_release_held_lock_abandoning(&self) {
         if let Some(p) = self.speleodb_abandon_lock_release_params() {
-            self.speleodb_release_best_effort(
-                &p.endpoint,
-                &p.token,
-                p.insecure_http,
-                &p.project_id,
-            );
+            self.speleodb_release_best_effort(&p.endpoint, &p.token, &p.project_id);
         }
     }
 
@@ -444,10 +523,8 @@ impl AppState {
             if !ran {
                 // No managed state to consult (unit tests, pre-`setup`): the raw
                 // POST this always did.
-                let _ = tx.send(
-                    client::release_lock(&p.endpoint, &p.token, p.insecure_http, &p.project_id)
-                        .map(|_| ()),
-                );
+                let _ =
+                    tx.send(client::release_lock(&p.endpoint, &p.token, &p.project_id).map(|_| ()));
             }
         });
         Some(rx)
@@ -561,8 +638,9 @@ mod tests {
         }
         assert_eq!(
             body.matches("tracing::warn!").count(),
-            2,
-            "both the link read and the token read must warn on an unexpected failure"
+            3,
+            "the link read, the pending-close read and the token read must each warn on \
+             an unexpected failure"
         );
     }
 }

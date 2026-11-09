@@ -266,3 +266,37 @@ The `save_project` backend command returns the save path as a string in `Command
 | `src-tauri/crates/persistence/src/persistence/sqlite.rs` | SQLite database operations |
 | `docs/undo-redo.md` | Undo/redo stack persistence details |
 | `docs/configuration.md` | Auto-save config options |
+
+## Immediate SpeleoDB connection settings
+
+Connect saves changed preferences and authenticates immediately. Success closes
+Settings and refreshes the project listing. Disconnect takes effect immediately,
+clears the remote listing and stays on the SpeleoDB Settings tab. Neither action
+requires a subsequent Save. While connected, the server endpoint and both reset
+controls are disabled; backend requests to change instances are also refused.
+Disconnect first, including when the current server is temporarily unavailable.
+
+The SpeleoDB tab has a Close button instead of Save/Cancel. Closing validates and
+saves preference changes, including changes in other categories, without connecting.
+Connection and persistence errors keep Settings open. The ordinary Settings
+unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
+
+HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
+address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
+allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
+missing schemes and malformed addresses are rejected. No DNS-based exception or
+insecure-HTTP override exists. Invalid endpoints produce an error modal when
+connecting or saving; existing legacy override fields are ignored and omitted
+from subsequent saves. Certificate verification and redirect restrictions remain.
+
+### Confirmed project close
+
+Hamburger Menu -> Close Project and the SpeleoDB workspace Close action share the
+same close command. A linked editing session remains open until the server confirms
+its lock is released. Ownership-probe or release errors are visible and retryable;
+no successful close is reported after an unsuccessful release. An uncertain release
+attempt leaves the project read-only with an ownership-checked retry available.
+Resuming editing requires the usual verified acquisition. Local files and saved
+unpublished changes remain intact. A fresh ownership check precedes release;
+the API has no atomic compare-and-release, so a server-side ownership change
+between that check and the POST remains a protocol limitation.

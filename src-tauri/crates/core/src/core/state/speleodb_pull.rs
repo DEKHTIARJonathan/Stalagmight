@@ -73,11 +73,10 @@ fn offline_open_result(
 impl AppState {
     pub fn speleodb_list_projects(&self) -> Result<Vec<SpeleoProjectSummary>, SpeleoErrorDto> {
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
         let projects = self
             .speleodb_handle_auth(
                 Endpoint::ListProjects,
-                client::list_projects(&endpoint, &token, insecure_http),
+                client::list_projects(&endpoint, &token),
             )
             .map_err(|e| dto_for_error(Endpoint::ListProjects, &e))?;
         Ok(projects
@@ -121,7 +120,6 @@ impl AppState {
         validate_project_id(&project_id).map_err(local_dto)?;
         let generation = self.reserve_download_generation();
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
-        let insecure_http = self.speleodb_insecure_http();
 
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
         // Download first so offline opens can recover unsynced cached work too.
@@ -129,7 +127,7 @@ impl AppState {
 
         let tip = match self.speleodb_handle_auth(
             Endpoint::GetProject,
-            client::get_revisions(&endpoint, &token, insecure_http, &project_id),
+            client::get_revisions(&endpoint, &token, &project_id),
         ) {
             Ok(history) => usable_tip(
                 sync::tip_of(&history.commits).map(str::to_owned),
@@ -157,14 +155,8 @@ impl AppState {
         let download = self.speleodb_handle_auth(
             Endpoint::DownloadStalx,
             match tip.as_deref() {
-                Some(sha) => client::download_stalx_at_hash(
-                    &endpoint,
-                    &token,
-                    insecure_http,
-                    &project_id,
-                    sha,
-                ),
-                None => client::download_stalx(&endpoint, &token, insecure_http, &project_id),
+                Some(sha) => client::download_stalx_at_hash(&endpoint, &token, &project_id, sha),
+                None => client::download_stalx(&endpoint, &token, &project_id),
             },
         );
         let native = match download {
@@ -215,7 +207,6 @@ impl AppState {
         &self,
         endpoint: &str,
         token: &str,
-        insecure_http: bool,
         link: &crate::models::SpeleoLink,
         tip: Option<&str>,
         transition: (LocalEditsPolicy, u64, Option<Vec<u8>>),
@@ -249,10 +240,8 @@ impl AppState {
         let native = self.speleodb_handle_auth(
             Endpoint::DownloadStalx,
             match pinned.as_deref() {
-                Some(sha) => {
-                    client::download_stalx_at_hash(endpoint, token, insecure_http, project_id, sha)
-                }
-                None => client::download_stalx(endpoint, token, insecure_http, project_id),
+                Some(sha) => client::download_stalx_at_hash(endpoint, token, project_id, sha),
+                None => client::download_stalx(endpoint, token, project_id),
             },
         )?;
         let dest = self.speleodb_cache_path(project_id)?;

@@ -42,12 +42,7 @@ impl AppState {
         let project = self
             .speleodb_handle_auth(
                 Endpoint::GetProject,
-                client::get_project(
-                    &endpoint,
-                    &token,
-                    self.speleodb_insecure_http(),
-                    &link.project_id,
-                ),
+                client::get_project(&endpoint, &token, &link.project_id),
             )
             .map_err(|error| {
                 if matches!(

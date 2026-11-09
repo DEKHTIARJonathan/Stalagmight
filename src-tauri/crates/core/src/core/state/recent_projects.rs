@@ -54,35 +54,23 @@ impl AppState {
             return CommandResult::failure("Failed to lock recent projects".to_string());
         };
 
-        // Remove the path from the list
-        let initial_len = recent.len();
-        recent.retain(|p| p != &path);
-
-        // Idempotent forget: "remove from recent" means "ensure this path is not in
-        // the list", so an already-absent entry is SUCCESS, not a failure. The
-        // backend's `config.general.recent_projects` and this in-memory list are kept
-        // in lockstep, but the FRONTEND holds its own config snapshot that can lag them
-        // (e.g. after the backend trimmed an entry past `recent_projects_max`). That
-        // stale snapshot still renders the trimmed path as an unavailable "missing"
-        // card. The frontend only refreshes recents on a success result, so returning a
-        // failure here left that row un-removable forever. Nothing changed on the
-        // backend, so skip the re-save and return success; the caller then re-reads the
-        // (already-correct) backend config and the stale row drops out. (The normal
-        // case - a missing file whose path is still in the list - takes the resave
-        // branch below.)
-        if recent.len() == initial_len {
-            tracing::debug!(path = ?path, "remove_from_recent: path already absent; treating as success");
+        let mut updated = recent.clone();
+        updated.retain(|p| p != &path);
+        if updated.len() == recent.len() {
             return CommandResult::success();
         }
 
-        // Update config and save
-        if let Ok(mut config) = self.config.lock() {
-            config.general.recent_projects.clone_from(&recent);
-            if let Err(e) = config.save() {
-                tracing::warn!("Failed to save config after removing from recent: {}", e);
-                return CommandResult::failure(format!("Failed to save config: {e}"));
-            }
+        // Publish neither in-memory list until persistence succeeds. Otherwise a
+        // failed conversion cleanup makes its manual retry a false successful no-op.
+        let Ok(mut config) = self.config.lock() else {
+            return CommandResult::failure("Failed to lock config".into());
+        };
+        let previous = std::mem::replace(&mut config.general.recent_projects, updated.clone());
+        if let Err(error) = config.save() {
+            config.general.recent_projects = previous;
+            return CommandResult::failure(format!("Failed to save config: {error}"));
         }
+        *recent = updated;
 
         tracing::info!(path = ?path, "Removed project from recent list");
         CommandResult::success()

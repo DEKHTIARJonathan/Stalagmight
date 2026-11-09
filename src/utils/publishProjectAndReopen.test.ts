@@ -10,12 +10,14 @@ const params: SpeleoPublishParams = { name: 'Synthetic cave', description: 'Synt
 const published = { project_id: 'remote', endpoint: 'https://synthetic.example', local_path: '/cache/remote/project.stalx' };
 const status = { is_remote: true, project_id: 'remote', edit_enabled: false, has_unpushed_edits: false, permission: 'ADMIN', remote_state: 'up_to_date', unwound: false };
 const load = vi.fn();
+const removeRecent = vi.fn();
 beforeEach(() => {
   vi.clearAllMocks();
   useProjectStore.setState({ project: { name: params.name, file_path: '/local.stalx', created_at: 'synthetic' } as never,
-    isDirty: true, projectTreeGeneration: 0, loadProject: load });
+    isDirty: true, projectTreeGeneration: 0, loadProject: load, removeFromRecentProjects: removeRecent });
   useSpeleoStore.setState({ link: null, projectLinkKind: 'local', remoteProjectId: null, sessionGeneration: 0, busy: false });
   load.mockResolvedValue({ success: true });
+  removeRecent.mockResolvedValue({ success: true });
   mock.acquire.mockResolvedValue(undefined);
   mock.ipc.mockImplementation(async (cmd) => {
     if (cmd === 'speleodb_publish') return published;
@@ -108,4 +110,28 @@ it.each(['project', 'account'])('conversion ignores a late fresh-download reply 
   expect(await publishProjectAndReopen(params)).toBe('stale');
   expect(load).not.toHaveBeenCalled();
   expect(mock.acquire).not.toHaveBeenCalled();
+});
+
+it('conversion removes only the original local recent reference after fresh reopening', async () => {
+  expect(await publishProjectAndReopen(params)).toBe('opened');
+  expect(removeRecent).toHaveBeenCalledExactlyOnceWith('/local.stalx');
+  expect(removeRecent.mock.invocationCallOrder[0]).toBeGreaterThan(load.mock.invocationCallOrder[0]!);
+  expect(removeRecent.mock.invocationCallOrder[0]).toBeGreaterThan(mock.acquire.mock.invocationCallOrder[0]!);
+  expect(mock.ipc.mock.calls.some(([command]) => command === 'delete_project')).toBe(false);
+  expect(useProjectStore.getState().project?.file_path).toBe(published.local_path);
+});
+it('conversion reports recent-reference cleanup failure without retrying publication or deleting files', async () => {
+  removeRecent.mockResolvedValue({ success: false, error: 'Synthetic config write failure' });
+  expect(await publishProjectAndReopen(params)).toBe('recent_cleanup_failed');
+  expect(useProjectStore.getState().project?.file_path).toBe(published.local_path);
+  expect(removeRecent).toHaveBeenCalledExactlyOnceWith('/local.stalx');
+  expect(await publishProjectAndReopen(params)).toBe('stale');
+  expect(mock.ipc.mock.calls.filter(([command]) => command === 'speleodb_publish')).toHaveLength(1);
+});
+it.each(['pending', 'failed', 'stale'])('conversion keeps the local recent reference when %s', async (outcome) => {
+  if (outcome === 'pending') mock.ipc.mockImplementation(async (cmd) => cmd === 'speleodb_publish' ? published : { ...status, has_unpushed_edits: true });
+  if (outcome === 'failed') load.mockResolvedValue({ success: false });
+  if (outcome === 'stale') mock.acquire.mockImplementation(async () => useSpeleoStore.setState({ sessionGeneration: 1 }));
+  expect(await publishProjectAndReopen(params)).not.toBe('opened');
+  expect(removeRecent).not.toHaveBeenCalled();
 });
