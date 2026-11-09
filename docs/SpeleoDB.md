@@ -215,6 +215,17 @@ Offline, failed or uncertain uploads never report success; the
 message and local work remain available for retry. Autosave and failed-autosave
 retry write only to the local SQLite file.
 
+The change description is limited to 1000 characters as SpeleoDB stores it. The
+server strips it and turns every run of line breaks (with the whitespace around
+them) into ". ", then stores it in a 1024-character column only after committing
+the upload; a longer description commits, fails to store (HTTP 500), and breaks
+every later upload of the project. The upload dialogs count the stored length (a
+line break counts as two characters), show the count under the field, and refuse
+a longer description with an inline message. The backend refuses it too, both at
+the `speleodb_done` / `speleodb_push` / `speleodb_publish` IPC boundary (before
+any work) and in `client::upload_stalx`, so no caller can send one
+(`speleodb/commit_message.rs`, mirrored by `src/utils/commitMessage.ts`).
+
 Save and Close carries its close intent through recovery and closes only after a
 confirmed upload and successful release, with no newer local changes. Cancellation,
 conflict, uncertainty and release failure leave the project open. Plain Close,

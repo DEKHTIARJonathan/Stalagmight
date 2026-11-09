@@ -309,3 +309,20 @@ it('Save upload progress disappears on failure while the description remains ava
   expect(screen.getByTestId('speleodb-push-failure-inline')).toBeVisible();
   expect(screen.getByTestId('speleodb-done-message')).toHaveValue('Survey update');
 });
+
+it('refuses a description longer than SpeleoDB can store, counting a line break as two (sdk#2)', async () => {
+  useUIStore.setState({ dialogData: { mode: 'push' } });
+  render(<SpeleoDoneDialog />);
+  const textarea = screen.getByTestId('speleodb-done-message');
+  fireEvent.change(textarea, { target: { value: 'x'.repeat(1000) } });
+  expect(screen.getByTestId('speleodb-done-message-count')).toHaveTextContent('1000 / 1000');
+  expect(screen.queryByTestId('speleodb-done-message-too-long')).toBeNull();
+  expect(screen.getByTestId('speleodb-done-confirm')).toBeEnabled();
+  // 1000 typed characters, one of them a line break: 1001 once stored.
+  fireEvent.change(textarea, { target: { value: `${'a'.repeat(500)}\n${'b'.repeat(499)}` } });
+  expect(screen.getByTestId('speleodb-done-message-count')).toHaveTextContent('1001 / 1000');
+  expect(screen.getByTestId('speleodb-done-message-too-long')).toHaveTextContent('line break counts as two');
+  expect(screen.getByTestId('speleodb-done-confirm')).toBeDisabled();
+  fireEvent.click(screen.getByTestId('speleodb-done-confirm'));
+  expect(invokeIpcMock).not.toHaveBeenCalled();
+});

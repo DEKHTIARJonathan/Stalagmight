@@ -12,6 +12,8 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 import { SpeleoProgressOverlay } from './SpeleoProgressOverlay';
+import { CommitMessageLimit } from './CommitMessageLimit';
+import { commitMessageTooLong } from '../../utils/commitMessage';
 
 /**
  * Commit-message confirm for the action shell (#204), in two modes read off
@@ -72,11 +74,13 @@ export default function SpeleoDoneDialog() {
   const unpushed = useSpeleoStore((s) => s.link?.hasUnpushedEdits);
   const unsaved = useProjectStore((s) => s.isDirty);
   const needsMessage = mode === 'push' || unpushed || unsaved;
+  // sdk#2: a description SpeleoDB cannot store is never sent (the backend refuses it too).
+  const messageTooLong = commitMessageTooLong(message);
   const dismiss = () => { if (!uploading) setUploadContinuation(null); closeDialog(); };
 
   const handleConfirm = async () => {
     const text = message.trim();
-    if (!uploadOwnerStillCurrent(owner) || attempt.current || busy || !uploadAllowed || (needsMessage && !text)) return;
+    if (!uploadOwnerStillCurrent(owner) || attempt.current || busy || !uploadAllowed || (needsMessage && !text) || messageTooLong) return;
     attempt.current = true;
     setSubmitting(true);
     setSaveFailure(null);
@@ -179,7 +183,9 @@ export default function SpeleoDoneDialog() {
             className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
             placeholder={t('speleodb.done.messagePlaceholder')}
             data-testid="speleodb-done-message"
+            aria-describedby="speleodb-done-message-limit"
           />
+          <CommitMessageLimit message={message} id="speleodb-done-message-limit" testIdPrefix="speleodb-done-message" />
         </div>
         {/* #260: the failure of the LAST attempt, right above the button that made
             it - the shell banner is unreachable behind this dialog's scrim. The
@@ -193,7 +199,7 @@ export default function SpeleoDoneDialog() {
           <Button
             variant="primary"
             onClick={() => void handleConfirm()}
-            disabled={busyAny || !uploadAllowed || (needsMessage && !message.trim())}
+            disabled={busyAny || !uploadAllowed || (needsMessage && !message.trim()) || messageTooLong}
             data-testid="speleodb-done-confirm"
           >
             {busyAny

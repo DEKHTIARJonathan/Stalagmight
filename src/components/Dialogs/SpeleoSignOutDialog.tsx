@@ -6,6 +6,7 @@ import { useScreenOccupant } from '../../hooks/useScreenOccupant';
 import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import { closeDiscardingLocal } from '../../utils/speleoExit';
+import { commitMessageTooLong } from '../../utils/commitMessage';
 import {
   releaseSignOutLocks,
   signOutHasWork,
@@ -82,7 +83,7 @@ function SignOutPrompt({ kind, initial, settle }: {
   const openCurrent = () => (useProjectStore.getState().project?.file_path ?? null) === openPath;
 
   const uploadOpen = async () => {
-    if (!openId || !message.trim()) return;
+    if (!openId || !message.trim() || commitMessageTooLong(message)) return;
     setRow(openId, 'working');
     setError(null);
     const result = await upload(message.trim(), openCurrent);
@@ -228,7 +229,7 @@ function SignOutPrompt({ kind, initial, settle }: {
                           data-testid="speleodb-signout-open-back">
                           {t('speleoExitPrompt.back')}
                         </Button>
-                        <Button variant="primary" onClick={() => void uploadOpen()} disabled={anyWorking || !message.trim()}
+                        <Button variant="primary" onClick={() => void uploadOpen()} disabled={anyWorking || !message.trim() || commitMessageTooLong(message)}
                           data-testid="speleodb-signout-open-upload-confirm">
                           {uploading ? t('speleoExitPrompt.uploading') : t('speleoExitPrompt.upload')}
                         </Button>

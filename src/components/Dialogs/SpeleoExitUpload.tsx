@@ -5,6 +5,7 @@ import { isUnwoundNotEdited, useSpeleoStore } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { SpeleoProgressOverlay } from './SpeleoProgressOverlay';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
+import { CommitMessageLimit } from './CommitMessageLimit';
 
 /** Same bound the Save / Finish editing upload uses before it lets the user walk away. */
 export const UPLOAD_PROGRESS_LIMIT_MS = 120_000;
@@ -92,7 +93,9 @@ export function SpeleoExitUploadFields({
           className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
           placeholder={t('speleoExitPrompt.messagePlaceholder')}
           data-testid={id}
+          aria-describedby={`${id}-limit`}
         />
+        <CommitMessageLimit message={message} id={`${id}-limit`} testIdPrefix={id} />
       </div>
       {uploading && slow && (
         <p role="alert" className="text-sm text-warning" data-testid={`${testIdPrefix}-upload-slow`}>

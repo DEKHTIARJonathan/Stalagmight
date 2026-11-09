@@ -13,6 +13,7 @@ import {
   type SpeleoExitRequest,
 } from '../../utils/speleoExit';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { commitMessageTooLong } from '../../utils/commitMessage';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoExitUploadFields, SpeleoExitUploadProgress, useSpeleoExitUpload } from './SpeleoExitUpload';
@@ -87,7 +88,7 @@ function SpeleoExitPrompt({ request }: { request: SpeleoExitRequest }) {
 
   const uploadAndClose = () => run(async () => {
     const text = message.trim();
-    if (!text) return 'stay';
+    if (!text || commitMessageTooLong(text)) return 'stay';
     const result = await upload(text, isCurrent);
     if (!isCurrent()) return 'stay';
     if (result === 'diverged') {
@@ -181,7 +182,7 @@ function SpeleoExitPrompt({ request }: { request: SpeleoExitRequest }) {
               </Button>
             )}
             {step === 'upload' && (
-              <Button variant="primary" onClick={() => void uploadAndClose()} disabled={working || !message.trim()}
+              <Button variant="primary" onClick={() => void uploadAndClose()} disabled={working || !message.trim() || commitMessageTooLong(message)}
                 data-testid="speleodb-exit-upload-confirm">
                 {working ? t('speleoExitPrompt.uploading') : t('speleoExitPrompt.uploadConfirm')}
               </Button>

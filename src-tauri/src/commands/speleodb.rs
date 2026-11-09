@@ -49,6 +49,27 @@ async fn run_blocking<T: Send + 'static>(
         })?
 }
 
+/// sdk#2: the reason an upload description cannot be sent, or `None` when it
+/// can. Checked at the IPC boundary, BEFORE any work starts: a description the
+/// server would commit and then fail to store breaks every later upload of the
+/// project, and a publish would already have created the server project by the
+/// time `client::upload_stalx` (which refuses it too) saw it. A blank
+/// description is not refused here: the upload verbs substitute a default.
+fn unstorable_commit_message(text: Option<&str>) -> Option<SpeleoErrorDto> {
+    use crate::speleodb::commit_message::{check_commit_message, CommitMessageError};
+    match check_commit_message(text?) {
+        Err(e @ CommitMessageError::TooLong { .. }) => Some(SpeleoErrorDto {
+            message: e.to_string(),
+            action: SpeleoDbAction::Fatal,
+            status: None,
+            transport: None,
+            unpushed_local: None,
+            newer_schema: None,
+        }),
+        Ok(()) | Err(CommitMessageError::Empty) => None,
+    }
+}
+
 /// Log in to SpeleoDB. Either email+`password` (exchanged for a token) or a
 /// pasted `token` must be supplied; with a pasted token the `email` is ignored
 /// and derived from the API instead. `endpoint` overrides the configured/env
@@ -148,6 +169,9 @@ pub async fn speleodb_done(
     message: Option<String>,
     accept_older_version: Option<bool>,
 ) -> Result<DoneResult, SpeleoErrorDto> {
+    if let Some(refused) = unstorable_commit_message(message.as_deref()) {
+        return Err(refused);
+    }
     run_blocking(app, move |s| {
         s.speleodb_done_acknowledged(message, accept_older_version.unwrap_or(false))
     })
@@ -181,6 +205,9 @@ pub async fn speleodb_push(
     message: Option<String>,
     accept_older_version: Option<bool>,
 ) -> Result<PushResult, SpeleoErrorDto> {
+    if let Some(refused) = unstorable_commit_message(message.as_deref()) {
+        return Err(refused);
+    }
     run_blocking(app, move |s| {
         s.speleodb_push_only_acknowledged(message, accept_older_version.unwrap_or(false))
     })
@@ -440,6 +467,9 @@ pub async fn speleodb_publish(
     app: AppHandle,
     params: SpeleoPublishParams,
 ) -> Result<SpeleoPublishResult, SpeleoErrorDto> {
+    if let Some(refused) = unstorable_commit_message(params.message.as_deref()) {
+        return Err(refused);
+    }
     run_blocking(app, move |s| s.speleodb_publish(params)).await
 }
 
@@ -469,4 +499,24 @@ pub async fn speleodb_project_access_at(
         s.speleodb_project_access_at(path, local_only.unwrap_or(false))
     })
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_upload_description_the_server_cannot_store_is_refused_up_front() {
+        // sdk#2: 1001 characters once each line break becomes ". ".
+        let long = format!("{}\n{}", "a".repeat(500), "b".repeat(499));
+        let refused = unstorable_commit_message(Some(&long));
+        assert!(
+            matches!(&refused, Some(dto) if dto.action == SpeleoDbAction::Fatal && dto.message.contains("1001")),
+            "{refused:?}"
+        );
+        assert!(unstorable_commit_message(Some(&"a".repeat(1000))).is_none());
+        // Blank and absent fall through to the default description.
+        assert!(unstorable_commit_message(Some("  ")).is_none());
+        assert!(unstorable_commit_message(None).is_none());
+    }
 }

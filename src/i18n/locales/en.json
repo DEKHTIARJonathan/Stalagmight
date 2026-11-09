@@ -3430,6 +3430,10 @@
       "failedHeading": "Your changes were NOT uploaded",
       "retryHint": "They are still only on this computer. Fix the problem, then press the button again to retry."
     },
+    "commitMessage": {
+      "count": "{{length}} / {{max}} characters",
+      "tooLong": "This description is too long for SpeleoDB ({{length}} characters). Shorten it to {{max}} characters or fewer. Each line break counts as two characters."
+    },
     "noPermission": {
       "title": "No SpeleoDB access",
       "description": "This project is linked to SpeleoDB, but your account doesn't have permission to view or edit it - it may have been shared with you as a file. You can convert it to a regular, unmanaged .stalx file to keep and edit locally.",

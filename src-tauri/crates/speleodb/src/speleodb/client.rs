@@ -606,11 +606,10 @@ pub fn upload_stalx(
     path: &Path,
     message: &str,
 ) -> Result<Project, SpeleoDbError> {
-    if message.trim().is_empty() {
-        return Err(SpeleoDbError::Parse(
-            "commit message must not be empty".into(),
-        ));
-    }
+    // Every upload goes through here, so no caller can send a description the
+    // server would commit and then fail to store (sdk#2). Empty is refused too.
+    super::commit_message::check_commit_message(message)
+        .map_err(|e| SpeleoDbError::Parse(e.to_string()))?;
     let content = std::fs::read(path).map_err(io_error)?;
     let c = client(base, Some(token), insecure, upload_timeout(content.len()))?;
     c.call(Endpoint::Upload, false, || async {
