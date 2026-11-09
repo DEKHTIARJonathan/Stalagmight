@@ -48,6 +48,35 @@ beforeEach(() => {
 });
 
 describe('PublishToSpeleoDbDialog', () => {
+  it('searches countries by name and code, supports keyboard selection, and resets on reopen', async () => {
+    const user = userEvent.setup();
+    render(<PublishToSpeleoDbDialog />);
+    const trigger = screen.getByTestId('publish-to-speleodb-dialog-country');
+    await user.click(trigger);
+    const search = screen.getByTestId('publish-to-speleodb-dialog-country-search');
+    expect(search).toHaveFocus();
+    await user.type(search, 'united states of america');
+    expect(screen.getAllByRole('option')).toHaveLength(1);
+    await user.keyboard('{ArrowDown}{Enter}');
+    expect(trigger).toHaveTextContent('United States');
+    expect(trigger).toHaveFocus();
+    await user.click(trigger);
+    const reopened = screen.getByTestId('publish-to-speleodb-dialog-country-search');
+    expect(reopened).toHaveValue('');
+    await user.type(reopened, 'zzzzzz');
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+    expect(screen.getByRole('status')).toHaveTextContent('No countries');
+    await user.clear(reopened);
+    await user.type(reopened, 'mx');
+    expect(screen.getAllByRole('option')).toHaveLength(1);
+    await user.click(screen.getByRole('option', { name: 'Mexico' }));
+    expect(trigger).toHaveTextContent('Mexico');
+    await user.click(trigger);
+    await user.keyboard('{Escape}');
+    expect(screen.queryByTestId('publish-to-speleodb-dialog-country-search')).toBeNull();
+    expect(trigger).toHaveFocus();
+  });
+
   it('gates Publish on a chosen country and publishes with the right params', async () => {
     invokeIpcMock.mockResolvedValue({
       project_id: 'p1',
@@ -55,10 +84,12 @@ describe('PublishToSpeleoDbDialog', () => {
       local_path: '/cache/p1/project.stalx',
     });
     render(<PublishToSpeleoDbDialog />);
-    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-message'), { target: { value: 'First survey' } });
+    expect(screen.queryByTestId('publish-to-speleodb-dialog-visibility')).toBeNull();
+    expect(screen.queryByTestId('publish-to-speleodb-dialog-message')).toBeNull();
 
     // Name prefilled from the project; country still unchosen -> Publish disabled.
     expect(screen.getByTestId('publish-to-speleodb-dialog-name')).toHaveValue('My Cave');
+    expect(screen.getByTestId('publish-to-speleodb-dialog-name')).toBeDisabled();
     expect(screen.getByTestId('publish-to-speleodb-dialog-submit')).toBeDisabled();
 
     await pickOption('publish-to-speleodb-dialog-country', 'US');
@@ -79,7 +110,7 @@ describe('PublishToSpeleoDbDialog', () => {
         params: {
           name: 'My Cave',
           description: 'Main line survey',
-          message: 'First survey',
+          message: 'Project Creation',
           country: 'US',
           visibility: 'PRIVATE',
           latitude: null,
@@ -100,7 +131,6 @@ describe('PublishToSpeleoDbDialog', () => {
     });
     loadProjectMock.mockResolvedValue({ success: false });
     render(<PublishToSpeleoDbDialog />);
-    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-message'), { target: { value: 'First survey' } });
 
     await pickOption('publish-to-speleodb-dialog-country', 'US');
     fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
@@ -112,7 +142,6 @@ describe('PublishToSpeleoDbDialog', () => {
 
   it('blocks submit on an out-of-range coordinate pair', async () => {
     render(<PublishToSpeleoDbDialog />);
-    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-message'), { target: { value: 'First survey' } });
     await pickOption('publish-to-speleodb-dialog-country', 'US');
     await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-latitude'), '999');
     await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-longitude'), '0');
@@ -130,7 +159,6 @@ describe('PublishToSpeleoDbDialog', () => {
       loadProject: loadProjectMock,
     });
     render(<PublishToSpeleoDbDialog />);
-    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-message'), { target: { value: 'First survey' } });
     expect(screen.getByTestId('publish-to-speleodb-dialog-country')).toHaveTextContent('Mexico');
     expect(screen.getByTestId('publish-to-speleodb-dialog-latitude')).toHaveValue(20.21);
     expect(screen.getByTestId('publish-to-speleodb-dialog-longitude')).toHaveValue(-87.46);
@@ -152,7 +180,6 @@ describe('PublishToSpeleoDbDialog', () => {
       loadProject: loadProjectMock,
     });
     render(<PublishToSpeleoDbDialog />);
-    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-message'), { target: { value: 'First survey' } });
     expect(screen.getByTestId('publish-to-speleodb-dialog-country')).toHaveTextContent('Select a country');
   });
 });

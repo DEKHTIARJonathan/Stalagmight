@@ -5,14 +5,13 @@ import { Select } from '../../common/Select';
 import { SpeleoUndoModeControl } from './SpeleoUndoModeControl';
 import { COUNTRIES } from '../../../data/countries';
 import type { SpeleoProjectMetadataState } from '../../../hooks/useSpeleoProjectMetadata';
-import type { Visibility } from '../../../types/ipc.generated';
 
 const inputClass =
   'w-full px-2 py-1 bg-background border border-border rounded text-sm disabled:opacity-60';
 
 /**
  * The General tab of the SpeleoDB project dialog (#206): the open project's
- * server-side details - name, description, country, visibility, coordinates - plus
+ * server-side details - name, description, country, coordinates - plus
  * the web-map rendering switch. Read-only users see the fields disabled with a badge.
  *
  * Pure presentation over {@link useSpeleoProjectMetadata}, which the DIALOG owns so
@@ -90,6 +89,8 @@ export function SpeleoDbGeneralTab({ metadata }: { metadata: SpeleoProjectMetada
             {t('speleodb.projectSettings.fields.country')}
           </label>
           <Select
+            searchLabel={t('speleodb.publish.searchCountry')}
+            noResultsLabel={t('speleodb.publish.noCountries')}
             value={form.country}
             disabled={!canEdit}
             onChange={(v) => update('country', v)}
@@ -99,23 +100,6 @@ export function SpeleoDbGeneralTab({ metadata }: { metadata: SpeleoProjectMetada
             ]}
             aria-label={t('speleodb.projectSettings.fields.country')}
             data-testid="speleodb-settings-country"
-          />
-        </div>
-
-        <div className="py-2">
-          <label className="block text-sm font-medium text-text-primary mb-1">
-            {t('speleodb.projectSettings.fields.visibility')}
-          </label>
-          <Select
-            value={form.visibility}
-            disabled={!canEdit}
-            onChange={(v) => update('visibility', v as Visibility)}
-            options={[
-              { value: 'PRIVATE', label: t('speleodb.projectSettings.visibilityOptions.private') },
-              { value: 'PUBLIC', label: t('speleodb.projectSettings.visibilityOptions.public') },
-            ]}
-            aria-label={t('speleodb.projectSettings.fields.visibility')}
-            data-testid="speleodb-settings-visibility"
           />
         </div>
 

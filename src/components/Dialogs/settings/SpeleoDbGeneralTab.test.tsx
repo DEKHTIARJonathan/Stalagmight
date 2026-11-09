@@ -80,9 +80,9 @@ beforeEach(() => {
 });
 
 describe('SpeleoDbGeneralTab', () => {
-  it('loads metadata on mount and PATCHes ONLY the changed field', async () => {
+  it.each(['PRIVATE', 'PUBLIC'] as const)('preserves %s visibility while editing metadata without a visibility control', async (visibility) => {
     invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_get_project_metadata') return Promise.resolve(META);
+      if (cmd === 'speleodb_get_project_metadata') return Promise.resolve({ ...META, visibility });
       if (cmd === 'speleodb_patch_project') return Promise.resolve({ ...META, name: 'Cave B' });
       return Promise.resolve(null);
     });
@@ -90,6 +90,7 @@ describe('SpeleoDbGeneralTab', () => {
     render(<Harness />);
 
     const nameInput = await screen.findByTestId('speleodb-settings-name');
+    expect(screen.queryByTestId('speleodb-settings-visibility')).toBeNull();
     expect(nameInput).toHaveValue('Cave A');
 
     await userEvent.clear(nameInput);

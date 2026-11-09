@@ -15,14 +15,13 @@ import { TOAST_KEYS } from '../../utils/toastKeys';
 import type {
   SpeleoPublishParams,
   SpeleoPublishResult,
-  Visibility,
 } from '../../types/ipc.generated';
 
 const inputClass = 'w-full px-2 py-1 bg-background border border-border rounded text-sm';
 
 /**
  * Publish the OPEN local project to SpeleoDB (#207). Collects the required metadata
- * (name + country) plus optional description / visibility / coordinates, calls
+ * (name + country) plus optional description / coordinates, calls
  * `speleodb_publish`, then reloads the now-remote project so the link status
  * re-seeds. Reachable from the project menu and from New Project's follow-up
  * checkbox.
@@ -33,9 +32,8 @@ export default function PublishToSpeleoDbDialog() {
   const showToast = useUIStore((s) => s.showToast);
   const project = useProjectStore((s) => s.project);
 
-  const [name, setName] = useState(project?.name ?? '');
+  const [name] = useState(project?.name ?? '');
   const [description, setDescription] = useState('');
-  const [message, setMessage] = useState('');
   // Best-effort prefill from the first georeferenced zero datum, if any.
   const firstGps = useMemo(() => project?.zero_datums?.[0]?.gps ?? null, [project]);
   // Offline reverse-geocode the required country from that datum (#217). Lazy
@@ -45,7 +43,6 @@ export default function PublishToSpeleoDbDialog() {
     const gps = project?.zero_datums?.[0]?.gps ?? null;
     return gps ? (reverseGeocodeCountry(gps.latitude, gps.longitude) ?? '') : '';
   });
-  const [visibility, setVisibility] = useState<Visibility>('PRIVATE');
   const [latitude, setLatitude] = useState(firstGps ? String(firstGps.latitude) : '');
   const [longitude, setLongitude] = useState(firstGps ? String(firstGps.longitude) : '');
   const [publishing, setPublishing] = useState(false);
@@ -68,7 +65,6 @@ export default function PublishToSpeleoDbDialog() {
   const canPublish =
     name.trim().length > 0 &&
     description.trim().length > 0 &&
-    message.trim().length > 0 &&
     country !== '' &&
     coordsValid &&
     !publishing;
@@ -81,9 +77,9 @@ export default function PublishToSpeleoDbDialog() {
     const params: SpeleoPublishParams = {
       name: name.trim(),
       description,
-      message: message.trim(),
+      message: 'Project Creation',
       country,
-      visibility,
+      visibility: 'PRIVATE',
       latitude: bothCoords ? latNum : null,
       longitude: bothCoords ? lonNum : null,
     };
@@ -123,9 +119,7 @@ export default function PublishToSpeleoDbDialog() {
     canPublish,
     name,
     description,
-    message,
     country,
-    visibility,
     latTrim,
     lonTrim,
     latNum,
@@ -136,11 +130,8 @@ export default function PublishToSpeleoDbDialog() {
   ]);
 
   const isDirty =
-    name.trim() !== (project?.name ?? '').trim() ||
     description.trim() !== '' ||
-    message.trim() !== '' ||
     country !== '' ||
-    visibility !== 'PRIVATE' ||
     // Include the coordinate pins so entering ONLY a location still prompts on close.
     latTrim !== '' ||
     lonTrim !== '';
@@ -158,13 +149,13 @@ export default function PublishToSpeleoDbDialog() {
 
         <div>
           <label className="block text-sm font-medium text-text-primary mb-1">
-            {t('speleodb.projectSettings.fields.name')} <span className="text-error">*</span>
+            {t('speleodb.projectSettings.fields.name')}
           </label>
           <input
             type="text"
             value={name}
-            onChange={(e) => setName(e.target.value)}
-            className={inputClass}
+            disabled
+            className={`${inputClass} opacity-50 cursor-not-allowed`}
             aria-label={t('speleodb.projectSettings.fields.name')}
             data-testid="publish-to-speleodb-dialog-name"
           />
@@ -194,6 +185,8 @@ export default function PublishToSpeleoDbDialog() {
             {t('speleodb.publish.country')} <span className="text-error">*</span>
           </label>
           <Select
+            searchLabel={t('speleodb.publish.searchCountry')}
+            noResultsLabel={t('speleodb.publish.noCountries')}
             value={country}
             onChange={setCountry}
             options={[
@@ -202,22 +195,6 @@ export default function PublishToSpeleoDbDialog() {
             ]}
             aria-label={t('speleodb.publish.country')}
             data-testid="publish-to-speleodb-dialog-country"
-          />
-        </div>
-
-        <div>
-          <label className="block text-sm font-medium text-text-primary mb-1">
-            {t('speleodb.publish.visibility')}
-          </label>
-          <Select
-            value={visibility}
-            onChange={(v) => setVisibility(v as Visibility)}
-            options={[
-              { value: 'PRIVATE', label: t('speleodb.projectSettings.visibilityOptions.private') },
-              { value: 'PUBLIC', label: t('speleodb.projectSettings.visibilityOptions.public') },
-            ]}
-            aria-label={t('speleodb.publish.visibility')}
-            data-testid="publish-to-speleodb-dialog-visibility"
           />
         </div>
 
@@ -255,21 +232,6 @@ export default function PublishToSpeleoDbDialog() {
           </p>
         )}
 
-        <div>
-          <label htmlFor="publish-commit-message" className="block text-sm text-text-secondary mb-1">
-            {t('speleodb.done.messageLabel')}
-          </label>
-          <textarea
-            id="publish-commit-message"
-            data-testid="publish-to-speleodb-dialog-message"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            disabled={publishing}
-            required
-            rows={3}
-            className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
-          />
-        </div>
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
           <Button onClick={closeDialog} disabled={publishing} data-testid="publish-to-speleodb-dialog-cancel">
             {t('common.actions.cancel')}

@@ -3612,13 +3612,8 @@
         "name": "Name",
         "description": "Description",
         "country": "Country",
-        "visibility": "Visibility",
         "latitude": "Latitude",
         "longitude": "Longitude"
-      },
-      "visibilityOptions": {
-        "private": "Private",
-        "public": "Public"
       },
       "rendering": {
         "label": "Web-map rendering",
@@ -3632,10 +3627,11 @@
       "menuItem": "Publish to SpeleoDB…",
       "description": "Create this project on SpeleoDB and upload its first revision.",
       "country": "Country",
-      "visibility": "Visibility",
       "latitude": "Latitude",
       "longitude": "Longitude",
       "countryPlaceholder": "Select a country…",
+      "searchCountry": "Search countries…",
+      "noCountries": "No countries match your search.",
       "submit": "Publish",
       "submitting": "Publishing…",
       "success": "Project published to SpeleoDB.",

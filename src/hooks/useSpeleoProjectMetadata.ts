@@ -11,7 +11,6 @@ import { TOAST_KEYS } from '../utils/toastKeys';
 import type {
   SpeleoProjectMetadata,
   SpeleoProjectMetadataPatch,
-  Visibility,
 } from '../types/ipc.generated';
 
 /** Editable copy of the server metadata that the form binds to. Lat/long are held
@@ -20,7 +19,6 @@ export interface SpeleoMetadataForm {
   name: string;
   description: string;
   country: string;
-  visibility: Visibility;
   latitude: string;
   longitude: string;
 }
@@ -48,7 +46,6 @@ function toForm(m: SpeleoProjectMetadata): SpeleoMetadataForm {
     name: m.name,
     description: m.description,
     country: m.country,
-    visibility: m.visibility,
     latitude: m.latitude === null ? '' : String(m.latitude),
     longitude: m.longitude === null ? '' : String(m.longitude),
   };
@@ -132,14 +129,13 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
   const nameChanged = !!baseline && !!form && form.name !== baseline.name;
   const descriptionChanged = !!baseline && !!form && form.description !== baseline.description;
   const countryChanged = !!baseline && !!form && form.country !== baseline.country;
-  const visibilityChanged = !!baseline && !!form && form.visibility !== baseline.visibility;
   const baselineLat = baseline?.latitude ?? null;
   const baselineLon = baseline?.longitude ?? null;
   const coordinatesChanged =
     !!baseline && !!form && coordsValid && (latNum !== baselineLat || lonNum !== baselineLon);
 
   const anyChanged =
-    nameChanged || descriptionChanged || countryChanged || visibilityChanged || coordinatesChanged;
+    nameChanged || descriptionChanged || countryChanged || coordinatesChanged;
   const nameEmpty = (form?.name.trim() ?? '') === '';
   const canSave = canEdit && !!form && anyChanged && coordsValid && !nameEmpty && !saving;
 
@@ -150,7 +146,7 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
       name: nameChanged ? form.name.trim() : null,
       description: descriptionChanged ? form.description : null,
       country: countryChanged ? form.country : null,
-      visibility: visibilityChanged ? form.visibility : null,
+      visibility: null,
       coordinates_edited: coordinatesChanged,
       latitude: coordinatesChanged ? latNum : null,
       longitude: coordinatesChanged ? lonNum : null,
@@ -187,7 +183,6 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
     nameChanged,
     descriptionChanged,
     countryChanged,
-    visibilityChanged,
     coordinatesChanged,
     latNum,
     lonNum,
