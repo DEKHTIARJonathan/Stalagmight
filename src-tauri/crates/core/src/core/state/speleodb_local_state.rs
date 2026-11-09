@@ -92,7 +92,21 @@ enum LocalRead {
 /// A missing file is `Known` (there is nothing on disk to lose); an unlinked one is
 /// `Known` too (a `.stalx` in the cache that is not a managed project has nothing
 /// to push). Only a file that is present and unreadable is `Unreadable`.
+///
+/// A present file with a HOT rollback journal beside it is `Unreadable` by rule,
+/// before any connection is tried: its committed state is the file PLUS that
+/// journal, and the journal is what a replace would otherwise throw away (see
+/// `speleodb_sidecars`). A read-only open trips over the same journal today, but
+/// the guard's answer must not hang on that.
 fn read_local_state_at(path: &Path) -> LocalRead {
+    if super::speleodb_sidecars::has_hot_journal(path) && path.try_exists().unwrap_or(true) {
+        tracing::debug!(
+            path = %path.display(),
+            purpose = "never read an interrupted write as the copy's state",
+            "speleodb: cached .stalx has a hot rollback journal"
+        );
+        return LocalRead::Unreadable;
+    }
     let link = match Database::open_for_metadata(path).and_then(|db| db.load_speleo_link()) {
         Ok(Some(link)) => link,
         // No link row: a `.stalx` sitting in the cache that is not a managed

@@ -273,7 +273,19 @@ impl AppState {
         )?;
         let preserved_view = preserved_display_settings(dest);
         let closed = self.close_project_if_open_at(dest);
+        // Our handle on `dest` is gone (or never existed), so any sidecar beside it
+        // belongs to the outgoing file - see `speleodb_sidecars`.
+        let sidecars = match super::speleodb_sidecars::SetAsideSidecars::take(dest) {
+            Ok(sidecars) => sidecars,
+            Err(error) => {
+                if closed {
+                    let _ = self.open_project(dest.to_path_buf());
+                }
+                return Err(error);
+            }
+        };
         if let Err(error) = std::fs::rename(&staged, dest) {
+            sidecars.restore();
             if closed {
                 let _ = self.open_project(dest.to_path_buf());
             }
@@ -281,6 +293,7 @@ impl AppState {
                 "could not install sanitized download: {error}"
             )));
         }
+        sidecars.discard();
         super::speleodb_cache_install::sync_cache_directory(dest);
         Ok(preserved_view)
     }
