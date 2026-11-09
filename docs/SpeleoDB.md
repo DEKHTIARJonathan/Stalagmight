@@ -289,12 +289,33 @@ before any question:
   `arm_forced_exit` so the backend may cut the operation.
 
 The backend exit hook (`commands/exit_wait.rs`, from `RunEvent::ExitRequested`) is
-the backstop for anything that reaches the exit anyway, such as a backend
-operation the frontend does not see. While an operation holds the lock-ops span
-and no forced exit is armed (10-second arm), it prevents the exit, waits for the
-operation on a background thread, runs the bounded lock release (5 s, the release
-only) and then exits. Tauri cannot prevent an `app.restart()`; the update restart
-only runs after the frontend gate has let the quit through.
+the backstop for a user-visible transfer still running when the exit arrives anyway.
+Only the transfers the frontend gate waits on can hold it: every IPC command the
+gate counts as `exclusive` (`speleoNetworkCommands.ts`; they run through
+`run_transfer`) plus `close_project` and the cached-copy discard. While one runs and
+no forced exit is armed (10-second arm), the hook prevents the exit, waits for it on
+a background thread, runs the bounded lock release (5 s) and then exits.
+Backend-internal work the user never sees (the background lock re-verify, the
+stranded-claim cleanup, a detached release from a project switch) never keeps a
+process alive without a window: the exit keeps the bounded behaviour for it, the
+release waiting at most 5 s behind it before the app exits. Tauri cannot prevent an
+`app.restart()`; the update restart only runs after the frontend gate has let the
+quit through.
+
+### Signing out
+
+Signing out first resolves what the account still holds (`utils/speleoSignOut`): the
+open project's un-uploaded work under our lock (Upload / Keep my changes on this
+computer / Discard), other cached copies with un-uploaded work (Open to upload /
+Keep my changes on this computer / Discard), and the remaining locks, handed back
+with Try again / Sign out anyway when a release fails. There is no keep-the-lock
+answer. "Keep my changes on this computer" is the non-destructive one when the
+upload is not possible: unsaved edits of the open project are saved first, the copy
+keeps its edits, its un-uploaded mark and its recents row, and its lock is handed
+back through the explicit per-project release (`speleodb_release_lock`). The user's
+choice is the consent: the logout's own silent release still keeps the lock over
+un-uploaded edits. After the next sign-in the ordinary open takes over (base equals
+tip: the local copy opens and resumes; a divergence offers "Open my local copy").
 
 Switch to Read Only Mode refuses unsaved or unuploaded work, including direct IPC
 calls: "Save your changes using Save Changes before switching to read-only mode."
