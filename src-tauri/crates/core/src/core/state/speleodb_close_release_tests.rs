@@ -473,6 +473,10 @@ fn a_signed_out_close_leaves_the_claim_for_the_next_sign_in() {
 }
 
 #[test]
+#[expect(
+    clippy::panic,
+    reason = "the panic poisons the session mutex on purpose"
+)]
 fn an_unreadable_session_refuses_the_close_but_still_lets_the_user_keep_the_lock() {
     // #668 `pending_close_release_poisoned_session_refuses_teardown`: a poisoned
     // session lock cannot say whether this account holds the lock, which is not

@@ -649,6 +649,7 @@ impl CommandResult {
 
     /// Attach what handing back the open project's lock came to (see
     /// [`CommandResult::lock_release`]); `None` leaves the key off the wire.
+    #[must_use]
     pub fn with_lock_release(mut self, outcome: Option<LockReleaseOutcome>) -> Self {
         self.lock_release = outcome;
         self
