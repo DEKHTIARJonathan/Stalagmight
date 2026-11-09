@@ -47,8 +47,7 @@ const openLink = (o: Partial<SpeleoLinkState> = {}): SpeleoLinkState => ({
   lockedByOther: false,
   hasUnpushedEdits: false,
   unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
+
   undoMode: 'full',
   remoteState: 'up_to_date',
   noAccess: false,
@@ -279,8 +278,7 @@ describe('useOpenRemoteProject (#218)', () => {
       lockedByOther: false,
       hasUnpushedEdits: true,
       unwound: false,
-      forceEditing: false,
-      forceEditAllowed: false,
+
       undoMode: 'full' as const,
       remoteState: 'up_to_date' as const,
       noAccess: false,
@@ -381,14 +379,6 @@ describe('useOpenRemoteProject (#218)', () => {
     expect(selectSpeleoReadOnly(useSpeleoStore.getState())).toBe(false);
   });
 
-  /**
-   * [#270] `offline fallback` skipped the seed for the already-open project; the two
-   * other routes into the same tail did not. "Open from SpeleoDB" is in the
-   * IN-PROJECT menu, so `openRemote` re-opening the current project is an ordinary
-   * mis-step - and for a CLEAN open project the backend does not refuse it, so it
-   * sails past the refusal prompt straight into the seed, which writes
-   * `read-only` / nothing-unpushed / no-force-edit over a lock we hold.
-   */
   it('openRemote seeds NOTHING when the pull names the already-open project', async () => {
     useProjectStore.setState({ project: { file_path: '/cache/p1.stalx' } as never });
     invokeIpcMock.mockImplementation((cmd: string) => {
@@ -525,7 +515,6 @@ describe('useOpenRemoteProject (#218)', () => {
   });
 
 });
-
 
 describe('access warnings follow acquisition instead of blocking opening', () => {
   it.each([

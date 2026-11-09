@@ -63,7 +63,6 @@ beforeEach(() => {
   });
 });
 
-
 /**
  * #270 (P1) - a TRANSIENT project-list failure must not log an authenticated user
  * out of the browser. The mount effect used to wrap the session probe and the list
@@ -219,8 +218,7 @@ describe('OpenFromSpeleoDbDialog with work at risk in the open project (#270)', 
         lockedByOther: false,
         hasUnpushedEdits: true,
         unwound: false,
-        forceEditing: false,
-        forceEditAllowed: false,
+
         undoMode: 'full',
         remoteState: 'unknown',
         noAccess: false,
@@ -242,7 +240,6 @@ describe('OpenFromSpeleoDbDialog with work at risk in the open project (#270)', 
 
   });
 });
-
 
 it.each(['read-only', 'locked'])('restores the browser after cancelling an unsaved switch to a %s project', async (kind) => {
   useProjectStore.setState({ project: { file_path: '/old.stalx' } as never, isDirty: true });

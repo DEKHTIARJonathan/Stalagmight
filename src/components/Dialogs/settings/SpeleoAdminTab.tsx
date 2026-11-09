@@ -19,11 +19,14 @@ export function SpeleoAdminTab() {
   const { t } = useTranslation();
   const showToast = useUIStore((s) => s.showToast);
   const link = useSpeleoStore((s) => s.link);
+  const busy = useSpeleoStore((s) => s.busy);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
 
   const [releasing, setReleasing] = useState(false);
 
   const handleRelease = useCallback(async () => {
+    if (useSpeleoStore.getState().busy) return;
+    const busyToken = useSpeleoStore.getState().beginBusy();
     setReleasing(true);
     try {
       const session = useSpeleoStore.getState().sessionGeneration;
@@ -41,15 +44,12 @@ export function SpeleoAdminTab() {
     } catch (e) {
       showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), TOAST_KEYS.SPELEODB_LOCK, 'error');
     } finally {
+      useSpeleoStore.getState().endBusy(busyToken);
       setReleasing(false);
     }
   }, [refreshLinkStatus, showToast, t]);
 
   const holder = link?.lockHolder ?? null;
-  // Shared predicate, and the force-edit exclusion is load-bearing here: a #213
-  // force-editor is editing WITHOUT the lock, so telling them the lock is "held by
-  // you" and offering Release named a lock they do not have and an action the
-  // backend can only refuse. This copy had drifted to the id-only spelling.
   const iHoldLock = holdsWriteLock(link);
 
   return (
@@ -75,7 +75,7 @@ export function SpeleoAdminTab() {
             )}
             <Button
               variant="secondary"
-              disabled={releasing}
+              disabled={releasing || busy}
               onClick={() => void handleRelease()}
               data-testid="speleodb-lock-release"
             >

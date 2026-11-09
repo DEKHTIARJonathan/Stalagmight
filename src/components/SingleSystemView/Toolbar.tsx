@@ -413,18 +413,20 @@ export default function Toolbar({
     setCarouselLeft(Math.max(minCenter, Math.min(maxCenter, windowCenter)));
   });
 
+  const splitToolbar = speleoLinkPresent && headerWidth > 0 && headerWidth < 720;
   const { displayCondensed, importCondensed, historyCondensed, tight, centerInFlow, clusterCls, centerCls } =
-    toolbarCondenseLayout(condense);
+    toolbarCondenseLayout(splitToolbar ? CONDENSE_MAX : condense);
   const centerStyle: CSSProperties | undefined = centerInFlow
     ? undefined
     : { left: carouselLeft ?? '50%' };
 
   return (
-    <header ref={headerRef} className="relative flex items-center justify-between px-4 py-2 border-b border-border bg-panel" data-testid="toolbar">
+    <header ref={headerRef} className={`relative flex items-center justify-between px-4 py-2 border-b border-border bg-panel ${splitToolbar ? 'flex-wrap gap-y-1' : ''}`} data-testid="toolbar">
       {/* Left section: hamburger menu, Import, then Undo/Redo */}
       <div
         ref={leftRef}
         className={`flex items-center ${clusterCls} ${tight ? 'gap-0.5' : 'gap-2'} transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}
+        style={splitToolbar ? { flexBasis: '100%' } : undefined}
         data-testid="toolbar-file-controls"
       >
         {/* Disabled during placement mode so the file/project actions that moved
@@ -491,7 +493,6 @@ export default function Toolbar({
               // boundary. The button stays disabled (Undo / Ctrl+Z must keep doing
               // nothing); only HOVER opens the panel. Placement mode is excluded - that
               // reason for `disabled` must still suppress the panel entirely.
-              hoverableWhenEmpty={!placementModeActive}
               onSingleAction={onUndo}
               testId="toolbar-undo-button"
               ariaLabel={t('common.actions.undo')}
@@ -518,7 +519,6 @@ export default function Toolbar({
               // redo stack still has the forward chain step to show ("Redo into next
               // SpeleoDB version"), and hover is the only way to reach it while the button
               // itself stays correctly disabled.
-              hoverableWhenEmpty={!placementModeActive}
               onSingleAction={onRedo}
               testId="toolbar-redo-button"
               ariaLabel={t('common.actions.redo')}

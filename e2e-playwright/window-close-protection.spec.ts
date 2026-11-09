@@ -356,8 +356,8 @@ test.describe('Window Close Protection', () => {
           hasUnpushedEdits: true,
           // The term that separates "you have work to save" from "this is an older copy".
           unwound: true,
-          forceEditing: false,
-          forceEditAllowed: false,
+
+
           remoteState: 'up_to_date',
           noAccess: false,
           serverError: null,
@@ -393,8 +393,8 @@ test.describe('Window Close Protection', () => {
           lockHolder: null,
           lockedByOther: false,
           hasUnpushedEdits: true,
-          forceEditing: false,
-          forceEditAllowed: false,
+
+
           remoteState: 'up_to_date',
           noAccess: false,
           serverError: null,

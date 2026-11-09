@@ -77,8 +77,8 @@ for (const button of ['speleodb-close-discard']) {
       w.__E2E_TEST__.projectStore.setState({ isDirty: true });
       w.__E2E_TEST__.speleoStore.setState({ busy: false, link: {
         permission: 'READ_AND_WRITE', editState: 'editing', lockedByOther: false,
-        lockHolder: null, hasUnpushedEdits: true, unwound: false, forceEditing: false,
-        forceEditAllowed: false, remoteState: 'up_to_date', noAccess: false, serverError: null,
+        lockHolder: null, hasUnpushedEdits: true, unwound: false,
+        remoteState: 'up_to_date', noAccess: false, serverError: null,
       } });
       w.__E2E_TEST__.uiStore.getState().openDialog('speleodb-close', { pendingOpenPath: '/synthetic/destination.stalx' });
     });
@@ -126,8 +126,8 @@ for (const outcome of ['pushed', 'push_unconfirmed', 'disk_failure'] as const) {
       w.__E2E_TEST__.projectStore.setState({ isDirty: true });
       w.__E2E_TEST__.speleoStore.setState({ busy: false, remoteProjectId: 'synthetic', session: { loggedIn: true, userEmail: 'synthetic@example.com', endpoint: 'https://synthetic.example' }, link: {
         permission: 'READ_AND_WRITE', editState: 'editing', lockedByOther: false,
-        lockHolder: null, hasUnpushedEdits: true, unwound: false, forceEditing: false,
-        forceEditAllowed: false, remoteState: 'up_to_date', noAccess: false, serverError: null,
+        lockHolder: null, hasUnpushedEdits: true, unwound: false,
+        remoteState: 'up_to_date', noAccess: false, serverError: null,
       } });
       w.__E2E_TEST__.uiStore.getState().openDialog('speleodb-done', { mode: 'push' });
     }, outcome);

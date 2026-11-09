@@ -1,3 +1,4 @@
+import { confirmWorkspaceDrafts } from '../utils/workspaceDrafts';
 import { isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent, reserveProjectRequest } from '../utils/projectTransition';
 import { useCallback } from 'react';
 import { confirmSpeleoOpen } from '../utils/confirmSpeleoOpen';
@@ -96,42 +97,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // failed and we are still here" from "the ground moved" (see below).
       const priorLink = useSpeleoStore.getState().snapshotLink();
       const priorPath = useProjectStore.getState().project?.file_path ?? null;
-      /**
-       * [#270] The file being "opened" is the one already on screen, so do not
-       * touch the link AT ALL: its live link is the authoritative state (lock
-       * held, permission, dirty bit, all resolved). The optimistic seed is for a
-       * project arriving from the server; applied to the open one it OVERWRITES
-       * resolved truth with a pessimistic guess (`read-only`, nothing unpushed, no
-       * force-edit), and `loadProject` then short-circuits on ALREADY_OPEN so
-       * nothing re-resolves it synchronously - a read-only survey UI and disarmed
-       * exit guards for a project we hold the lock on, until some later status
-       * refresh happens to correct it.
-       *
-       * Decided HERE rather than at a call site because all three routes into this
-       * tail can name the open project: "Open from SpeleoDB" sits in the
-       * IN-PROJECT menu, so `openRemote` re-opening the current project is an
-       * ordinary mis-step, and the open it can route to lands on the same path.
-       *
-       * A LITERAL string comparison, deliberately - it is NOT a claim that the two
-       * spellings name the same file on disk. What it has to predict is whether
-       * `loadProject` will short-circuit, and the backend decides exactly that with
-       * the same literal test (`do_load_project_full`:
-       * `project.file_path.as_ref() == Some(&path)`), over the same two values:
-       * `file_path` is stored verbatim from the path the load was handed, and both
-       * sides here are minted by one process-wide `speleodb_cache_path`. So the
-       * aliases a literal test cannot see through - a symlink, `..`, a Windows /
-       * macOS case alias - are ones the BACKEND cannot see through either, and this
-       * lands on the correct branch anyway: it really is a full reload, so the seed
-       * really is needed. Canonicalizing only this side would desync the prediction
-       * from the fact and skip the seed for a load that still happens, leaving
-       * `syncProjectLink` (literal in the same way, on `linkPath === forPath`) to
-       * resolve the fresh open to read-only / nothing-unpushed with no seed left to
-       * carry the permission or the dirty bit. Alias tolerance, if it is ever
-       * wanted, has to start in `do_load_project_full` - `project_io::same_file`
-       * canonicalizes, and `close_project_if_open_at` already uses it - with this
-       * side following, never leading. The webview cannot canonicalize a path at
-       * all: it has no filesystem.
-       */
+
       const alreadyOpen = priorPath === result.local_path;
       // #193 b8: a lock held by THIS account at open time = a second same-account
       // session; warn (keyed so repeat opens don't stack duplicate toasts).
@@ -224,6 +190,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   // local edits remain on disk, and the backend releases the old project's lock.
   // The acknowledgement belongs to this exact project snapshot and request.
   const confirmUnsavedHandBack = useCallback(async (current: () => boolean) => {
+    if (!await confirmWorkspaceDrafts() || !current()) return null;
     const { project, isDirty } = useProjectStore.getState();
     if (!project || !isDirty) return { project: null };
     const accepted = await confirm(t('speleodb.exit.unsavedMessage'), {
@@ -257,7 +224,6 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     },
     [handBackRefusal],
   );
-
 
   const openRemote = useCallback(
     async (

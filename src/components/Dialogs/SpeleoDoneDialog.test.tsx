@@ -38,8 +38,7 @@ const LINK: SpeleoLinkState = {
   lockedByOther: false,
   hasUnpushedEdits: true,
   unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
+
   undoMode: 'full',
   remoteState: 'up_to_date',
   noAccess: false,
@@ -59,7 +58,7 @@ beforeEach(() => {
     project: { zero_datums: [{}] } as never,
     saveProject: vi.fn(async () => ({ success: true }) as never),
   });
-  useSpeleoStore.setState({ link: { ...LINK }, banner: null, busy: false });
+  useSpeleoStore.setState({ link: { ...LINK }, banner: null, busy: false, session: { loggedIn: true, userEmail: 'me@x', endpoint: 'https://synthetic.example' } });
   useUIStore.setState({
     activeDialog: 'speleodb-done',
     dialogData: {},
@@ -186,7 +185,8 @@ it.each(['not_editing', 'divergence_needed', 'push_unconfirmed'])('retains the m
   render(<SpeleoDoneDialog />);
   fillCommitMessage();
   await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
-  expect(await screen.findByTestId('speleodb-save-upload-failure')).toHaveTextContent(kind === 'push_unconfirmed' ? 'could not be confirmed' : 'but not uploaded');
+  if (kind === 'not_editing') expect(await screen.findByTestId('speleodb-push-failure-inline')).toBeVisible();
+  else expect(await screen.findByTestId('speleodb-save-upload-failure')).toHaveTextContent(kind === 'push_unconfirmed' ? 'could not be confirmed' : 'but not uploaded');
   expect(screen.getByLabelText('Commit message')).toHaveValue('Survey update');
   expect(useUIStore.getState().activeDialog).toBe('speleodb-done');
 });
@@ -205,4 +205,40 @@ it('blocks duplicate confirmation while saving and ignores a replacement dialog'
   await waitFor(() => expect(screen.getByTestId('speleodb-done-confirm')).not.toBeDisabled());
   expect(invokeIpcMock).not.toHaveBeenCalled();
   expect(useUIStore.getState().activeDialog).toBe('replacement');
+});
+
+it.each(['read-only', 'signed-out', 'missing-permission'] as const)('explains and blocks upload while %s', async (kind) => {
+  useUIStore.setState({ dialogData: { mode: 'push', closeAfterSave: true } });
+  useSpeleoStore.setState({
+    link: { ...LINK, editState: kind === 'read-only' ? 'read-only' : 'editing', permission: kind === 'missing-permission' ? null : 'READ_AND_WRITE' },
+    session: kind === 'signed-out' ? null : { loggedIn: true, userEmail: 'me@x', endpoint: null },
+  });
+  render(<SpeleoDoneDialog />);
+  fillCommitMessage();
+  expect(screen.getByTestId('speleodb-upload-blocked')).toBeVisible();
+  expect(screen.getByTestId('speleodb-done-confirm')).toBeDisabled();
+  expect(invokeIpcMock.mock.calls.filter(([command]) => command === 'speleodb_done' || command === 'speleodb_push')).toHaveLength(0);
+});
+
+it.each(['released', 'push_unconfirmed', 'release_failed', 'newer-edits'] as const)('Save and Close only leaves after confirmed upload and release (%s)', async (kind) => {
+  const close = vi.fn(async () => ({ success: true }) as never);
+  useProjectStore.setState({ isDirty: false, closeProject: close });
+  useUIStore.setState({ dialogData: { mode: 'push', closeAfterSave: true } });
+  invokeIpcMock.mockImplementation(async (command: string) => {
+    if (command !== 'speleodb_done') return null;
+    if (kind === 'release_failed') throw new Error('Release failed');
+    if (kind === 'newer-edits') useProjectStore.setState({ isDirty: true });
+    return { kind: kind === 'push_unconfirmed' ? kind : 'released' };
+  });
+  render(<SpeleoDoneDialog />);
+  fillCommitMessage();
+  await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
+  await waitFor(() => expect(invokeIpcMock.mock.calls.some(([command]) => command === 'speleodb_done')).toBe(true));
+  if (kind === 'released') await waitFor(() => expect(close).toHaveBeenCalledOnce());
+  else {
+    if (kind === 'newer-edits') await waitFor(() => expect(screen.getByTestId('speleodb-save-upload-failure')).toHaveTextContent('Newer changes'));
+    else await waitFor(() => expect(screen.getByTestId('speleodb-done-confirm')).not.toBeDisabled());
+    expect(close).not.toHaveBeenCalled();
+    expect(useUIStore.getState().activeDialog).toBe('speleodb-done');
+  }
 });

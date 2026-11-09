@@ -1,3 +1,4 @@
+import { SpeleoAccessNotice } from './SpeleoAccessNotice';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
@@ -10,42 +11,11 @@ import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 
-/**
- * Thin banner slot below the toolbar for SpeleoDB status (#200/#204). It surfaces
- * one non-blocking notice at a time:
- * - `push_unconfirmed` / `concurrent_session` - transient action feedback (#204);
- * - `rendering_disabled` - the server's `exclude_geojson` is set, so the web map
- *   won't refresh; offers Enable-rendering (a PATCH that takes effect on the NEXT
- *   push, gated behind an inline confirmation stating exactly that). This one is
- *   server-derived state, so it has NO Dismiss button - dismissing would just be
- *   re-derived by the next status refresh; the resolution is Enable-rendering (or the
- *   flag being cleared server-side). It also preempts `no_anchor` in the store so it
- *   is always reachable.
- * - `no_anchor` - a push/unlock of a survey with no georeferenced zero datum, so the
- *   server generated no new map geometry (the map may be stale).
- * - `push_failed` (#260) - the last push/unlock threw. The action toast auto-clears
- *   after 3 s, which left a failed upload with no durable surface at all; this banner
- *   keeps the humanized error on screen and offers Retry, which replays the SAME verb
- *   (push keeps the lock, done releases it) with the same commit message. It clears on
- *   the next attempt, on a landed push/release, and when the project closes. It is
- *   HIDDEN while the dialog that issued the verb is open (`PUSH_FAILURE_DIALOGS`):
- *   that dialog stays open on failure and renders the same error inline, and a
- *   banner behind its modal scrim is dimmed, unreadable and unclickable.
- * None of these block editing or pushing.
- *
- * Above all of them sits the #213 force-edit banner (big-red, derived from
- * `link.forceEditing`, NOT the transient slot): while editing without the write lock
- * it persistently warns the `.stalx` is unmergeable and offers Reconnect. It preempts
- * the yellow notices so the data-safety warning is never masked.
- */
 export function SpeleoBanner() {
   const { t } = useTranslation();
   const banner = useSpeleoStore((s) => s.banner);
   const dismissBanner = useSpeleoStore((s) => s.dismissBanner);
   const enableRendering = useSpeleoStore((s) => s.enableRendering);
-  const forceEditing = useSpeleoStore((s) => s.link?.forceEditing ?? false);
-  const lockedByOther = useSpeleoStore((s) => s.link?.lockedByOther ?? false);
-  const lockHolder = useSpeleoStore((s) => s.link?.lockHolder ?? null);
   // #270: Retry re-issues push/done, and BOTH need an open edit gate. Without one
   // the backend uploads nothing and answers `not_editing` - so offering "Retry
   // upload" there is an invitation to a no-op that reads like a fix. A 401 is
@@ -76,41 +46,7 @@ export function SpeleoBanner() {
     if (banner?.kind !== 'rendering_disabled') setConfirmingEnable(false);
   }, [banner?.kind]);
 
-  // #213: a force-edit session (editing WITHOUT the write lock) shows a PERSISTENT
-  // big-red data-safety warning that outranks the yellow transient notices - the
-  // "this .stalx cannot be merged" message must never be masked by a lesser banner.
-  // Its only action is Reconnect (acquire the lock + reconcile, via startEditing);
-  // it is not dismissable (backend state, re-derived every refresh). When someone else
-  // holds the lock we name them, since their work is what a reconnect reconciles against.
-  if (forceEditing) {
-    return (
-      <div
-        className="flex items-center justify-between gap-3 px-4 py-2 bg-error-20 text-error text-sm font-medium border-b border-border"
-        role="alert"
-        data-testid="speleo-banner"
-        data-kind="force_edit_active"
-      >
-        <span>
-          {lockedByOther
-            ? t('speleodb.forceEdit.banner.lockedBy', {
-                email: lockHolder ?? t('speleodb.editBar.someone'),
-              })
-            : t('speleodb.forceEdit.banner.text')}
-        </span>
-        <button
-          type="button"
-          onClick={() => void startEditing()}
-          disabled={busy}
-          className="text-xs underline flex-shrink-0 disabled:opacity-50"
-          data-testid="speleo-banner-reconnect"
-        >
-          {t('speleodb.forceEdit.reconnect')}
-        </button>
-      </div>
-    );
-  }
-
-  if (!banner) return null;
+  if (!banner) return <SpeleoAccessNotice />;
   // #260: the failure is on screen inside the dialog that caused it - never both.
   if (banner.kind === 'push_failed' && dialogOwnsFailure) return null;
 

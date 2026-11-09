@@ -258,7 +258,6 @@ const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
   execute_compass_import: 'no mocked spec drives the compass parse+execute two-step import flow',
   parse_walls: 'walls-import-dialog.spec.ts uses execute_walls_import directly; parse_walls is not called',
   speleodb_done: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
-  speleodb_force_edit: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_get_revisions: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_open_project: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_open_project_discarding_local:

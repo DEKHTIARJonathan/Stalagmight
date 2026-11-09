@@ -1,10 +1,4 @@
-/**
- * Component test (#213 force-edit banner, #260 push-failure banner).
- *
- * The big-red banner appears whenever the link is force-editing (edit gate on, no
- * lock held), outranking the transient yellow notices; its Reconnect action runs the
- * existing acquire verb (speleodb_start_editing). It names the holder when locked.
- */
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -26,8 +20,7 @@ const LINK: SpeleoLinkState = {
   lockedByOther: false,
   hasUnpushedEdits: true,
   unwound: false,
-  forceEditing: true,
-  forceEditAllowed: true,
+
   undoMode: 'full',
   remoteState: 'unknown',
   noAccess: false,
@@ -44,47 +37,9 @@ beforeEach(() => {
   useUIStore.setState({ activeDialog: null, dialogData: {} });
 });
 
-describe('SpeleoBanner force-edit (#213)', () => {
-  it('renders the persistent force-edit banner while force-editing', () => {
-    seedLink();
-    render(<SpeleoBanner />);
-    const banner = screen.getByTestId('speleo-banner');
-    expect(banner).toHaveAttribute('data-kind', 'force_edit_active');
-    // No dismiss - it is backend-derived and re-raised every refresh.
-    expect(screen.queryByTestId('speleo-banner-dismiss')).not.toBeInTheDocument();
-  });
-
-  it('Reconnect runs the acquire verb (speleodb_start_editing)', async () => {
-    seedLink();
-    render(<SpeleoBanner />);
-    await userEvent.click(screen.getByTestId('speleo-banner-reconnect'));
-    await waitFor(() =>
-      expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(true),
-    );
-  });
-
-  it('names the lock holder in the banner when someone else holds it', () => {
-    seedLink({ lockedByOther: true, lockHolder: 'holder@example.com' });
-    render(<SpeleoBanner />);
-    expect(screen.getByTestId('speleo-banner').textContent).toContain('holder@example.com');
-  });
-
-  it('does not render for a normal (non-force) editing session', () => {
-    seedLink({ forceEditing: false });
-    render(<SpeleoBanner />);
-    expect(screen.queryByTestId('speleo-banner')).not.toBeInTheDocument();
-  });
-});
-
-/**
- * #260 - the persistent push-failure banner. A failed push/unlock only raised a
- * toast, which auto-clears after 3 s, so the failure left no durable surface. The
- * banner keeps the humanized error on screen and its Retry replays the SAME verb
- * with the SAME commit message.
- */
 describe('SpeleoBanner push failure (#260)', () => {
   const seedFailure = (origin: 'push' | 'done', pushMessage: string | null = null) => {
-    seedLink({ forceEditing: false });
+    seedLink({ });
     useSpeleoStore.setState({
       banner: { kind: 'push_failed', message: 'Could not push changes: boom', origin, pushMessage },
     });
@@ -203,7 +158,7 @@ describe('SpeleoBanner push failure (#260)', () => {
   it('still shows an unrelated banner while such a dialog is open', () => {
     // Only the push-failure kind is owned by the dialog; the informational
     // notices are not duplicated there, so they must not be suppressed.
-    seedLink({ forceEditing: false });
+    seedLink({ });
     useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
     useUIStore.setState({ activeDialog: 'speleodb-done' });
     render(<SpeleoBanner />);
@@ -211,7 +166,7 @@ describe('SpeleoBanner push failure (#260)', () => {
   });
 
   it('clearPushFailedBanner leaves an unrelated banner alone', () => {
-    seedLink({ forceEditing: false });
+    seedLink({ });
     useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
     useSpeleoStore.getState().clearPushFailedBanner();
     expect(useSpeleoStore.getState().banner).toEqual({ kind: 'no_anchor' });
@@ -229,7 +184,7 @@ describe('SpeleoBanner push failure (#260)', () => {
  */
 describe('SpeleoBanner retry needs an open edit gate (#270)', () => {
   const seedReadOnlyFailure = () => {
-    seedLink({ forceEditing: false, editState: 'read-only' });
+    seedLink({ editState: 'read-only' });
     useSpeleoStore.setState({
       banner: {
         kind: 'push_failed',
@@ -261,7 +216,7 @@ describe('SpeleoBanner retry needs an open edit gate (#270)', () => {
   });
 
   it('still offers Retry once the gate is open again', () => {
-    seedLink({ forceEditing: false, editState: 'editing' });
+    seedLink({ editState: 'editing' });
     useSpeleoStore.setState({
       banner: { kind: 'push_failed', message: 'boom', origin: 'push', pushMessage: 'm' },
     });

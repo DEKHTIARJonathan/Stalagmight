@@ -1,3 +1,4 @@
+import { confirmWorkspaceDrafts } from '../utils/workspaceDrafts';
 import { autoAcquireSpeleoLock, useSpeleoReadOnlyNotice } from '../utils/autoAcquireSpeleoLock';
 import { createSaveProjectAction } from './projectSaveActions';
 import { runDeduplicatedProjectLoad } from '../utils/projectLoadRequests';
@@ -130,7 +131,6 @@ function nextProjectTreeGeneration(): number {
 // must not clobber the newer result (e.g. a manual save's check racing a Repair's
 // check on the same project, where the project-identity guard can't tell them apart).
 let integrityCheckSeq = 0;
-
 
 /**
  * Parsed error from Tauri backend.
@@ -980,6 +980,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const superseded: LoadProjectOutcome = { success: false, superseded: true };
 
     const promise: Promise<LoadProjectOutcome> = runConfirmedProjectSwitch(path, () => get().project?.file_path, opts?.accessConfirmed, async () => {
+      if (!await confirmWorkspaceDrafts()) return { success: false, superseded: false };
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
       // resolution, the Zustand set, the view switch / MapCanvas mount, or
@@ -994,7 +995,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (!beginProjectMutation(request)) return superseded;
       dispatched = true;
 
-      // ALWAYS cancel first - NO isLoading guard
+      if (!await confirmWorkspaceDrafts() || !current()) return emptyCommandResult(false, 'Cancelled');
+    // ALWAYS cancel first - NO isLoading guard
       // cancel_loading is idempotent on backend
       await get().cancelLoading();
       if (!current()) return superseded;
@@ -1041,6 +1043,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           get().setLoadingProgress({ projectName: result.project.name });
         }
 
+        useUIStore.getState().resetLeftWorkspace();
         // Apply ALL state from single response
         const tSetStart = performance.now();
         set({
@@ -1432,6 +1435,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     return runProjectSwitch(async () => {
       try {
         if (!isProjectRequestCurrent(request)) return emptyCommandResult(false, 'Superseded');
+        if (!await confirmWorkspaceDrafts()) return emptyCommandResult(false, 'Cancelled');
+        if (!isProjectRequestCurrent(request)) return emptyCommandResult(false, 'Superseded');
         const result = await invokeIpc<CommandResult>(
           'close_project',
           // Default: release a held SpeleoDB lock so the close doesn't strand it
@@ -1674,7 +1679,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // issue set actually changes. Keeping the issues populated also lets the
   // Review & Repair dialog still open them.
   dismissIntegrityIssues: () => set({ integrityDismissed: true }),
-
 
   openIntegrityDialog: () => set({ integrityDialogOpen: true }),
   closeIntegrityDialog: () => set({ integrityDialogOpen: false }),

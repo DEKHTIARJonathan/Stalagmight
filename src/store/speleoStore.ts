@@ -1,3 +1,5 @@
+import { hasWorkspaceDrafts } from '../utils/workspaceDrafts';
+import { protectAccountTransition } from '../utils/protectAccountTransition';
 import { create } from 'zustand';
 import type {
   DoneResult,
@@ -124,37 +126,12 @@ export interface SpeleoLinkState {
   editState: SpeleoEditState;
   /** Email of the current lock holder (may be us, or another user), if known. */
   lockHolder: string | null;
-  /**
-   * Someone ELSE holds the write lock. Derived once here rather than compared
-   * against our email in every consumer: the backend enforces hold-lock ⟹
-   * edit-enabled, so a read-only project with a holder is held by another - even
-   * when that holder's email (or our own) couldn't be resolved.
-   */
   lockedByOther: boolean;
   hasUnpushedEdits: boolean;
-  /**
-   * [#303] A chain step has moved this copy off the server tip - an Unwind (or a forward
-   * step) is mid-walk. RAW, not combined with `hasUnpushedEdits`: use
-   * {@link isUnwoundNotEdited} for the question the UI actually asks.
-   */
+  /** A history step moved this copy away from the server tip. */
   unwound: boolean;
-  /**
-   * [#213] We are editing this remote project WITHOUT the write lock (force-edit):
-   * `editState === 'editing'` but no lock is held, so the `.stalx` cannot be merged
-   * until we reconnect and acquire the lock. Drives the persistent big-red banner
-   * and routes the status button / lock menu to Reconnect (the existing
-   * `startEditing`) instead of Done. Transient (backend-derived; resets on
-   * open/close/reconnect).
-   */
-  forceEditing: boolean;
   /** [#303] This project's explicit undo-history policy. */
   undoMode: UndoMode;
-  /**
-   * [#213] The `SpeleoDbConfig.allow_force_edit` opt-in (a global preference,
-   * mirrored per-refresh onto the link). Gates whether the read-only "Edit without
-   * lock" affordance appears at all; false hides it and the backend also refuses.
-   */
-  forceEditAllowed: boolean;
   /** The local copy's relationship to the server tip (drives the button, T2c). */
   remoteState: RemoteState;
   /**
@@ -443,7 +420,7 @@ interface SpeleoStore {
   clearPendingAuth: () => void;
   setAuthError: (msg: string | null) => void;
   /** Apply the staged login/logout (A2). ok=false carries the raw error. */
-  applyPendingAuth: (endpoint: string | null) => Promise<{ ok: boolean; error?: unknown }>;
+  applyPendingAuth: (endpoint: string | null) => Promise<{ ok: boolean; error?: unknown; cancelled?: boolean }>;
 
   // --- link/edit (action shell #204) ---
   /**
@@ -726,6 +703,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   applyPendingAuth: async (endpoint) => {
     const p = get().pendingAuth;
     if (!p) return { ok: true };
+    if ((useProjectStore.getState().isDirty || hasWorkspaceDrafts()) && !await protectAccountTransition()) return { ok: false, cancelled: true };
     try {
       if (p.kind === 'logout') {
         try {
@@ -804,8 +782,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           lockedByOther: false,
           hasUnpushedEdits: false,
           unwound: false,
-          forceEditing: false,
-          forceEditAllowed: false,
+
           // [#303] Placeholder until the first status reply supplies the project's
           // explicit value.
           undoMode: 'full',
@@ -1044,15 +1021,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
             editState: 'read-only',
             lockHolder: null,
             lockedByOther: false,
-            // `hasUnpushedEdits` is deliberately CARRIED THROUGH, not zeroed. It is
-            // a fact about the local .stalx - edits that never reached the server -
-            // and losing the token does not upload them. Clearing it here claimed
-            // "nothing outstanding" at the exact moment the work became most
-            // stranded, which disarmed the quit guard and hid the Toolbar's
-            // unpushed-edits warning; the next authenticated refresh re-seeds it.
-            // The backend drops the edit gate (and any force-edit) on a token loss,
-            // so mirror that here or the shell would keep offering Reconnect.
-            forceEditing: false,
+
             // We can no longer verify the server relationship without a token, so
             // report Unknown (what a token-less backend refresh returns) rather than
             // claiming up-to-date; the next refresh re-resolves it.
@@ -1118,10 +1087,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           !emailsMatch(s.lock_holder, state.session?.userEmail),
         hasUnpushedEdits: s.has_unpushed_edits,
         unwound: s.unwound,
-        // #213: force-edit (edit-enabled WITHOUT a held lock) is backend-authoritative
-        // and reported every refresh; a reconnect that acquires the lock clears it there.
-        forceEditing: s.force_editing,
-        forceEditAllowed: s.allow_force_edit,
+
         // [#303] Backend-resolved explicit project policy.
         undoMode: s.undo_mode,
         remoteState: s.remote_state,
@@ -1168,10 +1134,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         hasUnpushedEdits,
         // A fresh pull is at the server tip, so no chain step has walked it anywhere.
         unwound: false,
-        // A fresh pull always opens without the lock and not force-editing;
-        // `seedFromStatus` refines the opt-in + any force-edit on the first refresh.
-        forceEditing: false,
-        forceEditAllowed: false,
+
         undoMode: 'full',
         // A pull just took the server tip, so up-to-date is true by construction -
         // but only for a pull. A seed that already knows the copy holds un-pushed
@@ -1229,32 +1192,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       switch (r.kind) {
         case 'editing':
         case 'fast_forwarded': {
-          // We now hold the lock: not locked-by-other, no remote-ahead/conflict,
-          // no stale banner, and force-edit clears (Reconnect succeeded - #213).
-          // (fast_forwarded also reloads + re-seeds.)
-          //
-          // EXCEPT a push failure (#260/#270). Read-only is exactly how a project
-          // lands in that state - a 401 auto-drop runs `clearSession()`, which
-          // KEEPS the unpushed edits - and from there the failure banner's only
-          // control is "Start editing to retry", which calls this. Clearing the
-          // slot therefore destroyed the very surface that sent the user here, the
-          // moment it succeeded: the Retry control and their typed commit message
-          // went with it, leaving them holding the lock with the edits still only
-          // on this computer and nothing on screen saying so - the durable surface
-          // #260 exists to provide. So the failure survives the gate opening, and
-          // the Retry it carries is now usable.
-          //
-          // A fast-forward is different and still clears: it can only run over a
-          // copy with nothing unpushed (`LocalEditsPolicy::Protect` refuses
-          // otherwise) and it has just replaced the working copy with the server's,
-          // so an older failure no longer describes anything on this machine.
           const keepFailure = r.kind === 'editing' && state.banner?.kind === 'push_failed';
           return {
             link: {
               ...state.link,
               editState: 'editing',
               lockedByOther: false,
-              forceEditing: false,
+
               remoteState: 'up_to_date',
               serverError: null,
             },
@@ -1270,11 +1214,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           return {
             link: {
               ...state.link,
-              // #213: a force-editor who tried to Reconnect and found the lock still
-              // held keeps editing offline (the backend left its gate + force-edit on),
-              // so preserve their editing state - only record the holder. A normal
-              // read-only start downgrades to read-only as before.
-              editState: state.link.forceEditing ? state.link.editState : 'read-only',
+              editState: 'read-only',
               lockHolder: r.email ?? state.link.lockHolder,
               lockedByOther: true,
             },

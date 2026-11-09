@@ -557,6 +557,7 @@ export default function SettingsDialog() {
     if (hasPendingAuth) {
       const kind = pendingAuth?.kind;
       const auth = await applyPendingAuth(localConfig.speleodb.endpoint);
+      if (auth.cancelled) return false;
       if (!auth.ok) {
         setAuthError(
           humanizeSpeleoError(auth.error, kind === 'login' ? t('speleodb.errors.loginFailed') : undefined),

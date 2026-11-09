@@ -140,3 +140,12 @@ and docks over the freshly loaded ones. `uiStore.planDocks.test.ts` pins it.
   `e2e-playwright/mocks/tauri-ipc.ts` (unknown commands fall through to a warning
   and `null`, which the UI reads as failure), and the mock must initialize any
   store state your new gate reads, or the control is silently dead in every spec.
+
+## Left project workspace
+
+Sections remains Survey-only. Linked projects expose SpeleoDB navigation in every
+mode through the full toolbar button. Plan/Export keep the left dock hidden until
+requested unless SpeleoDB was selected before leaving Survey. Returning restores
+the Survey tab. Synchronization and account navigation remain accessible in every
+mode; survey and revision editing stay Survey-only. Hidden tab bodies retain their
+state, and tab navigation does not acquire or release a lock.

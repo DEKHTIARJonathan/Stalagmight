@@ -4,28 +4,9 @@ import { useSpeleoStore } from '../../../store/speleoStore';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
 import type { UndoMode } from '../../../types/ipc.generated';
 
-/**
- * [#303] The open SpeleoDB project's undo-history policy: Full (each revision stores the
- * operations that produced it, so undo chains back through the project's history) or
- * Disabled (undo works locally but is stripped before every push).
- *
- * It lives in this dialog rather than in the application Settings because it is a
- * PROJECT setting: the value is written into the `.stalx` and rides to the server on the
- * next push, so it becomes the policy for everyone who edits the project. That is also
- * why it needs an edit session - the same gate every other edit to the project file goes
- * through, including force editing - and why the control says so instead of just being
- * greyed out.
- *
- * The panel around it edits SERVER-side metadata; this one field does not, which the
- * copy is explicit about. It is here anyway because this is the dialog a user opens to
- * ask "how is this project set up".
- */
 export function SpeleoUndoModeControl() {
   const { t } = useTranslation();
   const mode = useSpeleoStore((s) => s.link?.undoMode ?? 'full');
-  // Force editing deliberately uses the same edit gate as ordinary commands. It carries
-  // conflict risk by design, but the user already accepted that responsibility when they
-  // entered the mode, so this project-file setting remains available there too.
   const canEdit = useSpeleoStore((s) => s.link?.editState === 'editing');
   const setUndoMode = useSpeleoStore((s) => s.setUndoMode);
 

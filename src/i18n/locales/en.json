@@ -666,7 +666,6 @@
         "aria": "Allow insecure HTTP endpoints",
         "warning": "Allowing plain HTTP to a public address sends your token unencrypted. Only enable this for a trusted local server."
       },
-
       "account": {
         "appliesOnSave": "Sign in and sign out apply when you press Save.",
         "signedInAs": "Signed in as {{email}}",
@@ -682,12 +681,6 @@
         "useToken": "Paste an existing token instead of a password",
         "tryLogin": "Log in now",
         "tryingLogin": "Logging in…"
-      },
-      "allowForceEdit": {
-        "label": "Allow editing without the write lock",
-        "help": "Adds an \"Edit without the write lock\" option for remote projects, so you can survey offline or while someone else holds it.",
-        "aria": "Allow editing SpeleoDB projects without the write lock",
-        "warning": "Changes made without the write lock cannot be merged to SpeleoDB until you reconnect and acquire it. If someone else edits meanwhile you may have to reconcile or keep your work as a separate local file."
       },
       "credentials": {
         "fileStorage": "SpeleoDB settings and your API token are saved in speleodb/speleodb.conf in the app configuration folder. The token is stored as plaintext."
@@ -762,22 +755,22 @@
       "placementSuggestion": {
         "azimuthWeight": {
           "label": "Azimuth weight",
-          "help": "Weight for azimuth score component (0\u20131)",
+          "help": "Weight for azimuth score component (0-1)",
           "aria": "Azimuth weight"
         },
         "lengthWeight": {
           "label": "Length weight",
-          "help": "Weight for length score component (0\u20131)",
+          "help": "Weight for length score component (0-1)",
           "aria": "Length weight"
         },
         "depthInWeight": {
           "label": "Depth in weight",
-          "help": "Weight for depth-in score component (0\u20131)",
+          "help": "Weight for depth-in score component (0-1)",
           "aria": "Depth in weight"
         },
         "depthOutWeight": {
           "label": "Depth out weight",
-          "help": "Weight for depth-out score component (0\u20131)",
+          "help": "Weight for depth-out score component (0-1)",
           "aria": "Depth out weight"
         },
         "azimuthSigma": {
@@ -797,17 +790,17 @@
         },
         "minShotScore": {
           "label": "Min shot score",
-          "help": "Minimum per-shot score to continue matching (0\u20131)",
+          "help": "Minimum per-shot score to continue matching (0-1)",
           "aria": "Minimum shot score"
         },
         "minAggregateScore": {
           "label": "Min aggregate score",
-          "help": "Minimum aggregate score to include a suggestion (0\u20131)",
+          "help": "Minimum aggregate score to include a suggestion (0-1)",
           "aria": "Minimum aggregate score"
         },
         "singleShotPenalty": {
           "label": "Single shot penalty",
-          "help": "Penalty multiplier for single-shot matches (0\u20131)",
+          "help": "Penalty multiplier for single-shot matches (0-1)",
           "aria": "Single shot penalty"
         },
         "maxAzimuthErrorFull": {
@@ -827,7 +820,7 @@
         },
         "maxLengthErrorFraction": {
           "label": "Max length error fraction",
-          "help": "Length error fraction for dynamic cutoff (0\u20131)",
+          "help": "Length error fraction for dynamic cutoff (0-1)",
           "aria": "Max length error fraction"
         },
         "maxLengthErrorFloor": {
@@ -837,17 +830,17 @@
         },
         "maxReferenceShots": {
           "label": "Max reference shots",
-          "help": "Maximum number of reference shots to try from each leaf (1\u201350)",
+          "help": "Maximum number of reference shots to try from each leaf (1-50)",
           "aria": "Max reference shots"
         },
         "maxSuggestions": {
           "label": "Max suggestions",
-          "help": "Maximum number of suggestions to return (1\u2013100)",
+          "help": "Maximum number of suggestions to return (1-100)",
           "aria": "Max suggestions"
         },
         "minPartialRatio": {
           "label": "Min partial ratio",
-          "help": "Minimum partial shot length ratio (0\u20131)",
+          "help": "Minimum partial shot length ratio (0-1)",
           "aria": "Min partial ratio"
         },
         "shortShotThreshold": {
@@ -3195,8 +3188,6 @@
       "editingUnwound": "Viewing an older survey version - open SpeleoDB menu",
       "editingDirty": "Editing - changes have not been uploaded. Open SpeleoDB menu.",
       "editingClean": "Editing - open SpeleoDB menu",
-      "forceEditing": "Editing without the lock - open SpeleoDB menu to reconnect",
-      "forceEditingLockedBy": "Editing without the lock (held by {{email}}) - open SpeleoDB menu",
       "lockedByOther": "Read-only - {{email}} is editing this project. Open SpeleoDB menu.",
       "remoteAhead": "SpeleoDB has newer changes - open SpeleoDB menu",
       "conflict": "Local and remote changes need review - open SpeleoDB menu",
@@ -3215,8 +3206,7 @@
       "unlock": "Release editing lock",
       "push": "Upload changes",
       "refresh": "Refresh from SpeleoDB",
-      "discardChanges": "Discard changes…",
-      "editWithoutLock": "Edit without the write lock…"
+      "discardChanges": "Discard changes…"
     },
     "close": {
       "title": "Close SpeleoDB project",
@@ -3286,25 +3276,6 @@
       "saveFailedTitle": "Save Failed",
       "saveFailedMessage": "Failed to save project"
     },
-    "forceEdit": {
-      "reconnect": "Reconnect to sync",
-      "confirm": {
-        "title": "Edit without the write lock?",
-        "warning": "You are about to edit WITHOUT the SpeleoDB write lock. Your changes stay only on this computer and cannot be merged back to SpeleoDB until you reconnect and acquire it.",
-        "hint": "If someone else edits meanwhile, reconnecting may report a conflict - you would then reconcile, or save your work as an unmanaged local copy. Use this to survey offline or while another person holds the write lock.",
-        "lockedBy": "{{email}} currently holds the write lock, so their work is what a later reconnect will reconcile against.",
-        "action": "Edit without the write lock",
-        "entering": "Enabling…"
-      },
-      "banner": {
-        "text": "Editing WITHOUT the write lock - these changes cannot be merged to SpeleoDB until you reconnect and acquire it.",
-        "lockedBy": "Editing WITHOUT the write lock ({{email}} holds it) - reconnect to acquire it and reconcile before your work can be merged."
-      },
-      "toasts": {
-        "active": "Editing without the write lock. Reconnect to sync when you're ready.",
-        "failed": "Could not start editing without the write lock"
-      }
-    },
     "revisions": {
       "title": "Revision history",
       "loading": "Loading revisions…",
@@ -3317,7 +3288,6 @@
       "viewing": "Viewing…",
       "restoreHint": "Restoring replaces the working copy with the selected revision as an unsaved edit; push to make it the project's latest. Your project history is not rewritten.",
       "lockToRestore": "The project is read-only. View opens a revision for inspection (the SpeleoDB Update returns you to the latest). Revert takes the write lock, uploads the chosen revision as a new revision, and releases it again.",
-      "forceEditActive": "You are force-editing without the write lock. Finish or discard those edits (reconnect or save a local copy) before you can view or restore a revision.",
       "unknownAuthor": "unknown author",
       "viewBlockedByUnpushed": "This copy has changes that are not on SpeleoDB. Viewing a revision replaces the working copy, so it would discard them - take the write lock and upload your changes first, or use Revert (that route asks before replacing them)."
     },

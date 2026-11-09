@@ -12,12 +12,15 @@ export interface PanelReveal {
   /** Attach to the bar, the tab, and the floating panel: together they form one
    *  hover region, so moving between them keeps a hover-revealed panel open. */
   onRegionEnter: () => void;
+  onRegionFocus: () => void;
+  onRegionBlur: () => void;
   onRegionLeave: () => void;
   /** Schedule a close after `ms` (cancelled by onRegionEnter). Used to give a
    *  longer grace after a resize so the user can move back over the panel. */
   scheduleClose: (ms?: number) => void;
   /** Click the closed bar/tab: pin mode opens pinned; hover mode reveals it. */
   openClick: () => void;
+  revealTemporarily: () => void;
   /** Pin the panel open (hover → pin). */
   pin: () => void;
   /** Un-pin to hover mode; stays visible while the pointer remains over it. */
@@ -48,6 +51,10 @@ export function usePanelReveal(panel: PanelId, opts: PanelRevealOpts = {}): Pane
   const setPanelOpen = useUIStore((s) => s.setPanelOpen);
 
   const [hovering, setHovering] = useState(false);
+  const [programmatic, setProgrammatic] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const onRegionFocus = useCallback(() => setFocused(true), []);
+  const onRegionBlur = useCallback(() => setFocused(false), []);
   const graceRef = useRef<number | null>(null);
   const graceDeadlineRef = useRef(0);
 
@@ -70,11 +77,11 @@ export function usePanelReveal(panel: PanelId, opts: PanelRevealOpts = {}): Pane
   // clearing `hovering` on its (still 'pin') persisted mode would snap a panel the
   // user just floated open shut again.
   useEffect(() => {
-    if (mode === 'pin' && !forcedClosed) {
+    if (mode === 'pin' && !forcedClosed && !programmatic) {
       setHovering(false);
       clearGrace();
     }
-  }, [mode, forcedClosed, clearGrace]);
+  }, [mode, forcedClosed, programmatic, clearGrace]);
 
   // Programmatic reveal (e.g. "jump to this warning" from the data table) is
   // driven by the one panel that needs it (Details) via onRegionEnter +
@@ -99,9 +106,10 @@ export function usePanelReveal(panel: PanelId, opts: PanelRevealOpts = {}): Pane
         graceRef.current = null;
         graceDeadlineRef.current = 0;
         setHovering(false);
+        if (!focused) setProgrammatic(false);
       }, ms);
     },
-    [clearGrace],
+    [clearGrace, focused],
   );
 
   const onRegionLeave = useCallback(() => scheduleClose(), [scheduleClose]);
@@ -109,7 +117,8 @@ export function usePanelReveal(panel: PanelId, opts: PanelRevealOpts = {}): Pane
   // A force-closed panel never reflows the map (that is the whole point), but it
   // can still be floated over it - so it reads as hover mode for both booleans.
   const isPinnedOpen = mode === 'pin' && open && !forcedClosed;
-  const isFloatingOpen = (mode === 'hover' || forcedClosed) && hovering;
+  const isFloatingOpen = ((mode === 'hover' || forcedClosed) || (programmatic && !isPinnedOpen)) && (hovering || focused);
+  const revealTemporarily = useCallback(() => { clearGrace(); setProgrammatic(true); setHovering(true); }, [clearGrace]);
   const isOpen = isPinnedOpen || isFloatingOpen;
 
   const openClick = useCallback(() => {
@@ -137,6 +146,8 @@ export function usePanelReveal(panel: PanelId, opts: PanelRevealOpts = {}): Pane
 
   const close = useCallback(() => {
     setPanelOpen(panel, false);
+    setProgrammatic(false);
+    setFocused(false);
     clearGrace();
     setHovering(false);
   }, [panel, setPanelOpen, clearGrace]);
@@ -152,13 +163,16 @@ export function usePanelReveal(panel: PanelId, opts: PanelRevealOpts = {}): Pane
       isFloatingOpen,
       isOpen,
       onRegionEnter,
+      onRegionFocus,
+      onRegionBlur,
       onRegionLeave,
       scheduleClose,
       openClick,
+      revealTemporarily,
       pin,
       unpin,
       close,
     }),
-    [isPinnedOpen, isFloatingOpen, isOpen, onRegionEnter, onRegionLeave, scheduleClose, openClick, pin, unpin, close],
+    [isPinnedOpen, isFloatingOpen, isOpen, onRegionFocus, onRegionBlur, onRegionEnter, onRegionLeave, scheduleClose, openClick, revealTemporarily, pin, unpin, close],
   );
 }

@@ -90,7 +90,6 @@ export const TOAST_KEYS = {
   SPELEODB_ACTION_ERROR: 'speleodb-action-error',
   SPELEODB_EDITING: 'speleodb-editing',
   SPELEODB_LOCKED_BY: 'speleodb-locked-by',
-  SPELEODB_FORCE_EDIT: 'speleodb-force-edit',
   SPELEODB_UP_TO_DATE: 'speleodb-up-to-date',
   SPELEODB_PUSHED: 'speleodb-pushed',
   SPELEODB_NOT_EDITING: 'speleodb-not-editing',

@@ -20,7 +20,7 @@ import type {
  * read-only until Start editing - #204). Replaces the dev spike's list half;
  * login now lives in Settings (#205), so this dialog only browses + opens.
  */
-export default function OpenFromSpeleoDbDialog() {
+export default function OpenFromSpeleoDbDialog({ embedded = false }: { embedded?: boolean } = {}) {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const openDialog = useUIStore((s) => s.openDialog);
@@ -32,9 +32,10 @@ export default function OpenFromSpeleoDbDialog() {
   // `cancelReturnsTo`: the refused-open prompt the hook may raise REPLACES this
   // browser in the single `activeDialog` slot, so its Cancel must hand the user back
   // here - otherwise cancelling leaves nothing open and nothing opened (#270).
+  const sessionGeneration = useSpeleoStore((s) => s.sessionGeneration);
   const { openRemote } = useOpenRemoteProject({
     onBeforeLoad: closeDialog,
-    cancelReturnsTo: 'open-from-speleodb',
+    cancelReturnsTo: embedded ? 'speleodb-projects' : 'open-from-speleodb',
   });
 
   // Start in 'checking' so the session probe settles before the first paint
@@ -50,7 +51,7 @@ export default function OpenFromSpeleoDbDialog() {
 
   const refreshProjects = async (isCancelled: () => boolean = () => false) => {
     const list = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
-    if (!isCancelled()) {
+    if (!isCancelled() && useSpeleoStore.getState().sessionGeneration === sessionGeneration) {
       setProjects(list);
       setListFailed(false);
     }
@@ -101,7 +102,7 @@ export default function OpenFromSpeleoDbDialog() {
     return () => {
       cancelled = true;
     };
-  }, [setSession, clearSession, t]);
+  }, [setSession, clearSession, t, sessionGeneration]);
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -115,6 +116,7 @@ export default function OpenFromSpeleoDbDialog() {
     try {
       await refreshProjects();
     } catch (e) {
+      if (useSpeleoStore.getState().sessionGeneration !== sessionGeneration) return;
       setListFailed(true);
       if (speleoErrorAction(e) === 'ReLogin') {
         clearSession();
@@ -143,6 +145,7 @@ export default function OpenFromSpeleoDbDialog() {
     setBusy(true);
     setError(null);
     const outcome = await openRemote(project);
+    if (useSpeleoStore.getState().sessionGeneration !== sessionGeneration) return;
     if (outcome.status === 'cancelled') {
       setBusy(false);
     } else if (outcome.status === 'unpushed_local') {
@@ -155,16 +158,9 @@ export default function OpenFromSpeleoDbDialog() {
     }
   };
 
-  const goToLogin = () => openDialog('settings', { initialCategory: 'speleodb' });
+  const goToLogin = () => embedded ? useUIStore.getState().openSpeleoWorkspace('account') : openDialog('settings', { initialCategory: 'speleodb' });
 
-  return (
-    <>
-    <DialogWrapper
-      title={t('speleodb.browser.title')}
-      onClose={closeDialog}
-      size="lg"
-      data-testid="open-from-speleodb-dialog"
-    >
+  const content = (
       <div className="space-y-4">
         {error && (
           <div
@@ -260,16 +256,18 @@ export default function OpenFromSpeleoDbDialog() {
                 <Button onClick={() => void handleRefresh()} disabled={busy} aria-busy={busy} icon={busy ? <LoadingSpinner testId="open-from-speleodb-refresh-spinner" /> : undefined} data-testid="open-from-speleodb-refresh">
                   {t('speleodb.browser.refresh')}
                 </Button>
-                <Button onClick={closeDialog} disabled={busy} data-testid="open-from-speleodb-close">
-                  {t('common.actions.close')}
+                <Button onClick={embedded ? () => openDialog('new-project') : closeDialog} disabled={busy} data-testid="open-from-speleodb-close">
+                  {embedded ? t('common.actions.new') : t('common.actions.close')}
                 </Button>
               </div>
             </div>
           </>
         )}
       </div>
+  );
+  return embedded ? content : (
+    <DialogWrapper title={t('speleodb.browser.title')} onClose={closeDialog} size="lg" data-testid="open-from-speleodb-dialog">
+      {content}
     </DialogWrapper>
-
-    </>
   );
 }

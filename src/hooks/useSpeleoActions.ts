@@ -47,14 +47,6 @@ export interface SpeleoActions {
   discardChanges: (
     keepLock: boolean,
   ) => Promise<'editing' | 'released' | 'discarded_without_lock' | 'stale'>;
-  /** #213 (E2): enter optimistic force-edit - edit WITHOUT the write lock (offline,
-      or while someone else holds it). Gated on the `allow_force_edit` opt-in (the
-      backend refuses otherwise) and behind a big-red destructive confirm; the caller
-      must gate this on that confirm. Re-seeds the link (→ editing + `forceEditing`).
-      Returns `true` only on success so the confirm dialog closes on success and stays
-      open (error toast shown) on a backend refusal, rather than dismissing as if it
-      worked. */
-  forceEdit: () => Promise<boolean>;
   update: () => Promise<void>;
   /** Push edits without releasing the lock (T2d); uploading UI requires a message.
       Returns the backend outcome (or `null` if the call threw) so callers can keep
@@ -258,27 +250,6 @@ export function useSpeleoActions(): SpeleoActions {
     },
     [routeStartEditingResult, beginBusy, endBusy],
   );
-
-  const forceEdit = useCallback(async (): Promise<boolean> => {
-    const busyToken = beginBusy();
-    try {
-      // No result payload: the backend flips the edit gate + force-edit flag.
-      // Re-seed the link so `editState → editing` and `forceEditing → true` drive
-      // the read-only badge off and the big-red banner on.
-      await invokeIpc<null>('speleodb_force_edit');
-      await refreshLinkStatus();
-      showToast(t('speleodb.forceEdit.toasts.active'), TOAST_KEYS.SPELEODB_FORCE_EDIT, 'warning');
-      return true;
-    } catch (e) {
-      // Backend refusal (opt-in off / link lost / already lock-held): surface the
-      // toast and report failure so the confirm dialog stays open instead of
-      // dismissing as if force-edit engaged.
-      handleError(e, 'speleodb.forceEdit.toasts.failed');
-      return false;
-    } finally {
-      endBusy(busyToken);
-    }
-  }, [refreshLinkStatus, showToast, t, handleError, beginBusy, endBusy]);
 
   const update = useCallback(async () => {
     const issuedFor = speleoProjectSessionIssuedFor(
@@ -549,5 +520,5 @@ export function useSpeleoActions(): SpeleoActions {
     }
   }, [loadProject, showToast, t, handleError, beginBusy, endBusy]);
 
-  return { busy, startEditing, discardChanges, forceEdit, update, push, done, takeRemote };
+  return { busy, startEditing, discardChanges, update, push, done, takeRemote };
 }

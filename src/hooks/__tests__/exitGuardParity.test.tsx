@@ -51,8 +51,7 @@ const link = (o: Partial<SpeleoLinkState>): SpeleoLinkState => ({
   lockedByOther: false,
   hasUnpushedEdits: false,
   unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
+
   undoMode: 'full',
   remoteState: 'up_to_date',
   noAccess: false,
@@ -156,7 +155,7 @@ describe('all four exits agree on unsaved changes', () => {
     { editState: 'editing' as const, hasUnpushedEdits: false },
     { editState: 'read-only' as const, hasUnpushedEdits: true },
     { editState: 'read-only' as const, hasUnpushedEdits: false },
-    { editState: 'editing' as const, forceEditing: true, hasUnpushedEdits: true },
+    { editState: 'editing' as const, hasUnpushedEdits: true },
   ])('saved work never prompts: %j', async (state) => {
     useSpeleoStore.setState({ link: link(state) });
     expect(await allExits()).toEqual({ quit: false, close: false, open: false, new: false });

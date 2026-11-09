@@ -1,3 +1,4 @@
+import { autoAcquireSpeleoLock } from '../../utils/autoAcquireSpeleoLock';
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DialogWrapper } from './DialogWrapper';
@@ -71,6 +72,8 @@ export default function PublishToSpeleoDbDialog() {
 
   const handlePublish = useCallback(async () => {
     if (!canPublish) return;
+    const issuedProject = useProjectStore.getState().project;
+    const session = useSpeleoStore.getState().sessionGeneration;
     setPublishing(true);
     // Both-or-neither: only send numbers when both are present and valid.
     const bothCoords = latTrim !== '' && lonTrim !== '';
@@ -85,6 +88,7 @@ export default function PublishToSpeleoDbDialog() {
     };
     try {
       const result = await invokeIpc<SpeleoPublishResult>('speleodb_publish', { params });
+      if (useSpeleoStore.getState().sessionGeneration !== session || useProjectStore.getState().project !== issuedProject) return;
       // The project now EXISTS on the server and is linked. Reload its cache copy so the
       // app converges on the now-remote project. loadProject reports failure via
       // {success:false} (it never throws - it may have opened a recovery dialog), so a
@@ -98,6 +102,13 @@ export default function PublishToSpeleoDbDialog() {
         );
         return;
       }
+      if (useSpeleoStore.getState().sessionGeneration !== session) return;
+      const project = useProjectStore.getState().project;
+      if (!project || (project !== issuedProject && project.file_path !== result.local_path)) return;
+      // Publishing relocates the live backend file before loadProject, which may
+      // answer ALREADY_OPEN. Reconcile that relocation in the frontend as well.
+      useProjectStore.setState({ project: { ...project, file_path: result.local_path } });
+      useSpeleoStore.getState().syncProjectLink(true, result.local_path);
       // UI-convergence only: a failure refreshing the link status must NOT flip a
       // succeeded publish into the error path (the link is already stamped on the
       // reloaded project), so swallow it.
@@ -106,7 +117,12 @@ export default function PublishToSpeleoDbDialog() {
       } catch {
         // non-fatal; leave the status to the next refresh.
       }
-      closeDialog();
+      if (useSpeleoStore.getState().sessionGeneration !== session) return;
+      await autoAcquireSpeleoLock(result.local_path, () =>
+        useSpeleoStore.getState().sessionGeneration === session &&
+        useProjectStore.getState().project?.file_path === result.local_path);
+      if (useSpeleoStore.getState().sessionGeneration === session &&
+          useProjectStore.getState().project?.file_path === result.local_path) closeDialog();
     } catch (e) {
       showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
       if (speleoErrorAction(e) === 'ReLogin') {

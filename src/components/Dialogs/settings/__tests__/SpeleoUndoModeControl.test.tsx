@@ -21,7 +21,6 @@ import type { UndoMode } from '../../../../types/ipc.generated';
 const seed = (opts: {
   editing: boolean;
   undoMode?: UndoMode;
-  forceEditing?: boolean;
 }) =>
   useSpeleoStore.setState({
     projectLinkKind: 'remote',
@@ -32,8 +31,7 @@ const seed = (opts: {
       lockedByOther: false,
       hasUnpushedEdits: false,
       unwound: false,
-      forceEditing: opts.forceEditing ?? false,
-      forceEditAllowed: false,
+
       undoMode: opts.undoMode ?? 'full',
       remoteState: 'up_to_date',
       noAccess: false,
@@ -80,21 +78,6 @@ describe('SpeleoUndoModeControl (#303)', () => {
     // The reason is VISIBLE: a greyed control with no explanation reads as a bug, and
     // this one is gated for a reason the user can act on (start editing).
     expect(screen.getByTestId('speleodb-undo-mode-lock-hint')).toBeInTheDocument();
-  });
-
-  it('stays enabled for a force-editor who accepted conflict responsibility', async () => {
-    seed({ editing: true, forceEditing: true });
-    render(<SpeleoUndoModeControl />);
-
-    expect(screen.getByTestId('speleodb-undo-mode-disabled-input')).toBeEnabled();
-    expect(screen.queryByTestId('speleodb-undo-mode-lock-hint')).not.toBeInTheDocument();
-
-    await userEvent.click(screen.getByTestId('speleodb-undo-mode-disabled-input'));
-    await waitFor(() =>
-      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_set_undo_mode', {
-        mode: 'disabled',
-      }),
-    );
   });
 
   it('surfaces a refusal inline instead of throwing it away', async () => {

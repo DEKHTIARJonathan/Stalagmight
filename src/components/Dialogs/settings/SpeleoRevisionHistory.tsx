@@ -31,37 +31,11 @@ function formatWhen(iso: string | null): string {
   });
 }
 
-/**
- * [#218] Read-only revision history for the open remote project - the History tab
- * of the SpeleoDB project dialog. Fetches
- * `speleodb_get_revisions` on mount and lists the server-ordered (newest-first)
- * commit chain: short SHA, author, date, message, a merge marker for >1 parent.
- *
- * Each PAST revision offers actions keyed on the edit state:
- * - **Restore** (genuine lock held): a git-forward restore that pulls the revision
- *   into the working copy as an unsaved, pushable edit (via a confirm dialog carrying
- *   the disclaimer + unsaved-changes safeguard).
- * - **View** (read-only): a non-destructive peek - it checks the revision out
- *   read-only, and the SpeleoDB Update action fast-forwards back to the latest.
- * - **Revert** (read-only, upload rights): the whole round trip - take the lock,
- *   check the revision out, upload it, release the lock - so a user who never held
- *   the lock can undo a bad revision and end read-only exactly as they started.
- * - **Neither** (force-editing, i.e. editing WITHOUT the lock): a revision swap would
- *   clobber the unsaved lock-less edits, so the backend refuses both and a hint asks
- *   the user to finish or discard the force-edit session first.
- *
- * The newest commit is the current server state and is marked, not actionable.
- */
 export function SpeleoRevisionHistory() {
   const { t } = useTranslation();
   const openDialog = useUIStore((s) => s.openDialog);
   const showToast = useUIStore((s) => s.showToast);
   const projectId = useSpeleoStore((s) => s.remoteProjectId);
-  const isForceEditing = useSpeleoStore((s) => s.link?.forceEditing ?? false);
-  // A genuine lock-held session (NOT force-editing, which holds no lock) may Restore;
-  // a plain read-only session may View. A force-editor gets neither: swapping the tree
-  // would clobber their unsaved, lock-less edits, so the backend refuses both and the
-  // UI offers no action. Shared predicate - see `holdsWriteLock`.
   const iHoldLock = useSpeleoStore((s) => holdsWriteLock(s.link));
   // A View is read-only in INTENT, but not in effect: the backend swaps the working
   // copy to the chosen revision, so it runs the same un-pushed-edits guard a Restore
@@ -72,13 +46,15 @@ export function SpeleoRevisionHistory() {
   // the user asked to be a peek, with nothing said about how to get out of it.
   // Named up front instead, with the way through (see the hint below).
   const hasUnpushedEdits = useSpeleoStore((s) => s.link?.hasUnpushedEdits ?? false);
-  const viewBlocked = !iHoldLock && !isForceEditing && hasUnpushedEdits;
+  const viewBlocked = !iHoldLock && hasUnpushedEdits;
   // Revert takes the lock, uploads the chosen revision and releases again, so it needs
   // upload rights. A `null` permission is "not known" (offline), not "none" - treat it
   // as potentially editable and let the backend gate decide, the same way the status
   // button does, rather than hiding the only route a read-only user has.
   const permission = useSpeleoStore((s) => s.link?.permission ?? null);
-  const canRevert = permission === null || permissionAtLeast(permission, 'READ_AND_WRITE');
+  const survey = useUIStore((s) => s.appMode === 'survey');
+  const generation = useSpeleoStore((s) => s.sessionGeneration);
+  const canRevert = survey && permissionAtLeast(permission, 'READ_AND_WRITE');
   const projectName = useProjectStore((s) => s.project?.name ?? '');
   const restoreRevision = useRestoreRevision();
   const web = useSpeleoWebLink('revisions');
@@ -104,7 +80,7 @@ export function SpeleoRevisionHistory() {
     return () => {
       cancelled = true;
     };
-  }, [projectId, t]);
+  }, [projectId, generation, t]);
 
   // Read-only View of a past revision (no lock): check it out for inspection; the
   // SpeleoDB Update then fast-forwards back to the latest. Errors toast (there is no
@@ -160,11 +136,7 @@ export function SpeleoRevisionHistory() {
       </div>
       <div className="mb-2 space-y-1" data-testid="speleodb-revisions-hint">
         <p className="text-xs text-text-secondary">{t('speleodb.revisions.restoreHint')}</p>
-        {isForceEditing ? (
-          <p className="text-xs text-warning" data-testid="speleodb-revisions-forceedit-hint">
-            {t('speleodb.revisions.forceEditActive')}
-          </p>
-        ) : viewBlocked ? (
+        {viewBlocked ? (
           // Says WHY View is gone and WHAT clears it, because the block is not
           // permanent: locking the project for editing and uploading the changes
           // resolves it, and Revert stays on offer here precisely because it carries
@@ -243,7 +215,7 @@ export function SpeleoRevisionHistory() {
                     </p>
                   )}
                 </div>
-                {!isCurrent && iHoldLock && (
+                {!isCurrent && iHoldLock && survey && (
                   <Button
                     variant="secondary"
                     size="sm"
@@ -261,7 +233,7 @@ export function SpeleoRevisionHistory() {
                     {t('speleodb.revisions.restore')}
                   </Button>
                 )}
-                {!isCurrent && !iHoldLock && !isForceEditing && !viewBlocked && (
+                {!isCurrent && !iHoldLock && !viewBlocked && (
                   <Button
                     variant="secondary"
                     size="sm"
@@ -279,7 +251,7 @@ export function SpeleoRevisionHistory() {
                     to show no buttons at all, and Revert is the one route out of it -
                     it takes the lock for the user, with the armed discard as the
                     explicit consent for replacing their un-pushed work. */}
-                {!isCurrent && !iHoldLock && !isForceEditing && canRevert && (
+                {!isCurrent && !iHoldLock && canRevert && (
                   <Button
                     variant="secondary"
                     size="sm"

@@ -1,10 +1,9 @@
+import { dispatchProjectSave } from '../utils/dispatchProjectSave';
 import { useCallback } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { useShallow } from 'zustand/react/shallow';
-import { getErrorMessage } from '../utils/ipc';
-import { surfaceSaveFailure } from '../utils/saveFeedback';
 import {
   ensureExtension,
   exportSaveFilters,
@@ -28,7 +27,6 @@ export function useProject() {
   // depend on them - rebuilding the AppMenu items array + icon JSX on every tick.
   // Store ACTIONS have stable identities in zustand, so the handlers built from
   // them stay stable; the data fields re-render only when they actually change.
-  const saveProject = useProjectStore((s) => s.saveProject);
   const closeProject = useProjectStore((s) => s.closeProject);
   const exportCsv = useProjectStore((s) => s.exportCsv);
   const exportJson = useProjectStore((s) => s.exportJson);
@@ -54,40 +52,7 @@ export function useProject() {
     [],
   );
 
-  const handleSaveProject = useCallback(async (opts?: { closeAfterSave?: boolean }) => {
-    const link = useSpeleoStore.getState().link;
-    if (link?.editState === 'editing' && !link.forceEditing) {
-      if (opts?.closeAfterSave) {
-        openDialog('speleodb-close');
-      } else {
-        openDialog('speleodb-done', { mode: 'push' });
-      }
-      return;
-    }
-    // An untitled project goes through Save As, which surfaces its own failures
-    // (saveProjectAs guards on !success). Surfacing again here would double-report
-    // - the second openDialog('error') is treated as dialog-chaining. So only the
-    // direct save-to-existing-path branch surfaces.
-    if (!useProjectStore.getState().project?.file_path) {
-      return handleSaveProjectAs(opts);
-    }
-    try {
-      const result = await saveProject();
-      if (result && !result.success) {
-        surfaceSaveFailure(result.error, openDialog);
-      }
-      return result;
-    } catch (e) {
-      // store.saveProject rejects only on an IPC-transport failure (real save
-      // failures resolve as CommandResult{success:false}, handled above). Surface
-      // it here rather than letting it escape as an unhandled rejection - callers
-      // like the save-status retry and the menu Save invoke this without awaiting
-      // or catching (`void onSave()` / `() => onSave()`).
-      const message = getErrorMessage(e, 'Failed to save');
-      surfaceSaveFailure(message, openDialog);
-      return { success: false, error: message };
-    }
-  }, [saveProject, handleSaveProjectAs, openDialog]);
+  const handleSaveProject = dispatchProjectSave;
 
   const handleCloseProject = useCallback(async () => {
     // Saved local work is safe to leave. Only unsaved changes need confirmation;

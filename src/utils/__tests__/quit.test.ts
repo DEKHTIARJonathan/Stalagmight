@@ -44,8 +44,7 @@ const link = (o: Partial<SpeleoLinkState> = {}): SpeleoLinkState => ({
   lockedByOther: false,
   hasUnpushedEdits: true,
   unwound: false,
-  forceEditing: false,
-  forceEditAllowed: false,
+
   undoMode: 'full',
   remoteState: 'up_to_date',
   noAccess: false,
@@ -117,7 +116,7 @@ describe('guardQuit', () => {
   });
 
   it.each([
-    {}, { hasUnpushedEdits: false }, { forceEditing: true }, { editState: 'read-only' as const },
+    {}, { hasUnpushedEdits: false }, { }, { editState: 'read-only' as const },
   ])('does not prompt for saved work or a held lock: %j', (state) => {
     useSpeleoStore.setState({ link: link(state) });
     expect(guardQuit()).toBe(false);
@@ -130,16 +129,6 @@ describe('guardQuit', () => {
     });
     expect(guardQuit()).toBe(false);
     expect(openDialog).not.toHaveBeenCalled();
-  });
-
-  it('uses the SpeleoDB prompt (not the disk one) when a force-edit session is also disk-dirty', () => {
-    // The SpeleoDB prompt subsumes the disk one - it carries its own "save
-    // locally" checkbox - so it must be the one that runs, or "Discard & Quit"
-    // would walk straight past the unpushed edits.
-    useProjectStore.setState({ isDirty: true });
-    useSpeleoStore.setState({ link: link({ forceEditing: true }) });
-    expect(guardQuit()).toBe(true);
-    expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
   });
 
   // Composition: BOTH dirty. The SpeleoDB prompt runs first because it is the only

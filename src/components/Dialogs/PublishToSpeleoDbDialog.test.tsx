@@ -1,3 +1,5 @@
+import { autoAcquireSpeleoLock } from '../../utils/autoAcquireSpeleoLock';
+vi.mock('../../utils/autoAcquireSpeleoLock', () => ({ autoAcquireSpeleoLock: vi.fn(async () => {}) }));
 /**
  * Component test (#207) - the Create-on-SpeleoDB Publish dialog.
  *
@@ -121,6 +123,8 @@ describe('PublishToSpeleoDbDialog', () => {
     // Reloaded the now-remote project and closed on success.
     await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1/project.stalx'));
     await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
+    expect(useProjectStore.getState().project?.file_path).toBe('/cache/p1/project.stalx');
+    expect(autoAcquireSpeleoLock).toHaveBeenCalledWith('/cache/p1/project.stalx', expect.any(Function));
   });
 
   it('does NOT close or claim success when the reopen fails', async () => {

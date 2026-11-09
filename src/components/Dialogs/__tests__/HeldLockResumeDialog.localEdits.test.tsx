@@ -187,7 +187,7 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
 
   it.each([true, false])('opens another project when current work is saved (unpushed: %s)', async (hasUnpushedEdits) => {
     useProjectStore.setState({ project: { file_path: '/other/open.stalx' } as never, isDirty: false });
-    useSpeleoStore.setState({ link: { editState: 'editing', forceEditing: false, hasUnpushedEdits } as never });
+    useSpeleoStore.setState({ link: { editState: 'editing', hasUnpushedEdits } as never });
     wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
     render(<HeldLockResumeDialog />);
     await userEvent.click(await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`));
@@ -208,7 +208,7 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
   it('still resumes the lock on the OPEN project, which by definition owes SpeleoDB work', async () => {
     useProjectStore.setState({ project: { file_path: '/cache/dirty.stalx' } as never });
     useSpeleoStore.setState({
-      link: { editState: 'editing', forceEditing: false, hasUnpushedEdits: true } as never,
+      link: { editState: 'editing', hasUnpushedEdits: true } as never,
     });
     const showToast = vi.fn();
     useUIStore.setState({ showToast });
@@ -243,7 +243,7 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
       isDirty: false,
     });
     useSpeleoStore.setState({
-      link: { editState: 'read-only', forceEditing: false, hasUnpushedEdits: false } as never,
+      link: { editState: 'read-only', hasUnpushedEdits: false } as never,
     });
     wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
     render(<HeldLockResumeDialog />);

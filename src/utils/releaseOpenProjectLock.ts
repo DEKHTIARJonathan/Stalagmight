@@ -46,7 +46,7 @@ export async function releaseOpenProjectLock(): Promise<void> {
     // Unlike applyDone, this must retain the saved unpushed-work flag.
     useSpeleoStore.setState((state) => ({
       link: state.link ? {
-        ...state.link, editState: 'read-only', forceEditing: false,
+        ...state.link, editState: 'read-only',
         lockHolder: null, lockedByOther: false,
       } : null,
     }));

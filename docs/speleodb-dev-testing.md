@@ -152,8 +152,8 @@ UI regression coverage must include:
   `Project Creation` automatically. Autosave remains local; failures keep the
   message and local edits available for retry.
 - Switching projects, closing a project, or quitting releases the editing lock
-  automatically. These exits do not upload changes. The SpeleoDB menu also offers
-  Release editing lock to remain in the project read-only; Acquire editing lock
+  automatically. These exits do not upload changes. The SpeleoDB workspace offers
+  Release editing lock to remain in the project read-only; Resume editing
   retries editing when it becomes available. A different holder is never released.
   Local release/acquire/refresh operations are serialized.
 - Read-only users cannot acquire or upload; another user's mutex does not become
@@ -163,3 +163,16 @@ Use selected Playwright cases for the affected workflows, including
 `window-close-protection.spec.ts` and `speleodb-managed-file.spec.ts`. The tests
 mock IPC and therefore complement, rather than replace, the Rust HTTP contracts
 and live round trips.
+
+## Workspace acceptance
+
+Use synthetic controlled projects. Check Sections-first default, logo + text at
+narrow widths and UI zoom, Survey/Plan/Export navigation, keyboard tab arrows,
+focus retention, pin/hover/collapse, resizing, and fullscreen table state. Check
+metadata and connection drafts across tab/section/dock hiding, including invalid
+drafts on switch, close, sign-out and Quit. Exercise upload, cancel, retry, missing
+lock, contention naming the editor, sign-in recovery, conflicts, uncertainty and
+release failure. Verify ordinary upload retains the lock, Save and Close waits for
+confirmed upload/release, and autosave retry remains local-only. Inspect light and
+dark themes. Record real-app and live-server results separately from mocked browser
+checks in [the workspace acceptance record](plans/2026-11-08_speleodb-workspace.md).

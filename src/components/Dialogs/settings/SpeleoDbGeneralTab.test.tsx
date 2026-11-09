@@ -40,6 +40,7 @@ function Harness() {
   return (
     <>
       <SpeleoDbGeneralTab metadata={metadata} />
+      <output data-testid="metadata-dirty">{String(metadata.isDirty)}</output>
       {metadata.canEdit && (
         <button
           type="button"
@@ -58,13 +59,12 @@ const seedRemote = (permission: Permission) =>
   useSpeleoStore.setState({
     link: {
       permission,
-      editState: 'read-only',
+      editState: 'editing',
       lockHolder: null,
       lockedByOther: false,
       hasUnpushedEdits: false,
       unwound: false,
-      forceEditing: false,
-      forceEditAllowed: false,
+
       undoMode: 'full',
       remoteState: 'up_to_date',
       noAccess: false,
@@ -124,6 +124,7 @@ describe('SpeleoDbGeneralTab', () => {
     const lat = await screen.findByTestId('speleodb-settings-latitude');
     await userEvent.type(lat, '45');
     expect(screen.getByTestId('speleodb-settings-save')).toBeDisabled();
+    expect(screen.getByTestId('metadata-dirty')).toHaveTextContent('true');
     expect(screen.getByTestId('speleodb-settings-coords-error')).toBeInTheDocument();
   });
 
@@ -137,6 +138,7 @@ describe('SpeleoDbGeneralTab', () => {
     await userEvent.type(lat, '999'); // out of [-90, 90]
     await userEvent.type(lon, '0');
     expect(screen.getByTestId('speleodb-settings-save')).toBeDisabled();
+    expect(screen.getByTestId('metadata-dirty')).toHaveTextContent('true');
     expect(screen.getByTestId('speleodb-settings-coords-error')).toBeInTheDocument();
   });
 

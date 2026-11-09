@@ -69,28 +69,6 @@ export function isMapReadOnly(state: Pick<UIStore, 'geometryMode' | 'appMode'>):
   return state.geometryMode === 'closureAdjusted' || state.appMode !== 'survey';
 }
 
-/**
- * Whether the map shows the "closure-adjusted, so read-only" notice - a narrower
- * question than [`isMapReadOnly`], which is why it is its own predicate: the map can
- * be read-only without this badge earning its space.
- *
- * Survey ONLY (#299): Plan and Export are read-only workspaces outright, so the
- * badge announces nothing new there and is noise over the fit-to-view button.
- * `showClosureComputing` is deliberately NOT gated this way - the solve still runs
- * in Plan/Export, where it is the only progress signal - so hiding the notice here
- * does not hide progress there.
- *
- * And only when nothing else already explains the read-only state, which inside
- * Survey means the project is otherwise editable: the exact complement of the
- * SpeleoDB badge, which occupies the same corner, so the two are mutually exclusive
- * by construction rather than by luck. `speleoReadOnly` is the right predicate for
- * that half rather than `holdsWriteLock`, because a force-editor genuinely CAN edit
- * - the SpeleoDB badge is already hidden for them, which makes the closure view the
- * only thing blocking their edits, and exactly when the notice earns its space.
- *
- * Both rules have been got wrong in opposite directions, so both are pinned by a
- * truth table in `uiStore.isMapReadOnly.test.ts`.
- */
 export function showsClosureAdjustedNotice(args: {
   geometryMode: GeometryMode;
   appMode: AppMode;
@@ -458,6 +436,17 @@ interface UIStore {
   setMeasureSnapShot: (snap: MeasureSnapShot | null) => void;
   /** Reset every piece of measure state (endpoints, results, tint, snap). */
   clearMeasure: () => void;
+
+  // Left workspace navigation is session-only and never changes lock ownership.
+  leftWorkspace: 'sections' | 'speleodb';
+  surveyLeftWorkspace: 'sections' | 'speleodb';
+  speleoWorkspaceSection: 'history' | 'settings' | 'projects' | 'account' | null;
+  speleoRevealNonce: number;
+  speleoOutsideSurvey: boolean;
+  leftWorkspaceVisible: boolean;
+  selectLeftWorkspace: (tab: 'sections' | 'speleodb') => void;
+  openSpeleoWorkspace: (section?: 'history' | 'settings' | 'projects' | 'account') => void;
+  resetLeftWorkspace: () => void;
 
   // Panel state
   sectionsPanelOpen: boolean;
@@ -1193,8 +1182,25 @@ export const useUIStore = create<UIStore>((set) => ({
   setMeasureSnapShot: (measureSnapShot) => set({ measureSnapShot }),
   clearMeasure: () => set({ ...MEASURE_CLEARED }),
 
-
   // Panel state
+  leftWorkspace: 'sections',
+  surveyLeftWorkspace: 'sections',
+  speleoWorkspaceSection: null,
+  speleoRevealNonce: 0,
+  speleoOutsideSurvey: false,
+  leftWorkspaceVisible: false,
+  resetLeftWorkspace: () => set({ leftWorkspace: 'sections', surveyLeftWorkspace: 'sections', speleoWorkspaceSection: null, speleoOutsideSurvey: false }),
+  selectLeftWorkspace: (tab) => set({ leftWorkspace: tab, ...(useUIStore.getState().appMode === 'survey' ? { surveyLeftWorkspace: tab } : {}) }),
+  openSpeleoWorkspace: (section) => {
+    const state = useUIStore.getState();
+    state.exitDataTableFullScreen();
+    set({
+      leftWorkspace: 'speleodb',
+      ...(state.appMode === 'survey' ? { surveyLeftWorkspace: 'speleodb' } : { speleoOutsideSurvey: true }),
+      ...(section ? { speleoWorkspaceSection: section } : {}),
+      speleoRevealNonce: state.speleoRevealNonce + 1,
+    });
+  },
   sectionsPanelOpen: true,
   sectionsPanelMode: 'pin',
   sectionsPanelWidth: 250,
@@ -1648,6 +1654,9 @@ export const useUIStore = create<UIStore>((set) => ({
   setAppMode: (mode) => {
     const s = useUIStore.getState();
     if (s.appMode === mode) return;
+    if (s.appMode === 'survey' && mode !== 'survey') {
+      set({ speleoOutsideSurvey: s.leftWorkspace === 'speleodb' && s.leftWorkspaceVisible, leftWorkspace: 'speleodb' });
+    }
     if (mode === 'survey') {
       // Returning to Survey: restore the geometry mode we had before entering
       // Plan/Export. The gas overlay + markers are appMode-gated (they clear when
@@ -1666,6 +1675,8 @@ export const useUIStore = create<UIStore>((set) => ({
       prePlanDocks = null;
       set({
         appMode: 'survey',
+        leftWorkspace: s.surveyLeftWorkspace,
+        speleoOutsideSurvey: false,
         geometryMode: restore,
         ...displayRestore,
         ...dockRestore,
@@ -2012,6 +2023,16 @@ export const useUIStore = create<UIStore>((set) => ({
   dialogData: {},
   dmpImportWizardPhase: null,
   openDialog: (activeDialog, dialogData = {}) => {
+    if (activeDialog === 'speleodb-projects') {
+      useUIStore.getState().closeDialog();
+      useUIStore.getState().openSpeleoWorkspace('projects');
+      return;
+    }
+    if (activeDialog === 'speleodb-project') {
+      useUIStore.getState().closeDialog();
+      useUIStore.getState().openSpeleoWorkspace(dialogData.tab === 'history' ? 'history' : 'settings');
+      return;
+    }
     const prev = useUIStore.getState().activeDialog;
     // Re-opening the dialog already on screen is a data refresh, not a chain and
     // not a new open, so gate the BOOKKEEPING - never the state. `dialogData` is

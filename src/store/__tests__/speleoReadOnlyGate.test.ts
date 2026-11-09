@@ -33,8 +33,7 @@ const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   exclude_geojson: false,
   // [#303] The hybrid undo stack's policy pair: Full, from the global default.
   undo_mode: 'full',
-  force_editing: false,
-  allow_force_edit: false,
+
   project_id: null,
   ...o,
 });
@@ -109,7 +108,6 @@ describe('a remote project without the write lock (#270)', () => {
     expect(link?.noAccess).toBe(false);
     expect(link?.serverError).toBeNull();
     expect(link?.lockedByOther).toBe(false);
-    expect(link?.forceEditing).toBe(false);
     // Nothing has been asked of the server yet - say so rather than claiming
     // up-to-date.
     expect(link?.remoteState).toBe('unknown');

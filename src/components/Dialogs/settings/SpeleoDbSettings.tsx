@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { registerWorkspaceDraft } from '../../../utils/workspaceDrafts';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Toggle } from '../../common/Toggle';
 import { Button } from '../../common/Button';
@@ -21,7 +22,9 @@ export function SpeleoDbSettings({
   onChange,
   changedFields,
   panelIdBase,
-}: SettingsCategoryProps) {
+  embedded = false,
+  isApplying,
+}: SettingsCategoryProps & { embedded?: boolean; isApplying?: () => boolean }) {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const session = useSpeleoStore((s) => s.session);
@@ -32,9 +35,24 @@ export function SpeleoDbSettings({
   const applyPendingAuth = useSpeleoStore((s) => s.applyPendingAuth);
   const setAuthError = useSpeleoStore((s) => s.setAuthError);
   const authError = useSpeleoStore((s) => s.authError);
+  const busy = useSpeleoStore((s) => s.busy);
 
   const speleo = config.speleodb;
   const [loggingIn, setLoggingIn] = useState(false);
+  const loggingRef = useRef(false);
+  const draft = useRef({ pendingAuth, isApplying });
+  draft.current = { pendingAuth, isApplying };
+  useEffect(() => {
+    if (!embedded) return;
+    return registerWorkspaceDraft({
+      dirty: () => {
+        const value = draft.current.pendingAuth;
+        return !loggingRef.current && !draft.current.isApplying?.() && value?.kind === 'login' &&
+          !!(value.email || value.password || value.token);
+      },
+      discard: () => useSpeleoStore.getState().clearPendingAuth(),
+    });
+  }, [embedded]);
 
   useEffect(() => {
     void refreshSession();
@@ -61,21 +79,24 @@ export function SpeleoDbSettings({
     // (zustand `set` is synchronous, so the subsequent read sees this).
     if (pendingAuth?.kind !== 'login') setPendingAuth(login);
     const issuedDialog = useUIStore.getState().dialogData;
+    loggingRef.current = true;
     setLoggingIn(true);
     try {
       const result = await applyPendingAuth(speleo.endpoint);
+      if (result.cancelled) return;
       // A slow login may finish after Settings was dismissed or replaced.
       // Its session still applies, but it must not close or edit the new dialog.
       const currentDialog = useUIStore.getState();
-      if (currentDialog.activeDialog !== 'settings' || currentDialog.dialogData !== issuedDialog) return;
+      if (!embedded && (currentDialog.activeDialog !== 'settings' || currentDialog.dialogData !== issuedDialog)) return;
       if (result.ok) {
         const endpoint = useSpeleoStore.getState().session?.endpoint;
         if (endpoint) onChange({ speleodb: { ...speleo, endpoint } });
-        closeDialog();
+        if (!embedded) closeDialog();
       } else {
         setAuthError(humanizeSpeleoError(result.error, t('speleodb.errors.loginFailed')));
       }
     } finally {
+      loggingRef.current = false;
       setLoggingIn(false);
     }
   };
@@ -87,9 +108,6 @@ export function SpeleoDbSettings({
     onChange({ speleodb: { ...speleo, endpoint: v.length > 0 ? v : null } });
   const handleInsecureHttpToggle = createToggleHandler(onChange, (v) => ({
     speleodb: { ...speleo, insecure_http: v },
-  }));
-  const handleAllowForceEditToggle = createToggleHandler(onChange, (v) => ({
-    speleodb: { ...speleo, allow_force_edit: v },
   }));
 
   return (
@@ -139,6 +157,7 @@ export function SpeleoDbSettings({
             </p>
             <Button
               variant="danger"
+              disabled={busy}
               onClick={() => setPendingAuth({ kind: 'logout' })}
               data-testid="speleodb-settings-logout"
             >
@@ -157,6 +176,7 @@ export function SpeleoDbSettings({
                 </label>
                 <input
                   type="email"
+                  disabled={loggingIn || busy}
                   value={login.email}
                   onChange={(e) => updateLogin({ email: e.target.value })}
                   className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
@@ -167,6 +187,7 @@ export function SpeleoDbSettings({
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
+                disabled={loggingIn || busy}
                 checked={login.useToken}
                 onChange={(e) => updateLogin({ useToken: e.target.checked })}
                 className="rounded"
@@ -181,6 +202,7 @@ export function SpeleoDbSettings({
                 </label>
                 <input
                   type="password"
+                  disabled={loggingIn || busy}
                   value={login.token}
                   onChange={(e) => updateLogin({ token: e.target.value })}
                   className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
@@ -194,6 +216,7 @@ export function SpeleoDbSettings({
                 </label>
                 <input
                   type="password"
+                  disabled={loggingIn || busy}
                   value={login.password}
                   onChange={(e) => updateLogin({ password: e.target.value })}
                   className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
@@ -210,7 +233,7 @@ export function SpeleoDbSettings({
               <Button
                 variant="primary"
                 onClick={() => void handleTryLogin()}
-                disabled={loggingIn || !canTryLogin}
+                disabled={loggingIn || !canTryLogin || busy}
                 data-testid="speleodb-settings-try-login"
               >
                 {loggingIn
@@ -240,9 +263,10 @@ export function SpeleoDbSettings({
         >
           <input
             type="text"
+            disabled={busy}
             value={speleo.endpoint ?? ''}
             onChange={(e) => handleEndpointChange(e.target.value)}
-            className="w-64 px-2 py-1 bg-background border border-border rounded text-sm"
+            className="w-full max-w-64 px-2 py-1 bg-background border border-border rounded text-sm"
             placeholder="https://www.speleodb.org/"
             aria-label={t('settings.speleodb.endpoint.aria')}
             data-testid="input-speleodb-endpoint"
@@ -260,6 +284,7 @@ export function SpeleoDbSettings({
           data-testid="setting-speleodb-insecure-http"
         >
           <Toggle
+            disabled={busy}
             checked={speleo.insecure_http}
             onChange={handleInsecureHttpToggle}
             aria-label={t('settings.speleodb.insecureHttp.aria')}
@@ -274,33 +299,6 @@ export function SpeleoDbSettings({
             {t('settings.speleodb.insecureHttp.warning')}
           </div>
         )}
-
-        <SettingRow
-          label={t('settings.speleodb.allowForceEdit.label')}
-          helpText={t('settings.speleodb.allowForceEdit.help')}
-          isChanged={isFieldChanged(changedFields, 'speleodb.allow_force_edit')}
-          onReset={() =>
-            onChange({ speleodb: { ...speleo, allow_force_edit: defaultConfig.speleodb.allow_force_edit } })
-          }
-          isDefault={speleo.allow_force_edit === defaultConfig.speleodb.allow_force_edit}
-          data-testid="setting-speleodb-allow-force-edit"
-        >
-          <Toggle
-            checked={speleo.allow_force_edit}
-            onChange={handleAllowForceEditToggle}
-            aria-label={t('settings.speleodb.allowForceEdit.aria')}
-            data-testid="toggle-speleodb-allow-force-edit"
-          />
-        </SettingRow>
-        {speleo.allow_force_edit && (
-          <div
-            className="mb-2 p-3 bg-warning-20 text-warning rounded text-xs"
-            data-testid="speleodb-allow-force-edit-warning"
-          >
-            {t('settings.speleodb.allowForceEdit.warning')}
-          </div>
-        )}
-
 
       </SettingsSection>
     </div>

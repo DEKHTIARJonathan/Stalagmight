@@ -61,7 +61,7 @@ export function SpeleoDbGeneralTab({ metadata }: { metadata: SpeleoProjectMetada
           <input
             type="text"
             value={form.name}
-            disabled={!canEdit}
+            disabled={!canEdit || metadata.saving}
             onChange={(e) => update('name', e.target.value)}
             className={inputClass}
             aria-label={t('speleodb.projectSettings.fields.name')}
@@ -75,7 +75,7 @@ export function SpeleoDbGeneralTab({ metadata }: { metadata: SpeleoProjectMetada
           </label>
           <textarea
             value={form.description}
-            disabled={!canEdit}
+            disabled={!canEdit || metadata.saving}
             onChange={(e) => update('description', e.target.value)}
             rows={3}
             className={inputClass}
@@ -92,7 +92,7 @@ export function SpeleoDbGeneralTab({ metadata }: { metadata: SpeleoProjectMetada
             searchLabel={t('speleodb.publish.searchCountry')}
             noResultsLabel={t('speleodb.publish.noCountries')}
             value={form.country}
-            disabled={!canEdit}
+            disabled={!canEdit || metadata.saving}
             onChange={(v) => update('country', v)}
             options={[
               { value: '', label: t('speleodb.publish.countryPlaceholder'), disabled: true },
@@ -111,7 +111,7 @@ export function SpeleoDbGeneralTab({ metadata }: { metadata: SpeleoProjectMetada
             <input
               type="number"
               value={form.latitude}
-              disabled={!canEdit}
+              disabled={!canEdit || metadata.saving}
               onChange={(e) => update('latitude', e.target.value)}
               className={inputClass}
               aria-label={t('speleodb.projectSettings.fields.latitude')}
@@ -125,7 +125,7 @@ export function SpeleoDbGeneralTab({ metadata }: { metadata: SpeleoProjectMetada
             <input
               type="number"
               value={form.longitude}
-              disabled={!canEdit}
+              disabled={!canEdit || metadata.saving}
               onChange={(e) => update('longitude', e.target.value)}
               className={inputClass}
               aria-label={t('speleodb.projectSettings.fields.longitude')}

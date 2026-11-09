@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
+import { registerWorkspaceDraft } from '../utils/workspaceDrafts';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
@@ -34,7 +35,9 @@ export interface SpeleoProjectMetadataState {
   coordsValid: boolean;
   canEdit: boolean;
   canSave: boolean;
+  isDirty: boolean;
   saving: boolean;
+  saveError: string | null;
   handleSave: () => Promise<void>;
   enablingRendering: boolean;
   handleEnableRendering: () => Promise<void>;
@@ -70,7 +73,12 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
   const permission = useSpeleoStore((s) => s.link?.permission ?? null);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
 
-  const canEdit = permissionAtLeast(permission, 'READ_AND_WRITE');
+  const editing = useSpeleoStore((s) => s.link?.editState === 'editing');
+  const mode = useUIStore((s) => s.appMode);
+  const generation = useSpeleoStore((s) => s.sessionGeneration);
+  const path = useProjectStore((s) => s.project?.file_path);
+  const current = () => useSpeleoStore.getState().sessionGeneration === generation && useProjectStore.getState().project?.file_path === path;
+  const canEdit = editing && mode === 'survey' && permissionAtLeast(permission, 'READ_AND_WRITE');
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -78,6 +86,9 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
   const [baseline, setBaseline] = useState<SpeleoProjectMetadata | null>(null);
   const [form, setForm] = useState<SpeleoMetadataForm | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const snapshot = useRef({ form, baseline });
+  snapshot.current = { form, baseline };
   const [enablingRendering, setEnablingRendering] = useState(false);
 
   const reload = useCallback(async () => {
@@ -91,14 +102,24 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
     setLoadError(null);
     try {
       const meta = await invokeIpc<SpeleoProjectMetadata>('speleodb_get_project_metadata');
+      if (!current()) return;
+      const previous = snapshot.current;
+      const fresh = toForm(meta);
+      if (previous.form && previous.baseline) {
+        const original = toForm(previous.baseline);
+        for (const key of Object.keys(fresh) as Array<keyof SpeleoMetadataForm>) {
+          if (previous.form[key] !== original[key]) fresh[key] = previous.form[key];
+        }
+      }
       setBaseline(meta);
-      setForm(toForm(meta));
+      setForm(fresh);
     } catch (e) {
+      if (!current()) return;
       setLoadError(humanizeSpeleoError(e, t('speleodb.projectSettings.loadFailed')));
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
-  }, [isLinked, t]);
+  }, [isLinked, generation, path, t]);
 
   useEffect(() => {
     void reload();
@@ -136,12 +157,21 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
 
   const anyChanged =
     nameChanged || descriptionChanged || countryChanged || coordinatesChanged;
+  const isDirty = !!baseline && !!form && JSON.stringify(form) !== JSON.stringify(toForm(baseline));
+  const draftRef = useRef({ isDirty, baseline });
+  draftRef.current = { isDirty, baseline };
+  useEffect(() => registerWorkspaceDraft({
+    dirty: () => draftRef.current.isDirty,
+    discard: () => { const saved = draftRef.current.baseline; if (saved) setForm(toForm(saved)); },
+  }), []);
   const nameEmpty = (form?.name.trim() ?? '') === '';
   const canSave = canEdit && !!form && anyChanged && coordsValid && !nameEmpty && !saving;
 
   const handleSave = useCallback(async () => {
     if (!form || !baseline || !canSave) return;
+    const busyToken = useSpeleoStore.getState().beginBusy();
     setSaving(true);
+    setSaveError(null);
     const patch: SpeleoProjectMetadataPatch = {
       name: nameChanged ? form.name.trim() : null,
       description: descriptionChanged ? form.description : null,
@@ -153,6 +183,7 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
     };
     try {
       const updated = await invokeIpc<SpeleoProjectMetadata>('speleodb_patch_project', { patch });
+      if (!current()) return;
       setBaseline(updated);
       setForm(toForm(updated));
       // The backend folds a name change into the local .stalx; mirror it in the UI.
@@ -168,17 +199,22 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
       void refreshLinkStatus();
       showToast(t('speleodb.projectSettings.saved'), TOAST_KEYS.SPELEODB_PROJECT_SETTINGS, 'success');
     } catch (e) {
+      if (!current()) return;
+      setSaveError(humanizeSpeleoError(e, t('speleodb.projectSettings.saveFailed')));
       showToast(
         humanizeSpeleoError(e, t('speleodb.projectSettings.saveFailed')),
         TOAST_KEYS.SPELEODB_PROJECT_SETTINGS,
         'error',
       );
     } finally {
-      setSaving(false);
+      useSpeleoStore.getState().endBusy(busyToken);
+      if (current()) setSaving(false);
     }
   }, [
     form,
     baseline,
+    generation,
+    path,
     canSave,
     nameChanged,
     descriptionChanged,
@@ -192,12 +228,14 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
   ]);
 
   const handleEnableRendering = useCallback(async () => {
+    if (!canEdit || useSpeleoStore.getState().busy) return;
     setEnablingRendering(true);
     try {
       // Reuse the shared store action (single source of truth for the IPC + the
       // rendering-disabled banner drop + link re-seed), then mirror the flag into this
       // hook's local baseline and toast. It throws on failure.
       await useSpeleoStore.getState().enableRendering();
+      if (!current()) return;
       setBaseline((prev) => (prev ? { ...prev, exclude_geojson: false } : prev));
       showToast(t('speleodb.projectSettings.rendering.enabled'), TOAST_KEYS.SPELEODB_PROJECT_SETTINGS, 'success');
     } catch (e) {
@@ -207,9 +245,9 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
         'error',
       );
     } finally {
-      setEnablingRendering(false);
+      if (current()) setEnablingRendering(false);
     }
-  }, [showToast, t]);
+  }, [showToast, t, canEdit, generation, path]);
 
   return {
     loading,
@@ -222,6 +260,8 @@ export function useSpeleoProjectMetadata(): SpeleoProjectMetadataState {
     canEdit,
     canSave,
     saving,
+    saveError,
+    isDirty,
     handleSave,
     enablingRendering,
     handleEnableRendering,

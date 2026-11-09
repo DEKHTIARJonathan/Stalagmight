@@ -1,3 +1,4 @@
+import { setUploadContinuation } from '../../utils/uploadContinuation';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
@@ -158,10 +159,14 @@ export default function SpeleoUnwoundPushDialog() {
     const resolved = await done(message, { acceptOlderVersion: true, isCurrent: current });
     if (stopIfStale()) return;
     if (resolved?.kind === 'released') {
+      if (useProjectStore.getState().isDirty || useSpeleoStore.getState().link?.hasUnpushedEdits) { setBusy(false); return; }
       trackDialogComplete('speleodb-unwound-push');
       closeDialog();
       if (pendingExit.kind === 'quit') performQuit();
-      else await handBackProject(pendingExit);
+      else {
+        await handBackProject(pendingExit);
+        if (!useProjectStore.getState().project) setUploadContinuation(null);
+      }
       return;
     }
     // Nothing was released, so nothing may leave - and the exit prompt is the surface
