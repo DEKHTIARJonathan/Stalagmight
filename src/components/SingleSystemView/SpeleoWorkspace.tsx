@@ -3,6 +3,7 @@ import { SpeleoHistorySteps } from './SpeleoHistorySteps';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
+import { useSpeleoOperationBusy } from '../../hooks/useSpeleoOperationBusy';
 import { useSpeleoWebLink } from '../../hooks/useSpeleoWebLink';
 import { releaseOpenProjectLock } from '../../utils/releaseOpenProjectLock';
 import { canResumeSpeleoEditing, permissionAtLeast } from '../../utils/speleoPermission';
@@ -26,7 +27,8 @@ export function SpeleoWorkspace() {
   const expanded = useUIStore((s) => s.speleoWorkspaceSection);
   const [visited, setVisited] = useState(() => new Set<string>());
   useEffect(() => { if (expanded) setVisited((old) => new Set([...old, expanded])); }, [expanded]);
-  const { busy, startEditing, update } = useSpeleoActions();
+  const { startEditing, update } = useSpeleoActions();
+  const busy = useSpeleoOperationBusy();
   const { handleCloseProject } = useProject();
   const web = useSpeleoWebLink();
   if (!link) return (

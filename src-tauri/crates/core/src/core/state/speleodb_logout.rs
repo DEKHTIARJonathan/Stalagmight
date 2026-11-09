@@ -1,5 +1,6 @@
 //! End SpeleoDB sessions and remove the persisted token.
 use super::speleodb::local_dto;
+use super::speleodb_lock_release::LockReleaseParams;
 use super::AppState;
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 
@@ -126,6 +127,48 @@ impl AppState {
             // project_id available here, so no lock release.)
             Err(_) => {
                 self.set_edit_enabled(false);
+            }
+        }
+    }
+    /// [`Self::speleodb_logout_drop_gates`] for a caller that holds a lock the
+    /// release POST must not be made under: a settings save that changes the
+    /// SpeleoDB instance holds `config_write_lock`, which every synchronous partial
+    /// config command (panel sizes, column widths) also takes on the main thread.
+    ///
+    /// Everything but the network call happens here, in the original order - the
+    /// session boundary, the silent-release veto and claim clear, the gate - and the
+    /// release is returned for the caller to send once that lock is dropped, still
+    /// inside its lock-ops span, so no lock operation can land between this and the
+    /// POST. The gate closes before the POST rather than after it: nothing is edited
+    /// under a lock that is about to be handed back.
+    pub(super) fn speleodb_logout_drop_gates_deferring_release(&self) -> Option<LockReleaseParams> {
+        {
+            let _proj_guard = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.bump_speleodb_session();
+        }
+        if !self.edit_enabled() {
+            return None;
+        }
+        match self.speleodb_open_link() {
+            Ok(_) => {
+                let release = self.speleodb_held_lock_release_params();
+                if let Some(params) = &release {
+                    // The claim ends now, as `speleodb_release_best_effort` ends it
+                    // before its POST: the session is about to be forgotten, and a
+                    // claim cleared after that could no longer be matched to it.
+                    self.speleodb_forget_lock_acquired_for(&params.project_id);
+                }
+                self.set_edit_enabled(false);
+                release
+            }
+            Err(SpeleoDbError::NoRemoteProject) => None,
+            // Fail safe to read-only, as the inline variant does.
+            Err(_) => {
+                self.set_edit_enabled(false);
+                None
             }
         }
     }

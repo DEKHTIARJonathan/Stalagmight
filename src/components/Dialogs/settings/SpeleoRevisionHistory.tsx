@@ -10,6 +10,7 @@ import {
 import { useProjectStore } from '../../../store/projectStore';
 import { useRestoreRevision } from '../../../hooks/useRestoreRevision';
 import { useSpeleoWebLink } from '../../../hooks/useSpeleoWebLink';
+import { useSpeleoOperationBusy } from '../../../hooks/useSpeleoOperationBusy';
 import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError, unpushedLocalEdits, } from '../../../utils/speleoError';
 import { holdsWriteLock } from '../../../utils/quit';
@@ -64,6 +65,9 @@ export function SpeleoRevisionHistory() {
   const [error, setError] = useState<string | null>(null);
   // The revision whose read-only View is currently loading (disables that button).
   const [pendingId, setPendingId] = useState<string | null>(null);
+  // View, Restore and Revert each download a revision (Restore and Revert also
+  // lock), so none may start while another lock, upload or download is running.
+  const operationBusy = useSpeleoOperationBusy();
 
   useEffect(() => {
     if (!projectId) return undefined;
@@ -221,6 +225,7 @@ export function SpeleoRevisionHistory() {
                   <Button
                     variant="secondary"
                     size="sm"
+                    disabled={operationBusy}
                     onClick={() =>
                       openDialog(TOAST_KEYS.SPELEODB_RESTORE, {
                         projectId,
@@ -240,7 +245,7 @@ export function SpeleoRevisionHistory() {
                   <Button
                     variant="secondary"
                     size="sm"
-                    disabled={pendingId !== null}
+                    disabled={pendingId !== null || operationBusy}
                     onClick={() => void handleView(rev)}
                     icon={<EyeIcon size={14} />}
                     data-testid={`speleodb-revision-view-${rev.id}`}
@@ -259,6 +264,7 @@ export function SpeleoRevisionHistory() {
                   <Button
                     variant="secondary"
                     size="sm"
+                    disabled={operationBusy}
                     onClick={() =>
                       openDialog('speleodb-revert', {
                         projectId,

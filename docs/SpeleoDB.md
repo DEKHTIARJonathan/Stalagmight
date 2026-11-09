@@ -226,8 +226,11 @@ account's lock is never released by an ordinary exit.
 
 Switch to Read Only Mode refuses unsaved or unuploaded work, including direct IPC
 calls: "Save your changes using Save Changes before switching to read-only mode."
-It never discards or uploads. The clean check and release are serialized against
-mutations, and consent is bound to the project, account, session and edit version.
+It never discards or uploads. The clean check and the switch to read-only happen
+together, serialized against mutations, before the release request is sent; edits
+attempted while it is in flight are refused as read-only rather than waiting. A
+failed release returns the same session to editing. Consent is bound to the
+project, account, session and edit version.
 Only the signed-in account's lock can be released. The server has no atomic
 compare-and-release operation; changes between the ownership probe and release
 remain a protocol limitation. Offline release failures leave the project open.
@@ -251,6 +254,28 @@ read-only. In-place frontend reconciliation suppresses automatic acquisition.
 
 An unreachable server or forcibly terminated process cannot guarantee server-side
 release. Close, Quit and Save-and-Close retain their separate lifecycle behavior.
+
+## Network activity and responsiveness
+
+Tauri runs synchronous commands on the main thread, so a SpeleoDB network wait
+inside one freezes the whole window. The SpeleoDB commands, the Settings save and
+reload, and project deletion run their work off the main thread. Panel, column and gas settings writes never wait on SpeleoDB: only a
+settings change that moves to another SpeleoDB instance joins the queue of lock
+operations, and its lock release is sent after the settings lock is let go. While
+an edit session is active, the lock check that runs at most every 20 minutes
+happens in the background; if it finds the lock gone, the next edit is refused
+and routed to the conflict prompt.
+
+While any SpeleoDB network call is in flight, a small spinner beside the SpeleoDB
+tab label says "Talking to SpeleoDB..."; it overlays the tab and never changes its
+size. While a lock, upload, download or account call runs, the controls that would
+start another one are disabled: the workspace's Save Changes, Resume editing /
+Switch to Read Only Mode, Reload Project, Close Project and conversion, History's
+Unwind/Rewind, revision View/Restore/Revert, opening from SpeleoDB, the held-lock
+prompt's Resume and Release, publishing, and the SpeleoDB endpoint, connection and
+sign-in/sign-out controls in Settings. Reads such as the status refresh show the
+spinner but lock nothing. The map, panels, other settings and editing stay
+available. Explicit uploads and publishing keep their app-blocking progress.
 
 ## Verification
 

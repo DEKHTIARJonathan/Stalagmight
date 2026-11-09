@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
+import { useSpeleoOperationBusy } from '../../hooks/useSpeleoOperationBusy';
 import { invokeIpc } from '../../utils/ipc';
 import { speleoErrorAction, humanizeSpeleoError } from '../../utils/speleoError';
 import { Button } from '../common/Button';
@@ -44,6 +45,9 @@ export default function OpenFromSpeleoDbDialog() {
   const [projects, setProjects] = useState<SpeleoProjectSummary[]>([]);
   const [filter, setFilter] = useState('');
   const [busy, setBusy] = useState(false);
+  // A lock, upload or account call already running (an upload, an auto-acquire):
+  // opening another project now would start a download and a lock under it.
+  const operationBusy = useSpeleoOperationBusy();
   const [error, setError] = useState<string | null>(null);
   // #270: the last project-list fetch failed, so an empty list means "we could not
   // load them", NOT "this account has no projects". Keeps the empty state honest.
@@ -245,7 +249,7 @@ export default function OpenFromSpeleoDbDialog() {
                     <Button
                       variant="primary"
                       onClick={() => void handleOpen(p)}
-                      disabled={busy}
+                      disabled={busy || operationBusy}
                       data-testid={`open-from-speleodb-open-${p.id}`}
                     >
                       {t('speleodb.browser.open')}

@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { SpeleoWorkspace } from './SpeleoWorkspace';
+import { SpeleoNetworkBusyIndicator } from './SpeleoNetworkBusyIndicator';
 import { SectionsTabIcon, SpeleoTabIcon, useSpeleoTabState } from './workspaceTabIcons';
 import type { ReactNode } from 'react';
 
@@ -41,7 +42,9 @@ export function LeftWorkspace({ sections }: { sections: ReactNode }) {
               event.preventDefault(); const nextTab = tabs[next]; if (nextTab) choose(nextTab); refs.current[next]?.focus();
             }}
             className={`flex-1 min-w-0 flex items-center justify-center gap-1.5 px-3 py-2 text-sm whitespace-nowrap focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent ${look}`}>
-            {id === 'speleodb' ? <SpeleoTabIcon state={speleoState} /> : <SectionsTabIcon />}
+            {id === 'speleodb'
+              ? <SpeleoNetworkBusyIndicator><SpeleoTabIcon state={speleoState} /></SpeleoNetworkBusyIndicator>
+              : <SectionsTabIcon />}
             <span>{id === 'speleodb' ? 'SpeleoDB' : 'Sections'}</span>
           </button>;
         })}

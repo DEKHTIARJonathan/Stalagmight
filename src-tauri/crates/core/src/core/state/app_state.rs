@@ -204,9 +204,15 @@ pub struct AppState {
     /// "stale release frees the successor's mutex" interleaving cannot fit in
     /// between. ORDER: this mutex is OUTERMOST - it is held across network calls,
     /// and code holding `project`/`database`/`undo_stack` must never block on it
-    /// (decide under `project`, drop it, then take this). See
-    /// `core::state::speleodb_session`.
+    /// (decide under `project`, drop it, then take this). Nor may a synchronous
+    /// Tauri command: those run on the main thread, and an upload or download
+    /// holds this for minutes. See `core::state::speleodb_session`.
     pub(super) speleodb_lock_ops: Mutex<()>,
+    /// The #202 lock re-verify running in the background, if any: started by one
+    /// edit, collected by a later one, so `execute()` never waits on the network.
+    /// See `AppState::speleodb_verify_lock_if_expired`. Held only briefly, never
+    /// across I/O.
+    pub(super) speleodb_reverify: Mutex<Option<super::speleodb::PendingReverify>>,
 }
 
 impl AppState {
@@ -264,6 +270,7 @@ impl AppState {
             adjusted_cache_generation: AtomicU64::new(0),
             speleodb_session_generation: AtomicU64::new(0),
             speleodb_lock_ops: Mutex::new(()),
+            speleodb_reverify: Mutex::new(None),
         })
     }
 
@@ -353,9 +360,21 @@ impl AppState {
 
     /// Set the transient edit-enabled flag. `false` only for a remote SpeleoDB
     /// project opened without a write lock; reset to `true` on every open/close.
+    ///
+    /// Opening a shut gate also drops any pending #202 lock re-verify: it was
+    /// started under the edit session that shut, and whatever it finds describes
+    /// that session, not the one opening now (a re-acquire can reopen the gate
+    /// within the same session generation, so the generation alone cannot tell).
     pub(crate) fn set_edit_enabled(&self, v: bool) {
-        self.edit_enabled
-            .store(v, std::sync::atomic::Ordering::Relaxed);
+        let was = self
+            .edit_enabled
+            .swap(v, std::sync::atomic::Ordering::Relaxed);
+        if v && !was {
+            *self
+                .speleodb_reverify
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        }
     }
 
     /// THE mutation chokepoint (#191, D-B6). Every SURVEY-CONTENT mutation entry

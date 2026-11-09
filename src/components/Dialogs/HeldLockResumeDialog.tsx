@@ -4,6 +4,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type HeldLock } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
+import { useSpeleoOperationBusy } from '../../hooks/useSpeleoOperationBusy';
 import { useSpeleoLocalStates } from '../../hooks/useSpeleoLocalStates';
 import { hasUnpushedEdits, localStateUnknown, UNPUSHED_ACCENT } from '../../utils/speleoLocalState';
 import { humanizeSpeleoError } from '../../utils/speleoError';
@@ -70,6 +71,9 @@ export default function HeldLockResumeDialog() {
 
   const locks = useMemo(() => heldLocks ?? [], [heldLocks]);
   const busy = busyId !== null;
+  // Another lock, upload or account call still running elsewhere: resuming or
+  // releasing now would start a second lock operation under it.
+  const operationBusy = useSpeleoOperationBusy();
 
   // The local half of the join, fetched once for every listed lock (#270).
   const lockIds = useMemo(() => locks.map((l) => l.projectId), [locks]);
@@ -291,7 +295,7 @@ export default function HeldLockResumeDialog() {
                   <button
                     type="button"
                     onClick={() => void continueEditing(lock)}
-                    disabled={busy}
+                    disabled={busy || operationBusy}
                     className="shrink-0 text-xs text-accent hover:underline disabled:opacity-50 disabled:no-underline"
                     aria-label={t('speleodb.localEdits.heldLocks.continueEditingAria', {
                       name: lock.projectName,
@@ -306,7 +310,7 @@ export default function HeldLockResumeDialog() {
                   <button
                     type="button"
                     onClick={() => void releaseOne(lock.projectId)}
-                    disabled={busy}
+                    disabled={busy || operationBusy}
                     className="shrink-0 text-xs text-danger hover:underline disabled:opacity-50 disabled:no-underline"
                     aria-label={t('speleodb.heldLocks.releaseOneAria', { name: lock.projectName })}
                     data-testid={`speleodb-held-lock-release-${lock.projectId}`}
