@@ -11,6 +11,12 @@ import { renderHook } from '@testing-library/react';
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 const confirmMock = vi.hoisted(() => vi.fn());
 vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
+// The unsaved-edits question is in-app (`askExitChoice`); `confirmMock` answers it:
+// true = discard, false = cancel, 'save' = save on this computer first.
+vi.mock('../utils/exitConfirm', () => ({
+  askExitChoice: (options: unknown) => Promise.resolve(confirmMock(options))
+    .then((answer: unknown) => (answer === 'save' ? 'save' : answer ? 'confirm' : 'cancel')),
+}));
 vi.mock('../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,
   getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
@@ -464,6 +470,27 @@ describe('useOpenRemoteProject (#218)', () => {
       expect(confirmMock).toHaveBeenCalledOnce();
       expect(invokeIpcMock.mock.calls.map(call => call[0])).not.toContain('save_project');
       expect(invokeIpcMock.mock.calls.map(call => call[0])).not.toContain('speleodb_push');
+    });
+
+    it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)('%s can save the edits on this computer instead of discarding them (frontend#6)', async (action) => {
+      const saveProject = vi.fn(async () => {
+        useProjectStore.setState({ isDirty: false });
+        return { success: true };
+      });
+      useProjectStore.setState({ isDirty: true, saveProject: saveProject as never });
+      confirmMock.mockResolvedValue('save');
+      expect(await hook()[action](SUMMARY)).toEqual({ status: 'opened' });
+      expect(confirmMock).toHaveBeenCalledWith(expect.objectContaining({ saveLabel: expect.any(String) }));
+      expect(saveProject).toHaveBeenCalledOnce();
+      expect(invokeIpcMock.mock.calls.map(call => call[0])).not.toContain('speleodb_push');
+    });
+
+    it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)('%s stays put when saving the edits fails', async (action) => {
+      useProjectStore.setState({ isDirty: true, saveProject: vi.fn(async () => ({ success: false, error: 'Synthetic disk failure' })) as never });
+      useUIStore.setState({ openDialog: vi.fn() });
+      confirmMock.mockResolvedValue('save');
+      expect(await hook()[action](SUMMARY)).toEqual({ status: 'cancelled' });
+      expect(loadProjectMock).not.toHaveBeenCalled();
     });
 
     it.each(['openRemote', 'takeRemoteDiscardingLocal'] as const)('%s protects edits made during download', async (action) => {

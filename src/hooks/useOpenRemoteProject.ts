@@ -16,7 +16,8 @@ import {
   humanizeSpeleoError,
   unpushedLocalEdits,
 } from '../utils/speleoError';
-import { confirm } from '@tauri-apps/plugin-dialog';
+import { askExitChoice } from '../utils/exitConfirm';
+import { saveOpenProjectLocally } from '../utils/saveOpenProjectLocally';
 import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from '../utils/speleoExit';
 import type {
   SpeleoProjectSummary,
@@ -202,13 +203,20 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     if (!await confirmWorkspaceDrafts(current) || !current()) return null;
     const { project, isDirty } = useProjectStore.getState();
     if (!project || !isDirty) return { project: null };
-    const accepted = await confirm(t('speleodb.exit.unsavedMessage'), {
+    // In-app, and never discard-only (frontend#6): a project with a file of its
+    // own can save its edits on this computer first, then the open goes on.
+    const choice = await askExitChoice({
       title: t('speleodb.exit.unsavedTitle'),
-      kind: 'warning',
-      okLabel: t('speleodb.exit.discardChanges'),
+      message: t('speleodb.exit.unsavedMessage'),
+      confirmLabel: t('speleodb.exit.discardChanges'),
       cancelLabel: t('common.actions.cancel'),
+      ...(project.file_path ? { saveLabel: t('speleoExitPrompt.saveLocally') } : {}),
     });
-    if (!accepted || !current() || useProjectStore.getState().project !== project) return null;
+    if (choice === 'cancel' || !current() || useProjectStore.getState().project !== project) return null;
+    if (choice === 'save') {
+      const saved = await saveOpenProjectLocally();
+      if (!saved?.success || !current() || useProjectStore.getState().isDirty) return null;
+    }
     return { project };
   }, [t]);
 

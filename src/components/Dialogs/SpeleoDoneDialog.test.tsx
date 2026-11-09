@@ -353,6 +353,34 @@ it('Save upload progress disappears on failure while the description remains ava
   expect(screen.getByTestId('speleodb-done-message')).toHaveValue('Survey update');
 });
 
+it('opened by Save without the lock, it takes the lock once so the upload can go ahead (frontend#6)', async () => {
+  useUIStore.setState({ dialogData: { mode: 'push', acquire: true } });
+  useSpeleoStore.setState({ link: { ...LINK, editState: 'read-only' }, remoteProjectId: 'p1' });
+  invokeIpcMock.mockImplementation(async (command: string) => (command === 'speleodb_start_editing' ? { kind: 'editing' } : null));
+  render(<SpeleoDoneDialog />);
+  await waitFor(() => expect(useSpeleoStore.getState().link?.editState).toBe('editing'));
+  expect(invokeIpcMock.mock.calls.filter(([command]) => command === 'speleodb_start_editing')).toHaveLength(1);
+  fillCommitMessage();
+  expect(screen.queryByTestId('speleodb-upload-blocked')).toBeNull();
+  expect(screen.getByTestId('speleodb-done-confirm')).toBeEnabled();
+});
+
+it('a refused lock leaves the blocked panel, with Save on this computer as the way out (frontend#6)', async () => {
+  const save = vi.fn(async () => ({ success: true }));
+  useProjectStore.setState({ isDirty: true, saveProject: save as never });
+  useUIStore.setState({ dialogData: { mode: 'push', acquire: true } });
+  useSpeleoStore.setState({ link: { ...LINK, editState: 'read-only' }, remoteProjectId: 'p1' });
+  invokeIpcMock.mockImplementation(async (command: string) => (command === 'speleodb_start_editing' ? { kind: 'locked_by', email: 'other@example.com' } : null));
+  render(<SpeleoDoneDialog />);
+  await waitFor(() => expect(screen.getByTestId('speleodb-upload-save-local')).toBeEnabled());
+  expect(screen.getByTestId('speleodb-done-confirm')).toBeDisabled();
+  await userEvent.click(screen.getByTestId('speleodb-upload-save-local'));
+  await waitFor(() => expect(useUIStore.getState().activeDialog).toBeNull());
+  expect(save).toHaveBeenCalledOnce();
+  expect(useUIStore.getState().showToast).toHaveBeenCalledWith(expect.stringContaining('Saved on this computer'), 'speleodb-saved-locally', 'warning');
+  expect(invokeIpcMock.mock.calls.filter(([command]) => command === 'speleodb_push' || command === 'speleodb_done')).toHaveLength(0);
+});
+
 it('refuses a description longer than SpeleoDB can store, counting a line break as two (sdk#2)', async () => {
   useUIStore.setState({ dialogData: { mode: 'push' } });
   render(<SpeleoDoneDialog />);

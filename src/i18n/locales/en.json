@@ -3431,6 +3431,15 @@
       "failedHeading": "Your changes were NOT uploaded",
       "retryHint": "They are still only on this computer. Fix the problem, then press the button again to retry."
     },
+    "saveLocal": {
+      "signedOut": "Saved on this computer. Sign in to SpeleoDB to upload it.",
+      "lockedBy": "Saved on this computer. {{email}} is editing this project, so it was not uploaded.",
+      "noAccess": "Saved on this computer. You cannot upload this project to SpeleoDB.",
+      "saved": "Saved on this computer. Not uploaded to SpeleoDB yet.",
+      "button": "Save on this computer",
+      "acquiring": "Taking the editing lock so you can upload…",
+      "blocked": "Upload needs sign-in, write permission and the editing lock. You can save your work on this computer and upload it later."
+    },
     "commitMessage": {
       "count": "{{length}} / {{max}} characters",
       "tooLong": "This description is too long for SpeleoDB ({{length}} characters). Shorten it to {{max}} characters or fewer. Each line break counts as two characters."
@@ -3661,6 +3670,7 @@
     "discard": "Discard changes",
     "discardHint": "Throw away the changes that are not on SpeleoDB and hand the project back.",
     "back": "Back",
+    "saveLocally": "Save on this computer",
     "uploadBody": "Describe what you changed. Other cavers will see this note in the project history.",
     "messageLabel": "What did you change?",
     "messagePlaceholder": "For example: surveyed the north passage",

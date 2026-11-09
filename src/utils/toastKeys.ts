@@ -95,6 +95,7 @@ export const TOAST_KEYS = {
   SPELEODB_RELEASED: 'speleodb-released',
   SPELEODB_TOOK_REMOTE: 'speleodb-took-remote',
   SPELEODB_LATE_UPLOAD: 'speleodb-late-upload',
+  SPELEODB_SAVED_LOCALLY: 'speleodb-saved-locally',
 
   // Dialogs
   NEW_SECTION_PASTE_CAP: 'new-section-paste-cap',

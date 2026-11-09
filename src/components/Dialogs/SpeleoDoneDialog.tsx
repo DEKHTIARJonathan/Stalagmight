@@ -1,4 +1,7 @@
-import { permissionAtLeast } from '../../utils/speleoPermission';
+import { canResumeSpeleoEditing } from '../../utils/speleoPermission';
+import { saveOpenProjectLocally } from '../../utils/saveOpenProjectLocally';
+import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useProject } from '../../hooks/useProject';
 import { captureUploadOwner, getUploadContinuation, setUploadContinuation, uploadOwnerStillCurrent } from '../../utils/uploadContinuation';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -43,6 +46,7 @@ export default function SpeleoDoneDialog() {
   const dialogData = useUIStore((s) => s.dialogData);
   const mode = dialogData.mode === 'push' ? 'push' : 'release';
   const { busy, push, done, startEditing } = useSpeleoActions();
+  const { handleCloseProject } = useProject();
   const path = useProjectStore((s) => s.project?.file_path);
   const [owner] = useState(captureUploadOwner);
   const sessionGeneration = useSpeleoStore((s) => s.sessionGeneration);
@@ -58,8 +62,10 @@ export default function SpeleoDoneDialog() {
     if (path) setUploadContinuation({ path, message, closeAfterSave }, owner);
   }, [path, message, closeAfterSave, owner, ownerCurrent, sessionGeneration, projectGeneration, dialogData, closeDialog]);
   const link = useSpeleoStore((s) => s.link);
-  const loggedIn = useSpeleoStore((s) => s.session?.loggedIn);
-  const uploadAllowed = link?.editState === 'editing' && !link.noAccess && loggedIn === true && permissionAtLeast(link.permission, 'READ_AND_WRITE');
+  const session = useSpeleoStore((s) => s.session);
+  const loggedIn = session?.loggedIn;
+  const canAcquire = canResumeSpeleoEditing(link, session) && link?.lockedByOther !== true;
+  const uploadAllowed = link?.editState === 'editing' && canResumeSpeleoEditing(link, session);
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgressExpired, setUploadProgressExpired] = useState(false);
@@ -78,6 +84,37 @@ export default function SpeleoDoneDialog() {
   // sdk#2: a description SpeleoDB cannot store is never sent (the backend refuses it too).
   const messageTooLong = commitMessageTooLong(message);
   const dismiss = () => { if (!uploading) setUploadContinuation(null); closeDialog(); };
+
+  // frontend#6: Save opened this dialog for a project we were not editing, after
+  // saving it on this computer (`dispatchProjectSave`). Take the editing lock
+  // once, so the upload can go ahead; a refusal says why on its own surface and
+  // leaves the blocked panel, with the work already safe on disk.
+  const acquireOnOpen = dialogData.acquire === true;
+  const acquireTried = useRef(false);
+  const [acquiring, setAcquiring] = useState(false);
+  useEffect(() => {
+    if (!acquireOnOpen || acquireTried.current || uploadAllowed || !canAcquire) return;
+    acquireTried.current = true;
+    setAcquiring(true);
+    void startEditing().finally(() => setAcquiring(false));
+  }, [acquireOnOpen, uploadAllowed, canAcquire, startEditing]);
+
+  // frontend#6: when upload is impossible the work still goes somewhere safe -
+  // this computer - rather than staying only discardable.
+  const saveLocally = async () => {
+    if (attempt.current) return;
+    attempt.current = true;
+    setSubmitting(true);
+    try {
+      const saved = await saveOpenProjectLocally();
+      if (!saved?.success || !uploadOwnerStillCurrent(owner)) return;
+      useUIStore.getState().showToast(t('speleodb.saveLocal.saved'), TOAST_KEYS.SPELEODB_SAVED_LOCALLY, 'warning');
+      const ui = useUIStore.getState();
+      if (ui.activeDialog !== 'speleodb-done' || ui.dialogData !== dialogData) return;
+      closeDialog();
+      if (closeAfterSave) await handleCloseProject();
+    } finally { attempt.current = false; setSubmitting(false); }
+  };
 
   const handleConfirm = async () => {
     const text = message.trim();
@@ -181,8 +218,11 @@ export default function SpeleoDoneDialog() {
           Upload has taken more than 120 seconds. It may still finish. Close this dialog to continue working.
         </p>}
         {!uploadAllowed && <div className="space-y-3" data-testid="speleodb-upload-blocked">
-          <p role="status">Upload requires sign-in, write permission and the editing lock. Your work remains on this computer.</p>
-          {!loggedIn ? <Button onClick={() => useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })} data-testid="speleodb-upload-sign-in">Sign in in Settings</Button> : <Button onClick={() => void startEditing()} disabled={busyAny || link?.noAccess} data-testid="speleodb-upload-resume">Resume editing</Button>}
+          <p role="status" data-testid="speleodb-upload-blocked-reason">{acquiring ? t('speleodb.saveLocal.acquiring') : t('speleodb.saveLocal.blocked')}</p>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => void saveLocally()} disabled={busyAny || acquiring} data-testid="speleodb-upload-save-local">{t('speleodb.saveLocal.button')}</Button>
+            {!loggedIn ? <Button onClick={() => useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })} data-testid="speleodb-upload-sign-in">Sign in in Settings</Button> : <Button onClick={() => void startEditing()} disabled={busyAny || acquiring || link?.noAccess} data-testid="speleodb-upload-resume">Resume editing</Button>}
+          </div>
         </div>}
         <p className="text-sm text-text-secondary">
           {mode === 'push' ? t('speleodb.done.pushDescription') : t('speleodb.done.description')}
