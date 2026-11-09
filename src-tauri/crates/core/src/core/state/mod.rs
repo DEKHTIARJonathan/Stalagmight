@@ -32,6 +32,7 @@ mod speleodb_project;
 mod speleodb_pull;
 mod speleodb_push;
 mod speleodb_reload;
+mod speleodb_revision_swap;
 mod speleodb_revisions;
 mod speleodb_session;
 mod speleodb_sidecars;
