@@ -116,7 +116,10 @@ async function closeWith(opts: { releaseLock?: boolean; discardLocal?: boolean }
   if (!result.success) {
     return { ok: false, error: result.error || i18n.t('speleoExitPrompt.errors.closeFailed') };
   }
-  const warning = result.warnings?.find((w) => w.code === 'speleodb_discard_failed')?.message;
+  // A close that happened but left something behind - the discard could not
+  // remove the copy (lock kept), or the copy went but the lock could not be
+  // released - is still a close; the user is told what was left.
+  const warning = result.warnings?.[0]?.message;
   return warning ? { ok: true, warning } : { ok: true };
 }
 
