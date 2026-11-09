@@ -23,21 +23,80 @@ file-picker, drag/drop and OS file opens. Opening automatically attempts to acqu
 the server mutex and reconcile the local base. Only successful
 acquisition/reconciliation enables editing. A lock held by another account keeps
 the project read-only and the contention dialog identifies its current editor. Offline opening
-stays read-only; a transient connection failure after acquisition permits local
-editing. Confirmed lock loss, sign-out or permission loss closes the editing gate.
+and opening without a session stay read-only; a transient connection failure after
+acquisition permits local editing. Confirmed lock loss, sign-out or permission loss
+closes the editing gate.
 
 The home screen uses the same card or table row for downloaded and undownloaded
 SpeleoDB projects. Selecting one never exposes local Project Details, local open,
-or local deletion actions. Opening always attempts a fresh download. Only a DNS,
-connection-unavailable or timeout failure allows opening an existing cache, whose
-stored project ID and endpoint must match. The UI announces that offline fallback
-and preserves the cached unsynced-edit state. Authentication, permission, missing
-remote project, TLS and invalid-download errors do not fall back to the cache.
-If a successful download would overwrite unsynced edits, the user can cancel or
-explicitly confirm replacing them; the prompt offers no online local-copy shortcut.
+or local deletion actions. Opening while signed in always attempts a fresh download.
+Only a DNS, connection-unavailable or timeout failure allows opening an existing
+cache, whose stored project ID and endpoint must match. The UI announces that
+offline fallback and preserves the cached unsynced-edit state. If a successful
+download would overwrite unsynced edits, the user can cancel or explicitly confirm
+replacing them; the prompt offers no online local-copy shortcut.
+
+Without a usable session the cached copy opens read-only, with no network call:
+
+- **Signed out** (no saved token): the cached copy of that project opens as it is,
+  un-uploaded edits kept, without a lock attempt. Any instance's copy qualifies,
+  since nothing is sent anywhere.
+- **Expired token**: a 401, or a 403 that the whoami probe confirms is a dead token,
+  drops the token (as on every authenticated call). The open then continues as a
+  signed-out one, and the app shows the user as signed out.
+- **Server-side denial keeps the no-fallback rule**: a 403 while the token is still
+  valid, or a 404, means the server says this account may not have the project. No
+  cached copy is opened. TLS and invalid-download errors do not fall back either.
+
+A copy opened without a session says "Read-only copy - log in to edit" on its home
+screen card or row, on the map's read-only pill (with a Log in action that opens the
+SpeleoDB settings) and in the SpeleoDB workspace header. Signing in later does not
+change an open project by itself; Resume editing then takes the lock as usual. A
+signed-in account whose permission is below read-and-write sees "Read-only - your
+SpeleoDB access does not allow editing" in the same three places.
 
 Collaborator/team management and remote project deletion are absent. Local file
 management, local imports and local exports remain separate application features.
+
+## Cached copies on this computer
+
+Every project opened from SpeleoDB lives at
+`<cache>/speleodb/<project_id>/project.stalx`. The `.stalx` records its instance,
+but not the account: the file rides to the server on every upload, so an account
+email inside it would reach every collaborator. The account is recorded beside the
+copy instead, in `owner.json`, which never leaves the machine. It is written when a
+signed-in account opens the copy online (download, or the fast-forward local open
+after the server showed that account the history) and when a project is published.
+It is not written for offline or signed-out opens.
+
+The home screen lists the cached copies by owner:
+
+- **Signed in**: the copies of the signed-in account on the signed-in instance.
+  Copies with no owner record, downloaded before the record existed, are listed
+  when their own link names the signed-in instance and hidden when it names another.
+  Nothing tells whose they are, and hiding a pre-upgrade copy from the account that
+  downloaded it would hide the way back to its work. The next online open records
+  the owner. Other accounts' copies are hidden everywhere on the home screen,
+  including the map. A project the account can see on the server is still listed
+  from the server listing, and opening it downloads as that account (guarded against
+  replacing un-uploaded edits).
+- **Signed out**: every cached copy, of every account and instance.
+
+Right-click on a SpeleoDB card, table row or map marker opens the SpeleoDB project
+menu: Open project, Zoom to system (when the project is on the map) and Remove local
+copy. Removing a copy goes through an in-app confirmation that first re-reads the
+copy. A copy with un-uploaded edits, or one whose state cannot be read, gets a
+warning and a "Remove copy and lose my changes" button. Only that confirmation tells
+the backend to remove such a copy; without it the backend refuses. The project open
+right now is never removed. Removal sends the `.stalx` to the OS trash where there is
+one, drops its recents row, and deletes the rest of its directory (owner record and
+SQLite sidecars). It releases no lock.
+
+SpeleoDB settings has "Purge all cached files". It removes every cached copy of every
+account except the open project. Copies with un-uploaded or unreadable state are
+listed in the confirmation and kept by default ("Keep those, remove the rest").
+Deleting them too takes a second confirmation. The backend re-checks every copy when
+it removes it.
 
 ## Operations used by the app
 
