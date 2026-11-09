@@ -242,10 +242,9 @@ release. Close, Quit and Save-and-Close retain their separate lifecycle behavior
 
 ## Network activity and responsiveness
 
-No synchronous command waits on SpeleoDB network I/O, because Tauri runs those on
-the main thread and a wait there freezes the whole window. The SpeleoDB commands,
-the Settings save and reload, and project deletion run their work off the main
-thread. Panel, column and gas settings writes never wait on SpeleoDB: only a
+Tauri runs synchronous commands on the main thread, so a SpeleoDB network wait
+inside one freezes the whole window. The SpeleoDB commands, the Settings save and
+reload, and project deletion run their work off the main thread. Panel, column and gas settings writes never wait on SpeleoDB: only a
 settings change that moves to another SpeleoDB instance joins the queue of lock
 operations, and its lock release is sent after the settings lock is let go. While
 an edit session is active, the lock check that runs at most every 20 minutes
