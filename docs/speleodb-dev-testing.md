@@ -160,7 +160,9 @@ UI regression coverage must include:
   `Project Creation` automatically. Autosave remains local; failures keep the
   message and local edits available for retry.
 - Switching projects, closing a project, or quitting releases the editing lock
-  automatically. These exits do not upload changes. The SpeleoDB workspace offers
+  automatically; a release that fails or is uncertain asks "Couldn't hand back the
+  lock" (Retry / Close and keep the lock / Cancel) instead of leaving silently.
+  These exits do not upload changes. The SpeleoDB workspace offers
   Switch to Read Only Mode only when locally saved and uploaded; Resume editing
   retries editing when it becomes available. A different holder is never released.
   Local release/acquire/refresh operations are serialized.
