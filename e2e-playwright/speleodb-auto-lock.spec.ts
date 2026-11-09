@@ -207,3 +207,61 @@ test('Settings authentication returns the Save description and close intent with
   expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.uiStore.getState().dialogData.closeAfterSave)).toBe(true);
   await expect(page.getByTestId('single-system-view')).toBeVisible();
 });
+
+test('the read-only map pill offers Resume editing, which retakes the lock', async ({ page }) => {
+  await openRemote(page, false);
+  await openSpeleoTab(page);
+  await page.getByTestId('speleodb-workspace-editing').click();
+  const pill = page.getByTestId('speleodb-readonly-banner');
+  await expect(pill).toBeVisible();
+  // No yellow read-only bar above the map any more: the pill and the tab's lock say it.
+  await expect(page.getByTestId('speleodb-access-notice')).toHaveCount(0);
+  await expect(page.getByTestId('workspace-tab-speleodb')).toHaveAttribute('data-state', 'read-only');
+  await pill.getByTestId('speleodb-readonly-resume').click();
+  await expect(pill).toHaveCount(0);
+  await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Switch to Read Only Mode');
+  expect(await page.evaluate(() => (window as unknown as { __lockCalls: string[] }).__lockCalls)).toEqual(['acquire', 'release', 'acquire']);
+});
+
+test('the read-only pill hides Resume editing when it cannot apply', async ({ page }) => {
+  await openRemote(page, false);
+  await openSpeleoTab(page);
+  await page.getByTestId('speleodb-workspace-editing').click();
+  const pill = page.getByTestId('speleodb-readonly-banner');
+  await expect(pill.getByTestId('speleodb-readonly-resume')).toBeVisible();
+  await page.evaluate(() => {
+    const store = (window as unknown as TestWindow).__E2E_TEST__.speleoStore;
+    store.setState({ link: { ...store.getState().link!, permission: 'READ_ONLY' } });
+  });
+  await expect(pill).toBeVisible();
+  await expect(pill.getByTestId('speleodb-readonly-resume')).toHaveCount(0);
+  await page.evaluate(() => {
+    const store = (window as unknown as TestWindow).__E2E_TEST__.speleoStore;
+    store.setState({ session: null, link: { ...store.getState().link!, permission: 'READ_AND_WRITE' } });
+  });
+  await expect(pill).toBeVisible();
+  await expect(pill.getByTestId('speleodb-readonly-resume')).toHaveCount(0);
+});
+
+test('Reload Project asks in the in-app dialog and Cancel keeps the work', async ({ page }) => {
+  await openRemote(page, false);
+  await page.evaluate(() => {
+    const w = window as unknown as TestWindow & { __updateCalls: number };
+    w.__updateCalls = 0;
+    Object.defineProperty(w.__MOCK_IPC_OVERRIDES__, 'speleodb_update', { get: () => { w.__updateCalls += 1; return { kind: 'up_to_date' }; } });
+    w.__E2E_TEST__.projectStore.setState({ isDirty: true });
+  });
+  await openSpeleoTab(page);
+  await page.getByTestId('speleodb-workspace-latest').click();
+  const dialog = page.getByTestId('speleodb-reload-confirm-dialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('Discard changes removes unsaved and unuploaded modifications');
+  await page.getByTestId('speleodb-reload-confirm-cancel').click();
+  await expect(dialog).toHaveCount(0);
+  expect(await page.evaluate(() => (window as unknown as { __updateCalls: number }).__updateCalls)).toBe(0);
+  expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.getState().isDirty)).toBe(true);
+  await page.getByTestId('speleodb-workspace-latest').click();
+  await page.getByTestId('speleodb-reload-confirm-discard').click();
+  await expect(dialog).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as unknown as { __updateCalls: number }).__updateCalls)).toBe(1);
+});

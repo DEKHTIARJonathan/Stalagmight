@@ -2339,6 +2339,11 @@
       "expandAria": "Show map imagery sources",
       "collapsed": "by {{source}}"
     },
+    "readOnlyPill": {
+      "resume": "Resume editing",
+      "resumeSpeleoTitle": "Take the SpeleoDB write lock again so you can edit",
+      "resumeRawTitle": "Switch back to the Raw Data View, which you can edit"
+    },
     "geometry": {
       "adjustedBadge": "Closures Computed View · read-only",
       "computing": "Computing closures…",

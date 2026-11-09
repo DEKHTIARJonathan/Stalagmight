@@ -21,8 +21,11 @@ vi.mock('react-i18next', async () => {
       );
     return typeof value === 'string' ? value : key;
   };
-  return { useTranslation: () => ({ t }) };
+  // The pills' Resume buttons pull in the SpeleoDB action hook, whose imports
+  // initialise i18n - hand it a no-op plugin so that init stays inert here.
+  return { useTranslation: () => ({ t }), initReactI18next: { type: '3rdParty', init: () => {} } };
 });
+vi.mock('../../utils/ipc', () => ({ invokeIpc: vi.fn(), getErrorMessage: String }));
 
 const baseProps = {
   focused: false,
