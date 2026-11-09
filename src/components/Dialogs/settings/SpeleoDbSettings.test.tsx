@@ -62,6 +62,11 @@ describe('the insecure-HTTP option (development builds only)', () => {
     render(<SpeleoDbSettings config={defaultConfig} onChange={onChange} changedFields={new Set()} onValidationError={vi.fn()} panelIdBase="dev-toggle" />);
     fireEvent.click(screen.getByTestId('toggle-speleodb-insecure-http'));
     expect(onChange).toHaveBeenLastCalledWith({ speleodb: { ...defaultConfig.speleodb, insecure_http: true } });
+    // The automatic exceptions are named from their one description.
+    const panel = screen.getByTestId('settings-panel-speleodb');
+    expect(panel).toHaveTextContent('HTTPS is required except for localhost, 127.0.0.1 and 192.168.x.x addresses.');
+    expect(panel).toHaveTextContent('Development builds only.');
+    expect(panel).not.toHaveTextContent('$t(');
   });
 
   it('a development build locks it with the server while connected', () => {
