@@ -45,16 +45,19 @@ interface Seed {
   /** What `speleodb_open_project` answers; the session ends with it when `read_only` says so. */
   open?: Record<string, unknown>;
   purge?: Record<string, unknown>;
+  /** Recents rows (the map is built from them). */
+  recents?: Record<string, unknown>[];
 }
 
-async function seed(page: Page, { signedIn, copies, open, purge }: Seed): Promise<string[]> {
-  await page.addInitScript(({ signedIn, copies, open, purge, inSession, outSession, openedId }) => {
+async function seed(page: Page, { signedIn, copies, open, purge, recents }: Seed): Promise<string[]> {
+  await page.addInitScript(({ signedIn, copies, open, purge, recents, inSession, outSession, openedId }) => {
     const w = window as unknown as Record<string, unknown>;
     let loggedIn = signedIn;
     const overrides: Record<string, unknown> = {
       speleodb_list_projects: [],
       speleodb_cached_projects: copies,
       ...(purge ? { speleodb_purge_cached_copies: purge } : {}),
+      ...(recents ? { get_recent_projects: recents, list_recent_projects: recents } : {}),
     };
     Object.defineProperty(overrides, 'speleodb_session', {
       enumerable: true,
@@ -74,7 +77,7 @@ async function seed(page: Page, { signedIn, copies, open, purge }: Seed): Promis
     // The opened copy is a SpeleoDB project, held read-only.
     w.__speleoLinkStatusOverrides = { is_remote: true, edit_enabled: false, project_id: openedId };
   }, {
-    signedIn, copies, open: open ?? null, purge: purge ?? null,
+    signedIn, copies, open: open ?? null, purge: purge ?? null, recents: recents ?? null,
     inSession: SIGNED_IN, outSession: SIGNED_OUT, openedId: MINE,
   });
   const commands: string[] = [];
@@ -153,6 +156,27 @@ test('signed in: only this account\'s copies and unknown-owner copies are listed
   await expect(page.getByTestId(`system-card-remote-${MINE}`)).not.toContainText('log in to edit');
 });
 
+for (const signedIn of [false, true]) {
+  test(`map: another account's cached copy is ${signedIn ? 'hidden while signed in' : 'shown while signed out'}`, async ({ page }) => {
+    const path = copy(THEIRS, 'Synthetic theirs', 'other_account').local_path;
+    await seed(page, {
+      signedIn,
+      copies: [copy(THEIRS, 'Synthetic theirs', signedIn ? 'other_account' : 'signed_out')],
+      recents: [
+        { name: 'Local cave', file_path: '/projects/local.stalx', location: null, modified_at: '2026-01-01T00:00:00Z',
+          section_count: 1, station_count: 2, total_length: 3, gps_center: [-87.46, 20.21], gps_bounds: null, is_remote: false },
+        { name: 'Synthetic theirs', file_path: path, location: null, modified_at: '2026-01-01T00:00:00Z',
+          section_count: 1, station_count: 2, total_length: 3, gps_center: [-87.4631, 20.2137], gps_bounds: null,
+          is_remote: true, speleodb_project_id: THEIRS },
+      ],
+    });
+    await page.getByTestId('globalview-view-toggle-map').click();
+    await page.getByTestId('view-mode-toggle').click();
+    await expect(page.getByTestId(`system-marker-${encodeURIComponent('/projects/local.stalx')}`)).toBeVisible();
+    await expect(page.getByTestId(`system-marker-${encodeURIComponent(path)}`)).toHaveCount(signedIn ? 0 : 1);
+  });
+}
+
 for (const density of ['cards', 'table'] as const) {
   test(`${density}: right-click removes the local copy, warning before un-uploaded work goes`, async ({ page }) => {
     await seed(page, {
@@ -170,6 +194,8 @@ for (const density of ['cards', 'table'] as const) {
     const dialog = page.getByTestId('speleodb-remove-copy-dialog');
     await expect(dialog).toBeVisible();
     await expect(dialog.getByTestId('speleodb-remove-copy-warning')).toContainText('never uploaded');
+    // Signed out, no lock is handed back, and the dialog says where it stays.
+    await expect(dialog.getByTestId('speleodb-remove-copy-lock')).toContainText('You are signed out, so no editing lock is handed back');
     const confirm = dialog.getByTestId('speleodb-remove-copy-confirm');
     await expect(confirm).toHaveText('Remove copy and lose my changes');
     // Cancel removes nothing.
@@ -202,7 +228,7 @@ test('purge keeps copies with un-uploaded changes unless deleting them is confir
   await seed(page, {
     signedIn: true,
     copies: [copy(MINE, 'Synthetic mine', 'mine', true), copy(LEGACY, 'Synthetic legacy', 'unknown')],
-    purge: { removed: 1, kept_unpushed: ['Synthetic mine'], kept_open: [], failed: [] },
+    purge: { removed: 1, kept_unpushed: ['Synthetic mine'], kept_open: [], failed: [], locks_released: ['Synthetic legacy'], locks_unchecked: [] },
   });
   await page.evaluate(() => {
     (window as unknown as { __E2E_TEST__: { uiStore: { getState: () => { openDialog: (d: string, data?: unknown) => void } } } })
@@ -215,10 +241,12 @@ test('purge keeps copies with un-uploaded changes unless deleting them is confir
   const dialog = page.getByTestId('speleodb-purge-dialog');
   await expect(dialog).toBeVisible();
   await expect(dialog.getByTestId('speleodb-purge-at-risk-list')).toHaveText('Synthetic mine');
+  await expect(dialog.getByTestId('speleodb-purge-locks')).toContainText('Your editing locks on these projects are handed back');
   await dialog.getByTestId('speleodb-purge-keep-at-risk').click();
   await expect(dialog).toHaveCount(0);
   await expect(section.getByTestId('speleodb-purge-result')).toContainText('Removed 1 downloaded copy.');
   await expect(section.getByTestId('speleodb-purge-result')).toContainText('Synthetic mine');
+  await expect(section.getByTestId('speleodb-purge-result')).toContainText('Handed back the editing lock of: Synthetic legacy');
 
   await section.getByTestId('speleodb-purge-cache').click();
   await page.getByTestId('speleodb-purge-delete-all').click();

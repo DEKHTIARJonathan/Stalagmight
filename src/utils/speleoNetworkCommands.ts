@@ -39,6 +39,10 @@ const KINDS: Readonly<Record<string, SpeleoNetworkKind>> = {
   speleodb_release_current_lock: 'exclusive',
   speleodb_unlink: 'exclusive',
   speleodb_publish: 'exclusive',
+  // Removing a cached copy (one, or the purge) hands back this account's lock on
+  // the project afterwards, when the server says the account holds it.
+  speleodb_remove_cached_copy: 'exclusive',
+  speleodb_purge_cached_copies: 'exclusive',
 };
 
 /** The network kind of one IPC call, or `null` when it never reaches SpeleoDB. */

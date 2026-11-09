@@ -68,6 +68,7 @@ describe('speleoNetworkKind', () => {
       'speleodb_push', 'speleodb_update', 'speleodb_take_remote', 'speleodb_discard_changes',
       'speleodb_restore_revision', 'speleodb_release_lock', 'speleodb_release_lock_acquired_here',
       'speleodb_release_current_lock', 'speleodb_unlink', 'speleodb_publish',
+      'speleodb_remove_cached_copy', 'speleodb_purge_cached_copies',
     ]) {
       expect(speleoNetworkKind(command), command).toBe('exclusive');
     }

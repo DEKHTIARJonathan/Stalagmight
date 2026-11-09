@@ -4,8 +4,22 @@ import { DialogWrapper } from '../Dialogs/DialogWrapper';
 import { Button } from '../common/Button';
 import { invokeIpc } from '../../utils/ipc';
 import { useSpeleoCacheStore } from '../../store/speleoCacheStore';
+import { useSpeleoOperationBusy } from '../../hooks/useSpeleoOperationBusy';
 import { cachedCopyAtRisk } from '../../utils/speleoCachedCopies';
-import type { CommandResult, SpeleoCachedProject } from '../../types/ipc.generated';
+import type { CommandResult, SpeleoCacheOwnership, SpeleoCachedProject } from '../../types/ipc.generated';
+
+/**
+ * What happens to the project's editing lock. The backend hands back this
+ * account's lock (holder-checked) after removing a copy of its own; signed out, or
+ * for another account's copy, nothing is asked and a held lock stays until the next
+ * sign-in's held-lock prompt or the website.
+ */
+const LOCK_NOTE: Record<SpeleoCacheOwnership, string> = {
+  mine: 'speleodb.cachedCopies.remove.lockHandedBack',
+  unknown: 'speleodb.cachedCopies.remove.lockHandedBack',
+  signed_out: 'speleodb.cachedCopies.remove.lockStaysSignedOut',
+  other_account: 'speleodb.cachedCopies.remove.lockStaysOtherAccount',
+};
 
 /**
  * In-app confirmation for removing the copy of a SpeleoDB project this computer
@@ -15,7 +29,8 @@ import type { CommandResult, SpeleoCachedProject } from '../../types/ipc.generat
  * gets a warning and a confirm button that names the loss; only that confirmation
  * sends `discardUnpushed`, and the backend refuses at-risk copies without it. The
  * copy's state is re-read when the dialog opens, and confirming waits for that
- * read, so the choice is always made against the copy as it is now.
+ * read, so the choice is always made against the copy as it is now. It also says
+ * what becomes of the project's editing lock (see `LOCK_NOTE`).
  */
 export function RemoveCachedCopyDialog({
   copy,
@@ -32,6 +47,7 @@ export function RemoveCachedCopyDialog({
   const latest = useSpeleoCacheStore((s) => s.copies.find((c) => c.project_id === copy.project_id));
   const current = latest ?? copy;
   const [checked, setChecked] = useState(false);
+  const speleoBusy = useSpeleoOperationBusy();
   const [removing, setRemoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -89,6 +105,9 @@ export function RemoveCachedCopyDialog({
               : 'speleodb.cachedCopies.remove.unpushed')}
           </div>
         )}
+        <p className="text-text-secondary text-sm" data-testid="speleodb-remove-copy-lock">
+          {t(LOCK_NOTE[current.ownership])}
+        </p>
         {error && (
           <div className="text-error text-sm" data-testid="speleodb-remove-copy-error">
             {error}
@@ -101,7 +120,8 @@ export function RemoveCachedCopyDialog({
           <Button
             variant="danger"
             onClick={() => void handleConfirm()}
-            disabled={removing || !checked}
+            // Another lock, upload or account call must not overlap the lock hand-back.
+            disabled={removing || !checked || speleoBusy}
             data-testid="speleodb-remove-copy-confirm"
           >
             {removing

@@ -537,3 +537,141 @@ fn a_missing_project_never_falls_back_to_the_copy() {
         assert!(state.speleodb_active_token().is_ok());
     });
 }
+
+// --- removing a copy hands back this account's lock ---------------------------
+
+/// A project body whose lock `holder` holds, for every request (probe and release).
+fn held_by(holder: &str) -> (u16, String) {
+    (
+        200,
+        super::tests_support::sdk_fixture(&format!(
+            r#"{{"id":"{MINE}","name":"Remote","permission":"READ_AND_WRITE","active_mutex":{{"user":"{holder}"}}}}"#
+        )),
+    )
+}
+
+fn releases(seen: &Arc<Mutex<Vec<String>>>) -> usize {
+    seen.lock()
+        .expect("log")
+        .iter()
+        .filter(|line| line.contains("/release"))
+        .count()
+}
+
+/// A clean cached copy of [`MINE`] on `url`, recorded as `owner`'s.
+fn owned_copy(root: &Path, url: &str, owner: &str) -> PathBuf {
+    let path = seed(root, MINE, url, false);
+    AppState::new()
+        .expect("state")
+        .speleodb_record_cache_owner(&path, url, owner, "Remote 1111");
+    path
+}
+
+#[test]
+fn removing_my_copy_hands_back_the_lock_the_server_says_i_hold() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = loopback(|_| held_by(ME));
+        let temp = tempfile::tempdir().expect("temp");
+        owned_copy(temp.path(), &url, ME);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        let removed = state.speleodb_remove_cached_copy_in(temp.path(), MINE, false);
+        assert!(removed.success, "{:?}", removed.error);
+        assert!(removed.warnings.is_empty(), "{:?}", removed.warnings);
+        assert_eq!(releases(&seen), 1, "the lock is handed back");
+        assert!(!temp.path().join(MINE).exists());
+    });
+}
+
+#[test]
+fn removing_my_copy_never_releases_someone_elses_lock() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = loopback(|_| held_by("someone@example.com"));
+        let temp = tempfile::tempdir().expect("temp");
+        owned_copy(temp.path(), &url, ME);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        assert!(
+            state
+                .speleodb_remove_cached_copy_in(temp.path(), MINE, false)
+                .success
+        );
+        assert_eq!(seen.lock().expect("log").len(), 1, "only the holder probe");
+        assert_eq!(releases(&seen), 0);
+    });
+}
+
+#[test]
+fn another_accounts_copy_or_no_session_asks_the_server_nothing() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = loopback(|_| held_by(ME));
+        let temp = tempfile::tempdir().expect("temp");
+        owned_copy(temp.path(), &url, "someone@example.com");
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        let report = state.speleodb_purge_cached_copies_in(temp.path(), false);
+        assert_eq!(report.removed, 1);
+        assert!(report.locks_released.is_empty() && report.locks_unchecked.is_empty());
+
+        owned_copy(temp.path(), &url, ME);
+        let signed_out = signed_out();
+        assert!(
+            signed_out
+                .speleodb_remove_cached_copy_in(temp.path(), MINE, false)
+                .success
+        );
+        assert!(seen.lock().expect("log").is_empty(), "no request at all");
+    });
+}
+
+#[test]
+fn an_unreachable_server_removes_the_copy_and_says_the_lock_may_stay() {
+    crate::test_helpers::with_isolated_config(|| {
+        let url = "http://127.0.0.1:1";
+        let temp = tempfile::tempdir().expect("temp");
+        owned_copy(temp.path(), url, ME);
+        let state = AppState::new().expect("state");
+        sign_in(&state, url, ME);
+        let removed = state.speleodb_remove_cached_copy_in(temp.path(), MINE, false);
+        assert!(removed.success, "{:?}", removed.error);
+        assert!(!temp.path().join(MINE).exists(), "the copy is gone");
+        assert!(removed
+            .warnings
+            .iter()
+            .any(|w| w.code == "speleodb_lock_not_handed_back"));
+        assert!(state.speleodb_active_token().is_ok(), "the session is kept");
+    });
+}
+
+#[test]
+fn purge_reports_the_locks_it_handed_back() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = loopback(|_| held_by(ME));
+        let temp = tempfile::tempdir().expect("temp");
+        owned_copy(temp.path(), &url, ME);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        let report = state.speleodb_purge_cached_copies_in(temp.path(), false);
+        assert_eq!(report.removed, 1);
+        assert_eq!(report.locks_released, vec!["Remote 1111".to_owned()]);
+        assert_eq!(releases(&seen), 1);
+    });
+}
+
+#[test]
+fn a_copy_that_could_not_be_removed_keeps_its_lock() {
+    crate::test_helpers::with_isolated_config(|| {
+        let (url, seen) = loopback(|_| held_by(ME));
+        let temp = tempfile::tempdir().expect("temp");
+        let path = owned_copy(temp.path(), &url, ME);
+        let state = AppState::new().expect("state");
+        sign_in(&state, &url, ME);
+        assert!(state.open_project(path).success, "open the copy");
+        assert!(
+            !state
+                .speleodb_remove_cached_copy_in(temp.path(), MINE, true)
+                .success
+        );
+        assert!(seen.lock().expect("log").is_empty());
+    });
+}

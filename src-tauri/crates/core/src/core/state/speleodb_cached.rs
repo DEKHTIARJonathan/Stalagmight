@@ -23,6 +23,15 @@
 //!
 //! Removal never reaches un-uploaded work without the caller's explicit consent
 //! (`discard_unpushed`), and never touches the project that is open.
+//!
+//! Removal does not strand a lock either. Once the copy is gone, when the session
+//! is the copy's account on its instance (owner recorded as this account, or no
+//! owner recorded and the copy is from this instance), the server is asked who
+//! holds the project's lock, and if it says this account, the lock is handed back
+//! through the normal release. Signed out, for another account's copy, or when the
+//! server cannot be asked, nothing else happens: a lock held on the server stays
+//! until that account's next sign-in (whose held-lock prompt offers to release it)
+//! or the SpeleoDB website.
 
 use std::path::{Path, PathBuf};
 
@@ -94,6 +103,11 @@ pub struct SpeleoPurgeReport {
     pub kept_open: Vec<String>,
     /// `name: reason` for copies whose removal failed.
     pub failed: Vec<String>,
+    /// Names of removed copies whose editing lock this account held and handed back.
+    pub locks_released: Vec<String>,
+    /// Names of removed copies of this account whose lock could not be checked or
+    /// handed back (SpeleoDB unreachable, or the release failed).
+    pub locks_unchecked: Vec<String>,
 }
 
 /// The `owner.json` record.
@@ -271,7 +285,10 @@ impl AppState {
 
     /// Remove the cached copy of `project_id`: the `.stalx` goes to the OS trash
     /// where there is one (through `delete_project`, which also drops its recents
-    /// row), then the rest of its directory goes. Releases no lock.
+    /// row), then the rest of its directory goes. Then, when the session is the
+    /// copy's account, this account's lock on the project is handed back if the
+    /// server says it holds it (see the module docs); a lock that could not be
+    /// checked or handed back is reported as a warning.
     ///
     /// Refuses the open project, and - unless `discard_unpushed` carries the user's
     /// explicit consent - a copy with un-uploaded edits or an unreadable state.
@@ -310,7 +327,24 @@ impl AppState {
                     purpose = "remove a cached SpeleoDB copy (user confirmed)",
                     "speleodb: removing a cached copy"
                 );
-                self.remove_cached_copy_files(root, project_id)
+                let (result, lock) = self.remove_cached_copy_and_lock(root, project_id);
+                match lock {
+                    LockHandBack::Unknown(reason) => {
+                        let mut warnings = result.warnings.clone();
+                        warnings.push(ValidationWarning {
+                            code: "speleodb_lock_not_handed_back".to_owned(),
+                            message: format!(
+                                "The copy was removed, but its editing lock could not be handed \
+                                 back ({reason}). If you hold it, it stays held until your next \
+                                 sign-in offers to release it, or until you release it on the \
+                                 SpeleoDB website."
+                            ),
+                            severity: WarningSeverity::Warning,
+                        });
+                        result.with_warnings(warnings)
+                    }
+                    _ => result,
+                }
             }
         }
     }
@@ -341,13 +375,18 @@ impl AppState {
                 Removal::Open => report.kept_open.push(name),
                 Removal::AtRisk => report.kept_unpushed.push(name),
                 Removal::Allowed => {
-                    let result = self.remove_cached_copy_files(root, &id);
+                    let (result, lock) = self.remove_cached_copy_and_lock(root, &id);
                     if result.success {
                         report.removed += 1;
                     } else {
                         report
                             .failed
                             .push(format!("{name}: {}", result.error.unwrap_or_default()));
+                    }
+                    match lock {
+                        LockHandBack::Released => report.locks_released.push(name),
+                        LockHandBack::Unknown(_) => report.locks_unchecked.push(name),
+                        LockHandBack::NotOurs | LockHandBack::NotHeld => {}
                     }
                 }
             }
@@ -357,6 +396,8 @@ impl AppState {
             kept_unpushed = report.kept_unpushed.len(),
             kept_open = report.kept_open.len(),
             failed = report.failed.len(),
+            locks_released = report.locks_released.len(),
+            locks_unchecked = report.locks_unchecked.len(),
             discard_unpushed,
             purpose = "purge the SpeleoDB cache (user confirmed)",
             "speleodb: purged cached copies"
@@ -385,6 +426,86 @@ impl AppState {
         match self.local_copy_state(project_id, &path) {
             Some(state) if !state.has_unpushed_edits && !state.state_unknown => Removal::Allowed,
             _ => Removal::AtRisk,
+        }
+    }
+
+    /// Remove the copy's files, then hand back this account's lock on the project
+    /// when that is ours to do. The account is resolved BEFORE the removal, because
+    /// the owner record goes with the copy's directory. The lock is handled only
+    /// after a successful removal: until the files are gone, the lock still guards
+    /// whatever they hold.
+    fn remove_cached_copy_and_lock(
+        &self,
+        root: &Path,
+        project_id: &str,
+    ) -> (CommandResult, LockHandBack) {
+        let account = self.copy_account_session(&cache_path_in(root, project_id));
+        let result = self.remove_cached_copy_files(root, project_id);
+        if !result.success {
+            return (result, LockHandBack::NotOurs);
+        }
+        let lock = self.hand_back_removed_copy_lock(project_id, account);
+        (result, lock)
+    }
+
+    /// The session's `(endpoint, token, email)` when it is the account of the copy at
+    /// `copy`: its recorded owner on its instance, or (no owner recorded) any account
+    /// of the copy's own instance. `None` signed out or for another account's copy.
+    fn copy_account_session(&self, copy: &Path) -> Option<(String, String, String)> {
+        let (endpoint, token, email) = self.speleodb_active_account().ok()?;
+        let link_endpoint = match read_cached_link(copy) {
+            CachedLink::Linked(link) => Some(link.endpoint),
+            CachedLink::NotManaged | CachedLink::Unreadable => None,
+        };
+        let ownership = ownership_of(
+            Some((endpoint.as_str(), email.as_str())),
+            read_owner_for(copy).as_ref(),
+            link_endpoint.as_deref(),
+        );
+        matches!(
+            ownership,
+            SpeleoCacheOwnership::Mine | SpeleoCacheOwnership::Unknown
+        )
+        .then_some((endpoint, token, email))
+    }
+
+    /// Ask the server who holds the project's lock (the short, unretried probe) and,
+    /// when it says this account, hand it back through the normal release. Never
+    /// drops the session on a failed probe: this is a best-effort courtesy after a
+    /// removal, not an authenticated operation the user asked for.
+    fn hand_back_removed_copy_lock(
+        &self,
+        project_id: &str,
+        account: Option<(String, String, String)>,
+    ) -> LockHandBack {
+        let Some((endpoint, token, email)) = account else {
+            return LockHandBack::NotOurs;
+        };
+        let insecure_http = self.speleodb_insecure_http();
+        match crate::speleodb::client::get_project_probe(
+            &endpoint,
+            &token,
+            insecure_http,
+            project_id,
+        ) {
+            Ok(remote) => {
+                let holder = remote.active_mutex.as_ref().map(|m| m.user.as_str());
+                if !super::speleodb::lock_held_by_me(holder, Some(&email)) {
+                    return LockHandBack::NotHeld;
+                }
+            }
+            Err(e) => return LockHandBack::Unknown(e.to_string()),
+        }
+        match self.speleodb_release_lock(project_id.to_owned()) {
+            Ok(()) => {
+                tracing::info!(
+                    project_id = %project_id,
+                    purpose = "hand back the lock of a removed cached copy",
+                    "speleodb: released this account's lock after removing its copy"
+                );
+                LockHandBack::Released
+            }
+            Err(e) => LockHandBack::Unknown(e.message),
         }
     }
 
@@ -426,4 +547,17 @@ enum Removal {
     Allowed,
     Open,
     AtRisk,
+}
+
+/// What happened to the server lock of a copy that was just removed.
+enum LockHandBack {
+    /// Signed out, or another account's copy: nothing was asked, and a lock held on
+    /// the server stays until that account's next sign-in or the website.
+    NotOurs,
+    /// The server says this account does not hold the lock.
+    NotHeld,
+    /// This account's lock was handed back.
+    Released,
+    /// The server could not be asked, or the release failed.
+    Unknown(String),
 }

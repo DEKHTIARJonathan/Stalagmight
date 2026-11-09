@@ -711,7 +711,9 @@ export default function GlobalView() {
     void loadRecentProjects();
     void refreshCachedCopies();
     reloadLocalStates();
-  }, [showToast, t, loadRecentProjects, refreshCachedCopies, reloadLocalStates]);
+    // The backend may have handed back this account's lock on the project.
+    if (copy.ownership === 'mine' || copy.ownership === 'unknown') void scanLocksOnOpen();
+  }, [showToast, t, loadRecentProjects, refreshCachedCopies, reloadLocalStates, scanLocksOnOpen]);
 
   const handleSpeleoZoom = useCallback((path: string) => {
     if (activeTab !== 'map') handleSwitchTab('map');

@@ -7,6 +7,7 @@ import { invokeIpc } from '../../../utils/ipc';
 import { formatNumber } from '../../../i18n/format';
 import { useSpeleoCacheStore } from '../../../store/speleoCacheStore';
 import { useProjectStore } from '../../../store/projectStore';
+import { useSpeleoStore } from '../../../store/speleoStore';
 import { useSpeleoOperationBusy } from '../../../hooks/useSpeleoOperationBusy';
 import { cachedCopyAtRisk } from '../../../utils/speleoCachedCopies';
 import type { SpeleoCachedProject, SpeleoPurgeReport } from '../../../types/ipc.generated';
@@ -28,6 +29,10 @@ interface PurgeMessage {
  * never removed silently: the confirmation lists them and defaults to keeping
  * them; deleting them too takes a second, explicit confirmation. The backend
  * re-checks every copy at removal time and keeps at-risk ones unless told.
+ *
+ * Signed in, the backend then hands back this account's editing lock on each
+ * removed copy of its own, when the server says the account holds it; the
+ * confirmation says so, and the result lists what was and was not handed back.
  *
  * Self-contained (its own state, dialogs and IPC) so the SpeleoDB settings panel
  * only has to render it.
@@ -60,6 +65,8 @@ export function SpeleoCachePurgeSection() {
         { purpose: 'purge downloaded SpeleoDB copies (user confirmed)' },
       );
       setMessage(purgeMessage(t, report));
+      // Handed-back locks change the home screen's lock badges.
+      if (report.locks_released.length > 0) void useSpeleoStore.getState().scanLocksOnOpen();
     } catch (e) {
       setMessage({ lines: [e instanceof Error ? e.message : String(e)], tone: 'warning' });
     } finally {
@@ -112,10 +119,17 @@ function purgeMessage(t: ReturnType<typeof useTranslation>['t'], report: SpeleoP
   if (report.kept_open.length > 0) {
     lines.push(t('speleodb.cachedCopies.purge.keptOpen', { names: report.kept_open.join(', ') }));
   }
+  if (report.locks_released.length > 0) {
+    lines.push(t('speleodb.cachedCopies.purge.locksReleased', { names: report.locks_released.join(', ') }));
+  }
+  if (report.locks_unchecked.length > 0) {
+    lines.push(t('speleodb.cachedCopies.purge.locksUnchecked', { names: report.locks_unchecked.join(', ') }));
+  }
   if (report.failed.length > 0) {
     lines.push(t('speleodb.cachedCopies.purge.failed', { details: report.failed.join('; ') }));
   }
-  return { lines, tone: report.failed.length > 0 ? 'warning' : 'info' };
+  const warn = report.failed.length > 0 || report.locks_unchecked.length > 0;
+  return { lines, tone: warn ? 'warning' : 'info' };
 }
 
 /** The purge confirmation, then (only on request) the "lose them for good" step. */
@@ -135,6 +149,8 @@ function PurgeConfirmDialog({
   const atRisk = removable.filter(cachedCopyAtRisk);
   const safeCount = removable.length - atRisk.length;
   const openKept = step.copies.some((copy) => copy.is_open);
+  // The backend classified every copy against the session it has right now.
+  const signedOut = step.copies.some((copy) => copy.ownership === 'signed_out');
   const names = (
     <ul className="list-disc pl-5" data-testid="speleodb-purge-at-risk-list">
       {atRisk.map((copy) => <li key={copy.project_id}>{copy.project_name}</li>)}
@@ -182,6 +198,9 @@ function PurgeConfirmDialog({
           })}
         </p>
         {openKept && <p className="text-text-secondary">{t('speleodb.cachedCopies.purge.openKept')}</p>}
+        <p className="text-text-secondary" data-testid="speleodb-purge-locks">
+          {t(signedOut ? 'speleodb.cachedCopies.purge.locksSignedOut' : 'speleodb.cachedCopies.purge.locksSignedIn')}
+        </p>
         {atRisk.length > 0 && (
           <div
             className="p-3 bg-warning-10 border border-warning-20 rounded text-warning space-y-2"

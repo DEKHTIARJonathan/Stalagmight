@@ -24,7 +24,7 @@ function copy(id: string, name: string, o: Partial<SpeleoCachedProject> = {}): S
   };
 }
 
-const REPORT: SpeleoPurgeReport = { removed: 2, kept_unpushed: [], kept_open: [], failed: [] };
+const REPORT: SpeleoPurgeReport = { removed: 2, kept_unpushed: [], kept_open: [], failed: [], locks_released: [], locks_unchecked: [] };
 
 function answer(listing: SpeleoCachedProject[], report: SpeleoPurgeReport = REPORT) {
   ipc.mockImplementation(async (cmd: string) => {
@@ -58,14 +58,29 @@ describe('Purge all cached files', () => {
 
   it('lists copies with un-uploaded changes and keeps them by default', async () => {
     answer([copy('a', 'Alpha'), copy('b', 'Beta', { has_unpushed_edits: true }), copy('c', 'Gamma', { state_unknown: true })],
-      { removed: 1, kept_unpushed: ['Beta', 'Gamma'], kept_open: [], failed: [] });
+      { removed: 1, kept_unpushed: ['Beta', 'Gamma'], kept_open: [], failed: [], locks_released: ['Alpha'], locks_unchecked: [] });
     render(<SpeleoCachePurgeSection />);
     await userEvent.click(screen.getByTestId('speleodb-purge-cache'));
     expect(await screen.findByTestId('speleodb-purge-at-risk-list')).toHaveTextContent('BetaGamma');
     expect(screen.queryByTestId('speleodb-purge-confirm')).toBeNull();
+    expect(screen.getByTestId('speleodb-purge-locks')).toHaveTextContent('Your editing locks on these projects are handed back.');
     await userEvent.click(screen.getByTestId('speleodb-purge-keep-at-risk'));
     expect(purges()).toEqual([{ discardUnpushed: false }]);
-    expect(await screen.findByTestId('speleodb-purge-result')).toHaveTextContent('Kept, with changes that were never uploaded: Beta, Gamma');
+    const result = await screen.findByTestId('speleodb-purge-result');
+    expect(result).toHaveTextContent('Kept, with changes that were never uploaded: Beta, Gamma');
+    expect(result).toHaveTextContent('Handed back the editing lock of: Alpha');
+  });
+
+  it('signed out, says no lock is handed back, and reports locks it could not check', async () => {
+    answer([copy('a', 'Alpha', { ownership: 'signed_out' })],
+      { removed: 1, kept_unpushed: [], kept_open: [], failed: [], locks_released: [], locks_unchecked: ['Alpha'] });
+    render(<SpeleoCachePurgeSection />);
+    await userEvent.click(screen.getByTestId('speleodb-purge-cache'));
+    expect(await screen.findByTestId('speleodb-purge-locks')).toHaveTextContent('You are signed out, so no editing lock is handed back.');
+    await userEvent.click(screen.getByTestId('speleodb-purge-confirm'));
+    const result = await screen.findByTestId('speleodb-purge-result');
+    expect(result).toHaveTextContent('Could not hand back the editing lock of: Alpha.');
+    expect(result).toHaveClass('text-warning');
   });
 
   it('deletes un-uploaded changes only after the second confirmation', async () => {

@@ -14,6 +14,7 @@ vi.mock('../../../utils/ipc', () => ({ invokeIpc: ipc, getErrorMessage: String }
 import '../../../i18n';
 import { RemoveCachedCopyDialog } from '../RemoveCachedCopyDialog';
 import { useSpeleoCacheStore } from '../../../store/speleoCacheStore';
+import { useSpeleoStore } from '../../../store/speleoStore';
 import type { SpeleoCachedProject } from '../../../types/ipc.generated';
 
 const COPY: SpeleoCachedProject = {
@@ -37,6 +38,7 @@ function answer(listing: SpeleoCachedProject[], removal: unknown = { success: tr
 beforeEach(() => {
   ipc.mockReset();
   useSpeleoCacheStore.setState({ copies: [], loaded: false });
+  useSpeleoStore.setState({ busy: false });
 });
 
 describe('RemoveCachedCopyDialog', () => {
@@ -71,6 +73,27 @@ describe('RemoveCachedCopyDialog', () => {
     answer([{ ...COPY, state_unknown: true }]);
     render(<RemoveCachedCopyDialog copy={COPY} onClose={vi.fn()} onRemoved={vi.fn()} />);
     expect(await screen.findByTestId('speleodb-remove-copy-warning')).toHaveTextContent('could not read');
+  });
+
+  it('says what happens to the editing lock: handed back for this account, kept signed out', async () => {
+    answer([{ ...COPY, ownership: 'mine' }]);
+    const { unmount } = render(<RemoveCachedCopyDialog copy={{ ...COPY, ownership: 'mine' }} onClose={vi.fn()} onRemoved={vi.fn()} />);
+    expect(screen.getByTestId('speleodb-remove-copy-lock')).toHaveTextContent('it is handed back once the copy is removed');
+    await waitFor(() => expect(screen.getByTestId('speleodb-remove-copy-confirm')).toBeEnabled());
+    unmount();
+    answer([COPY]);
+    render(<RemoveCachedCopyDialog copy={COPY} onClose={vi.fn()} onRemoved={vi.fn()} />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-remove-copy-confirm')).toBeEnabled());
+    expect(screen.getByTestId('speleodb-remove-copy-lock'))
+      .toHaveTextContent('it stays until your next sign-in offers to release it, or until it is released on the SpeleoDB website');
+  });
+
+  it('cannot confirm while another SpeleoDB operation runs', async () => {
+    useSpeleoStore.setState({ busy: true });
+    answer([COPY]);
+    render(<RemoveCachedCopyDialog copy={COPY} onClose={vi.fn()} onRemoved={vi.fn()} />);
+    await waitFor(() => expect(useSpeleoCacheStore.getState().loaded).toBe(true));
+    expect(screen.getByTestId('speleodb-remove-copy-confirm')).toBeDisabled();
   });
 
   it('cannot confirm before the copy was re-read', () => {

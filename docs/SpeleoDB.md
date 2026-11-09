@@ -80,7 +80,10 @@ The home screen lists the cached copies by owner:
   including the map. A project the account can see on the server is still listed
   from the server listing, and opening it downloads as that account (guarded against
   replacing un-uploaded edits).
-- **Signed out**: every cached copy, of every account and instance.
+- **Signed out**: every cached copy, of every account and instance, on the list and
+  on the map. Signing out does not forget the recents rows of cached copies (the map
+  is built from recents). It still forgets clean SpeleoDB references outside the
+  cache, and keeps any reference whose copy holds un-uploaded edits.
 
 Right-click on a SpeleoDB card, table row or map marker opens the SpeleoDB project
 menu: Open project, Zoom to system (when the project is on the map) and Remove local
@@ -90,13 +93,26 @@ warning and a "Remove copy and lose my changes" button. Only that confirmation t
 the backend to remove such a copy; without it the backend refuses. The project open
 right now is never removed. Removal sends the `.stalx` to the OS trash where there is
 one, drops its recents row, and deletes the rest of its directory (owner record and
-SQLite sidecars). It releases no lock.
+SQLite sidecars).
+
+Removing a copy does not strand a lock. After a successful removal, when the session
+is the copy's account on its instance (owner recorded as this account, or no owner
+recorded and the copy is from this instance), the short lock probe asks who holds
+the project's lock. If the server says this account, the normal lock release hands
+it back. The probe never drops the session. Signed out, for another account's copy,
+or when the server cannot be asked, nothing else happens: a lock held on the server
+stays until that account's next sign-in (whose held-lock prompt offers to release
+it) or the SpeleoDB website. The confirmation says which of the two applies. A
+probe or release that fails returns a warning saying so. Removal and the purge count
+as exclusive SpeleoDB operations: their confirm buttons are disabled while another
+lock, upload or account call runs, and the spinner shows while they run.
 
 SpeleoDB settings has "Purge all cached files". It removes every cached copy of every
 account except the open project. Copies with un-uploaded or unreadable state are
 listed in the confirmation and kept by default ("Keep those, remove the rest").
 Deleting them too takes a second confirmation. The backend re-checks every copy when
-it removes it.
+it removes it. Each removed copy's lock is handled as above, and the result lists the
+locks that were handed back and those that could not be checked.
 
 ## Operations used by the app
 
@@ -331,8 +347,9 @@ size. While a lock, upload, download or account call runs, the controls that wou
 start another one are disabled: the workspace's Save Changes, Resume editing /
 Switch to Read Only Mode, Reload Project, Close Project and conversion, History's
 Unwind/Rewind, revision View/Restore/Revert, opening from SpeleoDB, the held-lock
-prompt's Resume and Release, publishing, and the SpeleoDB endpoint, connection and
-sign-in/sign-out controls in Settings. Reads such as the status refresh show the
+prompt's Resume and Release, publishing, removing a cached copy, "Purge all cached
+files", and the SpeleoDB endpoint, connection and sign-in/sign-out controls in
+Settings. Reads such as the status refresh show the
 spinner but lock nothing. The map, panels, other settings and editing stay
 available. Explicit uploads and publishing keep their app-blocking progress.
 
