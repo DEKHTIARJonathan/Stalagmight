@@ -234,8 +234,9 @@ for (const theme of ['dark', 'light'] as const) {
       expect(style.width).toBe(styles[0].width);
       expect(style.background).not.toBe('rgba(0, 0, 0, 0)');
     }
-    expect(styles[1].background).toBe(styles[2].background);
-    expect(new Set(styles.map((style) => style.background)).size).toBe(4);
+    expect(styles[1].background).not.toBe(styles[2].background);
+    expect(new Set(styles.map((style) => style.background)).size).toBe(5);
+    await expect(page.getByTestId('speleodb-workspace-open-web').locator('svg')).toBeVisible();
     await page.getByTestId('speleodb-workspace').screenshot({ path: testInfo.outputPath(`speleodb-buttons-${theme}.png`) });
     await page.getByTestId('speleodb-workspace-editing').click();
     await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Resume editing');

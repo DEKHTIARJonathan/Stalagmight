@@ -11,6 +11,7 @@ import { dispatchProjectSave } from '../../utils/dispatchProjectSave';
 import { SpeleoRevisionHistory } from '../Dialogs/settings/SpeleoRevisionHistory';
 import { useProject } from '../../hooks/useProject';
 import { Button } from '../common/Button';
+import { ExternalLinkIcon } from '../common/icons';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 
 const actionClass = 'w-full h-11 px-3 py-2.5 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
@@ -62,9 +63,9 @@ export function SpeleoWorkspace() {
           disabled={busy || (session?.loggedIn === true && !canResume && !editing)} data-testid="speleodb-workspace-editing">
           {editing ? 'Switch to Read Only Mode' : session?.loggedIn ? 'Resume editing' : 'Sign in to resume editing'}
         </Button>
-        <Button variant="warning" className={actionClass} onClick={() => void update()} disabled={busy || !session?.loggedIn || link.noAccess || (link.permission !== null && !permissionAtLeast(link.permission, 'READ_ONLY'))} data-testid="speleodb-workspace-latest">Reload Project</Button>
+        <Button variant="info" className={actionClass} onClick={() => void update()} disabled={busy || !session?.loggedIn || link.noAccess || (link.permission !== null && !permissionAtLeast(link.permission, 'READ_ONLY'))} data-testid="speleodb-workspace-latest">Reload Project</Button>
         <Button variant="danger" className={actionClass} onClick={() => void handleCloseProject()} disabled={busy} data-testid="speleodb-workspace-close">Close Project</Button>
-        <Button variant="info" className={actionClass} onClick={web.open} disabled={!web.url} data-testid="speleodb-workspace-open-web">Open on SpeleoDB</Button>
+        <Button variant="external" icon={<ExternalLinkIcon size={16} />} className={actionClass} onClick={web.open} disabled={!web.url} data-testid="speleodb-workspace-open-web">Open on SpeleoDB</Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto" data-testid="speleodb-workspace-sections">
       {areas.map(([id, label]) => (

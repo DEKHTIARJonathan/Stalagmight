@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { SettingsSection } from './SettingsSection';
 import { Button } from '../../common/Button';
+import { ExternalLinkIcon } from '../../common/icons';
 import { useUIStore } from '../../../store/uiStore';
 import {
   useSpeleoStore,
@@ -124,7 +125,8 @@ export function SpeleoRevisionHistory() {
           plain string title. */}
       <div className="flex justify-end">
         <Button
-          variant="info"
+          variant="external"
+          icon={<ExternalLinkIcon size={14} />}
           size="sm"
           disabled={web.url === null}
           title={web.url === null ? t('speleodb.web.unavailable') : undefined}

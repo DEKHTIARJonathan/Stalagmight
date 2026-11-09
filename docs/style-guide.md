@@ -30,7 +30,8 @@ This guide captures the current UI conventions and design tokens for Stalagmight
   - `danger`: destructive actions and exiting a project.
   - `warning`: transitions that can replace content or relinquish editing access.
   - `success`: enabling editing.
-  - `info`: navigation and read-only inspection.
+  - `info`: reload and read-only inspection.
+  - `external`: purple browser navigation, paired with an external-link icon.
 - Use `icon` on `Button` for leading icons.
 - Use `IconButton` for icon-only actions; always include `aria-label` and, when helpful, `tooltip`.
 
@@ -71,6 +72,7 @@ This guide captures the current UI conventions and design tokens for Stalagmight
   (#396).
 
 SpeleoDB workspace actions use equal-height, full-width buttons. Save uses the
-theme's primary accent, Resume editing is green, read-only/reload/history changes
-are amber, Close is red, and navigation or inspection uses a tinted accent button.
+theme's primary accent, Resume editing is green, read-only/history changes are
+amber, Reload and inspection use a blue button, Close is red, and browser
+navigation is purple with an external-link icon.
 Labels and confirmations explain the action independently of color.
