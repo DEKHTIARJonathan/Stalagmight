@@ -739,6 +739,20 @@ mod tests {
         (temp, root, path, state)
     }
 
+    /// Stamp the open copy's dirty bit directly, as a fixture: the forward-edit
+    /// tripwire (`speleodb_revisions`) keeps production writers on
+    /// `mark_remote_forward_edit`, and this is setup, not a writer.
+    fn set_unpushed_edits(state: &AppState) {
+        state
+            .database
+            .lock()
+            .expect("database")
+            .as_ref()
+            .expect("open")
+            .touch_speleo_link_dirty("2026-11-09T10:00:00Z")
+            .expect("stamp the dirty bit");
+    }
+
     fn claim_is_kept(state: &AppState) -> bool {
         state
             .speleodb
@@ -778,7 +792,7 @@ mod tests {
         for (name, release) in every_lifecycle_release() {
             let (server, seen) = recording_server();
             let (_temp, _root, path, state) = managed_editing_session(&server);
-            state.mark_remote_dirty();
+            set_unpushed_edits(&state);
             let before = std::fs::read(&path).expect("bytes");
             release(&state);
             settle();
@@ -834,7 +848,7 @@ mod tests {
         // but the un-pushed-edits veto applies there too.
         let (server, seen) = recording_server();
         let (_temp, _root, _path, state) = managed_editing_session(&server);
-        state.mark_remote_dirty();
+        set_unpushed_edits(&state);
         state.set_edit_enabled(false);
         state.speleodb_release_held_lock_on_close();
         assert_eq!(release_requests(&seen), 0);
@@ -864,7 +878,7 @@ mod tests {
         // nothing local to protect - so it gets the server copy with no prompt.
         let (server, seen) = recording_server();
         let (_temp, root, path, state) = managed_editing_session(&server);
-        state.mark_remote_dirty();
+        set_unpushed_edits(&state);
         let result = state.speleodb_close_discarding_local_in(&root);
         assert!(result.success, "discard closes: {:?}", result.error);
         assert_eq!(result.session_closed, Some(true));
@@ -889,7 +903,7 @@ mod tests {
     fn discard_refuses_a_copy_outside_the_managed_cache_and_changes_nothing() {
         let (server, seen) = recording_server();
         let (temp, _root, path, state) = managed_editing_session(&server);
-        state.mark_remote_dirty();
+        set_unpushed_edits(&state);
         let elsewhere: &Path = &temp.path().join("not-the-cache");
         let result = state.speleodb_close_discarding_local_in(elsewhere);
         assert!(!result.success);
@@ -903,7 +917,7 @@ mod tests {
     fn sign_out_discards_a_cached_copy_that_is_not_open_without_releasing_anything() {
         let (server, seen) = recording_server();
         let (_temp, root, path, state) = managed_editing_session(&server);
-        state.mark_remote_dirty();
+        set_unpushed_edits(&state);
         let refused = state.speleodb_discard_cached_copy_in(&root, PID);
         assert!(
             !refused.success,
@@ -934,7 +948,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
         let (server, seen) = recording_server();
         let (_temp, root, path, state) = managed_editing_session(&server);
-        state.mark_remote_dirty();
+        set_unpushed_edits(&state);
         let dir = path.parent().expect("dir").to_path_buf();
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).expect("chmod");
         let result = state.speleodb_close_discarding_local_in(&root);

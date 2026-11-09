@@ -940,6 +940,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         };
       };
 
+      const EXIT_RECORDED_COMMANDS = new Set([
+        'close_project', 'save_project', 'speleodb_done', 'speleodb_release_lock',
+        'speleodb_discard_cached_copy', 'speleodb_logout', 'speleodb_login',
+        'install_app_update_and_restart',
+      ]);
+
       return function mockCommand(
         cmd: string,
         args?: Record<string, unknown>
@@ -947,6 +953,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         // Skip logging for push_frontend_log to avoid infinite loop with console capture
         if (cmd !== 'push_frontend_log') {
           console.log(`[Mock IPC] Command: ${cmd}`, args);
+        }
+
+        // The exit-prompt / sign-out specs assert WHICH of these ran, with what, and in
+        // what order - recorded before the override map so an overridden reply (an
+        // upload that "fails", a release that throws) is still on the record.
+        if (EXIT_RECORDED_COMMANDS.has(cmd)) {
+          const win = window as unknown as Record<string, unknown>;
+          const log = (win.__MOCK_EXIT_CALLS__ as Array<{ cmd: string; args: unknown }> | undefined) ?? [];
+          log.push({ cmd, args: args ?? null });
+          win.__MOCK_EXIT_CALLS__ = log;
         }
 
         const overrideMap = (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
@@ -5649,6 +5665,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // state, not about the download it does on the way.
           case 'speleodb_discard_changes':
             return { kind: 'editing' };
+          // Sign-out's discard of a cached copy that is not open. Specs assert the
+          // invocation (via __MOCK_EXIT_CALLS__); the reply is a plain success.
+          case 'speleodb_discard_cached_copy':
+            return { success: true, warnings: [], error: null, section_ids: [] };
           case 'speleodb_get_project_metadata':
             return { name: 'Mock Cave', description: '', country: 'US', visibility: 'PRIVATE', latitude: null, longitude: null, exclude_geojson: false };
           case 'speleodb_publish':

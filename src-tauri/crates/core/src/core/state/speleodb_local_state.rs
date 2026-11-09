@@ -591,7 +591,15 @@ mod tests {
         assert!(state
             .speleodb_local_fast_forward_open(ID_A, &path, SERVER, Some("9fdc7da"))
             .is_none());
-        state.mark_remote_dirty();
+        // The edit's dirty stamp, set as a fixture (see the forward-edit tripwire).
+        state
+            .database
+            .lock()
+            .expect("database")
+            .as_ref()
+            .expect("open")
+            .touch_speleo_link_dirty("2026-11-09T10:00:00Z")
+            .expect("stamp the dirty bit");
         assert!(state
             .speleodb_local_fast_forward_open(ID_A, &path, SERVER, Some("9fdc7da"))
             .is_some());
