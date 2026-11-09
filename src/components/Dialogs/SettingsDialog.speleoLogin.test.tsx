@@ -100,7 +100,7 @@ describe('Settings "Log in now" (security#4)', () => {
     expect(save).toBeEnabled();
     await userEvent.click(save);
     await waitFor(() => expect(updateConfig).toHaveBeenCalledOnce());
-    const written = updateConfig.mock.calls[0][0] as Config;
+    const written = updateConfig.mock.calls[0]?.[0] as Config;
     expect(written.general.auto_save).toBe(!savedConfig.general.auto_save);
     expect(written.speleodb).toMatchObject({ endpoint: ENDPOINT, insecure_http: true, email: 'synthetic@example.com' });
     expect(invokeIpcMock.mock.calls.filter((c) => c[0] === 'speleodb_login')).toHaveLength(1);

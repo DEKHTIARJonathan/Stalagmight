@@ -32,7 +32,7 @@ function startLogin(onLoginApplied?: () => boolean, config = defaultConfig) {
       changedFields={new Set()}
       onValidationError={vi.fn()}
       panelIdBase="settings-test"
-      onLoginApplied={onLoginApplied}
+      {...(onLoginApplied ? { onLoginApplied } : {})}
     />,
   );
   fireEvent.click(screen.getByTestId('speleodb-settings-try-login'));
