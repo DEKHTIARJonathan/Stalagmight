@@ -981,7 +981,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const superseded: LoadProjectOutcome = { success: false, superseded: true };
 
     const promise: Promise<LoadProjectOutcome> = runConfirmedProjectSwitch(path, () => get().project?.file_path, opts?.accessConfirmed, async () => {
-      if (!await confirmWorkspaceDrafts(current)) return { success: false, superseded: !current() };
+      if (get().project?.file_path !== path && !await confirmWorkspaceDrafts(current)) return { success: false, superseded: !current() };
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
       // resolution, the Zustand set, the view switch / MapCanvas mount, or

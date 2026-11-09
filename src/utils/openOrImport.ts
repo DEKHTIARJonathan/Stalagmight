@@ -42,6 +42,7 @@ import { extractFilename } from './path';
 import { openDialog, openOrImportFilters, DMP_EXTENSION } from './fileDialogs';
 import { clearProjectActionSource } from './telemetry';
 import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from './speleoExit';
+import { confirmWorkspaceDrafts } from './workspaceDrafts';
 import { confirmSpeleoFileOpen } from './confirmSpeleoOpen';
 import { TOAST_KEYS } from './toastKeys';
 import i18n from '../i18n';
@@ -340,7 +341,8 @@ export async function routeOpenedFile(
         // that cannot be opened must fail here (the catch below reports it), not
         // after the user has answered the prompt and the project is closed.
         await confirmSpeleoFileOpen(path);
-        if (await askSpeleoExit('switch')) {
+        // Unsent SpeleoDB input next, still before the prompt that uploads or releases.
+        if (await confirmWorkspaceDrafts() && await askSpeleoExit('switch')) {
           await useProjectStore.getState().loadProject(path, { accessConfirmed: true });
         }
       } else if (store.project && store.isDirty) {

@@ -22,7 +22,8 @@ dialog is open or cancelled. Save and Close releases and closes only after confi
 success with no newer edits. Cancel, conflict, uncertainty and release failure leave
 the project open. Plain Close, project switching and Quit retain automatic lock
 release without upload and Discard changes / Cancel protection for unsaved work,
-including invalid workspace form drafts. Saved unuploaded work remains local. See
+including unsent SpeleoDB form drafts (asked first, in-app). Saved unuploaded work
+remains local. See
 [SpeleoDB integration](SpeleoDB.md) for navigation, ownership and offline behavior.
 
 Switch to Read Only Mode requires a clean local file and no unuploaded work. It

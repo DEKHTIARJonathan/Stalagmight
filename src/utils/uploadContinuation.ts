@@ -1,6 +1,10 @@
+import i18n from '../i18n';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
+import { useUIStore } from '../store/uiStore';
+import { emailsMatch } from './email';
 import { endpointsMatch } from './speleoEndpoint';
+import { registerWorkspaceDraft, type AccountTarget } from './workspaceDrafts';
 
 interface UploadAccount { endpoint: string; email: string }
 export interface UploadOwner { path: string | null; epoch: number; account: UploadAccount | null }
@@ -49,6 +53,22 @@ export function uploadOwnerStillCurrent(owner: UploadOwner): boolean {
   return owner.account.email === account.email && endpointsMatch(owner.account.endpoint, account.endpoint);
 }
 
+/**
+ * Whether moving to `target` drops a draft owned by `owner` - the account half of
+ * {@link uploadOwnerStillCurrent}, asked before the move instead of after it.
+ */
+export function uploadOwnerDroppedBy(owner: UploadOwner, target: AccountTarget): boolean {
+  // Signed out, a draft waits: the next sign-in decides.
+  if (target.signedOut) return false;
+  const account = owner.account ?? currentAccount();
+  // A draft not tied to an account yet adopts the one that signs in.
+  if (!account) return false;
+  // A pasted token names its account only once the server has answered.
+  if (target.email === null) return true;
+  return !emailsMatch(account.email, target.email) ||
+    !endpointsMatch(account.endpoint, target.endpoint ?? account.endpoint);
+}
+
 /** Recovery may replace the upload dialog. Reopening still requires confirmation. */
 export function getUploadContinuation(path: string | null | undefined) {
   observeProjectLifetime();
@@ -58,3 +78,22 @@ export function getUploadContinuation(path: string | null | undefined) {
 export function setUploadContinuation(value: UploadDraft | null, owner = captureUploadOwner()): void {
   continuation = value && value.path === owner.path && uploadOwnerStillCurrent(owner) ? { ...value, owner } : null;
 }
+
+// The description typed for an upload is unsent input until the upload lands: the
+// open upload dialog mirrors it here, and it waits here while Settings is open for
+// sign-in or an error replaced the dialog. A description with nothing left to
+// upload loses nothing, and one being uploaded right now is not a draft.
+registerWorkspaceDraft({
+  label: () => i18n.t('speleoExitPrompt.drafts.upload'),
+  dirty: (account) => {
+    const pending = getUploadContinuation(useProjectStore.getState().project?.file_path);
+    if (!pending?.message.trim() || useSpeleoStore.getState().busy) return false;
+    if (!useProjectStore.getState().isDirty && !useSpeleoStore.getState().link?.hasUnpushedEdits) return false;
+    return account ? uploadOwnerDroppedBy(pending.owner, account) : true;
+  },
+  discard: () => {
+    continuation = null;
+    const ui = useUIStore.getState();
+    if (ui.activeDialog === 'speleodb-done') ui.closeDialog();
+  },
+});

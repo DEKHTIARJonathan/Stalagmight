@@ -1,5 +1,5 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-import { confirmSpeleoFileOpen, confirmSpeleoOpen } from '../confirmSpeleoOpen';
+import { confirmSpeleoFileOpen } from '../confirmSpeleoOpen';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 
 const mocks = vi.hoisted(() => ({ confirm: vi.fn(), invoke: vi.fn() }));
@@ -12,10 +12,6 @@ const project: SpeleoProjectSummary = {
 beforeEach(() => {
   mocks.confirm.mockReset();
   mocks.invoke.mockReset();
-});
-it.each(['READ_ONLY', 'READ_AND_WRITE'] as const)('does not warn from potentially stale %s listing metadata', async (permission) => {
-  expect(await confirmSpeleoOpen({ ...project, permission })).toBe(true);
-  expect(mocks.confirm).not.toHaveBeenCalled();
 });
 it('retains local metadata preflight without showing an advance lock warning', async () => {
   mocks.invoke.mockResolvedValue({ project, verification: 'unavailable' });

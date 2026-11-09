@@ -18,6 +18,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from './speleoExit';
+import { confirmWorkspaceDrafts, hasWorkspaceDrafts } from './workspaceDrafts';
 import { surfaceSaveFailure } from './saveFeedback';
 import i18n from '../i18n';
 import { getErrorMessage, invokeIpc } from './ipc';
@@ -50,6 +51,11 @@ import type { CommandResult } from '../types/commands';
 export function newProjectGuarded(): void {
   const { openDialog } = useUIStore.getState();
   const ps = useProjectStore.getState();
+  if (ps.project && hasWorkspaceDrafts()) {
+    // Unsent SpeleoDB input is asked about first; then the guards below run as usual.
+    void confirmWorkspaceDrafts().then((discarded) => { if (discarded) newProjectGuarded(); });
+    return;
+  }
   if (!ps.project) {
     openDialog('new-project');
   } else if (openProjectNeedsSpeleoExitPrompt()) {

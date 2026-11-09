@@ -3686,6 +3686,13 @@
       "message": "Changing the account or server discards changes you have not saved yet, including unsaved form changes.",
       "confirm": "Discard changes"
     },
+    "drafts": {
+      "title": "Discard what you typed?",
+      "message": "You have not sent {{items}} to SpeleoDB yet. If you continue, it is lost.",
+      "confirm": "Discard and continue",
+      "upload": "the description of your upload",
+      "publish": "the SpeleoDB project form"
+    },
     "unpushedLocal": {
       "openLocal": "Open my local copy",
       "openLocalHint": "\"Open my local copy\" opens the copy on this computer as it is, without downloading anything. You can then upload your changes, and Stalagmight will tell you if SpeleoDB has a newer version."

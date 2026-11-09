@@ -1,5 +1,6 @@
 import { publishProjectAndReopen } from '../../utils/publishProjectAndReopen';
-import { getPublishContinuation, setPublishContinuation } from '../../utils/publishContinuation';
+import { getPublishContinuation, publishFormDraft, setPublishContinuation, type PublishDraft } from '../../utils/publishContinuation';
+import { registerWorkspaceDraft } from '../../utils/workspaceDrafts';
 import { captureUploadOwner, uploadOwnerStillCurrent } from '../../utils/uploadContinuation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SpeleoProgressOverlay } from './SpeleoProgressOverlay';
@@ -62,6 +63,11 @@ export default function PublishToSpeleoDbDialog() {
     return () => window.clearTimeout(timer);
   }, [publishing]);
   const blocking = publishing && !progressExpired;
+  // What is typed here is unsent SpeleoDB input: every way out asks before
+  // dropping it (`utils/workspaceDrafts`). Not while it is being published.
+  const form = useRef<PublishDraft | null>(null);
+  form.current = publishing ? null : { description, country, latitude, longitude };
+  useEffect(() => registerWorkspaceDraft(publishFormDraft(owner, () => form.current)), [owner]);
 
   const latTrim = latitude.trim();
   const lonTrim = longitude.trim();

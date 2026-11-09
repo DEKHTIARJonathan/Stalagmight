@@ -1,4 +1,4 @@
-import { hasWorkspaceDrafts } from '../utils/workspaceDrafts';
+import { confirmWorkspaceDrafts } from '../utils/workspaceDrafts';
 import { protectAccountTransition } from '../utils/protectAccountTransition';
 import { guardSpeleoSignOut } from '../utils/speleoSignOut';
 import { create } from 'zustand';
@@ -711,13 +711,23 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     // A pasted token has no known identity until the server resolves it.
     const recovery = p.kind === 'login' && !p.useToken &&
       emailsMatch(p.email, previousEmail) && endpointsMatch(endpoint ?? previousEndpoint, previousEndpoint);
+    // Unsent SpeleoDB input written for another account (an upload description,
+    // the conversion form) cannot follow this sign-in. Asked first, before the
+    // sign-out guard below can upload or hand anything back. A plain sign-out
+    // keeps it for the next sign-in to decide, and the same account keeps it - so
+    // a recovery asks nothing, unless the input was written on another server.
+    if (!await confirmWorkspaceDrafts(current, p.kind === 'logout'
+      ? { signedOut: true }
+      : { email: p.useToken ? null : p.email.trim(), endpoint: (endpoint ?? '').trim() || previousEndpoint || null })) {
+      return { ok: false, cancelled: true };
+    }
     // Signing out - or switching, which signs the previous account out - must not
     // strand that account's locks or un-uploaded work: resolve them while its
     // token can still upload and release (utils/speleoSignOut).
     if (!recovery && !await guardSpeleoSignOut(p.kind === 'logout' ? 'signOut' : 'switch')) {
       return { ok: false, cancelled: true };
     }
-    if (!recovery && (useProjectStore.getState().isDirty || hasWorkspaceDrafts()) &&
+    if (!recovery && useProjectStore.getState().isDirty &&
         !await protectAccountTransition()) return { ok: false, cancelled: true };
     if (!current()) return { ok: false, cancelled: true };
     try {

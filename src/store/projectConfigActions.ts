@@ -1,4 +1,3 @@
-import { hasWorkspaceDrafts } from '../utils/workspaceDrafts';
 import { protectAccountTransition } from '../utils/protectAccountTransition';
 import { guardSpeleoSignOut } from '../utils/speleoSignOut';
 import type { StoreApi } from 'zustand';
@@ -57,7 +56,9 @@ export function createProjectConfigActions(
         const live = useSpeleoStore.getState().session;
         if (live?.loggedIn && !endpointsMatch(live.endpoint, config.speleodb.endpoint) &&
             !await guardSpeleoSignOut('switch')) return emptyCommandResult(false, 'Cancelled');
-        if (serverChange && (get().isDirty || hasWorkspaceDrafts()) && !await protectAccountTransition()) return emptyCommandResult(false, 'Cancelled');
+        // Unsent SpeleoDB input survives the sign-out a server change is; the next
+        // sign-in asks about it if it cannot follow (speleoStore.applyPendingAuth).
+        if (serverChange && get().isDirty && !await protectAccountTransition()) return emptyCommandResult(false, 'Cancelled');
         const sessionGeneration = useSpeleoStore.getState().sessionGeneration;
         const routingBefore = get().config?.gas.include_reference_legs;
         await invokeIpc<void>(

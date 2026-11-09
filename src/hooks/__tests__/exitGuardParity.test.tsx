@@ -18,7 +18,7 @@
  * Every exit routes through `needsSpeleoExitPrompt` and the awaited
  * `askSpeleoExit`, and the matrix below keeps them from drifting apart again.
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 
 vi.mock('@tauri-apps/api/window', () => ({
@@ -42,6 +42,8 @@ import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { needsSpeleoExitPrompt, resetSpeleoExitPromptForTests, useSpeleoExitPrompt } from '../../utils/speleoExit';
+import { useExitConfirm } from '../../utils/exitConfirm';
+import { registerWorkspaceDraft } from '../../utils/workspaceDrafts';
 
 const link = (o: Partial<SpeleoLinkState>): SpeleoLinkState => ({
   permission: 'READ_AND_WRITE',
@@ -227,5 +229,58 @@ describe('the disk-dirty guard still covers projects with no SpeleoDB lock', () 
     openDialog.mockClear();
     newProjectGuarded();
     expect(openDialog).toHaveBeenCalledWith('unsaved-changes', { pendingNewProject: true });
+  });
+});
+
+/**
+ * frontend#10 - unsent SpeleoDB input (an upload description, the project form) is
+ * asked about in-app FIRST on every exit, before the exit prompt can upload,
+ * release or close anything. Declining stops the exit with nothing done.
+ */
+describe('unsent SpeleoDB input is asked about before the exit prompt', () => {
+  let discard: ReturnType<typeof vi.fn>;
+  let unregister: () => void;
+  beforeEach(() => {
+    useExitConfirm.setState({ request: null });
+    useSpeleoStore.setState({ link: link({ editState: 'editing', hasUnpushedEdits: true }) });
+    discard = vi.fn();
+    unregister = registerWorkspaceDraft({
+      label: () => 'the synthetic form', dirty: () => discard.mock.calls.length === 0, discard,
+    });
+  });
+  afterEach(() => unregister());
+
+  function exits(): Record<'close' | 'open' | 'new', () => unknown> {
+    const { result } = renderHook(() => useProject());
+    return {
+      close: () => result.current.handleCloseProject(),
+      open: openOther,
+      new: () => newProjectGuarded(),
+    };
+  }
+
+  it.each(['close', 'open', 'new'] as const)('%s: declining stops before the exit prompt', async (exit) => {
+    const running = Promise.resolve(exits()[exit]());
+    await vi.waitFor(() => expect(useExitConfirm.getState().request).not.toBeNull());
+    expect(useExitConfirm.getState().request?.message).toContain('the synthetic form');
+    expect(useSpeleoExitPrompt.getState().request).toBeNull();
+    useExitConfirm.getState().request?.answer(false);
+    await running;
+    await tick();
+    expect(useSpeleoExitPrompt.getState().request).toBeNull();
+    expect(discard).not.toHaveBeenCalled();
+    expect(closeProject).not.toHaveBeenCalled();
+    expect(loadProject).not.toHaveBeenCalled();
+    expect(openDialog).not.toHaveBeenCalledWith('new-project');
+  });
+
+  it.each(['close', 'open', 'new'] as const)('%s: discarding goes on to the exit prompt', async (exit) => {
+    const running = Promise.resolve(exits()[exit]());
+    await vi.waitFor(() => expect(useExitConfirm.getState().request).not.toBeNull());
+    useExitConfirm.getState().request?.answer(true);
+    await vi.waitFor(() => expect(useSpeleoExitPrompt.getState().request).not.toBeNull());
+    expect(discard).toHaveBeenCalledOnce();
+    useSpeleoExitPrompt.getState().request?.settle(false);
+    await running;
   });
 });

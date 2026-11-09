@@ -3,7 +3,11 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const confirmMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
-vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
+// The unsaved-changes question before a remote open is asked in-app.
+vi.mock('../../utils/exitConfirm', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../utils/exitConfirm')>(),
+  askExitConfirm: confirmMock,
+}));
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,

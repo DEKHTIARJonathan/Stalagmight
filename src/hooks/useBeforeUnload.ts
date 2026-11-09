@@ -112,11 +112,18 @@ export function useBeforeUnload(
             return;
           }
 
+          // Unsent SpeleoDB input first, before any tier below can upload,
+          // release or discard. Declining abandons the quit, and with it an
+          // update restart riding on it, exactly like declining tier 1.
+          if (!await confirmWorkspaceDrafts()) {
+            abandonUpdateRestart();
+            return;
+          }
+
           // A quit the user already confirmed in-app (performQuit) comes back
           // through this same event. Consume the one-shot so the in-app guard
           // below is skipped for THIS close only - otherwise e.g. "Discard &
           // Quit" would re-open the dialog it came from, forever.
-          if (!await confirmWorkspaceDrafts()) return;
           const preConfirmed = consumeQuitConfirmation();
 
           // A close request that is NOT pre-confirmed starts a fresh quit attempt,

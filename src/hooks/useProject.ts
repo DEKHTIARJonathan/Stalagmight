@@ -12,6 +12,7 @@ import { openOrImport } from '../utils/openOrImport';
 import { newProjectGuarded, saveProjectAs } from '../utils/projectActions';
 import { debugLog } from '../utils/debugLog';
 import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from '../utils/speleoExit';
+import { confirmWorkspaceDrafts } from '../utils/workspaceDrafts';
 
 export function useProject() {
   const { setView, openDialog } = useUIStore(
@@ -54,6 +55,9 @@ export function useProject() {
   const handleSaveProject = dispatchProjectSave;
 
   const handleCloseProject = useCallback(async () => {
+    // Unsent SpeleoDB input (an upload description, the conversion form) is asked
+    // about first, before any question whose answer uploads, releases or closes.
+    if (!await confirmWorkspaceDrafts()) return { success: false, error: 'Cancelled' };
     // Holding the SpeleoDB lock over work SpeleoDB has not seen: the exit prompt
     // decides (upload / keep the lock / discard) and closes the project itself.
     if (openProjectNeedsSpeleoExitPrompt()) {

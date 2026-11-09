@@ -1,7 +1,7 @@
 import { confirmWorkspaceDrafts } from '../utils/workspaceDrafts';
 import { isProjectRequestCurrent, beginProjectMutation, isProjectMutationCurrent, reserveProjectRequest } from '../utils/projectTransition';
 import { useCallback } from 'react';
-import { confirmSpeleoOpen } from '../utils/confirmSpeleoOpen';
+import { askExitConfirm } from '../utils/exitConfirm';
 import { useTranslation } from 'react-i18next';
 import { useUIStore, type ToastKind } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
@@ -16,7 +16,6 @@ import {
   humanizeSpeleoError,
   unpushedLocalEdits,
 } from '../utils/speleoError';
-import { confirm } from '@tauri-apps/plugin-dialog';
 import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from '../utils/speleoExit';
 import type {
   SpeleoProjectSummary,
@@ -51,12 +50,15 @@ interface UseOpenRemoteProjectOpts {
  * Leaving a SpeleoDB project we hold the lock on, with work SpeleoDB has not seen,
  * goes through the exit prompt first - BEFORE the open reserves its ownership,
  * because the prompt's own close reserves a project request of its own and would
- * otherwise supersede this open. Reopening the project already on screen is not
- * leaving it, so it asks nothing. `false` = the user cancelled; nothing happened.
+ * otherwise supersede this open. Unsent SpeleoDB input is asked about before that
+ * prompt, which can upload or release. Reopening the project already on screen is
+ * not leaving it, so it asks nothing. `false` = the user cancelled; nothing happened.
  */
 async function leaveOpenProjectFor(targetProjectId: string): Promise<boolean> {
-  if (!openProjectNeedsSpeleoExitPrompt()) return true;
+  if (!useProjectStore.getState().project) return true;
   if (useSpeleoStore.getState().remoteProjectId === targetProjectId) return true;
+  if (!await confirmWorkspaceDrafts()) return false;
+  if (!openProjectNeedsSpeleoExitPrompt()) return true;
   return askSpeleoExit('switch');
 }
 
@@ -197,15 +199,16 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
 
   // Only unsaved memory changes need confirmation before a remote open. Saved
   // local edits remain on disk, and the backend releases the old project's lock.
-  // The acknowledgement belongs to this exact project snapshot and request.
+  // The acknowledgement belongs to this exact project snapshot and request. Asked
+  // in-app, like every other exit question (`utils/exitConfirm`).
   const confirmUnsavedHandBack = useCallback(async (current: () => boolean) => {
-    if (!await confirmWorkspaceDrafts(current) || !current()) return null;
+    if (!current()) return null;
     const { project, isDirty } = useProjectStore.getState();
     if (!project || !isDirty) return { project: null };
-    const accepted = await confirm(t('speleodb.exit.unsavedMessage'), {
+    const accepted = await askExitConfirm({
       title: t('speleodb.exit.unsavedTitle'),
-      kind: 'warning',
-      okLabel: t('speleodb.exit.discardChanges'),
+      message: t('speleodb.exit.unsavedMessage'),
+      confirmLabel: t('speleodb.exit.discardChanges'),
       cancelLabel: t('common.actions.cancel'),
     });
     if (!accepted || !current() || useProjectStore.getState().project !== project) return null;
@@ -250,12 +253,6 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         return { status: 'error', message: humanizeSpeleoError(error, t('speleodb.errors.openFailed')), reLogin: false };
       }
       if (!acknowledged || !ownership.current()) return { status: 'cancelled' };
-      try {
-        if (!await confirmSpeleoOpen(summary) || !ownership.current()) return { status: 'cancelled' };
-      } catch (e) {
-        if (!ownership.latest()) return { status: 'cancelled' };
-        return { status: 'error', message: humanizeSpeleoError(e, t('speleodb.errors.openFailed')), reLogin: false };
-      }
       const afterWarning = handBackRefusal(summary, acknowledged.project);
       if (afterWarning) return { status: 'error', message: afterWarning, reLogin: false };
       let result: SpeleoOpenResult;

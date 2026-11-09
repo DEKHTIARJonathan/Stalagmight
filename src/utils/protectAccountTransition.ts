@@ -3,22 +3,25 @@ import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import { isProjectRequestCurrent, reserveProjectRequest } from './projectTransition';
-import { discardWorkspaceDrafts, hasWorkspaceDrafts } from './workspaceDrafts';
+import { discardWorkspaceDrafts } from './workspaceDrafts';
 import { askExitConfirm } from './exitConfirm';
 
 /**
- * Account replacement protects both forms and the unsaved survey snapshot.
+ * Account replacement protects the unsaved survey snapshot.
  *
  * SpeleoDB locks and un-uploaded work are NOT this guard's business: the sign-out
  * guard (`utils/speleoSignOut`) runs first and resolves them (upload / discard /
- * hand back). What is left here is form drafts and unsaved edits outside a held
- * lock, which the account change discards - asked in-app, like every exit prompt.
+ * hand back). Nor are SpeleoDB form drafts the account change itself drops: the
+ * caller asks about those first (`confirmWorkspaceDrafts`). What is left here is
+ * unsaved edits outside a held lock: the project is reopened from disk without
+ * them, which also drops any draft still tied to it - asked in-app, like every
+ * exit prompt.
  */
 export async function protectAccountTransition(): Promise<boolean> {
   const before = useProjectStore.getState();
   const project = before.project;
   const generation = useSpeleoStore.getState().sessionGeneration;
-  if (!before.isDirty && !hasWorkspaceDrafts()) return true;
+  if (!before.isDirty) return true;
   const request = reserveProjectRequest();
   const current = () => isProjectRequestCurrent(request) &&
     useSpeleoStore.getState().sessionGeneration === generation;
@@ -31,7 +34,6 @@ export async function protectAccountTransition(): Promise<boolean> {
   });
   if (!accepted || !ownsProject()) return false;
   discardWorkspaceDrafts();
-  if (!before.isDirty) return true;
   const closed = await useProjectStore.getState().closeProject({ request, isCurrent: ownsProject });
   if (!closed.success || !current() || useProjectStore.getState().project !== null) return false;
   if (project?.file_path) {

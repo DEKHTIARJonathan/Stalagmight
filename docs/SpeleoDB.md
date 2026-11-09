@@ -226,6 +226,16 @@ confirmed upload and successful release, with no newer local changes. Cancellati
 conflict, uncertainty and release failure leave the project open. Plain Close,
 project switching and Quit automatically release the session's lock without
 uploading. Unsaved survey work and form drafts require Discard changes / Cancel.
+Form drafts are unsent SpeleoDB input: an upload description (in the upload dialog,
+or kept while Settings is open for sign-in or an error replaced the dialog) and the
+project creation form. Close, project switching (file open, New Project, open from
+SpeleoDB) and Quit ask about them first, in the shared in-app confirm, before the
+exit prompt or anything that uploads, releases or closes; Cancel stops the exit with
+nothing done. A sign-in as another account (or on another server) asks the same
+question before the sign-out guard, because a draft stays bound to the account it
+was written for; a sign-out or the same account keeps it. A description with nothing
+left to upload, or one being uploaded, is not a draft. No guard or SpeleoDB flow uses
+a native dialog.
 Saved unuploaded work remains in the local file. Backend release consent remains
 scoped to the project, authenticated account and session generation. Another
 account's lock is never released by an ordinary exit.
