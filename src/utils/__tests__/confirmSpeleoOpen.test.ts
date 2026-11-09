@@ -30,10 +30,10 @@ it('distinguishes unverified local inspection from actual read-only permission',
   mocks.invoke.mockResolvedValue({ project: { ...project, permission: null, lock_holder: null }, endpoint: 'https://example.com', verification: 'unavailable' });
   await confirmSpeleoFileOpen('/synthetic.stalx', () => true, true);
   expect(mocks.invoke).toHaveBeenCalledWith('speleodb_project_access_at', { path: '/synthetic.stalx', localOnly: true });
-  expect(mocks.confirm.mock.calls[0][0]).toContain('could not be verified');
+  expect(mocks.confirm.mock.calls[0]?.[0]).toContain('could not be verified');
   mocks.confirm.mockClear();
   await confirmSpeleoOpen({ ...project, permission: 'READ_ONLY', lock_holder: null });
-  expect(mocks.confirm.mock.calls[0][0]).not.toContain('could not be verified');
+  expect(mocks.confirm.mock.calls[0]?.[0]).not.toContain('could not be verified');
 });
 it('signed-out local opens warn without granting access and cancellation is returned', async () => {
   useSpeleoStore.setState({ session: null });

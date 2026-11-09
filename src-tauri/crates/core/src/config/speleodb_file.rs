@@ -66,7 +66,13 @@ pub(super) fn load(settings: &mut SpeleoDbConfig, config_path: &Path) -> Result<
     }
     let contents = match std::fs::read_to_string(&path) {
         Ok(contents) => contents,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && std::fs::symlink_metadata(&path)
+                    .is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) =>
+        {
+            return Ok(())
+        }
         Err(error) => return Err(error).context("Failed to read SpeleoDB configuration"),
     };
     // Parser diagnostics can contain the source line, which may contain a token.
@@ -95,8 +101,17 @@ pub(super) fn save_with_general(
     if settings.preserve_unreadable_file {
         // Preserve recovery information in the old general document as well.
         let mut document: toml::Value = toml::from_str(general)?;
-        if let Ok(old) = std::fs::read_to_string(config_path) {
-            let old: toml::Value = toml::from_str(&old)?;
+        let previous = match std::fs::read_to_string(config_path) {
+            Ok(old) => Some(old),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(_) => {
+                anyhow::bail!("Could not read general configuration to preserve legacy settings")
+            }
+        };
+        if let Some(old) = previous {
+            let old: toml::Value = toml::from_str(&old).map_err(|_| {
+                anyhow::anyhow!("Could not parse general configuration to preserve legacy settings")
+            })?;
             if let Some(legacy) = old.get("speleodb") {
                 if let Some(table) = document.as_table_mut() {
                     table.insert("speleodb".into(), legacy.clone());
@@ -262,6 +277,26 @@ mod tests {
             .token
             .0
             .is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_private_file_is_preserved_and_never_falls_back_to_legacy() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("config.toml");
+        std::fs::write(
+            &path,
+            general_with_legacy("[speleodb]\nemail = 'legacy@example.com'\n"),
+        )
+        .unwrap();
+        let target = file_path(&path);
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(temp.path().join("missing"), &target).unwrap();
+        let loaded = Config::load_from_path(&path).unwrap();
+        assert!(loaded.speleodb.email.is_none());
+        assert!(loaded.speleodb.preserve_unreadable_file);
+        loaded.save_to_path(&path).unwrap();
+        assert!(std::fs::symlink_metadata(target).unwrap().is_symlink());
     }
 
     #[test]
