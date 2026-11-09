@@ -2,8 +2,12 @@
 //! (with each copy's owner relative to the signed-in account), removing one copy,
 //! and Settings' "Purge all cached files".
 //!
-//! All three are purely local (no token, no network), but walk and delete files, so
-//! they run off the main thread like every other file operation.
+//! The listing is purely local (no token, no network). Removing a copy and the
+//! purge delete files and then, for each removed copy of the signed-in account,
+//! contact SpeleoDB with the session's token: a short probe of who holds the
+//! project's lock, and the normal release when it is this account's
+//! (`core::state::speleodb_cached`). All three run off the main thread; the two
+//! removals also hold the app's exit while they run (`exit_wait`).
 
 use tauri::{AppHandle, Manager};
 
