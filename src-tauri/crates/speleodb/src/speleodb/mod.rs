@@ -62,7 +62,7 @@ pub enum SpeleoDbError {
     /// Password login was attempted without both an email and a password (and
     /// without a pasted token). Rejected at the boundary rather than POSTing
     /// blank credentials and relying on the server to 400.
-    #[error("email and password are required to log in")]
+    #[error("email and password are required to sign in")]
     MissingCredentials,
     /// A transport-level failure (DNS, timeout, connection reset, body read).
     ///
