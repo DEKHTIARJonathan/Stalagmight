@@ -3542,6 +3542,58 @@
       "lockedByYou": "You are editing",
       "lockedByOther": "Currently being edited by {{email}}"
     },
+    "cachedCopies": {
+      "readOnlySignedOut": "Read-only copy - log in to edit",
+      "viewOnly": "Read-only - your SpeleoDB access does not allow editing",
+      "logIn": "Log in",
+      "logInTitle": "Open the SpeleoDB settings to log in",
+      "openedSignedOut": "Opened a read-only copy. Log in to SpeleoDB to edit it.",
+      "openedSessionExpired": "Your SpeleoDB session has expired. Opened a read-only copy; log in again to edit it.",
+      "menu": {
+        "aria": "SpeleoDB project actions",
+        "open": "Open project",
+        "zoom": "Zoom to system",
+        "removeCopy": "Remove local copy…"
+      },
+      "remove": {
+        "title": "Remove local copy?",
+        "body": "This removes the copy of {{name}} downloaded to this computer. The project stays on SpeleoDB and can be downloaded again.",
+        "unpushed": "This copy has changes that were never uploaded to SpeleoDB. Removing it deletes them for good.",
+        "unknown": "Stalagmight could not read this copy, so it may hold changes that were never uploaded to SpeleoDB. Removing it may delete them for good.",
+        "confirm": "Remove copy",
+        "confirmLosingChanges": "Remove copy and lose my changes",
+        "removing": "Removing…",
+        "cancel": "Cancel",
+        "done": "Removed the local copy of {{name}}.",
+        "failed": "The copy could not be removed."
+      },
+      "purge": {
+        "title": "Downloaded projects",
+        "help": "Copies of SpeleoDB projects downloaded to this computer, for every account. Projects stay on SpeleoDB and download again when you open them.",
+        "button": "Purge all cached files",
+        "working": "Purging…",
+        "empty": "There are no downloaded copies to remove.",
+        "confirmTitle": "Purge all cached files?",
+        "confirmBody_one": "Remove {{countFormatted}} downloaded copy from this computer? It stays on SpeleoDB and can be downloaded again.",
+        "confirmBody_other": "Remove {{countFormatted}} downloaded copies from this computer? They stay on SpeleoDB and can be downloaded again.",
+        "openKept": "The copy of the project that is open now is kept.",
+        "atRisk_one": "{{countFormatted}} copy has changes that were never uploaded to SpeleoDB, or could not be read:",
+        "atRisk_other": "{{countFormatted}} copies have changes that were never uploaded to SpeleoDB, or could not be read:",
+        "keepAtRisk": "Keep those, remove the rest",
+        "deleteAll": "Delete everything",
+        "purge": "Purge",
+        "cancel": "Cancel",
+        "lostTitle": "Delete changes that were never uploaded?",
+        "lostBody": "The changes in these copies exist only on this computer. They will be lost for good. This cannot be undone.",
+        "lostConfirm": "Delete them",
+        "back": "Back",
+        "result_one": "Removed {{countFormatted}} downloaded copy.",
+        "result_other": "Removed {{countFormatted}} downloaded copies.",
+        "keptUnpushed": "Kept, with changes that were never uploaded: {{names}}",
+        "keptOpen": "Kept because it is open: {{names}}",
+        "failed": "Could not remove: {{details}}"
+      }
+    },
     "browser": {
       "title": "Open from SpeleoDB",
       "checking": "Checking session…",

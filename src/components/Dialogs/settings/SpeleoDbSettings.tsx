@@ -5,6 +5,7 @@ import { Toggle } from '../../common/Toggle';
 import { Button } from '../../common/Button';
 import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
+import { SpeleoCachePurgeSection } from './SpeleoCachePurgeSection';
 import { getPanelId, getTabId } from '../SettingsSidebar';
 import type { SettingsCategoryProps } from './types';
 import {
@@ -289,6 +290,8 @@ export function SpeleoDbSettings({
         )}
 
       </SettingsSection>
+
+      <SpeleoCachePurgeSection />
     </div>
   );
 }

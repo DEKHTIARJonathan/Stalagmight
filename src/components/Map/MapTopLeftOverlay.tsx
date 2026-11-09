@@ -1,6 +1,11 @@
 import { useTranslation } from 'react-i18next';
 import { FitToViewIcon, LockIcon } from '../common/icons';
-import { RawDataResumeButton, SpeleoResumeEditingButton } from './MapReadOnlyResume';
+import {
+  RawDataResumeButton,
+  SpeleoLogInButton,
+  SpeleoReadOnlyLabel,
+  SpeleoResumeEditingButton,
+} from './MapReadOnlyResume';
 
 /**
  * The map's top-left overlay row: the fit-to-view / exit-focus button, and the
@@ -78,8 +83,9 @@ export function MapTopLeftOverlay({
           data-testid="speleodb-readonly-banner"
         >
           <LockIcon size={13} />
-          <span className="text-accent font-medium">{t('speleodb.map.readOnlyBadge')}</span>
+          <SpeleoReadOnlyLabel />
           <SpeleoResumeEditingButton />
+          <SpeleoLogInButton />
         </div>
       )}
 

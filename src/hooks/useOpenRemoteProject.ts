@@ -18,6 +18,7 @@ import {
 } from '../utils/speleoError';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from '../utils/speleoExit';
+import { TOAST_KEYS } from '../utils/toastKeys';
 import type {
   SpeleoProjectSummary,
   SpeleoOpenResult,
@@ -63,13 +64,23 @@ async function leaveOpenProjectFor(targetProjectId: string): Promise<boolean> {
 /** One ownership token covers the warning, download, seed, and file load. */
 function reserveRemoteOpen() {
   const request = reserveProjectRequest();
-  const sessionGeneration = useSpeleoStore.getState().sessionGeneration;
+  let sessionGeneration = useSpeleoStore.getState().sessionGeneration;
   let dispatched = false;
   return { request,
     latest: () => isProjectRequestCurrent(request) && useSpeleoStore.getState().sessionGeneration === sessionGeneration,
     dispatch: () => { dispatched = beginProjectMutation(request); return dispatched; },
     current: () => (dispatched ? isProjectMutationCurrent(request) : isProjectRequestCurrent(request)) &&
-      useSpeleoStore.getState().sessionGeneration === sessionGeneration };
+      useSpeleoStore.getState().sessionGeneration === sessionGeneration,
+    /**
+     * The backend ended the session as part of THIS open (the server rejected the
+     * saved token, and the open fell back to the read-only cached copy). Mirror the
+     * sign-out and carry on under the signed-out generation: the open is not
+     * superseded by a session change it caused itself.
+     */
+    endSessionHere: () => {
+      useSpeleoStore.getState().clearSession();
+      sessionGeneration = useSpeleoStore.getState().sessionGeneration;
+    } };
 
 }
 
@@ -132,12 +143,19 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           permission,
           forPath: result.local_path,
           hasUnpushedEdits: hasUnpushedEdits === true,
-          ...(result.offline ? { offline: true } : {}),
+          // A copy opened without the server's say has no confirmed server tip.
+          ...(result.offline || result.read_only ? { offline: true } : {}),
           projectId,
         });
       }
       onBeforeLoad?.();
-      const loaded = await loadProject(result.local_path, { accessConfirmed: true, request: ownership.request });
+      // Without a session (signed out, or the token was just rejected) there is no
+      // lock to take: the copy stays read-only and nothing is sent to SpeleoDB.
+      const loaded = await loadProject(result.local_path, {
+        accessConfirmed: true,
+        request: ownership.request,
+        ...(result.read_only ? { acquireLock: false } : {}),
+      });
       if (!ownership.current()) return { status: 'load_failed', localPath: result.local_path };
       if (!loaded.success) {
         // Nothing to roll back when we never seeded: the link on screen is still
@@ -183,7 +201,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // already-open fast path. The backend may still have replaced the whole tree, so
       // run the same post-replacement cleanup as fast-forward, discard, and restore.
       if (
-        alreadyOpen && !result.offline &&
+        alreadyOpen && !result.offline && !result.read_only &&
         !(await applySpeleoTreeReplacement(speleoProjectSessionIssuedFor(projectId), true))
       ) {
         return { status: 'load_failed', localPath: result.local_path };
@@ -287,8 +305,15 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           reLogin: speleoErrorAction(e) === 'ReLogin',
         };
       }
+      // The backend dropped a token the server rejected during this open: the app is
+      // signed out now, whatever happens next.
+      const sessionExpired = result.read_only === 'session_expired';
       // A new edit during the download invalidates the earlier discard consent.
-      if (!ownership.current()) return { status: 'cancelled' };
+      if (!ownership.current()) {
+        if (sessionExpired) useSpeleoStore.getState().clearSession();
+        return { status: 'cancelled' };
+      }
+      if (sessionExpired) ownership.endSessionHere();
       const landed = handBackRefusalAfterPull(summary, result.local_path, acknowledged.project);
       if (landed) return { status: 'error', message: landed, reLogin: false };
       return finishOpen(result, summary.permission, summary.id, ownership, {
@@ -297,6 +322,13 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           message: t('speleodb.projectListing.offlineCopy'),
           key: 'speleodb-offline-open',
           kind: 'warning' as const,
+        } } : {}),
+        ...(result.read_only ? { successToast: {
+          message: t(sessionExpired
+            ? 'speleodb.cachedCopies.openedSessionExpired'
+            : 'speleodb.cachedCopies.openedSignedOut'),
+          key: TOAST_KEYS.SPELEODB_READ_ONLY_OPEN,
+          kind: sessionExpired ? 'warning' as const : 'info' as const,
         } } : {}),
       });
     },

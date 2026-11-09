@@ -31,6 +31,10 @@ export const TOAST_KEYS = {
 
   // Global view
   SPELEODB_OPEN_REMOTE_ERROR: 'speleodb-open-remote-error',
+  /** A cached SpeleoDB copy opened read-only because there is no usable session. */
+  SPELEODB_READ_ONLY_OPEN: 'speleodb-read-only-open',
+  /** The outcome of removing a downloaded SpeleoDB copy from the home screen. */
+  SPELEODB_CACHED_COPY: 'speleodb-cached-copy',
   RENAME: 'rename',
 
   // Data table
