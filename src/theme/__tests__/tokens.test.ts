@@ -729,3 +729,99 @@ describe('warning text contrast', () => {
     expect(contrast(tokens['--cc-warning']!, solid(tokens['--cc-warning-20']!, tokens['--cc-panel']!))).toBeLessThan(4.5);
   });
 });
+
+/**
+ * Every tone `Button` variant (src/components/common/buttonStyles.ts), in both its
+ * outline/tint and filled forms, on the two surfaces a button sits on (the panel
+ * and the page background), in every theme. Read off the very class strings the
+ * component renders, resolved through tailwind.config.js to the `--cc-*` token
+ * and composited the way the browser paints it, so a class edit that pairs two
+ * tokens nobody measured fails here rather than shipping.
+ *
+ * - label: 4.5:1 (WCAG AA normal text) on the rest and the hover background;
+ * - border (the outline form's only boundary): 3:1 (WCAG 1.4.11) on the surface;
+ * - focus: the global `*:focus-visible` ring (--cc-focus-ring, 2px, offset onto
+ *   the surface) 3:1 on the surface.
+ * Disabled buttons (opacity 0.5) are exempt under WCAG 1.4.3 / 1.4.11 (inactive
+ * components); they keep their reason tooltip instead.
+ */
+describe('button tone contrast', async () => {
+  const { toneForms } = await import('../../components/common/buttonStyles');
+  const twSource = fs.readFileSync(path.resolve(__dirname, '../../../tailwind.config.js'), 'utf8');
+  /** Tailwind colour key -> the `--cc-*` token it reads. */
+  const twToken: Record<string, string> = {};
+  for (const m of twSource.matchAll(/^\s*'?([a-z0-9-]+)'?:\s*'var\((--cc-[a-z0-9-]+)\)'/gm)) twToken[m[1]!] = m[2]!;
+
+  type Paint = { rest: string; hover: string; text: string; border?: string };
+  /** The tokens one class string paints with. Throws on a colour that is not a token. */
+  function paint(classes: string): Paint {
+    const out: Partial<Paint> = {};
+    for (const cls of classes.split(/\s+/)) {
+      const m = /^(hover:)?(bg|text|border)-(.+)$/.exec(cls);
+      if (!m || /^border-(solid|dashed|dotted|none|\d+)$/.test(cls)) continue;
+      const token = twToken[m[3]!];
+      if (!token) throw new Error(`${cls} is not a theme token (tailwind.config.js has no var(--cc-*) for ${m[3]})`);
+      const slot = m[1] ? 'hover' : m[2] === 'bg' ? 'rest' : m[2] === 'text' ? 'text' : 'border';
+      out[slot] = token;
+    }
+    expect(out.rest, classes).toBeDefined();
+    expect(out.hover, classes).toBeDefined();
+    expect(out.text, classes).toBeDefined();
+    return out as Paint;
+  }
+
+  const forms = Object.entries(toneForms).flatMap(([variant, f]) =>
+    Object.entries(f).map(([form, classes]) => ({ variant, form, classes: classes as string })));
+
+  it('covers every tone in its outline form, and every tone but neutral filled', () => {
+    expect(forms.filter((f) => f.form === 'outline').map((f) => f.variant).sort())
+      .toEqual(['danger', 'external', 'info', 'neutral', 'primary', 'success', 'warning']);
+    expect(forms.filter((f) => f.form === 'filled').map((f) => f.variant).sort())
+      .toEqual(['danger', 'external', 'info', 'primary', 'success', 'warning']);
+  });
+
+  it('every outline form draws its border: index.css resets button borders to none', () => {
+    for (const f of forms.filter((x) => x.form === 'outline')) {
+      expect(f.classes.split(/\s+/), `${f.variant} outline`).toEqual(expect.arrayContaining(['border', 'border-solid']));
+    }
+  });
+
+  it('paints only with theme tokens (no raw palette classes like bg-sky-100)', () => {
+    for (const f of forms) expect(() => paint(f.classes), `${f.variant} ${f.form}`).not.toThrow();
+    expect(() => paint('bg-sky-100 border border-sky-500 text-sky-900 hover:bg-sky-200')).toThrow(/not a theme token/);
+  });
+
+  for (const theme of ALL_THEME_NAMES) {
+    it(`${theme}: every tone reads at AA in both forms, at rest, on hover and focused`, () => {
+      const tokens = themeTokens[theme] as Record<string, string>;
+      const failures: string[] = [];
+      for (const surfaceName of ['--cc-panel', '--cc-background']) {
+        const surface = tokens[surfaceName]!;
+        const ring = contrast(tokens['--cc-focus-ring']!, surface);
+        if (ring < 3) failures.push(`focus ring on ${surfaceName} ${ring.toFixed(2)}:1`);
+        for (const { variant, form, classes } of forms) {
+          const p = paint(classes);
+          const text = tokens[p.text]!;
+          expect(text, `${theme} ${p.text}`).toMatch(/^#[0-9a-fA-F]{6}$/);
+          for (const [state, bg] of [['rest', p.rest], ['hover', p.hover]] as const) {
+            const ratio = contrast(text, solid(tokens[bg]!, surface));
+            if (ratio < 4.5) failures.push(`${variant} ${form} ${state} on ${surfaceName}: ${p.text} on ${bg} ${ratio.toFixed(2)}:1`);
+          }
+          if (p.border) {
+            const ratio = contrast(solid(tokens[p.border]!, surface), surface);
+            if (ratio < 3) failures.push(`${variant} ${form} border on ${surfaceName}: ${p.border} ${ratio.toFixed(2)}:1`);
+          }
+        }
+      }
+      expect(failures, `${theme}:\n${failures.join('\n')}`).toEqual([]);
+    });
+  }
+
+  it("would reject #668's warning and success outlines (tone text on its own wash) on the light theme", () => {
+    const tokens = themeTokens.light as Record<string, string>;
+    const panel = tokens['--cc-panel']!;
+    // bg-warning-20 text-warning and bg-success-10 text-success, as #668 shipped them.
+    expect(contrast(tokens['--cc-warning']!, solid(tokens['--cc-warning-20']!, panel))).toBeLessThan(4.5);
+    expect(contrast(tokens['--cc-success']!, solid(tokens['--cc-success-30']!, panel))).toBeLessThan(4.5);
+  });
+});
