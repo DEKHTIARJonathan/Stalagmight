@@ -1,6 +1,8 @@
 import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
+import { useSpeleoStore } from '../../store/speleoStore';
+import { speleoReadOnlyReason, speleoReadOnlyReasonKey } from '../../utils/speleoReadOnlyReason';
 import { SpeleoWorkspace } from './SpeleoWorkspace';
 import { SpeleoNetworkBusyIndicator } from './SpeleoNetworkBusyIndicator';
 import { SectionsTabIcon, SpeleoTabIcon, useSpeleoTabState } from './workspaceTabIcons';
@@ -14,12 +16,18 @@ export function LeftWorkspace({ sections }: { sections: ReactNode }) {
   const tabs = mode === 'survey' ? ['sections', 'speleodb'] as const : ['speleodb'] as const;
   const choose = useUIStore((s) => s.selectLeftWorkspace);
   const speleoState = useSpeleoTabState();
+  const link = useSpeleoStore((s) => s.link);
+  const session = useSpeleoStore((s) => s.session);
   // The tab's own words for its badge, as its accessible description (and tooltip).
+  // Read-only says why in the same words as the map's pill and the workspace header:
+  // signed out, view-only access, or just not editing right now.
+  const readOnlyReason = speleoState === 'read-only' ? speleoReadOnlyReason(link, session) : null;
   const speleoNote = speleoState === 'unuploaded' ? t('speleodb.workspaceTab.unuploaded')
-    : speleoState === 'read-only' ? t('speleodb.workspaceTab.readOnly') : null;
+    : speleoState !== 'read-only' ? null
+    : readOnlyReason ? t(speleoReadOnlyReasonKey(readOnlyReason)) : t('speleodb.workspaceTab.readOnly');
   return (
     <div className="h-full min-h-0 flex flex-col">
-      <div role="tablist" aria-label="Project workspace" className="flex shrink-0 border-b border-border">
+      <div role="tablist" aria-label={t('speleodb.workspaceTab.tablist')} className="flex shrink-0 border-b border-border">
         {tabs.map((id, index) => {
           const selected = tab === id;
           const warn = id === 'speleodb' && speleoState === 'unuploaded';
@@ -45,7 +53,7 @@ export function LeftWorkspace({ sections }: { sections: ReactNode }) {
             {id === 'speleodb'
               ? <SpeleoNetworkBusyIndicator><SpeleoTabIcon state={speleoState} /></SpeleoNetworkBusyIndicator>
               : <SectionsTabIcon />}
-            <span>{id === 'speleodb' ? 'SpeleoDB' : 'Sections'}</span>
+            <span>{t(id === 'speleodb' ? 'speleodb.workspaceTab.speleodb' : 'speleodb.workspaceTab.sections')}</span>
           </button>;
         })}
       </div>

@@ -12,7 +12,7 @@ const link: SpeleoLinkState = {
   undoMode: 'full', remoteState: 'up_to_date', noAccess: false, serverError: null,
 };
 beforeEach(() => {
-  useSpeleoStore.setState({ link });
+  useSpeleoStore.setState({ link, session: null });
   useUIStore.setState({ appMode: 'survey', leftWorkspace: 'sections', surveyLeftWorkspace: 'sections' });
 });
 describe('Left workspace', () => {
@@ -88,6 +88,27 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
     expect(badge()).not.toHaveClass('text-warning-text');
     expect(speleoTab()).toHaveAccessibleDescription(/Read-only/);
     expect(speleoTab().className).not.toContain('text-warning');
+  });
+
+  it.each([
+    ['signed out', null, 'READ_AND_WRITE', 'Read-only copy - sign in to edit'],
+    ['view-only access', { loggedIn: true, userEmail: 'me@example.com', endpoint: 'https://example.com' }, 'READ_ONLY',
+      'Read-only - your SpeleoDB access does not allow editing'],
+    ['not editing', { loggedIn: true, userEmail: 'me@example.com', endpoint: 'https://example.com' }, 'READ_AND_WRITE',
+      'Read-only - you are not editing this project'],
+  ] as const)('read-only says why, in the pill and header words, when %s', (_label, session, permission, words) => {
+    useSpeleoStore.setState({ session, link: { ...link, permission } });
+    render(<LeftWorkspace sections={<div />} />);
+    expect(speleoTab()).toHaveAttribute('data-state', 'read-only');
+    expect(speleoTab()).toHaveAttribute('title', words);
+    expect(speleoTab()).toHaveAccessibleDescription(words);
+  });
+
+  it('labels the tab list and both tabs through i18n', () => {
+    render(<LeftWorkspace sections={<div />} />);
+    expect(screen.getByRole('tablist', { name: 'Project workspace' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Sections' })).toBeInTheDocument();
+    expect(speleoTab()).toBeInTheDocument();
   });
 
   it.each([

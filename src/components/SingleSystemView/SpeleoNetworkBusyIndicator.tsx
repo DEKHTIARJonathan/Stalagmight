@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
 import { selectSpeleoNetworkBusy, useSpeleoNetworkStore } from '../../store/speleoNetworkStore';
-
-export const SPELEO_NETWORK_BUSY_LABEL = 'Talking to SpeleoDB...';
 
 /**
  * A small spinner on the SpeleoDB tab while any SpeleoDB network call is in
@@ -18,8 +17,10 @@ export const SPELEO_NETWORK_BUSY_LABEL = 'Talking to SpeleoDB...';
  * readers announce the label when the spinner appears.
  */
 export function SpeleoNetworkBusyIndicator({ children }: { children?: ReactNode }) {
+  const { t } = useTranslation();
   const busy = useSpeleoNetworkStore(selectSpeleoNetworkBusy);
   const overIcon = children != null;
+  const label = t('speleodb.workspaceTab.busy');
   return (
     <span
       className={`relative ${overIcon ? 'inline-flex' : 'inline-block h-0 w-0 align-middle'}`}
@@ -27,11 +28,11 @@ export function SpeleoNetworkBusyIndicator({ children }: { children?: ReactNode 
     >
       {children}
       <span role="status" aria-live="polite" className="sr-only" data-testid="speleodb-network-busy-status">
-        {busy ? SPELEO_NETWORK_BUSY_LABEL : ''}
+        {busy ? label : ''}
       </span>
       {busy && (
         <span
-          title={SPELEO_NETWORK_BUSY_LABEL}
+          title={label}
           aria-hidden="true"
           className={`pointer-events-none absolute flex items-center justify-center text-accent ${
             overIcon

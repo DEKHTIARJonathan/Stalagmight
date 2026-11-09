@@ -58,7 +58,10 @@ screen card or row, on the map's read-only pill (with a Sign in action that open
 SpeleoDB settings) and in the SpeleoDB workspace header. Signing in later does not
 change an open project by itself; Resume editing then takes the lock as usual. A
 signed-in account whose permission is below read-and-write sees "Read-only - your
-SpeleoDB access does not allow editing" in the same three places.
+SpeleoDB access does not allow editing" in the same three places. The SpeleoDB tab's
+lock badge carries the same words as its tooltip (and accessible description), and,
+for a project that could be edited but is not right now, "Read-only - you are not
+editing this project".
 
 Collaborator/team management and remote project deletion are absent. Local file
 management, local imports and local exports remain separate application features.

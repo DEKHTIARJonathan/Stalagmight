@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, within } from '@testing-library/react';
 import { LeftWorkspace } from '../LeftWorkspace';
-import { SpeleoNetworkBusyIndicator, SPELEO_NETWORK_BUSY_LABEL } from '../SpeleoNetworkBusyIndicator';
+import { SpeleoNetworkBusyIndicator } from '../SpeleoNetworkBusyIndicator';
+
+const BUSY_LABEL = 'Talking to SpeleoDB...';
 import { SpeleoBadgedIcon } from '../../common/SpeleoBadgedIcon';
 import { useSpeleoNetworkStore } from '../../../store/speleoNetworkStore';
 import { useUIStore } from '../../../store/uiStore';
@@ -40,9 +42,9 @@ describe('SpeleoNetworkBusyIndicator', () => {
     render(<SpeleoNetworkBusyIndicator />);
     const end = startRead();
     const spinner = screen.getByTestId('speleodb-network-busy');
-    expect(spinner).toHaveAttribute('title', SPELEO_NETWORK_BUSY_LABEL);
-    expect(screen.getByRole('status')).toHaveTextContent(SPELEO_NETWORK_BUSY_LABEL);
-    expect(SPELEO_NETWORK_BUSY_LABEL).toBe('Talking to SpeleoDB...');
+    // The translated label (en), as the tooltip and in the live region.
+    expect(spinner).toHaveAttribute('title', BUSY_LABEL);
+    expect(screen.getByRole('status')).toHaveTextContent(BUSY_LABEL);
     end();
     expect(screen.queryByTestId('speleodb-network-busy')).toBeNull();
     expect(screen.getByRole('status')).toBeEmptyDOMElement();

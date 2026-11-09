@@ -3521,9 +3521,13 @@
       }
     },
     "workspaceTab": {
+      "tablist": "Project workspace",
+      "sections": "Sections",
+      "speleodb": "SpeleoDB",
       "unuploaded": "Changes on this computer have not been uploaded to SpeleoDB yet.",
-      "readOnly": "Read-only: you are not editing this project.",
-      "menuOpen": "SpeleoDB"
+      "readOnly": "Read-only - you are not editing this project",
+      "menuOpen": "SpeleoDB",
+      "busy": "Talking to SpeleoDB..."
     },
     "reloadConfirm": {
       "title": "Reload Project",
