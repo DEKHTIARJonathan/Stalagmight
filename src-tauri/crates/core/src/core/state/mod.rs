@@ -57,6 +57,13 @@ mod concurrency_tests;
 #[cfg(test)]
 mod crash_property_tests;
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    clippy::print_stderr,
+    reason = "live check: fails loudly, and reports each step it proved"
+)]
+mod exit_prompt_live_tests;
+#[cfg(test)]
 mod format_property_tests;
 #[cfg(test)]
 mod fuzz_rarity_tests;
