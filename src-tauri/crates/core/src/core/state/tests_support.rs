@@ -39,7 +39,7 @@ impl AppState {
 /// spread across the family - a scan that stops seeing a file stops guarding it, and
 /// an absence assertion goes on passing while it does.
 #[cfg(test)]
-fn speleodb_prod_sources() -> [(&'static str, &'static str); 15] {
+fn speleodb_prod_sources() -> [(&'static str, &'static str); 16] {
     [
         ("speleodb.rs", include_str!("speleodb.rs")),
         ("speleodb_admin.rs", include_str!("speleodb_admin.rs")),
@@ -68,6 +68,7 @@ fn speleodb_prod_sources() -> [(&'static str, &'static str); 15] {
             include_str!("speleodb_write_guard.rs"),
         ),
         ("speleodb_pull.rs", include_str!("speleodb_pull.rs")),
+        ("speleodb_reload.rs", include_str!("speleodb_reload.rs")),
         ("speleodb_push.rs", include_str!("speleodb_push.rs")),
         (
             "speleodb_revisions.rs",
@@ -125,7 +126,10 @@ mod tests {
             .expect("the state module directory is readable")
             .filter_map(|entry| {
                 let name = entry.ok()?.file_name().to_string_lossy().into_owned();
-                (name.starts_with("speleodb") && name.ends_with(".rs")).then_some(name)
+                (name.starts_with("speleodb")
+                    && name.ends_with(".rs")
+                    && !name.ends_with("_tests.rs"))
+                .then_some(name)
             })
             .collect();
         on_disk.sort();

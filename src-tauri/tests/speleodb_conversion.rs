@@ -42,6 +42,9 @@ fn conversion_saves_unsaved_survey_uploads_once_and_requires_verified_editing_af
                     continue;
                 };
                 stream
+                    .set_nonblocking(false)
+                    .expect("blocking request stream");
+                stream
                     .set_read_timeout(Some(std::time::Duration::from_secs(5)))
                     .expect("request timeout");
                 let mut request = Vec::new();

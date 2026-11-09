@@ -1068,7 +1068,12 @@ mod tests {
         let mut forward_calls = Vec::new();
         for entry in std::fs::read_dir(state_dir).expect("read state source directory") {
             let path = entry.expect("state source entry").path();
-            if path.extension().and_then(|v| v.to_str()) != Some("rs") {
+            if path.extension().and_then(|v| v.to_str()) != Some("rs")
+                || path
+                    .file_name()
+                    .and_then(|v| v.to_str())
+                    .is_some_and(|name| name.ends_with("_tests.rs"))
+            {
                 continue;
             }
             let name = path

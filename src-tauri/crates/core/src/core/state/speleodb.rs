@@ -2703,7 +2703,7 @@ mod tests {
             .and_then(|rest| rest.split("\n    fn ").next())
             .expect("speleodb_upload body precedes the next method");
         let save = upload
-            .find("self.save_project(")
+            .find(".save_project_at_generation(")
             .expect("push flushes via save_project");
         let vacuum = upload
             .find("vacuum_snapshot(")
@@ -3379,21 +3379,15 @@ mod tests {
 
     #[test]
     fn a_second_session_on_the_same_account_never_inherits_the_holders_authorship() {
-        // The reported hole, and why the two halves of `we_hold_the_lock` were never
-        // independent: `speleodb_link_status` RE-DERIVES the edit gate from the lock
-        // holder's email (so a project you locked and never released reopens editable
-        // rather than stuck read-only under your own lock). Pairing that gate with the
-        // same holder email therefore read ONE signal twice.
-        //
-        // Here a second session on the same account holds the real lock and has
-        // pushed. This session never acquired anything: refresh 1 re-derives the gate
-        // from the holder email, and refresh 2 - reading the gate that refresh 1 opened -
-        // used to hand the shortcut to a process that had pushed nothing, explaining
-        // the OTHER session's commit away as its own unrecorded push and reporting
-        // UpToDate over a real conflict.
+        // Another session on our account has pushed. Refresh must neither enable
+        // editing nor explain that session's commit away as our own. Only a verified
+        // acquisition by this process can establish the authorship provenance.
         let (base, _listener) = always_answering_stub(SAME_ACCOUNT_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
         *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        state
+            .speleodb_mutate_link(|link| link.endpoint = base.clone())
+            .expect("bind synthetic endpoint");
         assert!(
             !state.speleodb_lock_acquired_here(REMOTE_ID),
             "precondition: this process has taken no lock - it opened the project \
@@ -3407,9 +3401,8 @@ mod tests {
             "precondition: the server names our own account as the holder"
         );
         assert!(
-            first.edit_enabled,
-            "the re-derivation this defect rides on is deliberate and must survive: \
-             a project held under our own lock reopens editable"
+            !first.edit_enabled,
+            "status refresh never enables editing, even under our account lock"
         );
         assert_eq!(
             first.remote_state,
@@ -3421,13 +3414,12 @@ mod tests {
         assert_eq!(
             second.remote_state,
             RemoteState::Conflict,
-            "and it is still not ours on the next refresh, when the gate the first refresh \
-             opened is what `edit_enabled` reports - the verdict must not be laundered \
-             through a gate derived from the very holder email it is corroborating"
+            "a second refresh must preserve the conflict and the shut edit gate"
         );
 
         // The other side of the line: a process that really did take this lock keeps
         // the shortcut, so its own landed push is not painted as a conflict.
+        state.set_edit_enabled(true);
         state.speleodb_note_lock_acquired(Some(REMOTE_ID));
         let third = state.speleodb_link_status().expect("refresh 3");
         assert_eq!(
@@ -3827,15 +3819,14 @@ mod tests {
 
     #[test]
     fn a_refresh_over_a_shut_gate_drops_a_stale_acquisition_record() {
-        // The catch-all for every way a lock-held session can end without passing
-        // through a release verb in this file: a close / project switch / reopen, the
-        // detached switch-time release, an admin release, the 401 auto-drop. All of
-        // them leave the edit gate shut, and a shut gate means this process is not
-        // editing under a lock of its own - so the refresh drops the record BEFORE its
-        // own re-derivation can reopen the gate and hand the shortcut back.
+        // Closing or switching can shut editing outside the explicit release path.
+        // Refresh must drop stale acquisition provenance and leave editing shut.
         let (base, _listener) = always_answering_stub(SAME_ACCOUNT_HOLDER_BODY);
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
         *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        state
+            .speleodb_mutate_link(|link| link.endpoint = base.clone())
+            .expect("bind synthetic endpoint");
         state.set_edit_enabled(true);
         state.speleodb_note_lock_acquired(Some(REMOTE_ID));
         // The session ends somewhere this file cannot hook (here: the reopen after a
@@ -3844,8 +3835,8 @@ mod tests {
 
         let status = state.speleodb_link_status().expect("refresh");
         assert!(
-            status.edit_enabled,
-            "the reopen re-derivation still reopens the gate under our own lock"
+            !status.edit_enabled,
+            "status refresh keeps editing shut under our own lock"
         );
         assert_eq!(
             status.remote_state,
@@ -4555,6 +4546,9 @@ mod tests {
         let (base, _listener) = holder_changes_after_the_first_read(REMOTE_ID, None);
         let (_temp, state) = remote_readonly_fixture();
         *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        state
+            .speleodb_mutate_link(|link| link.endpoint = base.clone())
+            .expect("bind synthetic endpoint");
 
         let status = state.speleodb_link_status().expect("status");
 

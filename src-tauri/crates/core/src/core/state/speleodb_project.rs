@@ -461,7 +461,7 @@ mod tests {
         let body = &src[start..];
         let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
         let relocate = body
-            .find("self.save_project(Some(")
+            .find("self.save_project_at_generation(Some(")
             .expect("publish relocates via an explicit-destination save");
         let stamp = body
             .find(".save_speleo_link(Some(")

@@ -43,7 +43,7 @@ it('cancel leaves the project and lock alone', () => {
 it('discard closes without saving and uses the automatic release default', async () => {
   render(<SpeleoCloseDialog />);
   fireEvent.click(screen.getByTestId('speleodb-close-discard'));
-  await waitFor(() => expect(closeProject).toHaveBeenCalledWith({ request: expect.any(Number) }));
+  await waitFor(() => expect(closeProject).toHaveBeenCalledWith({ request: expect.any(Number), isCurrent: expect.any(Function) }));
   expect(saveProject).not.toHaveBeenCalled();
 });
 

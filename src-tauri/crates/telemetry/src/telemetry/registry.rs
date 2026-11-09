@@ -148,7 +148,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.speleodb_logout",
     "command.speleodb_open_project",
     "command.speleodb_open_project_discarding_local",
-    "command.speleodb_patch_project",
     "command.speleodb_project_access_at",
     "command.speleodb_publish",
     "command.speleodb_push",
@@ -157,8 +156,6 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.speleodb_release_lock_acquired_here",
     "command.speleodb_restore_revision",
     "command.speleodb_session",
-    "command.speleodb_set_exclude_geojson",
-    "command.speleodb_set_undo_mode",
     "command.speleodb_start_editing",
     "command.speleodb_take_remote",
     "command.speleodb_unlink",
@@ -1033,7 +1030,8 @@ mod tests {
         //       webview `invoke` cannot skip the exit guards.
         // Native SDK migration removes retired commands and picker events.
         // Removed force-edit command/dialog (5) and project settings dialog (4).
-        assert_eq!(EVENT_NAMES.len(), 656);
+        // Retired workspace metadata mutation commands (3).
+        assert_eq!(EVENT_NAMES.len(), 653);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -1665,7 +1665,7 @@ mod tests {
         for (file, func, database_commit, undo_commit) in [
             (
                 "project_load.rs",
-                "fn open_project",
+                "fn open_project_prepared_inner",
                 " = Some(db);",
                 "load_from_persisted_with_timestamps(",
             ),

@@ -188,9 +188,10 @@ for equal revisions. Cover stale listing hints, verified descendants, ambiguous
 history, failed downloads and status refresh never opening editing. Reload tests
 must cover cancellation, acknowledged discard, historical checkouts, mode preservation
 and safe failure. Direct read-only/reload calls and concurrent project/account/edit
-changes must reject stale consent. Use only synthetic data. Run only newly created
-or modified cases with explicit file and test-name filters, plus static gates;
-selected acceptance does not imply full-suite acceptance.
+changes must reject stale consent. Use only synthetic data. For focused verification,
+run newly created or modified cases with explicit file and test-name filters, plus
+static gates. Run the full suites when requested; selected acceptance does not imply
+full-suite acceptance.
 
 ### Focused workspace verification (2026-11-09)
 
@@ -223,3 +224,29 @@ workspace-member formatting, and workspace Clippy with telemetry and all targets
 passed. Existing repository/toolchain warnings remain. No unchanged test cases,
 external fixtures or live-server tests were run for this change; these selected
 results do not claim full-suite acceptance.
+
+### Full automated verification (2026-11-09)
+
+At the user's request, verification was broadened to the full automated suites:
+
+- Vitest: 408 files, 5,698 tests passed, including the IPC mock contract. Seven stale
+  expectations from the first run were corrected before the clean full rerun.
+- Rust workspace with telemetry: 3,590 tests passed, 41 ignored, including doc tests.
+  Corrected retired telemetry entries, source inventories and old acquisition/load
+  assertions; made accepted synthetic HTTP sockets explicitly blocking on macOS.
+- Vendored Compass: 119 unit tests and 3 doc tests passed.
+- Headless Chromium: all 1,135 cases executed, initially 1,127 passed and 8 failed.
+  Updated dialog-scoped focus, retained-but-hidden workspace and two-row toolbar
+  assertions, and disabled fling inertia in the painted pan-position test. All
+  eight failed cases passed on targeted reruns. The three gas-planning cases
+  passed unchanged after navigation interruptions in the initial run. A second
+  full browser run was not performed.
+- All three typechecks, all nine lint gates, all standalone JavaScript script-test
+  files, root and workspace-member Rust formatting checks, and workspace Clippy
+  with telemetry and all targets passed. The Playwright typecheck and parallel
+  lint were repeated after the browser-test corrections.
+
+Clippy retains existing repository warnings. Ignored and environment-gated checks
+are not equivalent to executed coverage; native desktop UAT and live-server
+acceptance were not separately verified. No external fixtures were added or
+committed. Logs and browser failure artifacts are under `/tmp/stalagmight-*`.

@@ -935,8 +935,9 @@ it('ignores a successful upload response after the project changes', async () =>
 it('manual refresh waits for fresh lock and permission status even when the revision is current', async () => {
   let finishStatus!: () => void;
   const refreshLinkStatus = vi.fn(() => new Promise<void>((resolve) => { finishStatus = resolve; }));
-  useSpeleoStore.setState({ applyUpdate: vi.fn(), refreshLinkStatus });
-  invokeIpcMock.mockResolvedValue({ kind: 'up_to_date' });
+  useProjectStore.setState({ isDirty: false });
+  useSpeleoStore.setState({ link: { hasUnpushedEdits: false } as never, applyUpdate: vi.fn(), refreshLinkStatus });
+  invokeIpcMock.mockImplementation(async (command) => command === 'speleodb_project_access_at' ? { release_context: {} } : { kind: 'up_to_date' });
   const { result } = renderHook(() => useSpeleoActions());
   let request!: Promise<void>;
   await act(async () => { request = result.current.update(); });
