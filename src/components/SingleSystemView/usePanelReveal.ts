@@ -53,8 +53,7 @@ export function usePanelReveal(panel: PanelId, opts: PanelRevealOpts = {}): Pane
   const [hovering, setHovering] = useState(false);
   const [programmatic, setProgrammatic] = useState(false);
   const [focused, setFocused] = useState(false);
-  const onRegionFocus = useCallback(() => setFocused(true), []);
-  const onRegionBlur = useCallback(() => setFocused(false), []);
+  const focusedRef = useRef(false);
   const graceRef = useRef<number | null>(null);
   const graceDeadlineRef = useRef(0);
 
@@ -65,6 +64,13 @@ export function usePanelReveal(panel: PanelId, opts: PanelRevealOpts = {}): Pane
     }
     graceDeadlineRef.current = 0;
   }, []);
+
+  const onRegionFocus = useCallback(() => {
+    focusedRef.current = true;
+    clearGrace();
+    setFocused(true);
+  }, [clearGrace]);
+  const onRegionBlur = useCallback(() => { focusedRef.current = false; setFocused(false); }, []);
 
   useEffect(() => clearGrace, [clearGrace]);
 
@@ -106,10 +112,10 @@ export function usePanelReveal(panel: PanelId, opts: PanelRevealOpts = {}): Pane
         graceRef.current = null;
         graceDeadlineRef.current = 0;
         setHovering(false);
-        if (!focused) setProgrammatic(false);
+        if (!focusedRef.current) setProgrammatic(false);
       }, ms);
     },
-    [clearGrace, focused],
+    [clearGrace],
   );
 
   const onRegionLeave = useCallback(() => scheduleClose(), [scheduleClose]);
@@ -147,6 +153,7 @@ export function usePanelReveal(panel: PanelId, opts: PanelRevealOpts = {}): Pane
   const close = useCallback(() => {
     setPanelOpen(panel, false);
     setProgrammatic(false);
+    focusedRef.current = false;
     setFocused(false);
     clearGrace();
     setHovering(false);

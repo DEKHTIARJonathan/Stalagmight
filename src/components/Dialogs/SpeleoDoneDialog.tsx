@@ -1,5 +1,5 @@
 import { permissionAtLeast } from '../../utils/speleoPermission';
-import { getUploadContinuation, setUploadContinuation } from '../../utils/uploadContinuation';
+import { captureUploadOwner, getUploadContinuation, setUploadContinuation, uploadOwnerStillCurrent } from '../../utils/uploadContinuation';
 import { SpeleoWorkspaceAccount } from '../SingleSystemView/SpeleoWorkspaceAccount';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -41,11 +41,19 @@ export default function SpeleoDoneDialog() {
   const mode = dialogData.mode === 'push' ? 'push' : 'release';
   const { busy, push, done, startEditing } = useSpeleoActions();
   const path = useProjectStore((s) => s.project?.file_path);
+  const [owner] = useState(captureUploadOwner);
+  const sessionGeneration = useSpeleoStore((s) => s.sessionGeneration);
+  const projectGeneration = useProjectStore((s) => s.projectTreeGeneration);
+  const ownerCurrent = uploadOwnerStillCurrent(owner);
   const closeAfterSave = dialogData.closeAfterSave === true;
   const [message, setMessage] = useState(() => getUploadContinuation(path)?.message ?? '');
   useEffect(() => {
-    if (path) setUploadContinuation({ path, message, closeAfterSave });
-  }, [path, message, closeAfterSave]);
+    if (!ownerCurrent) {
+      if (useUIStore.getState().activeDialog === 'speleodb-done' && useUIStore.getState().dialogData === dialogData) closeDialog();
+      return;
+    }
+    if (path) setUploadContinuation({ path, message, closeAfterSave }, owner);
+  }, [path, message, closeAfterSave, owner, ownerCurrent, sessionGeneration, projectGeneration, dialogData, closeDialog]);
   const link = useSpeleoStore((s) => s.link);
   const loggedIn = useSpeleoStore((s) => s.session?.loggedIn);
   const uploadAllowed = link?.editState === 'editing' && !link.noAccess && loggedIn === true && permissionAtLeast(link.permission, 'READ_AND_WRITE');
@@ -60,7 +68,7 @@ export default function SpeleoDoneDialog() {
 
   const handleConfirm = async () => {
     const text = message.trim();
-    if (attempt.current || busy || !uploadAllowed || (needsMessage && !text)) return;
+    if (!uploadOwnerStillCurrent(owner) || attempt.current || busy || !uploadAllowed || (needsMessage && !text)) return;
     attempt.current = true;
     setSubmitting(true);
     setSaveFailure(null);
@@ -68,7 +76,7 @@ export default function SpeleoDoneDialog() {
     const path = state.project?.file_path;
     const op = state.loading.clientOpId;
     const generation = useSpeleoStore.getState().sessionGeneration;
-    const current = () => useProjectStore.getState().project?.file_path === path &&
+    const current = () => uploadOwnerStillCurrent(owner) && useProjectStore.getState().project?.file_path === path &&
       useProjectStore.getState().loading.clientOpId === op &&
       useSpeleoStore.getState().sessionGeneration === generation &&
       useUIStore.getState().activeDialog === 'speleodb-done' &&
@@ -94,9 +102,19 @@ export default function SpeleoDoneDialog() {
             setSaveFailure('Newer changes remain on this computer. The project stays open.');
             return;
           }
-          const closed = await latest.closeProject();
-          if (closed.success) { setUploadContinuation(null); closeDialog(); useUIStore.getState().setView('global'); }
-          else setSaveFailure(closed.error ?? 'Could not close project');
+          const treeGeneration = latest.projectTreeGeneration;
+          const closeCurrent = () => current() &&
+            useProjectStore.getState().projectTreeGeneration === treeGeneration &&
+            !useProjectStore.getState().isDirty && !useSpeleoStore.getState().link?.hasUnpushedEdits;
+          const closed = await latest.closeProject({ isCurrent: closeCurrent });
+          if (closed.success) {
+            const ui = useUIStore.getState();
+            if (!useProjectStore.getState().project &&
+                useSpeleoStore.getState().sessionGeneration === generation &&
+                ui.activeDialog === 'speleodb-done' && ui.dialogData === dialogData) {
+              setUploadContinuation(null); closeDialog(); ui.setView('global');
+            }
+          } else if (current()) setSaveFailure(closed.error ?? 'Could not close project');
         } else if (resolved?.kind === 'pushed') { setUploadContinuation(null); closeDialog(); }
         else if (useSpeleoStore.getState().banner?.kind === 'push_failed') setSaveFailure(null);
         else setSaveFailure(resolved === null || resolved.kind === 'push_unconfirmed'
@@ -108,6 +126,8 @@ export default function SpeleoDoneDialog() {
       }
     } finally { attempt.current = false; setSubmitting(false); }
   };
+
+  if (!ownerCurrent) return null;
 
   return (
     <DialogWrapper

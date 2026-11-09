@@ -338,7 +338,7 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
    * the server mutex (fix 1). The release opt-out is reserved for internal tree
    * replacements that retain the same project's edit session.
    */
-  closeProject: (opts?: { releaseLock?: boolean; request?: number }) => Promise<CommandResult>;
+  closeProject: (opts?: { releaseLock?: boolean; request?: number; isCurrent?: () => boolean }) => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
   /**
    * Mark the project dirty (unsaved changes) without running a command. The DMP
@@ -980,7 +980,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const superseded: LoadProjectOutcome = { success: false, superseded: true };
 
     const promise: Promise<LoadProjectOutcome> = runConfirmedProjectSwitch(path, () => get().project?.file_path, opts?.accessConfirmed, async () => {
-      if (!await confirmWorkspaceDrafts()) return { success: false, superseded: false };
+      if (!await confirmWorkspaceDrafts(current)) return { success: false, superseded: !current() };
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
       // resolution, the Zustand set, the view switch / MapCanvas mount, or
@@ -995,8 +995,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (!beginProjectMutation(request)) return superseded;
       dispatched = true;
 
-      if (!await confirmWorkspaceDrafts() || !current()) return emptyCommandResult(false, 'Cancelled');
-    // ALWAYS cancel first - NO isLoading guard
+      // ALWAYS cancel first - NO isLoading guard
       // cancel_loading is idempotent on backend
       await get().cancelLoading();
       if (!current()) return superseded;
@@ -1284,6 +1283,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     let dispatched = false;
     const current = () => dispatched ? isProjectMutationCurrent(request) : isProjectRequestCurrent(request);
     if (!current()) return emptyCommandResult(false, 'Superseded');
+    if (!await confirmWorkspaceDrafts(current)) return emptyCommandResult(false, current() ? 'Cancelled' : 'Superseded');
     // ALWAYS cancel first - NO isLoading guard
     await get().cancelLoading();
     if (!current()) return emptyCommandResult(false, 'Superseded');
@@ -1434,9 +1434,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     set({ isClosing: true });
     return runProjectSwitch(async () => {
       try {
-        if (!isProjectRequestCurrent(request)) return emptyCommandResult(false, 'Superseded');
-        if (!await confirmWorkspaceDrafts()) return emptyCommandResult(false, 'Cancelled');
-        if (!isProjectRequestCurrent(request)) return emptyCommandResult(false, 'Superseded');
+        const current = () => isProjectRequestCurrent(request) && (opts?.isCurrent?.() ?? true);
+        if (!current()) return emptyCommandResult(false, 'Superseded');
+        if (!await confirmWorkspaceDrafts(current)) return emptyCommandResult(false, current() ? 'Cancelled' : 'Superseded');
+        if (!current()) return emptyCommandResult(false, 'Superseded');
         const result = await invokeIpc<CommandResult>(
           'close_project',
           // Default: release a held SpeleoDB lock so the close doesn't strand it

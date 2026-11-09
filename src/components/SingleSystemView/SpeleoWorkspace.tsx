@@ -34,7 +34,6 @@ export function SpeleoWorkspace() {
   const projectName = useProjectStore((s) => s.project?.name);
   const link = useSpeleoStore((s) => s.link);
   const session = useSpeleoStore((s) => s.session);
-  const generation = useSpeleoStore((s) => s.sessionGeneration);
   const expanded = useUIStore((s) => s.speleoWorkspaceSection);
   const [visited, setVisited] = useState(() => new Set<string>());
   useEffect(() => { if (expanded) setVisited((old) => new Set([...old, expanded])); }, [expanded]);
@@ -82,7 +81,7 @@ export function SpeleoWorkspace() {
               {(editing || link.permission === 'ADMIN') && <SpeleoAdminTab />}
             </>}
             {id === 'projects' && <OpenFromSpeleoDbDialog embedded />}
-            {id === 'account' && <SpeleoWorkspaceAccount key={generation} />}
+            {id === 'account' && <SpeleoWorkspaceAccount />}
             </>}
           </div>
         </section>

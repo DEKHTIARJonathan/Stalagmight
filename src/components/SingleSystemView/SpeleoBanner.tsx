@@ -7,7 +7,9 @@ import {
   type SpeleoBanner as SpeleoBannerState,
 } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoActions } from '../../hooks/useSpeleoActions';
+import { useProjectStore } from '../../store/projectStore';
+import { dispatchProjectSave } from '../../utils/dispatchProjectSave';
+import { getUploadContinuation, setUploadContinuation } from '../../utils/uploadContinuation';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 
@@ -30,9 +32,7 @@ export function SpeleoBanner() {
   const dialogOwnsFailure = useUIStore((s) =>
     s.activeDialog !== null && PUSH_FAILURE_DIALOGS.includes(s.activeDialog),
   );
-  // #213: Reconnect is the existing acquire+reconcile verb (startEditing).
-  // #260: Retry re-issues the push/unlock verb that failed.
-  const { startEditing, push, done, busy } = useSpeleoActions();
+  const busy = useSpeleoStore((s) => s.busy);
   // Inline second step for the Enable-rendering action (no single-click side effect
   // on server metadata; the confirm states rendering refreshes on the next push).
   const [confirmingEnable, setConfirmingEnable] = useState(false);
@@ -67,15 +67,22 @@ export function SpeleoBanner() {
   };
   const text = TEXT[banner.kind]();
 
-  // The verbs share the speleoStore `busy` lock, so a Retry while one is in flight
-  // can't double-issue; the guard just stops the click from queueing another.
+  // Retry returns to the shared Save confirmation, retaining the description
+  // and any still-current Save-and-Close request through authentication recovery.
   const retry = () => {
-    // `editing` is also what gates the button below - checked again here so the
-    // no-op re-issue is impossible even if the two ever drift.
-    if (!pushFailed || busy || !editing) return;
-    void (pushFailed.origin === 'done'
-      ? done(pushFailed.pushMessage)
-      : push(pushFailed.pushMessage));
+    if (!pushFailed || useSpeleoStore.getState().busy || !editing) return;
+    const path = useProjectStore.getState().project?.file_path;
+    if (!path) return;
+    const pending = getUploadContinuation(path);
+    setUploadContinuation({
+      path, message: pending?.message ?? pushFailed.pushMessage ?? '',
+      closeAfterSave: pending?.closeAfterSave ?? false,
+    });
+    useUIStore.getState().openSpeleoWorkspace();
+    if (pushFailed.origin === 'done' && !pending?.closeAfterSave) {
+      // A failed explicit lock release retries that operation after confirmation.
+      useUIStore.getState().openDialog('speleodb-done', { mode: 'release' });
+    } else void dispatchProjectSave();
   };
 
   const confirmEnable = async () => {
@@ -121,7 +128,7 @@ export function SpeleoBanner() {
           ) : (
             <button
               type="button"
-              onClick={() => void startEditing()}
+              onClick={() => useUIStore.getState().openSpeleoWorkspace(useSpeleoStore.getState().session?.loggedIn ? undefined : 'account')}
               disabled={busy}
               className="text-xs underline disabled:opacity-50"
               data-testid="speleo-banner-start-editing-to-retry"

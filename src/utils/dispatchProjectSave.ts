@@ -13,12 +13,13 @@ export async function dispatchProjectSave(opts?: { closeAfterSave?: boolean }) {
   const link = useSpeleoStore.getState().link;
   if (!state.project) return null;
   if (link) {
-    if (!link.hasUnpushedEdits && !state.isDirty && !opts?.closeAfterSave && link.editState === 'editing') {
+    const pending = getUploadContinuation(state.project.file_path);
+    const closeAfterSave = opts?.closeAfterSave === true || pending?.closeAfterSave === true;
+    if (!link.hasUnpushedEdits && !state.isDirty && !closeAfterSave && link.editState === 'editing') {
       ui.showToast('No changes to upload', 'speleodb-no-upload-changes', 'info');
       return null;
     }
-    const pending = getUploadContinuation(state.project.file_path);
-    ui.openDialog('speleodb-done', { mode: 'push', closeAfterSave: opts?.closeAfterSave === true || pending?.closeAfterSave === true });
+    ui.openDialog('speleodb-done', { mode: 'push', closeAfterSave });
     return null;
   }
   if (!state.project.file_path) return saveProjectAs(opts);

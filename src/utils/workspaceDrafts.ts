@@ -16,13 +16,14 @@ export function discardWorkspaceDrafts(): void {
   for (const draft of drafts.values()) if (draft.dirty()) draft.discard();
 }
 
-export async function confirmWorkspaceDrafts(): Promise<boolean> {
+export async function confirmWorkspaceDrafts(isCurrent: () => boolean = () => true): Promise<boolean> {
+  if (!isCurrent()) return false;
   const pending = [...drafts.values()].filter((draft) => draft.dirty());
   if (!pending.length) return true;
   const discard = await confirm('Discard unsaved SpeleoDB form changes?', {
     kind: 'warning', okLabel: 'Discard changes', cancelLabel: 'Cancel',
   });
-  if (!discard) return false;
+  if (!discard || !isCurrent()) return false;
   for (const draft of pending) draft.discard();
   return true;
 }

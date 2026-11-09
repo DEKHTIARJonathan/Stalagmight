@@ -1,5 +1,5 @@
 import { LoadingSpinner } from '../common/LoadingSpinner';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
@@ -48,6 +48,7 @@ export default function OpenFromSpeleoDbDialog({ embedded = false }: { embedded?
   // #270: the last project-list fetch failed, so an empty list means "we could not
   // load them", NOT "this account has no projects". Keeps the empty state honest.
   const [listFailed, setListFailed] = useState(false);
+  const request = useRef(0);
 
   const refreshProjects = async (isCancelled: () => boolean = () => false) => {
     const list = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
@@ -59,16 +60,23 @@ export default function OpenFromSpeleoDbDialog({ embedded = false }: { embedded?
 
   useEffect(() => {
     let cancelled = false;
+    request.current += 1;
+    setBusy(false);
+    setError(null);
+    setProjects([]);
+    setListFailed(false);
+    setPhase('checking');
+    const stale = () => cancelled || useSpeleoStore.getState().sessionGeneration !== sessionGeneration;
     void (async () => {
       // Step 1 - the AUTH check. Only THIS deciding we're not signed in may send the
       // user to the login prompt.
       let status: SpeleoSessionStatus;
       try {
         status = await invokeIpc<SpeleoSessionStatus>('speleodb_session');
-        if (cancelled) return;
+        if (stale()) return;
         setSession(status);
       } catch (e) {
-        if (cancelled) return;
+        if (stale()) return;
         // A dead token surfaces here - drop the session and prompt a re-login.
         if (speleoErrorAction(e) === 'ReLogin') clearSession();
         setError(humanizeSpeleoError(e, t('speleodb.errors.listFailed')));
@@ -85,10 +93,10 @@ export default function OpenFromSpeleoDbDialog({ embedded = false }: { embedded?
       // leaves them in the authenticated list phase with the inline error + Refresh.
       // Only a genuinely dead token (`ReLogin`) surfacing here escalates to logged-out.
       try {
-        await refreshProjects(() => cancelled);
-        if (!cancelled) setPhase('list');
+        await refreshProjects(stale);
+        if (!stale()) setPhase('list');
       } catch (e) {
-        if (cancelled) return;
+        if (stale()) return;
         setListFailed(true);
         setError(humanizeSpeleoError(e, t('speleodb.errors.listFailed')));
         if (speleoErrorAction(e) === 'ReLogin') {
@@ -101,6 +109,7 @@ export default function OpenFromSpeleoDbDialog({ embedded = false }: { embedded?
     })();
     return () => {
       cancelled = true;
+      request.current += 1;
     };
   }, [setSession, clearSession, t, sessionGeneration]);
 
@@ -111,12 +120,14 @@ export default function OpenFromSpeleoDbDialog({ embedded = false }: { embedded?
   }, [projects, filter]);
 
   const handleRefresh = async () => {
+    const issued = ++request.current;
+    const current = () => issued === request.current && useSpeleoStore.getState().sessionGeneration === sessionGeneration;
     setBusy(true);
     setError(null);
     try {
-      await refreshProjects();
+      await refreshProjects(() => !current());
     } catch (e) {
-      if (useSpeleoStore.getState().sessionGeneration !== sessionGeneration) return;
+      if (!current()) return;
       setListFailed(true);
       if (speleoErrorAction(e) === 'ReLogin') {
         clearSession();
@@ -124,7 +135,7 @@ export default function OpenFromSpeleoDbDialog({ embedded = false }: { embedded?
       }
       setError(humanizeSpeleoError(e, t('speleodb.errors.listFailed')));
     } finally {
-      setBusy(false);
+      if (current()) setBusy(false);
     }
   };
 
@@ -142,19 +153,17 @@ export default function OpenFromSpeleoDbDialog({ embedded = false }: { embedded?
   };
 
   const handleOpen = async (project: SpeleoProjectSummary) => {
+    const issued = ++request.current;
+    const current = () => issued === request.current && useSpeleoStore.getState().sessionGeneration === sessionGeneration;
     setBusy(true);
     setError(null);
-    const outcome = await openRemote(project);
-    if (useSpeleoStore.getState().sessionGeneration !== sessionGeneration) return;
-    if (outcome.status === 'cancelled') {
-      setBusy(false);
-    } else if (outcome.status === 'unpushed_local') {
-      // #270: the hook raised the keep-local / take-remote prompt, which has already
-      // replaced this browser as the active dialog - so this component is unmounting
-      // and there is deliberately nothing to do. (Backing out of that prompt re-opens
-      // this dialog fresh via `cancelReturnsTo`, with its own state.)
-    } else if (outcome.status === 'error') {
-      surfaceOpenError(outcome.message, outcome.reLogin);
+    try {
+      const outcome = await openRemote(project);
+      if (!current()) return;
+      if (outcome.status === 'error') surfaceOpenError(outcome.message, outcome.reLogin);
+    } finally {
+      // The embedded browser survives both the refusal prompt and its cancellation.
+      if (current()) setBusy(false);
     }
   };
 

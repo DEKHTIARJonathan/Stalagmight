@@ -190,7 +190,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   // local edits remain on disk, and the backend releases the old project's lock.
   // The acknowledgement belongs to this exact project snapshot and request.
   const confirmUnsavedHandBack = useCallback(async (current: () => boolean) => {
-    if (!await confirmWorkspaceDrafts() || !current()) return null;
+    if (!await confirmWorkspaceDrafts(current) || !current()) return null;
     const { project, isDirty } = useProjectStore.getState();
     if (!project || !isDirty) return { project: null };
     const accepted = await confirm(t('speleodb.exit.unsavedMessage'), {

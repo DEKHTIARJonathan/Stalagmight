@@ -17,6 +17,7 @@ import type {
 } from '../types/ipc.generated';
 import { invokeIpc } from '../utils/ipc';
 import { emailsMatch } from '../utils/email';
+import { endpointsMatch } from '../utils/speleoEndpoint';
 import { useProjectStore } from './projectStore';
 
 /**
@@ -637,6 +638,7 @@ const seededLinks = new WeakSet<SpeleoLinkState>();
 
 /// Issue order for `refreshLinkStatus`, so that when replies do overlap the newest
 /// one wins instead of whichever happened to land last.
+let authRequestSeq = 0;
 let linkStatusSeq = 0;
 let linkStatusApplied = 0;
 
@@ -703,16 +705,30 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   applyPendingAuth: async (endpoint) => {
     const p = get().pendingAuth;
     if (!p) return { ok: true };
-    if ((useProjectStore.getState().isDirty || hasWorkspaceDrafts()) && !await protectAccountTransition()) return { ok: false, cancelled: true };
+    const request = ++authRequestSeq;
+    const generation = get().sessionGeneration;
+    const current = () => request === authRequestSeq && get().sessionGeneration === generation;
+    const previous = useProjectStore.getState().config?.speleodb;
+    const previousEmail = get().session?.userEmail ?? previous?.email;
+    const previousEndpoint = get().session?.endpoint ?? previous?.endpoint;
+    // Known same-account password recovery preserves the local snapshot and drafts.
+    // A pasted token has no known identity until the server resolves it.
+    const recovery = p.kind === 'login' && !p.useToken &&
+      emailsMatch(p.email, previousEmail) && endpointsMatch(endpoint ?? previousEndpoint, previousEndpoint);
+    if (!recovery && (useProjectStore.getState().isDirty || hasWorkspaceDrafts()) &&
+        !await protectAccountTransition()) return { ok: false, cancelled: true };
+    if (!current()) return { ok: false, cancelled: true };
     try {
       if (p.kind === 'logout') {
         try {
           await invokeIpc<null>('speleodb_logout');
         } finally {
-          set({ pendingAuth: null, authError: null });
-          get().clearSession();
-          const projects = useProjectStore.getState();
-          await Promise.all([projects.loadRecentProjects(), projects.loadConfig()]);
+          if (current()) {
+            set({ pendingAuth: null, authError: null });
+            get().clearSession();
+            const projects = useProjectStore.getState();
+            await Promise.all([projects.loadRecentProjects(), projects.loadConfig()]);
+          }
         }
       } else {
         const r = await invokeIpc<SpeleoLoginResult>('speleodb_login', {
@@ -721,6 +737,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           password: p.useToken ? undefined : p.password || undefined,
           token: p.useToken ? p.token.trim() || undefined : undefined,
         });
+        if (!current()) return { ok: false, cancelled: true };
         set({ pendingAuth: null, authError: null });
         get().setSessionFromLogin(r);
         // #201: a fresh login is an "on login" scan point - surface any locks this
@@ -731,7 +748,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       }
       return { ok: true };
     } catch (error) {
-      return { ok: false, error };
+      return current() ? { ok: false, error } : { ok: false, cancelled: true };
     }
   },
 

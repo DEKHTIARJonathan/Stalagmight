@@ -304,7 +304,11 @@ export function useSpeleoActions(): SpeleoActions {
         return null;
       }
       const issuedFor = speleoProjectSessionIssuedFor(useSpeleoStore.getState().remoteProjectId);
-      const current = () => speleoProjectSessionStillCurrent(issuedFor) && (opts?.isCurrent?.() ?? true);
+      const path = useProjectStore.getState().project?.file_path;
+      const operation = useProjectStore.getState().loading.clientOpId;
+      const current = () => speleoProjectSessionStillCurrent(issuedFor) &&
+        useProjectStore.getState().project?.file_path === path &&
+        useProjectStore.getState().loading.clientOpId === operation && (opts?.isCurrent?.() ?? true);
       const treeGeneration = useProjectStore.getState().projectTreeGeneration;
       const busyToken = beginBusy();
       // A fresh attempt supersedes the previous failure banner (#260); a landed
@@ -416,6 +420,13 @@ export function useSpeleoActions(): SpeleoActions {
         // push RELEASES) and must stay put while the confirmation is up.
         return null;
       }
+      const issuedFor = speleoProjectSessionIssuedFor(useSpeleoStore.getState().remoteProjectId);
+      const path = useProjectStore.getState().project?.file_path;
+      const operation = useProjectStore.getState().loading.clientOpId;
+      const treeGeneration = useProjectStore.getState().projectTreeGeneration;
+      const current = () => speleoProjectSessionStillCurrent(issuedFor) &&
+        useProjectStore.getState().project?.file_path === path &&
+        useProjectStore.getState().loading.clientOpId === operation && (opts?.isCurrent?.() ?? true);
       const busyToken = beginBusy();
       clearPushFailedBanner();
       // #260: "Changes uploaded and the write lock released." lied whenever there was nothing to
@@ -429,7 +440,18 @@ export function useSpeleoActions(): SpeleoActions {
           message: message ?? null,
           acceptOlderVersion: opts?.acceptOlderVersion ?? false,
         });
-        if (opts?.isCurrent && !opts.isCurrent()) return null;
+        if (!current()) return null;
+        if (result.kind === 'released' && useProjectStore.getState().projectTreeGeneration !== treeGeneration) {
+          // The release happened, but newer frontend work is not covered by that
+          // reply. Preserve it without pretending the already-released lock is held.
+          applyDone(result);
+          useSpeleoStore.getState().markDirty();
+          raisePushFailedBanner({
+            message: 'Newer changes remain on this computer. The editing lock was released; resume editing before uploading them.',
+            origin: 'done', pushMessage: message ?? null,
+          });
+          return { kind: 'push_unconfirmed' };
+        }
         applyDone(result);
         switch (asDoneKind(result.kind)) {
           case 'released':
@@ -468,7 +490,7 @@ export function useSpeleoActions(): SpeleoActions {
         }
         return result;
       } catch (e) {
-        if (opts?.isCurrent && !opts.isCurrent()) return null;
+        if (!current()) return null;
         const humanized = humanizeError(e, 'speleodb.editBar.toasts.doneFailed');
         raisePushFailedBanner({
           message: humanized,

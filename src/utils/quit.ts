@@ -270,7 +270,7 @@ export function closeExitStillCurrent(exit: { request?: number; sessionGeneratio
  */
 export async function handBackProject(
   exit: { pendingOpenPath?: string | null; pendingNewProject?: boolean; accessConfirmed?: boolean; request?: number; sessionGeneration?: number },
-  opts?: { releaseLock?: boolean; onClosed?: () => void; onFailure?: (message: string) => void },
+  opts?: { releaseLock?: boolean; isCurrent?: () => boolean; onClosed?: () => void; onFailure?: (message: string) => void },
 ): Promise<void> {
   const request = exit.request ?? reserveProjectRequest();
   let dispatched = false;
@@ -286,9 +286,10 @@ export async function handBackProject(
       return;
     }
   }
-  if (!current()) return;
+  const canClose = () => current() && (opts?.isCurrent?.() ?? true);
+  if (!canClose()) return;
   dispatched = true;
-  const result = await closeProject({ ...(opts?.releaseLock === undefined ? {} : { releaseLock: opts.releaseLock }), request });
+  const result = await closeProject({ ...(opts?.releaseLock === undefined ? {} : { releaseLock: opts.releaseLock }), request, isCurrent: canClose });
   if (!current()) return;
   if (!result.success) {
     const message = result.error || 'Could not close the project. Your project is still open.';
