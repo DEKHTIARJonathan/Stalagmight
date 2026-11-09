@@ -878,12 +878,13 @@ export default function GlobalView() {
         </div>
       </header>
 
-      {refreshingLocks && (
-        <div role="status" className="flex items-center gap-2 px-4 py-2 text-sm text-text-secondary" data-testid="globalview-refresh-status">
-          <LoadingSpinner testId="globalview-list-spinner" />
-          {t('globalView.speleoRefresh.loading')}
-        </div>
-      )}
+      {/* The visible progress is the spinner inside the Refresh button itself;
+          nothing is drawn above the recents. This region only speaks the state to
+          screen readers. Mounted unconditionally (empty while idle) because a live
+          region inserted together with its text is announced unreliably. */}
+      <div role="status" aria-live="polite" className="sr-only" data-testid="globalview-refresh-status">
+        {refreshingLocks ? t('globalView.speleoRefresh.loading') : ''}
+      </div>
 
       {/* Loading Modal Overlay */}
       {loading.isLoading && (
