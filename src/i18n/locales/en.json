@@ -3618,5 +3618,89 @@
     "normal": "Permanent",
     "jump": "Jump",
     "reference": "Reference"
+  },
+  "speleoExitPrompt": {
+    "title": "Your changes are not on SpeleoDB yet",
+    "body": "You are editing \"{{name}}\", and some of your changes have not been uploaded to SpeleoDB. What should happen to them before {{action}}?",
+    "action": {
+      "close": "you close the project",
+      "switch": "you open another project",
+      "quit": "Stalagmight closes"
+    },
+    "upload": "Upload changes",
+    "uploadHint": "Send your changes to SpeleoDB, then hand the project back so others can edit it.",
+    "keep": "Keep the lock",
+    "keepHint": "Keep your changes on this computer and keep the project reserved for you. Nobody else can edit it until you come back and upload.",
+    "discard": "Discard changes",
+    "discardHint": "Throw away the changes that are not on SpeleoDB and hand the project back.",
+    "back": "Back",
+    "uploadBody": "Describe what you changed. Other cavers will see this note in the project history.",
+    "messageLabel": "What did you change?",
+    "messagePlaceholder": "For example: surveyed the north passage",
+    "uploadConfirm": "Upload and continue",
+    "uploading": "Uploading…",
+    "uploadProgressTitle": "Uploading your changes to SpeleoDB",
+    "uploadProgressBody": "This can take a moment for a large survey.",
+    "uploadSlow": "The upload is taking more than 2 minutes. It may still finish. You can wait, or close this window and try again later.",
+    "olderVersion": "This copy is an older version of the survey that you went back to. Uploading it records that older version over the newer one, for everyone who works on this project.",
+    "discardTitle": "Are you sure?",
+    "discardBody": "Your changes will be lost forever.",
+    "discardDetail": "The changes on this computer that are not on SpeleoDB will be deleted, and the project will be handed back. Next time you open it, you will get the version that is on SpeleoDB.",
+    "discardConfirm": "Yes, discard my changes",
+    "working": "Working…",
+    "errors": {
+      "saveFailed": "Your changes could not be saved on this computer, so nothing was closed.",
+      "closeFailed": "The project could not be closed. It is still open.",
+      "newerChanges": "You made more changes while uploading. They are still on this computer, so the project stays open."
+    },
+    "restart": {
+      "failedTitle": "Could not restart to update"
+    },
+    "closeApp": {
+      "title": "Close Stalagmight?",
+      "confirm": "Discard and close"
+    },
+    "account": {
+      "title": "Discard unsaved changes?",
+      "message": "Changing the account or server discards changes you have not saved yet, including unsaved form changes.",
+      "confirm": "Discard changes"
+    },
+    "unpushedLocal": {
+      "openLocal": "Open my local copy",
+      "openLocalHint": "\"Open my local copy\" opens the copy on this computer as it is, without downloading anything. You can then upload your changes, and Stalagmight will tell you if SpeleoDB has a newer version."
+    },
+    "readOnly": {
+      "lockedByKeepsChanges": "{{email}} is editing this project right now, so it is open read-only. Your changes are kept on this computer, and you can upload them once {{email}} has finished.",
+      "unavailableKeepsChanges": "The editing lock could not be taken, so this project is open read-only. Your changes are kept on this computer, and you can upload them later."
+    },
+    "signOut": {
+      "title": "Before you sign out",
+      "switchTitle": "Before you switch accounts",
+      "intro": "Signing out hands back every project you are editing on SpeleoDB, so others can edit them. Some of them need your attention first.",
+      "checking": "Checking your SpeleoDB projects…",
+      "checkFailedTitle": "Could not check your projects",
+      "checkFailedBody": "SpeleoDB could not be reached, so Stalagmight cannot tell which projects you are editing. If you sign out anyway, any project you are editing stays reserved for you until you sign in again and hand it back. Changes on this computer are kept.",
+      "openProject": "Open project: {{name}}",
+      "openProjectBody": "This project has changes that are not on SpeleoDB yet.",
+      "uploaded": "Uploaded and handed back.",
+      "discarded": "Changes discarded.",
+      "otherChanges": "Other projects with changes on this computer",
+      "otherChangesBody": "These projects have changes that are not on SpeleoDB yet. To upload them, open the project (this stops signing out). Or discard the changes.",
+      "openToUpload": "Open to upload",
+      "lastEdited": "last edited {{when}}",
+      "discardBody": "Your changes to \"{{name}}\" will be lost forever.",
+      "discardFailed": "The changes to \"{{name}}\" could not be discarded.",
+      "willRelease": "These projects will be handed back so others can edit them:",
+      "signOut": "Sign out",
+      "switch": "Switch account",
+      "releasing": "Handing projects back to SpeleoDB…",
+      "releasingShort": "Handing back…",
+      "releaseFailedTitle": "Some projects could not be handed back",
+      "releaseFailedBody": "SpeleoDB could not be reached, so these projects are still reserved for you: {{names}}.",
+      "signOutAnywayHint": "If you sign out anyway, these projects stay reserved for you, and nobody else can edit them until you sign in again and hand them back.",
+      "retry": "Try again",
+      "signOutAnyway": "Sign out anyway",
+      "unnamed": "Unnamed project"
+    }
   }
 }

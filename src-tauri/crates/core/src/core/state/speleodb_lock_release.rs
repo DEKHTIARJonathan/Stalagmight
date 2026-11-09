@@ -585,6 +585,49 @@ impl AppState {
             }])
             .with_session_closed(true)
     }
+
+    /// Sign-out's per-project "Discard" for a cached copy that is NOT open: remove
+    /// the managed copy of `project_id` (and its recents row) so no un-uploaded
+    /// work is left behind a sign-out the user confirmed.
+    ///
+    /// Releases nothing itself: the copy is not open, so there is no session to
+    /// end, and the sign-out releases every remaining lock of the account
+    /// explicitly once the user's choices are done. Refuses the OPEN project - its
+    /// discard is the close-with-discard (`close_project`'s `discard_local`).
+    pub fn speleodb_discard_cached_copy(&self, project_id: &str) -> CommandResult {
+        match super::speleodb_local_state::cache_root() {
+            Some(root) => self.speleodb_discard_cached_copy_in(&root, project_id),
+            None => CommandResult::failure(
+                "Could not find Stalagmight's SpeleoDB storage. Nothing was changed.".to_owned(),
+            ),
+        }
+    }
+
+    /// [`AppState::speleodb_discard_cached_copy`] against an explicit cache root.
+    pub(super) fn speleodb_discard_cached_copy_in(
+        &self,
+        root: &Path,
+        project_id: &str,
+    ) -> CommandResult {
+        if let Err(e) = super::speleodb::validate_project_id(project_id) {
+            return CommandResult::failure(e.to_string());
+        }
+        let path = super::speleodb_local_state::cache_path_in(root, project_id);
+        if self
+            .open_project_path()
+            .is_some_and(|open| super::project_io::same_file(&open, &path))
+        {
+            return CommandResult::failure(
+                "This project is open. Close it first, then discard its changes.".to_owned(),
+            );
+        }
+        tracing::info!(
+            project_id = %project_id,
+            purpose = "discard un-uploaded changes before signing out (user confirmed)",
+            "speleodb: discarding a cached copy"
+        );
+        self.delete_project(path)
+    }
 }
 
 #[cfg(test)]
@@ -854,6 +897,24 @@ mod tests {
         assert!(state.get_project_state().is_some(), "still open");
         assert!(state.edit_enabled(), "still editing");
         assert_eq!(release_requests(&seen), 0);
+    }
+
+    #[test]
+    fn sign_out_discards_a_cached_copy_that_is_not_open_without_releasing_anything() {
+        let (server, seen) = recording_server();
+        let (_temp, root, path, state) = managed_editing_session(&server);
+        state.mark_remote_dirty();
+        let refused = state.speleodb_discard_cached_copy_in(&root, PID);
+        assert!(!refused.success, "the OPEN project goes through close-with-discard");
+        assert!(path.exists());
+        assert!(state.close_project().success);
+        let result = state.speleodb_discard_cached_copy_in(&root, PID);
+        assert!(result.success, "{:?}", result.error);
+        assert!(!path.exists(), "the un-uploaded copy is gone");
+        settle();
+        assert_eq!(release_requests(&seen), 0, "the sign-out releases locks itself, explicitly");
+        let bad = state.speleodb_discard_cached_copy_in(&root, "../escape");
+        assert!(!bad.success, "ids are validated before they become paths");
     }
 
     #[cfg(unix)]

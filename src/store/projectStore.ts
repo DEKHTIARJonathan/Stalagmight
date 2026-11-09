@@ -335,10 +335,11 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
   /**
    * Close the open project. By default (`releaseLock` unset/true) the backend
    * best-effort releases a held SpeleoDB write lock first so the close can't strand
-   * the server mutex (fix 1). The release opt-out is reserved for internal tree
-   * replacements that retain the same project's edit session.
+   * the server mutex (fix 1) - but never over un-uploaded edits, which keep it.
+   * `releaseLock: false` is the exit prompt's "Keep the lock"; `discardLocal: true`
+   * its confirmed "Discard changes" (local copy removed, then the lock released).
    */
-  closeProject: (opts?: { releaseLock?: boolean; request?: number; isCurrent?: () => boolean }) => Promise<CommandResult>;
+  closeProject: (opts?: { releaseLock?: boolean; discardLocal?: boolean; request?: number; isCurrent?: () => boolean }) => Promise<CommandResult>;
   refreshProjectState: () => Promise<void>;
   /**
    * Mark the project dirty (unsaved changes) without running a command. The DMP
@@ -1440,9 +1441,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (!current()) return emptyCommandResult(false, 'Superseded');
         const result = await invokeIpc<CommandResult>(
           'close_project',
-          // Default: release a held SpeleoDB lock so the close doesn't strand it
-          // (fix 1). The keep-lock close path passes { releaseLock: false }.
-          { releaseLock: opts?.releaseLock ?? true },
+          // Default: release a held SpeleoDB lock (never over un-uploaded edits -
+          // the backend keeps it). The exit prompt's "Keep the lock" passes
+          // `releaseLock: false`; its confirmed "Discard changes" `discardLocal: true`.
+          { releaseLock: opts?.releaseLock ?? true, discardLocal: opts?.discardLocal === true },
           { purpose: 'close project and release resources' },
         );
         if (result.success && isProjectMutationCurrent(request)) {

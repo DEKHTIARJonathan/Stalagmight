@@ -17,7 +17,7 @@ import { exists } from '@tauri-apps/plugin-fs';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
-import { needsSpeleoHandBackPrompt } from './quit';
+import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from './speleoExit';
 import { surfaceSaveFailure } from './saveFeedback';
 import i18n from '../i18n';
 import { getErrorMessage, invokeIpc } from './ipc';
@@ -52,8 +52,12 @@ export function newProjectGuarded(): void {
   const ps = useProjectStore.getState();
   if (!ps.project) {
     openDialog('new-project');
-  } else if (needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
-    openDialog('speleodb-close', { pendingNewProject: true });
+  } else if (openProjectNeedsSpeleoExitPrompt()) {
+    // The exit prompt closes the project per the user's answer; only then does
+    // the New Project they asked for open.
+    void askSpeleoExit('switch').then((closed) => {
+      if (closed) useUIStore.getState().openDialog('new-project');
+    });
   } else if (ps.isDirty) {
     openDialog('unsaved-changes', { pendingNewProject: true });
   } else {

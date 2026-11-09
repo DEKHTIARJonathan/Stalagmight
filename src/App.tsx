@@ -19,6 +19,9 @@ import { applyWindowTitle } from './utils/windowTitle';
 import { routeOpenedFile } from './utils/openOrImport';
 import { useLaunchWithFile } from './utils/launchWithFile';
 import { guardQuit } from './utils/quit';
+import SpeleoExitDialog from './components/Dialogs/SpeleoExitDialog';
+import SpeleoSignOutDialog from './components/Dialogs/SpeleoSignOutDialog';
+import ExitConfirmDialog from './components/Dialogs/ExitConfirmDialog';
 import { isDroppableFilePath } from './utils/fileDialogs';
 import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale, useAppUpdate } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
@@ -30,7 +33,7 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseSectionDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, ImportBlockedDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoRestoreDialog, SpeleoUnwindDialog, SpeleoUnwoundPushDialog, SpeleoDiscardChangesDialog, SpeleoRevertDialog, SpeleoCloseDialog, SpeleoQuitDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, ImportReceiptDialog, ImportAsNewProjectDialog, LaunchOpenConfirmDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseSectionDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, ImportBlockedDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoRestoreDialog, SpeleoUnwindDialog, SpeleoUnwoundPushDialog, SpeleoDiscardChangesDialog, SpeleoRevertDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, ImportReceiptDialog, ImportAsNewProjectDialog, LaunchOpenConfirmDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu, ToastStack } from './components/common';
 import { UpdateBanner } from './components/UpdateBanner';
@@ -802,8 +805,6 @@ function App() {
       {activeDialog === 'speleodb-unwound-push' && <SpeleoUnwoundPushDialog />}
       {activeDialog === 'speleodb-discard-changes' && <SpeleoDiscardChangesDialog />}
       {activeDialog === 'speleodb-revert' && <SpeleoRevertDialog />}
-      {activeDialog === 'speleodb-close' && <SpeleoCloseDialog />}
-      {activeDialog === 'speleodb-quit' && <SpeleoQuitDialog />}
       {activeDialog === 'speleodb-no-permission' && <SpeleoNoPermissionDialog />}
       {activeDialog === 'speleodb-unpushed-local' && <SpeleoUnpushedLocalDialog />}
       {activeDialog === 'speleodb-managed-file' && <SpeleoManagedFileDialog />}
@@ -1069,6 +1070,14 @@ function App() {
           from inside another dialog - e.g. the Settings account panel - layers it
           OVER that dialog instead of replacing it, leaving Settings intact. */}
       {heldLockPromptOpen && <HeldLockResumeDialog />}
+
+      {/* The exit prompts: independent overlays (own stores, awaited by their
+          callers) so they layer over the dialog that raised them - the SpeleoDB
+          browser, Settings during a sign-out, an import wizard at quit - instead
+          of evicting it from the single dialog slot. See utils/speleoExit. */}
+      <SpeleoSignOutDialog />
+      <SpeleoExitDialog />
+      <ExitConfirmDialog />
 
       {/* [#258] "Which file is the survey?" - raised when a SpeleoDB dump holds
           more than one openable file. Independent and mounted LAST so it layers

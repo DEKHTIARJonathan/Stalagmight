@@ -7,7 +7,13 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { SpeleoProjectSummary, UnpushedLocalEdits } from '../../types/ipc.generated';
 
-/** Refuse to overwrite unsynced work. Cancel preserves it; replacing it requires confirmation. */
+/**
+ * Refuse to overwrite unsynced work. Raised only when the server has moved past the
+ * local copy's base (or the base cannot be checked): un-uploaded work sitting on the
+ * server tip opens directly instead. "Open my local copy" opens it as it is (no
+ * download) so the user can carry on through the ordinary resume / upload flows;
+ * Cancel preserves it; replacing it requires confirmation.
+ */
 export default function SpeleoUnpushedLocalDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
@@ -20,7 +26,7 @@ export default function SpeleoUnpushedLocalDialog() {
   const clearSession = useSpeleoStore((s) => s.clearSession);
   // Close the prompt right before loadProject so its progress is visible (the same
   // hand-off the browser dialog makes).
-  const { takeRemoteDiscardingLocal } = useOpenRemoteProject({
+  const { takeRemoteDiscardingLocal, openLocalCopy } = useOpenRemoteProject({
     onBeforeLoad: closeDialog,
   });
 
@@ -61,15 +67,11 @@ export default function SpeleoUnpushedLocalDialog() {
       ? t('speleodb.unpushedLocal.lastEdited', { when: parsed.toLocaleString() })
       : t('speleodb.unpushedLocal.lastEditedUnknown');
 
-  // Destructive branch. A failed re-pull keeps this prompt open with the reason on
-  // screen: closing it would leave the user with nothing opened and no explanation.
-  // The discard stays armed so the button is a retry, not a re-arm.
-  const handleTakeRemote = async () => {
-    setBusy(true);
-    setError(null);
-    const outcome = await takeRemoteDiscardingLocal(summary);
+  // Both branches keep this prompt open with the reason on screen when they fail:
+  // closing it would leave the user with nothing opened and no explanation.
+  const settleOutcome = (outcome: Awaited<ReturnType<typeof openLocalCopy>>) => {
     if (!stillPrompting()) return;
-    if (outcome.status === 'cancelled') {
+    if (outcome.status === 'cancelled' || outcome.status === 'load_failed') {
       setBusy(false);
     } else if (outcome.status === 'error') {
       setError(outcome.message);
@@ -78,6 +80,22 @@ export default function SpeleoUnpushedLocalDialog() {
       if (outcome.reLogin) clearSession();
       setBusy(false);
     }
+  };
+
+  // Non-destructive: open the copy on this computer, untouched. Nothing is
+  // downloaded and nothing is thrown away.
+  const handleOpenLocal = async () => {
+    setBusy(true);
+    setError(null);
+    settleOutcome(await openLocalCopy(summary, unpushedLocal));
+  };
+
+  // Destructive branch. The discard stays armed so a failed attempt's button is a
+  // retry, not a re-arm.
+  const handleTakeRemote = async () => {
+    setBusy(true);
+    setError(null);
+    settleOutcome(await takeRemoteDiscardingLocal(summary));
   };
 
   return (
@@ -122,9 +140,15 @@ export default function SpeleoUnpushedLocalDialog() {
           </div>
         )}
 
+        <p className="text-xs text-text-secondary">{t('speleoExitPrompt.unpushedLocal.openLocalHint')}</p>
+
         <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-border">
-          <Button variant="primary" data-primary-action="" onClick={dismiss} disabled={busy} data-testid="speleodb-unpushed-local-cancel">
+          <Button onClick={dismiss} disabled={busy} data-testid="speleodb-unpushed-local-cancel">
             {t('common.actions.cancel')}
+          </Button>
+          <Button variant="primary" data-primary-action="" onClick={() => void handleOpenLocal()} disabled={busy}
+            data-testid="speleodb-unpushed-local-open-local">
+            {t('speleoExitPrompt.unpushedLocal.openLocal')}
           </Button>
           <Button
             variant="danger"

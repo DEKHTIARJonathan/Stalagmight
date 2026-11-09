@@ -2,7 +2,6 @@ import { dispatchProjectSave } from '../utils/dispatchProjectSave';
 import { useCallback } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
-import { useSpeleoStore } from '../store/speleoStore';
 import { useShallow } from 'zustand/react/shallow';
 import {
   ensureExtension,
@@ -12,7 +11,7 @@ import {
 import { openOrImport } from '../utils/openOrImport';
 import { newProjectGuarded, saveProjectAs } from '../utils/projectActions';
 import { debugLog } from '../utils/debugLog';
-import { needsSpeleoHandBackPrompt } from '../utils/quit';
+import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from '../utils/speleoExit';
 
 export function useProject() {
   const { setView, openDialog } = useUIStore(
@@ -55,11 +54,13 @@ export function useProject() {
   const handleSaveProject = dispatchProjectSave;
 
   const handleCloseProject = useCallback(async () => {
-    // Saved local work is safe to leave. Only unsaved changes need confirmation;
-    // the backend releases the project lock when the close actually happens.
-    if (needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
-      openDialog('speleodb-close');
-      return { success: false, error: 'Showing dialog' };
+    // Holding the SpeleoDB lock over work SpeleoDB has not seen: the exit prompt
+    // decides (upload / keep the lock / discard) and closes the project itself.
+    if (openProjectNeedsSpeleoExitPrompt()) {
+      const closed = await askSpeleoExit('close');
+      if (!closed) return { success: false, error: 'Cancelled' };
+      setView('global');
+      return { success: true };
     }
     // Check for unsaved changes - use getState() to get current value, not stale closure
     const currentIsDirty = useProjectStore.getState().isDirty;

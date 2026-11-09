@@ -129,6 +129,23 @@ pub(crate) fn close_project_impl(state: &AppState, lock: CloseLock) -> CommandRe
     state.execute(Command::CloseProject)
 }
 
+/// Sign-out's "Discard" for a SpeleoDB project's cached copy that is NOT open:
+/// remove it so the sign-out leaves no un-uploaded work behind. Releases nothing;
+/// the sign-out releases the account's remaining locks explicitly afterwards.
+#[tauri::command]
+pub async fn speleodb_discard_cached_copy(
+    app: tauri::AppHandle,
+    project_id: String,
+) -> CommandResult {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<AppState>()
+            .inner()
+            .speleodb_discard_cached_copy(&project_id)
+    })
+    .await
+    .unwrap_or_else(|e| CommandResult::failure(format!("Discarding the copy failed: {e}")))
+}
+
 /// Get the full project state for the frontend
 #[tauri::command]
 pub fn get_project_state(state: State<AppState>) -> Option<ProjectState> {

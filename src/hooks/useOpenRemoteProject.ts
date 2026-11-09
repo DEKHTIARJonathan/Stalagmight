@@ -17,9 +17,11 @@ import {
   unpushedLocalEdits,
 } from '../utils/speleoError';
 import { confirm } from '@tauri-apps/plugin-dialog';
+import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from '../utils/speleoExit';
 import type {
   SpeleoProjectSummary,
   SpeleoOpenResult,
+  UnpushedLocalEdits,
 } from '../types/ipc.generated';
 
 /** Result shared by the project browser, remote rows and local-cache recovery. */
@@ -43,6 +45,19 @@ interface UseOpenRemoteProjectOpts {
    * cancelling correctly just returns to the view underneath.
    */
   cancelReturnsTo?: string;
+}
+
+/**
+ * Leaving a SpeleoDB project we hold the lock on, with work SpeleoDB has not seen,
+ * goes through the exit prompt first - BEFORE the open reserves its ownership,
+ * because the prompt's own close reserves a project request of its own and would
+ * otherwise supersede this open. Reopening the project already on screen is not
+ * leaving it, so it asks nothing. `false` = the user cancelled; nothing happened.
+ */
+async function leaveOpenProjectFor(targetProjectId: string): Promise<boolean> {
+  if (!openProjectNeedsSpeleoExitPrompt()) return true;
+  if (useSpeleoStore.getState().remoteProjectId === targetProjectId) return true;
+  return askSpeleoExit('switch');
 }
 
 /** One ownership token covers the warning, download, seed, and file load. */
@@ -225,6 +240,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     ): Promise<OpenRemoteOutcome> => {
       // Before the pull, the seed and the load: nothing about the open project may be
       // given up silently (see `handBackRefusal`).
+      if (!await leaveOpenProjectFor(summary.id)) return { status: 'cancelled' };
       const ownership = reserveRemoteOpen();
       let acknowledged: Awaited<ReturnType<typeof confirmUnsavedHandBack>>;
       try {
@@ -306,6 +322,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     ): Promise<OpenRemoteOutcome> => {
       // Discarding the target's cached copy does not authorize discarding newly
       // unsaved work in the project currently on screen. Ask separately if needed.
+      if (!await leaveOpenProjectFor(summary.id)) return { status: 'cancelled' };
       const ownership = reserveRemoteOpen();
       let acknowledged: Awaited<ReturnType<typeof confirmUnsavedHandBack>>;
       try {
@@ -346,5 +363,39 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     ],
   );
 
-  return { openRemote, takeRemoteDiscardingLocal };
+  /**
+   * "Open my local copy" - the refused-open prompt's non-destructive answer. Loads
+   * the copy already on this computer without downloading anything, keeping its
+   * un-uploaded edits and base. The load's own Start Editing then takes it from
+   * there: it re-acquires the lock if it can and runs the divergence check, so
+   * SpeleoDB having moved on is reported by the existing divergence dialog rather
+   * than resolved by throwing either copy away.
+   */
+  const openLocalCopy = useCallback(
+    async (
+      summary: SpeleoProjectSummary,
+      local: UnpushedLocalEdits,
+    ): Promise<OpenRemoteOutcome> => {
+      if (!await leaveOpenProjectFor(summary.id)) return { status: 'cancelled' };
+      const ownership = reserveRemoteOpen();
+      let acknowledged: Awaited<ReturnType<typeof confirmUnsavedHandBack>>;
+      try {
+        acknowledged = await confirmUnsavedHandBack(ownership.current);
+      } catch (error) {
+        if (!ownership.current()) return { status: 'cancelled' };
+        return { status: 'error', message: humanizeSpeleoError(error, t('speleodb.errors.openFailed')), reLogin: false };
+      }
+      if (!acknowledged || !ownership.current()) return { status: 'cancelled' };
+      if (!ownership.dispatch()) return { status: 'cancelled' };
+      const landed = handBackRefusalAfterPull(summary, local.local_path, acknowledged.project);
+      if (landed) return { status: 'error', message: landed, reLogin: false };
+      // `offline` keeps finishOpen from treating an already-open copy as a tree the
+      // backend just replaced: nothing was downloaded, so there is nothing to re-read.
+      return finishOpen({ local_path: local.local_path, offline: true, has_unpushed_edits: true },
+        summary.permission, summary.id, ownership, { hasUnpushedEdits: true });
+    },
+    [finishOpen, confirmUnsavedHandBack, handBackRefusalAfterPull, t],
+  );
+
+  return { openRemote, takeRemoteDiscardingLocal, openLocalCopy };
 }

@@ -1,0 +1,201 @@
+import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useProjectStore } from '../../store/projectStore';
+import { selectPushFailure, useSpeleoStore } from '../../store/speleoStore';
+import { useUIStore } from '../../store/uiStore';
+import { useScreenOccupant } from '../../hooks/useScreenOccupant';
+import {
+  closeAfterUpload,
+  closeDiscardingLocal,
+  closeKeepingLock,
+  useSpeleoExitPrompt,
+  type ExitCloseOutcome,
+  type SpeleoExitRequest,
+} from '../../utils/speleoExit';
+import { TOAST_KEYS } from '../../utils/toastKeys';
+import { Button } from '../common/Button';
+import { DialogWrapper } from './DialogWrapper';
+import { SpeleoExitUploadFields, SpeleoExitUploadProgress, useSpeleoExitUpload } from './SpeleoExitUpload';
+
+type Step = 'choose' | 'upload' | 'discard';
+
+/**
+ * The SpeleoDB exit prompt (see `utils/speleoExit` for when and why it is raised).
+ * Three answers, each carried out here before the exit continues:
+ *
+ * - **Upload changes** - the normal Finish editing upload (`done`: save, upload,
+ *   release) with its description field and bounded progress, then close. A
+ *   failure keeps the user in the project with the error on screen.
+ * - **Keep the lock** - save locally, close without releasing. The next open
+ *   resumes editing under the same lock with no prompt.
+ * - **Discard changes** - after a second "lost forever" confirmation, the local
+ *   copy is removed and the lock released, so the next open gets SpeleoDB's copy.
+ *
+ * Cancel / Escape / X / backdrop abort the exit. None of them is available while
+ * an answer is being carried out (except walking away from a slow upload).
+ */
+export default function SpeleoExitDialog() {
+  const request = useSpeleoExitPrompt((s) => s.request);
+  if (!request) return null;
+  // Keyed on the request so a replacement prompt starts from a clean slate.
+  return <SpeleoExitPrompt key={request.id} request={request} />;
+}
+
+function SpeleoExitPrompt({ request }: { request: SpeleoExitRequest }) {
+  const { t } = useTranslation();
+  useScreenOccupant(true);
+  const projectName = useProjectStore((s) => s.project?.name ?? '');
+  const pushFailure = useSpeleoStore(selectPushFailure);
+  const { upload, uploading, slow, unwound } = useSpeleoExitUpload();
+  const [step, setStep] = useState<Step>('choose');
+  const [message, setMessage] = useState('');
+  const [working, setWorking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const isCurrent = () =>
+    useSpeleoExitPrompt.getState().request?.id === request.id &&
+    (useProjectStore.getState().project?.file_path ?? null) === request.projectPath;
+
+  /** Carry out one answer; a failure stays on screen with the project still open. */
+  const run = async (work: () => Promise<ExitCloseOutcome | 'stay'>) => {
+    if (working) return;
+    if (!isCurrent()) {
+      request.settle(false);
+      return;
+    }
+    setWorking(true);
+    setError(null);
+    useSpeleoExitPrompt.setState({ working: true });
+    try {
+      const outcome = await work();
+      if (useSpeleoExitPrompt.getState().request?.id !== request.id || outcome === 'stay') return;
+      if (!outcome.ok) {
+        setError(outcome.error);
+        return;
+      }
+      if (outcome.warning) {
+        useUIStore.getState().showToast(outcome.warning, TOAST_KEYS.SPELEODB_LOCK, 'warning');
+      }
+      request.settle(true);
+    } finally {
+      setWorking(false);
+      if (useSpeleoExitPrompt.getState().request?.id === request.id) {
+        useSpeleoExitPrompt.setState({ working: false });
+      }
+    }
+  };
+
+  const uploadAndClose = () => run(async () => {
+    const text = message.trim();
+    if (!text) return 'stay';
+    const result = await upload(text, isCurrent);
+    if (!isCurrent()) return 'stay';
+    if (result === 'diverged') {
+      // SpeleoDB moved under us: its own resolution dialog is the error surface,
+      // and this prompt gets out of its way. The exit does not happen.
+      request.settle(false);
+      return 'stay';
+    }
+    // A failed upload already raised the failure notice shown in this step.
+    if (result === 'failed') return 'stay';
+    if (result === 'newer') return { ok: false, error: t('speleoExitPrompt.errors.newerChanges') };
+    return closeAfterUpload();
+  });
+
+  // A slow upload may be walked away from (it can still finish, which releases the
+  // lock and leaves the project open, read-only); nothing else in flight may.
+  const canDismiss = !working || (uploading && slow);
+  const cancel = () => {
+    if (canDismiss) request.settle(false);
+  };
+
+  const action = t(`speleoExitPrompt.action.${request.reason}`);
+
+  return (
+    <>
+      <DialogWrapper
+        title={step === 'discard' ? t('speleoExitPrompt.discardTitle') : t('speleoExitPrompt.title')}
+        onClose={canDismiss ? cancel : () => {}}
+        size="md"
+        data-testid="speleodb-exit-dialog"
+      >
+        <div className="space-y-4" data-step={step}>
+          {step === 'choose' && (
+            <>
+              <p className="text-sm text-text-secondary" data-testid="speleodb-exit-body">
+                {t('speleoExitPrompt.body', { name: projectName, action })}
+              </p>
+              <ul className="space-y-3">
+                <li className="space-y-1">
+                  <Button variant="primary" onClick={() => setStep('upload')} disabled={working}
+                    data-primary-action="" data-testid="speleodb-exit-upload">
+                    {t('speleoExitPrompt.upload')}
+                  </Button>
+                  <p className="text-xs text-text-secondary">{t('speleoExitPrompt.uploadHint')}</p>
+                </li>
+                <li className="space-y-1">
+                  <Button variant="secondary" onClick={() => void run(closeKeepingLock)} disabled={working}
+                    data-testid="speleodb-exit-keep">
+                    {working ? t('speleoExitPrompt.working') : t('speleoExitPrompt.keep')}
+                  </Button>
+                  <p className="text-xs text-text-secondary">{t('speleoExitPrompt.keepHint')}</p>
+                </li>
+                <li className="space-y-1">
+                  <Button variant="danger" onClick={() => setStep('discard')} disabled={working}
+                    data-testid="speleodb-exit-discard">
+                    {t('speleoExitPrompt.discard')}
+                  </Button>
+                  <p className="text-xs text-text-secondary">{t('speleoExitPrompt.discardHint')}</p>
+                </li>
+              </ul>
+            </>
+          )}
+
+          {step === 'upload' && (
+            <SpeleoExitUploadFields message={message} onMessage={setMessage} disabled={working}
+              uploading={uploading} slow={slow} unwound={unwound} testIdPrefix="speleodb-exit" />
+          )}
+
+          {step === 'discard' && (
+            <>
+              <p className="text-sm font-medium text-text-primary" data-testid="speleodb-exit-discard-body">
+                {t('speleoExitPrompt.discardBody')}
+              </p>
+              <p className="text-sm text-text-secondary">{t('speleoExitPrompt.discardDetail')}</p>
+            </>
+          )}
+
+          {error && !pushFailure && (
+            <p role="alert" className="text-sm text-error" data-testid="speleodb-exit-error">{error}</p>
+          )}
+
+          <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-border">
+            {step === 'choose' ? (
+              <Button onClick={cancel} disabled={working} data-testid="speleodb-exit-cancel">
+                {t('common.actions.cancel')}
+              </Button>
+            ) : (
+              <Button onClick={() => { setError(null); setStep('choose'); }} disabled={working}
+                data-testid="speleodb-exit-back">
+                {t('speleoExitPrompt.back')}
+              </Button>
+            )}
+            {step === 'upload' && (
+              <Button variant="primary" onClick={() => void uploadAndClose()} disabled={working || !message.trim()}
+                data-testid="speleodb-exit-upload-confirm">
+                {working ? t('speleoExitPrompt.uploading') : t('speleoExitPrompt.uploadConfirm')}
+              </Button>
+            )}
+            {step === 'discard' && (
+              <Button variant="danger" onClick={() => void run(closeDiscardingLocal)} disabled={working}
+                data-testid="speleodb-exit-discard-confirm">
+                {working ? t('speleoExitPrompt.working') : t('speleoExitPrompt.discardConfirm')}
+              </Button>
+            )}
+          </div>
+        </div>
+      </DialogWrapper>
+      <SpeleoExitUploadProgress uploading={uploading} slow={slow} testId="speleodb-exit-upload-progress" />
+    </>
+  );
+}

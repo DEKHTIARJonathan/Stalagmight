@@ -1812,6 +1812,7 @@ pub fn run() {
             commands::project::set_surface_elevation,
             commands::project::save_project,
             commands::project::close_project,
+            commands::project::speleodb_discard_cached_copy,
             commands::project::take_unrecognised_shot_kinds,
             commands::project::history_discarded,
             commands::project::get_project_state,

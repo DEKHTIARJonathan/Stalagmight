@@ -1,5 +1,6 @@
 import { hasWorkspaceDrafts } from '../utils/workspaceDrafts';
 import { protectAccountTransition } from '../utils/protectAccountTransition';
+import { guardSpeleoSignOut } from '../utils/speleoSignOut';
 import type { StoreApi } from 'zustand';
 import { invokeIpc } from '../utils/ipc';
 import { endpointsMatch } from '../utils/speleoEndpoint';
@@ -50,7 +51,13 @@ export function createProjectConfigActions(
 
     updateConfig: async (config: Config) => {
       try {
-        if (!endpointsMatch(get().config?.speleodb.endpoint, config.speleodb.endpoint) && (get().isDirty || hasWorkspaceDrafts()) && !await protectAccountTransition()) return emptyCommandResult(false, 'Cancelled');
+        const serverChange = !endpointsMatch(get().config?.speleodb.endpoint, config.speleodb.endpoint);
+        // Moving the live session off its server ends it like a sign-out (see the
+        // clearSession below), so it must not strand that account's locks either.
+        const live = useSpeleoStore.getState().session;
+        if (live?.loggedIn && !endpointsMatch(live.endpoint, config.speleodb.endpoint) &&
+            !await guardSpeleoSignOut('switch')) return emptyCommandResult(false, 'Cancelled');
+        if (serverChange && (get().isDirty || hasWorkspaceDrafts()) && !await protectAccountTransition()) return emptyCommandResult(false, 'Cancelled');
         const sessionGeneration = useSpeleoStore.getState().sessionGeneration;
         const routingBefore = get().config?.gas.include_reference_legs;
         await invokeIpc<void>(

@@ -1,5 +1,6 @@
 import { hasWorkspaceDrafts } from '../utils/workspaceDrafts';
 import { protectAccountTransition } from '../utils/protectAccountTransition';
+import { guardSpeleoSignOut } from '../utils/speleoSignOut';
 import { create } from 'zustand';
 import type {
   DoneResult,
@@ -713,6 +714,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     // A pasted token has no known identity until the server resolves it.
     const recovery = p.kind === 'login' && !p.useToken &&
       emailsMatch(p.email, previousEmail) && endpointsMatch(endpoint ?? previousEndpoint, previousEndpoint);
+    // Signing out - or switching, which signs the previous account out - must not
+    // strand that account's locks or un-uploaded work: resolve them while its
+    // token can still upload and release (utils/speleoSignOut).
+    if (!recovery && !await guardSpeleoSignOut(p.kind === 'logout' ? 'signOut' : 'switch')) {
+      return { ok: false, cancelled: true };
+    }
     if (!recovery && (useProjectStore.getState().isDirty || hasWorkspaceDrafts()) &&
         !await protectAccountTransition()) return { ok: false, cancelled: true };
     if (!current()) return { ok: false, cancelled: true };
@@ -1419,8 +1426,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
  */
 export const PUSH_FAILURE_DIALOGS: readonly string[] = [
   'speleodb-done',
-  'speleodb-close',
-  'speleodb-quit',
   'speleodb-revert',
   'speleodb-unwound-push',
 ];

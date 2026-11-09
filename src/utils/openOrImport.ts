@@ -41,7 +41,7 @@ import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
 import { openDialog, openOrImportFilters, DMP_EXTENSION } from './fileDialogs';
 import { clearProjectActionSource } from './telemetry';
-import { needsSpeleoHandBackPrompt } from './quit';
+import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from './speleoExit';
 import { TOAST_KEYS } from './toastKeys';
 import i18n from '../i18n';
 
@@ -329,15 +329,13 @@ export async function routeOpenedFile(
       // gate on the DISK-dirty bit alone - so a remote project saved to disk with a
       // held lock or with edits SpeleoDB has never seen was swapped out with no
       // notice, while closing the same project prompted. Ordered SpeleoDB-first for
-      // the same reason `guardQuit` is: the SpeleoDB prompt carries its own "save
-      // changes locally" checkbox and so subsumes the disk one, while the reverse
-      // order would let "Discard Changes" walk straight past the lock and the
-      // unpushed edits. The prompt carries the chosen path and performs the open
-      // itself once the SpeleoDB side is resolved, so the user's Ctrl+O is not
-      // silently swallowed by the prompt it raised.
-      if (store.project && needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
-        ui.openDialog('speleodb-close', { pendingOpenPath: path });
-        handedOff = true;
+      // the same reason `guardQuit` is: the SpeleoDB exit prompt covers unsaved
+      // work too (its upload and keep both save it), while the reverse order would
+      // let "Discard Changes" walk straight past the lock and the unpushed edits.
+      // The prompt closes the project per the user's answer; the open then runs
+      // here, so the user's Ctrl+O is not swallowed by the prompt it raised.
+      if (store.project && openProjectNeedsSpeleoExitPrompt()) {
+        if (await askSpeleoExit('switch')) await useProjectStore.getState().loadProject(path);
       } else if (store.project && store.isDirty) {
         ui.openDialog('unsaved-changes', { pendingOpenPath: path });
         handedOff = true;
