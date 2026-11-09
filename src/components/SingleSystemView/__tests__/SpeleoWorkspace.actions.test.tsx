@@ -63,7 +63,7 @@ describe('SpeleoDB tab everyday actions', () => {
     expect(b.className).toMatch(/(^|\s)bg-[a-z]+-10(\s|$)/);
   };
 
-  it.each([
+  it.each<[string, Partial<SpeleoLinkState>, typeof SESSION | null, boolean, string[]]>([
     ['editing with changes', { editState: 'editing' as const }, SESSION, true, ['speleodb-workspace-upload']],
     ['editing, nothing to save', { editState: 'editing' as const }, SESSION, false, []],
     ['read-only, able to resume editing', {}, SESSION, false, ['speleodb-workspace-editing']],
