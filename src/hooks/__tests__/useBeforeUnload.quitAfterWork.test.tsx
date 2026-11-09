@@ -39,7 +39,7 @@ vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock, getErrorMessage: S
 import { useBeforeUnload } from '../useBeforeUnload';
 import QuitWaitDialog from '../../components/Dialogs/QuitWaitDialog';
 import { resetQuitConfirmationForTests, requestUpdateRestart, resetUpdateRestartForTests } from '../../utils/quit';
-import { QUIT_SETTLE_MS, resetQuitWaitForTests, useQuitWait } from '../../utils/quitAfterWork';
+import { QUIT_SETTLE_MS, holdQuitDuring, resetQuitWaitForTests, useQuitWait } from '../../utils/quitAfterWork';
 import { useSpeleoNetworkStore } from '../../store/speleoNetworkStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -135,6 +135,19 @@ describe('quit after in-flight work', () => {
     await settle();
     expect(destroyMock).not.toHaveBeenCalled();
     act(() => useSpeleoExitPrompt.setState({ working: false }));
+    await settle();
+    expect(destroyMock).toHaveBeenCalledOnce();
+  });
+
+  it('a held multi-step flow (Save Changes, Publish) is waited for between its calls too', async () => {
+    let finish!: () => void;
+    let held!: Promise<void>;
+    act(() => { held = holdQuitDuring(() => new Promise<void>((resolve) => { finish = resolve; })); });
+    await act(closeRequested);
+    expect(useQuitWait.getState().waiting).toBe(true);
+    await settle();
+    expect(destroyMock).not.toHaveBeenCalled();
+    await act(async () => { finish(); await held; });
     await settle();
     expect(destroyMock).toHaveBeenCalledOnce();
   });

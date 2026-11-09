@@ -36,12 +36,30 @@ import { useSpeleoExitPrompt } from './speleoExit';
 import { TOAST_KEYS } from './toastKeys';
 
 /**
+ * Multi-step flows that must finish as a whole (Save Changes: save, upload,
+ * flush, close; Publish: save, create, upload, reopen), registered for their
+ * full span by {@link holdQuitDuring}: between two of their calls nothing may be
+ * in flight at the IPC boundary, yet quitting there still abandons the flow.
+ */
+const useQuitHolds = create<{ count: number }>(() => ({ count: 0 }));
+
+/** Keep a quit waiting until `work` settles (see {@link useQuitHolds}). */
+export async function holdQuitDuring<T>(work: () => Promise<T>): Promise<T> {
+  useQuitHolds.setState((s) => ({ count: s.count + 1 }));
+  try {
+    return await work();
+  } finally {
+    useQuitHolds.setState((s) => ({ count: Math.max(0, s.count - 1) }));
+  }
+}
+
+/**
  * In-flight work a quit must not cut: a SpeleoDB lock / upload / download /
- * account call or hand-off verb, or an exit-prompt answer being carried out
- * (its close can be releasing the lock).
+ * account call or hand-off verb, an exit-prompt answer being carried out (its
+ * close can be releasing the lock), or a flow held by {@link holdQuitDuring}.
  */
 export function quitBlockingWorkInFlight(): boolean {
-  return isSpeleoOperationBusy() || useSpeleoExitPrompt.getState().working;
+  return isSpeleoOperationBusy() || useSpeleoExitPrompt.getState().working || useQuitHolds.getState().count > 0;
 }
 
 /**
@@ -98,6 +116,7 @@ function watchUntilDrained(): void {
     useSpeleoNetworkStore.subscribe(check),
     useSpeleoStore.subscribe(check),
     useSpeleoExitPrompt.subscribe(check),
+    useQuitHolds.subscribe(check),
   ];
   stopWatching = () => unsubscribers.forEach((unsubscribe) => unsubscribe());
   check();
@@ -200,5 +219,6 @@ export function resetQuitWaitForTests(): void {
   stopWatching = null;
   clearSettleTimer();
   forcedQuitUntil = 0;
+  useQuitHolds.setState({ count: 0 });
   useQuitWait.setState({ waiting: false, step: 'wait', error: null });
 }

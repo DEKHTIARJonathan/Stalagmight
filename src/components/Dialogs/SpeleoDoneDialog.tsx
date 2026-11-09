@@ -18,6 +18,8 @@ import { SpeleoProgressOverlay } from './SpeleoProgressOverlay';
 import { CommitMessageLimit } from './CommitMessageLimit';
 import { commitMessageTooLong } from '../../utils/commitMessage';
 import { toastLateUploadOutcome } from '../../utils/lateUploadOutcome';
+// lock#6: a quit meanwhile waits for the whole save-upload-close, not just its calls.
+import { holdQuitDuring } from '../../utils/quitAfterWork';
 
 /**
  * Commit-message confirm for the action shell (#204), in two modes read off
@@ -256,7 +258,7 @@ export default function SpeleoDoneDialog() {
           </Button>
           <Button
             variant="primary"
-            onClick={() => void handleConfirm()}
+            onClick={() => void holdQuitDuring(handleConfirm)}
             disabled={busyAny || !uploadAllowed || (needsMessage && !message.trim()) || messageTooLong}
             data-testid="speleodb-done-confirm"
           >

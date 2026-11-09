@@ -1,5 +1,6 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { createProject, setupMockedPage } from './helpers/app';
+import { openSpeleoTab } from './helpers/speleoWorkspace';
 import type { useSpeleoStore } from '../src/store/speleoStore';
 
 /**
@@ -104,4 +105,35 @@ test('Quit now cuts the upload only after a warning, and tells the backend so', 
   await deliverCloseRequested(page);
   await expect.poll(async () => (await teardown(page)).destroy).toBe(1);
   expect(await page.evaluate(() => (window as unknown as QuitWindow).__forcedExitArmed ?? 0)).toBe(1);
+});
+
+test('window X during the Publishing overlay waits for the publish, then closes', async ({ page }) => {
+  await setupMockedPage(page);
+  await createProject(page, 'Synthetic quit during publish');
+  await page.evaluate(() => {
+    const w = window as unknown as QuitWindow & { __finishPublish: () => void };
+    w.__E2E_TEST__.speleoStore.setState({ session: { loggedIn: true, userEmail: 'test@example.com', endpoint: 'https://speleodb.example' } });
+    w.__MOCK_IPC_OVERRIDES__ = {
+      speleodb_publish: new Promise((resolve) => {
+        w.__finishPublish = () => resolve({ project_id: 'pending', endpoint: 'https://speleodb.example', local_path: '/cache/pending/project.stalx' });
+      }),
+      speleodb_link_status: { is_remote: true, project_id: 'pending', edit_enabled: false, has_unpushed_edits: false, permission: 'ADMIN', remote_state: 'up_to_date' },
+    };
+  });
+  await openSpeleoTab(page);
+  await page.getByTestId('speleodb-workspace-convert').click();
+  await page.getByTestId('publish-to-speleodb-dialog-description').fill('Team survey');
+  await page.getByTestId('publish-to-speleodb-dialog-country').click();
+  await page.getByTestId('publish-to-speleodb-dialog-country-option-US').click();
+  await page.getByTestId('publish-to-speleodb-dialog-submit').click();
+  await expect(page.getByTestId('speleodb-publish-progress')).toBeVisible();
+
+  await deliverCloseRequested(page);
+  await expect(page.getByTestId('toast').filter({ hasText: 'will close when it finishes' })).toBeVisible();
+  await expect(page.getByTestId('quit-wait-dialog')).toBeVisible();
+  expect(await teardown(page)).toEqual({ destroy: 0, close: 0 });
+
+  await page.evaluate(() => (window as unknown as { __finishPublish: () => void }).__finishPublish());
+  await expect(page.getByTestId('speleodb-publish-progress')).toHaveCount(0);
+  await expect.poll(async () => (await teardown(page)).close).toBe(1);
 });
