@@ -340,6 +340,69 @@ impl AppState {
         out
     }
 
+    /// The online open's FAST-FORWARD arm: a local copy whose un-uploaded edits sit
+    /// directly on top of the server's current revision is opened as it is - no
+    /// download, no "the copies differ" prompt.
+    ///
+    /// `Some` only when ALL of these hold, read from the same source
+    /// [`Self::local_copy_state`] trusts (the live open database when `dest` IS the
+    /// open project, the file's own link row otherwise):
+    ///
+    /// - `tip` is known. An unknown tip (history failed, empty repository, an
+    ///   unusable sha) proves nothing, so the caller falls back to the guarded
+    ///   download - whose refusal prompt still offers "Open my local copy".
+    /// - the copy is this project on this deployment, and it HAS un-uploaded edits
+    ///   (a clean copy downloads exactly as before);
+    /// - its `base_commit_sha` IS the tip: nobody has pushed since it was taken, so
+    ///   the local work is a pure fast-forward and there is nothing to conflict
+    ///   with. A base that differs is the real divergence, and only that reaches
+    ///   the refusal prompt.
+    ///
+    /// Nothing is written: the dirty bit and the base stay exactly as they are. The
+    /// lock is NOT decided here - the load's own Start Editing resumes a lock we
+    /// hold, acquires a free one, and opens read-only behind someone else's.
+    pub(super) fn speleodb_local_fast_forward_open(
+        &self,
+        project_id: &str,
+        dest: &Path,
+        endpoint: &str,
+        tip: Option<&str>,
+    ) -> Option<crate::speleodb::SpeleoOpenResult> {
+        let tip = tip?;
+        let live = self
+            .speleodb_open_link()
+            .ok()
+            .filter(|link| link.project_id == project_id)
+            .filter(|_| {
+                self.open_project_path()
+                    .is_some_and(|open| super::project_io::same_file(&open, dest))
+            });
+        let link = match live {
+            Some(link) => link,
+            None => Database::open_for_metadata(dest)
+                .and_then(|db| db.load_speleo_link())
+                .ok()??,
+        };
+        let same_server = crate::speleodb::auth::normalize_endpoint(&link.endpoint)
+            == crate::speleodb::auth::normalize_endpoint(endpoint);
+        if link.project_id != project_id || !same_server || !link.has_unpushed_edits {
+            return None;
+        }
+        if link.base_commit_sha.as_deref() != Some(tip) {
+            return None;
+        }
+        tracing::info!(
+            project_id = %project_id,
+            purpose = "open un-uploaded local work that sits on the server tip",
+            "speleodb: the local copy is a fast-forward of the server; opening it without a download"
+        );
+        Some(crate::speleodb::SpeleoOpenResult {
+            local_path: dest.to_string_lossy().into_owned(),
+            offline: None,
+            has_unpushed_edits: Some(true),
+        })
+    }
+
     /// Whether the OPEN project is the very file the cache walk read for `id` - the
     /// listing's half of the first-hand-knowledge rule [`Self::local_copy_state`]
     /// applies. Only then may the live link answer for a cached copy that could not
@@ -389,6 +452,176 @@ mod tests {
 
     const ID_A: &str = "11111111-1111-1111-1111-111111111111";
     const ID_B: &str = "22222222-2222-2222-2222-222222222222";
+
+    const SERVER: &str = "https://sdb.example/";
+
+    /// A cached copy of [`ID_A`] on [`SERVER`] with the given base and dirty bit.
+    fn seed_based(root: &Path, base: Option<&str>, dirty: bool) -> PathBuf {
+        let path = cache_path_in(root, ID_A);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        let mut db = Database::open(&path).expect("open db");
+        db.save_project(&Project::new("Cached".to_owned(), None))
+            .expect("save project");
+        db.save_speleo_link(Some(&SpeleoLink {
+            endpoint: SERVER.to_owned(),
+            project_id: ID_A.to_owned(),
+            project_name: "Cached".to_owned(),
+            base_commit_sha: base.map(str::to_owned),
+            has_unpushed_edits: dirty,
+            last_edit_at: dirty.then(|| "2026-11-09T10:00:00Z".to_owned()),
+            last_verify_at: None,
+            undo_mode: None,
+        }))
+        .expect("save link");
+        path
+    }
+
+    fn link_at(path: &Path) -> SpeleoLink {
+        Database::open_for_metadata(path)
+            .expect("open")
+            .load_speleo_link()
+            .expect("read")
+            .expect("linked")
+    }
+
+    #[test]
+    fn local_edits_on_top_of_the_server_tip_open_locally_without_a_download() {
+        // The live report: base 9fdc7da == tip 9fdc7da, one comment edit, and the
+        // open offered only Cancel or "discard my changes". A pure fast-forward has
+        // nothing to conflict with.
+        let temp = tempfile::tempdir().expect("temp");
+        let path = seed_based(temp.path(), Some("9fdc7da"), true);
+        let state = AppState::new().expect("state");
+        let opened = state
+            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, Some("9fdc7da"))
+            .expect("opened locally");
+        assert_eq!(opened.local_path, path.to_string_lossy());
+        assert_eq!(opened.has_unpushed_edits, Some(true));
+        assert_eq!(opened.offline, None);
+        let link = link_at(&path);
+        assert!(link.has_unpushed_edits, "the dirty bit is kept");
+        assert_eq!(
+            link.base_commit_sha.as_deref(),
+            Some("9fdc7da"),
+            "the base is kept"
+        );
+    }
+
+    #[test]
+    fn a_server_that_moved_past_the_base_is_the_real_divergence() {
+        let temp = tempfile::tempdir().expect("temp");
+        let path = seed_based(temp.path(), Some("9fdc7da"), true);
+        let state = AppState::new().expect("state");
+        assert!(state
+            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, Some("abc1234"))
+            .is_none());
+    }
+
+    #[test]
+    fn a_clean_copy_downloads_as_before() {
+        let temp = tempfile::tempdir().expect("temp");
+        let path = seed_based(temp.path(), Some("9fdc7da"), false);
+        let state = AppState::new().expect("state");
+        assert!(state
+            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, Some("9fdc7da"))
+            .is_none());
+    }
+
+    #[test]
+    fn an_unknown_tip_or_base_never_guesses() {
+        let temp = tempfile::tempdir().expect("temp");
+        let state = AppState::new().expect("state");
+        let path = seed_based(temp.path(), Some("9fdc7da"), true);
+        assert!(
+            state
+                .speleodb_local_fast_forward_open(ID_A, &path, SERVER, None)
+                .is_none(),
+            "no tip: fall back to the guarded download"
+        );
+        let path = seed_based(temp.path(), None, true);
+        assert!(
+            state
+                .speleodb_local_fast_forward_open(ID_A, &path, SERVER, Some("9fdc7da"))
+                .is_none(),
+            "no base: nothing proves a fast-forward"
+        );
+    }
+
+    #[test]
+    fn the_fast_forward_arm_needs_this_project_on_this_server() {
+        let temp = tempfile::tempdir().expect("temp");
+        let path = seed_based(temp.path(), Some("9fdc7da"), true);
+        let state = AppState::new().expect("state");
+        assert!(state
+            .speleodb_local_fast_forward_open(ID_B, &path, SERVER, Some("9fdc7da"))
+            .is_none());
+        assert!(state
+            .speleodb_local_fast_forward_open(
+                ID_A,
+                &path,
+                "https://other.example/",
+                Some("9fdc7da")
+            )
+            .is_none());
+        assert!(
+            state
+                .speleodb_local_fast_forward_open(
+                    ID_A,
+                    &path,
+                    "https://SDB.example",
+                    Some("9fdc7da")
+                )
+                .is_some(),
+            "endpoints compare the way the credential layer does"
+        );
+        let missing = temp.path().join("nowhere").join("project.stalx");
+        assert!(state
+            .speleodb_local_fast_forward_open(ID_A, &missing, SERVER, Some("9fdc7da"))
+            .is_none());
+    }
+
+    #[test]
+    fn the_open_project_answers_from_its_live_link() {
+        // Same source as `local_copy_state`: when the copy IS the open project, its
+        // dirty bit is stamped into the open database on every edit.
+        let temp = tempfile::tempdir().expect("temp");
+        let path = seed_based(temp.path(), Some("9fdc7da"), false);
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(path.clone()).success, "open the copy");
+        assert!(state
+            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, Some("9fdc7da"))
+            .is_none());
+        state.mark_remote_dirty();
+        assert!(state
+            .speleodb_local_fast_forward_open(ID_A, &path, SERVER, Some("9fdc7da"))
+            .is_some());
+    }
+
+    #[test]
+    fn the_online_pull_asks_the_fast_forward_arm_before_downloading() {
+        // The arm is only worth anything if the pull consults it AFTER resolving the
+        // tip and BEFORE the download - and only under the protecting policy, so
+        // "take the server copy" still replaces.
+        let src = include_str!("speleodb_pull.rs");
+        let start = src
+            .find("fn speleodb_pull_project(")
+            .expect("the pull is present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+        let tip = body.find("let tip = ").expect("tip resolution");
+        let arm = body
+            .find("speleodb_local_fast_forward_open(")
+            .expect("the pull consults the fast-forward arm");
+        let download = body.find("let download = ").expect("the download");
+        assert!(
+            tip < arm && arm < download,
+            "tip, then the arm, then the download"
+        );
+        assert!(
+            body[..arm].contains("LocalEditsPolicy::Protect"),
+            "only the protecting open takes the arm"
+        );
+    }
 
     /// Write a cached `.stalx` for `project_id` under `root` with the given dirty
     /// bit, and return its path.

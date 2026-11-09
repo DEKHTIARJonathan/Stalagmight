@@ -154,6 +154,15 @@ impl AppState {
                 None
             }
         };
+        // Un-uploaded local work sitting on the server tip is a fast-forward, not
+        // a conflict: open it as it is (see `speleodb_local_fast_forward_open`).
+        if policy == LocalEditsPolicy::Protect {
+            if let Some(local) =
+                self.speleodb_local_fast_forward_open(&project_id, &dest, &endpoint, tip.as_deref())
+            {
+                return Ok(local);
+            }
+        }
         let download = self.speleodb_handle_auth(
             Endpoint::DownloadStalx,
             match tip.as_deref() {

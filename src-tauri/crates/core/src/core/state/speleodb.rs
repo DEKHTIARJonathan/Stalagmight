@@ -2945,7 +2945,10 @@ mod tests {
     }
 
     #[test]
-    fn lifecycle_release_preserves_saved_unpublished_files() {
+    fn lifecycle_release_of_a_clean_session_preserves_the_local_file() {
+        // Over UN-PUSHED edits these keep the lock instead (the invariant in
+        // `speleodb_lock_release`, pinned by its own tests); a clean session is
+        // released and its file left exactly as it was.
         for release in [
             AppState::speleodb_release_held_lock_on_close,
             AppState::speleodb_release_held_lock_detached,
@@ -2955,7 +2958,6 @@ mod tests {
         ] {
             let (base, handle) = release_stub(REMOTE_ID);
             let (_temp, state) = editing_fixture(&base);
-            state.mark_remote_dirty();
             let path = state
                 .get_project_state()
                 .expect("project")
@@ -2965,12 +2967,11 @@ mod tests {
             release(&state);
             handle.join().expect("release reached server");
             assert_eq!(std::fs::read(&path).expect("file preserved"), before);
-            assert!(
-                state
-                    .speleodb_open_link()
-                    .expect("link preserved")
-                    .has_unpushed_edits
-            );
+            assert!(state
+                .speleodb_open_link()
+                .expect("link preserved")
+                .base_commit_sha
+                .is_some());
             assert!(!state.speleodb_lock_acquired_here(REMOTE_ID));
         }
     }
@@ -2979,12 +2980,10 @@ mod tests {
     fn lifecycle_release_can_finish_an_owned_claim_after_the_edit_gate_closes() {
         let (base, handle) = release_stub(REMOTE_ID);
         let (_temp, state) = editing_fixture(&base);
-        state.mark_remote_dirty();
         state.set_edit_enabled(false);
         state.speleodb_release_held_lock_on_close();
         handle.join().expect("release reached server");
         assert!(!state.speleodb_lock_acquired_here(REMOTE_ID));
-        assert!(state.speleodb_open_link().expect("link").has_unpushed_edits);
     }
 
     #[test]
@@ -3000,8 +2999,8 @@ mod tests {
 
     #[test]
     fn silent_lock_release_is_skipped_when_the_project_has_unpushed_edits() {
-        // Logout keeps its unpublished-work veto; lifecycle transitions use a
-        // separate policy that releases the lock while preserving the local file.
+        // Logout keeps its unpublished-work veto - and so, now, do the lifecycle
+        // transitions (see `no_lifecycle_release_hands_the_lock_back_over_unpushed_edits`).
         let (_temp, state) = editing_fixture("https://x/");
         assert!(
             state.speleodb_held_lock_release_params().is_some(),

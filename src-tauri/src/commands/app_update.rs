@@ -1006,12 +1006,24 @@ pub fn discard_app_update_download(update_state: State<AppUpdateState>) -> Resul
 ///
 /// On failure the bytes are put back, so the restart can be retried - through
 /// the guarded path, which re-arms - without downloading again.
+///
+/// Releases a held SpeleoDB write lock FIRST, bounded by the same deadline the
+/// ordinary quit uses. Neither `app.restart()` nor the Windows installer's own
+/// exit raises `RunEvent::ExitRequested`, which is where a quit releases, so
+/// without this the lock was simply never handed back. The release keeps the
+/// lock over un-pushed edits (the invariant in `speleodb_lock_release`), which is
+/// the restart's documented "keep the lock and the local changes" answer; the
+/// frontend has already saved and closed such a project with the lock kept.
 #[tauri::command]
 pub fn install_app_update_and_restart(
     app: AppHandle,
     update_state: State<'_, AppUpdateState>,
 ) -> Result<(), String> {
     let (generation, update, bytes) = installable_update(&update_state)?;
+
+    if let Some(state) = app.try_state::<AppState>() {
+        state.speleodb_release_held_lock_bounded(crate::EXIT_LOCK_RELEASE_TIMEOUT);
+    }
 
     if let Err(e) = update.install(&bytes) {
         // Filed under the generation they were DOWNLOADED for, not whatever is
@@ -1088,6 +1100,31 @@ pub fn install_downloaded_update_on_exit(app: &AppHandle) {
 #[expect(clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_update_restart_releases_the_speleodb_lock_before_installing() {
+        // `app.restart()` and the Windows installer's own exit both skip
+        // `RunEvent::ExitRequested`, the only other place a quit releases. A release
+        // placed after `update.install` never runs on Windows (the installer has
+        // already exited the process), so ORDER is the contract, not presence.
+        let src = include_str!("app_update.rs");
+        let start = src
+            .find("pub fn install_app_update_and_restart(")
+            .expect("the install command is present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n}\n").expect("fn body terminates")];
+        let release = body
+            .find("speleodb_release_held_lock_bounded(")
+            .expect("the install path releases a held lock");
+        let install = body
+            .find("update.install(&bytes)")
+            .expect("the install path installs");
+        assert!(release < install, "the release must run BEFORE the install");
+        assert!(
+            body.contains("EXIT_LOCK_RELEASE_TIMEOUT"),
+            "bounded by the same deadline the quit path uses"
+        );
+    }
 
     /// The endpoint override is process-global, so the tests that touch it take
     /// this first. Without it they race each other and read one another's value.

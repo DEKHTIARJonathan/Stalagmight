@@ -1317,7 +1317,10 @@ fn test_get_project_state_depth_stats_match_station_z() {
 fn test_close_project_clears_state() {
     let app = app_with_state();
     create_project(&app);
-    assert_success(&project::close_project(state(&app), None));
+    assert_success(&project::close_project_impl(
+        state(&app).inner(),
+        project::CloseLock::Release,
+    ));
     assert!(project::get_project_state(state(&app)).is_none());
 }
 
@@ -1402,7 +1405,10 @@ fn test_project_lifecycle_persists_undo_and_state() {
         // Wait for background undo persistence thread to complete
         std::thread::sleep(std::time::Duration::from_millis(200));
 
-        assert_success(&project::close_project(state(&app), None));
+        assert_success(&project::close_project_impl(
+            state(&app).inner(),
+            project::CloseLock::Release,
+        ));
         let open_result = open_project(state(&app), saved_path);
         assert_success(&open_result);
 
@@ -2737,7 +2743,10 @@ fn test_delete_project_reports_whether_it_closed_the_session() {
             // A project that is NOT open: save it, then close the session.
             create_project(&app);
             let other_path = save_project_to_temp(&app, &dir);
-            assert_success(&project::close_project(state(&app), None));
+            assert_success(&project::close_project_impl(
+                state(&app).inner(),
+                project::CloseLock::Release,
+            ));
 
             // ...and the one that IS open, in its own directory so the two saves
             // don't collide on `project.stalx`.
@@ -2889,7 +2898,10 @@ fn test_delete_project_by_an_alias_prunes_the_recents_entry() {
             create_project(&app);
             let dir = TempDir::new().unwrap();
             let saved_path = save_project_to_temp(&app, &dir);
-            assert_success(&project::close_project(state(&app), None));
+            assert_success(&project::close_project_impl(
+                state(&app).inner(),
+                project::CloseLock::Release,
+            ));
 
             // An unrelated bystander, in its own directory so the two saves don't
             // collide on `project.stalx`. Left OPEN as well.
@@ -3100,7 +3112,10 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
             create_project(&app);
             let dir = TempDir::new().unwrap();
             let real_path = save_project_to_temp(&app, &dir);
-            assert_success(&project::close_project(state(&app), None));
+            assert_success(&project::close_project_impl(
+                state(&app).inner(),
+                project::CloseLock::Release,
+            ));
 
             let link = dir.path().join("link.stalx");
             std::os::unix::fs::symlink(&real_path, &link).unwrap();
