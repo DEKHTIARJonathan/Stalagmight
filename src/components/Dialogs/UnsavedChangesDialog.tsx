@@ -2,7 +2,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useProject } from '../../hooks/useProject';
-import { abandonUpdateRestart, performQuit } from '../../utils/quit';
+import { abandonUpdateRestart, quitAfterHandingBackLock } from '../../utils/quit';
 import { saveOpenProjectLocally } from '../../utils/saveOpenProjectLocally';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -47,7 +47,9 @@ export default function UnsavedChangesDialog() {
   /** Go on with what this dialog interrupted: quit, a New Project, an open, or the close. */
   const proceed = async () => {
     if (pendingQuit) {
-      performQuit();
+      // A SpeleoDB project hands its lock back first ("Couldn't hand back the
+      // lock" when that fails); a local one quits straight away.
+      await quitAfterHandingBackLock();
       return;
     }
     if (pendingNewProject) {
@@ -83,7 +85,7 @@ export default function UnsavedChangesDialog() {
     // `handleSaveProject` would open the upload dialog and never come back to quit.
     const result = linked ? await saveOpenProjectLocally() : await handleSaveProject();
     if (result && result.success) {
-      performQuit();
+      await quitAfterHandingBackLock();
     }
   };
 

@@ -37,6 +37,8 @@ const KINDS: Readonly<Record<string, SpeleoNetworkKind>> = {
   speleodb_release_lock: 'exclusive',
   speleodb_release_lock_acquired_here: 'exclusive',
   speleodb_release_current_lock: 'exclusive',
+  // A project switch / quit hands the open project's lock back before leaving it.
+  speleodb_settle_open_lock: 'exclusive',
   speleodb_unlink: 'exclusive',
   speleodb_publish: 'exclusive',
   // Removing a cached copy (one, or the purge) hands back this account's lock on

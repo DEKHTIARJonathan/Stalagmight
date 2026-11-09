@@ -24,6 +24,7 @@ import SpeleoExitDialog from './components/Dialogs/SpeleoExitDialog';
 import QuitWaitDialog from './components/Dialogs/QuitWaitDialog';
 import SpeleoSignOutDialog from './components/Dialogs/SpeleoSignOutDialog';
 import ExitConfirmDialog from './components/Dialogs/ExitConfirmDialog';
+import SpeleoReleaseFailedDialog from './components/Dialogs/SpeleoReleaseFailedDialog';
 import { isDroppableFilePath } from './utils/fileDialogs';
 import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale, useAppUpdate } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
@@ -1084,6 +1085,10 @@ function App() {
           it layers over the upload progress it is waiting on. */}
       <QuitWaitDialog />
       <ExitConfirmDialog />
+      {/* "Couldn't hand back the lock" (utils/speleoReleaseFailure): raised by the
+          close, project switch or quit it interrupts, possibly from inside another
+          dialog, so it layers over all of the exit prompts above. */}
+      <SpeleoReleaseFailedDialog />
 
       {/* [#258] "Which file is the survey?" - raised when a SpeleoDB dump holds
           more than one openable file. Independent and mounted LAST so it layers
