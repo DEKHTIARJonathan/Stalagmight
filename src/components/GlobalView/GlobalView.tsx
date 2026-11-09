@@ -755,7 +755,10 @@ export default function GlobalView() {
     [t, handleNewProject, openDialog, speleoLoggedIn],
   );
 
-  const speleoRefreshButton = (speleoLoggedIn || refreshingProjects) ? (
+  // One SpeleoDB slot on the home screen: signed out it holds the SpeleoDB button
+  // (opens Settings on the SpeleoDB tab to sign in), signed in it holds Refresh.
+  // Settings stays reachable from the app menu either way.
+  const speleoSlotButton = (speleoLoggedIn || refreshingProjects) ? (
     <Button
       type="button"
       size="sm"
@@ -778,7 +781,18 @@ export default function GlobalView() {
     >
       {t('globalView.speleoRefresh.label')}
     </Button>
-  ) : null;
+  ) : (
+    <Button
+      type="button"
+      size="sm"
+      onClick={() => openDialog('settings', { initialCategory: 'speleodb' })}
+      data-testid="global-speleodb-button"
+      className="whitespace-nowrap"
+      icon={<SpeleoBadgedIcon size={18} testIdPrefix="global-speleodb-icon" />}
+    >
+      SpeleoDB
+    </Button>
+  );
 
   return (
     <div data-testid="global-view" className="h-full flex flex-col">
@@ -806,16 +820,6 @@ export default function GlobalView() {
             title={actionsCondensed ? t('globalView.actions.openOrImport') : undefined}
           >
             {actionsCondensed ? null : t('globalView.actions.openOrImport')}
-          </Button>
-          <Button
-            data-testid="global-speleodb-button"
-            className="whitespace-nowrap"
-            onClick={() => openDialog('settings', { initialCategory: 'speleodb' })}
-            icon={showToolbarIcons || actionsCondensed ? <SpeleoBadgedIcon size={16} testIdPrefix="global-speleodb-icon" /> : undefined}
-            aria-label={actionsCondensed ? 'SpeleoDB' : undefined}
-            title={actionsCondensed ? 'SpeleoDB' : undefined}
-          >
-            {actionsCondensed ? null : 'SpeleoDB'}
           </Button>
         </div>
 
@@ -909,9 +913,9 @@ export default function GlobalView() {
         {/* Main content area - disabled during loading */}
         <div className={`flex-1 min-w-0 overflow-hidden grid grid-rows-[auto_minmax(0,1fr)] ${loading.isLoading ? 'pointer-events-none opacity-50' : ''}`}>
           <div>
-            {(!hasRecentItems || activeTab === 'map') && speleoRefreshButton && (
+            {(!hasRecentItems || activeTab === 'map') && (
               <div className="flex justify-end px-6 pt-4 pb-2">
-                {speleoRefreshButton}
+                {speleoSlotButton}
               </div>
             )}
           </div>
@@ -960,7 +964,7 @@ export default function GlobalView() {
                       })}
                     </Button>
                   )}
-                  {speleoRefreshButton}
+                  {speleoSlotButton}
                   <RecentSortControl
                     field={recentSort.field}
                     direction={recentSort.direction}

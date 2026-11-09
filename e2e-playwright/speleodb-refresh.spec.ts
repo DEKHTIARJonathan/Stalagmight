@@ -13,6 +13,10 @@ test('successful login closes Settings and shows progress until the listing refr
       }),
     };
   });
+  // Signed out, the SpeleoDB button holds the Refresh slot (no header copy).
+  await expect(page.getByTestId('global-speleodb-button')).toBeVisible();
+  await expect(page.locator('header').getByTestId('global-speleodb-button')).toHaveCount(0);
+  await expect(page.getByTestId('globalview-speleo-refresh')).toHaveCount(0);
   await page.getByTestId('global-speleodb-button').click();
   await expect(page.getByTestId('settings-panel-speleodb')).toBeVisible();
   await expect(page.getByText('Remote refresh interval', { exact: true })).toHaveCount(0);
@@ -22,6 +26,8 @@ test('successful login closes Settings and shows progress until the listing refr
   await expect(page.getByTestId('settings-panel-speleodb')).toHaveCount(0);
   await expect(page.getByTestId('globalview-list-spinner')).toBeVisible();
   await expect(page.getByTestId('globalview-speleo-refresh')).toBeDisabled();
+  // Signed in, Refresh replaces the SpeleoDB button.
+  await expect(page.getByTestId('global-speleodb-button')).toHaveCount(0);
   await page.evaluate(() => {
     ((window as unknown as Record<string, unknown>).__FINISH_REFRESH__ as () => void)();
   });
