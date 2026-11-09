@@ -2,6 +2,7 @@ import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage, openAppMenu } from './helpers/app';
 import { openSpeleoFromMenu, openSpeleoTab } from './helpers/speleoWorkspace';
 import { LEFT_WORKSPACE_MIN_WIDTH } from '../src/components/SingleSystemView/layoutConstants';
+import { themeTokens } from '../src/theme/tokens';
 import type { useUIStore } from '../src/store/uiStore';
 import type { useSpeleoStore } from '../src/store/speleoStore';
 import type { useProjectStore } from '../src/store/projectStore';
@@ -306,14 +307,28 @@ test('Reload Project asks in the in-app dialog and Cancel keeps the work', async
   await expect.poll(() => page.evaluate(() => (window as unknown as { __updateCalls: number }).__updateCalls)).toBe(1);
 });
 
-for (const theme of ['dark', 'light'] as const) {
-  test(`workspace buttons have consistent geometry and semantic colors in ${theme} theme`, async ({ page }, testInfo) => {
+/** `rgb(r, g, b)` / `rgba(...)` of a resolved `--cc-*` token, as getComputedStyle reports colours. */
+async function tokenRgb(page: Page, token: string): Promise<string> {
+  return page.evaluate((name) => {
+    const probe = document.createElement('div');
+    probe.style.color = `var(${name})`;
+    document.body.appendChild(probe);
+    const value = getComputedStyle(probe).color;
+    probe.remove();
+    return value;
+  }, token);
+}
+
+for (const theme of Object.keys(themeTokens)) {
+  test(`workspace buttons: equal geometry, token colours, one filled per state in ${theme} theme`, async ({ page }, testInfo) => {
     await openRemote(page, false);
     await page.evaluate((theme) => {
       const stores = (window as unknown as TestWindow).__E2E_TEST__;
       const appearance = stores.projectStore.getState().config!.appearance;
-      stores.uiStore.getState().setThemePreview({ ...appearance, theme });
+      // Mode `dark` shows the night colour theme: any of the 10 themes.
+      stores.uiStore.getState().setThemePreview({ ...appearance, theme: 'dark', night_color_theme: theme } as typeof appearance);
     }, theme);
+    await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
     await openSpeleoTab(page);
     const controls = page.getByTestId('speleodb-workspace-everyday');
     await expect(controls).toBeVisible();
@@ -323,20 +338,42 @@ for (const theme of ['dark', 'light'] as const) {
     const styles = await buttons.evaluateAll((nodes) => nodes.map((node) => {
       const style = getComputedStyle(node);
       const box = node.getBoundingClientRect();
-      return { background: style.backgroundColor, height: box.height, width: box.width };
+      return { id: node.getAttribute('data-testid'), filled: node.hasAttribute('data-filled'), background: style.backgroundColor,
+        border: style.borderTopColor, color: style.color, height: box.height, width: box.width };
     }));
     for (const style of styles) {
-      expect(style.height).toBe(styles[0].height);
-      expect(style.width).toBe(styles[0].width);
+      expect(style.height).toBe(styles[0]!.height);
+      expect(style.width).toBe(styles[0]!.width);
       expect(style.background).not.toBe('rgba(0, 0, 0, 0)');
     }
-    expect(styles[1].background).not.toBe(styles[2].background);
-    expect(new Set(styles.map((style) => style.background)).size).toBe(5);
+    // Editing with nothing to save: no filled button; each outline is its tone's token.
+    expect(styles.filter((s) => s.filled).map((s) => s.id)).toEqual([]);
+    const byId = Object.fromEntries(styles.map((s) => [s.id, s]));
+    const expectations: Array<[string, string]> = [
+      ['speleodb-workspace-upload', '--cc-accent-text'],
+      ['speleodb-workspace-editing', '--cc-neutral-text'],
+      ['speleodb-workspace-latest', '--cc-info-text'],
+      ['speleodb-workspace-close', '--cc-neutral-text'],
+      ['speleodb-workspace-open-web', '--cc-external-text'],
+    ];
+    for (const [id, token] of expectations) expect(byId[id]!.color, `${id} label`).toBe(await tokenRgb(page, token));
+    expect(byId['speleodb-workspace-close']!.border).toBe(await tokenRgb(page, '--cc-neutral-border'));
+    // Save, Reload and the browser link each keep their own colour; Close and the
+    // step down to read-only share the neutral look.
+    expect(new Set(['speleodb-workspace-upload', 'speleodb-workspace-latest', 'speleodb-workspace-open-web', 'speleodb-workspace-close']
+      .map((id) => byId[id]!.color)).size).toBe(4);
+    expect(byId['speleodb-workspace-editing']!.background).toBe(byId['speleodb-workspace-close']!.background);
     await expect(page.getByTestId('speleodb-workspace-open-web').locator('svg')).toBeVisible();
     await page.getByTestId('speleodb-workspace').screenshot({ path: testInfo.outputPath(`speleodb-buttons-${theme}.png`) });
+    // Read-only, able to resume: Resume editing becomes the one filled button, in the success tone.
     await page.getByTestId('speleodb-workspace-editing').click();
-    await expect(page.getByTestId('speleodb-workspace-editing')).toHaveText('Resume editing');
-    await expect.poll(() => page.getByTestId('speleodb-workspace-editing').evaluate((node) => getComputedStyle(node).backgroundColor)).not.toBe(styles[1].background);
+    const resume = page.getByTestId('speleodb-workspace-editing');
+    await expect(resume).toHaveText('Resume editing');
+    await expect(resume).toHaveAttribute('data-filled', '');
+    await expect(controls.locator('[data-filled]')).toHaveCount(1);
+    await page.mouse.move(0, 0); // off the button: measure its rest colours, not the hover
+    await expect.poll(() => resume.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe(await tokenRgb(page, '--cc-success'));
+    await expect.poll(() => resume.evaluate((node) => getComputedStyle(node).color)).toBe(await tokenRgb(page, '--cc-success-on'));
   });
 }
 
