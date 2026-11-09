@@ -54,8 +54,8 @@ pub use models::{
 /// [`SpeleoDbError::Status`] without re-parsing message strings.
 #[derive(Debug, thiserror::Error)]
 pub enum SpeleoDbError {
-    /// No token is available - the user is not logged in (or the token was dropped).
-    #[error("not logged in to SpeleoDB")]
+    /// No token is available - the user is not connected (or the token was dropped).
+    #[error("not connected to SpeleoDB")]
     NotAuthenticated,
     /// No endpoint is configured (no `DEV_SPELEODB_URL`, no saved config).
     #[error("SpeleoDB endpoint is not configured")]
@@ -63,8 +63,15 @@ pub enum SpeleoDbError {
     /// Password login was attempted without both an email and a password (and
     /// without a pasted token). Rejected at the boundary rather than POSTing
     /// blank credentials and relying on the server to 400.
-    #[error("email and password are required to sign in")]
+    #[error("an email and a password are required to connect")]
     MissingCredentials,
+    /// A sign-in (or a settings write) would move a connected session to another
+    /// SpeleoDB server. Changing servers is a Disconnect - with its sign-out flow,
+    /// which protects un-uploaded work and hands locks back - and a fresh
+    /// Connect, never a sign-in that replaces the session underneath open work.
+    /// Refused before anything is sent or saved.
+    #[error("Disconnect from SpeleoDB before changing servers")]
+    ServerChangeWhileConnected,
     /// A transport-level failure (DNS, timeout, connection reset, body read).
     ///
     /// `cause` classifies the SDK transport error for translated UI messages.

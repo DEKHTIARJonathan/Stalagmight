@@ -91,7 +91,8 @@ pub enum TransportCause {
 #[ts(export, export_to = "../../bindings/")]
 pub enum EndpointRefusal {
     /// A plain `http://` server outside the automatic exceptions (`localhost`,
-    /// `127.0.0.1`, `192.168.x.x`), with the insecure-HTTP override off.
+    /// `127.0.0.1`, `192.168.x.x`; see `tls`), without the development-build
+    /// insecure-HTTP override.
     PlainHttp,
     /// Not a usable server address: no or an unknown scheme, no host, user info,
     /// or an invalid port.
@@ -104,9 +105,7 @@ impl EndpointRefusal {
     #[must_use]
     pub const fn reason(self) -> &'static str {
         match self {
-            Self::PlainHttp => {
-                "HTTPS is required. HTTP is allowed only on localhost, 127.0.0.1 or 192.168.x.x."
-            }
+            Self::PlainHttp => super::tls::PLAIN_HTTP_RULE,
             Self::InvalidAddress => {
                 "Not a usable SpeleoDB address: it needs an http:// or https:// scheme, a host and a valid port."
             }
@@ -289,6 +288,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         // the build until someone decides which side of that line it is on.
         SpeleoDbError::NoEndpoint
         | SpeleoDbError::MissingCredentials
+        | SpeleoDbError::ServerChangeWhileConnected
         | SpeleoDbError::NewerSchema(_)
         | SpeleoDbError::Parse(_)
         | SpeleoDbError::Io(_)

@@ -27,7 +27,7 @@ fn remove_legacy_token(
     match std::fs::remove_file(root.join("speleodb").join("tokens").join(filename)) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => Err(local_dto(SpeleoDbError::Io("Signed out, but an obsolete plaintext SpeleoDB credential could not be removed. Try signing out again.".into()))),
+        Err(_) => Err(local_dto(SpeleoDbError::Io("Disconnected, but an obsolete plaintext SpeleoDB credential could not be removed. Try disconnecting again.".into()))),
     }
 }
 
@@ -41,7 +41,7 @@ impl AppState {
         config.speleodb.token.0 = None;
         config.speleodb.preserve_unreadable_file = false;
         config.save_speleodb().map_err(|_| local_dto(SpeleoDbError::Io(
-            "Signed out, but the saved SpeleoDB token could not be removed. Try signing out again.".to_owned()
+            "Disconnected, but the saved SpeleoDB token could not be removed. Try disconnecting again.".to_owned()
         )))?;
         if let (Some(endpoint), Some(email)) = (&config.speleodb.endpoint, &config.speleodb.email) {
             let path = crate::config::Config::config_path().map_err(|_| {
@@ -110,7 +110,7 @@ impl AppState {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         config.general.recent_projects.clone_from(&recent);
         config.save().map_err(|_| local_dto(SpeleoDbError::Io(
-            "Signed out, but SpeleoDB project references could not be saved. Try signing out again.".into()
+            "Disconnected, but SpeleoDB project references could not be saved. Try disconnecting again.".into()
         )))
     }
 

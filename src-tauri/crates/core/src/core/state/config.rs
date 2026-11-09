@@ -89,7 +89,7 @@ impl AppState {
     /// `config` lock (the session status reads it).
     fn speleodb_check_instance_change(&self, incoming: &Config) -> Result<()> {
         if self.speleodb_session_status().is_ok_and(|s| s.logged_in) {
-            anyhow::bail!("Disconnect from SpeleoDB before changing servers.");
+            return Err(crate::speleodb::SpeleoDbError::ServerChangeWhileConnected.into());
         }
         if let Some(endpoint) = incoming.speleodb.endpoint.as_deref() {
             crate::speleodb::validate_endpoint(endpoint, incoming.speleodb.insecure_http)?;
@@ -242,10 +242,16 @@ impl AppState {
             return Ok(Locked::NeedsLockOps(config));
         }
         config.webkit_memory = existing.webkit_memory.clone();
-        config.speleodb.email.clone_from(&existing.speleodb.email);
         if instance_changed {
+            // The account and its token belong to the old server. Settings saves a
+            // new server before Connect signs in to it, so keeping either would
+            // leave the old server's credentials paired with the new one when that
+            // sign-in fails: a new server starts with no account until a sign-in
+            // saves one.
+            config.speleodb.email = None;
             config.speleodb.token.0 = None;
         } else {
+            config.speleodb.email.clone_from(&existing.speleodb.email);
             config.speleodb.token.clone_from(&existing.speleodb.token);
         }
         config.speleodb.preserve_unreadable_file = existing.speleodb.preserve_unreadable_file
@@ -660,6 +666,79 @@ mod tests {
             }
         });
     }
+    #[test]
+    fn a_server_change_while_connected_is_refused_in_its_own_words() {
+        // Not the generic "filesystem error: ..." an Io error reads as.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = signed_in_state();
+            let refused = state
+                .speleodb_login(
+                    Some("https://other.example.com".into()),
+                    None,
+                    None,
+                    None,
+                    Some("<your_token_here>".into()),
+                )
+                .expect_err("a connected session is bound to its server");
+            assert_eq!(
+                refused.message,
+                "Disconnect from SpeleoDB before changing servers"
+            );
+            assert_eq!(
+                refused.action,
+                crate::speleodb::SpeleoDbAction::Fatal,
+                "not retryable"
+            );
+            let mut settings = state.get_config();
+            settings.speleodb.endpoint = Some("https://other.example.com".into());
+            let refused = state.update_config(settings).expect_err("refused");
+            assert_eq!(
+                refused.to_string(),
+                "Disconnect from SpeleoDB before changing servers"
+            );
+        });
+    }
+
+    #[test]
+    fn a_new_server_saved_before_connect_keeps_no_credential_of_the_old_one() {
+        // Connect in Settings saves the staged server first, then signs in. When
+        // that sign-in fails, the old server's account must not stay saved as the
+        // new server's, and nothing of the failed sign-in may be saved either.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = signed_in_state();
+            state.speleodb_logout().unwrap();
+            assert_eq!(
+                state.get_config().speleodb.email.as_deref(),
+                Some("diver@example.com"),
+                "signed out, the account is still remembered for its server"
+            );
+            let mut staged = state.get_config();
+            staged.speleodb.endpoint = Some("https://other.example.com".to_owned());
+            state.update_config(staged).unwrap();
+            let refused = state.speleodb_login(
+                Some("https://other.example.com".into()),
+                None,
+                Some("other@example.com".into()),
+                None,
+                None,
+            );
+            assert_eq!(
+                refused.expect_err("no password").message,
+                "an email and a password are required to connect"
+            );
+            for saved in [state.get_config(), Config::load().unwrap()] {
+                assert_eq!(
+                    saved.speleodb.endpoint.as_deref(),
+                    Some("https://other.example.com"),
+                    "the server is a preference, saved by Connect"
+                );
+                assert_eq!(saved.speleodb.email, None, "no account for it yet");
+                assert_eq!(saved.speleodb.token.0, None);
+            }
+            assert!(!state.speleodb_session_status().unwrap().logged_in);
+        });
+    }
+
     #[test]
     fn direct_login_and_reload_cannot_switch_a_connected_instance() {
         crate::test_helpers::with_isolated_config(|| {

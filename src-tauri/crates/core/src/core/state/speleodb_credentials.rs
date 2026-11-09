@@ -31,13 +31,14 @@ impl AppState {
     /// store it backend-side, and record the session. The token never crosses
     /// back to the webview - only the account email and instance.
     ///
-    /// `insecure_http` is the caller's own choice for this login - Settings' "Log
-    /// in now" passes the box on screen, which may differ from the saved one - and
-    /// `None` means the saved value. It is what the credentials are sent under, so
-    /// a public `http://` endpoint is refused unless THIS choice allows it. On
-    /// success it is persisted together with the endpoint and token: the session
-    /// and the connection it was opened over are applied as one. A failed login
-    /// persists nothing.
+    /// `insecure_http` is the caller's own choice for this login - Settings'
+    /// Connect in a development build passes the box on screen, which may differ
+    /// from the saved one - and `None` means the saved value. It is what the
+    /// credentials are sent under, so a public `http://` endpoint is refused unless
+    /// THIS choice allows it (and only a development build lets it: the transport
+    /// policy ignores it in a release build). On success it is persisted together
+    /// with the endpoint and token: the session and the connection it was opened
+    /// over are applied as one. A failed login persists nothing.
     pub fn speleodb_login(
         &self,
         override_endpoint: Option<String>,
@@ -72,9 +73,7 @@ impl AppState {
                     != crate::speleodb::auth::normalize_endpoint(&endpoint)
             })
         {
-            return Err(local_dto(SpeleoDbError::Io(
-                "Disconnect from SpeleoDB before changing servers.".into(),
-            )));
+            return Err(local_dto(SpeleoDbError::ServerChangeWhileConnected));
         }
 
         let (token, email) =
