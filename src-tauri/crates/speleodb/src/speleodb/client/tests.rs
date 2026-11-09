@@ -267,6 +267,25 @@ fn revisions_and_native_file_routes_are_exact() {
 }
 
 #[test]
+fn upload_refuses_a_description_the_server_cannot_store_before_sending_anything() {
+    // sdk#2: SpeleoDB would commit it to git and then fail to store it, breaking
+    // every later upload. Refused before the file is read or a request is made:
+    // the path does not exist and nothing listens on the endpoint.
+    let long = format!("{}\n{}", "a".repeat(500), "b".repeat(499));
+    let missing = Path::new("/nonexistent/synthetic.stalx");
+    let err = upload_stalx("http://127.0.0.1:9", "t", true, ID, missing, &long).unwrap_err();
+    assert!(
+        matches!(&err, SpeleoDbError::Parse(m) if m.contains("too long") && m.contains("1001")),
+        "{err:?}"
+    );
+    let err = upload_stalx("http://127.0.0.1:9", "t", true, ID, missing, " \n ").unwrap_err();
+    assert!(
+        matches!(&err, SpeleoDbError::Parse(m) if m.contains("empty")),
+        "{err:?}"
+    );
+}
+
+#[test]
 fn status_errors_and_malformed_success_remain_distinct() {
     for status in [304, 400, 401, 403, 404, 409, 429, 500] {
         let s = Server::replies(vec![(status, br#"{"detail":"Test failure"}"#.to_vec())]);

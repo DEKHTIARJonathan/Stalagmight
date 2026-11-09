@@ -3414,7 +3414,8 @@
         "pushFailed": "Could not push changes",
         "tookRemote": "Reset to the SpeleoDB version.",
         "takeRemoteFailed": "Could not take the SpeleoDB version",
-        "notEditing": "Nothing was uploaded - you are not editing this project right now. Start editing again (signing in first if needed) to upload your changes."
+        "notEditing": "Nothing was uploaded - you are not editing this project right now. Start editing again (signing in first if needed) to upload your changes.",
+        "lateUploadFailed": "The upload you left running did not reach SpeleoDB. Your changes are still on this computer."
       },
       "push": "Save Changes",
       "unlock": "Switch to Read Only Mode"
@@ -3431,6 +3432,19 @@
       "pushing": "Uploading…",
       "failedHeading": "Your changes were NOT uploaded",
       "retryHint": "They are still only on this computer. Fix the problem, then press the button again to retry."
+    },
+    "saveLocal": {
+      "signedOut": "Saved on this computer. Sign in to SpeleoDB to upload it.",
+      "lockedBy": "Saved on this computer. {{email}} is editing this project, so it was not uploaded.",
+      "noAccess": "Saved on this computer. You cannot upload this project to SpeleoDB.",
+      "saved": "Saved on this computer. Not uploaded to SpeleoDB yet.",
+      "button": "Save on this computer",
+      "acquiring": "Taking the editing lock so you can upload…",
+      "blocked": "Upload needs sign-in, write permission and the editing lock. You can save your work on this computer and upload it later."
+    },
+    "commitMessage": {
+      "count": "{{length}} / {{max}} characters",
+      "tooLong": "This description is too long for SpeleoDB ({{length}} characters). Shorten it to {{max}} characters or fewer. Each line break counts as two characters."
     },
     "noPermission": {
       "title": "No SpeleoDB access",
@@ -3644,6 +3658,20 @@
     "jump": "Jump",
     "reference": "Reference"
   },
+  "quitWait": {
+    "toast": "An upload or save is in progress. Stalagmight will close when it finishes.",
+    "title": "Waiting to quit",
+    "body": "A SpeleoDB transfer is still running. Stalagmight will close as soon as it finishes, so nothing is lost on a slow connection.",
+    "cancel": "Keep Stalagmight open",
+    "force": "Quit now",
+    "forceTitle": "Quit without waiting?",
+    "forceBody": "The transfer will be cut off, and SpeleoDB may or may not receive it.",
+    "forceDetail": "Your changes stay saved on this computer. If an upload or an editing-lock request is cut off, the project can stay locked to you until you open it again in Stalagmight.",
+    "back": "Back",
+    "forceConfirm": "Quit without waiting",
+    "forcing": "Quitting…",
+    "saveFailed": "Your changes could not be saved on this computer, so Stalagmight did not quit."
+  },
   "speleoExitPrompt": {
     "title": "Your changes are not on SpeleoDB yet",
     "body": "You are editing \"{{name}}\", and some of your changes have not been uploaded to SpeleoDB. What should happen to them before {{action}}?",
@@ -3659,6 +3687,7 @@
     "discard": "Discard changes",
     "discardHint": "Throw away the changes that are not on SpeleoDB and hand the project back.",
     "back": "Back",
+    "saveLocally": "Save on this computer",
     "uploadBody": "Describe what you changed. Other cavers will see this note in the project history.",
     "messageLabel": "What did you change?",
     "messagePlaceholder": "For example: surveyed the north passage",
@@ -3710,8 +3739,12 @@
       "uploaded": "Uploaded and handed back.",
       "discarded": "Changes discarded.",
       "otherChanges": "Other projects with changes on this computer",
-      "otherChangesBody": "These projects have changes that are not on SpeleoDB yet. To upload them, open the project (this stops signing out). Or discard the changes.",
+      "otherChangesBody": "These projects have changes that are not on SpeleoDB yet. To upload them, open the project (this stops signing out). Or keep them on this computer for later, or discard them.",
       "openToUpload": "Open to upload",
+      "keep": "Keep my changes on this computer",
+      "keepHint": "The changes stay in the copy on this computer and the project is handed back. After you sign in again, open it to upload them.",
+      "kept": "Kept on this computer. The project is handed back when you sign out.",
+      "keepFailed": "Your changes could not be saved on this computer, so they were not kept.",
       "lastEdited": "last edited {{when}}",
       "discardBody": "Your changes to \"{{name}}\" will be lost forever.",
       "discardFailed": "The changes to \"{{name}}\" could not be discarded.",

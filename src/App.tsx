@@ -21,6 +21,7 @@ import { routeOpenedFile } from './utils/openOrImport';
 import { useLaunchWithFile } from './utils/launchWithFile';
 import { guardQuit } from './utils/quit';
 import SpeleoExitDialog from './components/Dialogs/SpeleoExitDialog';
+import QuitWaitDialog from './components/Dialogs/QuitWaitDialog';
 import SpeleoSignOutDialog from './components/Dialogs/SpeleoSignOutDialog';
 import ExitConfirmDialog from './components/Dialogs/ExitConfirmDialog';
 import { isDroppableFilePath } from './utils/fileDialogs';
@@ -1079,6 +1080,9 @@ function App() {
           of evicting it from the single dialog slot. See utils/speleoExit. */}
       <SpeleoSignOutDialog />
       <SpeleoExitDialog />
+      {/* A quit waiting for a SpeleoDB transfer (lock#6): after the exit prompts so
+          it layers over the upload progress it is waiting on. */}
+      <QuitWaitDialog />
       <ExitConfirmDialog />
 
       {/* [#258] "Which file is the survey?" - raised when a SpeleoDB dump holds

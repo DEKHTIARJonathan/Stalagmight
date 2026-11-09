@@ -239,29 +239,122 @@ and offer Reload Project. Retrying recovery never creates a second server projec
 
 ## Save, switching and exit
 
-Menu Save, Cmd/Ctrl+S and Save Changes share one dispatcher. Local projects retain
-local Save. Linked projects open the upload dialog, including a blocked explanation
-when the editing lock is missing. Sign-in and Resume editing recover access without
-uploading automatically; the user confirms the upload afterward. A clean linked
-project reports No changes to upload, without creating an empty revision.
+Menu Save, Cmd/Ctrl+S and Save Changes share one dispatcher (`dispatchProjectSave`).
+Local projects retain local Save. A linked project we are editing opens the upload
+dialog. A linked project that cannot be uploaded right now is never left with
+discard-only edits: the work is first saved to the local copy (the backend
+`save_project` has no edit gate), then
+- when the lock can be taken (signed in, write permission, nobody else holding
+  it), the upload dialog opens and takes it, and the user uploads with a
+  description as usual;
+- otherwise a warning toast says the work is on this computer and why it was not
+  uploaded (signed out, someone else editing, no write access), and Save and
+  Close goes on to close.
+
+The upload dialog's blocked panel (shown whenever upload is not allowed) offers
+Save on this computer beside Sign in / Resume editing. Sign-in and Resume editing
+recover access without uploading automatically; the user confirms the upload
+afterward. A clean linked project reports No changes to upload, without creating
+an empty revision.
+
+Every exit, close or switch question about unsaved edits offers a non-destructive
+answer as well as Discard: the unsaved-changes dialog (quit, close, open another
+project, New Project) saves a SpeleoDB project's edits on this computer instead of
+routing to the upload dialog; the open-from-SpeleoDB and account-change questions
+(in-app, `askExitChoice`) offer Save on this computer whenever the project has a
+file of its own. Saved edits keep the copy's un-uploaded flag, so the next open
+offers to open the local copy.
 
 Uploading requires a nonblank change description, saves locally first, and verifies
 current permission and lock ownership against the server. Ordinary successful upload
 retains the lock. The same centered progress surface blocks the app during explicit
 uploads from Save Changes, menu Save and Cmd/Ctrl+S. It expires after 120 seconds,
 allows closing the dialog, and preserves the description without resubmitting.
+An upload whose dialog (Save Changes, Finish editing or the exit prompt) was closed
+after that notice is still applied when it ends, for as long as the same project
+and SpeleoDB session are open: a success updates the link and shows its usual
+toast; a failure raises the push-failure banner and an error toast, and keeps the
+description for the retry. Only the dialog's own follow-ups (closing it, Save and
+Close) need it to still be open.
 Offline, failed or uncertain uploads never report success; the
 message and local work remain available for retry. Autosave and failed-autosave
 retry write only to the local SQLite file.
 
+The change description is limited to 1000 characters as SpeleoDB stores it. The
+server strips it and turns every run of line breaks (with the whitespace around
+them) into ". ", then stores it in a 1024-character column only after committing
+the upload; a longer description commits, fails to store (HTTP 500), and breaks
+every later upload of the project. The upload dialogs count the stored length (a
+line break counts as two characters), show the count under the field, and refuse
+a longer description with an inline message. The backend refuses it too, both at
+the `speleodb_done` / `speleodb_push` / `speleodb_publish` IPC boundary (before
+any work) and in `client::upload_stalx`, so no caller can send one
+(`speleodb/commit_message.rs`, mirrored by `src/utils/commitMessage.ts`).
+
 Save and Close carries its close intent through recovery and closes only after a
 confirmed upload and successful release, with no newer local changes. Cancellation,
 conflict, uncertainty and release failure leave the project open. Plain Close,
-project switching and Quit automatically release the session's lock without
-uploading. Unsaved survey work and form drafts require Discard changes / Cancel.
-Saved unuploaded work remains in the local file. Backend release consent remains
-scoped to the project, authenticated account and session generation. Another
-account's lock is never released by an ordinary exit.
+project switching and Quit release a clean session's lock silently. When the lock
+is held over work SpeleoDB has not seen, they ask the one in-app exit prompt
+(Upload / Keep the lock / Discard / Cancel, `utils/speleoExit`); the backend never
+releases over un-uploaded edits unless the close carries the confirmed discard.
+Without the lock, unsaved survey work gets the unsaved-changes dialog with Save on
+this computer / Discard / Cancel (see above). Saved unuploaded work remains in the
+local file. Backend release consent remains scoped to the project, authenticated
+account and session generation. Another account's lock is never released by an
+ordinary exit.
+
+### Quitting while a transfer is in flight
+
+Quitting never cuts a SpeleoDB upload, acquire, download or release that is still
+running, so a slow connection does not lose work (lock#6, frontend#4). Menu Quit,
+Ctrl+Q, the window X, an OS window close and restart-to-update all request a
+window close, and the close listener's first gate (`utils/quitAfterWork`) runs
+before any question:
+
+- With nothing in flight the quit goes on as before.
+- With an exclusive SpeleoDB call, a hand-off verb, or an exit-prompt answer in
+  flight, the window stays. An info toast says the save or upload is in progress
+  and that Stalagmight will close when it finishes, and the waiting prompt
+  (`QuitWaitDialog`, layered over the upload progress) shows a spinner with Keep
+  Stalagmight open (the default; also Escape) and Quit now. Once the work has
+  drained and stayed drained for 300 ms, the quit is re-issued un-confirmed, so
+  every guard sees the settled state: a successful upload quits; a failed one
+  raises the exit prompt.
+- Quit now is an explicit choice behind a warning (the transfer is cut off and may
+  or may not reach SpeleoDB; the project can stay locked until it is opened
+  again). It saves unsaved edits on this computer first (a failed save stops it),
+  then quits without waiting, and right before the window goes it calls
+  `arm_forced_exit` so the backend may cut the operation.
+
+The backend exit hook (`commands/exit_wait.rs`, from `RunEvent::ExitRequested`) is
+the backstop for a user-visible transfer still running when the exit arrives anyway.
+Only the transfers the frontend gate waits on can hold it: every IPC command the
+gate counts as `exclusive` (`speleoNetworkCommands.ts`; they run through
+`run_transfer`) plus `close_project` and the cached-copy discard. While one runs and
+no forced exit is armed (10-second arm), the hook prevents the exit, waits for it on
+a background thread, runs the bounded lock release (5 s) and then exits.
+Backend-internal work the user never sees (the background lock re-verify, the
+stranded-claim cleanup, a detached release from a project switch) never keeps a
+process alive without a window: the exit keeps the bounded behaviour for it, the
+release waiting at most 5 s behind it before the app exits. Tauri cannot prevent an
+`app.restart()`; the update restart only runs after the frontend gate has let the
+quit through.
+
+### Signing out
+
+Signing out first resolves what the account still holds (`utils/speleoSignOut`): the
+open project's un-uploaded work under our lock (Upload / Keep my changes on this
+computer / Discard), other cached copies with un-uploaded work (Open to upload /
+Keep my changes on this computer / Discard), and the remaining locks, handed back
+with Try again / Sign out anyway when a release fails. There is no keep-the-lock
+answer. "Keep my changes on this computer" is the non-destructive one when the
+upload is not possible: unsaved edits of the open project are saved first, the copy
+keeps its edits, its un-uploaded mark and its recents row, and its lock is handed
+back through the explicit per-project release (`speleodb_release_lock`). The user's
+choice is the consent: the logout's own silent release still keeps the lock over
+un-uploaded edits. After the next sign-in the ordinary open takes over (base equals
+tip: the local copy opens and resumes; a divergence offers "Open my local copy").
 
 Switch to Read Only Mode refuses unsaved or unuploaded work, including direct IPC
 calls: "Save your changes using Save Changes before switching to read-only mode."

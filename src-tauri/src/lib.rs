@@ -1477,9 +1477,11 @@ pub(crate) fn tile_fetch_impl(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// How long the app-exit handler waits for a best-effort SpeleoDB lock release
 /// before exiting anyway (fix M2). Long enough for a healthy round trip, short
-/// enough that a hung / unreachable server can't noticeably freeze quit. The
-/// server has NO lock timeout: a release that doesn't land leaves the lock held
-/// until the next sign-in's held-lock prompt (or the website) releases it.
+/// enough that a hung / unreachable server can't noticeably freeze quit. It
+/// bounds only the release itself: an upload or acquire still in flight is
+/// waited for first (`commands::exit_wait`), never cut by this deadline. The
+/// server has NO lock timeout: a release that does not land leaves the lock
+/// held until the next sign-in's held-lock prompt (or the website) releases it.
 pub(crate) const EXIT_LOCK_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn run() {
@@ -1554,6 +1556,8 @@ pub fn run() {
         // for themselves when the updater is off), and here rather than in
         // `.setup()` because it needs nothing from the app.
         .manage(commands::app_update::AppUpdateState::default())
+        // Exit never cuts an in-flight SpeleoDB operation (lock#6): see `exit_wait`.
+        .manage(commands::exit_wait::ExitWait::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1976,6 +1980,7 @@ pub fn run() {
             commands::app_update::discard_app_update_download,
             commands::app_update::arm_app_update_restart,
             commands::app_update::unarm_app_update_restart,
+            commands::exit_wait::arm_forced_exit,
             commands::app_update::install_app_update_and_restart,
             // Recovery (SPEC 14.4)
             commands::recovery::attempt_repair,
@@ -2006,12 +2011,12 @@ pub fn run() {
                 // edit session is active. Bounded (fix M2): this closure runs on the
                 // main event-loop thread, so a synchronous release against a hung /
                 // unreachable server would freeze quit for the full HTTP timeout - cap
-                // the wait and exit anyway. SpeleoDB never expires a lock, so a release
-                // that does not land here waits for the next sign-in's held-lock prompt.
-                if let tauri::RunEvent::ExitRequested { .. } = event {
-                    if let Some(state) = app_handle.try_state::<core::state::AppState>() {
-                        state.speleodb_release_held_lock_bounded(EXIT_LOCK_RELEASE_TIMEOUT);
-                    }
+                // the release and exit anyway. An upload or acquire still in flight
+                // is NOT cut (lock#6): the exit is held, the operation is waited for
+                // off the main thread, and only then does the release run and the
+                // app exit - unless the user chose "Quit now" in-app.
+                if let tauri::RunEvent::ExitRequested { code, api, .. } = &event {
+                    commands::exit_wait::on_exit_requested(app_handle, *code, api);
                 }
 
                 // Install on quit (#631). `Exit`, not `ExitRequested`: the latter

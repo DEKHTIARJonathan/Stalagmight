@@ -1193,4 +1193,82 @@ mod tests {
             "both the link read and the token read must warn on an unexpected failure"
         );
     }
+
+    #[test]
+    fn sign_out_keep_my_changes_releases_over_unpushed_edits_only_as_the_explicit_choice() {
+        // Silent: signing out without an answer for the open project's
+        // un-uploaded work (the logout's own gate drop) keeps the lock, as every
+        // lifecycle release does.
+        let (server, seen) = recording_server();
+        let (_temp, _root, _path, state) = managed_editing_session(&server);
+        set_unpushed_edits(&state);
+        state.speleodb_logout_drop_gates();
+        settle();
+        assert_eq!(release_requests(&seen), 0, "no silent release");
+        assert!(
+            claim_is_kept(&state),
+            "the lock is kept for the next sign-in"
+        );
+
+        // Explicit: "Keep my changes on this computer" hands the lock back through
+        // the per-project release the sign-out uses for every lock it returns; the
+        // copy keeps its edits and its un-uploaded mark for the next sign-in.
+        let (server, seen) = recording_server();
+        let (_temp, _root, path, state) = managed_editing_session(&server);
+        set_unpushed_edits(&state);
+        state
+            .speleodb_release_lock(PID.to_owned())
+            .expect("the explicit release goes through");
+        assert_eq!(release_requests(&seen), 1, "handed back once");
+        assert!(!state.speleodb_lock_acquired_here(PID), "the claim is over");
+        assert!(!state.edit_enabled(), "the open copy is read-only now");
+        assert!(
+            state.speleodb_open_link().expect("link").has_unpushed_edits,
+            "the edits are still marked un-uploaded"
+        );
+        assert!(path.exists(), "the cached copy is kept");
+        // The logout that follows has nothing left to release.
+        state.speleodb_logout_drop_gates();
+        settle();
+        assert_eq!(release_requests(&seen), 1, "no second release");
+    }
+
+    /// A sink that gives the release thread this process's managed state, as the
+    /// app does - so the exit release really queues behind the lock-ops span.
+    struct ManagedSink(&'static AppState);
+
+    impl crate::core::events::EventSink for ManagedSink {
+        fn emit(&self, _event: &str, _payload: serde_json::Value) {}
+
+        fn with_app_state(&self, f: Box<dyn FnOnce(&AppState) + Send>) -> bool {
+            f(self.0);
+            true
+        }
+    }
+
+    #[test]
+    fn an_exit_release_behind_backend_internal_work_gives_up_on_its_budget() {
+        // Backend-internal work the quit gate never sees (the background re-verify,
+        // the stranded-claim cleanup) may hold the lock-ops span when the app
+        // exits. It must not keep a windowless process alive: the exit release
+        // waits at most its own budget behind it, then returns so the app exits.
+        let (server, seen) = recording_server();
+        let (_temp, _root, _path, state) = managed_editing_session(&server);
+        let state: &'static AppState = Box::leak(Box::new(state));
+        state.set_event_sink(Arc::new(ManagedSink(state)));
+        let background = state.speleodb_lock_ops_guard();
+        let budget = std::time::Duration::from_millis(300);
+        let started = std::time::Instant::now();
+        state.speleodb_release_held_lock_bounded(budget);
+        let took = started.elapsed();
+        drop(background);
+        assert!(took >= budget, "it did wait behind the span ({took:?})");
+        assert!(
+            took < std::time::Duration::from_secs(3),
+            "and gave up on its budget ({took:?})"
+        );
+        // The release still lands once the span frees, if the process lives on.
+        settle();
+        assert_eq!(release_requests(&seen), 1);
+    }
 }

@@ -5566,6 +5566,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'check_for_app_update':
             return { status: { kind: 'up_to_date' }, current_version: '0.5.0', installs_on_quit: true };
 
+          case 'arm_forced_exit':
+            // The explicit "Quit now" past a running SpeleoDB transfer: the
+            // backend half (cut instead of wait) is covered in Rust.
+            (window as unknown as { __forcedExitArmed?: number }).__forcedExitArmed =
+              ((window as unknown as { __forcedExitArmed?: number }).__forcedExitArmed ?? 0) + 1;
+            return null;
           case 'arm_app_update_restart':
           case 'unarm_app_update_restart':
             // The backend's one-shot install consent. Succeeds here so a spec

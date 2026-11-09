@@ -12,17 +12,23 @@ export default function ExitConfirmDialog() {
 
 function ExitConfirm({ request }: { request: ExitConfirmRequest }) {
   useScreenOccupant(true);
+  const save = request.saveLabel;
   return (
-    <DialogWrapper title={request.title} onClose={() => request.answer(false)} size="sm" data-testid="exit-confirm-dialog">
+    <DialogWrapper title={request.title} onClose={() => request.answer('cancel')} size="sm" data-testid="exit-confirm-dialog">
       <div className="space-y-4">
         <p className="text-sm text-text-secondary" data-testid="exit-confirm-message">{request.message}</p>
-        <div className="flex justify-end gap-2 pt-2 border-t border-border">
-          <Button onClick={() => request.answer(false)} data-primary-action="" data-testid="exit-confirm-cancel">
+        <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-border">
+          <Button onClick={() => request.answer('cancel')} {...(save ? {} : { 'data-primary-action': '' })} data-testid="exit-confirm-cancel">
             {request.cancelLabel}
           </Button>
-          <Button variant="danger" onClick={() => request.answer(true)} data-testid="exit-confirm-ok">
+          <Button variant="danger" onClick={() => request.answer('confirm')} data-testid="exit-confirm-ok">
             {request.confirmLabel}
           </Button>
+          {save && (
+            <Button variant="primary" onClick={() => request.answer('save')} data-primary-action="" data-testid="exit-confirm-save">
+              {save}
+            </Button>
+          )}
         </div>
       </div>
     </DialogWrapper>

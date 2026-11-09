@@ -196,6 +196,33 @@ describe('SpeleoExitDialog', () => {
     await waitFor(() => expect(settled).toBe(true));
   });
 
+  it('an upload walked away from still has its result applied, and a late failure is toasted (frontend#2)', async () => {
+    let finish!: (value: unknown) => void;
+    let opts!: { isCurrent: () => boolean };
+    doneMock.mockImplementation((_message: string, o: { isCurrent: () => boolean }) => {
+      opts = o;
+      return new Promise((resolve) => { finish = resolve; });
+    });
+    let settled: boolean | null = null;
+    void raise('quit').then((value) => { settled = value; });
+    await userEvent.click(screen.getByTestId('speleodb-exit-upload'));
+    await userEvent.type(screen.getByTestId('speleodb-exit-message'), 'm');
+    vi.useFakeTimers();
+    try {
+      await act(async () => screen.getByTestId('speleodb-exit-upload-confirm').click());
+      act(() => vi.advanceTimersByTime(120_000));
+      expect(screen.getByTestId('speleodb-exit-upload-slow')).toBeVisible();
+      // Walk away, which only a slow upload allows (Escape / X on the prompt).
+      await act(async () => { useSpeleoExitPrompt.getState().request?.settle(false); });
+      expect(settled).toBe(false);
+      // The prompt is gone, but the upload is still applied for this project.
+      expect(opts.isCurrent()).toBe(true);
+      await act(async () => finish(null));
+      expect(showToast).toHaveBeenCalledWith(expect.stringContaining('did not reach SpeleoDB'), 'speleodb-late-upload', 'error');
+      expect(closeProject).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('refuses to act for a project that is no longer the one it was raised for', async () => {
     const answer = raise();
     useProjectStore.setState({ project: { name: 'Other', file_path: '/synthetic/other.stalx' } as never });

@@ -293,6 +293,63 @@ it('Save upload progress expires after 120 seconds and retains the description w
     await act(async () => uploaded({ kind: 'pushed' }));
     expect(useUIStore.getState().activeDialog).toBe('settings');
     expect(invokeIpcMock.mock.calls.filter(([cmd]) => cmd === 'speleodb_push')).toHaveLength(1);
+    // frontend#2: the dialog is gone, but the result is still applied and reported.
+    expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(expect.stringContaining('pushed'), 'speleodb-pushed', 'success');
+    expect(getUploadContinuation('/progress.stalx')).toBeNull();
+  } finally { vi.useRealTimers(); }
+});
+
+it('a failure that lands after the dialog was closed raises the banner and a toast (frontend#2)', async () => {
+  useProjectStore.setState({ project: { file_path: '/late.stalx', zero_datums: [{}] } as never });
+  useUIStore.setState({ dialogData: { mode: 'push' } });
+  let fail!: (error: Error) => void;
+  invokeIpcMock.mockImplementation((cmd) => cmd === 'speleodb_push' ? new Promise((_resolve, reject) => { fail = reject; }) : Promise.resolve(null));
+  render(<SpeleoDoneDialog />);
+  fillCommitMessage();
+  vi.useFakeTimers();
+  try {
+    await act(async () => fireEvent.click(screen.getByTestId('speleodb-done-confirm')));
+    act(() => vi.advanceTimersByTime(120_000));
+    fireEvent.click(screen.getByTestId('speleodb-done-cancel'));
+    expect(useUIStore.getState().activeDialog).toBeNull();
+    await act(async () => fail(new Error('Synthetic late failure')));
+    expect(useSpeleoStore.getState().banner?.kind).toBe('push_failed');
+    expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(expect.stringContaining('did not reach SpeleoDB'), 'speleodb-late-upload', 'error');
+    // The description survives for the retry.
+    expect(getUploadContinuation('/late.stalx')?.message).toBe('Survey update');
+  } finally { vi.useRealTimers(); }
+});
+
+it('the older-version confirmation replacing the dialog is not a walked-away upload: no late toast', async () => {
+  useUIStore.setState({
+    dialogData: { mode: 'push' },
+    // The single dialog slot: the confirmation evicts this dialog.
+    openDialog: ((name: string) => useUIStore.setState({ activeDialog: name, dialogData: {} })) as never,
+  });
+  useSpeleoStore.setState({ link: { ...LINK, unwound: true } });
+  render(<SpeleoDoneDialog />);
+  fillCommitMessage();
+  await userEvent.click(screen.getByTestId('speleodb-done-confirm'));
+  await waitFor(() => expect(useUIStore.getState().activeDialog).toBe('speleodb-unwound-push'));
+  expect(useUIStore.getState().showToast).not.toHaveBeenCalledWith(expect.anything(), 'speleodb-late-upload', expect.anything());
+});
+
+it('Finish editing applies a release that lands after the dialog was closed (frontend#2)', async () => {
+  useUIStore.setState({ dialogData: {} });
+  let released!: (value: { kind: 'released' }) => void;
+  invokeIpcMock.mockImplementation((cmd) => cmd === 'speleodb_done' ? new Promise((resolve) => { released = resolve; }) : Promise.resolve(null));
+  render(<SpeleoDoneDialog />);
+  fillCommitMessage();
+  vi.useFakeTimers();
+  try {
+    await act(async () => fireEvent.click(screen.getByTestId('speleodb-done-confirm')));
+    act(() => vi.advanceTimersByTime(120_000));
+    fireEvent.click(screen.getByTestId('speleodb-done-cancel'));
+    await act(async () => released({ kind: 'released' }));
+    expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+    expect(useUIStore.getState().showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-released', 'success');
   } finally { vi.useRealTimers(); }
 });
 
@@ -308,4 +365,49 @@ it('Save upload progress disappears on failure while the description remains ava
   expect(screen.queryByTestId('speleodb-upload-progress')).toBeNull();
   expect(screen.getByTestId('speleodb-push-failure-inline')).toBeVisible();
   expect(screen.getByTestId('speleodb-done-message')).toHaveValue('Survey update');
+});
+
+it('opened by Save without the lock, it takes the lock once so the upload can go ahead (frontend#6)', async () => {
+  useUIStore.setState({ dialogData: { mode: 'push', acquire: true } });
+  useSpeleoStore.setState({ link: { ...LINK, editState: 'read-only' }, remoteProjectId: 'p1' });
+  invokeIpcMock.mockImplementation(async (command: string) => (command === 'speleodb_start_editing' ? { kind: 'editing' } : null));
+  render(<SpeleoDoneDialog />);
+  await waitFor(() => expect(useSpeleoStore.getState().link?.editState).toBe('editing'));
+  expect(invokeIpcMock.mock.calls.filter(([command]) => command === 'speleodb_start_editing')).toHaveLength(1);
+  fillCommitMessage();
+  expect(screen.queryByTestId('speleodb-upload-blocked')).toBeNull();
+  expect(screen.getByTestId('speleodb-done-confirm')).toBeEnabled();
+});
+
+it('a refused lock leaves the blocked panel, with Save on this computer as the way out (frontend#6)', async () => {
+  const save = vi.fn(async () => ({ success: true }));
+  useProjectStore.setState({ isDirty: true, saveProject: save as never });
+  useUIStore.setState({ dialogData: { mode: 'push', acquire: true } });
+  useSpeleoStore.setState({ link: { ...LINK, editState: 'read-only' }, remoteProjectId: 'p1' });
+  invokeIpcMock.mockImplementation(async (command: string) => (command === 'speleodb_start_editing' ? { kind: 'locked_by', email: 'other@example.com' } : null));
+  render(<SpeleoDoneDialog />);
+  await waitFor(() => expect(screen.getByTestId('speleodb-upload-save-local')).toBeEnabled());
+  expect(screen.getByTestId('speleodb-done-confirm')).toBeDisabled();
+  await userEvent.click(screen.getByTestId('speleodb-upload-save-local'));
+  await waitFor(() => expect(useUIStore.getState().activeDialog).toBeNull());
+  expect(save).toHaveBeenCalledOnce();
+  expect(useUIStore.getState().showToast).toHaveBeenCalledWith(expect.stringContaining('Saved on this computer'), 'speleodb-saved-locally', 'warning');
+  expect(invokeIpcMock.mock.calls.filter(([command]) => command === 'speleodb_push' || command === 'speleodb_done')).toHaveLength(0);
+});
+
+it('refuses a description longer than SpeleoDB can store, counting a line break as two (sdk#2)', async () => {
+  useUIStore.setState({ dialogData: { mode: 'push' } });
+  render(<SpeleoDoneDialog />);
+  const textarea = screen.getByTestId('speleodb-done-message');
+  fireEvent.change(textarea, { target: { value: 'x'.repeat(1000) } });
+  expect(screen.getByTestId('speleodb-done-message-count')).toHaveTextContent('1000 / 1000');
+  expect(screen.queryByTestId('speleodb-done-message-too-long')).toBeNull();
+  expect(screen.getByTestId('speleodb-done-confirm')).toBeEnabled();
+  // 1000 typed characters, one of them a line break: 1001 once stored.
+  fireEvent.change(textarea, { target: { value: `${'a'.repeat(500)}\n${'b'.repeat(499)}` } });
+  expect(screen.getByTestId('speleodb-done-message-count')).toHaveTextContent('1001 / 1000');
+  expect(screen.getByTestId('speleodb-done-message-too-long')).toHaveTextContent('line break counts as two');
+  expect(screen.getByTestId('speleodb-done-confirm')).toBeDisabled();
+  fireEvent.click(screen.getByTestId('speleodb-done-confirm'));
+  expect(invokeIpcMock).not.toHaveBeenCalled();
 });

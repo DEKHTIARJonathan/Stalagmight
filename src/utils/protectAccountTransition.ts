@@ -4,7 +4,8 @@ import { useSpeleoStore } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import { isProjectRequestCurrent, reserveProjectRequest } from './projectTransition';
 import { discardWorkspaceDrafts, hasWorkspaceDrafts } from './workspaceDrafts';
-import { askExitConfirm } from './exitConfirm';
+import { askExitChoice } from './exitConfirm';
+import { saveOpenProjectLocally } from './saveOpenProjectLocally';
 
 /**
  * Account replacement protects both forms and the unsaved survey snapshot.
@@ -23,15 +24,24 @@ export async function protectAccountTransition(): Promise<boolean> {
   const current = () => isProjectRequestCurrent(request) &&
     useSpeleoStore.getState().sessionGeneration === generation;
   const ownsProject = () => current() && useProjectStore.getState().project === project;
-  const accepted = await askExitConfirm({
+  // frontend#6: unsaved survey edits are never only discardable - when the
+  // project has a file of its own, "save on this computer, then go on" is offered
+  // too, and the project then stays open with nothing left to drop.
+  const canSave = before.isDirty && !!project?.file_path;
+  const choice = await askExitChoice({
     title: i18n.t('speleoExitPrompt.account.title'),
     message: i18n.t('speleoExitPrompt.account.message'),
     confirmLabel: i18n.t('speleoExitPrompt.account.confirm'),
     cancelLabel: i18n.t('common.actions.cancel'),
+    ...(canSave ? { saveLabel: i18n.t('speleoExitPrompt.saveLocally') } : {}),
   });
-  if (!accepted || !ownsProject()) return false;
+  if (choice === 'cancel' || !ownsProject()) return false;
+  if (choice === 'save') {
+    const saved = await saveOpenProjectLocally();
+    if (!saved?.success || !ownsProject() || useProjectStore.getState().isDirty) return false;
+  }
   discardWorkspaceDrafts();
-  if (!before.isDirty) return true;
+  if (choice === 'save' || !before.isDirty) return true;
   const closed = await useProjectStore.getState().closeProject({ request, isCurrent: ownsProject });
   if (!closed.success || !current() || useProjectStore.getState().project !== null) return false;
   if (project?.file_path) {

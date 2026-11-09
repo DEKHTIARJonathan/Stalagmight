@@ -4,6 +4,12 @@ import userEvent from '@testing-library/user-event';
 
 const confirmMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
+// The unsaved-edits question before a switch is in-app (`askExitChoice`); answer it
+// through the same mock: true = discard, false = cancel.
+vi.mock('../../utils/exitConfirm', () => ({
+  askExitChoice: (options: unknown) => Promise.resolve(confirmMock(options))
+    .then((answer: unknown) => (answer === 'save' ? 'save' : answer ? 'confirm' : 'cancel')),
+}));
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,

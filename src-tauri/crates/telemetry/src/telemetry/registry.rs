@@ -40,6 +40,7 @@ pub const EVENT_NAMES: &[&str] = &[
     // coverage tests skip it via REMOVED_COMMANDS.
     "command.adjust_loop_closures",
     "command.arm_app_update_restart",
+    "command.arm_forced_exit",
     "command.attempt_repair",
     "command.calculate_file_hash",
     "command.can_redo",
@@ -1052,7 +1053,11 @@ mod tests {
         //   + 11 SpeleoDB traffic outcome `parse-error`, one per endpoint kind
         //       (sdk#8): a reply that does not match the SDK contract was
         //       counted as `ok`, hiding every contract drift = 665.
-        assert_eq!(EVENT_NAMES.len(), 665);
+        //   + 1 the user's explicit "Quit now" while a SpeleoDB transfer is still
+        //       running (lock#6): how often people refuse to wait says whether the
+        //       quit-after-work wait is too long to bear:
+        //       command.arm_forced_exit = 666.
+        assert_eq!(EVENT_NAMES.len(), 666);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

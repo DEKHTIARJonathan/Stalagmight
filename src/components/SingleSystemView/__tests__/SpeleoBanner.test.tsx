@@ -76,6 +76,9 @@ describe('SpeleoBanner push failure (#260)', () => {
 
   it('Retry opens Save confirmation with the original description without uploading', async () => {
     seedFailure('push', 'my message');
+    // Signed in: an editing session that can upload (signed out, Save keeps the
+    // work on this computer instead - see dispatchProjectSave).
+    useSpeleoStore.setState({ session: { loggedIn: true, endpoint: 'https://synthetic.example', userEmail: 'user@example.com' } });
     render(<SpeleoBanner />);
     await userEvent.click(screen.getByTestId('speleo-banner-retry-push'));
     expect(useUIStore.getState().activeDialog).toBe('speleodb-done');

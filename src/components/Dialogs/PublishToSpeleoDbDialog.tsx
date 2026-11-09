@@ -16,6 +16,7 @@ import { validateCoordinates } from '../../utils/gps';
 import { reverseGeocodeCountry } from '../../utils/reverseGeocodeCountry';
 import { COUNTRIES } from '../../data/countries';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { holdQuitDuring } from '../../utils/quitAfterWork';
 import type {
   SpeleoPublishParams,
 } from '../../types/ipc.generated';
@@ -105,7 +106,8 @@ export default function PublishToSpeleoDbDialog() {
       longitude: bothCoords ? lonNum : null,
     };
     try {
-      const { outcome, undoHistoryOmitted } = await publishProjectAndReopen(params);
+      // lock#6: a quit meanwhile waits for the whole publish, not just its calls.
+      const { outcome, undoHistoryOmitted } = await holdQuitDuring(() => publishProjectAndReopen(params));
       if (outcome === 'stale') return;
       setPublishContinuation(null);
       if (ownsDialog()) closeDialog();

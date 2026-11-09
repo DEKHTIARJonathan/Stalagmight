@@ -135,9 +135,17 @@ UI regression coverage must include:
   Read-only permissions, another editor's lock, and connection failures remain
   distinct. A failed acquisition leaves the project open read-only and explains
   why; a competing editor is identified by their email address.
-- A project with unsaved local changes offers Discard changes or Cancel before
-  switching or closing. Cancelling performs no download, release or replacement.
-  Saved but unuploaded work stays in the local file and does not trigger an exit prompt.
+- A project with unsaved local changes and no editing lock offers Save on this
+  computer, Discard changes or Cancel before switching, closing or quitting.
+  Cancelling performs no download, release or replacement.
+- Closing, switching or quitting while holding the editing lock over work SpeleoDB
+  has not seen (unsaved, or saved but not uploaded) raises the exit prompt:
+  Upload, Keep the lock, Discard (confirmed) or Cancel. A clean project releases
+  its lock silently. Signing out offers Upload, Keep my changes on this computer
+  (the copy is kept, the lock handed back) or Discard for the same work.
+- Quitting while an upload, acquire, download or exit-prompt action is in flight
+  waits for it with a toast and a waiting prompt (Keep Stalagmight open / Quit
+  now behind a warning), then quits.
 - Deferred open/create setup, remote downloads, and reconciliation cannot replay
   older selections over newer mutations. Cancelling a newer preflight warning does
   not strand an older already-dispatched load; it reconciles and settles loading.

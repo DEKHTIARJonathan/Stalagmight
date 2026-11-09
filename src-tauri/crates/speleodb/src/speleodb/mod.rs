@@ -6,6 +6,7 @@
 //!
 //! Layout:
 //! - [`client`]   - the published SpeleoDB SDK adapter (Bearer auth, retries, timeouts).
+//! - [`commit_message`] - the upload-description limit, measured as the server stores it.
 //! - [`auth`]     - backend-only token cache.
 //! - [`config`]   - persisted connection settings (re-exported via `crate::config`).
 //! - [`contract`] - the pure status→action table (#186) + `SpeleoErrorDto`.
@@ -20,6 +21,8 @@
 
 pub mod auth;
 pub mod client;
+// sdk#2: the longest upload description the server can store.
+pub mod commit_message;
 // Persisted connection settings ([`SpeleoDbConfig`]), re-exported via `crate::config`.
 pub mod config;
 // [Track A] #186 status→action contract (pure map_status + ts-rs SpeleoDbAction).

@@ -318,6 +318,28 @@ test.describe('Sign-out never strands a lock or un-uploaded work', () => {
     expect(log.find((c) => c.cmd === 'speleodb_release_lock')?.args).toEqual({ projectId: 'b' });
   });
 
+  // Decision 10: with the upload impossible, the edits are never discard-only.
+  test('open project with changes: Keep my changes on this computer hands the lock back and keeps the copy', async ({ page }) => {
+    await seedLockedWithChanges(page);
+    await setIpcOverrides(page, {
+      speleodb_list_projects: [summary('synthetic-open', ME)],
+      speleodb_local_project_states: { 'synthetic-open': { ...localState(true), is_open: true } },
+    });
+    await startAuthChange(page, { kind: 'logout' });
+    await expect(page.getByTestId('speleodb-signout-dialog')).toBeVisible();
+    await page.getByTestId('speleodb-signout-open-keep').click();
+    await expect(page.getByTestId('speleodb-signout-open-kept')).toBeVisible();
+    await page.getByTestId('speleodb-signout-go').click();
+    await expect.poll(() => authResult(page)).toEqual({ ok: true });
+    const log = await calls(page);
+    const order = log.map((c) => c.cmd)
+      .filter((c) => ['speleodb_done', 'close_project', 'speleodb_discard_cached_copy', 'speleodb_release_lock', 'speleodb_logout'].includes(c));
+    // No upload, no close, no discard: the lock is handed back, then the sign-out.
+    expect(order).toEqual(['speleodb_release_lock', 'speleodb_logout']);
+    expect(log.find((c) => c.cmd === 'speleodb_release_lock')?.args).toEqual({ projectId: 'synthetic-open' });
+    await expect(page.getByTestId('single-system-view')).toBeVisible();
+  });
+
   test('another cached project with changes: Discard (confirmed) removes it and releases its lock', async ({ page }) => {
     await seedLockedWithChanges(page);
     await page.evaluate(() => {
