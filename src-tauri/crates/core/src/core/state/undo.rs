@@ -550,7 +550,10 @@ impl AppState {
                 // Remove exactly what the add brought, guard-free: an inverse
                 // consults no user-intent guard. Its saved ignores stay on disk
                 // (see `remove_pending_ignores`).
-                let mut guard = self.project.lock().unwrap_or_else(|e| e.into_inner());
+                let mut guard = self
+                    .project
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 match guard.as_mut() {
                     Some(project) => {
                         content.remove_from(project);
@@ -649,7 +652,10 @@ impl AppState {
             // closure ids - never re-reading the file, which a reloaded entry
             // does not even name (#674).
             UndoData::AddedProjectContent(content) => {
-                let mut guard = self.project.lock().unwrap_or_else(|e| e.into_inner());
+                let mut guard = self
+                    .project
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 match guard.as_mut() {
                     Some(project) => match content.install_into(project) {
                         Ok(()) => {

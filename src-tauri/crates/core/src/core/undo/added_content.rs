@@ -233,7 +233,7 @@ impl AddedContent {
         self.station_merges = live.station_merges;
         self.loop_closures = live.loop_closures;
         self.surface_elevation.1 = project.surface_elevation;
-        self.location.1 = project.location.clone();
+        self.location.1.clone_from(&project.location);
         for (id, _, after) in &mut self.moved_offsets {
             *after = project.section_offsets.get(id).copied();
         }

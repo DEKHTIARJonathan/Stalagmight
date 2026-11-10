@@ -404,7 +404,7 @@ fn add_then_undo_restores_the_project_exactly_and_keeps_older_history() {
         };
         let mut recorded: Vec<SectionId> = content.sections.iter().map(|s| s.id).collect();
         recorded.sort_unstable();
-        let mut created = result.section_ids.clone();
+        let mut created = result.section_ids;
         created.sort_unstable();
         assert_eq!(
             recorded, created,
@@ -569,7 +569,7 @@ fn ignored_warnings_survive_the_add_a_save_and_a_reload() {
 
     let result = add(&state, &source);
     assert!(result.success, "{:?}", result.error);
-    let ids = result.section_ids.clone();
+    let ids = result.section_ids;
     assert_eq!(
         long_shot_verdicts(&state, &ids),
         vec![true, true],

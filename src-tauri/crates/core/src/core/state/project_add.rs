@@ -190,7 +190,10 @@ impl AppState {
 
         // The refusals that need no file read come first.
         let open_path = {
-            let guard = self.project.lock().unwrap_or_else(|e| e.into_inner());
+            let guard = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let Some(project) = guard.as_ref() else {
                 return CommandResult::failure("No project is open to add the file to".to_string());
             };
@@ -210,7 +213,10 @@ impl AppState {
             Err(e) => return CommandResult::failure(e),
         };
 
-        let mut guard = self.project.lock().unwrap_or_else(|e| e.into_inner());
+        let mut guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(project) = guard.as_mut() else {
             return CommandResult::failure("No project is open to add the file to".to_string());
         };
@@ -393,7 +399,7 @@ impl AppState {
     pub(super) fn pending_ignores(&self) -> Vec<ResolvedWarning> {
         self.pending_ignores
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
 
@@ -402,7 +408,7 @@ impl AppState {
     pub(super) fn clear_pending_ignores(&self) {
         self.pending_ignores
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clear();
     }
 
@@ -411,7 +417,7 @@ impl AppState {
         let mut pending = self
             .pending_ignores
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         for ignore in ignores {
             let Some(shot_id) = project
                 .get_section(ignore.section_id)
@@ -449,7 +455,7 @@ impl AppState {
     pub(super) fn remove_pending_ignores(&self, sections: &HashSet<SectionId>) {
         self.pending_ignores
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .retain(|row| !sections.contains(&row.section_id));
     }
 
@@ -464,7 +470,7 @@ impl AppState {
         let mut pending = self
             .pending_ignores
             .lock()
-            .unwrap_or_else(|e| e.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let before = pending.len();
         pending.retain(|row| {
             // Every pending row is uuid-keyed; the in-session id is only the
@@ -483,7 +489,10 @@ impl AppState {
     /// ignores the undo found rather than the ones the add first brought.
     pub(super) fn ignores_on_sections(&self, sections: &HashSet<SectionId>) -> Vec<CarriedIgnore> {
         let saved = {
-            let db = self.database.lock().unwrap_or_else(|e| e.into_inner());
+            let db = self
+                .database
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             db.as_ref()
                 .and_then(|db| db.load_resolved_warnings_verbatim().ok())
                 .unwrap_or_default()
