@@ -203,8 +203,9 @@ fn test_get_config_defaults_panels() {
     assert!(cfg.panels.data_table_station_column_order.is_empty());
     assert_eq!(
         cfg.panels.data_table_station_hidden_columns,
-        vec!["_x", "_y", "_lat", "_long"]
+        vec!["_x", "_y", "_lat", "_long", "name"]
     );
+    assert_eq!(cfg.panels.data_table_station_columns_seen, vec!["name"]);
     // The new-section dialog opens on what the old hand-rolled table showed.
     assert!(cfg.panels.new_section_column_order.is_empty());
     assert_eq!(
