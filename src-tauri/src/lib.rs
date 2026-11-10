@@ -1939,6 +1939,7 @@ pub fn run() {
             commands::import::track_imported_file,
             commands::import::check_section_hashes,
             commands::import::import_sections,
+            commands::import::add_project_file,
             commands::import::parse_tml,
             commands::import::execute_tml_import,
             commands::import::parse_compass,

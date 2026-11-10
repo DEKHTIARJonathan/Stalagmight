@@ -7,7 +7,7 @@ use tauri::{AppHandle, State};
 use crate::commands::event_sink::tauri_sink;
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::state::{AppState, VirtualShotMode};
-use crate::core::CommandResult;
+use crate::core::{Command, CommandResult};
 use crate::models::placement_suggest::{
     suggest_all_placements, suggest_placements, CrossSectionSuggestion, ExistingSection,
     ImportSectionForSuggestion, OrphanPlacementSuggestion, PlacementSuggestion,
@@ -269,6 +269,22 @@ pub fn import_sections(
         }
     }
 
+    finalize_deferred_import(state.inner(), result)
+}
+
+/// Append another `.stalx`'s survey into the OPEN project (#674) as one undo
+/// step, refusing (nothing changed) with no project open, the open project's
+/// own file, or an unreadable file. The result carries `section_ids` - exactly
+/// the added sections, the orphan-placement dialog's input - and an
+/// `import_receipt`. Funnels through `finalize_deferred_import` like every
+/// import, so an add into a never-saved project makes it real on disk.
+#[tauri::command]
+pub fn add_project_file(state: State<'_, AppState>, path: String) -> CommandResult {
+    tracing::info!(
+        purpose = "add a .stalx into the open project",
+        "add_project_file called"
+    );
+    let result = state.execute(Command::add_project_file(PathBuf::from(path)));
     finalize_deferred_import(state.inner(), result)
 }
 
