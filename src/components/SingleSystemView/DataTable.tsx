@@ -1147,6 +1147,9 @@ export default function DataTable({ sections }: DataTableProps) {
         getShotWarnings,
         shotIndexAt,
         onCycleShotKind: handleCycleShotKind,
+        onPanToShot: (shot) => {
+          if (selectedSectionId !== null) useUIStore.getState().triggerPanToShot(selectedSectionId, shot.id);
+        },
         onResolveWarning: (shotId: number) => {
           if (selectedSectionId === null) return;
           // triggerResolveWarning opens the Warnings panel (and exits

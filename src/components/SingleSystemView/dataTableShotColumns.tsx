@@ -57,6 +57,7 @@ export interface ShotColumnContext {
   /** Open the Warnings tab and start resolving the given shot's issue (the
    *  warning indicator becomes a button when the shot has unresolved warnings). */
   onResolveWarning?: (shotId: number) => void;
+  onPanToShot?: (shot: Shot) => void;
 }
 
 const fixed = (precision: number) => (value: unknown): string =>
@@ -204,6 +205,7 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       width: 100,
       align: 'right',
       getValue: (shot) => shot.id < 0 ? '' : shot.id,
+      ...(ctx.onPanToShot ? { render: (shot: Shot) => shot.id < 0 ? null : <span onDoubleClick={() => ctx.onPanToShot?.(shot)}>{shot.id}</span> } : {}),
     },
     numberCol('length', t('dataTable.columns.length', { unit: t('common.units.meters') }), 100, precision.length, (v) =>
       typeof v === 'number' && v <= 0 ? t('dataTable.validation.nonPositiveLength') : null,
