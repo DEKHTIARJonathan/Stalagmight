@@ -1,8 +1,8 @@
 import { dispatchProjectSave } from '../utils/dispatchProjectSave';
+import i18n from '../i18n';
 import { useCallback } from 'react';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
-import { useSpeleoStore } from '../store/speleoStore';
 import { useShallow } from 'zustand/react/shallow';
 import {
   ensureExtension,
@@ -12,7 +12,8 @@ import {
 import { openOrImport } from '../utils/openOrImport';
 import { newProjectGuarded, saveProjectAs } from '../utils/projectActions';
 import { debugLog } from '../utils/debugLog';
-import { needsSpeleoHandBackPrompt } from '../utils/quit';
+import { askSpeleoExit, openProjectNeedsSpeleoExitPrompt } from '../utils/speleoExit';
+import { confirmWorkspaceDrafts } from '../utils/workspaceDrafts';
 
 export function useProject() {
   const { setView, openDialog } = useUIStore(
@@ -55,11 +56,16 @@ export function useProject() {
   const handleSaveProject = dispatchProjectSave;
 
   const handleCloseProject = useCallback(async () => {
-    // Saved local work is safe to leave. Only unsaved changes need confirmation;
-    // the backend releases the project lock when the close actually happens.
-    if (needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
-      openDialog('speleodb-close');
-      return { success: false, error: 'Showing dialog' };
+    // Unsent SpeleoDB input (an upload description, the conversion form) is asked
+    // about first, before any question whose answer uploads, releases or closes.
+    if (!await confirmWorkspaceDrafts()) return { success: false, error: 'Cancelled' };
+    // Holding the SpeleoDB lock over work SpeleoDB has not seen: the exit prompt
+    // decides (upload / keep the lock / discard) and closes the project itself.
+    if (openProjectNeedsSpeleoExitPrompt()) {
+      const closed = await askSpeleoExit('close');
+      if (!closed) return { success: false, error: 'Cancelled' };
+      setView('global');
+      return { success: true };
     }
     // Check for unsaved changes - use getState() to get current value, not stale closure
     const currentIsDirty = useProjectStore.getState().isDirty;
@@ -86,7 +92,9 @@ export function useProject() {
     if (result.success) {
       setView('global');
     } else if (result.error !== 'Cancelled' && result.error !== 'Superseded' && result.error !== 'Already closing') {
-      openDialog('error', { title: 'Close Project failed', message: result.error || 'The project is still open. Try again.' });
+      // A failed lock release has already asked "Couldn't hand back the lock"
+      // (Cancel resolves 'Cancelled'); this is every other close failure.
+      openDialog('error', { title: i18n.t('projectClose.failedTitle'), message: result.error || i18n.t('projectClose.failedMessage') });
     }
     const t2 = performance.now();
     const { recordPerfTiming } = await import('../utils/memoryProbe');

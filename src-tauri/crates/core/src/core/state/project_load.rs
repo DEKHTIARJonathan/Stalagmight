@@ -361,24 +361,35 @@ impl AppState {
             db
         };
         *proj_guard = Some(project);
-        // A session boundary (a project committed into the slot), bumped under
-        // the guard per the `speleodb_session` rule.
-        self.bump_speleodb_session();
+        // [Track B] (#191) The edit gate, re-derived for what is now open (see
+        // `speleodb_edit_gate`): a local project is editable, a linked one only
+        // through a bound lock claim. A downloaded reload that keeps its edit
+        // session (`editing`) carries the claim bound to the generation it was
+        // prepared against - and only that: a reload never starts a session, so a
+        // lock released before it (Take remote) leaves the project read-only.
+        let carry_from = download
+            .as_ref()
+            .filter(|(_, editing)| *editing)
+            .and(expected.as_ref())
+            .map(|(generation, _)| *generation);
+        {
+            // A session boundary (a project committed into the slot), bumped under
+            // the guard per the `speleodb_session` rule - and under the SpeleoDB
+            // session lock, in ONE step with the gate it re-derives, so a reader
+            // never sees the new generation with the old binding.
+            let mut session = self
+                .speleodb
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.bump_speleodb_session();
+            // Off the link read above, which came from the same handle before `db`
+            // moves.
+            self.speleodb_commit_open_gate(&mut session, speleo_link.as_ref(), carry_from);
+        }
         // [#473] Under the SAME acquisition that commits the project, so the flag can
         // only ever describe the project in the slot. Unconditional, so a clean load
         // clears the previous project's verdict.
         self.set_history_discarded(history_discarded);
-
-        // [Track B] (#191) Read-only edit gate: remote ⇒ edit disabled,
-        // local-only ⇒ enabled (see do_load_project_full). Off the link read above,
-        // which came from the same handle before `db` moves.
-        let is_remote = speleo_link.is_some();
-        self.set_edit_enabled(
-            download
-                .as_ref()
-                .map_or(!is_remote, |(_, editing)| *editing),
-        );
-
         *self
             .database
             .lock()
@@ -1025,22 +1036,28 @@ impl AppState {
 
         // Commit 1: Project state mutation
         *proj_guard = Some(project.clone());
-        // A session boundary (a project committed into the slot), bumped under
-        // the guard per the `speleodb_session` rule.
-        self.bump_speleodb_session();
+        // [Track B] (#191) The edit gate, re-derived for what is now open (see
+        // `speleodb_edit_gate`): a project carrying a speleo_link row is a
+        // SpeleoDB project, editable only once Start Editing binds a lock claim to
+        // this session; a local-only project is always editable. Off the link read
+        // above, taken from the same handle before `db` is moved into the handle
+        // slot. A fresh open carries no edit session: whatever claim this account
+        // still holds on the project stays a pointer, never an open gate.
+        let is_remote = speleo_link.is_some();
+        {
+            // A session boundary (a project committed into the slot), bumped under
+            // the guard per the `speleodb_session` rule, in one step with the gate.
+            let mut session = self
+                .speleodb
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.bump_speleodb_session();
+            self.speleodb_commit_open_gate(&mut session, speleo_link.as_ref(), None);
+        }
         // [#473] Under the SAME acquisition that commits the project - a cancelled load
         // never reaches this finalize section, so it cannot leave its verdict on the
         // project the user actually opened.
         self.set_history_discarded(history_discarded);
-
-        // [Track B] (#191) Read-only edit gate: a remote SpeleoDB project (one
-        // carrying a speleo_link row) opened WITHOUT a write lock is read-only.
-        // There is no lock-acquire path yet (#191), so the rule is simply: remote
-        // ⇒ edit disabled; local-only ⇒ edit enabled (default-true; the gate is a
-        // no-op off-SpeleoDB). Off the link read above, taken from the same handle
-        // before `db` is moved into the handle slot.
-        let is_remote = speleo_link.is_some();
-        self.set_edit_enabled(!is_remote);
 
         // Commit 2: Database handle mutation
         *self

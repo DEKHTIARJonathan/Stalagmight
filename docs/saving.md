@@ -22,7 +22,8 @@ dialog is open or cancelled. Save and Close releases and closes only after confi
 success with no newer edits. Cancel, conflict, uncertainty and release failure leave
 the project open. Plain Close, project switching and Quit retain automatic lock
 release without upload and Discard changes / Cancel protection for unsaved work,
-including invalid workspace form drafts. Saved unuploaded work remains local. See
+including unsent SpeleoDB form drafts (asked first, in-app). Saved unuploaded work
+remains local. See
 [SpeleoDB integration](SpeleoDB.md) for navigation, ownership and offline behavior.
 
 Switch to Read Only Mode requires a clean local file and no unuploaded work. It
@@ -284,19 +285,26 @@ unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
 HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
 address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
 allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
-missing schemes and malformed addresses are rejected. No DNS-based exception or
-insecure-HTTP override exists. Invalid endpoints produce an error modal when
-connecting or saving; existing legacy override fields are ignored and omitted
-from subsequent saves. Certificate verification and redirect restrictions remain.
+missing schemes and malformed addresses are rejected, without any DNS lookup. An
+endpoint the policy refuses produces an error dialog when connecting, or when saving
+a new server. `insecure_http` lifts only the HTTP rule (never certificate
+verification); it stays in the file so existing configurations load, Settings has
+no control for it, and its development-build-only handling is being finalised by a
+follow-up commit. Certificate verification and redirect restrictions remain.
 
 ### Confirmed project close
 
 Hamburger Menu -> Close Project and the SpeleoDB workspace Close action share the
-same close command. A linked editing session remains open until the server confirms
-its lock is released. Ownership-probe or release errors are visible and retryable;
-no successful close is reported after an unsuccessful release. An uncertain release
-attempt leaves the project read-only with an ownership-checked retry available.
-Resuming editing requires the usual verified acquisition. Local files and saved
-unpublished changes remain intact. A fresh ownership check precedes release;
-the API has no atomic compare-and-release, so a server-side ownership change
-between that check and the POST remains a protocol limitation.
+same close command. A clean close releases the lock only when SpeleoDB names this
+account as its holder; over un-uploaded work the exit prompt decides (Upload / Keep
+the lock / Discard / Cancel) and the backend never releases without the confirmed
+discard. A close the backend reports as failed keeps the project open with a visible
+error and pauses editing until the link status is refreshed. A release that fails
+or is uncertain closes nothing: the claim stays unbound (editing paused) and the
+in-app "Couldn't hand back the lock" dialog asks - Retry (the holder-checked
+release again), Close and keep the lock (the lock waits for the next sign-in's
+held-lock prompt) or Cancel (stay, read-only). Project switches and quits ask the
+same question (see [SpeleoDB](SpeleoDB.md#save-switching-and-exit)). Local files
+and saved unpublished changes remain intact. The API has no atomic
+compare-and-release, so a server-side ownership change between the holder check and
+the POST remains a protocol limitation.

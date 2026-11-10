@@ -57,6 +57,22 @@ describe('useProjectMenuItems SpeleoDB row', () => {
   it('is absent for a local project', () => {
     expect(speleoRow()).toBeUndefined();
   });
+
+  // The "SpeleoDB" row that only switched to the left panel's SpeleoDB tab is
+  // gone too: the tab itself is the entry point.
+  it.each([
+    ['a local project in Survey', null, 'survey'],
+    ['a remote read-only project in Survey', LINK, 'survey'],
+    ['a remote project in Plan', LINK, 'plan'],
+    ['a remote project in Export', LINK, 'export'],
+  ] as const)('has no row that opens the SpeleoDB tab: %s', (_label, link, appMode) => {
+    useSpeleoStore.setState({ link });
+    useUIStore.setState({ appMode });
+    const { result } = renderHook(() => useProjectMenuItems({ onSave: async () => ({ success: true }) }));
+    const flat = result.current.flatMap((item) => [item, ...(item.submenu ?? [])]);
+    expect(flat.find((item) => item.id === 'project-menu-speleodb')).toBeUndefined();
+    expect(flat.filter((item) => item.label === 'SpeleoDB')).toEqual([]);
+  });
 });
 
 describe('SpeleoDB manual save intent', () => {

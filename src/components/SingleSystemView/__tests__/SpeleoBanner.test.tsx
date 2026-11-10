@@ -1,6 +1,6 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -12,9 +12,11 @@ vi.mock('../../../utils/ipc', () => ({
 import { SpeleoBanner } from '../SpeleoBanner';
 import { SpeleoWorkspace } from '../SpeleoWorkspace';
 import { useProjectStore } from '../../../store/projectStore';
-import { getUploadContinuation, setUploadContinuation } from '../../../utils/uploadContinuation';
+import { captureUploadOwner, getSetAsideUploadMessage, getUploadContinuation, setAsideUploadMessage, setUploadContinuation } from '../../../utils/uploadContinuation';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
+import { askSpeleoExit, resetSpeleoExitPromptForTests } from '../../../utils/speleoExit';
+import { useSpeleoSignOut } from '../../../utils/speleoSignOut';
 
 const LINK: SpeleoLinkState = {
   permission: 'READ_AND_WRITE',
@@ -42,6 +44,30 @@ beforeEach(() => {
   useUIStore.setState({ activeDialog: null, dialogData: {}, speleoWorkspaceSection: null });
 });
 
+describe('SpeleoBanner read-only state', () => {
+  it.each([
+    ['free lock', {}],
+    ['someone else editing', { lockHolder: 'editor@example.com', lockedByOther: true }],
+    ['no project access', { noAccess: true }],
+  ])('draws no top bar for a read-only project (%s) without a banner', (_label, o) => {
+    seedLink({ editState: 'read-only', ...o });
+    const { container } = render(<SpeleoBanner />);
+    expect(container).toBeEmptyDOMElement();
+    expect(screen.queryByTestId('speleodb-access-notice')).not.toBeInTheDocument();
+  });
+});
+
+describe('SpeleoBanner no_anchor notice', () => {
+  it('shows the no-zero-datum notice with a Dismiss that clears it', async () => {
+    seedLink();
+    useSpeleoStore.getState().raiseNoAnchorBanner();
+    render(<SpeleoBanner />);
+    expect(screen.getByTestId('speleo-banner')).toHaveAttribute('data-kind', 'no_anchor');
+    await userEvent.click(screen.getByTestId('speleo-banner-dismiss'));
+    expect(useSpeleoStore.getState().banner).toBeNull();
+  });
+});
+
 describe('SpeleoBanner push failure (#260)', () => {
   const seedFailure = (origin: 'push' | 'done', pushMessage: string | null = null) => {
     seedLink({ });
@@ -63,12 +89,27 @@ describe('SpeleoBanner push failure (#260)', () => {
 
   it('Retry opens Save confirmation with the original description without uploading', async () => {
     seedFailure('push', 'my message');
+    // Signed in: an editing session that can upload (signed out, Save keeps the
+    // work on this computer instead - see dispatchProjectSave).
+    useSpeleoStore.setState({ session: { loggedIn: true, endpoint: 'https://synthetic.example', userEmail: 'user@example.com' } });
     render(<SpeleoBanner />);
     await userEvent.click(screen.getByTestId('speleo-banner-retry-push'));
     expect(useUIStore.getState().activeDialog).toBe('speleodb-done');
     expect(useUIStore.getState().dialogData.mode).toBe('push');
     expect(getUploadContinuation('/synthetic/remote.stalx')?.message).toBe('my message');
     expect(invokeIpcMock).not.toHaveBeenCalled();
+  });
+
+  it('Retry starts from a description set aside by Resolve now, not the failed one', async () => {
+    seedFailure('push', 'the failed description');
+    useSpeleoStore.setState({ session: { loggedIn: true, endpoint: 'https://synthetic.example', userEmail: 'user@example.com' } });
+    // The user edited the description after the failure, then chose Resolve now.
+    setAsideUploadMessage('edited after the failure', captureUploadOwner());
+    render(<SpeleoBanner />);
+    await userEvent.click(screen.getByTestId('speleo-banner-retry-push'));
+    expect(useUIStore.getState().activeDialog).toBe('speleodb-done');
+    expect(getUploadContinuation('/synthetic/remote.stalx')?.message).toBe('edited after the failure');
+    expect(getSetAsideUploadMessage('/synthetic/remote.stalx')).toBeNull();
   });
 
   it('Retry opens release confirmation with the original description after a Done failure', async () => {
@@ -124,11 +165,26 @@ describe('SpeleoBanner push failure (#260)', () => {
     expect(screen.queryByTestId('speleo-banner')).not.toBeInTheDocument();
   });
 
-  it('hides itself while the close-flow dialog owns the failure', () => {
+  // The exit prompt (Close / Quit / switch) and the sign-out prompt are overlays of
+  // their own, not an `activeDialog`, and render the same failure inline in their
+  // upload step: the banner used to show it a second time behind them.
+  it.each([
+    ['the exit prompt', () => {
+      void askSpeleoExit('quit');
+      return () => resetSpeleoExitPromptForTests();
+    }],
+    ['the sign-out prompt', () => {
+      useSpeleoSignOut.setState({ request: { id: 1, kind: 'signOut', survey: null, settle: () => {} } });
+      return () => useSpeleoSignOut.setState({ request: null });
+    }],
+  ])('hides itself while %s is open, and comes back once it is gone', (_label, open) => {
     seedFailure('done');
-    useUIStore.setState({ activeDialog: 'speleodb-close' });
-    render(<SpeleoBanner />);
+    const close = open();
+    const { rerender } = render(<SpeleoBanner />);
     expect(screen.queryByTestId('speleo-banner')).not.toBeInTheDocument();
+    act(() => close());
+    rerender(<SpeleoBanner />);
+    expect(screen.getByTestId('speleo-banner')).toHaveAttribute('data-kind', 'push_failed');
   });
 
   it('renders again once that dialog is dismissed with the failure unresolved', () => {

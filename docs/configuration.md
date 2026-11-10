@@ -29,12 +29,15 @@ All SpeleoDB settings and the API token are stored in a separate TOML file:
 endpoint = "https://www.speleodb.org"
 email = "you@example.com"
 token = "<API token>"
+insecure_http = false   # development builds only; ignored by release builds
 undo_mode = "full"
 ```
 
 The endpoint and email are optional until configured. The token is optional until
-sign-in and is removed on disconnect; disconnect before changing instances. There is one
-instance and one saved account. Tokens are plaintext, with atomic replacement and
+sign-in and is removed on disconnect; disconnect before changing instances. Saving a
+new instance clears the previous instance's email and token, so the old account is
+never paired with the new server (not even when the Connect that follows fails). There
+is one instance and one saved account. Tokens are plaintext, with atomic replacement and
 owner-only file permissions (0600) on Unix; Windows uses the user's profile ACLs.
 Passwords are never saved. Tokens remain backend-only and are omitted from IPC
 settings payloads and debug output.
@@ -47,8 +50,9 @@ credential bytes (or prior absence) are restored with private permissions. A fai
 rollback is reported explicitly; two files cannot provide crash-atomic updates.
 
 When `speleodb/speleodb.conf` is genuinely absent, the legacy `[speleodb]` table
-supplies endpoint, email and `undo_mode`. Obsolete HTTP overrides, polling settings,
-passwords, tokens and credential-storage options are ignored;
+supplies endpoint, email, `insecure_http`,
+`poll_interval_seconds` and `undo_mode`. Normalization still applies, including the
+polling floor. Passwords, tokens and obsolete credential-storage options are ignored;
 sign in again to store a token. The separate file always takes precedence, including
 when damaged or unreadable. Malformed legacy preferences are logged without source
 values and retained on unrelated saves for recovery. A successful two-file save
@@ -61,8 +65,14 @@ untouched; cleanup failures are reported. No keychain access is restored.
 is restored only when the resolved instance matches its configured endpoint.
 Reloading configuration refuses a different endpoint while connected. Same-instance
 credential reloads reset the edit gate; unrelated preference reloads retain the session.
-Projects refresh at startup and immediately after sign-in. Successful Connect
-closes Settings and shows the project listing. Refreshes display a spinner until
+Projects refresh at startup and immediately after sign-in. Connect in Settings first
+asks what the account change needs (the sign-out flow when another account is signed
+in, and the question about unsent SpeleoDB drafts the change would drop; Cancel changes
+nothing, not even the staged settings), then saves the staged settings, then signs in
+over the connection on screen - in a development build including the "Allow insecure
+HTTP" switch on screen (never the saved value). On success the backend saves that
+endpoint and `insecure_http` with the token, and Settings closes and shows the
+project listing. A failed sign-in saves no credentials. Refreshes display a spinner until
 they finish, including failed requests. Use the refresh button
 on the home screen to reload the listing, or Refresh in the open project's
 SpeleoDB workspace. No periodic SpeleoDB refresh runs in the background.
@@ -583,7 +593,11 @@ omitted when saving. It cannot enable editing.
 ## Immediate SpeleoDB connection settings
 
 Connect saves changed preferences and authenticates immediately. Success closes
-Settings and refreshes the project listing. Disconnect takes effect immediately,
+Settings and refreshes the project listing. Disconnect first runs the sign-out flow
+(the open project's un-uploaded work: Discard / Keep on this computer / Upload and
+disconnect; other copies with changes are kept on this computer; held locks handed
+back; Try again / Disconnect anyway when a hand-back fails). Cancel there
+leaves you connected with Settings open. Once it goes ahead, Disconnect takes effect immediately,
 clears the remote listing and stays on the SpeleoDB Settings tab. Neither action
 requires a subsequent Save. While connected, the server endpoint and both reset
 controls are disabled; backend requests to change instances are also refused.
@@ -597,7 +611,11 @@ unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
 HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
 address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
 allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
-missing schemes and malformed addresses are rejected. No DNS-based exception or
-insecure-HTTP override exists. Invalid endpoints produce an error modal when
-connecting or saving; existing legacy override fields are ignored and omitted
-from subsequent saves. Certificate verification and redirect restrictions remain.
+missing schemes and malformed addresses are rejected, without any DNS lookup. An
+endpoint the policy refuses produces an error dialog when connecting, or when saving
+a new server. `insecure_http` lifts only the HTTP rule (never certificate
+verification), and only in a development build ([debug gates](debug-gates.md)): there the
+Connection section has an "Allow insecure HTTP" switch, locked with the server while
+connected. A release build - betas and release candidates included - has no control for
+it and the backend ignores the stored value; the field stays in the file so existing
+configurations load in every build. Certificate verification and redirect restrictions remain.

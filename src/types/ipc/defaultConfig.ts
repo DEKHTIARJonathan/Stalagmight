@@ -242,7 +242,11 @@ export const defaultConfig: Config = {
       "_x",
       "_y",
       "_lat",
-      "_long"
+      "_long",
+      "name"
+    ],
+    "data_table_station_columns_seen": [
+      "name"
     ],
     "data_table_station_column_widths": {},
     "new_section_column_order": [],
@@ -356,6 +360,7 @@ export const defaultConfig: Config = {
   "speleodb": {
     "endpoint": null,
     "email": null,
+    "insecure_http": false,
     "undo_mode": "full"
   }
 };

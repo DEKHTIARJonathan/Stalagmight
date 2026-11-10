@@ -547,6 +547,10 @@ interface UIStore {
   requestResolveWarning: { sectionId: SectionId; shotId: ShotId } | null;
   triggerResolveWarning: (sectionId: SectionId, shotId: ShotId) => void;
   clearResolveWarningRequest: () => void;
+  /** Show the project view's Details panel on the Warnings tab, listing every
+   *  issue, without starting to resolve one (the SpeleoDB upload dialog's
+   *  "Resolve now"). Leaves Plan/Export for Survey, where that panel lives. */
+  openWarningsTab: () => void;
 
   /** Progressive zoom-in centered on a shot: each request recenters and zooms
    *  one step closer (used by the resolve view's zoom button, #57). */
@@ -913,6 +917,43 @@ let prePlanDocks:
 let fullScreenTableSnapshot:
   | { dataTableOpen: boolean; dataTableMode: PanelMode }
   | null = null;
+
+/**
+ * Show the Details panel on its Warnings tab, making sure it will actually mount
+ * and be visible: section-focus and data-table fullscreen hide or cover the
+ * panel, and the panel may simply be collapsed. WarningsContent only consumes a
+ * resolve request while mounted (detailPanelOpen && tab === 'warnings'), so
+ * without this a request would be a no-op that sat stale and fired on a later
+ * tab switch.
+ *
+ * It reveals the panel without changing the user's saved panel mode. Pinned: just
+ * ensure it is open. Hover: bump the reveal nonce so SingleSystemView floats it
+ * open like a hover (with a timed auto-close, since no pointer-leave fires for a
+ * programmatic reveal), so revealing never silently leaves a hover-mode user
+ * pinned. Opening a pinned-but-closed panel is a real (persistent) open, just
+ * like toggleDetailPanel, so it is persisted: otherwise the in-memory open flag
+ * would diverge from the saved layout (re-closing the panel next session, or
+ * being overwritten by any later savePanelLayout).
+ */
+function revealWarningsTab(
+  set: (partial: Partial<UIStore>) => void,
+  extra: Partial<UIStore>,
+): void {
+  let s = useUIStore.getState();
+  if (s.focusedSectionId !== null) s.exitSectionFocus();
+  if (s.dataTableFullScreen) s.exitDataTableFullScreen();
+  // Re-read: the exits above can change the panel's mode/open.
+  s = useUIStore.getState();
+  const pinOpening = s.detailPanelMode === 'pin' && !s.detailPanelOpen;
+  set({
+    ...extra,
+    detailPanelTab: 'warnings',
+    ...(s.detailPanelMode === 'pin'
+      ? { detailPanelOpen: true }
+      : { detailRevealNonce: s.detailRevealNonce + 1 }),
+  });
+  if (pinOpening) void useUIStore.getState().savePanelLayout();
+}
 
 /**
  * Apply a panel mutation that also exits section-focus (#50). Restores the
@@ -1497,36 +1538,13 @@ export const useUIStore = create<UIStore>((set) => ({
   setGeometryPreview: (geometryPreview) => set({ geometryPreview }),
   requestResolveWarning: null,
   triggerResolveWarning: (sectionId: SectionId, shotId: ShotId) => {
-    // Make sure the resolve view will actually mount and be visible before
-    // requesting it: section-focus and data-table fullscreen hide/cover the
-    // detail panel, and the panel may simply be collapsed. WarningsContent only
-    // consumes the request while mounted (detailPanelOpen && tab === 'warnings'),
-    // so open the panel on the Warnings tab here. (Otherwise the click would be
-    // a no-op and the request would sit stale and fire on a later tab switch.)
-    let s = useUIStore.getState();
-    if (s.focusedSectionId !== null) s.exitSectionFocus();
-    if (s.dataTableFullScreen) s.exitDataTableFullScreen();
-    // Re-read: the exits above can change the panel's mode/open.
-    s = useUIStore.getState();
-    // Reveal the Details panel on the Warnings tab so WarningsContent mounts and
-    // consumes the request - without mutating the user's persisted panel mode.
-    // Pinned: just ensure it's open. Hover: bump the reveal nonce so SingleSystemView
-    // floats it open like a hover (with a timed auto-close, since no pointer-leave
-    // fires for a programmatic reveal), so resolving a warning never silently leaves
-    // a hover-mode user pinned.
-    // For a pinned-but-closed panel, opening it is a real (persistent) open just
-    // like toggleDetailPanel - persist it so the in-memory open flag doesn't
-    // diverge from the saved layout (which would re-close the panel next session
-    // and could be clobbered by any later savePanelLayout).
-    const pinOpening = s.detailPanelMode === 'pin' && !s.detailPanelOpen;
-    set({
-      requestResolveWarning: { sectionId, shotId },
-      detailPanelTab: 'warnings',
-      ...(s.detailPanelMode === 'pin'
-        ? { detailPanelOpen: true }
-        : { detailRevealNonce: s.detailRevealNonce + 1 }),
-    });
-    if (pinOpening) void useUIStore.getState().savePanelLayout();
+    revealWarningsTab(set, { requestResolveWarning: { sectionId, shotId } });
+  },
+  openWarningsTab: () => {
+    // The Warnings tab lives in the Details panel, which Plan and Export replace
+    // with panels of their own: return to Survey first (a no-op when there).
+    useUIStore.getState().exitGasPlan();
+    revealWarningsTab(set, {});
   },
   clearResolveWarningRequest: () => set({ requestResolveWarning: null }),
   requestZoomToShot: null,

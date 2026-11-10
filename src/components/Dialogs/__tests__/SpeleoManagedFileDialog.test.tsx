@@ -14,7 +14,14 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const confirmMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
-vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
+// The unsaved-edits question before a switch is in-app (`askExitChoice`); answer it
+// through `confirmMock`: true = discard, false = cancel, 'save' = save on this
+// computer first. The rest of the module (the drafts question) stays real.
+vi.mock('../../../utils/exitConfirm', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../../utils/exitConfirm')>(),
+  askExitChoice: (options: unknown) => Promise.resolve(confirmMock(options))
+    .then((answer: unknown) => (answer === 'save' ? 'save' : answer ? 'confirm' : 'cancel')),
+}));
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,

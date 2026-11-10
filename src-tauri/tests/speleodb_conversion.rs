@@ -36,6 +36,9 @@ fn conversion_saves_unsaved_survey_uploads_once_and_requires_verified_editing_af
         let server_id = id.clone();
         let server = std::thread::spawn(move || {
             let mut uploaded = false;
+            // The server's mutex: taken by the publish's acquire, freed by its
+            // release, and reported by the release's holder check (lock#4).
+            let mut held = false;
             while !server_stop.load(Ordering::SeqCst) {
                 let Ok((mut stream, _)) = listener.accept() else {
                     std::thread::sleep(std::time::Duration::from_millis(5));
@@ -71,11 +74,21 @@ fn conversion_saves_unsaved_survey_uploads_once_and_requires_verified_editing_af
                 }
                 let text = String::from_utf8_lossy(&request).into_owned();
                 let route = text.lines().next().expect("request line");
+                if route.contains("/acquire/") {
+                    held = true;
+                } else if route.contains("/release/") {
+                    held = false;
+                }
+                let holder = if held {
+                    json!("test@example.com")
+                } else {
+                    serde_json::Value::Null
+                };
                 let project = json!({"id":server_id,"name":"Latest local edits","description":"Synthetic conversion","country":"US",
                     "type":"STALAGMIGHT","visibility":"PRIVATE","permission":"ADMIN","color":"#123456",
                     "commit_count":u8::from(uploaded),"created_by":"test@example.com","creation_date":"2026-01-01T00:00:00Z",
                     "modified_date":"2026-01-01T00:00:00Z","exclude_geojson":false,"fork_from":null,"is_active":true,
-                    "active_mutex":null,"latest_commit":null});
+                    "active_mutex":holder,"latest_commit":null});
                 let (code, body) = if route.contains("/user/") {
                     (
                         200,
@@ -88,7 +101,7 @@ fn conversion_saves_unsaved_survey_uploads_once_and_requires_verified_editing_af
                         uploaded = true;
                         (
                             200,
-                            json!({"project":project,"hexsha":SHA,"files":["project.stalx"],"geojson_status":"skipped","message":"Saved","browser_url":null}),
+                            json!({"project":project,"hexsha":SHA,"files":["project.stalx"],"message":"Saved","browser_url":null}),
                         )
                     }
                 } else if route.contains("/revisions/") {
@@ -125,7 +138,7 @@ fn conversion_saves_unsaved_survey_uploads_once_and_requires_verified_editing_af
         state.set_project_for_tests(project);
         state.set_database_for_tests(db);
         state
-            .speleodb_login(Some(base), None, None, Some("synthetic-token".into()))
+            .speleodb_login(Some(base), None, None, None, Some("synthetic-token".into()))
             .expect("sign in");
         let result = state
             .speleodb_publish(SpeleoPublishParams {

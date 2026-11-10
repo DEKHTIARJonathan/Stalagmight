@@ -1,4 +1,5 @@
 import { SpeleoReadOnlyNotice } from './components/Dialogs/SpeleoReadOnlyNotice';
+import { SpeleoReloadConfirmDialog } from './components/Dialogs/SpeleoReloadConfirmDialog';
 import { useEffect, useCallback, useState, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
@@ -19,8 +20,13 @@ import { applyWindowTitle } from './utils/windowTitle';
 import { routeOpenedFile } from './utils/openOrImport';
 import { useLaunchWithFile } from './utils/launchWithFile';
 import { guardQuit } from './utils/quit';
+import SpeleoExitDialog from './components/Dialogs/SpeleoExitDialog';
+import QuitWaitDialog from './components/Dialogs/QuitWaitDialog';
+import SpeleoSignOutDialog from './components/Dialogs/SpeleoSignOutDialog';
+import ExitConfirmDialog from './components/Dialogs/ExitConfirmDialog';
+import SpeleoReleaseFailedDialog from './components/Dialogs/SpeleoReleaseFailedDialog';
 import { isDroppableFilePath } from './utils/fileDialogs';
-import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale, useAppUpdate } from './hooks';
+import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale, useAppUpdate, useHelpMenu } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
 import { registerOnboardingRestart } from './hooks/useOnboardingRestart';
 import { ORIENTATION_FLOW_ID } from './onboarding/flows';
@@ -30,7 +36,7 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseSectionDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, ImportBlockedDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoRestoreDialog, SpeleoUnwindDialog, SpeleoUnwoundPushDialog, SpeleoDiscardChangesDialog, SpeleoRevertDialog, SpeleoCloseDialog, SpeleoQuitDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, ImportReceiptDialog, ImportAsNewProjectDialog, LaunchOpenConfirmDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseSectionDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, ImportBlockedDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoRestoreDialog, SpeleoUnwindDialog, SpeleoUnwoundPushDialog, SpeleoDiscardChangesDialog, SpeleoRevertDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, ImportReceiptDialog, ImportAsNewProjectDialog, LaunchOpenConfirmDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu, ToastStack } from './components/common';
 import { UpdateBanner } from './components/UpdateBanner';
@@ -130,6 +136,9 @@ function App() {
 
   // Event-driven network status orchestrator (tile transport events + offline polling)
   useNetworkStatus();
+
+  // macOS Help menu > Keyboard Shortcuts (#665)
+  useHelpMenu();
 
   // Whole-UI zoom via Ctrl+= / Ctrl+- / Ctrl+0 (persisted)
   useUiScale();
@@ -793,6 +802,7 @@ function App() {
       {activeDialog === 'open-from-speleodb' && <OpenFromSpeleoDbDialog />}
       {activeDialog === 'publish-to-speleodb' && <PublishToSpeleoDbDialog />}
       <SpeleoReadOnlyNotice />
+      <SpeleoReloadConfirmDialog />
       {activeDialog === 'speleodb-done' && <SpeleoDoneDialog />}
       {activeDialog === 'speleodb-divergence' && <SpeleoDivergenceDialog />}
       {activeDialog === 'speleodb-restore' && <SpeleoRestoreDialog />}
@@ -802,8 +812,6 @@ function App() {
       {activeDialog === 'speleodb-unwound-push' && <SpeleoUnwoundPushDialog />}
       {activeDialog === 'speleodb-discard-changes' && <SpeleoDiscardChangesDialog />}
       {activeDialog === 'speleodb-revert' && <SpeleoRevertDialog />}
-      {activeDialog === 'speleodb-close' && <SpeleoCloseDialog />}
-      {activeDialog === 'speleodb-quit' && <SpeleoQuitDialog />}
       {activeDialog === 'speleodb-no-permission' && <SpeleoNoPermissionDialog />}
       {activeDialog === 'speleodb-unpushed-local' && <SpeleoUnpushedLocalDialog />}
       {activeDialog === 'speleodb-managed-file' && <SpeleoManagedFileDialog />}
@@ -1069,6 +1077,21 @@ function App() {
           from inside another dialog - e.g. the Settings account panel - layers it
           OVER that dialog instead of replacing it, leaving Settings intact. */}
       {heldLockPromptOpen && <HeldLockResumeDialog />}
+
+      {/* The exit prompts: independent overlays (own stores, awaited by their
+          callers) so they layer over the dialog that raised them - the SpeleoDB
+          browser, Settings during a sign-out, an import wizard at quit - instead
+          of evicting it from the single dialog slot. See utils/speleoExit. */}
+      <SpeleoSignOutDialog />
+      <SpeleoExitDialog />
+      {/* A quit waiting for a SpeleoDB transfer (lock#6): after the exit prompts so
+          it layers over the upload progress it is waiting on. */}
+      <QuitWaitDialog />
+      <ExitConfirmDialog />
+      {/* "Couldn't hand back the lock" (utils/speleoReleaseFailure): raised by the
+          close, project switch or quit it interrupts, possibly from inside another
+          dialog, so it layers over all of the exit prompts above. */}
+      <SpeleoReleaseFailedDialog />
 
       {/* [#258] "Which file is the survey?" - raised when a SpeleoDB dump holds
           more than one openable file. Independent and mounted LAST so it layers

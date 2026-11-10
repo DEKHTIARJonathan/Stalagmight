@@ -34,6 +34,18 @@ it('shows the actual competing editor and leaves the project read-only', async (
   expect(useSpeleoReadOnlyNotice.getState().notice?.message).toContain('editor@example.com');
 });
 
+// Opened over our own un-uploaded work (a fast-forward local copy, or "Open my
+// local copy"): someone else holding the lock must not read as "your work is gone".
+it('says local changes are kept when someone else holds the lock over our own work', async () => {
+  useSpeleoStore.setState((state) => ({ link: state.link ? { ...state.link, hasUnpushedEdits: true } : null }));
+  ipc.mockResolvedValue({ kind: 'locked_by', email: 'editor@example.com' });
+  await autoAcquireSpeleoLock('/remote.stalx', () => true);
+  const message = useSpeleoReadOnlyNotice.getState().notice?.message ?? '';
+  expect(message).toContain('editor@example.com');
+  expect(message).toContain('Your changes are kept on this computer');
+  expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
+});
+
 it('reconciles a fast-forward before completing the acquisition', async () => {
   ipc.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/remote.stalx' });
   await autoAcquireSpeleoLock('/remote.stalx', () => true);

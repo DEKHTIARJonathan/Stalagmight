@@ -34,7 +34,7 @@ use stalagmight_models::{NorthReference, Project, ShotKind as ModelShotKind, Sur
 ///
 /// Every list is sorted, so the same file content always reads to the same
 /// value: sections by id, shots in
-/// survey order, merges by `(a, b)`, zero datums and comments and station
+/// survey order, merges by `(a, b)`, zero datums, comments, names and station
 /// positions by station, loop closures by id. [`Survey::modified_at`] changes
 /// on every save; leave it out of any content hash.
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +55,9 @@ pub struct Survey {
     pub zero_datums: Vec<ZeroDatum>,
     pub loop_closures: Vec<LoopClosure>,
     pub station_comments: Vec<StationComment>,
+    /// Station names, e.g. the mNemo station number a DMP import recorded. Not
+    /// unique: mNemo numbers restart at 0 in every section.
+    pub station_names: Vec<StationName>,
     /// The zero datum whose station is the georeference origin of the local frame
     /// (the project's first resolvable datum, as the app defines it). `None` when
     /// the project has no usable datum. See [`StationPosition`].
@@ -63,8 +66,8 @@ pub struct Survey {
     /// the supported input for drawing a map; `None` unless requested in
     /// [`crate::ReadOptions`].
     pub stations: Option<Vec<StationPosition>>,
-    /// Cross-references (merges, datums, closures, comments) whose station no
-    /// longer exists in the file. They are dropped, and counted here.
+    /// Cross-references (merges, datums, closures, comments, names) whose station
+    /// no longer exists in the file. They are dropped, and counted here.
     pub unresolved_references: usize,
 }
 
@@ -208,6 +211,13 @@ pub struct StationComment {
     pub text: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct StationName {
+    pub station: StationId,
+    pub name: String,
+}
+
 /// A station's measured (not loop-closure-adjusted) position, computed by the
 /// app's own geometry, so a map drawn from these agrees with the app's measured
 /// view.
@@ -318,6 +328,17 @@ impl Survey {
             })
             .collect();
         station_comments.sort_by_key(|c| c.station);
+        let mut station_names: Vec<StationName> = project
+            .station_names
+            .iter()
+            .filter_map(|(key, name)| {
+                Some(StationName {
+                    station: resolve(key)?,
+                    name: name.clone(),
+                })
+            })
+            .collect();
+        station_names.sort_by_key(|n| n.station);
         let frame_datum = project
             .frame_datum_key()
             .and_then(|key| project.resolve_key(&key))
@@ -399,6 +420,7 @@ impl Survey {
             zero_datums,
             loop_closures,
             station_comments,
+            station_names,
             frame_datum,
             stations,
             unresolved_references: unresolved,

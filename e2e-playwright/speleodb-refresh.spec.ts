@@ -1,5 +1,18 @@
-import { test, expect } from './fixtures/coverage';
+import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
+
+/**
+ * While the project listing refreshes, the ONLY visible spinner is the one inside
+ * the SpeleoDB Refresh button: nothing is drawn above the recent projects, and the
+ * state still reaches screen readers through the (visually hidden) status region.
+ */
+async function expectRefreshSpinnerOnlyOnButton(page: Page): Promise<void> {
+  const button = page.getByTestId('globalview-speleo-refresh');
+  await expect(button.getByTestId('globalview-speleo-refresh-spinner')).toBeVisible();
+  await expect(page.getByTestId('global-view').locator('.animate-spin')).toHaveCount(1);
+  await expect(page.getByTestId('globalview-list-spinner')).toHaveCount(0);
+  await expect(page.getByTestId('globalview-refresh-status')).toHaveText('Refreshing projects...');
+}
 
 test('successful login closes Settings and shows progress until the listing refresh finishes', async ({ page }) => {
   await setupMockedPage(page);
@@ -13,6 +26,10 @@ test('successful login closes Settings and shows progress until the listing refr
       }),
     };
   });
+  // Signed out, the SpeleoDB button holds the Refresh slot (no header copy).
+  await expect(page.getByTestId('global-speleodb-button')).toBeVisible();
+  await expect(page.locator('header').getByTestId('global-speleodb-button')).toHaveCount(0);
+  await expect(page.getByTestId('globalview-speleo-refresh')).toHaveCount(0);
   await page.getByTestId('global-speleodb-button').click();
   await expect(page.getByTestId('settings-panel-speleodb')).toBeVisible();
   await expect(page.getByText('Remote refresh interval', { exact: true })).toHaveCount(0);
@@ -20,13 +37,15 @@ test('successful login closes Settings and shows progress until the listing refr
   await page.getByTestId('speleodb-settings-password').fill('synthetic-password');
   await page.getByTestId('speleodb-settings-try-login').click();
   await expect(page.getByTestId('settings-panel-speleodb')).toHaveCount(0);
-  await expect(page.getByTestId('globalview-list-spinner')).toBeVisible();
+  await expectRefreshSpinnerOnlyOnButton(page);
   await expect(page.getByTestId('globalview-speleo-refresh')).toBeDisabled();
+  // Signed in, Refresh replaces the SpeleoDB button.
+  await expect(page.getByTestId('global-speleodb-button')).toHaveCount(0);
   await page.evaluate(() => {
     ((window as unknown as Record<string, unknown>).__FINISH_REFRESH__ as () => void)();
   });
   await expect(page.getByTestId('global-view')).toContainText('Synthetic refreshed cave');
-  await expect(page.getByTestId('globalview-list-spinner')).toHaveCount(0);
+  await expect(page.getByTestId('globalview-speleo-refresh-spinner')).toHaveCount(0);
 });
 
 test('startup and manual refresh reload the project listing', async ({ page }) => {
@@ -42,7 +61,7 @@ test('startup and manual refresh reload the project listing', async ({ page }) =
     };
   });
   await setupMockedPage(page);
-  await expect(page.getByTestId('globalview-list-spinner')).toBeVisible();
+  await expectRefreshSpinnerOnlyOnButton(page);
   await page.evaluate(() => {
     ((window as unknown as Record<string, unknown>).__FINISH_REFRESH__ as () => void)();
   });
@@ -57,12 +76,12 @@ test('startup and manual refresh reload the project listing', async ({ page }) =
     });
   });
   await page.getByTestId('globalview-speleo-refresh').click();
-  await expect(page.getByTestId('globalview-list-spinner')).toBeVisible();
-  await expect(page.getByTestId('globalview-speleo-refresh-spinner')).toBeVisible();
+  await expectRefreshSpinnerOnlyOnButton(page);
   await page.evaluate(() => {
     ((window as unknown as Record<string, unknown>).__FINISH_REFRESH__ as () => void)();
   });
-  await expect(page.getByTestId('globalview-list-spinner')).toHaveCount(0);
+  await expect(page.getByTestId('globalview-speleo-refresh-spinner')).toHaveCount(0);
+  await expect(page.getByTestId('globalview-refresh-status')).toHaveText('');
   await expect(page.getByTestId('global-view')).toContainText('Synthetic manual cave');
   await expect(page.getByTestId('global-view')).not.toContainText('Synthetic startup cave');
 });
@@ -79,7 +98,7 @@ test('failed login keeps Settings open for correction', async ({ page }) => {
   await page.getByTestId('speleodb-settings-email').fill('test@example.com');
   await page.getByTestId('speleodb-settings-password').fill('synthetic-password');
   await page.getByTestId('speleodb-settings-try-login').click();
-  await expect(page.getByTestId('speleodb-account-settings-error')).toBeVisible();
+  await expect(page.getByTestId('speleodb-connection-error')).toBeVisible();
   await expect(page.getByTestId('settings-panel-speleodb')).toBeVisible();
-  await expect(page.getByTestId('globalview-list-spinner')).toHaveCount(0);
+  await expect(page.getByTestId('globalview-speleo-refresh-spinner')).toHaveCount(0);
 });

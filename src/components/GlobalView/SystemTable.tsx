@@ -17,6 +17,7 @@ import {
   resolveSpeleoLock,
   recentAccent,
   recentAccentStyle,
+  withCachedCopyEdits,
 } from './SpeleoLockBadge';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 import type { SpeleoLocalStateMap } from '../../utils/speleoLocalState';
@@ -45,6 +46,8 @@ interface SystemTableProps {
   onRemoveMissing: (filePath: string) => void;
   /** Pull + open a purely-remote SpeleoDB project row (#218). */
   onOpenRemote: (summary: SpeleoProjectSummary) => void;
+  /** Right-click on a SpeleoDB row: the SpeleoDB project context menu. */
+  onContextMenuRemote?: (e: MouseEvent, item: Extract<RecentListItem, { kind: 'remote' }>) => void;
   /** True while a remote open/adopt is in flight - gates the remote rows so a second
       click can't issue a concurrent open (mirrors RemoteSystemCard's `busy`). */
   busy?: boolean;
@@ -113,6 +116,7 @@ export function SystemTable({
   onContextMenu,
   onRemoveMissing,
   onOpenRemote,
+  onContextMenuRemote,
   busy = false,
 }: SystemTableProps) {
   const { t } = useTranslation();
@@ -200,14 +204,14 @@ export function SystemTable({
             // #218: a purely-remote SpeleoDB project (not in local recents). No local
             // file/stats - show the SpeleoDB name + lock badge, and open (pull) it on
             // row click. Reuses resolveSpeleoLock via a synthetic project id.
-            const remoteLock = resolveSpeleoLock(
+            const remoteLock = withCachedCopyEdits(resolveSpeleoLock(
               { is_remote: true, speleodb_project_id: item.projectId },
               remoteLocks,
               myEmail,
               remoteProjects,
               localStates,
               { ...remoteSummaries, [item.projectId]: item.summary },
-            );
+            ), item.cached);
             return (
               <tr
                 key={`remote-${item.projectId}`}
@@ -222,6 +226,10 @@ export function SystemTable({
                 tabIndex={0}
                 onClick={() => {
                   if (!busy) onOpenRemote(item.summary);
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  if (!busy) onContextMenuRemote?.(e, item);
                 }}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' || e.key === ' ') {
@@ -245,28 +253,17 @@ export function SystemTable({
                   <SpeleoProjectInfo
                     lock={remoteLock}
                     summary={item.summary}
+                    cached={item.cached}
                     testIdPrefix={`system-row-remote-${item.projectId}-speleo`}
                   />
                 </td>
                 <td className={`${cellClass} text-text-tertiary text-right`} colSpan={2}>
                   {t('globalView.recent.remote.onSpeleoDb')}
                 </td>
+                {/* The row itself is the Open action (click, Enter/Space), like the
+                    card grid's remote cards and every local row; no separate button. */}
                 <td className={cellClass}>
-                  <div className="flex items-center justify-between gap-3">
-                    <RemoteUpdatedTime date={item.summary.modified_date} />
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (!busy) onOpenRemote(item.summary);
-                      }}
-                      className="text-xs text-accent hover:underline disabled:opacity-60 disabled:no-underline"
-                      data-testid={`system-row-remote-open-${item.projectId}`}
-                    >
-                      {t('speleodb.browser.open')}
-                    </button>
-                  </div>
+                  <RemoteUpdatedTime date={item.summary.modified_date} />
                 </td>
               </tr>
             );

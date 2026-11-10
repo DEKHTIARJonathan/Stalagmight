@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../common/Button';
-import { ExternalLinkIcon } from '../../common/icons';
+import { DownloadIcon, ExternalLinkIcon, EyeIcon, UndoIcon } from '../../common/icons';
+import { MENU_ICON_COLORS } from '../../common/menuColors';
 import { useUIStore } from '../../../store/uiStore';
 import {
   useSpeleoStore,
@@ -9,26 +10,34 @@ import {
 import { useProjectStore } from '../../../store/projectStore';
 import { useRestoreRevision } from '../../../hooks/useRestoreRevision';
 import { useSpeleoWebLink } from '../../../hooks/useSpeleoWebLink';
+import { useSpeleoOperationBusy } from '../../../hooks/useSpeleoOperationBusy';
 import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError, unpushedLocalEdits, } from '../../../utils/speleoError';
 import { holdsWriteLock } from '../../../utils/quit';
 import { permissionAtLeast } from '../../../utils/speleoPermission';
-import { formatDate } from '../../../i18n/format';
+import { formatRelativeTime } from '../../../i18n/format';
 import type { SpeleoRevision } from '../../../types/ipc.generated';
 import { TOAST_KEYS } from '../../../utils/toastKeys';
+import { formatRevisionTime, parseRevisionDate } from '../../../utils/speleoRevisionTime';
 
-/** RFC-3339 -> localized date/time; falls back to the raw string if unparseable. */
-function formatWhen(iso: string | null): string {
-  if (!iso) return '';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return iso;
-  return formatDate(date, undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+/**
+ * sdk#7: a revision's server time as the viewer's local time with its GMT offset,
+ * and the relative time as the tooltip. The server string is New York wall time
+ * with no zone, so it is converted to an instant first (see `speleoRevisionTime`);
+ * an unparseable value is shown as sent.
+ */
+function RevisionWhen({ raw, id }: { raw: string; id: string }) {
+  const date = parseRevisionDate(raw);
+  if (!date) return <span data-testid={`speleodb-revision-date-${id}`}>{raw}</span>;
+  return (
+    <time
+      dateTime={date.toISOString()}
+      title={formatRelativeTime(date)}
+      data-testid={`speleodb-revision-date-${id}`}
+    >
+      {formatRevisionTime(date)}
+    </time>
+  );
 }
 
 export function SpeleoRevisionHistory() {
@@ -63,6 +72,9 @@ export function SpeleoRevisionHistory() {
   const [error, setError] = useState<string | null>(null);
   // The revision whose read-only View is currently loading (disables that button).
   const [pendingId, setPendingId] = useState<string | null>(null);
+  // View, Restore and Revert each download a revision (Restore and Revert also
+  // lock), so none may start while another lock, upload or download is running.
+  const operationBusy = useSpeleoOperationBusy();
 
   useEffect(() => {
     if (!projectId) return undefined;
@@ -120,32 +132,30 @@ export function SpeleoRevisionHistory() {
 
   return (
     <div data-testid="speleodb-revisions">
-      <div className="flex justify-end">
-        <Button
-          variant="external"
-          icon={<ExternalLinkIcon size={16} />}
-          disabled={web.url === null}
-          title={web.url === null ? t('speleodb.web.unavailable') : undefined}
-          onClick={web.open}
-          className="w-full h-11 px-3 py-2.5 shadow-sm"
-          data-testid="speleodb-web-revisions"
-        >
-          {t('speleodb.web.openRevisions')}
-        </Button>
-      </div>
-      <div className="mb-2 space-y-1" data-testid="speleodb-revisions-hint">
+      <Button
+        icon={<ExternalLinkIcon size={16} />}
+        iconColor={MENU_ICON_COLORS.projectDetails}
+        disabled={web.url === null}
+        title={web.url === null ? t('speleodb.web.unavailable') : undefined}
+        onClick={web.open}
+        className="w-full"
+        data-testid="speleodb-web-revisions"
+      >
+        {t('speleodb.web.openRevisions')}
+      </Button>
+      <div className="mt-2 mb-2 space-y-1" data-testid="speleodb-revisions-hint">
         <p className="text-xs text-text-secondary">{t('speleodb.revisions.restoreHint')}</p>
         {viewBlocked ? (
           // Says WHY View is gone and WHAT clears it, because the block is not
           // permanent: locking the project for editing and uploading the changes
           // resolves it, and Revert stays on offer here precisely because it carries
           // its own explicit discard route for the same changes.
-          <p className="text-xs text-warning" data-testid="speleodb-revisions-unpushed-hint">
+          <p className="text-xs text-warning-text" data-testid="speleodb-revisions-unpushed-hint">
             {t('speleodb.revisions.viewBlockedByUnpushed')}
           </p>
         ) : (
           !iHoldLock && (
-            <p className="text-xs text-warning" data-testid="speleodb-revisions-lock-hint">
+            <p className="text-xs text-warning-text" data-testid="speleodb-revisions-lock-hint">
               {t('speleodb.revisions.lockToRestore')}
             </p>
           )
@@ -193,7 +203,7 @@ export function SpeleoRevisionHistory() {
                     )}
                     {rev.parent_ids.length > 1 && (
                       <span
-                        className="px-1.5 py-0.5 rounded text-xs bg-warning-20 text-warning"
+                        className="px-1.5 py-0.5 rounded text-xs bg-warning-20 text-warning-text"
                         data-testid={`speleodb-revision-merge-${rev.id}`}
                       >
                         {t('speleodb.revisions.merge')}
@@ -203,8 +213,8 @@ export function SpeleoRevisionHistory() {
                       {rev.author_email || t('speleodb.revisions.unknownAuthor')}
                     </span>
                     {rev.authored_date && (
-                      <span className="text-xs text-text-tertiary">
-                        · {formatWhen(rev.authored_date)}
+                      <span className="text-xs text-text-secondary">
+                        · <RevisionWhen raw={rev.authored_date} id={rev.id} />
                       </span>
                     )}
                   </div>
@@ -216,8 +226,9 @@ export function SpeleoRevisionHistory() {
                 </div>
                 {!isCurrent && iHoldLock && survey && (
                   <Button
-                    variant="warning"
+                    variant="secondary"
                     size="sm"
+                    disabled={operationBusy}
                     onClick={() =>
                       openDialog(TOAST_KEYS.SPELEODB_RESTORE, {
                         projectId,
@@ -227,6 +238,7 @@ export function SpeleoRevisionHistory() {
                         message: rev.message ?? '',
                       })
                     }
+                    icon={<DownloadIcon size={14} />}
                     data-testid={`speleodb-revision-restore-${rev.id}`}
                   >
                     {t('speleodb.revisions.restore')}
@@ -234,10 +246,11 @@ export function SpeleoRevisionHistory() {
                 )}
                 {!isCurrent && !iHoldLock && !viewBlocked && (
                   <Button
-                    variant="info"
+                    variant="secondary"
                     size="sm"
-                    disabled={pendingId !== null}
+                    disabled={pendingId !== null || operationBusy}
                     onClick={() => void handleView(rev)}
+                    icon={<EyeIcon size={14} />}
                     data-testid={`speleodb-revision-view-${rev.id}`}
                   >
                     {pendingId === rev.id
@@ -252,8 +265,9 @@ export function SpeleoRevisionHistory() {
                     explicit consent for replacing their un-pushed work. */}
                 {!isCurrent && !iHoldLock && canRevert && (
                   <Button
-                    variant="danger"
+                    variant="secondary"
                     size="sm"
+                    disabled={operationBusy}
                     onClick={() =>
                       openDialog('speleodb-revert', {
                         projectId,
@@ -270,6 +284,7 @@ export function SpeleoRevisionHistory() {
                         returnData: { tab: 'history' },
                       })
                     }
+                    icon={<UndoIcon size={14} />}
                     data-testid={`speleodb-revision-revert-${rev.id}`}
                   >
                     {t('speleodb.revert.action')}

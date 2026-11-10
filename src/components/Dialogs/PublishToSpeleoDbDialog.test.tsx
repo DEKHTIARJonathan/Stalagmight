@@ -1,4 +1,6 @@
 import { setPublishContinuation } from '../../utils/publishContinuation';
+import { confirmWorkspaceDrafts, hasWorkspaceDrafts } from '../../utils/workspaceDrafts';
+import { useExitConfirm } from '../../utils/exitConfirm';
 import { autoAcquireSpeleoLock } from '../../utils/autoAcquireSpeleoLock';
 vi.mock('../../utils/autoAcquireSpeleoLock', () => ({ autoAcquireSpeleoLock: vi.fn(async () => {}) }));
 /**
@@ -151,6 +153,43 @@ describe('PublishToSpeleoDbDialog', () => {
     expect(showToastMock).toHaveBeenCalledWith(expect.stringContaining('fresh server copy'), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
   });
 
+  it('warns when the first upload left the undo history out to fit the size limit (sdk#3)', async () => {
+    invokeIpcMock.mockImplementation(async (cmd) => {
+      if (cmd === 'speleodb_link_status') return { is_remote: true, project_id: 'p1', has_unpushed_edits: false, edit_enabled: false, permission: 'ADMIN', remote_state: 'up_to_date' };
+      if (cmd === 'speleodb_open_project') return { local_path: '/cache/p1/project.stalx' };
+      return { project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx', undo_history_omitted: true };
+    });
+    render(<PublishToSpeleoDbDialog />);
+
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
+
+    await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
+    expect(showToastMock).toHaveBeenCalledTimes(1);
+    expect(showToastMock).toHaveBeenCalledWith(expect.stringContaining('without undo history'), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
+  });
+
+  it('adds the undo-history note to the reopen failure instead of a second toast (sdk#3)', async () => {
+    invokeIpcMock.mockImplementation(async (cmd) => {
+      if (cmd === 'speleodb_link_status') return { is_remote: true, project_id: 'p1', has_unpushed_edits: false, edit_enabled: false, permission: 'ADMIN', remote_state: 'up_to_date' };
+      return { project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx', undo_history_omitted: true };
+    });
+    loadProjectMock.mockResolvedValue({ success: false });
+    render(<PublishToSpeleoDbDialog />);
+
+    await pickOption('publish-to-speleodb-dialog-country', 'US');
+    fireEvent.change(screen.getByTestId('publish-to-speleodb-dialog-description'), { target: { value: 'desc' } });
+    await userEvent.click(screen.getByTestId('publish-to-speleodb-dialog-submit'));
+
+    await waitFor(() => expect(showToastMock).toHaveBeenCalledTimes(1));
+    const [message, key, kind] = showToastMock.mock.calls[0] ?? [];
+    expect(key).toBe(TOAST_KEYS.SPELEODB_PUBLISH);
+    expect(kind).toBe('error');
+    expect(message).toContain('fresh server copy');
+    expect(message).toContain('without undo history');
+  });
+
   it('blocks submit on an out-of-range coordinate pair', async () => {
     render(<PublishToSpeleoDbDialog />);
     await pickOption('publish-to-speleodb-dialog-country', 'US');
@@ -238,4 +277,26 @@ it('publishing blocks the app with a centered progress overlay that expires afte
     expect(screen.getByTestId('publish-to-speleodb-dialog-submit')).toBeDisabled();
     await act(async () => finish({ project_id: 'p1', endpoint: 'https://x', local_path: '/cache/p1/project.stalx' }));
   } finally { vi.useRealTimers(); }
+});
+
+/** frontend#10 - what is typed in the project form is guarded on every way out. */
+describe('PublishToSpeleoDbDialog as unsent SpeleoDB input', () => {
+  it('is a draft once something is typed, and Discard closes the form', async () => {
+    render(<PublishToSpeleoDbDialog />);
+    expect(hasWorkspaceDrafts()).toBe(false);
+    await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-description'), 'Synthetic system');
+    expect(hasWorkspaceDrafts()).toBe(true);
+    const pending = confirmWorkspaceDrafts();
+    await waitFor(() => expect(useExitConfirm.getState().request?.message).toContain('the SpeleoDB project form'));
+    act(() => useExitConfirm.getState().request?.answer(true));
+    expect(await pending).toBe(true);
+    expect(closeDialogMock).toHaveBeenCalledOnce();
+  });
+
+  it('stops being a draft once unmounted', async () => {
+    const { unmount } = render(<PublishToSpeleoDbDialog />);
+    await userEvent.type(screen.getByTestId('publish-to-speleodb-dialog-description'), 'Synthetic system');
+    unmount();
+    expect(hasWorkspaceDrafts()).toBe(false);
+  });
 });

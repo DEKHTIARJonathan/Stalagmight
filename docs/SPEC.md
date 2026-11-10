@@ -81,7 +81,9 @@ verification; ordinary upload keeps the lock. Clean projects do not upload empty
 revisions. Autosave and autosave retry remain local-only. Save and Close continues
 only after confirmed upload and release, with no newer unuploaded changes. Other
 exits automatically release without upload, protecting unsaved survey and form
-drafts with Discard changes / Cancel. Dirtiness is independent of validity.
+drafts with Discard changes / Cancel. A release that fails or is uncertain never
+leaves silently: Close, project switches and Quit stay put and ask "Couldn't hand
+back the lock" (Retry / Close and keep the lock / Cancel). Dirtiness is independent of validity.
 Switch to read-only refuses unsaved or unuploaded changes, with Save Changes guidance.
 Reload requires explicit Discard changes / Cancel for pending work, preserves mode,
 and never acquires a lock. Historical checkouts return to the live server version.
@@ -323,6 +325,16 @@ Examples:
 - 0:15 → 16th station of section 0
 - Merged station: [0:15, 1:0] → Station 15 of section 0 merged with station 0 of section 1
 ```
+
+The index is positional: inserting, deleting or reversing shots renumbers it.
+A station can also carry a **name**, free text stored apart from the shots and
+keyed to the physical station, so it stays put through those edits. A DMP
+import records each station's mNemo station number there (see
+[dmp-import.md](dmp-import.md#station-names)); names are not unique (mNemo
+restarts at 0 in every section), so the UI shows a name beside the positional
+ID (`3:5 · 17`), never instead of it. A shot delete drops the name of the
+station it removes, an inserted shot adds an unnamed station, and a reverse
+keeps every name on its physical station.
 
 ### 4.3 Coordinate System
 
@@ -1708,7 +1720,7 @@ The sidebar displays 12 settings categories, with a visual separator before the 
 | Export | Default image format (PNG/SVG/PDF), default DPI, default layer includes (satellite, grid, labels) |
 | Shortcuts | Searchable shortcut editor with categories (Tools, Edit, View, Panels), primary/secondary binding slots, conflict detection, reserved shortcuts display |
 | Cache | Tile cache statistics, clear cache button, cache enable toggle, max size, TTL days |
-| SpeleoDB | Account sign-in, API endpoint, token authentication, automatic transport policy, startup and manual refresh |
+| SpeleoDB | Account Connect / Disconnect, API endpoint, token authentication, automatic transport policy, startup and manual refresh, "Purge all cached files" (keeps copies with un-uploaded changes unless their deletion is confirmed twice) |
 | Advanced | Debug settings (hitboxes, hit detection logging), logging level/max size, placement suggestion heuristic constants, panel dimensions, reload config from disk |
 
 ### 10.3 Navigation
@@ -2271,8 +2283,8 @@ The schema is versioned (`SCHEMA_VERSION` in
 opened. Alongside the survey tables (project, sections, shots, station merges,
 zero datums, loop closures, section and station offsets) it holds per-project and
 display settings, the persisted undo and redo stacks, resolved warnings, import
-hashes, station comments, the SpeleoDB link row, and the Unwind chain position in
-`speleo_undo_chain`. Five markers are worth knowing before touching migration
+hashes, station comments and names, the SpeleoDB link row, and the Unwind chain
+position in `speleo_undo_chain`. Five markers are worth knowing before touching migration
 code:
 
 - `UNDO_FORMAT_SAFE_VERSION` - files written before it get their persisted
@@ -2309,6 +2321,20 @@ code:
   `UNDO_FORMAT_SAFE_VERSION` stays at 7: it is the floor for the pre-v7 purge
   alone, and bumping it would make the v13 and v15 arms' own tests pass with
   those arms removed.
+
+`station_names` holds per-station names in the same positional shape as
+`station_comments`. It was added at v18 WITHOUT a schema version bump, on
+purpose: SpeleoDB turns an uploaded `.stalx` into a map with OpenSpeleo's
+Python package `stalagmight_lib` (pytool_stalagmight_lib, through
+`openspeleo_lib`; not the app's Rust lib crate of the same name). It refuses any
+file not at exactly v18 and reads only the tables it knows, so a new table is
+invisible to it while a bump would lock it out (verified version and details in
+`persistence/sqlite/station_texts.rs`). The cost is that a build without the table drops
+the names on its next save. A v18 file from before the table takes the version
+fast path, so the read side treats a missing table as empty and `save_project`
+creates it inside its transaction; `station_names_tests.rs` in
+`persistence/sqlite/` pins both, and that no table the outside reader reads
+changes when a project gains names.
 
 The dive plan lives beside the project in its own `.plnx` SQLite sidecar
 (`src-tauri/crates/persistence/src/persistence/plnx.rs`), not in the `.stalx`.
@@ -2356,6 +2382,12 @@ pub struct DmpShot {
     pub comment: Option<String>,  // not parsed from DMP; defaults to None
 }
 ```
+
+The file carries no station numbers: mNemo numbers a section's start 0 and the
+end of its N-th shot N, so the importer derives each station's number from the
+shot's position (counting only the shots it imports - an assumption not yet
+checked against a device) and records it as the station's name; see
+[dmp-import.md](dmp-import.md#station-names).
 
 ### 17.3 Export Formats
 
@@ -2660,7 +2692,9 @@ unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
 HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
 address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
 allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
-missing schemes and malformed addresses are rejected. No DNS-based exception or
-insecure-HTTP override exists. Invalid endpoints produce an error modal when
-connecting or saving; existing legacy override fields are ignored and omitted
-from subsequent saves. Certificate verification and redirect restrictions remain.
+missing schemes and malformed addresses are rejected, without any DNS lookup. An
+endpoint the policy refuses produces an error dialog when connecting, or when saving
+a new server. `insecure_http` lifts only the HTTP rule (never certificate
+verification); it stays in the file so existing configurations load, Settings has
+no control for it, and its development-build-only handling is being finalised by a
+follow-up commit. Certificate verification and redirect restrictions remain.

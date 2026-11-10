@@ -627,7 +627,7 @@ side's value.
 | Event | Effect | Why |
 |---|---|---|
 | Confirmed push | entries with `timestamp <= push_start` dropped; redo cleared | they are in the commit now, so keeping them would duplicate them in the next one. Bounded by push-start because an edit recorded after the snapshot keeps its dirty bit, so its history has to survive with it |
-| Any server `.stalx` becoming the local cache file | undo/redo tables emptied in the downloaded FILE | `InheritedUndo::Drop` at the `replace_cache_stalx*` chokepoint - pull, fast-forward and revision swap all funnel there |
+| Any server `.stalx` becoming the local cache file | undo/redo tables emptied in the downloaded FILE | `InheritedUndo::Drop` applied by `stage_download` - pull, fast-forward and revision swap all stage their download through it |
 | Lock acquired over a copy that equals git (`UpToDate` + clean) | in-memory stacks cleared | the history describes already-committed operations. The clean check is what lets lock, edit, unlock-without-pushing, re-lock keep the user's own history |
 
 Clearing on adopt happens in the FILE, not in memory: the load path reads those tables into
@@ -764,12 +764,31 @@ One lock sits OUTSIDE even that: `speleodb_lock_ops`
 operation** against every other and is deliberately held across network calls.
 Start Editing takes it before its first read (generation, link, token, holder)
 and holds it through the commit; so do the reclaim-checked releases, the status
-refresh's inherited-lock gate reopen, and logout - each of which can invalidate a
-fact another one of them is mid-way through acting on. Nothing holding `project` / `database` / `undo_stack` may
+refresh's short lock-holder probe, logout, and a settings save or reload that
+moves to another SpeleoDB instance (taken before `config_write_lock`) - each of
+which can invalidate a fact another one of them is mid-way through acting on.
+Nothing holding `project` / `database` / `undo_stack` / `config_write_lock` may
 block on it - its users decide under `project`, drop that guard, and only then
-take it. The SpeleoDB session generation (`speleodb_session_generation`) is
+take it. No synchronous Tauri command may block on it either: those run on the
+main thread, and the span lasts as long as an upload or download. The partial
+config writes never take it, and Switch to Read Only Mode drops `command_lock`
+and `project` before its release request. The SpeleoDB session generation (`speleodb_session_generation`) is
 likewise only ever bumped while holding `project`; see the module doc in
 `speleodb_session.rs` for the rules.
+
+The read-only edit gate that every mutation entry (`guard_mutation`) checks is
+not a stored flag but a function of the lock claim bound to the editing session
+(`core/state/speleodb_edit_gate.rs`): a local project is always editable, a
+SpeleoDB project only while the signed-in account holds a claim on it bound to the
+current session generation. Reading it takes the open-project gate record (the
+innermost lock of all) and then, separately, the SpeleoDB session mutex, under
+which nothing but that record is ever taken - so `edit_enabled()` must never be
+called while holding the session mutex. An in-place reload bumps the generation and carries the binding in one
+acquisition of the session mutex, so a reader never sees the gate of a session
+that kept editing flicker shut. Undo and redo on a SpeleoDB project are therefore
+refused exactly when there is no edit session, including right after Take remote,
+whose reload carries no claim. A Restore that loads a revision's undo history keeps
+its edit session by carrying the claim through the swap; a View carries none.
 
 ## History UI
 

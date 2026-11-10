@@ -1,12 +1,11 @@
+import type { MouseEvent } from 'react';
 import { RemoteUpdatedTime } from './RemoteUpdatedTime';
-import { type MouseEvent } from 'react';
-import { useTranslation } from 'react-i18next';
-import type { SpeleoProjectSummary } from '../../types/ipc.generated';
+import type { SpeleoCachedProject, SpeleoProjectSummary } from '../../types/ipc.generated';
 import { SpeleoProjectInfo } from './SpeleoProjectInfo';
-import { Button } from '../common/Button';
 import {
   recentAccent,
   recentAccentStyle,
+  withCachedCopyEdits,
   type SpeleoLockInfo,
 } from './SpeleoLockBadge';
 
@@ -14,30 +13,35 @@ interface RemoteSystemCardProps {
   summary: SpeleoProjectSummary;
   /** Lock state for the badge, resolved from the scan for this project id (#218). */
   lock: SpeleoLockInfo;
+  /** This computer's cached copy, when the session may see one. */
+  cached?: SpeleoCachedProject | undefined;
   /** Pull + open this remote project (shared `useOpenRemoteProject` flow). */
   onOpen: (summary: SpeleoProjectSummary) => void;
+  /** Right-click: the SpeleoDB project context menu. */
+  onContextMenu?: (e: MouseEvent) => void;
   /** Disable actions while an open/adopt is in flight. */
   busy?: boolean;
 }
 
 /**
- * Card for a SpeleoDB project, whether or not it has been downloaded before. It carries no local file/stats, so it shows the SpeleoDB name
- * + lock badge and a single Open action that pulls it (like the browser dialog). The
- * whole card is clickable for discoverability; the Open button stops propagation so
- * it doesn't double-fire.
+ * Card for a SpeleoDB project, whether or not it has been downloaded before. It
+ * carries no local file/stats, so it shows the SpeleoDB name + lock badge. The card
+ * itself is the Open action (click, or Enter/Space when focused), which pulls the
+ * project like the browser dialog does; there is no separate Open button.
  */
 export default function RemoteSystemCard({
   summary,
   lock,
+  cached,
   onOpen,
+  onContextMenu,
   busy = false,
 }: RemoteSystemCardProps) {
-  const { t } = useTranslation();
-  const displayLock = { ...lock, hasLocalEdits: false };
+  // The same leading-edge accent as the table row, un-uploaded work included.
+  const displayLock = withCachedCopyEdits(lock, cached);
   const testId = `system-card-remote-${summary.id}`;
-  // Gate the whole-card click on `busy` too, not just the Open button - otherwise a
-  // click on the card body (or Enter/Space) bypasses the disabled button and fires a
-  // concurrent open.
+  // Gate every open on `busy`: a click (or Enter/Space) while a pull is in flight
+  // must not fire a concurrent open.
   const open = () => {
     if (!busy) onOpen(summary);
   };
@@ -55,6 +59,10 @@ export default function RemoteSystemCard({
       aria-disabled={busy || undefined}
       tabIndex={0}
       onClick={open}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        if (!busy) onContextMenu?.(e);
+      }}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
@@ -65,23 +73,16 @@ export default function RemoteSystemCard({
     >
       <h3 className="text-lg font-medium mb-1">{summary.name}</h3>
       <div className="mb-3" data-testid={`${testId}-path`}>
-        <SpeleoProjectInfo lock={displayLock} summary={summary} testIdPrefix={`${testId}-speleo`} />
+        <SpeleoProjectInfo lock={displayLock} summary={summary} cached={cached} testIdPrefix={`${testId}-speleo`} />
       </div>
 
-      <div className="mt-3 pt-3 border-t border-border flex items-center justify-between gap-2">
-        <RemoteUpdatedTime date={summary.modified_date} />
-        <Button
-          variant="primary"
-          onClick={(e: MouseEvent) => {
-            e.stopPropagation();
-            open();
-          }}
-          disabled={busy}
-          data-testid={`system-card-remote-open-${summary.id}`}
-        >
-          {t('speleodb.browser.open')}
-        </Button>
-      </div>
+      {/* The footer held the Open button too; with only the time left, draw it
+          only when there is a time to show rather than leave an empty strip. */}
+      {summary.modified_date && Number.isFinite(Date.parse(summary.modified_date)) && (
+        <div className="mt-3 pt-3 border-t border-border flex items-center" data-testid={`${testId}-footer`}>
+          <RemoteUpdatedTime date={summary.modified_date} />
+        </div>
+      )}
     </div>
   );
 }

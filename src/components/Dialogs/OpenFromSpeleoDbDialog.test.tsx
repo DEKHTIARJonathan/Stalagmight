@@ -3,11 +3,18 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const confirmMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
-vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
+// The unsaved-edits question before a switch is in-app (`askExitChoice`); answer it
+// through `confirmMock`: true = discard, false = cancel, 'save' = save on this
+// computer first. The rest of the module (the drafts question) stays real.
+vi.mock('../../utils/exitConfirm', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../utils/exitConfirm')>(),
+  askExitChoice: (options: unknown) => Promise.resolve(confirmMock(options))
+    .then((answer: unknown) => (answer === 'save' ? 'save' : answer ? 'confirm' : 'cancel')),
+}));
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f?: string) => f ?? 'error',
+  getErrorMessage: (e: unknown, f?: string) => (e as { message?: string } | null)?.message ?? f ?? 'error',
 }));
 
 import OpenFromSpeleoDbDialog from './OpenFromSpeleoDbDialog';
@@ -238,6 +245,77 @@ describe('OpenFromSpeleoDbDialog with work at risk in the open project (#270)', 
     await waitFor(() => expect(loadProjectMock).toHaveBeenCalled());
     expect(confirmMock).not.toHaveBeenCalled();
 
+  });
+});
+
+/**
+ * frontend#3 - Escape, the X or a backdrop click used to close the browser while an
+ * open was in flight; the unmount then made the open's outcome stale, so its error,
+ * including the 401 that should drop the session, was never shown.
+ */
+describe('OpenFromSpeleoDbDialog while an open is in flight (frontend#3)', () => {
+  const realClearSession = useSpeleoStore.getState().clearSession;
+  const deferredOpen = () => {
+    let fail!: (error: unknown) => void;
+    const pending = new Promise<never>((_resolve, reject) => { fail = reject; });
+    return { pending, fail };
+  };
+
+  it('cannot be dismissed by Escape, the X, the backdrop or Close until the open ends', async () => {
+    const open = deferredOpen();
+    mockRoutes({ speleodb_open_project: () => open.pending });
+    render(<OpenFromSpeleoDbDialog />);
+    await userEvent.click(await screen.findByTestId('open-from-speleodb-open-p1'));
+
+    await userEvent.keyboard('{Escape}');
+    await userEvent.click(screen.getByTestId('open-from-speleodb-dialog-close'));
+    const backdrop = screen.getByTestId('open-from-speleodb-dialog-backdrop');
+    await userEvent.click(backdrop);
+    expect(screen.getByTestId('open-from-speleodb-close')).toBeDisabled();
+    expect(closeDialogMock).not.toHaveBeenCalled();
+
+    open.fail({ message: 'Project not found', action: 'Fatal', status: 404 });
+    expect(await screen.findByTestId('open-from-speleodb-error')).toHaveTextContent('Project not found');
+    await waitFor(() => expect(screen.getByTestId('open-from-speleodb-close')).toBeEnabled());
+    await userEvent.keyboard('{Escape}');
+    expect(closeDialogMock).toHaveBeenCalledOnce();
+  });
+
+  it('a 401 from the open signs out and keeps its message on the login prompt', async () => {
+    useSpeleoStore.setState({ clearSession: realClearSession, session: { loggedIn: true, userEmail: 'u@example.com', endpoint: 'https://x/' } });
+    let signedIn = true;
+    mockRoutes({
+      speleodb_session: () => Promise.resolve({ logged_in: signedIn }),
+      speleodb_open_project: () => {
+        signedIn = false;
+        return Promise.reject({ message: 'Your SpeleoDB session expired', action: 'ReLogin', status: 401 });
+      },
+    });
+    const generation = useSpeleoStore.getState().sessionGeneration;
+    render(<OpenFromSpeleoDbDialog />);
+    await userEvent.click(await screen.findByTestId('open-from-speleodb-open-p1'));
+
+    expect(await screen.findByTestId('open-from-speleodb-logged-out')).toBeInTheDocument();
+    // The session change re-ran the browser's session check; the reason survived it.
+    await waitFor(() => expect(invokeIpcMock.mock.calls.filter((c) => c[0] === 'speleodb_session')).toHaveLength(2));
+    expect(screen.getByTestId('open-from-speleodb-error')).toHaveTextContent('Your SpeleoDB session expired');
+    expect(useSpeleoStore.getState().session).toBeNull();
+    expect(useSpeleoStore.getState().sessionGeneration).toBe(generation + 1);
+  });
+
+  it('an open error that outlives the browser is toasted, and a 401 still drops the session', async () => {
+    const open = deferredOpen();
+    mockRoutes({ speleodb_open_project: () => open.pending });
+    const { unmount } = render(<OpenFromSpeleoDbDialog />);
+    await userEvent.click(await screen.findByTestId('open-from-speleodb-open-p1'));
+    // Something else took the dialog slot mid-open.
+    unmount();
+
+    open.fail({ message: 'Your SpeleoDB session expired', action: 'ReLogin', status: 401 });
+    await waitFor(() => expect(showToastMock).toHaveBeenCalledWith(
+      expect.stringContaining('Your SpeleoDB session expired'), 'speleodb-open-remote-error', 'error',
+    ));
+    expect(useSpeleoStore.getState().clearSession).toHaveBeenCalledOnce();
   });
 });
 

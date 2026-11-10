@@ -1,6 +1,6 @@
 import { type ReactNode, type ButtonHTMLAttributes, forwardRef } from 'react';
 
-type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger' | 'warning' | 'success' | 'info' | 'external';
+type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 type ButtonSize = 'sm' | 'md' | 'lg';
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
@@ -9,17 +9,23 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   size?: ButtonSize;
   children: ReactNode;
   icon?: ReactNode;
+  /**
+   * Tint for `icon`, taken from `MENU_ICON_COLORS` so an action wears the same
+   * icon colour here as in the menus. Applied on the unfilled variants only
+   * (`secondary`, `ghost`): on a filled `primary` / `danger` button the icon keeps
+   * the button's own text colour, which is the one guaranteed to read on that fill.
+   */
+  iconColor?: string;
 }
+
+/** Variants drawn on the panel colour, where a tinted icon reads like it does in a menu. */
+const TINTABLE_ICON_VARIANTS: ReadonlySet<ButtonVariant> = new Set(['secondary', 'ghost']);
 
 const variantStyles: Record<ButtonVariant, string> = {
   primary: 'bg-accent text-accent-on hover:bg-accent-90',
-  secondary: 'bg-panel border border-border text-text-primary hover:bg-border',
+  secondary: 'bg-button-secondary border border-border text-text-primary hover:bg-button-secondary-hover',
   ghost: 'text-text-primary hover:bg-panel',
   danger: 'bg-error text-accent-on hover:bg-error-90',
-  warning: 'bg-warning-20 border border-warning text-warning hover:bg-warning-30',
-  success: 'bg-success-10 border border-success text-success hover:bg-success-30',
-  info: 'bg-sky-100 border border-sky-500 text-sky-900 hover:bg-sky-200',
-  external: 'bg-violet-700 border border-violet-600 text-white hover:bg-violet-800',
 };
 
 const sizeStyles: Record<ButtonSize, string> = {
@@ -33,11 +39,13 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
   size = 'md',
   children,
   icon,
+  iconColor,
   className = '',
   disabled,
   'data-testid': testId,
   ...props
 }, ref) {
+  const iconStyle = iconColor && TINTABLE_ICON_VARIANTS.has(variant) ? { color: iconColor } : undefined;
   return (
     <button
       ref={ref}
@@ -54,7 +62,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       {...(variant === 'primary' ? { 'data-primary-action': '' } : {})}
       {...props}
     >
-      {icon && <span className="flex-shrink-0">{icon}</span>}
+      {icon && <span className="flex-shrink-0" style={iconStyle} data-icon-color={iconStyle ? iconColor : undefined}>{icon}</span>}
       {children}
     </button>
   );

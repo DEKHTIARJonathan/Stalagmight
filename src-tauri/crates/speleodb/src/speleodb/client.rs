@@ -24,14 +24,62 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 fn upload_timeout(bytes: usize) -> Duration {
     TRANSFER_TIMEOUT + Duration::from_secs((bytes as u64).div_ceil(16 * 1024))
 }
+
+/// The slowest average rate a download may keep up once its grace
+/// ([`TRANSFER_TIMEOUT`]) has run, in bytes per second: 32 kbit/s, a quarter of
+/// the upload budget's rate. Generous on purpose - a download only has a read
+/// timeout otherwise, so a server trickling a byte now and then held the transfer
+/// (and, through the quit-after-work wait, the app's exit) for ever.
+const DOWNLOAD_MIN_RATE: u64 = 4 * 1024;
+
+/// The longest any download may run, whatever it has received: the deadline of
+/// the largest file SpeleoDB accepts ([`SERVER_UPLOAD_LIMIT_BYTES`]) at
+/// [`DOWNLOAD_MIN_RATE`], 120 + 6,020 s (about 1 h 42 min). Without it the
+/// per-byte deadline alone let a server trickling just above the minimum rate
+/// hold a download - and the app's exit waiting for it - for some 36 hours
+/// within the native size limit. Derived rather than picked: every project the
+/// server can store still downloads at the minimum rate, so only a server
+/// sending more than it could have stored, or slower than the minimum, is cut.
+/// It grows with the upload limit when the server's limit is fixed.
+const DOWNLOAD_CEILING: Duration = Duration::from_secs(
+    TRANSFER_TIMEOUT.as_secs() + SERVER_UPLOAD_LIMIT_BYTES.div_ceil(DOWNLOAD_MIN_RATE),
+);
+
+/// How long a download may have run once it has received `bytes`: `grace` plus
+/// `bytes` at `min_rate`, the shape of [`upload_timeout`], and never more than
+/// `ceiling` ([`DOWNLOAD_CEILING`]). The SDK's stream does not expose the reply's
+/// `Content-Length`, so the size is what has arrived so far: a download of N
+/// bytes must end within `grace + N / min_rate` of its start, and none outlasts
+/// the ceiling.
+fn download_deadline(grace: Duration, min_rate: u64, ceiling: Duration, bytes: u64) -> Duration {
+    (grace + Duration::from_millis(bytes.saturating_mul(1000) / min_rate.max(1))).min(ceiling)
+}
 const JSON_LIMIT: usize = 10 * 1024 * 1024;
 pub(crate) const NATIVE_LIMIT: u64 = 512 * 1024 * 1024;
+
+/// The largest project file SpeleoDB accepts in one upload, in bytes. A larger
+/// file is refused with a 400 only AFTER its whole body has been sent, so the
+/// push path checks against this first (sdk#3).
+///
+/// The value is an upstream bug, not a design limit. The server compares the
+/// upload against `DJANGO_UPLOAD_TOTAL_FILES_LIMIT * 1024 * 1204`: that setting is
+/// the maximum file COUNT (20), not the intended
+/// `DJANGO_UPLOAD_TOTAL_FILESIZE_MB_LIMIT` (150 MB), and `1204` is a typo for
+/// `1024`. 20 * 1024 * 1204 = 24,657,920 bytes (about 23.5 MiB). Raise this to the
+/// real limit once the server is fixed.
+pub const SERVER_UPLOAD_LIMIT_BYTES: u64 = 24_657_920;
 
 #[derive(Clone, Copy)]
 struct Settings {
     timeout: Option<Duration>,
     retries: u32,
     native_limit: u64,
+    upload_limit: u64,
+    /// A download's total deadline ([`download_deadline`]): its grace, the
+    /// minimum average rate after it, and the absolute ceiling.
+    download_grace: Duration,
+    download_min_rate: u64,
+    download_ceiling: Duration,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -39,6 +87,10 @@ impl Default for Settings {
             timeout: None,
             retries: 2,
             native_limit: NATIVE_LIMIT,
+            upload_limit: SERVER_UPLOAD_LIMIT_BYTES,
+            download_grace: TRANSFER_TIMEOUT,
+            download_min_rate: DOWNLOAD_MIN_RATE,
+            download_ceiling: DOWNLOAD_CEILING,
         }
     }
 }
@@ -65,10 +117,11 @@ impl SdkClient {
     fn new(
         base: &str,
         token: Option<&str>,
+        insecure: bool,
         timeout: Duration,
         settings: Settings,
     ) -> Result<Self, SpeleoDbError> {
-        super::validate_endpoint(base)?;
+        super::tls::enforce(base, insecure)?;
         let mut builder = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -112,12 +165,17 @@ impl SdkClient {
                 }
                 let started = Instant::now();
                 let result = operation().await;
-                let outcome = match &result {
-                    Ok(_) | Err(SpeleoDbError::Parse(_)) => Outcome::Ok,
-                    Err(SpeleoDbError::Status { status, .. }) => Outcome::from_status(*status),
-                    Err(_) => Outcome::NetworkError,
-                };
-                super::metrics::record(endpoint, outcome, started.elapsed());
+                // sdk#8: a contract mismatch is the failure most likely to need a
+                // bug report (a new server enum value fails every call that
+                // decodes it), so name the call and the field in the log.
+                if let Err(SpeleoDbError::Parse(detail)) = &result {
+                    tracing::warn!(
+                        endpoint = endpoint.kind(),
+                        detail = %detail,
+                        "SpeleoDB reply does not match the expected contract"
+                    );
+                }
+                super::metrics::record(endpoint, attempt_outcome(&result), started.elapsed());
                 let transient = matches!(&result, Err(SpeleoDbError::Transport { .. }))
                     || matches!(
                         &result,
@@ -136,38 +194,60 @@ impl SdkClient {
 
     fn download(&self, id: &str, revision: Option<&str>) -> Result<NativeFile, SpeleoDbError> {
         self.call(Endpoint::DownloadStalx, true, || async {
+            // The total deadline, on top of the read timeout: see `download_deadline`.
+            let started = tokio::time::Instant::now();
+            let deadline = |received: u64| {
+                started
+                    + download_deadline(
+                        self.settings.download_grace,
+                        self.settings.download_min_rate,
+                        self.settings.download_ceiling,
+                        received,
+                    )
+            };
             let file = NativeFile::new()?;
             let mut output = tokio::fs::File::create(file.path())
                 .await
                 .map_err(io_error)?;
-            let stream: std::pin::Pin<
-                Box<dyn futures_util::Stream<Item = Result<_, reqwest::Error>>>,
-            > = match revision {
-                Some(sha) => Box::pin(
-                    self.http
-                        .v2_projects_download_retrieve_by_format_at_hash_binary_stream(
-                            "stalagmight",
-                            sha,
-                            id,
-                            None,
-                        )
-                        .await
-                        .map_err(api_error)?,
-                ),
-                None => Box::pin(
-                    self.http
-                        .v2_projects_download_retrieve_by_format_binary_stream(
-                            "stalagmight",
-                            id,
-                            None,
-                        )
-                        .await
-                        .map_err(api_error)?,
-                ),
+            let request = async {
+                let chunks: std::pin::Pin<
+                    Box<dyn futures_util::Stream<Item = Result<_, reqwest::Error>>>,
+                > = match revision {
+                    Some(sha) => Box::pin(
+                        self.http
+                            .v2_projects_download_retrieve_by_format_at_hash_binary_stream(
+                                "stalagmight",
+                                sha,
+                                id,
+                                None,
+                            )
+                            .await
+                            .map_err(api_error)?,
+                    ),
+                    None => Box::pin(
+                        self.http
+                            .v2_projects_download_retrieve_by_format_binary_stream(
+                                "stalagmight",
+                                id,
+                                None,
+                            )
+                            .await
+                            .map_err(api_error)?,
+                    ),
+                };
+                Ok::<_, SpeleoDbError>(chunks)
             };
-            let mut stream = stream;
+            let mut stream = tokio::time::timeout_at(deadline(0), request)
+                .await
+                .map_err(|_| download_too_slow())??;
             let mut received = 0_u64;
-            while let Some(chunk) = stream.next().await {
+            loop {
+                let Some(chunk) = tokio::time::timeout_at(deadline(received), stream.next())
+                    .await
+                    .map_err(|_| download_too_slow())?
+                else {
+                    break;
+                };
                 let chunk = chunk.map_err(network_error)?;
                 received = received.saturating_add(chunk.len() as u64);
                 if received > self.settings.native_limit {
@@ -184,6 +264,17 @@ impl SdkClient {
     }
 }
 
+/// The traffic-metrics outcome of one attempt. A [`SpeleoDbError::Parse`] is its
+/// own error kind, never `Ok` (sdk#8): the server answered, but not in a shape
+/// the app can use.
+fn attempt_outcome<T>(result: &Result<T, SpeleoDbError>) -> Outcome {
+    match result {
+        Ok(_) => Outcome::Ok,
+        Err(SpeleoDbError::Parse(_)) => Outcome::ParseError,
+        Err(SpeleoDbError::Status { status, .. }) => Outcome::from_status(*status),
+        Err(_) => Outcome::NetworkError,
+    }
+}
 fn unreachable_result<T>() -> Result<T, SpeleoDbError> {
     Err(SpeleoDbError::Io(
         "invalid SpeleoDB retry configuration".into(),
@@ -192,12 +283,43 @@ fn unreachable_result<T>() -> Result<T, SpeleoDbError> {
 fn io_error(error: std::io::Error) -> SpeleoDbError {
     SpeleoDbError::Io(error.to_string())
 }
+/// A download that ran past its total deadline ([`download_deadline`]): a
+/// timeout, like the read timeout that a trickling server stays inside.
+fn download_too_slow() -> SpeleoDbError {
+    SpeleoDbError::Transport {
+        cause: TransportCause::Timeout,
+        detail: "the download was too slow to finish in time".into(),
+    }
+}
+/// `true` when a TLS handshake or certificate check is what failed: a typed
+/// `rustls::Error` anywhere in the error tree. tokio-rustls reports it inside an
+/// `io::Error`, which hyper-rustls wraps in a second one, and `io::Error::source`
+/// skips the error it wraps - so every `io::Error` is also opened with
+/// `get_ref`. Typed, never text-matched.
+fn is_tls_failure(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut pending = vec![error];
+    while let Some(link) = pending.pop() {
+        if link.is::<rustls::Error>() {
+            return true;
+        }
+        if let Some(wrapped) = link
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+        {
+            pending.push(wrapped);
+        }
+        pending.extend(link.source());
+    }
+    false
+}
 fn network_error(error: reqwest::Error) -> SpeleoDbError {
     use std::error::Error;
     let mut cause = if error.is_timeout() {
         TransportCause::Timeout
     } else if error.is_dns() {
         TransportCause::Dns
+    } else if is_tls_failure(&error) {
+        TransportCause::Tls
     } else {
         TransportCause::Unknown
     };
@@ -223,10 +345,114 @@ fn network_error(error: reqwest::Error) -> SpeleoDbError {
         detail: error.without_url().to_string(),
     }
 }
+/// The longest SDK decoder detail kept on a contract-mismatch error. serde's
+/// "unknown variant" message lists every accepted value (about 250 for a
+/// country), which would bury the one that failed.
+const CONTRACT_DETAIL_LIMIT: usize = 240;
+
+/// Append `text` to `out` with every quoted or backticked span replaced by
+/// `"..."` / `` `...` ``. Returns whether `text` ended inside a span (the caller
+/// then drops whatever follows, since the span may run into it). Only a quoted
+/// string escapes (serde Debug-formats it); a backtick span is the value verbatim,
+/// so it closes at the next backtick - which is why the server's value is not
+/// scanned with this (see [`redact_server_values`]).
+fn redact_spans(text: &str, out: &mut String) -> bool {
+    let mut chars = text.chars();
+    // The delimiter of the response value being skipped, while inside one.
+    let mut open: Option<char> = None;
+    while let Some(c) = chars.next() {
+        match (open, c) {
+            (None, '"' | '`') => {
+                open = Some(c);
+                out.push(c);
+                out.push_str("...");
+                out.push(c);
+            }
+            (Some(delimiter), c) if c == delimiter => open = None,
+            (Some('"'), '\\') => {
+                chars.next();
+            }
+            (Some(_), _) => {}
+            (None, c) => out.push(c),
+        }
+    }
+    open.is_some()
+}
+
+/// A serde decoder message with the server's value redacted.
+///
+/// serde puts at most one value from the reply in a message, ahead of what the
+/// schema wanted: `` unknown variant `X`, expected `A` or `B` ``,
+/// `` invalid type: string "X", expected u32 ``. A backticked value is printed
+/// verbatim, so it can itself hold a backtick or the text `, expected`: closing
+/// its span at the first backtick leaked the rest (`` `a`LEAK` ``). So the value
+/// part is everything before the LAST `, expected` (the schema's side never
+/// holds one), and a backtick span there runs from its first backtick to its
+/// last. A quoted value is escaped, so its span ends where the quotes say. The
+/// schema's side is redacted span by span as before. Whatever follows a span
+/// that never closes is dropped.
+fn redact_server_values(detail: &str) -> String {
+    let (value, expected) = detail
+        .rfind(", expected")
+        .map_or((detail, ""), |at| detail.split_at(at));
+    let mut out = String::with_capacity(detail.len());
+    let first = value.find(['"', '`']);
+    let open = match first {
+        Some(first) if value[first..].starts_with('`') => {
+            out.push_str(&value[..first]);
+            out.push_str("`...`");
+            match value.rfind('`').filter(|&last| last > first) {
+                Some(last) => redact_spans(&value[last + 1..], &mut out),
+                None => true,
+            }
+        }
+        _ => redact_spans(value, &mut out),
+    };
+    if !open {
+        redact_spans(expected, &mut out);
+    }
+    out
+}
+
+/// The [`SpeleoDbError::Parse`] text for a 2xx reply the SDK could not decode.
+///
+/// Keeps the SDK's decoder detail (what kind of mismatch, and where) so the log
+/// and the error dialog can name it (sdk#8). Every response value in it is
+/// redacted: serde quotes a string value (`string "..."`, which can be user text
+/// such as a project description) and puts numbers, unknown variants and unknown
+/// field names in backticks (`` floating point `20.48` ``, which can be a cave's
+/// coordinates). The detail is capped at [`CONTRACT_DETAIL_LIMIT`] characters.
+fn contract_mismatch(detail: Option<String>) -> String {
+    const MISMATCH: &str = "response does not match the SpeleoDB SDK contract";
+    let Some(detail) = detail else {
+        return MISMATCH.into();
+    };
+    let detail = detail
+        .trim()
+        .trim_start_matches("failed to deserialize 2xx response body:")
+        .trim();
+    let redacted = redact_server_values(detail);
+    let detail = redacted.trim();
+    if detail.is_empty() {
+        return MISMATCH.into();
+    }
+    format!("{MISMATCH}: {}", bounded(detail))
+}
+
+/// `text` cut to [`CONTRACT_DETAIL_LIMIT`] characters, with `...` when it was cut.
+/// Every piece of server-chosen text an error carries goes through this: an error
+/// reply can be as large as the JSON limit, and its message reaches the log, the
+/// error dialogs, the removal warning and the purge report.
+fn bounded(text: &str) -> String {
+    match text.char_indices().nth(CONTRACT_DETAIL_LIMIT) {
+        Some((cut, _)) => format!("{}...", &text[..cut]),
+        None => text.to_owned(),
+    }
+}
 fn api_error<E: std::fmt::Debug>(error: ApiOpError<E>) -> SpeleoDbError {
     match error {
         ApiOpError::Api(error) if (200..300).contains(&error.status) => {
-            SpeleoDbError::Parse("response does not match the SpeleoDB SDK contract".into())
+            SpeleoDbError::Parse(contract_mismatch(error.parse_error))
         }
         ApiOpError::Api(error) => SpeleoDbError::Status {
             status: error.status,
@@ -234,9 +460,14 @@ fn api_error<E: std::fmt::Debug>(error: ApiOpError<E>) -> SpeleoDbError {
                 .unwrap_or_else(|| format!("HTTP {}", error.status)),
         },
         ApiOpError::Transport(HttpError::Network(error)) => network_error(error),
+        // A send failure. Only the timeout and the TLS failure are classified
+        // here; refused / reset / DNS through this arm stay Unknown (tracked
+        // separately as F1, deliberately not changed with the TLS mapping).
         ApiOpError::Transport(HttpError::Middleware(error)) => SpeleoDbError::Transport {
             cause: if error.is_timeout() {
                 TransportCause::Timeout
+            } else if is_tls_failure(&error) {
+                TransportCause::Tls
             } else {
                 TransportCause::Unknown
             },
@@ -254,23 +485,24 @@ fn api_error<E: std::fmt::Debug>(error: ApiOpError<E>) -> SpeleoDbError {
         }
     }
 }
+/// The message of a SpeleoDB error reply, [`bounded`]: the server chooses it, and
+/// it may be as long as the reply.
 fn parse_error_message(body: &[u8]) -> Option<String> {
     let value: serde_json::Value = serde_json::from_slice(body).ok()?;
     for key in ["error", "detail"] {
         if let Some(message) = value.get(key).and_then(serde_json::Value::as_str) {
-            return Some(message.into());
+            return Some(bounded(message));
         }
     }
+    fn first(v: &serde_json::Value) -> Option<&str> {
+        v.as_str().or_else(|| v.as_array()?.first()?.as_str())
+    }
     let errors = value.get("errors")?.as_object()?;
-    let first = |v: &serde_json::Value| {
-        v.as_str()
-            .or_else(|| v.as_array()?.first()?.as_str())
-            .map(str::to_owned)
-    };
     errors
         .get("non_field_errors")
         .and_then(first)
         .or_else(|| errors.values().find_map(first))
+        .map(bounded)
 }
 fn project(value: types::Project) -> Result<Project, SpeleoDbError> {
     let permission = value
@@ -315,15 +547,30 @@ fn project(value: types::Project) -> Result<Project, SpeleoDbError> {
         longitude: value.longitude,
     })
 }
-fn client(base: &str, token: Option<&str>, timeout: Duration) -> Result<SdkClient, SpeleoDbError> {
-    let settings = Settings::default();
+fn client(
+    base: &str,
+    token: Option<&str>,
+    insecure: bool,
+    timeout: Duration,
+) -> Result<SdkClient, SpeleoDbError> {
+    SdkClient::new(base, token, insecure, timeout, settings())
+}
+/// The transport settings in force: the defaults, or a test's override.
+fn settings() -> Settings {
     #[cfg(test)]
-    let settings = TEST_SETTINGS.with(|value| value.get()).unwrap_or(settings);
-    SdkClient::new(base, token, timeout, settings)
+    if let Some(settings) = TEST_SETTINGS.with(std::cell::Cell::get) {
+        return settings;
+    }
+    Settings::default()
 }
 
-pub fn login(base: &str, email: &str, password: &str) -> Result<String, SpeleoDbError> {
-    let c = client(base, None, READ_TIMEOUT)?;
+pub fn login(
+    base: &str,
+    insecure: bool,
+    email: &str,
+    password: &str,
+) -> Result<String, SpeleoDbError> {
+    let c = client(base, None, insecure, READ_TIMEOUT)?;
     login_with(&c, email, password)
 }
 fn login_with(c: &SdkClient, email: &str, password: &str) -> Result<String, SpeleoDbError> {
@@ -339,8 +586,8 @@ fn login_with(c: &SdkClient, email: &str, password: &str) -> Result<String, Spel
             .map_err(api_error)
     })
 }
-pub fn fetch_user_email(base: &str, token: &str) -> Result<String, SpeleoDbError> {
-    let c = client(base, Some(token), READ_TIMEOUT)?;
+pub fn fetch_user_email(base: &str, token: &str, insecure: bool) -> Result<String, SpeleoDbError> {
+    let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::FetchUser, true, || async {
         match c.http.v2_user_retrieve(None).await {
             Ok(user) => Ok(user.email),
@@ -358,16 +605,18 @@ pub fn fetch_user_email(base: &str, token: &str) -> Result<String, SpeleoDbError
                         return Ok(email.to_owned());
                     }
                 }
-                Err(SpeleoDbError::Parse(
-                    "response does not match the SpeleoDB SDK contract".into(),
-                ))
+                Err(SpeleoDbError::Parse(contract_mismatch(error.parse_error)))
             }
             Err(error) => Err(api_error(error)),
         }
     })
 }
-pub fn list_projects(base: &str, token: &str) -> Result<Vec<Project>, SpeleoDbError> {
-    let c = client(base, Some(token), READ_TIMEOUT)?;
+pub fn list_projects(
+    base: &str,
+    token: &str,
+    insecure: bool,
+) -> Result<Vec<Project>, SpeleoDbError> {
+    let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::ListProjects, true, || async {
         match c.http.v2_projects_list(None).await {
             Ok(values) => list_projection(
@@ -452,20 +701,43 @@ fn list_projection(value: serde_json::Value) -> Result<Vec<Project>, SpeleoDbErr
     Ok(projects)
 }
 
-pub fn get_project(base: &str, token: &str, id: &str) -> Result<Project, SpeleoDbError> {
-    get_project_inner(base, token, id, READ_TIMEOUT, true)
+pub fn get_project(
+    base: &str,
+    token: &str,
+    insecure: bool,
+    id: &str,
+) -> Result<Project, SpeleoDbError> {
+    get_project_inner(base, token, insecure, id, READ_TIMEOUT, true)
 }
-pub fn get_project_probe(base: &str, token: &str, id: &str) -> Result<Project, SpeleoDbError> {
-    get_project_inner(base, token, id, Duration::from_secs(5), false)
+pub fn get_project_probe(
+    base: &str,
+    token: &str,
+    insecure: bool,
+    id: &str,
+) -> Result<Project, SpeleoDbError> {
+    get_project_inner(base, token, insecure, id, Duration::from_secs(5), false)
+}
+/// [`get_project_probe`] with a caller-chosen total budget, for a probe that has
+/// to fit inside a larger deadline (the lifecycle release's holder check runs
+/// inside the app-exit wait).
+pub fn get_project_probe_within(
+    base: &str,
+    token: &str,
+    insecure: bool,
+    id: &str,
+    timeout: Duration,
+) -> Result<Project, SpeleoDbError> {
+    get_project_inner(base, token, insecure, id, timeout, false)
 }
 fn get_project_inner(
     base: &str,
     token: &str,
+    insecure: bool,
     id: &str,
     timeout: Duration,
     retry: bool,
 ) -> Result<Project, SpeleoDbError> {
-    let c = client(base, Some(token), timeout)?;
+    let c = client(base, Some(token), insecure, timeout)?;
     c.call(Endpoint::GetProject, retry, || async {
         project(
             c.http
@@ -475,8 +747,13 @@ fn get_project_inner(
         )
     })
 }
-pub fn get_revisions(base: &str, token: &str, id: &str) -> Result<RevisionHistory, SpeleoDbError> {
-    let c = client(base, Some(token), READ_TIMEOUT)?;
+pub fn get_revisions(
+    base: &str,
+    token: &str,
+    insecure: bool,
+    id: &str,
+) -> Result<RevisionHistory, SpeleoDbError> {
+    let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::GetRevisions, true, || async {
         let value = c
             .http
@@ -498,8 +775,13 @@ pub fn get_revisions(base: &str, token: &str, id: &str) -> Result<RevisionHistor
         })
     })
 }
-pub fn acquire_lock(base: &str, token: &str, id: &str) -> Result<Project, SpeleoDbError> {
-    let c = client(base, Some(token), READ_TIMEOUT)?;
+pub fn acquire_lock(
+    base: &str,
+    token: &str,
+    insecure: bool,
+    id: &str,
+) -> Result<Project, SpeleoDbError> {
+    let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::Acquire, false, || async {
         project(
             c.http
@@ -509,8 +791,13 @@ pub fn acquire_lock(base: &str, token: &str, id: &str) -> Result<Project, Speleo
         )
     })
 }
-pub fn release_lock(base: &str, token: &str, id: &str) -> Result<Project, SpeleoDbError> {
-    let c = client(base, Some(token), READ_TIMEOUT)?;
+pub fn release_lock(
+    base: &str,
+    token: &str,
+    insecure: bool,
+    id: &str,
+) -> Result<Project, SpeleoDbError> {
+    let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::Release, false, || async {
         project(
             c.http
@@ -523,11 +810,12 @@ pub fn release_lock(base: &str, token: &str, id: &str) -> Result<Project, Speleo
 pub fn create_project_with(
     base: &str,
     token: &str,
+    insecure: bool,
     payload: &str,
 ) -> Result<Project, SpeleoDbError> {
     let request: types::V2ProjectsCreateWithJsonRequest =
         serde_json::from_str(payload).map_err(|e| SpeleoDbError::Parse(e.to_string()))?;
-    let c = client(base, Some(token), READ_TIMEOUT)?;
+    let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::CreateProject, false, || async {
         project(
             c.http
@@ -540,12 +828,13 @@ pub fn create_project_with(
 pub fn patch_project(
     base: &str,
     token: &str,
+    insecure: bool,
     id: &str,
     payload: &str,
 ) -> Result<Project, SpeleoDbError> {
     let request: types::V2ProjectsPartialUpdateWithJsonRequest =
         serde_json::from_str(payload).map_err(|e| SpeleoDbError::Parse(e.to_string()))?;
-    let c = client(base, Some(token), READ_TIMEOUT)?;
+    let c = client(base, Some(token), insecure, READ_TIMEOUT)?;
     c.call(Endpoint::PatchProject, false, || async {
         project(
             c.http
@@ -558,17 +847,26 @@ pub fn patch_project(
 pub fn upload_stalx(
     base: &str,
     token: &str,
+    insecure: bool,
     id: &str,
     path: &Path,
     message: &str,
 ) -> Result<Project, SpeleoDbError> {
-    if message.trim().is_empty() {
-        return Err(SpeleoDbError::Parse(
-            "commit message must not be empty".into(),
-        ));
+    // Every upload goes through here, so no caller can send a description the
+    // server would commit and then fail to store (sdk#2). Empty is refused too.
+    super::commit_message::check_commit_message(message)
+        .map_err(|e| SpeleoDbError::Parse(e.to_string()))?;
+    // sdk#3: the server reads the whole body before it refuses an oversized file,
+    // so refuse it here, before reading it or opening a connection. The push path
+    // shrinks the snapshot first (`core::state::speleodb_upload_limit`); this is the
+    // backstop that keeps every caller from sending a body that cannot land.
+    let size = std::fs::metadata(path).map_err(io_error)?.len();
+    let limit = settings().upload_limit;
+    if size > limit {
+        return Err(SpeleoDbError::UploadTooLarge { size, limit });
     }
     let content = std::fs::read(path).map_err(io_error)?;
-    let c = client(base, Some(token), upload_timeout(content.len()))?;
+    let c = client(base, Some(token), insecure, upload_timeout(content.len()))?;
     c.call(Endpoint::Upload, false, || async {
         let request = types::ProjectUploadRequestRequest {
             message: message.into(),
@@ -594,16 +892,22 @@ pub fn upload_stalx(
         Ok(value)
     })
 }
-pub fn download_stalx(base: &str, token: &str, id: &str) -> Result<NativeFile, SpeleoDbError> {
-    client(base, Some(token), Duration::ZERO)?.download(id, None)
+pub fn download_stalx(
+    base: &str,
+    token: &str,
+    insecure: bool,
+    id: &str,
+) -> Result<NativeFile, SpeleoDbError> {
+    client(base, Some(token), insecure, Duration::ZERO)?.download(id, None)
 }
 pub fn download_stalx_at_hash(
     base: &str,
     token: &str,
+    insecure: bool,
     id: &str,
     sha: &str,
 ) -> Result<NativeFile, SpeleoDbError> {
-    client(base, Some(token), Duration::ZERO)?.download(id, Some(sha))
+    client(base, Some(token), insecure, Duration::ZERO)?.download(id, Some(sha))
 }
 
 #[cfg(test)]

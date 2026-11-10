@@ -1339,9 +1339,9 @@ impl AppState {
         // Clear display settings cache
         self.clear_display_settings_cache();
         self.invalidate_adjusted_cache();
-        // [Track B] (#191) Reset the transient read-only edit gate so a previously
-        // read-only remote project can't leave the flag stuck for the next open.
-        self.set_edit_enabled(true);
+        // [Track B] (#191) Nothing is open: back to unmanaged (see
+        // `speleodb_edit_gate`); the closed session's claim stays a pointer only.
+        self.speleodb_set_open_gate(None);
 
         tracing::info!(purpose = "release project resources", "Project closed");
         tracing::debug!("close_project: returning success");

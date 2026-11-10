@@ -4,6 +4,8 @@
 // use) keeps compiling unchanged.
 pub use stalagmight_models::app_dirs;
 pub use stalagmight_persistence::cache;
+#[cfg(target_os = "macos")]
+mod app_menu;
 pub mod commands;
 // Extracted to the `stalagmight-core` workspace member; re-exported under the
 // old names, same deal as `models` below (`tile_providers` and, for the test
@@ -1477,9 +1479,12 @@ pub(crate) fn tile_fetch_impl(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 /// How long the app-exit handler waits for a best-effort SpeleoDB lock release
 /// before exiting anyway (fix M2). Long enough for a healthy round trip, short
-/// enough that a hung / unreachable server can't noticeably freeze quit; the
-/// server-side mutex times out on its own if the release doesn't land.
-const EXIT_LOCK_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
+/// enough that a hung / unreachable server can't noticeably freeze quit. It
+/// bounds only the release itself: an upload or acquire still in flight is
+/// waited for first (`commands::exit_wait`), never cut by this deadline. The
+/// server has NO lock timeout: a release that does not land leaves the lock
+/// held until the next sign-in's held-lock prompt (or the website) releases it.
+pub(crate) const EXIT_LOCK_RELEASE_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn run() {
     // Export the WebKit memory-pressure environment as the FIRST thing `run()`
@@ -1553,6 +1558,8 @@ pub fn run() {
         // for themselves when the updater is off), and here rather than in
         // `.setup()` because it needs nothing from the app.
         .manage(commands::app_update::AppUpdateState::default())
+        // Exit never cuts an in-flight SpeleoDB operation (lock#6): see `exit_wait`.
+        .manage(commands::exit_wait::ExitWait::default())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
@@ -1683,6 +1690,12 @@ pub fn run() {
             },
         );
 
+    // macOS menu bar: Tauri's default menu with a working Help submenu (#665).
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .menu(app_menu::build)
+        .on_menu_event(|app, event| app_menu::on_event(app, &event));
+
     // Desktop-only: intercept window close to allow frontend confirmation dialogs.
     // Android has no window close button, so this handler is dead code on mobile.
     #[cfg(desktop)]
@@ -1812,6 +1825,7 @@ pub fn run() {
             commands::project::set_surface_elevation,
             commands::project::save_project,
             commands::project::close_project,
+            commands::project::speleodb_discard_cached_copy,
             commands::project::take_unrecognised_shot_kinds,
             commands::project::history_discarded,
             commands::project::get_project_state,
@@ -1851,6 +1865,11 @@ pub fn run() {
             // SpeleoDB per-project LOCAL state (cached copy + un-pushed edits), the
             // local half of the held-lock / GlobalView project joins
             commands::speleodb::speleodb_local_project_states,
+            // Cached SpeleoDB copies on the home screen: owner-aware listing,
+            // removing one copy, and Settings' "Purge all cached files"
+            commands::speleodb_cache::speleodb_cached_projects,
+            commands::speleodb_cache::speleodb_remove_cached_copy,
+            commands::speleodb_cache::speleodb_purge_cached_copies,
             // SpeleoDB revision-history read + restore (#218)
             commands::speleodb::speleodb_get_revisions,
             commands::speleodb::speleodb_restore_revision,
@@ -1864,6 +1883,8 @@ pub fn run() {
             commands::speleodb::speleodb_publish,
             // SpeleoDB project settings: release the open project lock
             commands::speleodb::speleodb_release_current_lock,
+            // A project switch / quit hands the open project's lock back first
+            commands::speleodb::speleodb_settle_open_lock,
             commands::speleodb::speleodb_project_access_at,
             // Section commands
             commands::section::create_section,
@@ -1974,6 +1995,8 @@ pub fn run() {
             commands::app_update::discard_app_update_download,
             commands::app_update::arm_app_update_restart,
             commands::app_update::unarm_app_update_restart,
+            commands::exit_wait::arm_forced_exit,
+            commands::exit_wait::disarm_forced_exit,
             commands::app_update::install_app_update_and_restart,
             // Recovery (SPEC 14.4)
             commands::recovery::attempt_repair,
@@ -2004,11 +2027,12 @@ pub fn run() {
                 // edit session is active. Bounded (fix M2): this closure runs on the
                 // main event-loop thread, so a synchronous release against a hung /
                 // unreachable server would freeze quit for the full HTTP timeout - cap
-                // the wait and exit anyway (the server lock times out on its own).
-                if let tauri::RunEvent::ExitRequested { .. } = event {
-                    if let Some(state) = app_handle.try_state::<core::state::AppState>() {
-                        state.speleodb_release_held_lock_bounded(EXIT_LOCK_RELEASE_TIMEOUT);
-                    }
+                // the release and exit anyway. An upload or acquire still in flight
+                // is NOT cut (lock#6): the exit is held, the operation is waited for
+                // off the main thread, and only then does the release run and the
+                // app exit - unless the user chose "Quit now" in-app.
+                if let tauri::RunEvent::ExitRequested { code, api, .. } = &event {
+                    commands::exit_wait::on_exit_requested(app_handle, *code, api);
                 }
 
                 // Install on quit (#631). `Exit`, not `ExitRequested`: the latter

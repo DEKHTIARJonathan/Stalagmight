@@ -17,6 +17,8 @@ import { handBackProject } from '../../utils/quit';
 import { useUIStore } from '../uiStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../speleoStore';
 import type { DisplaySettings } from '../../types/loading';
+import { registerWorkspaceDraft } from '../../utils/workspaceDrafts';
+import { useExitConfirm } from '../../utils/exitConfirm';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 const loadBinaryMock = vi.hoisted(() => vi.fn());
@@ -223,7 +225,7 @@ it('reconciles a dispatched close after a newer file preflight fails', async () 
   });
   const closing = useProjectStore.getState().closeProject({ releaseLock: false });
   await vi.waitFor(() => expect(invokeIpcMock).toHaveBeenCalledWith(
-    'close_project', { releaseLock: false }, expect.anything(),
+    'close_project', { releaseLock: false, discardLocal: false }, expect.anything(),
   ));
   confirmMock.mockResolvedValue(false);
   expect(await useProjectStore.getState().loadProject('/restricted.stalx')).toEqual({ success: false });
@@ -247,7 +249,7 @@ it('carries pending New through a dispatched close and a failed newer preflight'
   });
   const closing = handBackProject({ pendingNewProject: true }, { releaseLock: false });
   await vi.waitFor(() => expect(invokeIpcMock).toHaveBeenCalledWith(
-    'close_project', { releaseLock: false }, expect.anything(),
+    'close_project', { releaseLock: false, discardLocal: false }, expect.anything(),
   ));
   confirmMock.mockResolvedValue(false);
   await useProjectStore.getState().loadProject('/restricted.stalx');
@@ -255,4 +257,27 @@ it('carries pending New through a dispatched close and a failed newer preflight'
   await closing;
   expect(useProjectStore.getState().project).toBeNull();
   expect(useUIStore.getState().activeDialog).toBe('new-project');
+});
+
+describe('unsent SpeleoDB input on a load (frontend#10)', () => {
+  it('asks before another project replaces it, and declining loads nothing', async () => {
+    mockLoad(false);
+    useProjectStore.setState({ project: { file_path: '/current.stalx', name: 'Current' } as never });
+    const unregister = registerWorkspaceDraft({ label: () => 'the synthetic form', dirty: () => true, discard: vi.fn() });
+    const pending = useProjectStore.getState().loadProject('/mock/loaded.stalx', { accessConfirmed: true });
+    await vi.waitFor(() => expect(useExitConfirm.getState().request).not.toBeNull());
+    useExitConfirm.getState().request?.answer(false);
+    expect((await pending).success).toBe(false);
+    expect(loadBinaryMock).not.toHaveBeenCalled();
+    unregister();
+  });
+
+  it('reloading the project already open is not leaving it: nothing is asked', async () => {
+    mockLoad(false);
+    useProjectStore.setState({ project: { file_path: '/mock/loaded.stalx', name: 'Loaded Cave' } as never });
+    const unregister = registerWorkspaceDraft({ label: () => 'the synthetic form', dirty: () => true, discard: vi.fn() });
+    await useProjectStore.getState().loadProject('/mock/loaded.stalx', { accessConfirmed: true });
+    expect(useExitConfirm.getState().request).toBeNull();
+    unregister();
+  });
 });

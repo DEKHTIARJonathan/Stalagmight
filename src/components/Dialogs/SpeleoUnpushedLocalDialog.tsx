@@ -7,7 +7,21 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { SpeleoProjectSummary, UnpushedLocalEdits } from '../../types/ipc.generated';
 
-/** Refuse to overwrite unsynced work. Cancel preserves it; replacing it requires confirmation. */
+/**
+ * Refuse to overwrite unsynced work. Raised when the server has moved past the
+ * local copy's base (or the base cannot be checked), and when the copy is not
+ * recorded as the signed-in account's (another account's, or one downloaded before
+ * owners were recorded): only this account's un-uploaded work sitting on the
+ * server tip opens directly instead. "Open my local copy" opens it as it is (no
+ * download) so the user can carry on through the ordinary resume / upload flows;
+ * Cancel preserves it; replacing it requires confirmation.
+ *
+ * When the copy's owner record names ANOTHER account (`other_owner`), the edits
+ * are that account's: the prompt names it instead of saying "your changes", and
+ * the non-destructive answer becomes "Open it read-only" - no lock is taken, and
+ * the backend refuses Start Editing on it, so the work can be looked at and saved
+ * as a copy but never edited or uploaded as this account's.
+ */
 export default function SpeleoUnpushedLocalDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
@@ -20,7 +34,7 @@ export default function SpeleoUnpushedLocalDialog() {
   const clearSession = useSpeleoStore((s) => s.clearSession);
   // Close the prompt right before loadProject so its progress is visible (the same
   // hand-off the browser dialog makes).
-  const { takeRemoteDiscardingLocal } = useOpenRemoteProject({
+  const { takeRemoteDiscardingLocal, openLocalCopy } = useOpenRemoteProject({
     onBeforeLoad: closeDialog,
   });
 
@@ -54,6 +68,10 @@ export default function SpeleoUnpushedLocalDialog() {
     else closeDialog();
   };
 
+  // The copy's owner record names another account: the edits are that account's
+  // work. Say so, and open it read-only rather than as this account's to edit.
+  const owner = unpushedLocal.other_owner ?? null;
+
   const lastEditAt = unpushedLocal.last_edit_at;
   const parsed = lastEditAt ? new Date(lastEditAt) : null;
   const lastEditedLine =
@@ -61,15 +79,11 @@ export default function SpeleoUnpushedLocalDialog() {
       ? t('speleodb.unpushedLocal.lastEdited', { when: parsed.toLocaleString() })
       : t('speleodb.unpushedLocal.lastEditedUnknown');
 
-  // Destructive branch. A failed re-pull keeps this prompt open with the reason on
-  // screen: closing it would leave the user with nothing opened and no explanation.
-  // The discard stays armed so the button is a retry, not a re-arm.
-  const handleTakeRemote = async () => {
-    setBusy(true);
-    setError(null);
-    const outcome = await takeRemoteDiscardingLocal(summary);
+  // Both branches keep this prompt open with the reason on screen when they fail:
+  // closing it would leave the user with nothing opened and no explanation.
+  const settleOutcome = (outcome: Awaited<ReturnType<typeof openLocalCopy>>) => {
     if (!stillPrompting()) return;
-    if (outcome.status === 'cancelled') {
+    if (outcome.status === 'cancelled' || outcome.status === 'load_failed') {
       setBusy(false);
     } else if (outcome.status === 'error') {
       setError(outcome.message);
@@ -78,6 +92,22 @@ export default function SpeleoUnpushedLocalDialog() {
       if (outcome.reLogin) clearSession();
       setBusy(false);
     }
+  };
+
+  // Non-destructive: open the copy on this computer, untouched. Nothing is
+  // downloaded and nothing is thrown away.
+  const handleOpenLocal = async () => {
+    setBusy(true);
+    setError(null);
+    settleOutcome(await openLocalCopy(summary, unpushedLocal));
+  };
+
+  // Destructive branch. The discard stays armed so a failed attempt's button is a
+  // retry, not a re-arm.
+  const handleTakeRemote = async () => {
+    setBusy(true);
+    setError(null);
+    settleOutcome(await takeRemoteDiscardingLocal(summary));
   };
 
   return (
@@ -90,17 +120,25 @@ export default function SpeleoUnpushedLocalDialog() {
       // surface its error had: `setError` landed on an unmounted component and a
       // failed discard-my-edits open produced no message anywhere.
       onClose={busy ? () => {} : dismiss}
-      size="md"
+      // Wide enough for the three answers on one footer line, armed or not.
+      size="lg"
       data-testid="speleodb-unpushed-local-dialog"
     >
       <div className="space-y-4">
-        <p className="text-sm text-text-secondary">
-          {t('speleodb.unpushedLocal.message', { name: summary.name })}
+        <p className="text-sm text-text-secondary" data-testid="speleodb-unpushed-local-message">
+          {owner
+            ? t('speleodb.unpushedLocal.messageOtherAccount', { name: summary.name, owner })
+            : t('speleodb.unpushedLocal.message', { name: summary.name })}
         </p>
         <p className="text-sm text-text-primary" data-testid="speleodb-unpushed-local-last-edited">
           {lastEditedLine}
         </p>
-        <p className="text-xs text-text-secondary">{t('speleodb.unpushedLocal.cancelHint')}</p>
+        {/* What each answer does, said once in the body (the app's dialog layout). */}
+        <p className="text-sm text-text-secondary" data-testid="speleodb-unpushed-local-open-hint">
+          {owner
+            ? t('speleodb.unpushedLocal.choicesOtherAccount', { owner })
+            : t('speleodb.unpushedLocal.choices')}
+        </p>
 
         {discardArmed && (
           <div
@@ -122,8 +160,8 @@ export default function SpeleoUnpushedLocalDialog() {
           </div>
         )}
 
-        <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-border">
-          <Button variant="primary" data-primary-action="" onClick={dismiss} disabled={busy} data-testid="speleodb-unpushed-local-cancel">
+        <div className="flex flex-wrap justify-end gap-2 pt-4 border-t border-border" data-testid="speleodb-unpushed-local-footer">
+          <Button onClick={dismiss} disabled={busy} data-testid="speleodb-unpushed-local-cancel">
             {t('common.actions.cancel')}
           </Button>
           <Button
@@ -138,9 +176,15 @@ export default function SpeleoUnpushedLocalDialog() {
             disabled={busy}
             data-testid="speleodb-unpushed-local-take-remote"
           >
-            {discardArmed
-              ? t('speleodb.unpushedLocal.takeRemoteConfirm')
-              : t('speleodb.unpushedLocal.takeRemote')}
+            {owner
+              ? t(discardArmed
+                ? 'speleodb.unpushedLocal.takeRemoteConfirmOtherAccount'
+                : 'speleodb.unpushedLocal.takeRemoteOtherAccount')
+              : t(discardArmed ? 'speleodb.unpushedLocal.takeRemoteConfirm' : 'speleodb.unpushedLocal.takeRemote')}
+          </Button>
+          <Button variant="primary" data-primary-action="" onClick={() => void handleOpenLocal()} disabled={busy}
+            data-testid="speleodb-unpushed-local-open-local">
+            {owner ? t('speleoExitPrompt.unpushedLocal.openReadOnly') : t('speleoExitPrompt.unpushedLocal.openLocal')}
           </Button>
         </div>
       </div>

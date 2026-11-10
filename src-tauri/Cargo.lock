@@ -4540,9 +4540,9 @@ dependencies = [
 
 [[package]]
 name = "speleodb-api"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e600e205836314e6c6f04e38571c0c6d486e16efbd09d36bbe069c12c842fc5c"
+checksum = "f7c6f7636c5c5ee9e0410be170db92d2d8d5e424ca6797453a67af8eaf40ad37"
 dependencies = [
  "bytes",
  "chrono",
@@ -4722,6 +4722,7 @@ dependencies = [
  "futures-util",
  "http",
  "reqwest 0.13.5",
+ "rustls",
  "serde",
  "serde_json",
  "speleodb-api",

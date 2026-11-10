@@ -55,9 +55,13 @@ export async function autoAcquireSpeleoLock(path: string, current: () => boolean
       });
     }
     if (result.kind === 'locked_by') {
-      showSpeleoReadOnlyNotice(i18n.t(result.email ? 'speleodb.readOnlyNotice.lockedBy' : 'speleodb.readOnlyNotice.unavailable', {
-        email: result.email,
-      }));
+      // Opened with un-uploaded work of our own (a fast-forward copy, or "Open my
+      // local copy"): say that it is safe, not just that the project is read-only.
+      const keeps = useSpeleoStore.getState().link?.hasUnpushedEdits === true;
+      const key = result.email
+        ? (keeps ? 'speleoExitPrompt.readOnly.lockedByKeepsChanges' : 'speleodb.readOnlyNotice.lockedBy')
+        : (keeps ? 'speleoExitPrompt.readOnly.unavailableKeepsChanges' : 'speleodb.readOnlyNotice.unavailable');
+      showSpeleoReadOnlyNotice(i18n.t(key, { email: result.email }));
     }
     // Divergence already has its own resolution dialog. Successful acquisition is silent.
     void useSpeleoStore.getState().refreshLinkStatus();

@@ -17,6 +17,15 @@ pub struct SpeleoDbConfig {
     #[serde(skip)]
     #[ts(skip)]
     pub preserve_unreadable_file: bool,
+    /// Allow an `http://` endpoint outside the automatic exceptions (`localhost`,
+    /// `127.0.0.1`, `192.168.x.x`; see `speleodb::tls`). Off by default. Relaxes
+    /// ONLY the http scheme rule in `speleodb::tls::validate_endpoint` - NEVER TLS cert
+    /// verification (self-signed / internal CAs stay rejected). A development-build
+    /// option: kept in the schema so existing configs load (in every build) and so
+    /// a development build can offer it; a release build offers no control for it
+    /// and the policy treats it as `false` (`tls::INSECURE_HTTP_HONOURED`).
+    #[serde(default)]
+    pub insecure_http: bool,
     /// [#303] Default undo policy for SpeleoDB-linked projects, under any
     /// per-project `speleo_link.undo_mode` override. Default
     /// [`UndoMode::Full`] - the hybrid stack the issue exists to deliver.
@@ -35,7 +44,7 @@ impl Default for SpeleoDbConfig {
             email: None,
             token: super::auth::AuthToken::default(),
             preserve_unreadable_file: false,
-
+            insecure_http: false,
             undo_mode: crate::models::UndoMode::Full,
         }
     }

@@ -51,8 +51,6 @@ export { default as SpeleoUnwindDialog } from './SpeleoUnwindDialog';
 export { default as SpeleoUnwoundPushDialog } from './SpeleoUnwoundPushDialog';
 export { default as SpeleoDiscardChangesDialog } from './SpeleoDiscardChangesDialog';
 export { default as SpeleoRevertDialog } from './SpeleoRevertDialog';
-export { default as SpeleoCloseDialog } from './SpeleoCloseDialog';
-export { default as SpeleoQuitDialog } from './SpeleoQuitDialog';
 export { default as SpeleoNoPermissionDialog } from './SpeleoNoPermissionDialog';
 export { default as SpeleoUnpushedLocalDialog } from './SpeleoUnpushedLocalDialog';
 export { default as SpeleoManagedFileDialog } from './SpeleoManagedFileDialog';

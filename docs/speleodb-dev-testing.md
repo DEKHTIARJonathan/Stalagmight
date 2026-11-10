@@ -135,9 +135,18 @@ UI regression coverage must include:
   Read-only permissions, another editor's lock, and connection failures remain
   distinct. A failed acquisition leaves the project open read-only and explains
   why; a competing editor is identified by their email address.
-- A project with unsaved local changes offers Discard changes or Cancel before
-  switching or closing. Cancelling performs no download, release or replacement.
-  Saved but unuploaded work stays in the local file and does not trigger an exit prompt.
+- A project with unsaved local changes and no editing lock offers Save on this
+  computer, Discard changes or Cancel before switching, closing or quitting.
+  Cancelling performs no download, release or replacement.
+- Closing, switching or quitting while holding the editing lock over work SpeleoDB
+  has not seen (unsaved, or saved but not uploaded) raises the exit prompt:
+  Upload, Keep the lock, Discard (confirmed) or Cancel. A clean project releases
+  its lock silently. Signing out offers Upload and disconnect, Keep on this
+  computer (the copy is kept, the lock handed back) or Discard (confirmed) for the
+  open project's work; other copies with changes are always kept on this computer.
+- Quitting while an upload, acquire, download or exit-prompt action is in flight
+  waits for it with a toast and a waiting prompt (Keep Stalagmight open / Quit
+  now behind a warning), then quits.
 - Deferred open/create setup, remote downloads, and reconciliation cannot replay
   older selections over newer mutations. Cancelling a newer preflight warning does
   not strand an older already-dispatched load; it reconciles and settles loading.
@@ -152,7 +161,9 @@ UI regression coverage must include:
   `Project Creation` automatically. Autosave remains local; failures keep the
   message and local edits available for retry.
 - Switching projects, closing a project, or quitting releases the editing lock
-  automatically. These exits do not upload changes. The SpeleoDB workspace offers
+  automatically; a release that fails or is uncertain asks "Couldn't hand back the
+  lock" (Retry / Close and keep the lock / Cancel) instead of leaving silently.
+  These exits do not upload changes. The SpeleoDB workspace offers
   Switch to Read Only Mode only when locally saved and uploaded; Resume editing
   retries editing when it becomes available. A different holder is never released.
   Local release/acquire/refresh operations are serialized.
@@ -268,10 +279,18 @@ unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
 HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
 address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
 allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
-missing schemes and malformed addresses are rejected. No DNS-based exception or
-insecure-HTTP override exists. Invalid endpoints produce an error modal when
-connecting or saving; existing legacy override fields are ignored and omitted
-from subsequent saves. Certificate verification and redirect restrictions remain.
+missing schemes and malformed addresses are rejected, without any DNS lookup. An
+endpoint the policy refuses produces an error dialog when connecting, or when saving
+a new server. `insecure_http` lifts only the HTTP rule (never certificate
+verification); it stays in the file so existing configurations load, Settings has
+no control for it, and its development-build-only handling is being finalised by a
+follow-up commit. Certificate verification and redirect restrictions remain.
+
+The verification notes below record PR #668 as reviewed on its own branch. On
+the reconciliation with the review-fixes branch its close-release retry context,
+pending-close state and close serialisation were dropped in favour of the
+holder-checked release model (docs/SpeleoDB.md), and the `insecure_http` field
+stayed in the configuration; its close scenarios were ported onto that model.
 
 ### Connection workflow verification (2026-11-09)
 
