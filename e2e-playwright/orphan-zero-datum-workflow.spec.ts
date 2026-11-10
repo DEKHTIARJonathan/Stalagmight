@@ -198,14 +198,14 @@ test.describe('Orphan + Zero Datum Workflow', () => {
     expect(mainline.shots.map((s) => s.kind)).toEqual(['Normal', 'Normal', 'Normal']);
   });
 
-  test('every row\'s choice is fully in view at the 800 px window minimum (#681)', async ({ page }) => {
-    // The choice used to be the table's last column, behind horizontal scroll
-    // in any window narrower than ~880 px. 800x888 is the narrowest window; the
-    // max UI scale caps the CSS viewport at 800 px wide too (uiScale.ts).
-    await openRepeatScenario(page, { width: 800, height: 888 });
+  /**
+   * No horizontal scroll in the details column, and each row's choice inside it.
+   * INJECTION (tried): the choice back as the table's last column reds the
+   * scale-0.5 case (overflow 67); with the fixed 380 px preview column as well,
+   * the 800 px case reds too (overflow 71).
+   */
+  async function expectChoicesInView(page: Page) {
     const details = page.getByTestId('wizard-suggestion');
-    await expect(page.getByTestId('overlap-row-1')).toBeVisible();
-
     const overflow = await details.evaluate((el) => el.scrollWidth - el.clientWidth);
     expect(overflow).toBeLessThanOrEqual(0);
     const column = (await details.boundingBox())!;
@@ -214,6 +214,27 @@ test.describe('Orphan + Zero Datum Workflow', () => {
       expect(select.x).toBeGreaterThanOrEqual(column.x);
       expect(select.x + select.width).toBeLessThanOrEqual(column.x + column.width);
     }
+  }
+
+  test('every row\'s choice is fully in view at the 800 px window minimum (#681)', async ({ page }) => {
+    // The choice used to be the table's last column, behind horizontal scroll
+    // in any window narrower than ~880 px. 800x888 is the narrowest window; the
+    // max UI scale caps the CSS viewport at 800 px wide too (uiScale.ts).
+    await openRepeatScenario(page, { width: 800, height: 888 });
+    await expect(page.getByTestId('overlap-row-1')).toBeVisible();
+
+    await expectChoicesInView(page);
+  });
+
+  test('every row\'s choice is fully in view at UI scale 0.5 (#681)', async ({ page }) => {
+    // Scale 0.5 doubles the CSS viewport, so the dialog is at its 900 px cap,
+    // but WebKit's minimum font size turns the 12 px table text into ~18 CSS
+    // px. Chromium has no such floor, so it is emulated with a style rule.
+    await openRepeatScenario(page, { width: 1600, height: 1776 });
+    await page.addStyleTag({ content: '* { font-size: max(18px, 1em) !important; }' });
+    await expect(page.getByTestId('overlap-row-1')).toBeVisible();
+
+    await expectChoicesInView(page);
   });
 
   test('a mid-repeat merge resolves only the shot before it; the rest stays Normal (#681)', async ({ page }) => {
