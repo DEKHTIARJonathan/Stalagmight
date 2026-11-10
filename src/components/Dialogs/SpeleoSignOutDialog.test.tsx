@@ -112,7 +112,7 @@ describe('SpeleoSignOutDialog', () => {
   it('an account switch says so on its buttons', () => {
     void show({ openProject: entry('open'), releasable: [], unuploaded: [] }, 'switch');
     expect(screen.getByText('Before you switch accounts')).toBeInTheDocument();
-    expect(screen.getByTestId('speleodb-signout-open-upload')).toHaveTextContent('Upload and switch account');
+    expect(screen.getByTestId('speleodb-signout-open-upload')).toHaveTextContent('Upload and switch');
   });
 
   it('without the open project\'s lock there is no Upload; Keep and Discard remain', () => {

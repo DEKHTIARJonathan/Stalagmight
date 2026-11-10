@@ -653,7 +653,7 @@ on, and every button is in the one footer row, Cancel first and the primary last
 
 - The open project's un-uploaded work under our lock: the body says it has changes
   not on SpeleoDB yet, and the footer offers Cancel / Discard / Keep on this
-  computer / Upload and disconnect (Upload and switch account for an account
+  computer / Upload and disconnect (Upload and switch, Discard and switch for an account
   switch). Upload goes through the description step (Back / Upload and disconnect)
   and runs the normal upload, which releases. Discard goes through a "lost forever"
   step (Back / Discard and disconnect) that lists what is lost (unsaved changes,
