@@ -885,13 +885,13 @@ fn swap_in_during(window: AddWindow, bravo: PathBuf) -> String {
 /// in the successor, or a record measured on it, would be paired with the
 /// first project's baseline, and its undo would delete the successor's own
 /// sections.
-/// INJECTION (tried): removing the slot-generation check under the forward
-/// step's FIRST lock appends Alpha into Bravo in the `BeforeFirstLock` case
-/// (the second lock compared against the generation the first lock read, so
-/// it passed); removing the re-check under the second lock does the same in
-/// the `DuringRead` case; removing the generation check in `push_add_undo`
-/// pushes an entry onto Bravo's stack that records Bravo's own sections as
-/// added, failing the undo-depth assertion in the `BeforePush` case.
+/// INJECTION (tried): binding the forward step to the generation its first
+/// lock reads instead of the stub's (the code before this test) appends Alpha
+/// into Bravo in the `BeforeFirstLock` case - the push check then reports a
+/// failure, but Bravo is already changed; dropping the re-check under the
+/// second lock does the same in the `DuringRead` case; dropping the generation
+/// check in `push_add_undo` reports success in the `BeforePush` case, with an
+/// entry on Bravo's stack that records Bravo's own sections as added.
 #[test]
 fn an_add_is_refused_when_another_project_is_opened_mid_command() {
     for window in [
