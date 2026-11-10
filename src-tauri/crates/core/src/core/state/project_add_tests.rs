@@ -8,6 +8,7 @@ use chrono::{TimeZone, Utc};
 use tempfile::TempDir;
 
 use super::fuzz_undo_tests::{canonical_snapshot, describe_diffs, diff_snapshots};
+use super::project_add::{set_add_window_hook, AddWindow};
 use super::AppState;
 use crate::core::{AddedContent, Command, CommandResult, UndoData, EDIT_DISABLED_CODE};
 use crate::models::{
@@ -859,42 +860,71 @@ fn the_add_command_never_serializes_its_path() {
     assert_eq!(command.description(), "Add 'survey.stalx' to project");
 }
 
-/// A project load does not take `command_lock`, so another project can be
-/// committed into the slot while the add reads its file. The add must then
-/// refuse rather than append into the successor - whose undo would be measured
-/// against the first project's baseline and delete the successor's sections.
-/// INJECTION (tried): removing the slot-generation re-check in
-/// `add_project_file` appends Alpha into Bravo and fails the refusal assertion.
-#[test]
-fn an_add_is_refused_when_another_project_is_opened_during_the_read() {
-    let temp = TempDir::new().unwrap();
-    let (state, _) = open_target(temp.path(), true);
-    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
-    let bravo = save_to(temp.path(), "bravo.stalx", &source_bravo());
+/// Open `bravo` into `state` from inside `window` of the next add, and return
+/// what Bravo looks like opened on its own.
+fn swap_in_during(window: AddWindow, bravo: PathBuf) -> String {
     let expected = {
         let reference = AppState::new().unwrap();
         assert!(reference.open_project(bravo.clone()).success);
         canonical_snapshot(&reference, false)
     };
-    super::project_add::set_between_locks(move |state| {
+    set_add_window_hook(window, move |state| {
         assert!(
             state.open_project(bravo).success,
             "commit another project mid-add"
         );
     });
+    expected
+}
 
-    let refused = add(&state, &alpha);
-    assert!(!refused.success, "the add must not land in the new project");
-    assert!(
-        refused
-            .error
-            .as_deref()
-            .is_some_and(|e| e.contains("changed while 'alpha.stalx' was being read")),
-        "{:?}",
-        refused.error
-    );
-    assert_same_project(&state, &expected, false, "the new project is untouched");
-    assert_eq!(undo_depth(&state), 0, "no undo entry was pushed");
+/// A project load does not take `command_lock`, so another project can be
+/// committed into the slot at any point the add holds no `project` guard:
+/// after `execute` captured the undo stub, while the source file is read, and
+/// after the append before the undo push. Each time the add must leave the
+/// project that is open now untouched and push no undo entry - an add landing
+/// in the successor, or a record measured on it, would be paired with the
+/// first project's baseline, and its undo would delete the successor's own
+/// sections.
+/// INJECTION (tried): removing the slot-generation check under the forward
+/// step's FIRST lock appends Alpha into Bravo in the `BeforeFirstLock` case
+/// (the second lock compared against the generation the first lock read, so
+/// it passed); removing the re-check under the second lock does the same in
+/// the `DuringRead` case; removing the generation check in `push_add_undo`
+/// pushes an entry onto Bravo's stack that records Bravo's own sections as
+/// added, failing the undo-depth assertion in the `BeforePush` case.
+#[test]
+fn an_add_is_refused_when_another_project_is_opened_mid_command() {
+    for window in [
+        AddWindow::BeforeFirstLock,
+        AddWindow::DuringRead,
+        AddWindow::BeforePush,
+    ] {
+        let temp = TempDir::new().unwrap();
+        let (state, _) = open_target(temp.path(), true);
+        let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+        let bravo = save_to(temp.path(), "bravo.stalx", &source_bravo());
+        let expected = swap_in_during(window, bravo);
+
+        let refused = add(&state, &alpha);
+        assert!(
+            !refused.success,
+            "{window:?}: the add must not land in Bravo"
+        );
+        assert!(
+            refused
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("changed while 'alpha.stalx' was being added")),
+            "{window:?}: {:?}",
+            refused.error
+        );
+        assert_same_project(&state, &expected, false, "the new project is untouched");
+        assert_eq!(
+            undo_depth(&state),
+            0,
+            "{window:?}: no undo entry was pushed"
+        );
+    }
 }
 
 /// The source is read under `command_lock`, so it must be a regular file of

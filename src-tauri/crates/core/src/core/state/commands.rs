@@ -818,7 +818,9 @@ impl AppState {
                 file_hashes,
                 section_hashes,
             } => self.untrack_import(file_hashes, section_hashes),
-            Command::AddProjectFile { path, .. } => self.add_project_file(path),
+            Command::AddProjectFile { path, .. } => {
+                self.add_project_file(path, Self::add_slot_generation(&undo_data))
+            }
             Command::RepairIntegrity => CommandResult::failure(
                 "RepairIntegrity is applied via repair_project_integrity, not execute()"
                     .to_string(),
@@ -878,10 +880,20 @@ impl AppState {
             self.reconcile_geometry();
         }
 
-        // Push to undo stack if successful and undoable.
-        // Batch commands handle their own undo push inside execute_batch()
-        // (with before+after snapshots), so skip them here.
-        if result.success && Self::is_undoable(&cmd) && !matches!(cmd, Command::Batch { .. }) {
+        // An add finalizes and pushes under ONE `project` guard, bound to the
+        // slot generation its stub was captured against (#674): a project
+        // committed into the slot since must neither be recorded as the add's
+        // content nor receive its undo entry.
+        if result.success && matches!(cmd, Command::AddProjectFile { .. }) {
+            if let Err(failure) = self.push_add_undo(&cmd, undo_data) {
+                return failure;
+            }
+            self.mark_remote_forward_edit();
+        } else if result.success && Self::is_undoable(&cmd) && !matches!(cmd, Command::Batch { .. })
+        {
+            // Push to undo stack if successful and undoable.
+            // Batch commands handle their own undo push inside execute_batch()
+            // (with before+after snapshots), so skip them here.
             // For create commands, finalize undo data with snapshot-based ID preservation
             let final_undo_data = self.finalize_undo_data(&cmd, undo_data);
 

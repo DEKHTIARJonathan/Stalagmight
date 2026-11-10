@@ -33,6 +33,12 @@ pub struct CarriedIgnore {
 /// finalized entry holds the difference, not the baseline.
 #[derive(Debug, Clone, Default)]
 pub struct AddBaseline {
+    /// The project slot's generation when the stub was captured, which binds
+    /// the whole command to ONE project: the forward step refuses, and the undo
+    /// push is skipped, when another project was committed into the slot since.
+    /// `None` for the forward step's own rollback point, taken and used under a
+    /// single `project` guard.
+    pub slot_generation: Option<u64>,
     pub next_section_id: SectionId,
     pub section_offsets: HashMap<SectionId, (f64, f64)>,
     pub file_hashes: HashSet<String>,
@@ -98,10 +104,12 @@ pub struct AddedContent {
 }
 
 impl AddedContent {
-    /// The stub `generate_undo_data` returns: the baseline only.
-    pub fn stub(project: &Project) -> Self {
+    /// The stub `generate_undo_data` returns: the baseline only, captured under
+    /// the `project` guard that read `slot_generation`.
+    pub fn stub(project: &Project, slot_generation: Option<u64>) -> Self {
         Self {
             baseline: Some(AddBaseline {
+                slot_generation,
                 next_section_id: project.next_section_id,
                 section_offsets: project.section_offsets.clone(),
                 file_hashes: project.imported_file_hashes.iter().cloned().collect(),
@@ -153,6 +161,12 @@ impl AddedContent {
         moved.sort_by_key(|(id, _, _)| *id);
         content.moved_offsets = moved;
         Some(content)
+    }
+
+    /// The slot generation a stub was captured against; `None` on a finalized
+    /// entry and on a rollback point.
+    pub fn slot_generation(&self) -> Option<u64> {
+        self.baseline.as_ref().and_then(|b| b.slot_generation)
     }
 
     /// The ids of the sections this add created.

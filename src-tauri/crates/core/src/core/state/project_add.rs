@@ -14,7 +14,9 @@ use super::project_append::{append_project, AppendOutcome};
 use super::project_io::same_file;
 use super::AppState;
 use crate::core::command::{sanitize_display_text, ImportReceipt, MAX_FILE_NAME_LEN};
-use crate::core::{extend_unique_hashes, AddedContent, CarriedIgnore, CommandResult};
+use crate::core::{
+    extend_unique_hashes, AddedContent, CarriedIgnore, Command, CommandResult, UndoData,
+};
 use crate::models::{
     gps_to_local, warning_is_ignorable, GpsCoordinates, Project, SectionId, SpeleoLink,
     FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
@@ -324,23 +326,52 @@ struct AppendReport {
 }
 
 impl AppState {
+    /// The slot generation an add's undo stub was captured against, which
+    /// `execute` hands the forward step. `None` when no stub was captured (no
+    /// project was open).
+    pub(super) fn add_slot_generation(undo_data: &UndoData) -> Option<u64> {
+        match undo_data {
+            UndoData::AddedProjectContent(stub) => stub.slot_generation(),
+            _ => None,
+        }
+    }
+
     /// `Command::AddProjectFile`'s forward step (reached only through
     /// `execute`, so the read-only gate, the geometry epilogue and the undo push
     /// all apply). Refuses with nothing changed when no project is open, when
     /// `path` is the open project's own file, or when the file cannot be read.
-    pub(super) fn add_project_file(&self, path: &Path) -> CommandResult {
+    ///
+    /// Bound to `slot_generation`, the generation `execute`'s undo stub was
+    /// captured under: a project load does not take `command_lock`, so another
+    /// project can be committed into the slot between that capture and either
+    /// of the two `project` locks below, and every slot commit bumps the
+    /// generation (local projects included - see `bump_speleodb_session` and the
+    /// bump-site tripwire in `speleodb_session`). Appending into that successor
+    /// would pair it with the first project's baseline, so its undo would delete
+    /// the successor's own sections. `push_add_undo` closes the same window after
+    /// the append.
+    pub(super) fn add_project_file(
+        &self,
+        path: &Path,
+        slot_generation: Option<u64>,
+    ) -> CommandResult {
         let label = path
             .file_name()
             .map(|n| sanitize_display_text(&n.to_string_lossy(), MAX_FILE_NAME_LEN))
             .unwrap_or_default();
+        let Some(slot_generation) = slot_generation else {
+            return CommandResult::failure("No project is open to add the file to".to_string());
+        };
+        let slot_moved = || {
+            CommandResult::failure(format!(
+                "The open project changed while '{label}' was being added, so it was not \
+                 added. No changes were made."
+            ))
+        };
+        add_window(self, AddWindow::BeforeFirstLock);
 
-        // The refusals that need no file read come first. The slot generation is
-        // read under the same guard: a project load does not take
-        // `command_lock`, so a different project can be committed while the
-        // file is read below, and every slot commit bumps the generation (local
-        // projects included - see `bump_speleodb_session` and the bump-site
-        // tripwire in `speleodb_session`).
-        let (open_path, slot_generation) = {
+        // The refusals that need no file read come first.
+        let open_path = {
             let guard = self
                 .project
                 .lock()
@@ -348,10 +379,10 @@ impl AppState {
             let Some(project) = guard.as_ref() else {
                 return CommandResult::failure("No project is open to add the file to".to_string());
             };
-            (
-                project.file_path.clone(),
-                self.speleodb_session_generation(),
-            )
+            if self.speleodb_session_generation() != slot_generation {
+                return slot_moved();
+            }
+            project.file_path.clone()
         };
         if open_path
             .as_deref()
@@ -366,7 +397,7 @@ impl AppState {
             Ok(source) => source,
             Err(e) => return CommandResult::failure(e),
         };
-        between_locks(self);
+        add_window(self, AddWindow::DuringRead);
 
         let mut guard = self
             .project
@@ -375,17 +406,12 @@ impl AppState {
         let Some(project) = guard.as_mut() else {
             return CommandResult::failure("No project is open to add the file to".to_string());
         };
-        // The project the add was started against left the slot during the read.
-        // Appending into its successor would pair it with the undo baseline
-        // `execute` captured from the first one, so that undo would delete the
-        // successor's own sections. Nothing has been changed yet. (A SpeleoDB
-        // sign-in or sign-out in the window bumps the generation too; refusing
-        // then is conservative, and the user simply adds again.)
+        // The project the add was started against left the slot during the
+        // read. Nothing has been changed yet. (A SpeleoDB sign-in or sign-out in
+        // the window bumps the generation too; refusing then is conservative,
+        // and the user simply adds again.)
         if self.speleodb_session_generation() != slot_generation {
-            return CommandResult::failure(format!(
-                "The open project changed while '{label}' was being read, so it was not \
-                 added. No changes were made."
-            ));
+            return slot_moved();
         }
         let report = match Self::append_into_open(project, &source) {
             Ok(report) => report,
@@ -443,7 +469,7 @@ impl AppState {
         let frame_before = project.frame_datum().map(|d| d.gps);
         let pre_critical = project.has_critical_integrity_violations();
         let closures_before = project.loop_closures.len();
-        let baseline = AddedContent::stub(project);
+        let baseline = AddedContent::stub(project, None);
         let roll_back = |project: &mut Project, baseline: AddedContent| {
             if let Some(added) = baseline.finalize(project, Vec::new()) {
                 added.remove_from(project);
@@ -550,6 +576,56 @@ impl AppState {
         };
         receipt.cap_warnings();
         receipt
+    }
+
+    /// Finalize the add's undo record and push it, under ONE `project` guard
+    /// and only while the slot still holds the project the stub was captured
+    /// against (lock order: `project` outranks `undo_stack`, as a load's own
+    /// commit takes them). When another project was committed since - after the
+    /// append, during `execute`'s epilogue - the record would measure that
+    /// project's sections as the add's and its undo would delete them, so
+    /// nothing is pushed and the command reports failure: the project the add
+    /// went into has left the slot, and the one there now is untouched.
+    pub(super) fn push_add_undo(
+        &self,
+        cmd: &Command,
+        undo_data: UndoData,
+    ) -> Result<(), CommandResult> {
+        add_window(self, AddWindow::BeforePush);
+        let guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let bound = Self::add_slot_generation(&undo_data);
+        let project = match guard.as_ref() {
+            Some(project) if bound == Some(self.speleodb_session_generation()) => project,
+            _ => {
+                tracing::warn!(
+                    purpose = "bind an add's undo record to its project",
+                    "The open project changed before the add was recorded; not pushing its undo entry"
+                );
+                let label = match cmd {
+                    Command::AddProjectFile { file_name, .. } => file_name.as_str(),
+                    _ => "",
+                };
+                return Err(CommandResult::failure(format!(
+                    "The open project changed while '{label}' was being added, so the add \
+                     was not recorded. The project open now was not changed."
+                )));
+            }
+        };
+        let final_undo_data = self.finalize_add_undo(project, undo_data);
+        if let Ok(mut undo_stack) = self.undo_stack.lock() {
+            // As `execute`'s generic push: an entry undo cannot apply never
+            // enters the stack, but the forward command still invalidates redo.
+            if matches!(final_undo_data, UndoData::None) {
+                undo_stack.clear_redo();
+            } else {
+                undo_stack.push_with_data(cmd.clone(), final_undo_data);
+            }
+        }
+        drop(guard);
+        Ok(())
     }
 
     // === Ignores carried by an add, until a save persists them ===
@@ -683,36 +759,57 @@ impl AppState {
     }
 }
 
-/// The window between the add's two `project` locks, where the source file is
-/// read. A no-op outside tests.
-#[cfg(not(test))]
-fn between_locks(_state: &AppState) {}
+/// The windows in which no `project` guard is held during an add, where a
+/// project load (which does not take `command_lock`) can commit another
+/// project into the slot.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum AddWindow {
+    /// After `execute` captured the undo stub, before the forward step's first
+    /// `project` lock.
+    BeforeFirstLock,
+    /// Between the forward step's two `project` locks, where the source file
+    /// is read.
+    DuringRead,
+    /// After the append and `execute`'s epilogue, before the undo push.
+    BeforePush,
+}
 
-/// Test-only: run the hook a test installed with [`set_between_locks`], once.
-/// Per thread, so it reaches no other test. Defined below every production
-/// item on purpose: the slot-commit tripwire in `speleodb_session` reads each
-/// file only up to its first test gate.
+/// A no-op outside tests.
+#[cfg(not(test))]
+fn add_window(_state: &AppState, _window: AddWindow) {}
+
+/// Test-only: run the hook a test installed with [`set_add_window_hook`] for
+/// `window`, once. Per thread, so it reaches no other test. Defined below every
+/// production item on purpose: the slot-commit tripwire in `speleodb_session`
+/// reads each file only up to its first test gate.
 #[cfg(test)]
-fn between_locks(state: &AppState) {
-    let hook = BETWEEN_LOCKS.with(|slot| slot.borrow_mut().take());
-    if let Some(hook) = hook {
+fn add_window(state: &AppState, window: AddWindow) {
+    let hook = ADD_WINDOW_HOOK.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.as_ref().is_some_and(|(at, _)| *at == window) {
+            slot.take()
+        } else {
+            None
+        }
+    });
+    if let Some((_, hook)) = hook {
         hook(state);
     }
 }
 
 #[cfg(test)]
-type BetweenLocksHook = Box<dyn FnOnce(&AppState)>;
+type AddWindowHook = (AddWindow, Box<dyn FnOnce(&AppState)>);
 
 #[cfg(test)]
 thread_local! {
-    static BETWEEN_LOCKS: std::cell::RefCell<Option<BetweenLocksHook>> =
+    static ADD_WINDOW_HOOK: std::cell::RefCell<Option<AddWindowHook>> =
         const { std::cell::RefCell::new(None) };
 }
 
-/// Test-only: run `hook` inside the next add's file-read window on this thread.
+/// Test-only: run `hook` inside `window` of the next add on this thread.
 #[cfg(test)]
-pub(super) fn set_between_locks(hook: impl FnOnce(&AppState) + 'static) {
-    BETWEEN_LOCKS.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+pub(super) fn set_add_window_hook(window: AddWindow, hook: impl FnOnce(&AppState) + 'static) {
+    ADD_WINDOW_HOOK.with(|slot| *slot.borrow_mut() = Some((window, Box::new(hook))));
 }
 
 /// Test-only: the append step on an in-memory source, bypassing the file read
