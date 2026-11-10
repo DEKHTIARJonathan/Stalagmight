@@ -608,11 +608,13 @@ impl AppState {
     /// project's sections as the add's and its undo would delete them, so
     /// nothing is pushed and the command reports failure: the project the add
     /// went into has left the slot, and the one there now is untouched.
+    ///
+    /// Returns that failure, or `None` once the entry is pushed.
     pub(super) fn push_add_undo(
         &self,
         cmd: &Command,
         undo_data: UndoData,
-    ) -> Result<(), CommandResult> {
+    ) -> Option<CommandResult> {
         add_window(self, AddWindow::BeforePush);
         let guard = self
             .project
@@ -630,7 +632,7 @@ impl AppState {
                     Command::AddProjectFile { file_name, .. } => file_name.as_str(),
                     _ => "",
                 };
-                return Err(CommandResult::failure(format!(
+                return Some(CommandResult::failure(format!(
                     "The open project changed while '{label}' was being added, so the add \
                      was not recorded. The project open now was not changed."
                 )));
@@ -647,7 +649,7 @@ impl AppState {
             }
         }
         drop(guard);
-        Ok(())
+        None
     }
 
     // === Ignores carried by an add, until a save persists them ===

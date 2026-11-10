@@ -885,7 +885,7 @@ impl AppState {
         // committed into the slot since must neither be recorded as the add's
         // content nor receive its undo entry.
         if result.success && matches!(cmd, Command::AddProjectFile { .. }) {
-            if let Err(failure) = self.push_add_undo(&cmd, undo_data) {
+            if let Some(failure) = self.push_add_undo(&cmd, undo_data) {
                 return failure;
             }
             self.mark_remote_forward_edit();
