@@ -243,8 +243,11 @@ impl AddedContent {
     /// project-level fields it changed. Any merge or closure still touching a
     /// removed section goes too - it could only dangle.
     ///
-    /// The id allocators are deliberately left alone: they are monotonic, so a
-    /// later command never reuses an id this redo may need again.
+    /// The id allocators are deliberately left alone, so within a session a
+    /// later command never reuses an id this redo may need again. Across a
+    /// reload that does not hold - the load derives `next_section_id` as the
+    /// highest saved id + 1 - and [`Self::install_into`] then refuses an id
+    /// that is already taken.
     pub fn remove_from(&self, project: &mut Project) {
         let ids = self.section_ids();
         project.sections.retain(|s| !ids.contains(&s.id));

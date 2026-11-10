@@ -420,7 +420,8 @@ history, and that step records only what the add brought - never a
 
 - **What is recorded** (`AddedContent`, `core/undo/added_content.rs`): the
   added `Section`s whole (ids, shot uuids, parity, gauge pair), every merge,
-  closure, datum, comment and section/station offset that names them, the
+  closure, datum, comment, station name and section/station offset that names
+  them, the
   dedup hashes the add put in (not ones the project already held), the ignored
   warnings it carried, `(before, after)` of `surface_elevation` and `location`
   (the two project fields the shared append can set), and `(before, after)` of
@@ -432,13 +433,19 @@ history, and that step records only what the add brought - never a
   it. The baseline is `#[serde(skip)]` and never persisted.
 - **Undo** removes exactly the recorded sections and everything referencing
   them, the recorded hashes, and puts the two fields and any moved offset back.
-  The id allocators are left alone (monotonic), so nothing later reuses an id
-  the redo needs. It is SELF-REFRESHING, like `CreatedSectionSnapshot`: the
+  The id allocators are left alone, so within a session nothing later reuses
+  an id the redo needs. That holds only within a session: a reload derives
+  `next_section_id` from the highest section id on disk (max + 1), so after
+  undo, save and reopen a later command can take an id the redo needs - and
+  the redo then refuses it rather than create two sections with one id. It is
+  SELF-REFRESHING, like `CreatedSectionSnapshot`: the
   content is re-read from the live project right before the removal, so a save
   heal applied since the push comes back on redo instead of being reverted.
 - **Redo** reinstalls the recorded content verbatim - it never re-reads the
   file, which may have changed or gone. It refuses (nothing changed) if a
-  recorded section id is already taken.
+  recorded section id is already taken, or if the record names a section twice
+  or past `MAX_SECTION_ID` (the entry is persisted, so it is read back like any
+  other input).
 - **Privacy**: undo history rides to SpeleoDB in Full mode, so the command's
   `path` is `#[serde(skip)]`; only the sanitized file name (the history label)
   is serialized. A reloaded entry has an empty path, which nothing reads.
