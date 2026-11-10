@@ -303,3 +303,9 @@ pub fn set_shot_from_id(
 ) -> CommandResult {
     state.set_shot_from_id(shot_number, from_id)
 }
+
+/// Set an explicit geometry editing lock, including an override for network locks.
+#[tauri::command]
+pub fn set_shot_locked(state: State<AppState>, shot_number: u32, locked: bool) -> CommandResult {
+    state.set_shot_locked(shot_number, locked)
+}

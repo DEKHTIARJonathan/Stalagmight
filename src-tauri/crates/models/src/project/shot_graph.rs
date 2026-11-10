@@ -20,6 +20,10 @@ pub struct ShotGraphState {
     pub root_positions: BTreeMap<u32, (f64, f64)>,
     #[serde(default)]
     pub azimuth_overrides: BTreeMap<u32, crate::AzimuthReference>,
+    /// User overrides for computed geometry locks, keyed by immutable shot number.
+    /// False explicitly unlocks a network-constrained measurement.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub geometry_locks: BTreeMap<u32, bool>,
 }
 
 impl Project {

@@ -1,5 +1,6 @@
 mod reassign;
 mod shot_from;
+mod shot_lock;
 use super::AppState;
 #[cfg(test)]
 use crate::core::CommentHolder;

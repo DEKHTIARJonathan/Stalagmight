@@ -601,11 +601,23 @@ impl Project {
         closure_adj: &HashMap<StationRef, Vec<StationRef>>,
         datum_stations: &HashSet<StationRef>,
     ) -> bool {
+        if let Some(locked) = section_lookup
+            .get(&section_id)
+            .and_then(|section| section.shots.get(shot_index))
+            .and_then(|shot| shot.number)
+            .and_then(|number| self.shot_graph.geometry_locks.get(&number))
+        {
+            return *locked;
+        }
         if datum_stations.is_empty() {
             return false;
         }
 
-        let station_a = StationRef::new(section_id, shot_index as u32);
+        let station_a = if self.shot_graph.explicit {
+            Self::shot_start_ref(section_id, shot_index)
+        } else {
+            StationRef::new(section_id, shot_index as u32)
+        };
         let station_b = StationRef::new(section_id, (shot_index + 1) as u32);
 
         self.can_reach_datum_excluding_shot(
@@ -665,6 +677,37 @@ impl Project {
     /// Uses Tarjan's bridge-finding algorithm for O(V+E) total complexity instead
     /// of the naive O(shots × BFS) approach.
     pub fn compute_frozen_shots(&self) -> Vec<FrozenShotRef> {
+        let network = self.compute_network_frozen_shots();
+        if self.shot_graph.geometry_locks.is_empty() {
+            return network;
+        }
+        let frozen: HashSet<_> = network
+            .iter()
+            .map(|shot| (shot.section_id, shot.shot_index))
+            .collect();
+        self.sections
+            .iter()
+            .flat_map(|section| {
+                section
+                    .shots
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, shot)| {
+                        let locked = shot
+                            .number
+                            .and_then(|number| self.shot_graph.geometry_locks.get(&number))
+                            .copied()
+                            .unwrap_or_else(|| frozen.contains(&(section.id, index as u32)));
+                        locked.then_some(FrozenShotRef {
+                            section_id: section.id,
+                            shot_index: index as u32,
+                        })
+                    })
+            })
+            .collect()
+    }
+
+    fn compute_network_frozen_shots(&self) -> Vec<FrozenShotRef> {
         if self.zero_datums.is_empty() {
             return Vec::new();
         }

@@ -124,6 +124,11 @@ pub(super) fn append_project(
 
 /// Preserve explicit origins while allocating fresh project-wide shot numbers.
 fn copy_shot_graph(target: &mut Project, source: &Project, sections: &HashMap<SectionId, SectionId>, numbers: &HashMap<u32, u32>) {
+    for (&old, &new) in numbers {
+        if let Some(locked) = source.shot_graph.geometry_locks.get(&old) {
+            target.shot_graph.geometry_locks.insert(new, *locked);
+        }
+    }
     if !source.shot_graph.explicit { return; }
     target.shot_graph.explicit = true;
     for original in &source.sections {
