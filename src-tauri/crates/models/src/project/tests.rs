@@ -168,7 +168,8 @@ fn project_serialization_is_key_ordered_and_state_determined() {
             .insert(start.clone(), (0.1, 0.2, 0.3));
         project
             .station_comments
-            .insert(start, format!("comment {i}"));
+            .insert(start.clone(), format!("comment {i}"));
+        project.station_names.insert(start, format!("{i}"));
     }
     assert_eq!(project.section_offsets.len(), 10);
     assert_eq!(project.station_offsets.len(), 20);
@@ -210,7 +211,7 @@ fn project_serialization_is_key_ordered_and_state_determined() {
     // cannot key an object by a struct), ordered by section then anchor - and
     // `SectionStart` sorts before `AfterShot`, so each section's station 0 leads.
     let value: serde_json::Value = serde_json::from_str(&previous).unwrap();
-    for field in ["station_offsets", "station_comments"] {
+    for field in ["station_offsets", "station_comments", "station_names"] {
         let entries = value[field].as_array().expect("array of pairs");
         let order: Vec<(u64, u8)> = entries
             .iter()
@@ -346,6 +347,9 @@ fn station_ref_traversals_cover_every_bearing_collection() {
     project
         .station_comments
         .insert(StationRef::new(a, 1).into(), "note".to_string());
+    project
+        .station_names
+        .insert(StationRef::new(a, 1).into(), "17".to_string());
 
     // READ traversal: every collection's label is visited.
     let mut labels: HashSet<String> = HashSet::new();
@@ -362,6 +366,7 @@ fn station_ref_traversals_cover_every_bearing_collection() {
         "zero datum",
         "station offset",
         "station comment",
+        "station name",
     ] {
         assert!(
             labels.contains(expected),
@@ -369,8 +374,8 @@ fn station_ref_traversals_cover_every_bearing_collection() {
         );
     }
     assert_eq!(
-        a1_hits, 5,
-        "a:1 is referenced once in each of the five collections"
+        a1_hits, 6,
+        "a:1 is referenced once in each of the six collections"
     );
 
     // REWRITE traversal: shifting a:1 -> a:2 must update every collection, incl.
@@ -408,6 +413,12 @@ fn station_ref_traversals_cover_every_bearing_collection() {
         .contains_key(&StationRef::new(a, 2).into()));
     assert!(!project
         .station_comments
+        .contains_key(&StationRef::new(a, 1).into()));
+    assert!(project
+        .station_names
+        .contains_key(&StationRef::new(a, 2).into()));
+    assert!(!project
+        .station_names
         .contains_key(&StationRef::new(a, 1).into()));
 }
 
