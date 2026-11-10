@@ -16,7 +16,7 @@ import { presentImportReceipt } from '../../utils/saveFeedback';
 import { formatShotId } from '../../utils/formatters';
 import { computeOverlapPairs, type MergeOption } from '../../utils/overlapHelpers';
 import { repeatedShots, type OverlapChoice } from '../../utils/overlapChoices';
-import { mergeOptionsOf, overlapParamsOf, placeSuggestion } from '../../utils/orphanPlacement';
+import { isRepeatDoublyAnchored, mergeOptionsOf, overlapParamsOf, placeSuggestion } from '../../utils/orphanPlacement';
 import OverlapShotTable, { type OverlapShotRow } from './OverlapShotTable';
 
 interface OrphanPlacementDialogProps {
@@ -184,86 +184,11 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     setOverlapChoices(new Map());
   }, [currentSuggestion, mergeOptions]);
 
-  // Check if the target section's overlap region is doubly-anchored
-  const isTargetDoublyAnchored = useMemo(() => {
-    if (!currentSuggestion) return false;
-    if (currentSuggestion.matchedShots === 0) return false;
-    if (!project) return false;
-
-    const sid = currentSuggestion.targetSectionId;
-
-    // BFS: can `start` reach a zero datum via merges + aligned closures
-    // without traversing through `excluded`?
-    const hasDatumPathExcluding = (start: number, excluded: number): boolean => {
-      const visited = new Set<number>();
-      const queue = [start];
-      while (queue.length > 0) {
-        const current = queue.pop()!;
-        if (current === excluded) continue;
-        if (visited.has(current)) continue;
-        visited.add(current);
-        if (project.zero_datums.some((zd) => zd.station_ref.section_id === current)) {
-          return true;
-        }
-        for (const m of project.station_merges) {
-          if (m.station_a.section_id === current && !visited.has(m.station_b.section_id)) {
-            queue.push(m.station_b.section_id);
-          }
-          if (m.station_b.section_id === current && !visited.has(m.station_a.section_id)) {
-            queue.push(m.station_a.section_id);
-          }
-        }
-        for (const c of project.loop_closures) {
-          if (!c.is_aligned) continue;
-          if (c.station_a.section_id === current && !visited.has(c.station_b.section_id)) {
-            queue.push(c.station_b.section_id);
-          }
-          if (c.station_b.section_id === current && !visited.has(c.station_a.section_id)) {
-            queue.push(c.station_a.section_id);
-          }
-        }
-      }
-      return false;
-    };
-
-    // Compute the range of target shot indices that would be modified
-    let minShot: number;
-    let maxShot: number;
-    if (currentSuggestion.direction === 'forward') {
-      minShot = currentSuggestion.targetStationIndex;
-      maxShot = currentSuggestion.targetStationIndex + currentSuggestion.matchedShots - 1;
-    } else {
-      minShot = currentSuggestion.targetStationIndex - currentSuggestion.matchedShots;
-      maxShot = currentSuggestion.targetStationIndex - 1;
-    }
-
-    // Collect anchor station indices on the target section
-    const anchors: number[] = [];
-    for (const zd of project.zero_datums) {
-      if (zd.station_ref.section_id === sid) anchors.push(zd.station_ref.station_index);
-    }
-    for (const m of project.station_merges) {
-      if (m.station_a.section_id === sid && hasDatumPathExcluding(m.station_b.section_id, sid)) {
-        anchors.push(m.station_a.station_index);
-      }
-      if (m.station_b.section_id === sid && hasDatumPathExcluding(m.station_a.section_id, sid)) {
-        anchors.push(m.station_b.station_index);
-      }
-    }
-    for (const c of project.loop_closures) {
-      if (!c.is_aligned) continue;
-      if (c.station_a.section_id === sid && hasDatumPathExcluding(c.station_b.section_id, sid)) {
-        anchors.push(c.station_a.station_index);
-      }
-      if (c.station_b.section_id === sid && hasDatumPathExcluding(c.station_a.section_id, sid)) {
-        anchors.push(c.station_b.station_index);
-      }
-    }
-
-    const hasFront = anchors.some((idx) => idx <= minShot);
-    const hasBack = anchors.some((idx) => idx > maxShot);
-    return hasFront && hasBack;
-  }, [currentSuggestion, project]);
+  // A target anchored at both ends of the repeat allows Keep existing only.
+  const isTargetDoublyAnchored = useMemo(
+    () => (currentSuggestion && project ? isRepeatDoublyAnchored(currentSuggestion, project) : false),
+    [currentSuggestion, project],
+  );
 
   const mergeImportStation = selectedMergePair?.importStation ?? currentSuggestion?.orphanStationIndex ?? 0;
 

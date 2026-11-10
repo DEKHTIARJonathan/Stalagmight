@@ -38,6 +38,91 @@ export function mergeOptionsOf(s: OrphanPlacementSuggestion, orphanShotCount: nu
   );
 }
 
+/**
+ * Whether the existing survey the repeat overlays is tied down at both ends: a
+ * zero datum, or a merge / aligned closure leading to one without passing back
+ * through the target, at or before the repeat AND after it. Rewriting its
+ * readings would then bend survey that is fixed at both ends, so the dialog
+ * allows Keep existing only.
+ */
+export function isRepeatDoublyAnchored(suggestion: OrphanPlacementSuggestion, project: Project): boolean {
+  if (suggestion.matchedShots === 0) return false;
+
+  const sid = suggestion.targetSectionId;
+
+  // BFS: can `start` reach a zero datum via merges + aligned closures
+  // without traversing through `excluded`?
+  const hasDatumPathExcluding = (start: number, excluded: number): boolean => {
+    const visited = new Set<number>();
+    const queue = [start];
+    while (queue.length > 0) {
+      const current = queue.pop()!;
+      if (current === excluded) continue;
+      if (visited.has(current)) continue;
+      visited.add(current);
+      if (project.zero_datums.some((zd) => zd.station_ref.section_id === current)) {
+        return true;
+      }
+      for (const m of project.station_merges) {
+        if (m.station_a.section_id === current && !visited.has(m.station_b.section_id)) {
+          queue.push(m.station_b.section_id);
+        }
+        if (m.station_b.section_id === current && !visited.has(m.station_a.section_id)) {
+          queue.push(m.station_a.section_id);
+        }
+      }
+      for (const c of project.loop_closures) {
+        if (!c.is_aligned) continue;
+        if (c.station_a.section_id === current && !visited.has(c.station_b.section_id)) {
+          queue.push(c.station_b.section_id);
+        }
+        if (c.station_b.section_id === current && !visited.has(c.station_a.section_id)) {
+          queue.push(c.station_a.section_id);
+        }
+      }
+    }
+    return false;
+  };
+
+  // Compute the range of target shot indices that would be modified
+  let minShot: number;
+  let maxShot: number;
+  if (suggestion.direction === 'forward') {
+    minShot = suggestion.targetStationIndex;
+    maxShot = suggestion.targetStationIndex + suggestion.matchedShots - 1;
+  } else {
+    minShot = suggestion.targetStationIndex - suggestion.matchedShots;
+    maxShot = suggestion.targetStationIndex - 1;
+  }
+
+  // Collect anchor station indices on the target section
+  const anchors: number[] = [];
+  for (const zd of project.zero_datums) {
+    if (zd.station_ref.section_id === sid) anchors.push(zd.station_ref.station_index);
+  }
+  for (const m of project.station_merges) {
+    if (m.station_a.section_id === sid && hasDatumPathExcluding(m.station_b.section_id, sid)) {
+      anchors.push(m.station_a.station_index);
+    }
+    if (m.station_b.section_id === sid && hasDatumPathExcluding(m.station_a.section_id, sid)) {
+      anchors.push(m.station_b.station_index);
+    }
+  }
+  for (const c of project.loop_closures) {
+    if (!c.is_aligned) continue;
+    if (c.station_a.section_id === sid && hasDatumPathExcluding(c.station_b.section_id, sid)) {
+      anchors.push(c.station_a.station_index);
+    }
+    if (c.station_b.section_id === sid && hasDatumPathExcluding(c.station_a.section_id, sid)) {
+      anchors.push(c.station_b.station_index);
+    }
+  }
+
+  const hasFront = anchors.some((idx) => idx <= minShot);
+  const hasBack = anchors.some((idx) => idx > maxShot);
+  return hasFront && hasBack;
+}
+
 /** The store actions a placement runs, and the project as it stands now. */
 export interface PlacementActions {
   mergeStations: ProjectStore['mergeStations'];
