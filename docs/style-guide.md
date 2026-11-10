@@ -40,7 +40,7 @@ This guide captures the current UI conventions and design tokens for Stalagmight
 
 ## Dialogs
 - Use `DialogWrapper`. The body is text that explains the situation and, when there is a choice, what each button does; then ONE right-aligned footer row (`flex flex-wrap justify-end gap-2 pt-4 border-t border-border`) holds every button: Cancel first, a destructive action (`danger`) next, the `primary` last. `UnsavedChangesDialog` is the reference.
-- No buttons in the body, and no hint paragraph under a button: fold the hint into the body text. Size the dialog so the footer fits on one line.
+- No buttons in the body, and no hint paragraph under a button: fold the hint into the body text. Size the dialog so the footer fits on one line. The exception is a notice in the body that carries the one action resolving it, such as "Resolve now" in the SpeleoDB upload dialog's survey-errors notice: the footer stays about the dialog's own action.
 - A second step (a description to type, a "lost forever" confirmation) keeps the same footer row: Back, then the step's action. Escape and the X cancel the whole dialog.
 - Do not signal an error where there is none: un-uploaded SpeleoDB changes are yellow (`text-warning-text`), never a "!" or the error colour.
 

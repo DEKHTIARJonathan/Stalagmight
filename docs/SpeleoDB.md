@@ -527,6 +527,17 @@ Offline, failed or uncertain uploads never report success; the
 message and local work remain available for retry. Autosave and failed-autosave
 retry write only to the local SQLite file.
 
+A survey with errors (validation issues of error severity; warnings do not count)
+is not uploaded without a decision. The upload dialog (Save Changes, and Finish
+editing when it has changes to upload) shows the number of errors in red, and its
+upload button stays disabled until the user ticks "Upload anyway, with the
+errors". "Resolve now" uploads nothing: it closes the dialog, keeps the
+description for the next upload (a Save and Close becomes a plain Save, since the
+project stays open for the fix), and opens the Details panel on the Warnings tab
+(`openWarningsTab`, leaving Plan or Export for Survey). The notice is hidden while
+the upload itself is blocked. The revert and unwound-upload confirmations upload
+an older revision rather than the open survey, so they do not ask.
+
 The change description is limited to 1000 characters as SpeleoDB stores it. The
 server strips it and turns every run of line breaks (with the whitespace around
 them) into ". ", then stores it in a 1024-character column only after committing
