@@ -76,6 +76,11 @@ export async function runAddProjectFile(path: string): Promise<CommandResult> {
       return result;
     }
   }
-  await finishImportWithoutOrphanSuggestions(DIALOG, importUi, newSectionIds, result.import_receipt);
+  // Re-checked inside the helper after its count IPC, right before completing.
+  await finishImportWithoutOrphanSuggestions(DIALOG, importUi, newSectionIds, result.import_receipt, () => {
+    const current = stillOpen();
+    if (!current) dropContext();
+    return current;
+  });
   return result;
 }

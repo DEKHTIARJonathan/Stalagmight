@@ -60,14 +60,14 @@ describe('runAddProjectFile', () => {
     addProjectFile.mockResolvedValue({ success: true, section_ids: [7], import_receipt: receipt });
     invokeIpc.mockResolvedValue([]);
     await runAddProjectFile('/cave/a.stalx');
-    expect(finish).toHaveBeenCalledWith('add-or-open-project', expect.anything(), [7], receipt);
+    expect(finish).toHaveBeenCalledWith('add-or-open-project', expect.anything(), [7], receipt, expect.any(Function));
   });
 
   it('skips the orphan lookup when the add created no sections', async () => {
     addProjectFile.mockResolvedValue({ success: true, section_ids: [], import_receipt: receipt });
     await runAddProjectFile('/cave/a.stalx');
     expect(invokeIpc).not.toHaveBeenCalled();
-    expect(finish).toHaveBeenCalledWith('add-or-open-project', expect.anything(), [], receipt);
+    expect(finish).toHaveBeenCalledWith('add-or-open-project', expect.anything(), [], receipt, expect.any(Function));
   });
 
   it('a failed orphan lookup is non-fatal and still finishes', async () => {
@@ -126,6 +126,20 @@ describe('runAddProjectFile', () => {
     await runAddProjectFile('/cave/a.stalx');
     expect(useUIStore.getState().activeDialog).toBeNull();
     expect(finish).not.toHaveBeenCalled();
+    expect(useUIStore.getState().importContext).toBeNull();
+  });
+
+  /** The final helper awaits its own count IPC; the add hands it the identity
+   *  predicate so a switch during THAT await drops the completion too. */
+  it('hands the finish helper a predicate that goes false when the project changes', async () => {
+    addProjectFile.mockResolvedValue({ success: true, section_ids: [7], import_receipt: receipt });
+    invokeIpc.mockResolvedValue([]);
+    await runAddProjectFile('/cave/a.stalx');
+    const stillCurrent = finish.mock.calls[0]?.[4] as () => boolean;
+    useUIStore.getState().setImportContext('existing-project');
+    expect(stillCurrent()).toBe(true);
+    useProjectStore.setState({ project: { created_at: 'cave-b' } } as never);
+    expect(stillCurrent()).toBe(false);
     expect(useUIStore.getState().importContext).toBeNull();
   });
 });
