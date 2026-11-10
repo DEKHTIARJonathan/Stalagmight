@@ -307,6 +307,11 @@ pub struct ImportSectionConfig {
     /// Each tuple is (station_index, comment_text).
     #[serde(default)]
     pub station_comments: Vec<(u32, String)>,
+    /// Station names to apply after section creation, as (station_index, name),
+    /// such as the mNemo station numbers of a DMP import. Same index convention
+    /// as `station_comments` (see `reverse` below).
+    #[serde(default)]
+    pub station_names: Vec<(u32, String)>,
     /// Reverse this section end-to-end as it is imported (#24), so the file's
     /// last station becomes station 0.
     ///
@@ -314,9 +319,9 @@ pub struct ImportSectionConfig {
     /// shots *before* creating the section.
     ///
     /// Index conventions, which differ by field:
-    /// * `station_comments` indices are given in the FILE's original order - the
-    ///   backend mirrors them itself (`execute_import_sections`), so an importer
-    ///   never has to think about it.
+    /// * `station_comments` and `station_names` indices are given in the FILE's
+    ///   original order - the backend mirrors them itself
+    ///   (`execute_import_sections`), so an importer never has to think about it.
     /// * `placement` indices must already address the final (reversed) order.
     ///   Placement is a graph of cross-section references the wizard resolves
     ///   while the user is looking at the original numbering, so only the caller

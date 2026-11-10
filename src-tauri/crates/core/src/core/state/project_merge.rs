@@ -227,21 +227,37 @@ impl AppState {
             // redrive reanchor pass canonicalizes it once the merged shots exist.
             // (Without this, every per-station comment was silently dropped on
             // merge while every sibling collection was copied.)
-            for (old_key, comment) in &source_project.station_comments {
-                if let Some(&new_section_id) = section_id_map.get(&(proj_idx, old_key.section_id)) {
-                    if let Some(src_sr) = source_project.resolve_key(old_key) {
-                        let new_key = StationKey::positional(new_section_id, src_sr.station_index);
-                        merged_project
-                            .station_comments
-                            .insert(new_key, comment.clone());
+            // Station names ride the same way.
+            for (texts, merged, what) in [
+                (
+                    &source_project.station_comments,
+                    &mut merged_project.station_comments,
+                    "comment",
+                ),
+                (
+                    &source_project.station_names,
+                    &mut merged_project.station_names,
+                    "name",
+                ),
+            ] {
+                for (old_key, text) in texts {
+                    if let Some(&new_section_id) =
+                        section_id_map.get(&(proj_idx, old_key.section_id))
+                    {
+                        if let Some(src_sr) = source_project.resolve_key(old_key) {
+                            let new_key =
+                                StationKey::positional(new_section_id, src_sr.station_index);
+                            merged.insert(new_key, text.clone());
+                        }
+                    } else {
+                        tracing::warn!(
+                            project = %source_project.name,
+                            section_id = old_key.section_id,
+                            what,
+                            purpose = "merge station comments and names",
+                            "Station comment or name references unknown section ID; skipping"
+                        );
                     }
-                } else {
-                    tracing::warn!(
-                        project = %source_project.name,
-                        section_id = old_key.section_id,
-                        purpose = "merge station comments",
-                        "Station comment references unknown section ID; skipping"
-                    );
                 }
             }
 

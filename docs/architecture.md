@@ -56,6 +56,9 @@ family (`command_shot.rs`, `command_station.rs`, `command_move.rs`, ...) under
   - `station_comments` - free text keyed by `StationKey`. A station is implicit (the
     boundary between consecutive shots), so it has no record of its own to hang a
     comment on.
+  - `station_names` - a station's name (a DMP import's mNemo station number), keyed
+    and handled exactly like `station_comments`, so it stays on its physical station
+    when shots are inserted, deleted or reversed.
   - `validation` - per-project thresholds, stored in the `.stalx` so they travel with the
     file between collaborators instead of following whoever opens it.
   - `imported_file_hashes` / `imported_section_hashes` - re-import de-duplication.

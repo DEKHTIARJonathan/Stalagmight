@@ -1500,6 +1500,7 @@ pub fn convert_tml_with_options(
             shots,
             placement,
             station_comments,
+            station_names: Vec::new(),
             azimuth_reference: Some(azimuth_reference),
         });
     }

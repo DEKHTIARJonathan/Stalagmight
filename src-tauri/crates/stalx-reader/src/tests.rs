@@ -77,7 +77,7 @@ fn set_user_version(path: &Path, version: i32) {
         .unwrap();
 }
 
-/// Two sections, one merge, one datum, one closure, one comment.
+/// Two sections, one merge, one datum, one closure, one comment, two names.
 fn full_project() -> Project {
     let mut project = Project::new("Synthetic".to_string(), Some("Nowhere".to_string()));
     project.add_section(descending("Main", 1.0, 4));
@@ -112,7 +112,12 @@ fn full_project() -> Project {
         strategy: ClosureStrategy::default(),
         is_aligned: false,
     });
-    project.station_comments.insert(a, "lead".to_string());
+    project
+        .station_comments
+        .insert(a.clone(), "lead".to_string());
+    project.station_names.insert(a, "17".to_string());
+    let start = project.key_for_ref(StationRef::new(main, 0)).unwrap();
+    project.station_names.insert(start, "0".to_string());
     project
 }
 
@@ -157,6 +162,12 @@ fn reads_every_part_of_a_current_file() {
     assert_eq!(survey.station_comments.len(), 1);
     assert_eq!(survey.station_comments[0].station, id(main.id, 4));
     assert_eq!(survey.station_comments[0].text, "lead");
+    let names: Vec<_> = survey
+        .station_names
+        .iter()
+        .map(|n| (n.station, n.name.as_str()))
+        .collect();
+    assert_eq!(names, [(id(main.id, 0), "0"), (id(main.id, 4), "17")]);
     assert_eq!(survey.unresolved_references, 0);
     assert!(survey.stations.is_none(), "positions are opt-in");
 }
@@ -382,6 +393,30 @@ fn an_expired_deadline_interrupts_a_long_statement() {
     assert_eq!(invalid_kind(&err), Some(InvalidKind::Deadline), "{err}");
 }
 
+/// A v18 file written before station names has no `station_names` table; it
+/// still reads, with no names.
+#[test]
+fn a_file_without_station_names_reads_with_none() {
+    let path = with_schema_sql("DROP TABLE station_names;");
+
+    let survey = read_file(&path).unwrap();
+
+    assert!(survey.station_names.is_empty());
+    assert_eq!(survey.station_comments.len(), 1);
+    assert_eq!(survey.schema_version, SUPPORTED_SCHEMA_VERSION);
+}
+
+#[test]
+fn a_dangling_station_name_is_dropped_and_counted() {
+    let path =
+        with_schema_sql("UPDATE station_names SET station_index = 999 WHERE station_index = 4;");
+
+    let survey = read_file(&path).unwrap();
+
+    assert_eq!(survey.station_names.len(), 1);
+    assert_eq!(survey.unresolved_references, 1);
+}
+
 #[test]
 fn a_dangling_cross_reference_is_dropped_and_counted() {
     let path = with_schema_sql("UPDATE station_comments SET station_index = 999;");
@@ -573,6 +608,34 @@ fn count_limits_refuse_a_file_before_the_post_load_steps() {
         ),
         "{err}"
     );
+}
+
+/// A hostile upload can fill `station_names` with rows that name no station;
+/// they are counted before the load builds them, like every other capped table.
+#[test]
+fn station_names_are_counted_against_their_own_cap() {
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &full_project());
+    let options = ReadOptions::default().count_limits(CountLimits::default().station_names(1));
+
+    let err = read_file_with(&path, &options).unwrap_err();
+
+    assert!(
+        matches!(
+            err,
+            ReadError::TooComplex {
+                what: Limit::StationNames,
+                count: 2,
+                max: 1
+            }
+        ),
+        "{err}"
+    );
+    assert!(read_file_with(
+        &path,
+        &ReadOptions::default().count_limits(CountLimits::default().station_names(2))
+    )
+    .is_ok());
 }
 
 #[test]

@@ -125,6 +125,8 @@ export interface SurveyData {
   stationMergedWith: Map<number, StationRef[]>;
   stationClosuresWith: Map<number, ClosureRef[]>;
   stationComments: Map<number, string>;
+  /** Station names (e.g. the mNemo station number of a DMP import). */
+  stationNames: Map<number, string>;
 }
 
 /**
@@ -285,6 +287,8 @@ export function getStation(data: SurveyData, globalIndex: number): Station {
   if (closures !== undefined) station.closures_with = closures;
   const cmt = data.stationComments.get(globalIndex);
   if (cmt !== undefined) station.comment = cmt;
+  const name = data.stationNames.get(globalIndex);
+  if (name !== undefined) station.name = name;
   return station;
 }
 
@@ -434,6 +438,7 @@ export function surveyDataFromLegacy(
     stationMergedWith: new Map(),
     stationClosuresWith: new Map(),
     stationComments: new Map(),
+    stationNames: new Map(),
   };
 
   const nullToNaN = (v: number | null | undefined): number => (v == null ? NaN : v);
@@ -499,6 +504,7 @@ export function surveyDataFromLegacy(
       data.stationClosuresWith.set(i, closuresWith);
     }
     if (s.comment) data.stationComments.set(i, s.comment);
+    if (s.name) data.stationNames.set(i, s.name);
   });
 
   return data;
@@ -531,6 +537,7 @@ export function surveyDataWithAdjustedStations(
   const stationMergedWith = new Map<number, StationRef[]>();
   const stationClosuresWith = new Map<number, ClosureRef[]>();
   const stationComments = new Map<number, string>();
+  const stationNames = new Map<number, string>();
 
   adjustedStations.forEach((s, i) => {
     stationSectionIds[i] = s.station_ref.section_id;
@@ -545,6 +552,7 @@ export function surveyDataWithAdjustedStations(
     const closuresWith = s.closures_with;
     if (closuresWith && closuresWith.length > 0) stationClosuresWith.set(i, closuresWith);
     if (s.comment) stationComments.set(i, s.comment);
+    if (s.name) stationNames.set(i, s.name);
   });
 
   return {
@@ -558,6 +566,7 @@ export function surveyDataWithAdjustedStations(
     stationMergedWith,
     stationClosuresWith,
     stationComments,
+    stationNames,
   };
 }
 
@@ -595,5 +604,6 @@ export function emptySurveyData(): SurveyData {
     stationMergedWith: new Map(),
     stationClosuresWith: new Map(),
     stationComments: new Map(),
+    stationNames: new Map(),
   };
 }

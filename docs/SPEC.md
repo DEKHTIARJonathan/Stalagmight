@@ -326,6 +326,16 @@ Examples:
 - Merged station: [0:15, 1:0] → Station 15 of section 0 merged with station 0 of section 1
 ```
 
+The index is positional: inserting, deleting or reversing shots renumbers it.
+A station can also carry a **name**, free text stored apart from the shots and
+keyed to the physical station, so it stays put through those edits. A DMP
+import records each station's mNemo station number there (see
+[dmp-import.md](dmp-import.md#station-names)); names are not unique (mNemo
+restarts at 0 in every section), so the UI shows a name beside the positional
+ID (`3:5 · 17`), never instead of it. A shot delete drops the name of the
+station it removes, an inserted shot adds an unnamed station, and a reverse
+keeps every name on its physical station.
+
 ### 4.3 Coordinate System
 
 - **Internal coordinates**: X (East), Y (North), Z (Depth) in meters
@@ -2273,8 +2283,8 @@ The schema is versioned (`SCHEMA_VERSION` in
 opened. Alongside the survey tables (project, sections, shots, station merges,
 zero datums, loop closures, section and station offsets) it holds per-project and
 display settings, the persisted undo and redo stacks, resolved warnings, import
-hashes, station comments, the SpeleoDB link row, and the Unwind chain position in
-`speleo_undo_chain`. Five markers are worth knowing before touching migration
+hashes, station comments and names, the SpeleoDB link row, and the Unwind chain
+position in `speleo_undo_chain`. Five markers are worth knowing before touching migration
 code:
 
 - `UNDO_FORMAT_SAFE_VERSION` - files written before it get their persisted
@@ -2311,6 +2321,20 @@ code:
   `UNDO_FORMAT_SAFE_VERSION` stays at 7: it is the floor for the pre-v7 purge
   alone, and bumping it would make the v13 and v15 arms' own tests pass with
   those arms removed.
+
+`station_names` holds per-station names in the same positional shape as
+`station_comments`. It was added at v18 WITHOUT a schema version bump, on
+purpose: SpeleoDB turns an uploaded `.stalx` into a map with OpenSpeleo's
+Python package `stalagmight_lib` (pytool_stalagmight_lib, through
+`openspeleo_lib`; not the app's Rust lib crate of the same name). It refuses any
+file not at exactly v18 and reads only the tables it knows, so a new table is
+invisible to it while a bump would lock it out (verified version and details in
+`persistence/sqlite/station_texts.rs`). The cost is that a build without the table drops
+the names on its next save. A v18 file from before the table takes the version
+fast path, so the read side treats a missing table as empty and `save_project`
+creates it inside its transaction; `station_names_tests.rs` in
+`persistence/sqlite/` pins both, and that no table the outside reader reads
+changes when a project gains names.
 
 The dive plan lives beside the project in its own `.plnx` SQLite sidecar
 (`src-tauri/crates/persistence/src/persistence/plnx.rs`), not in the `.stalx`.
@@ -2358,6 +2382,12 @@ pub struct DmpShot {
     pub comment: Option<String>,  // not parsed from DMP; defaults to None
 }
 ```
+
+The file carries no station numbers: mNemo numbers a section's start 0 and the
+end of its N-th shot N, so the importer derives each station's number from the
+shot's position (counting only the shots it imports - an assumption not yet
+checked against a device) and records it as the station's name; see
+[dmp-import.md](dmp-import.md#station-names).
 
 ### 17.3 Export Formats
 

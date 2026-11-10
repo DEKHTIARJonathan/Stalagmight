@@ -203,8 +203,9 @@ fn test_get_config_defaults_panels() {
     assert!(cfg.panels.data_table_station_column_order.is_empty());
     assert_eq!(
         cfg.panels.data_table_station_hidden_columns,
-        vec!["_x", "_y", "_lat", "_long"]
+        vec!["_x", "_y", "_lat", "_long", "name"]
     );
+    assert_eq!(cfg.panels.data_table_station_columns_seen, vec!["name"]);
     // The new-section dialog opens on what the old hand-rolled table showed.
     assert!(cfg.panels.new_section_column_order.is_empty());
     assert_eq!(
@@ -1705,6 +1706,7 @@ fn test_import_sections_persists_deferred_new_project() {
             quality: 1.0,
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
         }];
@@ -1766,6 +1768,7 @@ fn test_import_sections_provenance_params_decorate_receipt() {
             quality: 1.0,
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
         }];
@@ -1822,6 +1825,7 @@ fn test_import_sections_sanitizes_hostile_zero_datum_section_name() {
             quality: 1.0,
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: crate::models::ImportPlacement::ZeroDatum {
                 coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
                 station_index: 0,
@@ -1882,6 +1886,7 @@ fn test_import_sections_without_provenance_params_leaves_receipt_defaults() {
             quality: 1.0,
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
         }];
@@ -2046,6 +2051,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
             quality: 1.0,
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
         }];
@@ -2172,6 +2178,7 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
             quality: 1.0,
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
         }];
@@ -2245,6 +2252,7 @@ fn test_import_sections_deferred_save_generic_open_failure_is_not_a_denial() {
             quality: 1.0,
             shots: vec![shot_data(5.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
             azimuth_reference: None,
         }];

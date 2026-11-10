@@ -27,6 +27,13 @@ pub enum VirtualShotMode {
 }
 use std::sync::Mutex;
 
+/// Which per-station text map an import config entry lands in.
+#[derive(Clone, Copy)]
+enum StationText {
+    Comment,
+    Name,
+}
+
 /// Tally closure-creation results from a `create_loop_closures_batch` call,
 /// counting successes (and failures) directly from `results` rather than
 /// deriving `created` by subtracting `failed` from the requested count.
@@ -861,29 +868,40 @@ impl AppState {
                 }
             }
 
-            // Apply station comments (promoted from shot comments during TML import)
-            if !config.station_comments.is_empty() {
+            // Apply station comments (promoted from shot comments during TML
+            // import) and station names (the mNemo numbers of a DMP import).
+            if !config.station_comments.is_empty() || !config.station_names.is_empty() {
                 let mut proj_guard = match self.project.lock() {
                     Ok(g) => g,
                     Err(poisoned) => poisoned.into_inner(),
                 };
                 if let Some(project) = proj_guard.as_mut() {
                     let shot_count = config.shots.len() as u32;
-                    for (station_index, comment) in &config.station_comments {
+                    let entries = config
+                        .station_comments
+                        .iter()
+                        .map(|entry| (StationText::Comment, entry))
+                        .chain(
+                            config
+                                .station_names
+                                .iter()
+                                .map(|entry| (StationText::Name, entry)),
+                        );
+                    for (kind, (station_index, text)) in entries {
                         // Mirror here rather than trusting the caller to have done
                         // it. `reverse` renumbers station `i` to `shot_count - i`,
                         // and these indices were collected against the file's
                         // original order - the same rewrite the wizard applies to
                         // `placement` (src/utils/reversePlacement.ts). Doing it
-                        // backend-side keeps the one importer that actually
-                        // populates `station_comments` (TML) correct the day its
-                        // wizard gains the toggle, instead of relying on a prose
-                        // contract every future importer has to re-derive.
+                        // backend-side keeps every importer correct whether or not
+                        // its wizard offers the toggle - TML sends comments, the
+                        // DMP wizard (which has the toggle) sends names - instead
+                        // of relying on a prose contract each has to re-derive.
                         // `checked_sub`, not `saturating_sub`: an index past the
                         // last station has no mirror, and saturating it would
-                        // park the comment on station 0 - a station it was never
-                        // about. Un-reversed the same index simply fails
-                        // `key_for_ref` below and the comment is dropped, so
+                        // park the comment or name on station 0 - a station it
+                        // was never about. Un-reversed the same index simply
+                        // fails `key_for_ref` below and the entry is dropped, so
                         // skipping here keeps the two paths honest.
                         let index = if config.reverse {
                             match shot_count.checked_sub(*station_index) {
@@ -895,7 +913,11 @@ impl AppState {
                         };
                         let station_ref = StationRef::new(section_id, index);
                         if let Some(key) = project.key_for_ref(station_ref) {
-                            project.station_comments.insert(key, comment.clone());
+                            let map = match kind {
+                                StationText::Comment => &mut project.station_comments,
+                                StationText::Name => &mut project.station_names,
+                            };
+                            map.insert(key, text.clone());
                         }
                     }
                 }

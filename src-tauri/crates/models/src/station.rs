@@ -395,6 +395,11 @@ pub struct Station {
     /// User comment for this station
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+    /// Station name (e.g. the mNemo station number from a DMP import). Not
+    /// unique - shown next to the positional id, never instead of it. Off the
+    /// wire when absent: `get_project_state` serializes every station.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 impl Station {
@@ -407,6 +412,7 @@ impl Station {
             merged_with: Vec::new(),
             closures_with: None,
             comment: None,
+            name: None,
         }
     }
 
@@ -419,6 +425,7 @@ impl Station {
             merged_with: Vec::new(),
             closures_with: None,
             comment: None,
+            name: None,
         }
     }
 

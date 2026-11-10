@@ -1640,6 +1640,7 @@ impl Config {
         }
 
         self.map.controls.zoom_speed = migrate_zoom_speed(self.map.controls.zoom_speed);
+        self.panels.hide_newly_arrived_station_columns();
     }
 }
 

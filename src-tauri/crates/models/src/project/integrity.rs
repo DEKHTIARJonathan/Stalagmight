@@ -240,6 +240,7 @@ impl Project {
             .retain(|section_id, _| sect_info.contains_key(section_id));
         self.station_offsets.retain(|key, _| key_valid(key));
         self.station_comments.retain(|key, _| key_valid(key));
+        self.station_names.retain(|key, _| key_valid(key));
 
         self.touch();
 
