@@ -1772,8 +1772,12 @@ fn test_add_project_file_reports_added_sections_and_persists_deferred_project() 
             .save_project(&source)
             .unwrap();
 
-        let result =
-            import::add_project_file(state(&app), source_path.to_string_lossy().into_owned());
+        // Through the async command itself, so the blocking-thread handoff is
+        // what is tested; that thread resolves its own temp config dir.
+        let result = tauri::async_runtime::block_on(import::add_project_file(
+            app.handle().clone(),
+            source_path.to_string_lossy().into_owned(),
+        ));
         assert_success(&result);
         assert_eq!(result.section_ids, vec![0], "exactly the added section");
         let receipt = result.import_receipt.as_ref().expect("a receipt");

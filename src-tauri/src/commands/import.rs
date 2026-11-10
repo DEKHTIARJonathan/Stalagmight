@@ -2,7 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use crate::commands::event_sink::tauri_sink;
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
@@ -278,14 +278,29 @@ pub fn import_sections(
 /// the added sections, the orphan-placement dialog's input - and an
 /// `import_receipt`. Funnels through `finalize_deferred_import` like every
 /// import, so an add into a never-saved project makes it real on disk.
+///
+/// Async, with the work on a blocking thread exactly as `load_project_full`
+/// does: a synchronous command runs on the main thread, and the copy (up to
+/// 512 MiB), the SQLite open and migration, the load and the geometry re-solve
+/// would freeze the window for their whole length.
 #[tauri::command]
-pub fn add_project_file(state: State<'_, AppState>, path: String) -> CommandResult {
+pub async fn add_project_file<R: tauri::Runtime>(
+    app_handle: AppHandle<R>,
+    path: String,
+) -> CommandResult {
     tracing::info!(
         purpose = "add a .stalx into the open project",
         "add_project_file called"
     );
-    let result = state.execute(Command::add_project_file(PathBuf::from(path)));
-    finalize_deferred_import(state.inner(), result)
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let result = state.execute(Command::add_project_file(PathBuf::from(path)));
+        finalize_deferred_import(state.inner(), result)
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        CommandResult::failure(format!("The add did not finish: {join_error}"))
+    })
 }
 
 /// Parse a TML/TMLU file and return preview data for the import dialog.
