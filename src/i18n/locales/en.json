@@ -1619,7 +1619,7 @@
         "heading_one": "{{count}} repeated shot",
         "heading_other": "{{count}} repeated shots",
         "setAll": "Set all:",
-        "hint": "The repeat ends at the merge station; survey past it is new and stays a normal shot. The new copy of each repeated shot is kept as a Reference shot. Choose which reading the existing shot keeps.",
+        "hint": "Only the shots between this section's open end and the merge station are treated as the repeat; survey on the other side of the merge station is kept as normal survey, so choose the end of the repeat to resolve all of it. The new copy of each repeated shot is kept as a Reference shot. Choose which reading the existing shot keeps.",
         "anchored": "The existing survey is tied down at both ends, so its readings stay as they are. The new copies are kept as Reference shots.",
         "choices": {
           "keep_existing": "Keep existing",
