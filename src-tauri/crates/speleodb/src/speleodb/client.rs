@@ -32,14 +32,27 @@ fn upload_timeout(bytes: usize) -> Duration {
 /// (and, through the quit-after-work wait, the app's exit) for ever.
 const DOWNLOAD_MIN_RATE: u64 = 4 * 1024;
 
+/// The longest any download may run, whatever it has received: the deadline of
+/// the largest file SpeleoDB accepts ([`SERVER_UPLOAD_LIMIT_BYTES`]) at
+/// [`DOWNLOAD_MIN_RATE`], 120 + 6,020 s (about 1 h 42 min). Without it the
+/// per-byte deadline alone let a server trickling just above the minimum rate
+/// hold a download - and the app's exit waiting for it - for some 36 hours
+/// within the native size limit. Derived rather than picked: every project the
+/// server can store still downloads at the minimum rate, so only a server
+/// sending more than it could have stored, or slower than the minimum, is cut.
+/// It grows with the upload limit when the server's limit is fixed.
+const DOWNLOAD_CEILING: Duration = Duration::from_secs(
+    TRANSFER_TIMEOUT.as_secs() + SERVER_UPLOAD_LIMIT_BYTES.div_ceil(DOWNLOAD_MIN_RATE),
+);
+
 /// How long a download may have run once it has received `bytes`: `grace` plus
-/// `bytes` at `min_rate`, the shape of [`upload_timeout`]. The SDK's stream does
-/// not expose the reply's `Content-Length`, so the size is what has arrived so
-/// far: a download of N bytes must end within `grace + N / min_rate` of its start,
-/// and none can outlast the deadline at the native size limit, the most it may
-/// receive.
-fn download_deadline(grace: Duration, min_rate: u64, bytes: u64) -> Duration {
-    grace + Duration::from_millis(bytes.saturating_mul(1000) / min_rate.max(1))
+/// `bytes` at `min_rate`, the shape of [`upload_timeout`], and never more than
+/// `ceiling` ([`DOWNLOAD_CEILING`]). The SDK's stream does not expose the reply's
+/// `Content-Length`, so the size is what has arrived so far: a download of N
+/// bytes must end within `grace + N / min_rate` of its start, and none outlasts
+/// the ceiling.
+fn download_deadline(grace: Duration, min_rate: u64, ceiling: Duration, bytes: u64) -> Duration {
+    (grace + Duration::from_millis(bytes.saturating_mul(1000) / min_rate.max(1))).min(ceiling)
 }
 const JSON_LIMIT: usize = 10 * 1024 * 1024;
 pub(crate) const NATIVE_LIMIT: u64 = 512 * 1024 * 1024;
@@ -62,10 +75,11 @@ struct Settings {
     retries: u32,
     native_limit: u64,
     upload_limit: u64,
-    /// A download's total deadline ([`download_deadline`]): its grace, and the
-    /// minimum average rate after it.
+    /// A download's total deadline ([`download_deadline`]): its grace, the
+    /// minimum average rate after it, and the absolute ceiling.
     download_grace: Duration,
     download_min_rate: u64,
+    download_ceiling: Duration,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -76,6 +90,7 @@ impl Default for Settings {
             upload_limit: SERVER_UPLOAD_LIMIT_BYTES,
             download_grace: TRANSFER_TIMEOUT,
             download_min_rate: DOWNLOAD_MIN_RATE,
+            download_ceiling: DOWNLOAD_CEILING,
         }
     }
 }
@@ -186,6 +201,7 @@ impl SdkClient {
                     + download_deadline(
                         self.settings.download_grace,
                         self.settings.download_min_rate,
+                        self.settings.download_ceiling,
                         received,
                     )
             };
