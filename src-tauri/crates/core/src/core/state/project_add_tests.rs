@@ -13,7 +13,7 @@ use crate::core::{AddedContent, Command, CommandResult, UndoData, EDIT_DISABLED_
 use crate::models::{
     gps_to_local, AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure,
     Project, SectionData, SectionId, ShotData, SpeleoLink, StationMerge, StationRef,
-    SurveyDirection, FEATURE_ID_STRIDE, MAX_SECTION_ID,
+    SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
 };
 use crate::persistence::{Database, ResolvedWarning};
 
@@ -991,10 +991,10 @@ fn a_source_with_non_finite_or_invalid_placement_is_refused() {
 /// The add's undo entry is persisted with the file, so redo reads it back like
 /// any other input: a record no add could have produced is refused with the
 /// project unchanged, and the id allocators saturate rather than overflow.
-/// INJECTION (tried): dropping the duplicate-id check reinstalls both copies
-/// (the project-unchanged assertion fails); dropping the `MAX_SECTION_ID`
-/// check reinstalls the section past the id space (same assertion); reverting
-/// to `max + 1` on the closure id panics on overflow in this debug build.
+/// INJECTION (tried): dropping the duplicate-id check, or the `MAX_SECTION_ID`
+/// check, makes that install succeed and fails the refusal assertion;
+/// reverting to `max + 1` on the closure id panics on overflow in this debug
+/// build.
 #[test]
 fn redo_refuses_a_record_no_add_could_have_produced() {
     let mut project = source_bravo();
@@ -1044,4 +1044,97 @@ fn redo_refuses_a_record_no_add_could_have_produced() {
     edge.install_into(&mut project).unwrap();
     assert_eq!(project.next_section_id, MAX_SECTION_ID + 1);
     assert_eq!(project.next_closure_id, u64::MAX);
+}
+
+/// A source refused AFTER the append ran is taken out again by the undo's own
+/// removal, leaving the project exactly as it was: through the append's error
+/// (two datums on one connected survey, a real file) and through the
+/// post-append integrity guard (an infinite shot length - no loadable file is
+/// known to reach that guard, see `append_in_memory`, so the source is handed
+/// over in memory). The target already holds an earlier add's closure, merge
+/// and datum, so the `assign_closure_ids` re-measure and the
+/// `reanchor_station_refs` pass that run before the integrity check meet
+/// pre-existing state: on a settled project both are no-ops, and this pins it.
+/// INJECTION (tried): skipping `roll_back` on the append-error branch fails the
+/// file case's exactness assertion (the copied sections stay); skipping it on
+/// the integrity branch fails the in-memory case's.
+#[test]
+fn a_source_refused_after_the_append_is_rolled_back_exactly() {
+    let temp = TempDir::new().unwrap();
+    let (state, _) = open_target(temp.path(), true);
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha_named());
+    assert!(add(&state, &alpha).success, "an earlier add to roll back onto");
+    let before = canonical_snapshot(&state, false);
+    let depth = undo_depth(&state);
+
+    let mut two_datums = source_bravo();
+    let b0 = two_datums.sections[0].id;
+    two_datums.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(b0, 2).into(),
+        gps: GpsCoordinates::new(20.7, -87.5, 0.0).unwrap(),
+    });
+    let two_datums = save_to(temp.path(), "two-datums.stalx", &two_datums);
+    let refused = add(&state, &two_datums);
+    assert!(
+        refused.error.as_deref().is_some_and(
+            |e| e.starts_with("Failed to copy zero datum from source project Bravo")
+        ),
+        "{:?}",
+        refused.error
+    );
+    assert_same_project(&state, &before, false, "the append error rolled back");
+    assert_eq!(undo_depth(&state), depth, "the refused add pushed nothing");
+
+    let mut infinite = Project::new("Infinite".to_string(), None);
+    infinite.add_section(section(
+        "X0",
+        vec![shot("x0-0", 10.0, f64::INFINITY, 1.0)],
+    ));
+    let blocked = {
+        let mut guard = state.project.lock().unwrap();
+        super::project_add::append_in_memory(guard.as_mut().unwrap(), infinite)
+    };
+    assert!(
+        blocked
+            .as_ref()
+            .is_err_and(|e| e.starts_with("Blocked: the file's survey has integrity problems")),
+        "{blocked:?}"
+    );
+    assert_same_project(&state, &before, false, "the integrity block rolled back");
+}
+
+/// The section-id budget's boundary: an add that uses the id space up to its
+/// last id exactly is accepted, one more section is refused.
+/// INJECTION (tried): `>=` for `>` in the budget check refuses the exact fit;
+/// `> MAX_SECTIONS_IN_ID_SPACE + 1` accepts the one-over case, which then
+/// overflows `Section::new`'s shot-id arithmetic.
+#[test]
+fn the_section_id_budget_admits_an_exact_fit_and_refuses_one_more() {
+    let temp = TempDir::new().unwrap();
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+    let incoming = source_alpha().sections.len() as u32;
+
+    for (spent, fits) in [
+        (MAX_SECTIONS_IN_ID_SPACE as u32 - incoming, true),
+        (MAX_SECTIONS_IN_ID_SPACE as u32 - incoming + 1, false),
+    ] {
+        let dir = TempDir::new().unwrap();
+        let (state, _) = open_target(dir.path(), true);
+        if let Some(project) = state.project.lock().unwrap().as_mut() {
+            project.next_section_id = spent;
+        }
+        let before = canonical_snapshot(&state, false);
+
+        let result = add(&state, &alpha);
+        assert_eq!(result.success, fits, "spent {spent}: {:?}", result.error);
+        if fits {
+            assert_eq!(result.section_ids.iter().max(), Some(&MAX_SECTION_ID));
+        } else {
+            assert!(result
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("Add refused")));
+            assert_same_project(&state, &before, false, "nothing was appended");
+        }
+    }
 }

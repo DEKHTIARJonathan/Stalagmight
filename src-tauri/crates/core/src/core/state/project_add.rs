@@ -714,3 +714,18 @@ thread_local! {
 pub(super) fn set_between_locks(hook: impl FnOnce(&AppState) + 'static) {
     BETWEEN_LOCKS.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
 }
+
+/// Test-only: the append step on an in-memory source, bypassing the file read
+/// and its load-time heals. The post-append integrity guard is defense in
+/// depth - the reader sanitizes non-finite shots, the load re-mints duplicate
+/// uuids and the append skips references that do not resolve, so no loadable
+/// file is known to trip it - and this is the way to exercise its rollback.
+#[cfg(test)]
+pub(super) fn append_in_memory(project: &mut Project, source: Project) -> Result<(), String> {
+    let source = AddSource {
+        project: source,
+        ignores: None,
+        link: None,
+    };
+    AppState::append_into_open(project, &source).map(|_| ())
+}
