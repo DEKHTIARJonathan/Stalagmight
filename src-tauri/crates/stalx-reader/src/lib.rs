@@ -57,7 +57,7 @@ use stalagmight_persistence::persistence::{refused_schema_object, Database, SCHE
 
 pub use survey::{
     CorrectionSource, Direction, LoopClosure, North, Section, Shot, ShotKind, StationComment,
-    StationId, StationMerge, StationPosition, Survey, ZeroDatum,
+    StationId, StationMerge, StationName, StationPosition, Survey, ZeroDatum,
 };
 
 /// Default cap on the input size, in bytes.
