@@ -70,10 +70,14 @@ pub(super) fn append_project(
         // sidecar - already drops repeats itself
         // (`export::tml::harden_for_speleodb`).
         let mut data = section.to_section_data();
-        for shot in &mut data.shots { shot.from_id = None; }
+        for shot in &mut data.shots {
+            shot.from_id = None;
+        }
         let copied = target.add_section(data);
         for (old, new) in section.shots.iter().zip(&copied.shots) {
-            if let (Some(old), Some(new)) = (old.number, new.number) { number_map.insert(old, new); }
+            if let (Some(old), Some(new)) = (old.number, new.number) {
+                number_map.insert(old, new);
+            }
         }
 
         // #438: `SectionData` cannot carry the north reference, so the
@@ -123,16 +127,26 @@ pub(super) fn append_project(
 }
 
 /// Preserve explicit origins while allocating fresh project-wide shot numbers.
-fn copy_shot_graph(target: &mut Project, source: &Project, sections: &HashMap<SectionId, SectionId>, numbers: &HashMap<u32, u32>) {
+fn copy_shot_graph(
+    target: &mut Project,
+    source: &Project,
+    sections: &HashMap<SectionId, SectionId>,
+    numbers: &HashMap<u32, u32>,
+) {
     for (&old, &new) in numbers {
         if let Some(locked) = source.shot_graph.geometry_locks.get(&old) {
             target.shot_graph.geometry_locks.insert(new, *locked);
         }
     }
-    if !source.shot_graph.explicit { return; }
+    if !source.shot_graph.explicit {
+        return;
+    }
     target.shot_graph.explicit = true;
     for original in &source.sections {
-        if let Some(section) = sections.get(&original.id).and_then(|id| target.get_section_mut(*id)) {
+        if let Some(section) = sections
+            .get(&original.id)
+            .and_then(|id| target.get_section_mut(*id))
+        {
             for (old, new) in original.shots.iter().zip(&mut section.shots) {
                 new.from_id = old.from_id.and_then(|number| numbers.get(&number).copied());
             }
