@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import SpeleoUnpushedLocalDialog from './SpeleoUnpushedLocalDialog';
 import { useUIStore } from '../../store/uiStore';
@@ -16,6 +16,48 @@ beforeEach(() => {
     summary: { id: 'synthetic', name: 'Synthetic cave' },
     unpushedLocal: { local_path: '/synthetic/cave.stalx', last_edit_at: null },
   } });
+});
+
+/**
+ * The app's dialog layout (`UnsavedChangesDialog`): every button in the one footer
+ * row - Cancel, the destructive answer, the primary last - and none anywhere else
+ * in the body (the header's X aside), with no hint under a button.
+ */
+function expectButtonsOnlyInFooter(expected: string[]) {
+  const dialog = screen.getByTestId('speleodb-unpushed-local-dialog');
+  const footer = screen.getByTestId('speleodb-unpushed-local-footer');
+  expect(footer).toHaveClass('flex', 'flex-wrap', 'justify-end', 'gap-2', 'pt-4', 'border-t', 'border-border');
+  expect(within(footer).getAllByRole('button').map((b) => b.getAttribute('data-testid'))).toEqual(expected);
+  const elsewhere = within(dialog).getAllByRole('button')
+    .filter((b) => !footer.contains(b) && b.getAttribute('data-testid') !== 'speleodb-unpushed-local-dialog-close');
+  expect(elsewhere).toEqual([]);
+  expect(footer.nextElementSibling).toBeNull();
+  // What each answer does sits in the body, above any warning and the footer.
+  const hint = screen.getByTestId('speleodb-unpushed-local-open-hint');
+  expect(hint.compareDocumentPosition(footer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  const warning = screen.queryByTestId('speleodb-unpushed-local-discard-warning');
+  if (warning) expect(hint.compareDocumentPosition(warning) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+}
+
+const FOOTER_ORDER = [
+  'speleodb-unpushed-local-cancel',
+  'speleodb-unpushed-local-take-remote',
+  'speleodb-unpushed-local-open-local',
+];
+
+it('lays the choices out like every other dialog: Cancel, the discard, then the primary open', async () => {
+  await import('../../i18n');
+  render(<SpeleoUnpushedLocalDialog />);
+  expectButtonsOnlyInFooter(FOOTER_ORDER);
+  expect(screen.getByTestId('speleodb-unpushed-local-take-remote')).toHaveClass('bg-error');
+  expect(screen.getByTestId('speleodb-unpushed-local-open-local')).toHaveClass('bg-accent');
+  const hint = screen.getByTestId('speleodb-unpushed-local-open-hint');
+  expect(hint).toHaveTextContent('"Open my local copy" opens the copy on this computer');
+  expect(hint).toHaveTextContent('Cancel to preserve your unsynced changes');
+  // Arming the discard adds its warning to the body; the row stays as it was.
+  await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+  expect(screen.getByTestId('speleodb-unpushed-local-discard-warning')).toBeVisible();
+  expectButtonsOnlyInFooter(FOOTER_ORDER);
 });
 
 it('restores retry and dismissal after a discarded-copy open is superseded', async () => {
@@ -118,5 +160,13 @@ describe("another account's un-uploaded work", () => {
       .toHaveTextContent("discard someone@example.com's changes");
     await userEvent.click(openButton);
     expect(openLocal).toHaveBeenCalledWith({ id: 'synthetic', name: 'Synthetic cave' }, THEIRS);
+  });
+
+  it('keeps the same footer row, with what each answer does in the body', () => {
+    render(<SpeleoUnpushedLocalDialog />);
+    expectButtonsOnlyInFooter(FOOTER_ORDER);
+    const hint = screen.getByTestId('speleodb-unpushed-local-open-hint');
+    expect(hint).toHaveTextContent('"Open it read-only" opens the copy');
+    expect(hint).toHaveTextContent("Cancel to leave someone@example.com's changes as they are");
   });
 });

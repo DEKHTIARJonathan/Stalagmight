@@ -132,7 +132,12 @@ export default function SpeleoUnpushedLocalDialog() {
         <p className="text-sm text-text-primary" data-testid="speleodb-unpushed-local-last-edited">
           {lastEditedLine}
         </p>
-        <p className="text-xs text-text-secondary">
+        {/* What each answer does, said once in the body (the app's dialog layout). */}
+        <p className="text-sm text-text-secondary" data-testid="speleodb-unpushed-local-open-hint">
+          {owner
+            ? t('speleoExitPrompt.unpushedLocal.openReadOnlyHint', { owner })
+            : t('speleoExitPrompt.unpushedLocal.openLocalHint')}
+          {' '}
           {owner
             ? t('speleodb.unpushedLocal.cancelHintOtherAccount', { owner })
             : t('speleodb.unpushedLocal.cancelHint')}
@@ -158,19 +163,9 @@ export default function SpeleoUnpushedLocalDialog() {
           </div>
         )}
 
-        <p className="text-xs text-text-secondary" data-testid="speleodb-unpushed-local-open-hint">
-          {owner
-            ? t('speleoExitPrompt.unpushedLocal.openReadOnlyHint', { owner })
-            : t('speleoExitPrompt.unpushedLocal.openLocalHint')}
-        </p>
-
-        <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-border">
+        <div className="flex flex-wrap justify-end gap-2 pt-4 border-t border-border" data-testid="speleodb-unpushed-local-footer">
           <Button onClick={dismiss} disabled={busy} data-testid="speleodb-unpushed-local-cancel">
             {t('common.actions.cancel')}
-          </Button>
-          <Button variant="primary" data-primary-action="" onClick={() => void handleOpenLocal()} disabled={busy}
-            data-testid="speleodb-unpushed-local-open-local">
-            {owner ? t('speleoExitPrompt.unpushedLocal.openReadOnly') : t('speleoExitPrompt.unpushedLocal.openLocal')}
           </Button>
           <Button
             variant="danger"
@@ -189,6 +184,10 @@ export default function SpeleoUnpushedLocalDialog() {
                 ? 'speleodb.unpushedLocal.takeRemoteConfirmOtherAccount'
                 : 'speleodb.unpushedLocal.takeRemoteOtherAccount', { owner })
               : t(discardArmed ? 'speleodb.unpushedLocal.takeRemoteConfirm' : 'speleodb.unpushedLocal.takeRemote')}
+          </Button>
+          <Button variant="primary" data-primary-action="" onClick={() => void handleOpenLocal()} disabled={busy}
+            data-testid="speleodb-unpushed-local-open-local">
+            {owner ? t('speleoExitPrompt.unpushedLocal.openReadOnly') : t('speleoExitPrompt.unpushedLocal.openLocal')}
           </Button>
         </div>
       </div>
