@@ -886,7 +886,9 @@ fn an_add_is_refused_when_another_project_is_opened_during_the_read() {
 /// INJECTION (tried): dropping the `is_file` check fails the directory case
 /// on its message (the read then fails as "Failed to read"); dropping the
 /// metadata length check fails the oversized case on its message (the bounded
-/// copy still refuses it, after copying the whole ceiling).
+/// copy still refuses it, as "grew past", after copying the whole ceiling).
+/// That bounded-copy refusal itself needs a file growing mid-read and is not
+/// exercised here.
 #[test]
 fn a_non_regular_or_oversized_source_is_refused() {
     let temp = TempDir::new().unwrap();

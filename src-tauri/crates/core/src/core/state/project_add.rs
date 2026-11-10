@@ -95,12 +95,7 @@ const MAX_ADD_SOURCE_BYTES: u64 = crate::speleodb::client::NATIVE_LIMIT;
 /// reading blocks), and the copy itself is bounded too, so a file that grows
 /// or is swapped after the check still cannot exceed the ceiling.
 fn copy_regular_file(path: &Path, dest: &Path, label: &str) -> Result<(), String> {
-    let too_large = || {
-        format!(
-            "'{label}' is larger than {} MB, the largest project file that can be added",
-            MAX_ADD_SOURCE_BYTES / (1024 * 1024)
-        )
-    };
+    let limit_mb = MAX_ADD_SOURCE_BYTES / (1024 * 1024);
     let metadata = match std::fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -112,7 +107,9 @@ fn copy_regular_file(path: &Path, dest: &Path, label: &str) -> Result<(), String
         return Err(format!("'{label}' is not a project file"));
     }
     if metadata.len() > MAX_ADD_SOURCE_BYTES {
-        return Err(too_large());
+        return Err(format!(
+            "'{label}' is larger than {limit_mb} MB, the largest project file that can be added"
+        ));
     }
     let source = std::fs::File::open(path).map_err(|e| format!("Failed to read '{label}': {e}"))?;
     let mut target =
@@ -123,7 +120,9 @@ fn copy_regular_file(path: &Path, dest: &Path, label: &str) -> Result<(), String
     )
     .map_err(|e| format!("Failed to read '{label}': {e}"))?;
     if copied > MAX_ADD_SOURCE_BYTES {
-        return Err(too_large());
+        return Err(format!(
+            "'{label}' grew past {limit_mb} MB while it was being read, so it was not added"
+        ));
     }
     Ok(())
 }
