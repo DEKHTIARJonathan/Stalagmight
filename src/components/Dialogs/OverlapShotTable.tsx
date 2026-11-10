@@ -38,6 +38,13 @@ interface OverlapShotTableProps {
 
 const cell = 'px-1 py-0.5 text-right whitespace-nowrap';
 
+/** Kebab-case ids for the set-all buttons, as the test tooling expects. */
+const SET_ALL_TESTID: Record<OverlapChoice, string> = {
+  keep_existing: 'overlap-set-all-keep-existing',
+  use_new: 'overlap-set-all-use-new',
+  average: 'overlap-set-all-average',
+};
+
 /**
  * The per-shot decision table for repeated survey (#681): one row per repeated
  * shot, existing over new with their difference, and the reading to keep.
@@ -108,7 +115,7 @@ export default function OverlapShotTable({
               aria-pressed={sharedChoice === choice}
               disabled={isDisabled(choice)}
               onClick={() => onSetAll(choice)}
-              data-testid={`overlap-set-all-${choice}`}
+              data-testid={SET_ALL_TESTID[choice]}
             >
               {choiceLabel(choice)}
             </Button>

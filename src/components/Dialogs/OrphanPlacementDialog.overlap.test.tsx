@@ -250,7 +250,7 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
 
     expect(screen.getByTestId('overlap-row-2').getAttribute('data-differs')).toBe('false');
     expect(screen.getByTestId('overlap-row-3').getAttribute('data-differs')).toBe('false');
-    await userEvent.click(screen.getByTestId('overlap-set-all-use_new'));
+    await userEvent.click(screen.getByTestId('overlap-set-all-use-new'));
     await acceptAndFinish();
 
     expect(referenceCalls()).toEqual([[1, 102], [1, 103]]);
@@ -263,9 +263,9 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     setup(makeProject({ zero_datums: [datum(0), datum(5)] as unknown as Project['zero_datums'] }));
     render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} />);
 
-    expect((screen.getByTestId('overlap-set-all-use_new') as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByTestId('overlap-set-all-use-new') as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByTestId('overlap-set-all-average') as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByTestId('overlap-set-all-keep_existing') as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByTestId('overlap-set-all-keep-existing') as HTMLButtonElement).disabled).toBe(false);
 
     await userEvent.click(screen.getByTestId('overlap-choice-1'));
     expect(screen.getByTestId('overlap-choice-1-option-use_new').getAttribute('aria-disabled')).toBe('true');

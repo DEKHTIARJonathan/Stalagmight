@@ -336,6 +336,9 @@ export const TESTID_INVENTORY: readonly string[] = [
   'orphan-skip',
   'orphan-accept-all',
   'orphan-close',
+  // the repeated-shots table (#681): a set-all button per choice, a choice per row
+  'overlap-set-all-*',
+  'overlap-choice-*',
   // --- dirty-discard overlay ------------------------------------------------
   'dirty-dialog-keep-editing',
   'dirty-dialog-discard',
@@ -358,6 +361,12 @@ export const SELECT_TESTIDS: readonly string[] = [
 
 /** `overlap-mode-select`'s option values are static (see DmpNewImportDialog). */
 export const OVERLAP_MODES: readonly string[] = ['interpolate', 'import_data', 'existing_data', 'keep_both'];
+
+/**
+ * The orphan dialog's per-shot choices (#681): the option values of every
+ * `overlap-choice-N` (see `OVERLAP_CHOICES` in src/utils/overlapChoices.ts).
+ */
+export const ORPHAN_OVERLAP_CHOICES: readonly string[] = ['keep_existing', 'use_new', 'average'];
 
 /** `tml-virtual-shot-mode`'s option values are static (see TmlImportDialog). */
 export const VIRTUAL_SHOT_MODES: readonly string[] = ['Auto', 'AllJumps', 'AllReferences'];
