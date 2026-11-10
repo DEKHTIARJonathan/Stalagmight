@@ -1231,3 +1231,70 @@ fn a_pending_kind_classification_in_the_source_is_finished_by_the_add() {
         "the source file itself is untouched"
     );
 }
+
+/// A refused add leaves no trace at all: the removal the undo runs keeps the
+/// id allocators advanced on purpose (a redo may need those ids again), but a
+/// refused add has no redo, so it must give back the ids it spent - or an add
+/// that fits the section-id budget exactly is refused after a failed one - and
+/// the modification time it bumped. Through the append's error (a real file)
+/// and the post-append integrity guard (in memory, with a closure so the
+/// closure-id allocator moves too).
+/// INJECTION (tried): dropping the allocator restore from `roll_back` refuses
+/// the exact-fit add (the failed one spent two section ids) and fails the
+/// allocator assertion on the integrity path (the closure id stays spent);
+/// dropping the `modified_at` restore fails the allocator assertion on the
+/// timestamp the removal bumped.
+#[test]
+fn a_refused_add_spends_no_ids_and_keeps_the_modification_time() {
+    let temp = TempDir::new().unwrap();
+    let (state, _) = open_target(temp.path(), true);
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+    let incoming = source_alpha().sections.len() as u32;
+    let allocators = || {
+        let guard = state.project.lock().unwrap();
+        let project = guard.as_ref().unwrap();
+        (
+            project.next_section_id,
+            project.next_closure_id,
+            project.modified_at,
+        )
+    };
+    if let Some(project) = state.project.lock().unwrap().as_mut() {
+        project.next_section_id = MAX_SECTIONS_IN_ID_SPACE as u32 - incoming;
+        project.modified_at = fixed_time(0);
+    }
+    let before = allocators();
+
+    let mut two_datums = source_bravo();
+    let b0 = two_datums.sections[0].id;
+    two_datums.zero_datums.push(ZeroDatum {
+        station_ref: StationRef::new(b0, 2).into(),
+        gps: GpsCoordinates::new(20.7, -87.5, 0.0).unwrap(),
+    });
+    let two_datums = save_to(temp.path(), "two-datums.stalx", &two_datums);
+    assert!(
+        !add(&state, &two_datums).success,
+        "the append error refuses"
+    );
+    assert_eq!(allocators(), before, "the append error spent nothing");
+
+    let mut infinite = Project::new("Infinite".to_string(), None);
+    let x0 = infinite
+        .add_section(section("X0", vec![shot("x0-0", 10.0, f64::INFINITY, 1.0)]))
+        .id;
+    infinite.loop_closures.push(closure(
+        StationRef::new(x0, 0),
+        StationRef::new(x0, 1),
+        ClosureStrategy::Batch,
+    ));
+    let blocked = {
+        let mut guard = state.project.lock().unwrap();
+        super::project_add::append_in_memory(guard.as_mut().unwrap(), infinite)
+    };
+    assert!(blocked.is_err(), "the integrity guard refuses");
+    assert_eq!(allocators(), before, "the integrity block spent nothing");
+
+    let fits = add(&state, &alpha);
+    assert!(fits.success, "the exact fit still fits: {:?}", fits.error);
+    assert_eq!(fits.section_ids.iter().max(), Some(&MAX_SECTION_ID));
+}

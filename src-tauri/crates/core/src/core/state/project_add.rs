@@ -480,10 +480,22 @@ impl AppState {
         let pre_critical = project.has_critical_integrity_violations();
         let closures_before = project.loop_closures.len();
         let baseline = AddedContent::stub(project, None);
+        // A refused add must leave no trace, so beyond the removal the undo
+        // runs it also winds back what that removal deliberately keeps: the id
+        // allocators (a refused add must not spend the section-id budget an
+        // exact-fit add needs) and the modification time.
+        let (next_section_id, next_closure_id, modified_at) = (
+            project.next_section_id,
+            project.next_closure_id,
+            project.modified_at,
+        );
         let roll_back = |project: &mut Project, baseline: AddedContent| {
             if let Some(added) = baseline.finalize(project, Vec::new()) {
                 added.remove_from(project);
             }
+            project.next_section_id = next_section_id;
+            project.next_closure_id = next_closure_id;
+            project.modified_at = modified_at;
         };
 
         let outcome = match append_project(project, &source.project) {
