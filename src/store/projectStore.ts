@@ -541,6 +541,7 @@ const IMPORT_COMMANDS = new Set([
   'execute_compass_import',
   'execute_walls_import',
   'execute_gpx_import',
+  'add_project_file',
 ]);
 
 /**
