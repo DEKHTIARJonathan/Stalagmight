@@ -113,7 +113,8 @@ test.describe('Orphan + Zero Datum Workflow', () => {
     expect(mergeCalls.length).toBeGreaterThan(0);
   });
 
-  test('a repeated section resolves every repeated shot, one choice per shot (#681)', async ({ page }) => {
+  /** Mainline 3 shots; the orphan re-surveys Mainline shots 2-3, then carries on (#681). */
+  async function openRepeatScenario(page: Page) {
     await page.setViewportSize({ width: 1024, height: 640 });
     await createProject(page, 'Orphan Repeat Scenario');
 
@@ -156,6 +157,11 @@ test.describe('Orphan + Zero Datum Workflow', () => {
     ]);
     const dialog = page.getByTestId('orphan-placement-dialog');
     await expect(dialog).toBeVisible({ timeout: 10000 });
+    return dialog;
+  }
+
+  test('a repeated section resolves every repeated shot, one choice per shot (#681)', async ({ page }) => {
+    const dialog = await openRepeatScenario(page);
 
     await expect(dialog.getByText('100% score')).toBeVisible();
     await expect(page.getByTestId('overlap-row-0')).toHaveAttribute('data-differs', 'false');
@@ -190,6 +196,30 @@ test.describe('Orphan + Zero Datum Workflow', () => {
     // Keep existing on row 0, Use new on row 1 - written into the EXISTING shot.
     expect(mainline.shots.map((s) => s.length)).toEqual([10, 8, 6.5]);
     expect(mainline.shots.map((s) => s.kind)).toEqual(['Normal', 'Normal', 'Normal']);
+  });
+
+  test('a mid-repeat merge resolves only the shot before it; the rest stays Normal (#681)', async ({ page }) => {
+    const dialog = await openRepeatScenario(page);
+
+    // Merge at orphan stn 1 = Mainline stn 2: the repeat is now one shot long.
+    // Picked and confirmed as a unit: one run under heavy load (load average
+    // ~50) ended on a different option, so the row checks below saw no rows.
+    await expect(async () => {
+      await page.getByTestId('merge-station-select').click();
+      await page.getByTestId('merge-station-select-option-1').click({ timeout: 2000 });
+      await expect(page.getByTestId('merge-station-select')).toContainText('stn 1 ', { timeout: 1000 });
+    }).toPass({ timeout: 15000 });
+    await expect(page.getByTestId('overlap-row-0')).toBeVisible();
+    await expect(page.getByTestId('overlap-row-1')).toHaveCount(0);
+
+    await page.getByTestId('orphan-accept').click();
+    await expect(dialog).toBeHidden({ timeout: 10000 });
+
+    const project = await readProject(page);
+    const orphan = project.sections.find((s) => s.id === 2)!;
+    // Shot 2 runs on from the merge station: a Reference there would cut the
+    // rest of the orphan off in Plan mode.
+    expect(orphan.shots.map((s) => s.kind)).toEqual(['Reference', 'Normal', 'Normal']);
   });
 
   test('walks through zero datum selection into new import wizard', async ({ page }) => {
