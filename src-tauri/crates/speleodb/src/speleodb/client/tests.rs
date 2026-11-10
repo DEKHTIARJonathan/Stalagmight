@@ -820,7 +820,7 @@ fn download_deadline_scales_with_the_size_and_is_bounded_by_the_native_limit() {
     // the minimum rate) is cut at the ceiling, Content-Length or not.
     assert_eq!(deadline(NATIVE_LIMIT), DOWNLOAD_CEILING);
     assert!(
-        DOWNLOAD_CEILING < Duration::from_secs(2 * 60 * 60),
+        DOWNLOAD_CEILING < Duration::from_hours(2),
         "{DOWNLOAD_CEILING:?}"
     );
 }
