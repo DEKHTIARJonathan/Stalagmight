@@ -1469,6 +1469,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const stationMergedWith: Array<[number, unknown[]]> = [];
             const stationClosuresWith: Array<[number, unknown[]]> = [];
             const stationCommentsArr: Array<[number, string]> = [];
+            const stationNamesArr: Array<[number, string]> = [];
 
             jsonResult.stations.forEach((station, idx) => {
               const fOff = idx * STATION_FLOAT_STRIDE;
@@ -1483,6 +1484,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               if (station.merged_with?.length) stationMergedWith.push([idx, station.merged_with]);
               if (station.closures_with?.length) stationClosuresWith.push([idx, station.closures_with]);
               if (station.comment) stationCommentsArr.push([idx, station.comment]);
+              if (station.name) stationNamesArr.push([idx, station.name]);
             });
 
             const envelope = {
@@ -1493,7 +1495,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // the header no longer carries a `collab` field; 4 to 5 for the
               // #438 north references (a project-level default plus one per
               // section header).
-              version: 5,
+              version: 6,
               loading_id: jsonResult.loadingId,
               // Added to the envelope at v3 alongside the ShotKind bits
               // (`load_binary.rs`): the decoder reads it unvalidated, so omitting
@@ -1566,6 +1568,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               station_merged_with: stationMergedWith,
               station_closures_with: stationClosuresWith,
               station_comments: stationCommentsArr,
+              station_names: stationNamesArr,
               stats: jsonResult.stats,
               warnings: jsonResult.warnings,
               display_settings: jsonResult.displaySettings,
