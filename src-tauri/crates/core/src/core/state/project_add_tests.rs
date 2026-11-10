@@ -1305,8 +1305,8 @@ fn a_refused_add_spends_no_ids_and_keeps_the_modification_time() {
 /// projects" (the same append) must copy them, or the copied component is
 /// gauged on a different station and its adjusted geometry translates.
 /// INJECTION (tried): dropping the parity/anchor copy from `append_project`
-/// fails the add's assertion (parity false, anchors `None`) and the merge's
-/// (the output's save captures fresh anchors on station 0's shots instead).
+/// fails the add's assertion with parity false and both anchors `None`, and,
+/// with the add's assertion skipped, the merge's the same way.
 #[test]
 fn add_and_merge_keep_each_sections_gauge_parity_and_anchors() {
     let temp = TempDir::new().unwrap();
