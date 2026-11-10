@@ -305,6 +305,47 @@ fn status_errors_and_malformed_success_remain_distinct() {
     }
 }
 
+/// An error reply's message is the server's text, and the reply may be as long
+/// as the JSON limit: uncapped, a 10 MiB `detail` reached the log, the error
+/// dialogs, Home's removal warning and the purge report. It is cut at the source,
+/// to the same bound as a contract mismatch's detail, whichever field it came from.
+#[test]
+fn an_error_replys_message_is_bounded_whatever_field_it_comes_from() {
+    let long = "\u{e9}".repeat(CONTRACT_DETAIL_LIMIT * 40);
+    let cut = format!("{}...", "\u{e9}".repeat(CONTRACT_DETAIL_LIMIT));
+    for body in [
+        json!({"detail": long}),
+        json!({"error": long}),
+        json!({"errors": {"non_field_errors": [long]}}),
+        json!({"errors": {"name": long}}),
+    ] {
+        let raw = serde_json::to_vec(&body).expect("json");
+        assert_eq!(
+            parse_error_message(&raw).as_deref(),
+            Some(cut.as_str()),
+            "{body}"
+        );
+    }
+    // A short message is kept as it is.
+    assert_eq!(
+        parse_error_message(br#"{"detail":"Test failure"}"#).as_deref(),
+        Some("Test failure")
+    );
+
+    // End to end: the status error a removal's lock release reports.
+    let s = Server::replies(vec![(
+        409,
+        serde_json::to_vec(&json!({ "detail": long })).expect("json"),
+    )]);
+    let err = release_lock(&s.base, "t", false, ID).unwrap_err();
+    s.finish();
+    assert!(
+        matches!(&err, SpeleoDbError::Status { status: 409, message } if *message == cut),
+        "{err:?}"
+    );
+    assert!(err.to_string().chars().count() < CONTRACT_DETAIL_LIMIT + 100);
+}
+
 #[test]
 fn reads_retry_transient_failures_and_native_streams_enforce_a_limit() {
     let s = Server::replies(vec![

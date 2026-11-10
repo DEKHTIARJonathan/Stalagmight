@@ -436,9 +436,17 @@ fn contract_mismatch(detail: Option<String>) -> String {
     if detail.is_empty() {
         return MISMATCH.into();
     }
-    match detail.char_indices().nth(CONTRACT_DETAIL_LIMIT) {
-        Some((cut, _)) => format!("{MISMATCH}: {}...", &detail[..cut]),
-        None => format!("{MISMATCH}: {detail}"),
+    format!("{MISMATCH}: {}", bounded(detail))
+}
+
+/// `text` cut to [`CONTRACT_DETAIL_LIMIT`] characters, with `...` when it was cut.
+/// Every piece of server-chosen text an error carries goes through this: an error
+/// reply can be as large as the JSON limit, and its message reaches the log, the
+/// error dialogs, the removal warning and the purge report.
+fn bounded(text: &str) -> String {
+    match text.char_indices().nth(CONTRACT_DETAIL_LIMIT) {
+        Some((cut, _)) => format!("{}...", &text[..cut]),
+        None => text.to_owned(),
     }
 }
 fn api_error<E: std::fmt::Debug>(error: ApiOpError<E>) -> SpeleoDbError {
@@ -477,23 +485,24 @@ fn api_error<E: std::fmt::Debug>(error: ApiOpError<E>) -> SpeleoDbError {
         }
     }
 }
+/// The message of a SpeleoDB error reply, [`bounded`]: the server chooses it, and
+/// it may be as long as the reply.
 fn parse_error_message(body: &[u8]) -> Option<String> {
     let value: serde_json::Value = serde_json::from_slice(body).ok()?;
     for key in ["error", "detail"] {
         if let Some(message) = value.get(key).and_then(serde_json::Value::as_str) {
-            return Some(message.into());
+            return Some(bounded(message));
         }
     }
+    fn first(v: &serde_json::Value) -> Option<&str> {
+        v.as_str().or_else(|| v.as_array()?.first()?.as_str())
+    }
     let errors = value.get("errors")?.as_object()?;
-    let first = |v: &serde_json::Value| {
-        v.as_str()
-            .or_else(|| v.as_array()?.first()?.as_str())
-            .map(str::to_owned)
-    };
     errors
         .get("non_field_errors")
         .and_then(first)
         .or_else(|| errors.values().find_map(first))
+        .map(bounded)
 }
 fn project(value: types::Project) -> Result<Project, SpeleoDbError> {
     let permission = value
