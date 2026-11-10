@@ -91,6 +91,13 @@ impl AppState {
         if self.speleodb_session_status().is_ok_and(|s| s.logged_in) {
             return Err(crate::speleodb::SpeleoDbError::ServerChangeWhileConnected.into());
         }
+        Self::speleodb_check_endpoint(incoming)
+    }
+
+    /// Refuse a saved SpeleoDB address the transport policy refuses, under the
+    /// `insecure_http` choice the same save carries (honoured only in a
+    /// development build, `tls::INSECURE_HTTP_HONOURED`).
+    fn speleodb_check_endpoint(incoming: &Config) -> Result<()> {
         if let Some(endpoint) = incoming.speleodb.endpoint.as_deref() {
             crate::speleodb::validate_endpoint(endpoint, incoming.speleodb.insecure_http)?;
         }
@@ -98,10 +105,15 @@ impl AppState {
     }
 
     /// Update config from a whole-`Config` payload. A change of SpeleoDB instance is
-    /// refused while connected ([`Self::speleodb_check_instance_change`]).
+    /// refused while connected ([`Self::speleodb_check_instance_change`]). A save
+    /// that changes the server or the insecure-HTTP choice must leave an address
+    /// the transport policy accepts: turning the choice off under a saved
+    /// `http://` hostname would otherwise save a server every call then refuses.
     pub fn update_config(&self, config: Config) -> Result<()> {
         if self.speleodb_instance_changes(&config) {
             self.speleodb_check_instance_change(&config)?;
+        } else if self.get_config().speleodb.insecure_http != config.speleodb.insecure_http {
+            Self::speleodb_check_endpoint(&config)?;
         }
         self.write_whole_config(config)
     }
@@ -490,6 +502,36 @@ mod tests {
                 Some("https://sdb.example.com")
             );
             assert!(loaded.speleodb.token.0.is_some());
+        });
+    }
+
+    /// Settings validates the saved address whenever a save changes the server OR
+    /// the insecure-HTTP choice: turning the choice off under a plain-http
+    /// hostname is refused, not saved as a server every call would then refuse.
+    #[test]
+    fn turning_insecure_http_off_under_a_plain_http_server_is_refused() {
+        crate::test_helpers::with_isolated_config(|| {
+            let state = AppState::new().unwrap();
+            {
+                let mut config = state.config.lock().unwrap();
+                config.speleodb.endpoint = Some("http://sdb.example.com".to_owned());
+                config.speleodb.insecure_http = true;
+            }
+            let mut incoming = state.get_config();
+            incoming.speleodb.insecure_http = false;
+            assert!(state.update_config(incoming).is_err());
+            assert!(
+                state.get_config().speleodb.insecure_http,
+                "nothing was saved"
+            );
+
+            // Over https the choice changes nothing the policy refuses.
+            state.config.lock().unwrap().speleodb.endpoint =
+                Some("https://sdb.example.com".to_owned());
+            let mut incoming = state.get_config();
+            incoming.speleodb.insecure_http = false;
+            state.update_config(incoming).unwrap();
+            assert!(!state.get_config().speleodb.insecure_http);
         });
     }
 
