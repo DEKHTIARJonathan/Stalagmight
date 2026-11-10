@@ -610,6 +610,34 @@ fn count_limits_refuse_a_file_before_the_post_load_steps() {
     );
 }
 
+/// A hostile upload can fill `station_names` with rows that name no station;
+/// they are counted before the load builds them, like every other capped table.
+#[test]
+fn station_names_are_counted_against_their_own_cap() {
+    let dir = TempDir::new().unwrap();
+    let path = save(&dir, &full_project());
+    let options = ReadOptions::default().count_limits(CountLimits::default().station_names(1));
+
+    let err = read_file_with(&path, &options).unwrap_err();
+
+    assert!(
+        matches!(
+            err,
+            ReadError::TooComplex {
+                what: Limit::StationNames,
+                count: 2,
+                max: 1
+            }
+        ),
+        "{err}"
+    );
+    assert!(read_file_with(
+        &path,
+        &ReadOptions::default().count_limits(CountLimits::default().station_names(2))
+    )
+    .is_ok());
+}
+
 #[test]
 fn the_frame_datum_anchors_its_component_even_when_it_is_not_the_lowest() {
     // The app refuses a second datum in one component, but a crafted or older
