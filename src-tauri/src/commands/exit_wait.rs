@@ -112,6 +112,16 @@ impl ExitWait {
             .is_some_and(|until| Instant::now() < until)
     }
 
+    /// Arm (`Some`) or disarm (`None`) the forced exit; see [`arm_forced_exit`]
+    /// and [`disarm_forced_exit`].
+    fn set_forced(&self, armed: bool) {
+        *self
+            .forced_until
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            armed.then(|| Instant::now() + FORCED_EXIT_TTL);
+    }
+
     /// Register a user-visible transfer (see [`user_transfer`]).
     pub fn begin_transfer(&self) -> UserTransfer {
         *self.transfers.count() += 1;
@@ -233,14 +243,24 @@ pub fn on_exit_requested(app: &AppHandle, code: Option<i32>, api: &tauri::ExitRe
 /// waiting for it.
 #[tauri::command]
 pub fn arm_forced_exit(wait: State<'_, ExitWait>) {
-    *wait
-        .forced_until
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner) =
-        Some(Instant::now() + FORCED_EXIT_TTL);
+    wait.set_forced(true);
     tracing::warn!(
         purpose = "quit without waiting for an in-flight SpeleoDB transfer (user chose it)",
         "forced exit armed"
+    );
+}
+
+/// The forced quit did not happen after all: the window survived its destroy, so
+/// the app is still running and the user can go on working. Left armed, the next
+/// exit within [`FORCED_EXIT_TTL`] - an ordinary quit the user starts a moment
+/// later, or the OS ending the app - would cut a transfer the user never chose to
+/// cut. Idempotent.
+#[tauri::command]
+pub fn disarm_forced_exit(wait: State<'_, ExitWait>) {
+    wait.set_forced(false);
+    tracing::info!(
+        purpose = "a forced quit whose window close failed must not cut a later transfer",
+        "forced exit disarmed"
     );
 }
 
@@ -330,6 +350,27 @@ mod tests {
         assert!(wait.restart_blocked(), "an expired arm cuts nothing");
         drop(upload);
         assert!(!wait.restart_blocked(), "the upload finished");
+    }
+
+    /// A forced quit whose window survived (its destroy failed) is disarmed: the
+    /// next exit waits for a transfer again instead of cutting it, and an update
+    /// restart is refused over one again.
+    #[test]
+    fn a_disarmed_forced_quit_cuts_nothing() {
+        let wait = ExitWait::default();
+        let _upload = wait.begin_transfer();
+        wait.set_forced(true);
+        assert!(wait.forced());
+        assert_eq!(wait.step(None), ExitStep::ReleaseAndExit);
+        assert!(!wait.restart_blocked());
+
+        wait.set_forced(false);
+        assert!(!wait.forced());
+        assert_eq!(wait.step(None), ExitStep::WaitThenExit);
+        assert!(wait.restart_blocked());
+        // Disarming what is not armed is a no-op.
+        wait.set_forced(false);
+        assert!(!wait.forced());
     }
 
     #[test]

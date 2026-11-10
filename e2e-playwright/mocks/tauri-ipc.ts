@@ -5610,6 +5610,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             (window as unknown as { __forcedExitArmed?: number }).__forcedExitArmed =
               ((window as unknown as { __forcedExitArmed?: number }).__forcedExitArmed ?? 0) + 1;
             return null;
+          case 'disarm_forced_exit':
+            // A "Quit now" whose window destroy failed takes the arm back; the
+            // backend half is covered in Rust.
+            (window as unknown as { __forcedExitDisarmed?: number }).__forcedExitDisarmed =
+              ((window as unknown as { __forcedExitDisarmed?: number }).__forcedExitDisarmed ?? 0) + 1;
+            return null;
           case 'arm_app_update_restart':
           case 'unarm_app_update_restart':
             // The backend's one-shot install consent. Succeeds here so a spec

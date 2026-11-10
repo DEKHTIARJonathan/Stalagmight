@@ -1988,6 +1988,7 @@ pub fn run() {
             commands::app_update::arm_app_update_restart,
             commands::app_update::unarm_app_update_restart,
             commands::exit_wait::arm_forced_exit,
+            commands::exit_wait::disarm_forced_exit,
             commands::app_update::install_app_update_and_restart,
             // Recovery (SPEC 14.4)
             commands::recovery::attempt_repair,

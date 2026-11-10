@@ -67,6 +67,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.delete_section",
     "command.delete_shot",
     "command.delete_shot_and_split",
+    "command.disarm_forced_exit",
     "command.discard_app_update_download",
     "command.download_app_update",
     "command.execute_batch",
@@ -1068,7 +1069,10 @@ mod tests {
         //   + 1 a project switch or a quit hands the open project's lock back
         //       before leaving it, and asks when that fails (never strand a lock
         //       silently): command.speleodb_settle_open_lock = 670.
-        assert_eq!(EVENT_NAMES.len(), 670);
+        //   + 1 a "Quit now" whose window close failed takes its forced-exit arm
+        //       back, so the app that stays open does not cut a later transfer:
+        //       command.disarm_forced_exit = 671.
+        assert_eq!(EVENT_NAMES.len(), 671);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
