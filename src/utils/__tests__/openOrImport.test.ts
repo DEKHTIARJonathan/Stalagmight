@@ -132,6 +132,17 @@ describe('routeOpenedFile', () => {
       expect(peekProjectActionSource()).toBe('keyboard');
     });
 
+    it('picking the open project\'s own file shows an already-open toast, not the dialog', async () => {
+      useProjectStore.setState({
+        project: { name: 'X', file_path: '/cave/self.stalx' } as never,
+        isDirty: false,
+      });
+      await routeOpenedFile('/cave/self.stalx', 'Import Failed', { importDoor: true });
+      expect(useUIStore.getState().activeDialog).toBeNull();
+      expect(loadProject).not.toHaveBeenCalled();
+      expect(useUIStore.getState().toasts.map((x) => x.key)).toContain('import-already-open');
+    });
+
     it('is unchanged for the Open doors: a dirty project still defers to unsaved-changes', async () => {
       useProjectStore.setState({ project: { name: 'X' } as never, isDirty: true });
       await routeOpenedFile('/cave/other.stalx', 'Open Failed');

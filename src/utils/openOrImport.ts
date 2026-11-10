@@ -342,7 +342,15 @@ export async function routeOpenedFile(
       // here, so the user's Ctrl+O is not swallowed by the prompt it raised.
       // #674: an Import door asks open-or-add first; "Open as project" re-enters
       // without `importDoor`, so it still meets every guard below.
-      if (store.project && opts?.importDoor) {
+      if (store.project && opts?.importDoor && store.project.file_path === path) {
+        // Picking the open project's own file: adding it to itself is refused and
+        // re-opening it would only discard nothing, so say so instead of offering both.
+        ui.showToast(
+          i18n.t('importGate.alreadyOpen', { fileName: extractFilename(path) }),
+          'import-already-open',
+          'info',
+        );
+      } else if (store.project && opts?.importDoor) {
         ui.openDialog('add-or-open-project', { path, fileName: extractFilename(path) });
         handedOff = true;
       } else if (store.project && openProjectNeedsSpeleoExitPrompt()) {

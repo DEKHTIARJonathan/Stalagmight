@@ -2566,7 +2566,8 @@
     "commandFailed": "The change could not be applied."
   },
   "importGate": {
-    "inProgress": "Finish or cancel the current import first."
+    "inProgress": "Finish or cancel the current import first.",
+    "alreadyOpen": "{{fileName}} is already the open project."
   },
   "newerSchema": {
     "message": "\"{{file}}\" was saved by a newer version of Stalagmight (file format {{found}}; this version reads up to {{supported}}). Update Stalagmight to open it.",
