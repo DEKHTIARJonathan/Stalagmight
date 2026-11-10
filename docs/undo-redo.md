@@ -46,6 +46,7 @@ Commands go through a two-phase capture during execution:
 | `ZeroDatumInfo` | SetZeroDatum (and legacy persisted RemoveZeroDatum entries) | Restore GPS + offsets directly, at the datum's recorded index | Execute the original command |
 | `SegmentMoveInfo` | MoveSegment | Restore section offsets directly | Reapply offset to affected sections |
 | `ProjectSnapshotPair` | Batch, DeleteSection, DeleteShot, ReverseSection, MergeStations, UnmergeStations, UnmergeStationPair, MoveStation, MoveComment, RemoveZeroDatum, CreateLoopClosure (distributing strategies only), and the label-only RepairIntegrity / UpdateProjectSettings / SetSurfaceElevation (see below) | Re-record "after" from the live project, then restore "before" JSON (see below) | Re-record "before" from the live project, then restore "after" JSON |
+| `AddedProjectContent` | AddProjectFile (#674) | Re-record what the add brought from the live project, then remove exactly that and put back the two project fields it changed (see below) | Reinstall the recorded content verbatim - same section, shot and closure ids |
 | `None` | Non-undoable commands | N/A | N/A |
 
 ### Undo data addresses a shot by uuid, never by its in-session id (#413)
@@ -407,6 +408,48 @@ Batch operations (`Command::Batch { commands }`) are **atomic**:
 - If any sub-command fails, the entire batch rolls back via the pre-snapshot
 - The single `UndoEntry` uses `ProjectSnapshotPair` - undo restores "before", redo restores "after"
 - The UI shows batch as one history item; the hover preview lists each sub-command
+
+## Adding a `.stalx` to the open project (#674)
+
+`AddProjectFile` appends another project file's survey into the OPEN project
+through the same routine "Merge projects" uses (`core/state/project_append.rs`),
+and goes through `execute()` like any edit, so the read-only gate and the
+geometry epilogue apply. It is ONE undo step on top of the project's existing
+history, and that step records only what the add brought - never a
+`ProjectSnapshotPair`, whose size would grow with the cave being added INTO:
+
+- **What is recorded** (`AddedContent`, `core/undo/added_content.rs`): the
+  added `Section`s whole (ids, shot uuids, parity, gauge pair), every merge,
+  closure, datum, comment and section/station offset that names them, the
+  dedup hashes the add put in (not ones the project already held), the ignored
+  warnings it carried, `(before, after)` of `surface_elevation` and `location`
+  (the two project fields the shared append can set), and `(before, after)` of
+  any PRE-EXISTING section offset that moved across the command (normally none:
+  the add places only what it copied).
+- **Two phases**, like `CreatedShotSnapshot`: `generate_undo_data` returns a stub
+  holding only a baseline (`next_section_id`, offsets, hash sets, the two
+  fields); `finalize_undo_data` measures the project the epilogue left against
+  it. The baseline is `#[serde(skip)]` and never persisted.
+- **Undo** removes exactly the recorded sections and everything referencing
+  them, the recorded hashes, and puts the two fields and any moved offset back.
+  The id allocators are left alone (monotonic), so nothing later reuses an id
+  the redo needs. It is SELF-REFRESHING, like `CreatedSectionSnapshot`: the
+  content is re-read from the live project right before the removal, so a save
+  heal applied since the push comes back on redo instead of being reverted.
+- **Redo** reinstalls the recorded content verbatim - it never re-reads the
+  file, which may have changed or gone. It refuses (nothing changed) if a
+  recorded section id is already taken.
+- **Privacy**: undo history rides to SpeleoDB in Full mode, so the command's
+  `path` is `#[serde(skip)]`; only the sanitized file name (the history label)
+  is serialized. A reloaded entry has an empty path, which nothing reads.
+- **Ignored warnings** live in the open file's `resolved_warnings` table, which
+  has a foreign key on `sections(id)` - and an added section is not in that
+  table until the next save. So the carried ignores wait in
+  `AppState::pending_ignores`, are honored by `compute_project_warnings`
+  meanwhile, are written by the next save's carry-over, and are cleared with
+  every project-slot commit. Undo drops the pending ones; rows a save already
+  wrote stay on disk, inert (their sections are gone) and dropped by the next
+  save, so a close without saving leaves the file consistent.
 
 ## Non-Undoable Commands
 
@@ -853,6 +896,9 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 | `src-tauri/crates/core/src/core/state/undo_policy.rs` | Persisted policy loading and effective undo limits |
 | `src-tauri/crates/core/src/core/state/commands.rs` | `execute()`, `execute_batch()` |
 | `src-tauri/crates/core/src/core/state/undo_capture.rs` | `generate_undo_data()`, `finalize_undo_data()`, `is_undoable()` |
+| `src-tauri/crates/core/src/core/undo/added_content.rs` | `AddedContent`: what an `AddProjectFile` brought, its removal and reinstall |
+| `src-tauri/crates/core/src/core/state/project_add.rs` | The add's forward step, the pending-ignore set |
+| `src-tauri/crates/core/src/core/state/project_append.rs` | `append_project`, shared by merge and add |
 | `src-tauri/crates/core/src/core/command.rs` | `Command` enum and `description()` method |
 | `src-tauri/src/commands/history.rs` | Tauri commands for stacks |
 | `src-tauri/crates/core/src/core/undo/history_view.rs` | `UndoHistoryItem` DTO, `derive_preview_data()`, `entry_to_history_item()` |
