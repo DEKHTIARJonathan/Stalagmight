@@ -3852,12 +3852,10 @@
     "title": "Couldn't hand back the lock",
     "body": "Stalagmight could not hand back the SpeleoDB lock on \"{{name}}\" before {{action}}. Until it is handed back, nobody else can edit the project.",
     "reason": "What went wrong: {{reason}}",
+    "choices": "Retry asks SpeleoDB again and hands the lock back if it is still yours. Close and keep the lock leaves the project reserved for you: the next time you connect to SpeleoDB, Stalagmight offers to release it, and you can also release it on the SpeleoDB website. Cancel keeps the project open, read-only until you resume editing.",
     "retry": "Retry",
     "retrying": "Retrying...",
-    "retryHint": "Ask SpeleoDB again, and hand the lock back if it is still yours.",
     "keep": "Close and keep the lock",
-    "keepHint": "Leave the project reserved for you. The next time you connect to SpeleoDB, Stalagmight offers to release it; you can also release it on the SpeleoDB website.",
-    "cancelHint": "Cancel keeps the project open. It stays read-only until you resume editing.",
     "stillOpen": "The SpeleoDB lock was not handed back, so the project is still open."
   },
   "projectClose": {

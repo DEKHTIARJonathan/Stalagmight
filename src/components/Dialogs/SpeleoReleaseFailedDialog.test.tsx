@@ -5,7 +5,7 @@
  * Close and keep the lock, and Cancel (stay in the project, read-only).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('../../utils/ipc', () => ({ invokeIpc: vi.fn(), getErrorMessage: (e: unknown) => String(e) }));
@@ -31,6 +31,23 @@ function raise(reason: ReleaseFailureReason, retry: () => Promise<ReleaseRetryOu
   return answer;
 }
 
+/**
+ * The app's dialog layout (`UnsavedChangesDialog`): every button in the one footer
+ * row, in order, and none anywhere else in the body (the header's X aside).
+ */
+function expectButtonsOnlyInFooter(expected: Array<[testId: string, label: string]>) {
+  const dialog = screen.getByTestId('speleodb-release-failed-dialog');
+  const footer = screen.getByTestId('speleodb-release-failed-footer');
+  expect(footer).toHaveClass('flex', 'flex-wrap', 'justify-end', 'gap-2', 'pt-4', 'border-t', 'border-border');
+  const inFooter = within(footer).getAllByRole('button');
+  expect(inFooter.map((b) => [b.getAttribute('data-testid'), b.textContent])).toEqual(expected);
+  const elsewhere = within(dialog).getAllByRole('button')
+    .filter((b) => !footer.contains(b) && b.getAttribute('data-testid') !== 'speleodb-release-failed-dialog-close');
+  expect(elsewhere).toEqual([]);
+  // The footer is the last thing in the body: nothing (no hint) sits under a button.
+  expect(footer.nextElementSibling).toBeNull();
+}
+
 describe('SpeleoReleaseFailedDialog', () => {
   it.each([
     ['close', 'you close the project'],
@@ -49,6 +66,26 @@ describe('SpeleoReleaseFailedDialog', () => {
     expect(screen.getByTestId('speleodb-release-failed-cancel')).toBeEnabled();
   });
 
+  it.each(['close', 'switch', 'quit'] as const)(
+    'lays the choices out like every other dialog (%s): one footer row, Cancel first, Retry last',
+    (reason) => {
+      void raise(reason);
+      expectButtonsOnlyInFooter([
+        ['speleodb-release-failed-cancel', 'Cancel'],
+        ['speleodb-release-failed-keep', 'Close and keep the lock'],
+        ['speleodb-release-failed-retry', 'Retry'],
+      ]);
+      expect(screen.getByTestId('speleodb-release-failed-retry')).toHaveClass('bg-accent');
+      expect(screen.getByTestId('speleodb-release-failed-keep')).not.toHaveClass('bg-accent');
+      expect(screen.getByTestId('speleodb-release-failed-cancel')).not.toHaveClass('bg-accent');
+      // What each answer does is said once, in the body, by the buttons' own names.
+      const choices = screen.getByTestId('speleodb-release-failed-choices');
+      expect(choices).toHaveTextContent('Retry asks SpeleoDB again');
+      expect(choices).toHaveTextContent('Close and keep the lock leaves the project reserved for you');
+      expect(choices).toHaveTextContent('Cancel keeps the project open, read-only');
+    },
+  );
+
   it('Retry that settles the release resolves "settled" and closes the dialog', async () => {
     const retry = vi.fn(async (): Promise<ReleaseRetryOutcome> => ({ ok: true }));
     const answer = raise('close', retry);
@@ -66,6 +103,12 @@ describe('SpeleoReleaseFailedDialog', () => {
     await userEvent.click(screen.getByTestId('speleodb-release-failed-retry'));
     await waitFor(() => expect(screen.getByTestId('speleodb-release-failed-reason')).toHaveTextContent('still unreachable'));
     expect(screen.getByTestId('speleodb-release-failed-dialog')).toBeVisible();
+    // The new reason does not move the buttons out of the footer row.
+    expectButtonsOnlyInFooter([
+      ['speleodb-release-failed-cancel', 'Cancel'],
+      ['speleodb-release-failed-keep', 'Close and keep the lock'],
+      ['speleodb-release-failed-retry', 'Retry'],
+    ]);
     await userEvent.click(screen.getByTestId('speleodb-release-failed-retry'));
     await expect(answer).resolves.toBe('settled');
     expect(retry).toHaveBeenCalledTimes(2);
@@ -76,6 +119,7 @@ describe('SpeleoReleaseFailedDialog', () => {
     const answer = raise('quit', () => new Promise((resolve) => { finish = resolve; }));
     await userEvent.click(screen.getByTestId('speleodb-release-failed-retry'));
     expect(screen.getByTestId('speleodb-release-failed-retry')).toHaveTextContent('Retrying...');
+    expect(screen.getByTestId('speleodb-release-failed-retry')).toBeDisabled();
     expect(screen.getByTestId('speleodb-release-failed-keep')).toBeDisabled();
     expect(screen.getByTestId('speleodb-release-failed-cancel')).toBeDisabled();
     expect(useReleaseFailurePrompt.getState().working).toBe(true);

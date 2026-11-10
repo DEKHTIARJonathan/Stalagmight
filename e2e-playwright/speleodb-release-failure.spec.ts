@@ -73,6 +73,22 @@ async function pressWindowCloseButton(page: Page): Promise<void> {
   });
 }
 
+/**
+ * The app's dialog layout: the body says what each answer does, and every button
+ * is in the one right-aligned footer row, Cancel first and Retry (primary) last.
+ */
+async function expectFooterRow(page: Page): Promise<void> {
+  const footer = page.getByTestId('speleodb-release-failed-footer');
+  await expect(footer.getByRole('button')).toHaveText(['Cancel', 'Close and keep the lock', 'Retry']);
+  await expect(page.getByTestId('speleodb-release-failed-dialog').getByRole('button'))
+    .toHaveCount(4); // the three above and the header's X
+  await expect(page.getByTestId('speleodb-release-failed-retry')).toHaveAttribute('data-primary-action', '');
+  await expect(page.getByTestId('speleodb-release-failed-choices')).toContainText('Close and keep the lock leaves');
+  // One row: every button sits on the same line.
+  const tops = await footer.getByRole('button').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().top));
+  expect(new Set(tops).size).toBe(1);
+}
+
 async function teardown(page: Page): Promise<{ destroy: number; close: number }> {
   return page.evaluate(() => (window as unknown as {
     __MOCK_GET_WINDOW_TEARDOWN_COUNTS__: () => { destroy: number; close: number };
@@ -100,6 +116,7 @@ test.describe('Close Project with a failing lock release', () => {
     await expect(dialog).toContainText("Couldn't hand back the lock");
     await expect(page.getByTestId('speleodb-release-failed-body')).toContainText('you close the project');
     await expect(page.getByTestId('speleodb-release-failed-reason')).toContainText('synthetic timeout');
+    await expectFooterRow(page);
     // #668's error dialog no longer stands in for this question.
     await expect(page.getByTestId('error-dialog')).toHaveCount(0);
     await page.getByTestId('speleodb-release-failed-cancel').click();
@@ -155,6 +172,7 @@ test.describe('Quit with a failing lock release (window X)', () => {
     await pressWindowCloseButton(page);
     await expect(page.getByTestId('speleodb-release-failed-dialog')).toBeVisible();
     await expect(page.getByTestId('speleodb-release-failed-body')).toContainText('Stalagmight closes');
+    await expectFooterRow(page);
     await page.getByTestId('speleodb-release-failed-cancel').click();
     await expect(page.getByTestId('speleodb-release-failed-dialog')).toHaveCount(0);
     // Cancel has been carried out and nothing in the quit gate can re-issue the quit.
@@ -200,6 +218,7 @@ test('switching to another file with a failing release asks first; Cancel opens 
   }).__E2E_TEST__.projectStore.getState().loadProject('/synthetic/other.stalx', { accessConfirmed: true }));
   await expect(page.getByTestId('speleodb-release-failed-dialog')).toBeVisible();
   await expect(page.getByTestId('speleodb-release-failed-body')).toContainText('you open another project');
+  await expectFooterRow(page);
   await page.getByTestId('speleodb-release-failed-cancel').click();
   expect(await opening).toMatchObject({ success: false });
   await expect(page.getByTestId('single-system-view')).toBeVisible();

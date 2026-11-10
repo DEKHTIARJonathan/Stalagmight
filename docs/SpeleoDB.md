@@ -542,7 +542,10 @@ or a quit. A release that failed or is uncertain (the holder could not be read, 
 transport error, a 5xx, a lost reply, a reply that still names this account, no
 usable token for the account holding the claim, an unreadable session) closes
 nothing: the claim stays, unbound, so editing is already paused, and the in-app
-dialog "Couldn't hand back the lock" (`utils/speleoReleaseFailure`) asks:
+dialog "Couldn't hand back the lock" (`utils/speleoReleaseFailure`) asks. Like every
+other dialog, its body says what went wrong (with the reason of the last attempt)
+and what each answer does, and its buttons are in the one footer row: Cancel /
+Close and keep the lock / Retry (primary).
 
 - Retry - the holder-checked release again. The dialog stays up, with the new
   reason, while it keeps failing; a lock SpeleoDB now says is someone else's (a

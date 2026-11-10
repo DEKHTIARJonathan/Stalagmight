@@ -12,6 +12,10 @@ import { DialogWrapper } from './DialogWrapper';
  * reason, while it keeps failing; Close and keep the lock leaves on purpose;
  * Cancel / Escape / X / backdrop stay in the project, read-only. Nothing but the
  * retry itself can be pressed while a retry is in flight.
+ *
+ * Laid out like every other dialog in the app (`UnsavedChangesDialog`): the body
+ * says what went wrong and what each answer does, and every button sits in the
+ * one footer row, Cancel first and Retry (the primary) last.
  */
 export default function SpeleoReleaseFailedDialog() {
   const request = useReleaseFailurePrompt((s) => s.request);
@@ -64,26 +68,20 @@ function ReleaseFailedPrompt({ request }: { request: ReleaseFailureRequest }) {
             {t('speleoReleaseFailed.reason', { reason: detail })}
           </p>
         )}
-        <ul className="space-y-3">
-          <li className="space-y-1">
-            <Button variant="primary" onClick={() => void retry()} disabled={working}
-              data-primary-action="" data-testid="speleodb-release-failed-retry">
-              {working ? t('speleoReleaseFailed.retrying') : t('speleoReleaseFailed.retry')}
-            </Button>
-            <p className="text-xs text-text-secondary">{t('speleoReleaseFailed.retryHint')}</p>
-          </li>
-          <li className="space-y-1">
-            <Button variant="secondary" onClick={() => request.settle('keep')} disabled={working}
-              data-testid="speleodb-release-failed-keep">
-              {t('speleoReleaseFailed.keep')}
-            </Button>
-            <p className="text-xs text-text-secondary">{t('speleoReleaseFailed.keepHint')}</p>
-          </li>
-        </ul>
-        <p className="text-xs text-text-secondary">{t('speleoReleaseFailed.cancelHint')}</p>
-        <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-border">
+        <p className="text-sm text-text-secondary" data-testid="speleodb-release-failed-choices">
+          {t('speleoReleaseFailed.choices')}
+        </p>
+        <div className="flex flex-wrap justify-end gap-2 pt-4 border-t border-border" data-testid="speleodb-release-failed-footer">
           <Button onClick={cancel} disabled={working} data-testid="speleodb-release-failed-cancel">
             {t('common.actions.cancel')}
+          </Button>
+          <Button onClick={() => request.settle('keep')} disabled={working}
+            data-testid="speleodb-release-failed-keep">
+            {t('speleoReleaseFailed.keep')}
+          </Button>
+          <Button variant="primary" onClick={() => void retry()} disabled={working}
+            data-testid="speleodb-release-failed-retry">
+            {working ? t('speleoReleaseFailed.retrying') : t('speleoReleaseFailed.retry')}
           </Button>
         </div>
       </div>
