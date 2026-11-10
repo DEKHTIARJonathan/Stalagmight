@@ -267,12 +267,14 @@ impl AddedContent {
         project.loop_closures.retain(|c| {
             !ids.contains(&c.station_a.section_id) && !ids.contains(&c.station_b.section_id)
         });
+        let file_hashes: HashSet<&String> = self.file_hashes.iter().collect();
         project
             .imported_file_hashes
-            .retain(|h| !self.file_hashes.contains(h));
+            .retain(|h| !file_hashes.contains(h));
+        let section_hashes: HashSet<&String> = self.section_hashes.iter().collect();
         project
             .imported_section_hashes
-            .retain(|h| !self.section_hashes.contains(h));
+            .retain(|h| !section_hashes.contains(h));
         project.surface_elevation = self.surface_elevation.0;
         project.location.clone_from(&self.location.0);
         for (id, before, _) in &self.moved_offsets {
@@ -334,16 +336,8 @@ impl AddedContent {
         if let Some(max) = self.loop_closures.iter().map(|c| c.id).max() {
             project.next_closure_id = project.next_closure_id.max(max.saturating_add(1));
         }
-        for hash in &self.file_hashes {
-            if !project.imported_file_hashes.contains(hash) {
-                project.imported_file_hashes.push(hash.clone());
-            }
-        }
-        for hash in &self.section_hashes {
-            if !project.imported_section_hashes.contains(hash) {
-                project.imported_section_hashes.push(hash.clone());
-            }
-        }
+        extend_unique_hashes(&mut project.imported_file_hashes, &self.file_hashes);
+        extend_unique_hashes(&mut project.imported_section_hashes, &self.section_hashes);
         project.surface_elevation = self.surface_elevation.1;
         project.location.clone_from(&self.location.1);
         for (id, _, after) in &self.moved_offsets {
@@ -369,6 +363,17 @@ fn station_texts_in(
         .collect();
     entries.sort_by_key(|(key, _)| (key.section_id, key.to_string()));
     entries
+}
+
+/// Append each of `incoming` that `list` does not hold yet, in order - one set
+/// built up front instead of a scan of `list` per item.
+pub fn extend_unique_hashes(list: &mut Vec<String>, incoming: &[String]) {
+    let mut held: HashSet<String> = list.iter().cloned().collect();
+    for hash in incoming {
+        if held.insert(hash.clone()) {
+            list.push(hash.clone());
+        }
+    }
 }
 
 /// `Some` writes through the dust-zero gate, `None` means "no key".

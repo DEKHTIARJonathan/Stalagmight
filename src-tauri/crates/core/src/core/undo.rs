@@ -14,7 +14,7 @@ mod budget;
 pub mod history_view;
 mod persistence;
 
-pub use added_content::{AddedContent, CarriedIgnore};
+pub use added_content::{extend_unique_hashes, AddedContent, CarriedIgnore};
 
 /// Serialize a section-offset map in KEY order rather than in `HashMap`
 /// iteration order.

@@ -7,14 +7,14 @@
 //! the source's dedup hashes and ignored warnings, refusing corruption without
 //! a whole-project snapshot, and the receipt.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use super::project_append::{append_project, AppendOutcome};
 use super::project_io::same_file;
 use super::AppState;
 use crate::core::command::{sanitize_display_text, ImportReceipt, MAX_FILE_NAME_LEN};
-use crate::core::{AddedContent, CarriedIgnore, CommandResult};
+use crate::core::{extend_unique_hashes, AddedContent, CarriedIgnore, CommandResult};
 use crate::models::{
     gps_to_local, warning_is_ignorable, GpsCoordinates, Project, SectionId, SpeleoLink,
     FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
@@ -220,7 +220,8 @@ fn remap_ignores(
     rows: &[ResolvedWarning],
     outcome: &AppendOutcome,
 ) -> Vec<CarriedIgnore> {
-    let mut carried: Vec<CarriedIgnore> = Vec::new();
+    let shots = ShotIndex::of(source, rows.iter().map(|row| row.section_id));
+    let mut carried = IgnoreList::default();
     for row in rows {
         if !warning_is_ignorable(&row.warning_code) {
             continue;
@@ -228,35 +229,90 @@ fn remap_ignores(
         let Some(&section_id) = outcome.section_id_map.get(&row.section_id) else {
             continue;
         };
-        let Some(section) = source.get_section(row.section_id) else {
+        let shot_uuid = match row.shot_uuid.as_deref() {
+            Some(uuid) => shots
+                .id_of(row.section_id, uuid)
+                .map(|_| uuid.to_string()),
+            None => shots
+                .uuid_of(row.section_id, row.shot_id)
+                .map(str::to_string),
+        };
+        let Some(shot_uuid) = shot_uuid else {
             continue;
         };
-        let shot = match row.shot_uuid.as_deref() {
-            Some(uuid) => section
-                .shots
-                .iter()
-                .find(|s| s.uuid.as_deref() == Some(uuid)),
-            None => section.shots.iter().find(|s| s.id == row.shot_id),
-        };
-        let Some(shot_uuid) = shot.and_then(|s| s.uuid.clone()) else {
-            continue;
-        };
-        let ignore = CarriedIgnore {
+        carried.push(CarriedIgnore {
             section_id,
             shot_uuid,
             warning_code: row.warning_code.clone(),
             resolved_at: row.resolved_at,
             resolved_comment: row.resolved_comment.clone(),
-        };
-        if !carried.iter().any(|c| same_ignore(c, &ignore)) {
-            carried.push(ignore);
-        }
+        });
     }
-    carried
+    carried.items
 }
 
-fn same_ignore(a: &CarriedIgnore, b: &CarriedIgnore) -> bool {
-    a.section_id == b.section_id && a.shot_uuid == b.shot_uuid && a.warning_code == b.warning_code
+/// The shots of some sections, indexed both ways, built once so a pass over N
+/// ignore rows costs O(N) rather than a shot scan per row (a hostile source
+/// controls both counts). The FIRST shot wins a key, as a linear scan would.
+#[derive(Default)]
+struct ShotIndex<'a> {
+    id_by_uuid: HashMap<(SectionId, &'a str), u32>,
+    uuid_by_id: HashMap<(SectionId, u32), Option<&'a str>>,
+}
+
+impl<'a> ShotIndex<'a> {
+    fn of(project: &'a Project, sections: impl IntoIterator<Item = SectionId>) -> Self {
+        let mut index = Self::default();
+        let wanted: HashSet<SectionId> = sections.into_iter().collect();
+        for section_id in wanted {
+            let Some(section) = project.get_section(section_id) else {
+                continue;
+            };
+            for shot in &section.shots {
+                if let Some(uuid) = shot.uuid.as_deref() {
+                    index
+                        .id_by_uuid
+                        .entry((section_id, uuid))
+                        .or_insert(shot.id);
+                }
+                index
+                    .uuid_by_id
+                    .entry((section_id, shot.id))
+                    .or_insert(shot.uuid.as_deref());
+            }
+        }
+        index
+    }
+
+    /// The id of the shot carrying `uuid` in `section_id`.
+    fn id_of(&self, section_id: SectionId, uuid: &str) -> Option<u32> {
+        self.id_by_uuid.get(&(section_id, uuid)).copied()
+    }
+
+    /// The uuid of the shot with `shot_id` in `section_id`, if it has one.
+    fn uuid_of(&self, section_id: SectionId, shot_id: u32) -> Option<&'a str> {
+        self.uuid_by_id.get(&(section_id, shot_id)).copied().flatten()
+    }
+}
+
+/// Carried ignores in first-seen order, one per (section, shot, warning).
+#[derive(Default)]
+struct IgnoreList {
+    items: Vec<CarriedIgnore>,
+    seen: HashSet<(SectionId, String, String)>,
+}
+
+impl IgnoreList {
+    fn push(&mut self, ignore: CarriedIgnore) {
+        let key = (
+            ignore.section_id,
+            ignore.shot_uuid.clone(),
+            ignore.warning_code.clone(),
+        );
+        if self.seen.insert(key) {
+            self.items.push(ignore);
+        }
+    }
 }
 
 /// What happened during the append, for the receipt.
@@ -409,19 +465,18 @@ impl AppState {
 
         // Carry the source's dedup state, so re-importing the Ariane/DMP file it
         // was built from is still caught here, plus its own identity.
-        for hash in &source.project.imported_file_hashes {
-            if !project.imported_file_hashes.contains(hash) {
-                project.imported_file_hashes.push(hash.clone());
-            }
-        }
-        for hash in &source.project.imported_section_hashes {
-            if !project.imported_section_hashes.contains(hash) {
-                project.imported_section_hashes.push(hash.clone());
-            }
-        }
-        if !project.imported_file_hashes.contains(&identity) {
-            project.imported_file_hashes.push(identity);
-        }
+        extend_unique_hashes(
+            &mut project.imported_file_hashes,
+            &source.project.imported_file_hashes,
+        );
+        extend_unique_hashes(
+            &mut project.imported_section_hashes,
+            &source.project.imported_section_hashes,
+        );
+        extend_unique_hashes(
+            &mut project.imported_file_hashes,
+            std::slice::from_ref(&identity),
+        );
 
         // Block corruption at the source without a whole-project snapshot: the
         // append only ever ADDS, so taking out what it added is an exact
@@ -525,28 +580,28 @@ impl AppState {
 
     /// Hold `ignores` until the next save, keyed by the live shot's id.
     pub(super) fn add_pending_ignores(&self, project: &Project, ignores: &[CarriedIgnore]) {
+        let shots = ShotIndex::of(project, ignores.iter().map(|i| i.section_id));
         let mut pending = self
             .pending_ignores
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut held: HashSet<(SectionId, String, String)> = pending
+            .iter()
+            .filter_map(|row| {
+                let uuid = row.shot_uuid.clone()?;
+                Some((row.section_id, uuid, row.warning_code.clone()))
+            })
+            .collect();
         for ignore in ignores {
-            let Some(shot_id) = project
-                .get_section(ignore.section_id)
-                .and_then(|s| {
-                    s.shots
-                        .iter()
-                        .find(|shot| shot.uuid.as_deref() == Some(ignore.shot_uuid.as_str()))
-                })
-                .map(|shot| shot.id)
-            else {
+            let Some(shot_id) = shots.id_of(ignore.section_id, &ignore.shot_uuid) else {
                 continue;
             };
-            let already = pending.iter().any(|row| {
-                row.section_id == ignore.section_id
-                    && row.warning_code == ignore.warning_code
-                    && row.shot_uuid.as_deref() == Some(ignore.shot_uuid.as_str())
-            });
-            if !already {
+            let key = (
+                ignore.section_id,
+                ignore.shot_uuid.clone(),
+                ignore.warning_code.clone(),
+            );
+            if held.insert(key) {
                 pending.push(ResolvedWarning {
                     section_id: ignore.section_id,
                     shot_id,
@@ -608,7 +663,7 @@ impl AppState {
                 .and_then(|db| db.load_resolved_warnings_verbatim().ok())
                 .unwrap_or_default()
         };
-        let mut found: Vec<CarriedIgnore> = Vec::new();
+        let mut found = IgnoreList::default();
         for row in self.pending_ignores().iter().chain(saved.iter()) {
             let Some(uuid) = row.shot_uuid.clone() else {
                 continue;
@@ -616,18 +671,15 @@ impl AppState {
             if !sections.contains(&row.section_id) {
                 continue;
             }
-            let ignore = CarriedIgnore {
+            found.push(CarriedIgnore {
                 section_id: row.section_id,
                 shot_uuid: uuid,
                 warning_code: row.warning_code.clone(),
                 resolved_at: row.resolved_at,
                 resolved_comment: row.resolved_comment.clone(),
-            };
-            if !found.iter().any(|c| same_ignore(c, &ignore)) {
-                found.push(ignore);
-            }
+            });
         }
-        found
+        found.items
     }
 }
 
