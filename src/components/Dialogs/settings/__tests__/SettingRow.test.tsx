@@ -32,10 +32,10 @@ describe('SettingRow reset', () => {
   });
 
   it('has no labelled-button variant', () => {
-    // A stray `resetLabel` (the removed text-button path) changes nothing.
-    const props = { label: 'Synthetic setting', onReset: vi.fn(), isDefault: false, 'data-testid': 'setting-synthetic', resetLabel: 'Reset' };
     render(
-      <SettingRow {...(props as Parameters<typeof SettingRow>[0])}>
+      // The text-button path (`resetLabel`) is gone: the type check fails if it returns.
+      // @ts-expect-error resetLabel is not a SettingRow prop
+      <SettingRow label="Synthetic setting" onReset={vi.fn()} isDefault={false} data-testid="setting-synthetic" resetLabel="Reset">
         <input aria-label="Synthetic value" />
       </SettingRow>,
     );
