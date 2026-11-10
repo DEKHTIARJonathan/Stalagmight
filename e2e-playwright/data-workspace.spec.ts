@@ -168,7 +168,7 @@ test('Section menu highlights creation, sorts names and filters with text', asyn
 });
 
 
-test('From ID replaces a global incoming origin and None or -1 clears it', async ({ page }) => {
+test('From ID text validates existing global shot IDs and NONE', async ({ page }) => {
   await setupMockedPage(page);
   await createProject(page, 'Synthetic directed origins');
   const measurement = { length: 10, azimuth_in: 90, azimuth_out: 90, depth_in: 0, depth_out: 1 };
@@ -178,24 +178,26 @@ test('From ID replaces a global incoming origin and None or -1 clears it', async
   ]);
   await page.getByTestId('mode-data').click();
   const origin = page.getByTestId('data-from-id-100001');
-  await expect(origin).toContainText('1 - First group');
-  await origin.click();
-  const search = page.getByRole('combobox', { name: 'Search shots by ID or section name', exact: true });
-  await search.fill('3');
-  await page.getByRole('option', { name: '3 - Other group', exact: true }).click();
-  await expect(origin).toContainText('3 - Other group');
+  await expect(origin).toHaveValue('1');
+  await origin.fill('99999');
+  await origin.press('Enter');
+  await expect(origin).toHaveAttribute('aria-invalid', 'true');
+  await expect(page.getByRole('alert')).toContainText('Enter another existing Shot ID or NONE.');
+  await origin.fill('2');
+  await origin.press('Enter');
+  await expect(origin).toHaveAttribute('aria-invalid', 'true');
+  await origin.fill('3');
+  await origin.press('Enter');
   await expect.poll(() => page.evaluate(() => (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].shots[1].from_id)).toBe(3);
+  await expect(origin).toHaveValue('3');
   await expect(page.getByTestId('grid-cell-1-shot_id')).toHaveText('2');
   await expect(page.getByTestId('data-section-100001')).toContainText('First group');
-  // Multiple shots may originate from the same parent, independent of metadata groups.
   const first = page.getByTestId('data-from-id-100000');
-  await first.click();
-  await search.fill('3');
-  await page.getByRole('option', { name: '3 - Other group', exact: true }).click();
-  await expect(first).toContainText('3 - Other group');
-  await origin.click();
-  await search.fill('-1');
-  await page.getByRole('option', { name: 'None', exact: true }).click();
-  await expect(origin).toContainText('None');
+  await first.fill('3');
+  await first.press('Enter');
+  await expect.poll(() => page.evaluate(() => (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].shots[0].from_id)).toBe(3);
+  await origin.fill('NONE');
+  await origin.press('Enter');
+  await expect(origin).toHaveValue('NONE');
   await expect.poll(() => page.evaluate(() => (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].shots[1].from_id)).toBeNull();
 });

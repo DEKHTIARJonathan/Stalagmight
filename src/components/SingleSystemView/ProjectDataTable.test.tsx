@@ -146,7 +146,8 @@ it('edits Explorer independently and presents a hex color with a picker without 
 it('clears an incoming origin through the atomic global shot-number command', async () => {
   const numbered = sections.map((section, index) => ({ ...section, shots: section.shots.map(shot => ({ ...shot, number: index + 1, from_id: index === 0 ? null : 1 })) }));
   render(<ProjectDataTable sections={numbered} />);
-  await act(async () => fireEvent.change(screen.getByTestId('data-from-id-200000'), { target: { value: '-1' } }));
+  await act(async () => fireEvent.change(screen.getByTestId('data-from-id-200000'), { target: { value: 'NONE' } }));
+  await act(async () => fireEvent.blur(screen.getByTestId('data-from-id-200000')));
   expect(mocks.ipc).toHaveBeenCalledWith('set_shot_from_id', { shotNumber: 2, fromId: null });
   expect(mocks.store.refreshProjectState).toHaveBeenCalledOnce();
   expect(mocks.store.markDirty).toHaveBeenCalledOnce();

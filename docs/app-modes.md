@@ -180,9 +180,9 @@ and assigns the section on save without entering map placement. The entire
 create-and-transfer operation is one undo unit.
 
 From ID is an editable incoming origin, expressed as another shot's permanent
-Shot ID. The picker searches all sections. Each shot has one origin or none;
+Shot ID. A text field validates IDs across all sections. Each shot has one origin or none;
 changing it replaces the old connection. Multiple shots can share an origin.
-None and -1 clear the origin, which is stored as null. A shot cannot originate
+NONE and -1 clear the origin, which is stored as null. A shot cannot originate
 from itself. Section membership does not constrain these connections.
 
 Data temporarily uses measured geometry, restores the prior Survey geometry

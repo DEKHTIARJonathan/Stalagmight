@@ -6,8 +6,8 @@ import { nextShotKind } from '../../utils/shotKind';
 import { isEditingBlockedNow, useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { SpreadsheetGrid, type GridColumn } from '../common/SpreadsheetGrid';
-import { Select, type SelectOption } from '../common/Select';
-import { ShotFromIdPicker } from './ShotFromIdPicker';
+import { Select } from '../common/Select';
+import { ShotFromIdInput } from './ShotFromIdInput';
 import { Button } from '../common/Button';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { DialogWrapper } from '../Dialogs/DialogWrapper';
@@ -112,13 +112,16 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
     await store.refreshProjectState();
     store.markDirty();
   };
-  const originChoices = useMemo(() => {
-    const choices: SelectOption[] = sections.flatMap(section => section.shots.flatMap(shot => shot.number ? [{
-      value: String(shot.number), label: `${shot.number} - ${section.name ?? t('sections.defaultName', { id: section.id })}`,
-    }] : []));
-    choices.sort((a, b) => Number(a.value) - Number(b.value));
-    return { choices, byId: new Map(choices.map(option => [option.value, option])) };
-  }, [sections, t]);
+  const shotNumbers = useMemo(() => new Set(sections.flatMap(section => section.shots.flatMap(shot => shot.number ? [shot.number] : []))), [sections]);
+  const parseFromId = (value: unknown, row: Row): number | null => {
+    const token = String(value ?? '').trim();
+    if (token.toUpperCase() === 'NONE' || token === '-1') return null;
+    const number = Number(token);
+    if (!/^\d+$/.test(token) || !Number.isSafeInteger(number) || !shotNumbers.has(number) || number === row.number) {
+      throw new Error(t('dataWorkspace.invalidOrigin'));
+    }
+    return number;
+  };
   const openCreate = (row: Row | 'empty') => {
     setName(''); setSurveyor(''); setDate(''); setColor('#4ecdc4'); setDirection('in'); setError(null); setCreateFor(row);
   };
@@ -170,28 +173,28 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
       isEditable: row => !blocked && !busy && (row.id < 0 || (!!row.number && !store.isShotFrozen(row.sectionId, positions.get(`${row.sectionId}:${row.id}`) ?? -1))),
       noInlineEdit: true, parse: () => undefined,
       getValue: row => row.from_id ?? null,
-      format: value => value === null ? t('dataWorkspace.noOrigin') : String(value),
-      activate: row => root.current?.querySelector<HTMLButtonElement>(`[data-testid="data-from-id-${row.id}"]`)?.click(),
-      render: row => <ShotFromIdPicker shotNumber={row.number} fromId={row.id < 0 ? draftRef.current.data.from_id ?? null : row.from_id ?? null}
-        choices={originChoices.choices} byId={originChoices.byId} testId={`data-from-id-${row.id}`}
+      format: value => value === null ? 'NONE' : String(value),
+      activate: row => root.current?.querySelector<HTMLInputElement>(`[data-testid="data-from-id-${row.id}"]`)?.focus(),
+      render: row => <ShotFromIdInput fromId={row.id < 0 ? draftRef.current.data.from_id ?? null : row.from_id ?? null}
+        parseValue={value => parseFromId(value, row)} onInvalid={report} testId={`data-from-id-${row.id}`}
         disabled={blocked || busy || (row.id >= 0 && (!row.number || store.isShotFrozen(row.sectionId, positions.get(`${row.sectionId}:${row.id}`) ?? -1)))}
         onChange={value => { void mutate(() => setFromId(row, value)); }} />,
     });
     const leading = ['_warnings', 'shot_id', 'section', 'from_id'];
     return [...leading.flatMap(key => columns.filter(column => column.key === key)), ...columns.filter(column => !leading.includes(column.key))];
-  }, [rows, sections, t, precision, blocked, busy, store.warnings, options, originChoices]);
+  }, [rows, sections, t, precision, blocked, busy, store.warnings, options, shotNumbers]);
   const edit = async (edits: CellEdit[]) => {
     if (blocked) return;
     const originEdits = edits.filter(edit => edit.colKey === 'from_id');
     if (originEdits.length) {
       if (edits.length !== 1) throw new Error(t('dataWorkspace.singleOriginEdit'));
       const row = rows[originEdits[0]!.row];
-      const value = originEdits[0]!.value;
-      const token = String(value ?? '').trim();
-      const cleared = token === '' || token === '-1' || token.toLocaleLowerCase() === 'none';
-      const fromId = cleared ? null : Number(token);
-      if (fromId !== null && (!Number.isInteger(fromId) || fromId <= 0)) throw new Error(t('dataWorkspace.invalidOrigin'));
-      if (row) await setFromId(row, fromId);
+      if (row) {
+        // Spreadsheet deletion clears an origin; typed values use explicit NONE.
+        const value = originEdits[0]!.value;
+        const fromId = value == null || value === '' ? null : parseFromId(value, row);
+        await setFromId(row, fromId);
+      }
       return;
     }
     const groups = new Map<number, CellEdit[]>();
