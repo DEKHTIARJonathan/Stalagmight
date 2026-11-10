@@ -7,6 +7,8 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-10
+
 ### Added
 
 - **Station names from mNemo imports** - a DMP import now gives each station its mNemo number as a name, so your dive notes still line up after the import filters or trims shots, or after you delete or insert one. The Stations table has a Name column, hidden until you show it from the column menu, and the Details panel shows the name. Projects imported before this have no names ([#676](https://github.com/Stalagmight/Stalagmight/pull/676))
