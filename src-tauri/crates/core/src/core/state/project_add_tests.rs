@@ -1106,8 +1106,8 @@ fn a_source_refused_after_the_append_is_rolled_back_exactly() {
 /// The section-id budget's boundary: an add that uses the id space up to its
 /// last id exactly is accepted, one more section is refused.
 /// INJECTION (tried): `>=` for `>` in the budget check refuses the exact fit;
-/// `> MAX_SECTIONS_IN_ID_SPACE + 1` accepts the one-over case, which then
-/// overflows `Section::new`'s shot-id arithmetic.
+/// `> MAX_SECTIONS_IN_ID_SPACE + 1` accepts the one-over case (a section id
+/// past `MAX_SECTION_ID`), and both fail the success assertion.
 #[test]
 fn the_section_id_budget_admits_an_exact_fit_and_refuses_one_more() {
     let temp = TempDir::new().unwrap();
