@@ -248,7 +248,7 @@ fn revisions_and_native_file_routes_are_exact() {
     let f = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(f.path(), bytes).unwrap();
     let s = Server::json(
-        json!({"project":project_json(),"hexsha":SHA,"files":["project.stalx"],"geojson_status":"skipped","message":"Saved","browser_url":null}),
+        json!({"project":project_json(),"hexsha":SHA,"files":["project.stalx"],"message":"Saved","browser_url":null}),
     );
     assert_eq!(
         upload_stalx(&s.base, "t", false, ID, f.path(), "My commit")

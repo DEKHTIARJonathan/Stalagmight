@@ -4,6 +4,8 @@
 // use) keeps compiling unchanged.
 pub use stalagmight_models::app_dirs;
 pub use stalagmight_persistence::cache;
+#[cfg(target_os = "macos")]
+mod app_menu;
 pub mod commands;
 // Extracted to the `stalagmight-core` workspace member; re-exported under the
 // old names, same deal as `models` below (`tile_providers` and, for the test
@@ -1687,6 +1689,12 @@ pub fn run() {
                 });
             },
         );
+
+    // macOS menu bar: Tauri's default menu with a working Help submenu (#665).
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .menu(app_menu::build)
+        .on_menu_event(|app, event| app_menu::on_event(app, &event));
 
     // Desktop-only: intercept window close to allow frontend confirmation dialogs.
     // Android has no window close button, so this handler is dead code on mobile.
