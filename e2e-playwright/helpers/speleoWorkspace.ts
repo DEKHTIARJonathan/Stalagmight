@@ -1,5 +1,4 @@
 import { expect, type Page } from '@playwright/test';
-import { openAppMenu } from './app';
 
 /**
  * Open the left panel's SpeleoDB tab - the SpeleoDB entry point since the toolbar
@@ -12,12 +11,13 @@ export async function openSpeleoTab(page: Page): Promise<void> {
 }
 
 /**
- * Reach the SpeleoDB tab through the hamburger's SpeleoDB row: the route where
- * the tab is not on screen (Plan/Export before the panel is opened, the
- * fullscreen table, a narrow window that squeezed the panel away).
+ * Open the SpeleoDB tab where the left panel is folded away (closed, hover mode,
+ * or squeezed out by a narrow window): reveal the panel with its opener tab on
+ * the left edge, then click the SpeleoDB tab - the route a user takes, since the
+ * hamburger has no SpeleoDB row.
  */
-export async function openSpeleoFromMenu(page: Page): Promise<void> {
-  await openAppMenu(page);
-  await page.getByTestId('project-menu-speleodb').click();
-  await expect(page.getByTestId('workspace-tab-speleodb')).toHaveAttribute('aria-selected', 'true');
+export async function revealSpeleoTab(page: Page): Promise<void> {
+  const bar = await page.getByTestId('sections-panel-bar').boundingBox();
+  if (!bar || bar.width < 100) await page.getByTestId('panel-tab-sections').click();
+  await openSpeleoTab(page);
 }

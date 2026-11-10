@@ -348,14 +348,21 @@ as sent.
 
 The SpeleoDB workspace is the left dock's
 SpeleoDB tab, for local and managed projects, including signed-out and read-only
-projects; the project menu's SpeleoDB row opens it from anywhere (Plan, Export, the
-fullscreen table). Its icon carries the project's state as a badge: a yellow "!"
-for un-uploaded changes, a lock for read-only (see the read-only prose above for
-its tooltip). Survey starts on Sections;
-Sections and SpeleoDB use accessible tabs with arrow-key navigation. Plan and Export
-retain SpeleoDB on request, and returning to Survey restores its previous tab.
-Opening SpeleoDB from the fullscreen table exits fullscreen without clearing table
-selection or scroll. Navigation never acquires or releases a lock.
+projects. The tab is its only general entry point (the hamburger has no SpeleoDB
+row): in Survey click it, after revealing the dock with its left-edge opener if the
+dock is closed, in hover mode or squeezed out by a narrow window; from the
+fullscreen table, go Back to Map (or Escape) first. Plan and Export keep the
+SpeleoDB tab when Survey was showing it on entry; otherwise they show no left dock,
+and the way to the tab is back through Survey. The push-failure banner's links and
+the revision Revert flow still open the tab themselves (`openSpeleoWorkspace`),
+which leaves the fullscreen table without clearing table selection or scroll. Its icon carries the project's state as a badge: a yellow "!" for
+un-uploaded changes, a lock for read-only (see the read-only prose above for its
+tooltip). Un-uploaded changes also turn the tab's text the warning colour, dimmed
+while another tab is selected and full strength when the SpeleoDB tab is; the tab
+is otherwise selected exactly like Sections (no wash or rule of its own). Survey
+starts on Sections; Sections and SpeleoDB use accessible tabs with arrow-key
+navigation, and returning to Survey restores its previous tab. Navigation never
+acquires or releases a lock.
 
 For managed projects, the persistent header shows identity, editing access, lock owner and
 connection status. Everyday controls are Save Changes, Switch to Read Only Mode or

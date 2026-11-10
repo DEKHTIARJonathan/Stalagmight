@@ -15,7 +15,6 @@ import { useUIStore } from '../../store/uiStore';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
 import { leadingMenuItems, serviceMenuItems, quitMenuItem, importMenuItem } from '../common/appMenuItems';
-import { SpeleoBadgedIcon } from '../common/SpeleoBadgedIcon';
 import type { AppMenuItem } from '../common/AppMenu';
 import {
   SaveIcon,
@@ -142,16 +141,6 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
         icon: <InfoIcon size={sz} />,
         iconColor: MENU_ICON_COLORS.projectDetails,
         onClick: showProjectDetails,
-      },
-      {
-        // The SpeleoDB tab of the left panel is the SpeleoDB entry point, but Plan and
-        // Export show no left panel until it is opened, and the fullscreen table covers
-        // it: this row reaches it from anywhere (local projects get the conversion
-        // offer). Always enabled - navigation, not a SpeleoDB action.
-        id: 'project-menu-speleodb',
-        label: t('speleodb.workspaceTab.menuOpen'),
-        icon: <SpeleoBadgedIcon size={sz} testIdPrefix="project-menu-speleodb-icon" />,
-        onClick: () => useUIStore.getState().openSpeleoWorkspace(),
       },
       { id: 'project-menu-sep-4', label: '', separator: true },
       ...serviceMenuItems(t, { onSettings: () => openDialog('settings'), onDebug: () => openDialog('debug') }, [

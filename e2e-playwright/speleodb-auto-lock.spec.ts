@@ -1,6 +1,6 @@
 import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage, openAppMenu } from './helpers/app';
-import { openSpeleoFromMenu, openSpeleoTab } from './helpers/speleoWorkspace';
+import { openSpeleoTab, revealSpeleoTab } from './helpers/speleoWorkspace';
 import { LEFT_WORKSPACE_MIN_WIDTH } from '../src/components/SingleSystemView/layoutConstants';
 import { themeTokens } from '../src/theme/tokens';
 import type { useUIStore } from '../src/store/uiStore';
@@ -90,10 +90,11 @@ test('workspace contains everyday controls and Revision History without history-
   await expect(page.getByTestId('speleodb-history-forward')).toHaveCount(0);
   const webHistory = page.getByTestId('speleodb-web-revisions');
   await expect(webHistory).toHaveText('Revision History on SpeleoDB');
-  // An ordinary button (the workspace's own size), with the external-link glyph.
+  // An ordinary button (the standard padding and font, no fixed height: a long
+  // label wraps), with the external-link glyph.
   await expect(webHistory).toHaveCSS('padding', '6px 12px');
-  expect(Math.round((await webHistory.boundingBox())!.height))
-    .toBe(Math.round((await page.getByTestId('speleodb-workspace-latest').boundingBox())!.height));
+  await expect(webHistory).toHaveCSS('font-size', await page.getByTestId('speleodb-workspace-latest').evaluate((b) => getComputedStyle(b).fontSize));
+  await expect(webHistory).toHaveCSS('box-shadow', 'none');
   await expect(webHistory.locator('svg')).toBeVisible();
   await expect(page.getByTestId('speleodb-workspace-section-projects')).toHaveCount(0);
   await expect(page.getByTestId('speleodb-workspace-close')).toHaveText('Close Project');
@@ -103,29 +104,30 @@ test('workspace contains everyday controls and Revision History without history-
   expect(await page.evaluate(() => (window as unknown as { __lockCalls: string[] }).__lockCalls)).toEqual(['acquire']);
 });
 
-test('all-mode navigation preserves the Survey tab and exits fullscreen', async ({ page }) => {
+test('the SpeleoDB tab carries into Plan and Export, and the hamburger has no SpeleoDB row', async ({ page }) => {
   await openRemote(page, false);
-  await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.uiStore.getState().setAppMode('plan'));
-  // Plan shows no left panel until asked: the hamburger's SpeleoDB row brings it in.
-  await openSpeleoFromMenu(page);
+  const setMode = (mode: string) => page.evaluate((m) => (window as unknown as TestWindow).__E2E_TEST__.uiStore.getState().setAppMode(m as never), mode);
+  // Leaving Survey with the SpeleoDB tab on screen keeps it in Plan and Export.
+  await openSpeleoTab(page);
+  await setMode('plan');
   await expect(page.getByTestId('speleodb-workspace')).toBeVisible();
   await expect(page.getByTestId('workspace-tab-sections')).toHaveCount(0);
-  await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.uiStore.getState().setAppMode('export'));
+  await setMode('export');
   await expect(page.getByTestId('speleodb-workspace')).toBeVisible();
-  await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.uiStore.getState().setAppMode('survey'));
-  await expect(page.getByTestId('workspace-tab-sections')).toHaveAttribute('aria-selected', 'true');
-  await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.uiStore.getState().enterDataTableFullScreen());
-  await openSpeleoFromMenu(page);
-  await expect.poll(() => page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.uiStore.getState().dataTableFullScreen)).toBe(false);
-  await expect(page.getByTestId('speleodb-workspace')).toBeVisible();
+  await setMode('survey');
+  await expect(page.getByTestId('workspace-tab-speleodb')).toHaveAttribute('aria-selected', 'true');
+  // The hamburger's former "SpeleoDB" row (it only switched to this tab) is gone.
+  await openAppMenu(page);
+  await expect(page.getByTestId('back-button')).toBeVisible();
+  await expect(page.getByTestId('project-menu-speleodb')).toHaveCount(0);
 });
 
-test('a narrow window reaches the SpeleoDB tab from the menu, and a narrow saved panel resizes immediately', async ({ page }) => {
+test('a narrow window reaches the SpeleoDB tab through the panel opener, and a narrow saved panel resizes immediately', async ({ page }) => {
   await page.setViewportSize({ width: 540, height: 720 });
   await openRemote(page, false);
   await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.uiStore.setState({ sectionsPanelWidth: 200 }));
   await expect(page.getByTestId('speleodb-status-button')).toHaveCount(0);
-  await openSpeleoFromMenu(page);
+  await revealSpeleoTab(page);
   const panel = page.getByTestId('sections-panel-bar');
   const handle = page.getByTestId('sections-resize-handle');
   await expect(panel).toBeVisible();

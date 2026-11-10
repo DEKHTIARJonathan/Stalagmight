@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures/coverage';
 import { createProject, setupMockedPage } from './helpers/app';
-import { openSpeleoFromMenu, openSpeleoTab } from './helpers/speleoWorkspace';
+import { openSpeleoTab, revealSpeleoTab } from './helpers/speleoWorkspace';
 import type { useProjectStore } from '../src/store/projectStore';
 import type { useSpeleoStore } from '../src/store/speleoStore';
 
@@ -16,9 +16,9 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 540, height: 720 
     await page.setViewportSize(viewport);
     await setupMockedPage(page);
     await createProject(page, 'Synthetic team survey');
-    // At 540px the side-panel squeeze can fold the left panel away, so take the
-    // route that works at any width there; the wide window uses the tab itself.
-    if (viewport.width < 800) await openSpeleoFromMenu(page); else await openSpeleoTab(page);
+    // At 540px the side-panel squeeze can fold the left panel away: reveal it with
+    // its opener first. The wide window uses the tab itself.
+    if (viewport.width < 800) await revealSpeleoTab(page); else await openSpeleoTab(page);
     const panel = page.getByTestId('speleodb-workspace-local');
     const prompt = page.getByTestId('speleodb-workspace-conversion-prompt');
     const button = page.getByTestId('speleodb-workspace-convert');
