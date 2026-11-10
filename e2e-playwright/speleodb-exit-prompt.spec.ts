@@ -149,10 +149,14 @@ test.describe('SpeleoDB exit prompt - close', () => {
     await page.getByTestId('speleodb-exit-upload-confirm').click();
     await expect(page.getByTestId('speleodb-push-failure-inline')).toBeVisible();
     await expect(page.getByTestId('speleodb-exit-dialog')).toBeVisible();
+    // Shown once: the shell banner behind the prompt waits its turn.
+    await expect(page.getByTestId('speleo-banner')).toHaveCount(0);
     expect(await calls(page, 'close_project')).toEqual([]);
     await page.getByTestId('speleodb-exit-back').click();
     await page.getByTestId('speleodb-exit-cancel').click();
     await expect(page.getByTestId('single-system-view')).toBeVisible();
+    // Left unresolved, the failure is back on the banner.
+    await expect(page.getByTestId('speleo-banner')).toHaveAttribute('data-kind', 'push_failed');
   });
 
   test('a clean held lock closes silently (and releases as before)', async ({ page }) => {
