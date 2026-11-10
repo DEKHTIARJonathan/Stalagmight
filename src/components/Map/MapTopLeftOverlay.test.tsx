@@ -95,7 +95,24 @@ describe('MapTopLeftOverlay', () => {
     const row = screen.getByTestId('map-top-left-overlay');
     expect(row).toHaveClass('right-14', 'pointer-events-none');
     expect(screen.getByTestId('fit-to-view-button')).toHaveClass('pointer-events-auto', 'shrink-0');
-    expect(screen.getByTestId('geometry-readonly-banner')).toHaveClass('pointer-events-auto', 'min-w-0', 'flex-wrap');
+    // The pill never wraps its glyph away from the words: the glyph has its own
+    // slot, and only the body (words + action) wraps.
+    const pill = screen.getByTestId('geometry-readonly-banner');
+    expect(pill).toHaveClass('pointer-events-auto', 'min-w-0', 'flex', 'items-start');
+    expect(pill).not.toHaveClass('flex-wrap');
+    expect(screen.getByTestId('geometry-readonly-banner-glyph')).toHaveClass('shrink-0');
+    expect(screen.getByTestId('geometry-readonly-banner-body')).toHaveClass('flex-wrap', 'min-w-0', 'flex-1');
+    expect(screen.getByTestId('geometry-readonly-banner-body')).toContainElement(screen.getByTestId('geometry-readonly-resume'));
     expect(screen.getByTestId('geometry-readonly-resume')).toHaveClass('shrink-0', 'whitespace-nowrap');
+  });
+
+  it('gives the SpeleoDB notice the same glyph / body structure', () => {
+    render(<MapTopLeftOverlay {...baseProps} showSpeleoReadOnly />);
+    const pill = screen.getByTestId('speleodb-readonly-banner');
+    expect(pill).not.toHaveClass('flex-wrap');
+    expect(screen.getByTestId('speleodb-readonly-banner-glyph').querySelector('svg')).not.toBeNull();
+    expect(screen.getByTestId('speleodb-readonly-banner-body')).toContainElement(screen.getByTestId('speleodb-readonly-reason'));
+    // The words keep a minimum column before the action drops under them.
+    expect(screen.getByTestId('speleodb-readonly-reason')).toHaveClass('flex-[1_1_5rem]', 'max-w-max');
   });
 });

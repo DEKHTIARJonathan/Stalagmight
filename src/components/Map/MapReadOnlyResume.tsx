@@ -7,7 +7,20 @@ import { speleoReadOnlyReason, speleoReadOnlyReasonKey } from '../../utils/spele
 import { PencilIcon, SignInIcon } from '../common/icons';
 
 const RESUME_CLS =
-  'ml-1 shrink-0 whitespace-nowrap inline-flex items-center gap-1 rounded bg-accent px-2 py-0.5 font-medium text-accent-on hover:bg-accent-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
+  'shrink-0 whitespace-nowrap inline-flex items-center gap-1 rounded bg-accent px-2 py-0.5 font-medium text-accent-on hover:bg-accent-90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent';
+
+/**
+ * A read-only pill's words (`MapTopLeftOverlay`'s notices). They sit beside the
+ * pill's action and wrap in their own column. The basis is the narrowest that
+ * column may get before the action drops under it: `flex-[1_1_5rem]` with
+ * `max-w-max`, so a short label (min of 5rem and its own width) never pushes the
+ * action down, and a long one grows to fill the row. 5rem keeps every pill's
+ * action beside its words at the minimum map width (MAP_MIN_WIDTH) with no other
+ * notice in the row; the action drops only when the pill gets narrower than that.
+ * `py-0.5` puts the first line on the action's and the glyph's centre line (all
+ * three are 20px).
+ */
+export const PILL_LABEL_CLS = 'flex-[1_1_5rem] max-w-max py-0.5 text-accent font-medium';
 
 /**
  * "Resume editing" on the SpeleoDB read-only pill: takes the write lock again
@@ -35,8 +48,8 @@ export function SpeleoResumeEditingButton() {
 
 /**
  * The SpeleoDB read-only pill's words: why the project cannot be edited when that
- * is a lasting reason (signed out: "Read-only copy - sign in to edit"; view-only
- * access), and the plain badge otherwise.
+ * is a lasting reason (signed out: "Read-only copy - connect to SpeleoDB to edit";
+ * view-only access), and the plain badge otherwise.
  */
 export function SpeleoReadOnlyLabel() {
   const { t } = useTranslation();
@@ -44,7 +57,7 @@ export function SpeleoReadOnlyLabel() {
   const session = useSpeleoStore((s) => s.session);
   const reason = speleoReadOnlyReason(link, session);
   return (
-    <span className="min-w-0 text-accent font-medium" data-testid="speleodb-readonly-reason" data-reason={reason ?? 'none'}>
+    <span className={PILL_LABEL_CLS} data-testid="speleodb-readonly-reason" data-reason={reason ?? 'none'}>
       {reason ? t(speleoReadOnlyReasonKey(reason)) : t('speleodb.map.readOnlyBadge')}
     </span>
   );

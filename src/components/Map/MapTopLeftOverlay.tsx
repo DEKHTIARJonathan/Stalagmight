@@ -1,6 +1,8 @@
+import type { ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { FitToViewIcon, LockIcon } from '../common/icons';
 import {
+  PILL_LABEL_CLS,
   RawDataResumeButton,
   SpeleoLogInButton,
   SpeleoReadOnlyLabel,
@@ -25,11 +27,31 @@ import {
  * source text, comments included.
  */
 /**
- * A read-only notice. `min-w-0` lets it shrink inside the bounded row and
- * `flex-wrap` lets its action drop under the words instead of being cut off.
+ * A read-only notice: a pill holding a glyph, the words, and (when there is one)
+ * the action. The glyph sits in its own 20px slot beside the words, never on a
+ * line of its own; the words and the action share the body, which wraps.
+ *
+ * The body keeps the action on the words' row while the words still get their
+ * minimum column (`PILL_LABEL_CLS`); the words wrap inside that column, and the
+ * action stays at the row's end, centred on the text block. Only when the pill is
+ * narrower than that minimum plus the action does the action drop to the next
+ * line, where it starts under the words (the body begins after the glyph). The
+ * pill itself is `min-w-0`, so it shrinks inside the bounded row rather than
+ * running under the zoom control.
  */
 const NOTICE_CLS =
-  'pointer-events-auto min-w-0 bg-panel border border-accent rounded px-3 py-1.5 text-xs flex flex-wrap items-center gap-x-1.5 gap-y-1';
+  'pointer-events-auto min-w-0 bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-start gap-1.5';
+
+function ReadOnlyNotice({ testId, glyph, children }: { testId: string; glyph: ReactNode; children: ReactNode }) {
+  return (
+    <div className={NOTICE_CLS} data-testid={testId}>
+      <span className="flex h-5 shrink-0 items-center" data-testid={`${testId}-glyph`}>{glyph}</span>
+      <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-2 gap-y-1" data-testid={`${testId}-body`}>
+        {children}
+      </div>
+    </div>
+  );
+}
 
 export function MapTopLeftOverlay({
   focused,
@@ -59,7 +81,8 @@ export function MapTopLeftOverlay({
   // an absolutely positioned row grows to the map's right edge and the notices ran
   // UNDER the zoom control on a narrow map (MAP_MIN_WIDTH, i.e. a small window or
   // a large UI zoom). Inside the bound the fit button keeps its size, the notices
-  // shrink and wrap (text first, then the action onto its own line), and an action
+  // shrink and wrap (the words in their own column beside the glyph, the action
+  // under the words only once that column would get too narrow), and an action
   // never shrinks. The row spans the map's width, so it lets clicks through where
   // nothing is drawn.
   return (
@@ -97,15 +120,11 @@ export function MapTopLeftOverlay({
       </button>
 
       {showSpeleoReadOnly && (
-        <div
-          className={NOTICE_CLS}
-          data-testid="speleodb-readonly-banner"
-        >
-          <LockIcon size={13} className="shrink-0" />
+        <ReadOnlyNotice testId="speleodb-readonly-banner" glyph={<LockIcon size={13} />}>
           <SpeleoReadOnlyLabel />
           <SpeleoResumeEditingButton />
           <SpeleoLogInButton />
-        </div>
+        </ReadOnlyNotice>
       )}
 
       {/* One chip, two reasons to exist. The read-only testid rides ONLY on the
@@ -114,44 +133,39 @@ export function MapTopLeftOverlay({
 
           Purely visual - it carries no live-region role, because it is mounted and
           unmounted BY the thing it would have to announce. The region above speaks
-          for it. */}
+          for it.
+
+          The glyph is the closed padlock, exactly as the SpeleoDB notice draws it:
+          both tell the user the same thing (editing is off). While the solve runs
+          the spinner owns that slot instead - a solve in progress is not itself
+          the reason editing is off. */}
       {(showClosureReadOnly || showClosureComputing) && (
-        <div
-          className={NOTICE_CLS}
-          data-testid={showClosureReadOnly ? 'geometry-readonly-banner' : 'geometry-computing-banner'}
-        >
-          {showClosureComputing && (
+        <ReadOnlyNotice
+          testId={showClosureReadOnly ? 'geometry-readonly-banner' : 'geometry-computing-banner'}
+          glyph={showClosureComputing ? (
             <span
-              className="shrink-0 w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin"
+              className="w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin"
               aria-hidden="true"
               data-testid="geometry-computing-spinner"
             />
-          )}
-          {/* Closed padlock, exactly as the SpeleoDB badge above draws it: both
-              notices tell the user the same thing (editing is off), so they carry
-              the same glyph rather than one being text-only. Deliberately NOT on
-              the computing branch below - the spinner already owns that slot, and
-              a solve in progress is not itself the reason editing is off. */}
-          {showClosureReadOnly && !showClosureComputing && (
-            <>
-              <LockIcon size={13} className="shrink-0" />
-              <span className="min-w-0 text-accent font-medium">{t('map.geometry.adjustedBadge')}</span>
-            </>
-          )}
-          {showClosureComputing && (
-            <span className="min-w-0 text-accent font-medium" data-testid="geometry-computing">
+          ) : <LockIcon size={13} />}
+        >
+          {showClosureComputing ? (
+            <span className={PILL_LABEL_CLS} data-testid="geometry-computing">
               {t(
                 showClosureReadOnly
                   ? 'map.geometry.computingReadOnly'
                   : 'map.geometry.computing'
               )}
             </span>
+          ) : (
+            <span className={PILL_LABEL_CLS}>{t('map.geometry.adjustedBadge')}</span>
           )}
           {/* Leaving the computed view applies whether or not the solve is still
               running; outside Survey (Plan/Export force it) the notice is off and
               so is this. */}
           {showClosureReadOnly && <RawDataResumeButton />}
-        </div>
+        </ReadOnlyNotice>
       )}
     </div>
   );
