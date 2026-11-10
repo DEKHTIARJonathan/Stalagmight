@@ -199,23 +199,11 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
     // Raw identifiers (read-only, hidden by default) - for cross-referencing and
     // copying out alongside the data.
     {
-      key: 'section_id',
-      header: t('dataTable.columns.sectionIdShort'),
-      width: 60,
-      align: 'right',
-      getValue: () => sectionId ?? '',
-    },
-    {
       key: 'shot_id',
       header: t('dataTable.columns.shotIdShort'),
-      width: 60,
+      width: 100,
       align: 'right',
-      // The shot sub-portion of the displayed id - the 1-based position after
-      // the ':' in the pill, not the internal row id. Drafts have none yet.
-      getValue: (_r, rowIndex) => {
-        const shotIndex = shotIndexAt(rowIndex);
-        return shotIndex === null ? '' : shotIndex + 1;
-      },
+      getValue: (shot) => shot.id < 0 ? '' : shot.id,
     },
     numberCol('length', t('dataTable.columns.length', { unit: t('common.units.meters') }), 100, precision.length, (v) =>
       typeof v === 'number' && v <= 0 ? t('dataTable.validation.nonPositiveLength') : null,

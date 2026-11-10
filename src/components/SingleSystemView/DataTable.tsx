@@ -313,7 +313,6 @@ export default function DataTable({ sections }: DataTableProps) {
     setSelection,
     setHoveredShot,
     hoveredShot,
-    triggerPanToShot,
     dataTableHeight,
     dataTableFullScreen,
     rawTableSelection,
@@ -603,7 +602,7 @@ export default function DataTable({ sections }: DataTableProps) {
   const [azimuthMode, setAzimuthMode] = useState<'avg' | 'inout' | 'off'>('avg');
   const [inclinationMode, setInclinationMode] = useState<'avg' | 'inout' | 'off'>('off');
   const [hiddenShotCols, setHiddenShotCols] = useState<ReadonlySet<string>>(
-    () => new Set(['section_id', 'shot_id'])
+    () => new Set<string>()
   );
   // The stations view keeps its own order/visibility (no angle modes there);
   // persisted alongside the shot view state below.
@@ -1137,16 +1136,6 @@ export default function DataTable({ sections }: DataTableProps) {
     [selectedSection, editingBlocked, setShotKind, applyDraftEdit]
   );
 
-  const handlePanToShot = useCallback(
-    (shot: Shot) => {
-      if (selectedSection) {
-        setSource('data-table');
-        triggerPanToShot(selectedSection.id, shot.id);
-      }
-    },
-    [selectedSection, triggerPanToShot]
-  );
-
   const shotColumns = useMemo(
     () =>
       buildShotColumns({
@@ -1206,24 +1195,7 @@ export default function DataTable({ sections }: DataTableProps) {
 
   // Gutter shows the shot's ID pill (replaces the old ID column); double-click
   // pans the map to the shot, as it did on the column's pill.
-  const shotRowLabel = useCallback(
-    (shot: Shot, rowIndex: number) => {
-      // Draft rows earn their pill only once they become real shots.
-      if (shot.id < 0) return <span className="opacity-50">+</span>;
-      const shotIndex = shotIndexAt(rowIndex);
-      return selectedSectionId !== null && shotIndex !== null ? (
-        <span
-          onDoubleClick={() => handlePanToShot(shot)}
-          data-testid={`data-table-shot-row-label-${selectedSectionId}-${shot.id}`}
-        >
-          <EntityBlob entity="shot">{formatShotId(selectedSectionId, shotIndex + 1)}</EntityBlob>
-        </span>
-      ) : (
-        rowIndex + 1
-      );
-    },
-    [selectedSectionId, handlePanToShot, shotIndexAt]
-  );
+  const shotRowLabel = (_shot: Shot, rowIndex: number) => rowIndex + 1;
 
   // --- Stations view (SpreadsheetGrid) --------------------------------------
   // Stations are derived from shots, so only the comment is editable - a
@@ -1713,7 +1685,7 @@ export default function DataTable({ sections }: DataTableProps) {
             anchorScope={panelRef}
             {...(tableView === 'shots'
               ? {
-                  extraRows: { warnings: true, sectionId: true, shotId: true },
+                  extraRows: { warnings: true, shotId: true },
                   angleModes: {
                     azimuth: {
                       mode: azimuthMode,
@@ -1779,7 +1751,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 cellClassName={shotCellClassName}
                 rowLabel={shotRowLabel}
                 labels={gridLabels}
-                gutterWidth={72}
+                gutterWidth={42}
                 onSelectionChange={setGridSel}
                 onHeaderContextMenu={(colKey, pos) => setHeaderMenu({ ...pos, colKey })}
                 {...(editingBlocked ? {} : { onInsertRows: onShotInsertRows })}
@@ -1814,7 +1786,7 @@ export default function DataTable({ sections }: DataTableProps) {
                 hoveredRow={stationHoveredRow}
                 rowLabel={stationRowLabel}
                 labels={stationGridLabels}
-                gutterWidth={72}
+                gutterWidth={42}
                 onHeaderContextMenu={(colKey, pos) => setHeaderMenu({ ...pos, colKey })}
                 hiddenColumns={stationHiddenColumns}
                 columnOrder={stationColumnOrder}

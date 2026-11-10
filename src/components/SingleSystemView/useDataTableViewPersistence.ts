@@ -105,8 +105,8 @@ export function useDataTableViewPersistence(
     // overrides. Guarded here rather than at each use because the guard was
     // originally applied to the snapshot below but not to these setters, which
     // seeded the state `undefined` and left the crash exactly where it was.
-    const shotHidden = panelsConfig.data_table_shot_hidden_columns ?? [];
-    const shotOrder = panelsConfig.data_table_shot_column_order ?? [];
+    const shotHidden = (panelsConfig.data_table_shot_hidden_columns ?? []).filter(key => key !== 'section_id' && !(key === 'shot_id' && panelsConfig.data_table_shot_hidden_columns?.includes('section_id')));
+    const shotOrder = (panelsConfig.data_table_shot_column_order ?? []).filter(key => key !== 'section_id');
     // The persisted list is authoritative: the backend fills a missing/legacy
     // config with the coordinate-column defaults (serde default), so an EMPTY
     // array genuinely means the user unhid every station column ("show all") -
