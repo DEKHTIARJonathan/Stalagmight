@@ -1744,6 +1744,108 @@ fn test_import_sections_persists_deferred_new_project() {
     });
 }
 
+/// #674: `add_project_file` is an import door too - into a never-saved project
+/// it resolves the deferred save, and its result carries exactly the added
+/// section ids (the orphan-placement input) plus a receipt.
+#[test]
+fn test_add_project_file_reports_added_sections_and_persists_deferred_project() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        let dir = TempDir::new().unwrap();
+        let project_path = dir.path().join("new-add.stalx");
+        let mut project = Project::new("New Add".to_string(), None);
+        project.file_path = Some(project_path.clone());
+        state(&app).inner().set_project_for_tests(project);
+        state(&app)
+            .inner()
+            .set_initial_save_deferred_for_tests(true);
+
+        let mut source = Project::new("Source".to_string(), None);
+        source.add_section(SectionData {
+            name: Some("Added".to_string()),
+            shots: vec![shot_data(5.0), shot_data(6.0)],
+            ..Default::default()
+        });
+        let source_path = dir.path().join("source.stalx");
+        Database::open(&source_path)
+            .unwrap()
+            .save_project(&source)
+            .unwrap();
+
+        // Through the async command itself, so the blocking-thread handoff is
+        // what is tested; that thread resolves its own temp config dir.
+        let result = tauri::async_runtime::block_on(import::add_project_file(
+            app.handle().clone(),
+            source_path.to_string_lossy().into_owned(),
+        ));
+        assert_success(&result);
+        assert_eq!(result.section_ids, vec![0], "exactly the added section");
+        let receipt = result.import_receipt.as_ref().expect("a receipt");
+        assert_eq!(receipt.source_format, "Stalagmight");
+        assert_eq!(receipt.file_name, "source.stalx");
+        assert_eq!(receipt.sections_imported, 1);
+        assert_eq!(receipt.shot_count, 2);
+        assert!(project_path.exists(), "the deferred project was saved");
+        assert!(!state(&app).initial_save_deferred());
+    });
+}
+
+/// #674: `suggest_orphan_placements` runs on a blocking thread; driven through
+/// the async command, a newly imported floating section that re-surveys an
+/// anchored one is offered that section as its target.
+#[test]
+fn test_suggest_orphan_placements_command_offers_the_anchored_host() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        let leg = || -> Vec<ShotData> {
+            [(45.0, 10.0), (90.0, 8.0), (135.0, 6.0), (180.0, 4.0)]
+                .iter()
+                .map(|&(azimuth, length)| ShotData {
+                    azimuth_in: azimuth,
+                    azimuth_out: azimuth,
+                    length,
+                    depth_in: 2.0,
+                    depth_out: 2.5,
+                    ..Default::default()
+                })
+                .collect()
+        };
+        let mut project = Project::new("Host".to_string(), None);
+        let host = project
+            .add_section(SectionData {
+                shots: leg(),
+                ..Default::default()
+            })
+            .id;
+        project
+            .store_zero_datum_without_repositioning(
+                StationRef::new(host, 0),
+                GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+            )
+            .unwrap();
+        let added = project
+            .add_section(SectionData {
+                shots: leg(),
+                ..Default::default()
+            })
+            .id;
+        state(&app).inner().set_project_for_tests(project);
+
+        let suggestions = tauri::async_runtime::block_on(import::suggest_orphan_placements(
+            app.handle().clone(),
+            vec![added],
+        ))
+        .unwrap();
+
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.orphan_section_id == added && s.target_section_id == host),
+            "the added section must be offered the anchored host: {suggestions:?}"
+        );
+    });
+}
+
 /// #391: `import_sections`' additive provenance params (used by the mNemo DMP
 /// wizard) decorate the base receipt when passed, and leave it at its
 /// (empty-provenance) defaults when omitted - the shape every other caller

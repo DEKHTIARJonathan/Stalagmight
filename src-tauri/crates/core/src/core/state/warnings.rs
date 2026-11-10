@@ -35,8 +35,13 @@ impl AppState {
             // Use provided database reference (pre-finalization)
             db.load_resolved_warnings_verbatim().unwrap_or_default()
         } else {
-            // Fall back to self.database (post-finalization)
-            self.load_resolved_warnings().unwrap_or_default()
+            // Fall back to self.database (post-finalization), plus the ignores an
+            // "Add .stalx" carried in that no save has written yet (#674). Only
+            // here: the `db` branch above reads a project that is not in the
+            // slot yet, which the pending rows do not belong to.
+            let mut rows = self.load_resolved_warnings().unwrap_or_default();
+            rows.extend(self.pending_ignores());
+            rows
         };
         // Key the lookup sets by borrowed slices into `resolved` so the
         // per-warning probe below allocates nothing. `resolved` outlives this
@@ -360,13 +365,20 @@ impl AppState {
         warning_code: &str,
         shot_uuid: Option<&str>,
     ) -> Result<()> {
+        // An ignore an "Add .stalx" carried in and no save has written yet
+        // (#674) lives only in memory; un-ignoring it is forgetting it there.
+        let forgot_pending =
+            self.forget_pending_ignore(section_id, shot_id, warning_code, shot_uuid);
         let db_guard = self
             .database
             .lock()
             .map_err(|_| anyhow::anyhow!("Failed to lock database"))?;
-        let db = db_guard
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("No database open"))?;
+        let Some(db) = db_guard.as_ref() else {
+            if forgot_pending {
+                return Ok(());
+            }
+            return Err(anyhow::anyhow!("No database open"));
+        };
         db.delete_resolved_warning(section_id, shot_id, warning_code, shot_uuid)
     }
 

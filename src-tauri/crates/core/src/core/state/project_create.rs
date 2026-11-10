@@ -148,6 +148,8 @@ impl AppState {
             // A session boundary (a project committed into the slot), bumped under
             // the guard per the `speleodb_session` rule.
             self.bump_speleodb_session();
+            // An add's pending ignores (#674) belong to the project that just left.
+            self.clear_pending_ignores();
         }
 
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
@@ -509,6 +511,8 @@ impl AppState {
         // A session boundary (a project committed into the slot), bumped under
         // the guard per the `speleodb_session` rule.
         self.bump_speleodb_session();
+        // An add's pending ignores (#674) belong to the project that just left.
+        self.clear_pending_ignores();
 
         // Commit 2: Database handle mutation
         *self

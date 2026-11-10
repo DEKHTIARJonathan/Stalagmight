@@ -37,7 +37,7 @@ import { useSidePanelSqueeze, useDataPanelSqueeze, resolveResize } from './sideP
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
 import { usePanelReveal } from './usePanelReveal';
 import { Dock, BAR } from './Dock';
-import { dmpImportFilters } from '../../utils/fileDialogs';
+import { inProjectImportFilters } from '../../utils/fileDialogs';
 import { pickAndRoute } from '../../utils/openOrImport';
 import { useProjectMenuItems } from './useProjectMenuItems';
 import { setSource, withTrackingSuppressed, withPersistSuppressed, setProjectActionSource } from '../../utils/telemetry';
@@ -169,15 +169,15 @@ export default function SingleSystemView() {
   // Opening the message dialog leaves local autosave running.
   const handleSaveProject = rawSave;
 
-  // Toolbar "Import" button - `.dmp` only (#508), matching the hamburger Import
-  // row and Ctrl+I: with a project open, Import means adding mNemo data to it.
-  // The other survey formats would only ever reach the "import as new project?"
-  // confirm, and a `.stalx` is a plain open - both belong to the hamburger's
-  // Open / Import row, which keeps the full unified picker. Still routed through
+  // Toolbar "Import" button - `.dmp` and `.stalx` only (#508, #674), matching the
+  // hamburger Import row and Ctrl+I: with a project open, Import means adding
+  // data to it. The other survey formats would only ever reach the "import as new
+  // project?" confirm and belong to the hamburger's Open / Import row, which
+  // keeps the full unified picker. A `.stalx` asks open-or-add. Still routed through
   // the shared router, so the read-only guard and its fix-it prompt apply.
   const handleImportDmp = useCallback(async () => {
     setProjectActionSource('toolbar');
-    await pickAndRoute(dmpImportFilters(), 'Import Failed');
+    await pickAndRoute(inProjectImportFilters(), 'Import Failed', { importDoor: true });
   }, []);
 
   // Hamburger menu items (file/project actions). Built here so it can use the

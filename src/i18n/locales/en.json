@@ -1253,6 +1253,14 @@
       "closeNotice": "Opening it will close {{projectName}}.",
       "confirm": "Open"
     },
+    "addOrOpenProject": {
+      "title": "Open or add this project?",
+      "body": "{{fileName}} can be opened as its own project, or its survey data can be added to the project that is open now. Adding is one undo step and never modifies the original file.",
+      "blockedNotice": "Adding is unavailable while editing is blocked (Plan or Export mode, the Closures Computed View, or no SpeleoDB write lock).",
+      "openAsProject": "Open as project",
+      "addTo": "Add to {{projectName}}",
+      "adding": "Adding..."
+    },
     "importAsNewProject": {
       "title": "Import as new project?",
       "body": "{{fileName}} will be converted into a new Stalagmight project. Your original file is never modified.",
@@ -2558,7 +2566,8 @@
     "commandFailed": "The change could not be applied."
   },
   "importGate": {
-    "inProgress": "Finish or cancel the current import first."
+    "inProgress": "Finish or cancel the current import first.",
+    "alreadyOpen": "{{fileName}} is already the open project."
   },
   "newerSchema": {
     "message": "\"{{file}}\" was saved by a newer version of Stalagmight (file format {{found}}; this version reads up to {{supported}}). Update Stalagmight to open it.",

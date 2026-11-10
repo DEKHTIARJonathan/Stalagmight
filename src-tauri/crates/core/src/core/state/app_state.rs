@@ -181,6 +181,10 @@ pub struct AppState {
     /// Transient, never persisted: it describes THIS read of the file, and the next save
     /// overwrites the unreadable rows anyway.
     pub(super) history_discarded: AtomicBool,
+    /// Ignored warnings an "Add .stalx" carried in for sections the open file's
+    /// database does not hold yet (#674; see `project_add.rs`). Written by the
+    /// next save, cleared with every project-slot commit. Transient.
+    pub(super) pending_ignores: Mutex<Vec<crate::persistence::ResolvedWarning>>,
     /// Memoized closure-adjusted station coordinates for the display-mode toggle.
     /// See [`AdjustedStationsCache`]. Transient; never persisted.
     pub(super) adjusted_cache: Mutex<Option<AdjustedStationsCache>>,
@@ -269,6 +273,7 @@ impl AppState {
             unrecognised_shot_kinds: Mutex::new(None),
             // Default-false: no project is open, so no history has been discarded.
             history_discarded: AtomicBool::new(false),
+            pending_ignores: Mutex::new(Vec::new()),
             adjusted_cache: Mutex::new(None),
             adjusted_cache_generation: AtomicU64::new(0),
             speleodb_session_generation: AtomicU64::new(0),

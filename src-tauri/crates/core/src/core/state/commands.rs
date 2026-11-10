@@ -71,6 +71,9 @@ impl AppState {
             | MoveComment { .. }
             | Batch { .. }
             | UntrackImport { .. }
+            // Adding a file INTO the open project is an edit of it (#674),
+            // unlike MergeProjects, which writes a new file.
+            | AddProjectFile { .. }
             | RepairIntegrity
             | UpdateProjectSettings
             | SetSurfaceElevation => false,
@@ -231,6 +234,14 @@ impl AppState {
             | MoveSection { .. }
             | MoveSegment { .. }
             | MoveStation { .. } => SAFE_REFS,
+
+            // A pure addition (#674): it copies a source's own references
+            // between the sections it creates and links nothing existing, so
+            // it can neither dangle a ref nor strand a closure. No rollback
+            // snapshot either - `add_project_file` blocks introduced corruption
+            // itself by removing what it appended, which costs the size of the
+            // file being added rather than of the open project.
+            AddProjectFile { .. } => SAFE_REFS,
         }
     }
 
@@ -308,11 +319,16 @@ impl AppState {
     ///   `DeleteShot`, the delete/split entry points, `RepairIntegrity`, any
     ///   `Batch`) each record a `ProjectSnapshotPair`, so their undo hands the old
     ///   map back verbatim.
-    /// * `SetZeroDatum` - the only command that ESTABLISHES a frame today -
+    /// * `SetZeroDatum` - the command that ordinarily ESTABLISHES a frame -
     ///   records `UndoData::ZeroDatumInfo` with a whole-project
     ///   `previous_offsets` (`Project::capture_all_section_offsets`, taken before
     ///   the mutation), which is exactly the blast radius of the translation it
     ///   performs.
+    /// * `AddProjectFile` (#674) can establish one too, when the copied file
+    ///   carries a datum and the open project has none. It lands that datum on
+    ///   the origin itself, moving only what it copied, so this gate measures
+    ///   zero; a pre-existing offset that moves anyway is recorded in its
+    ///   `AddedContent::moved_offsets` and handed back by the undo.
     ///
     /// KNOWN LIMITATION, pre-existing and NOT introduced here: a datum stored
     /// against a legacy POSITIONAL anchor (`StationAnchor::Index`, written by
@@ -802,6 +818,9 @@ impl AppState {
                 file_hashes,
                 section_hashes,
             } => self.untrack_import(file_hashes, section_hashes),
+            Command::AddProjectFile { path, .. } => {
+                self.add_project_file(path, Self::add_slot_generation(&undo_data))
+            }
             Command::RepairIntegrity => CommandResult::failure(
                 "RepairIntegrity is applied via repair_project_integrity, not execute()"
                     .to_string(),
@@ -861,10 +880,20 @@ impl AppState {
             self.reconcile_geometry();
         }
 
-        // Push to undo stack if successful and undoable.
-        // Batch commands handle their own undo push inside execute_batch()
-        // (with before+after snapshots), so skip them here.
-        if result.success && Self::is_undoable(&cmd) && !matches!(cmd, Command::Batch { .. }) {
+        // An add finalizes and pushes under ONE `project` guard, bound to the
+        // slot generation its stub was captured against (#674): a project
+        // committed into the slot since must neither be recorded as the add's
+        // content nor receive its undo entry.
+        if result.success && matches!(cmd, Command::AddProjectFile { .. }) {
+            if let Some(failure) = self.push_add_undo(&cmd, undo_data) {
+                return failure;
+            }
+            self.mark_remote_forward_edit();
+        } else if result.success && Self::is_undoable(&cmd) && !matches!(cmd, Command::Batch { .. })
+        {
+            // Push to undo stack if successful and undoable.
+            // Batch commands handle their own undo push inside execute_batch()
+            // (with before+after snapshots), so skip them here.
             // For create commands, finalize undo data with snapshot-based ID preservation
             let final_undo_data = self.finalize_undo_data(&cmd, undo_data);
 

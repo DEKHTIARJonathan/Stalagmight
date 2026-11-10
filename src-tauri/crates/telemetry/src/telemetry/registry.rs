@@ -100,6 +100,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.history_discarded",
     "command.import_dmp",
     "command.import_sections",
+    "command.add_project_file",
     "command.install_app_update_and_restart",
     "command.list_backups",
     "command.list_dive_plans",
@@ -378,6 +379,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "undo-after.execute_tml_import",
     "undo-after.execute_walls_import",
     "undo-after.import_sections",
+    "undo-after.add_project_file",
     "undo-after.merge_stations",
     "undo-after.move_comment",
     "undo-after.move_section",
@@ -778,6 +780,12 @@ pub const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.import-as-new-project",
     "dwell.dialog.import-as-new-project",
     "active-dwell.dialog.import-as-new-project",
+    // Open-or-add prompt (#674): a `.stalx` picked through an Import door while a
+    // project is open asks whether to open it or add it to the open project.
+    "action.dialog.add-or-open-project",
+    "dialog-cancel.add-or-open-project",
+    "dwell.dialog.add-or-open-project",
+    "active-dwell.dialog.add-or-open-project",
 ];
 
 #[cfg(test)]
@@ -1072,7 +1080,11 @@ mod tests {
         //   + 1 a "Quit now" whose window close failed takes its forced-exit arm
         //       back, so the app that stays open does not cut a later transfer:
         //       command.disarm_forced_exit = 671.
-        assert_eq!(EVENT_NAMES.len(), 671);
+        //   + 6 "Add .stalx to current project" (#674): command.add_project_file,
+        //       undo-after.add_project_file, and the full per-dialog set for the
+        //       open-or-add prompt: action.dialog + dialog-cancel + dwell.dialog +
+        //       active-dwell.dialog for add-or-open-project = 677.
+        assert_eq!(EVENT_NAMES.len(), 677);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

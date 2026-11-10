@@ -490,6 +490,8 @@ export interface ProjectStore extends ProjectConfigActions, ProjectHistoryBanner
     provenance?: ImportReceiptProvenance,
     existingShotUpdates?: ExistingShotUpdate[] | null,
   ) => Promise<CommandResult>;
+  /** [#674] Append the `.stalx` at `path` into the open project as one undo step. */
+  addProjectFile: (path: string) => Promise<CommandResult>;
   suggestImportPlacement: (
     shots: ShotData[],
     azimuthReference?: AzimuthReference | null,
@@ -539,6 +541,7 @@ const IMPORT_COMMANDS = new Set([
   'execute_compass_import',
   'execute_walls_import',
   'execute_gpx_import',
+  'add_project_file',
 ]);
 
 /**
@@ -2376,6 +2379,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Terminal flow: the project is already open, so there's no
       // setView('single') to clear the pending source. Clear it here so it
       // can't leak into the next peeking command.
+      clearProjectActionSource();
+    }
+  },
+
+  addProjectFile: async (path: string) => {
+    const s = peekProjectActionSource();
+    if (s) setSource(s);
+    try {
+      return await executeCommand('add_project_file', { path }, { purpose: 'add a .stalx to the open project' });
+    } finally {
       clearProjectActionSource();
     }
   },

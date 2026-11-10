@@ -19,14 +19,14 @@ import { MENU_ICON_COLORS } from './menuColors';
 import { setProjectActionSource, type SourceName } from '../../utils/telemetry';
 import { quitApp } from '../../utils/quit';
 import { pickAndRoute } from '../../utils/openOrImport';
-import { openOrImportFilters, dmpImportFilters } from '../../utils/fileDialogs';
+import { openOrImportFilters, inProjectImportFilters } from '../../utils/fileDialogs';
 import type { AppMenuItem } from './AppMenu';
 
 const ICON_SIZE = 18;
 
 /**
- * The IN-PROJECT hamburger's "Import" row (#508) - adds mNemo data to the open
- * project, and nothing else.
+ * The IN-PROJECT hamburger's "Import" row (#508) - adds mNemo data or a `.stalx`
+ * (#674) to the open project, and nothing else.
  *
  * Two shapes died here on purpose. The pre-#407 version was five per-format
  * rows; #407 collapsed them into a one-row submenu offering the SAME unified
@@ -53,7 +53,7 @@ export function importMenuItem(t: TFunction): AppMenuItem {
     action: 'import_dmp',
     onClick: () => {
       setProjectActionSource('hamburger');
-      void pickAndRoute(dmpImportFilters(), 'Import Failed');
+      void pickAndRoute(inProjectImportFilters(), 'Import Failed', { importDoor: true });
     },
   };
 }
