@@ -9,11 +9,51 @@
  */
 
 import { averageAzimuth, normalizeAzimuth } from './azimuth';
-import { interpolateShots, type TargetShotLike } from './overlapHelpers';
+import {
+  computeOverlapPairs,
+  interpolateShots,
+  needsDirectionReversal,
+  reverseTargetShot,
+  type OverlapParams,
+  type TargetShotLike,
+} from './overlapHelpers';
 
 export type OverlapChoice = 'keep_existing' | 'use_new' | 'average';
 
 export const OVERLAP_CHOICES: readonly OverlapChoice[] = ['keep_existing', 'use_new', 'average'];
+
+/** One repeated shot: the new section's copy and the existing shot it repeats. */
+export interface RepeatedShot<S extends TargetShotLike> {
+  orphanShotIndex: number;
+  targetShotIndex: number;
+  orphanShot: S;
+  targetShot: S;
+  /** The new reading, oriented the way the existing shot runs. */
+  incoming: TargetShotLike;
+}
+
+/**
+ * The repeated shots a placement resolves (`computeOverlapPairs`), with both
+ * shots looked up. A pair missing either shot is dropped whole, so the table
+ * the user decides on and the step that applies it list exactly the same shots.
+ */
+export function repeatedShots<S extends TargetShotLike>(
+  params: OverlapParams,
+  mergeImportStation: number,
+  orphanShots: readonly S[],
+  targetShots: readonly S[],
+): RepeatedShot<S>[] {
+  const reverse = needsDirectionReversal(params.importStationIndex, params.direction);
+  const shots: RepeatedShot<S>[] = [];
+  for (const pair of computeOverlapPairs(params, mergeImportStation)) {
+    const orphanShot = orphanShots[pair.orphanShotIndex];
+    const targetShot = targetShots[pair.targetShotIndex];
+    if (!orphanShot || !targetShot) continue;
+    const incoming = reverse ? reverseTargetShot(orphanShot) : orphanShot;
+    shots.push({ ...pair, orphanShot, targetShot, incoming });
+  }
+  return shots;
+}
 
 /**
  * How far two readings of one shot may differ before the row is highlighted:

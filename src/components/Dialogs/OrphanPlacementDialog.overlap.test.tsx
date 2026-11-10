@@ -371,6 +371,24 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     expect(updateShot).not.toHaveBeenCalled();
   });
 
+  it('a repeated shot the existing section no longer has is neither listed nor marked', async () => {
+    // A stale suggestion: Mainline has lost its last shot, so the second
+    // repeated shot pairs with nothing. The table and the apply step agree.
+    setup(makeProject({
+      sections: [
+        { id: 1, name: 'Orphan', shots: ORPHAN, direction: 'in', color: '#4a9eff' },
+        { id: 2, name: 'Mainline', shots: MAINLINE.slice(0, 4), direction: 'in', color: '#4a9eff' },
+      ] as unknown as Project['sections'],
+    }));
+    render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} />);
+
+    const rows = screen.getAllByTestId(/^overlap-row-\d+$/).map((row) => row.getAttribute('data-testid'));
+    expect(rows).toEqual(['overlap-row-0']);
+    await acceptAndFinish();
+
+    expect(referenceCalls()).toEqual([[1, 100]]);
+  });
+
   it('never shows a score above 100%', () => {
     setup();
     const boosted = makeSuggestion({ score: 1.18 });
