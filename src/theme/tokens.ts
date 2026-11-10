@@ -9,13 +9,12 @@ export const themeTokens = {
     '--cc-accent': '#4ecdc4',
     '--cc-accent-on': '#1a1a2e',
     '--cc-warning': '#ffcb77',
-    '--cc-warning-on': '#1a1a2e',
     // Warning PROSE on the panel, the background and the warning washes
     // (`bg-warning-10` / `-20`): WCAG AA (4.5:1) on all of them, pinned in
-    // tokens.test.ts. `--cc-warning` itself is tuned as a FILL (the highlight
-    // button, stripes, the map's hover); on the light themes it is too pale to
-    // carry text, so they darken it here, same hue. Dark themes reuse it as is,
-    // except nord, which lightens it to clear its 20% wash.
+    // tokens.test.ts. `--cc-warning` itself is tuned as a FILL (stripes, the
+    // map's hover); on the light themes it is too pale to carry text, so they
+    // darken it here, same hue. Dark themes reuse it as is, except nord, which
+    // lightens it to clear its 20% wash.
     '--cc-warning-text': '#ffcb77',
     '--cc-error': '#ff6b6b',
     '--cc-success': '#95e1d3',
@@ -129,7 +128,6 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(255, 203, 119, 0.1)',
     '--cc-warning-20': 'rgba(255, 203, 119, 0.2)',
     '--cc-warning-30': 'rgba(255, 203, 119, 0.3)',
-    '--cc-warning-90': 'rgba(255, 203, 119, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(149, 225, 211, 0.05)',
@@ -146,7 +144,6 @@ export const themeTokens = {
     '--cc-accent': '#3a8a82',
     '--cc-accent-on': '#ffffff',
     '--cc-warning': '#b8860b',
-    '--cc-warning-on': '#1a120b',
     '--cc-warning-text': '#7c5a07',
     '--cc-error': '#c0392b',
     '--cc-success': '#27764e',
@@ -240,7 +237,6 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(184, 134, 11, 0.1)',
     '--cc-warning-20': 'rgba(184, 134, 11, 0.2)',
     '--cc-warning-30': 'rgba(184, 134, 11, 0.3)',
-    '--cc-warning-90': 'rgba(184, 134, 11, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(39, 118, 78, 0.05)',
@@ -257,7 +253,6 @@ export const themeTokens = {
     '--cc-accent': '#a89060',
     '--cc-accent-on': '#0e0d0c',
     '--cc-warning': '#b89848',
-    '--cc-warning-on': '#0e0d0c',
     '--cc-warning-text': '#b89848',
     '--cc-error': '#b85048',
     '--cc-success': '#48986a',
@@ -348,7 +343,6 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(184, 152, 72, 0.1)',
     '--cc-warning-20': 'rgba(184, 152, 72, 0.2)',
     '--cc-warning-30': 'rgba(184, 152, 72, 0.3)',
-    '--cc-warning-90': 'rgba(184, 152, 72, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(72, 152, 106, 0.05)',
@@ -368,7 +362,6 @@ export const themeTokens = {
     '--cc-accent': '#bd93f9',
     '--cc-accent-on': '#282a36',
     '--cc-warning': '#ffb86c',
-    '--cc-warning-on': '#282a36',
     '--cc-warning-text': '#ffb86c',
     '--cc-error': '#ff5555',
     '--cc-success': '#50fa7b',
@@ -461,7 +454,6 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(255, 184, 108, 0.1)',
     '--cc-warning-20': 'rgba(255, 184, 108, 0.2)',
     '--cc-warning-30': 'rgba(255, 184, 108, 0.3)',
-    '--cc-warning-90': 'rgba(255, 184, 108, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(80, 250, 123, 0.05)',
@@ -480,7 +472,6 @@ export const themeTokens = {
     '--cc-accent': '#61afef',
     '--cc-accent-on': '#282c34',
     '--cc-warning': '#e5c07b',
-    '--cc-warning-on': '#282c34',
     '--cc-warning-text': '#e5c07b',
     '--cc-error': '#e06c75',
     '--cc-success': '#98c379',
@@ -575,7 +566,6 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(229, 192, 123, 0.1)',
     '--cc-warning-20': 'rgba(229, 192, 123, 0.2)',
     '--cc-warning-30': 'rgba(229, 192, 123, 0.3)',
-    '--cc-warning-90': 'rgba(229, 192, 123, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(152, 195, 121, 0.05)',
@@ -594,7 +584,6 @@ export const themeTokens = {
     '--cc-accent': '#268bd2',
     '--cc-accent-on': '#fdf6e3',
     '--cc-warning': '#b58900',
-    '--cc-warning-on': '#002b36',
     '--cc-warning-text': '#735700',
     '--cc-error': '#dc322f',
     '--cc-success': '#859900',
@@ -657,7 +646,6 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(181, 137, 0, 0.1)',
     '--cc-warning-20': 'rgba(181, 137, 0, 0.2)',
     '--cc-warning-30': 'rgba(181, 137, 0, 0.3)',
-    '--cc-warning-90': 'rgba(181, 137, 0, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(133, 153, 0, 0.05)',
@@ -676,7 +664,6 @@ export const themeTokens = {
     '--cc-accent': '#1e66f5',
     '--cc-accent-on': '#eff1f5',
     '--cc-warning': '#df8e1d',
-    '--cc-warning-on': '#1e1e2e',
     '--cc-warning-text': '#835311',
     '--cc-error': '#d20f39',
     '--cc-success': '#40a02b',
@@ -739,7 +726,6 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(223, 142, 29, 0.1)',
     '--cc-warning-20': 'rgba(223, 142, 29, 0.2)',
     '--cc-warning-30': 'rgba(223, 142, 29, 0.3)',
-    '--cc-warning-90': 'rgba(223, 142, 29, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(64, 160, 43, 0.05)',
@@ -759,7 +745,6 @@ export const themeTokens = {
     '--cc-accent': '#88c0d0',
     '--cc-accent-on': '#2e3440',
     '--cc-warning': '#ebcb8b',
-    '--cc-warning-on': '#2e3440',
     '--cc-warning-text': '#efd6a2',
     '--cc-error': '#bf616a',
     '--cc-success': '#a3be8c',
@@ -852,7 +837,6 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(235, 203, 139, 0.1)',
     '--cc-warning-20': 'rgba(235, 203, 139, 0.2)',
     '--cc-warning-30': 'rgba(235, 203, 139, 0.3)',
-    '--cc-warning-90': 'rgba(235, 203, 139, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(163, 190, 140, 0.05)',
@@ -871,7 +855,6 @@ export const themeTokens = {
     '--cc-accent': '#89b4fa',
     '--cc-accent-on': '#1e1e2e',
     '--cc-warning': '#f9e2af',
-    '--cc-warning-on': '#1e1e2e',
     '--cc-warning-text': '#f9e2af',
     '--cc-error': '#f38ba8',
     '--cc-success': '#a6e3a1',
@@ -963,7 +946,6 @@ export const themeTokens = {
     '--cc-warning-10': 'rgba(249, 226, 175, 0.1)',
     '--cc-warning-20': 'rgba(249, 226, 175, 0.2)',
     '--cc-warning-30': 'rgba(249, 226, 175, 0.3)',
-    '--cc-warning-90': 'rgba(249, 226, 175, 0.9)',
 
     // Opacity Variants: success
     '--cc-success-5': 'rgba(166, 227, 161, 0.05)',
@@ -980,7 +962,6 @@ export const themeTokens = {
     '--cc-accent': '#0050a0',
     '--cc-accent-on': '#ffffff',
     '--cc-warning': '#cc7700',
-    '--cc-warning-on': '#000000',
     '--cc-warning-text': '#965700',
     '--cc-error': '#cc0000',
     '--cc-success': '#007a2f',
@@ -1069,7 +1050,6 @@ export const themeTokens = {
     '--cc-warning-10': '#fdf2e0',
     '--cc-warning-20': '#fae4c2',
     '--cc-warning-30': '#f8d7a3',
-    '--cc-warning-90': '#d1851a',
 
     // Opacity Variants: success (pre-composited against #ffffff)
     '--cc-success-5': '#f0faf3',

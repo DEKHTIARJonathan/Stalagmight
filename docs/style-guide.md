@@ -6,7 +6,7 @@ This guide captures the current UI conventions and design tokens for Stalagmight
 - Source of truth: `src/theme/tokens.ts`, applied as CSS variables in `src/index.css`.
 - Use token-backed utility classes (examples): `bg-panel`, `bg-background`, `text-text-primary`, `text-text-secondary`, `border-border`, `bg-accent`, `text-accent-on`, `text-warning`, `text-error`, `text-success`.
 - Opacity variants are available as token utilities (examples): `bg-accent-10`, `bg-accent-20`, `bg-background-50`.
-- Warning prose takes `text-warning-text`, not `text-warning`: `--cc-warning` is tuned as a fill (highlight button, stripes) and is too pale for text on the light themes. `--cc-warning-text` reads at WCAG AA on the panel, the background and the `bg-warning-10` / `bg-warning-20` washes in every theme (pinned in `tokens.test.ts`).
+- Warning prose takes `text-warning-text`, not `text-warning`: `--cc-warning` is tuned as a fill (stripes, the map's hover) and is too pale for text on the light themes. `--cc-warning-text` reads at WCAG AA on the panel, the background and the `bg-warning-10` / `bg-warning-20` washes in every theme (pinned in `tokens.test.ts`).
 
 ## Colors
 - **No color value ships without a human seeing it rendered.** Measure and propose; do not merge. Covers `--cc-*` tokens on all 10 themes, display defaults in `src/types/config.ts`, section palettes, and renderer/export constants.
@@ -29,7 +29,6 @@ This guide captures the current UI conventions and design tokens for Stalagmight
   - `secondary`: default action style.
   - `ghost`: low-emphasis actions in dense UI or toolbars.
   - `danger`: destructive actions (delete, discard).
-  - `highlight`: the main action of a panel that has no `primary`, in the theme's warning yellow with `text-warning-on` (the per-theme dark text that reads at WCAG AA on it). Example: Open project in the home screen's project details. Yellow also marks un-uploaded SpeleoDB changes, so keep it to one such button per view.
 - Do not give a `Button` a colour, shadow or fixed height of its own through `className`, and do not add a variant for one feature: a view's buttons look the same as every other panel's and dialog's. Width and margins (`w-full`, `mt-2`) are layout and are fine.
 - At most one `primary` per view, and only when one action is clearly the one to take now. A view may have none. The SpeleoDB tab picks it with `speleoPrimaryAction`: Save Changes while there are changes not yet uploaded, Resume editing when the account can edit, the Connect button while signed out, none when the access is view-only or when editing with nothing to save. Every other action there is `secondary`.
 - Side panels stack their actions as full-width buttons (the home screen's project details, the shot details, the SpeleoDB tab), at the size the panel uses for all of them.

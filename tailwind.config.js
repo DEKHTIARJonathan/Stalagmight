@@ -29,7 +29,6 @@ export default {
         hover: 'var(--cc-hover)',
         overlay: 'var(--cc-overlay)',
         warning: 'var(--cc-warning)',
-        'warning-on': 'var(--cc-warning-on)',
         // Warning prose (text-warning-text): AA on the panel and the warning washes.
         'warning-text': 'var(--cc-warning-text)',
         // The same warning text dimmed toward the panel, for an idle tab that carries
@@ -89,12 +88,11 @@ export default {
         'error-80': 'var(--cc-error-80)',
         'error-90': 'var(--cc-error-90)',
 
-        // Opacity variants: warning (5 entries)
+        // Opacity variants: warning (4 entries)
         'warning-5': 'var(--cc-warning-5)',
         'warning-10': 'var(--cc-warning-10)',
         'warning-20': 'var(--cc-warning-20)',
         'warning-30': 'var(--cc-warning-30)',
-        'warning-90': 'var(--cc-warning-90)',
 
         // Opacity variants: success (3 entries)
         'success-5': 'var(--cc-success-5)',

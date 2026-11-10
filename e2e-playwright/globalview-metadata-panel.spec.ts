@@ -32,7 +32,7 @@ test.describe('GlobalView Metadata Panel', () => {
     });
   });
 
-  test('Open project is the yellow highlight action, readable in every theme', async ({ page }) => {
+  test('Open project is the standard primary action (accent), not yellow, in every theme', async ({ page }) => {
     await page.getByTestId(ALPHA_CARD).click();
     const open = page.getByTestId('metadata-open-button');
     await expect(open).toBeVisible({ timeout: 5000 });
@@ -44,8 +44,8 @@ test.describe('GlobalView Metadata Panel', () => {
       // settles on the theme's tokens, resolved through an un-animated probe.
       await expect.poll(() => open.evaluate((el) => {
         const probe = document.createElement('div');
-        probe.style.backgroundColor = 'var(--cc-warning)';
-        probe.style.color = 'var(--cc-warning-on)';
+        probe.style.backgroundColor = 'var(--cc-accent)';
+        probe.style.color = 'var(--cc-accent-on)';
         document.body.appendChild(probe);
         const want = getComputedStyle(probe);
         const got = getComputedStyle(el);
@@ -54,6 +54,8 @@ test.describe('GlobalView Metadata Panel', () => {
         return same;
       }), { message: theme }).toBe(true);
     }
+    // The same Button variant every dialog's main action uses.
+    await expect(open).toHaveAttribute('data-primary-action', '');
   });
 
   test.describe('Project Selection from List', () => {

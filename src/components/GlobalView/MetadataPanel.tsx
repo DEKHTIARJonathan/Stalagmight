@@ -420,10 +420,8 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
 
             {/* Actions */}
             <div className="p-3 border-t border-border space-y-2">
-              {/* The panel's main action, in the highlight (warning-yellow) variant
-                  so it stands out from the secondary actions below it. */}
               <Button
-                variant="highlight"
+                variant="primary"
                 onClick={handleOpenProject}
                 className="w-full"
                 data-testid="metadata-open-button"

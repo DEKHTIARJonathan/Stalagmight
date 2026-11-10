@@ -46,4 +46,13 @@ describe('Button (component-tier harness smoke)', () => {
     render(<Button variant="primary">Confirm</Button>);
     expect(screen.getByRole('button', { name: 'Confirm' })).toHaveAttribute('data-primary-action', '');
   });
+
+  it('has no yellow highlight variant: a main action is primary', () => {
+    render(
+      // The warning-yellow `highlight` variant is gone: the type check fails if it returns.
+      // @ts-expect-error highlight is not a Button variant
+      <Button variant="highlight">Open project</Button>,
+    );
+    expect(screen.getByRole('button', { name: 'Open project' }).className).not.toMatch(/warning/);
+  });
 });

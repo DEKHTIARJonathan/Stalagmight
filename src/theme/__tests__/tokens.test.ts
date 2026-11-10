@@ -681,25 +681,6 @@ function solid(value: string, under: string): string {
 }
 
 /**
- * The `highlight` Button variant paints `--cc-warning` with `--cc-warning-on` text
- * (and `--cc-warning-90` on hover, composited over the panel it sits on). Every
- * theme must keep that text readable: WCAG AA for normal text, 4.5:1.
- */
-describe('highlight button (warning) contrast', () => {
-
-  for (const theme of ALL_THEME_NAMES) {
-    it(`${theme}: warning-on reads at AA on warning and on its hover`, () => {
-      const tokens = themeTokens[theme] as Record<string, string>;
-      const on = tokens['--cc-warning-on']!;
-      const panel = tokens['--cc-panel']!;
-      expect(on).toMatch(/^#[0-9a-fA-F]{6}$/);
-      expect(contrast(tokens['--cc-warning']!, on)).toBeGreaterThanOrEqual(4.5);
-      expect(contrast(solid(tokens['--cc-warning-90']!, panel), on)).toBeGreaterThanOrEqual(4.5);
-    });
-  }
-});
-
-/**
  * Warning PROSE (`text-warning-text`) sits on the panel, on the page background and
  * on the warning washes (`bg-warning-10` / `bg-warning-20`, composited over either):
  * the remove-copy and purge warnings, the insecure-HTTP note, the workspace's
