@@ -2927,6 +2927,8 @@
   },
   "dataWorkspace": {
     "createSection": "Create a New Section",
+    "searchSections": "Search sections",
+    "noSections": "No sections match your search.",
     "section": "Section",
     "sections": "Sections",
     "markerIndex": "Marker index",

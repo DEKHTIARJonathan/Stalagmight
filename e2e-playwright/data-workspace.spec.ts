@@ -135,3 +135,34 @@ test('Data columns and Section menu follow the requested layout and viewport mar
   expect(narrow!.x + narrow!.width).toBeLessThanOrEqual(540);
 
 });
+
+test('Section menu highlights creation, sorts names and filters with text', async ({ page }) => {
+  await setupMockedPage(page);
+  await createProject(page, 'Synthetic searchable sections');
+  await seedProjectWithSections(page, [
+    { name: 'Zulu passage', shots: [{ length: 10, azimuth_in: 90, azimuth_out: 90, depth_in: 0, depth_out: 1 }] },
+    { name: 'alpha passage', shots: [] },
+    { name: 'Bravo passage', shots: [] },
+  ]);
+  await page.getByTestId('mode-data').click();
+  const picker = page.getByTestId('project-data-table').getByRole('combobox', { name: 'Section', exact: true }).first();
+  await picker.click();
+  const list = page.getByRole('listbox');
+  await expect(list.getByRole('option')).toHaveText(['Create a New Section', 'alpha passage', 'Bravo passage', 'Zulu passage']);
+  await expect(list.getByRole('option').first()).toHaveClass(/text-success/);
+  const search = page.getByRole('combobox', { name: 'Search sections', exact: true });
+  await expect(search).toBeFocused();
+  await search.fill('BRAVO');
+  await expect(list.getByRole('option')).toHaveText(['Create a New Section', 'Bravo passage']);
+  await search.fill('No matching section');
+  await expect(list.getByRole('option')).toHaveText(['Create a New Section']);
+  await expect(page.getByText('No sections match your search.', { exact: true })).toBeVisible();
+  await search.fill('alpha');
+  await list.getByRole('option', { name: 'alpha passage', exact: true }).click();
+  await expect(picker).toContainText('alpha passage');
+  await picker.click();
+  await expect(search).toHaveValue('');
+  await expect(list.getByRole('option')).toHaveCount(4);
+  await page.keyboard.press('Escape');
+  await expect(list).not.toBeVisible();
+});

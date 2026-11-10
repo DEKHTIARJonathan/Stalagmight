@@ -12,6 +12,10 @@ export interface SelectOption {
   value: string;
   label: string;
   disabled?: boolean;
+  /** Highlight an action option separately from normal choices. */
+  tone?: 'success';
+  /** Keep an action available while filtering the other options. */
+  alwaysVisible?: boolean;
   /** Optional leading icon for the option row. */
   icon?: ReactNode;
   /** Optional trailing node after the label (e.g. an italic qualifier). */
@@ -121,29 +125,16 @@ function flattenOptions(options: SelectOption[] | SelectOptionGroup[]): Flattene
         const opt = group.options[i];
         if (!opt) continue;
         const flatOpt: FlattenedOption = {
-          value: opt.value,
-          label: opt.label,
+          ...opt,
           groupLabel: group.label,
           isFirstInGroup: i === 0,
         };
-        if (opt.disabled !== undefined) {
-          flatOpt.disabled = opt.disabled;
-        }
         result.push(flatOpt);
       }
     }
     return result;
   }
-  return options.map(opt => {
-    const flatOpt: FlattenedOption = {
-      value: opt.value,
-      label: opt.label,
-    };
-    if (opt.disabled !== undefined) {
-      flatOpt.disabled = opt.disabled;
-    }
-    return flatOpt;
-  });
+  return options.map(opt => ({ ...opt }));
 }
 
 /** Position state for the portaled dropdown */
@@ -229,8 +220,8 @@ export function Select({
   const displayedOptions = useMemo(() => {
     if (!searchLabel || !query.trim()) return options;
     const term = query.trim().toLocaleLowerCase();
-    const matches = (option: SelectOption) => !option.disabled &&
-      `${option.label} ${option.value}`.toLocaleLowerCase().includes(term);
+    const matches = (option: SelectOption) => option.alwaysVisible || (!option.disabled &&
+      `${option.label} ${option.value}`.toLocaleLowerCase().includes(term));
     return isGroupedOptions(options)
       ? options.map(group => ({ ...group, options: group.options.filter(matches) }))
           .filter(group => group.options.length > 0)
@@ -543,8 +534,8 @@ export function Select({
           aria-selected={isSelected}
           aria-disabled={option.disabled || undefined}
           className={`w-full px-3 py-2 text-left text-sm cursor-pointer ${
-            isHighlighted ? 'bg-accent-30' : ''
-          } ${isSelected ? 'bg-accent-10 text-accent' : ''} ${
+            isHighlighted ? 'bg-accent-30' : option.tone === 'success' ? 'bg-success-10' : ''
+          } ${option.tone === 'success' ? 'text-success font-semibold border-b border-success-30' : isSelected ? 'bg-accent-10 text-accent' : ''} ${
             option.disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-accent-20'
           }`}
           onClick={() => handleSelect(option.value, option.disabled)}
@@ -705,7 +696,7 @@ export function Select({
                 data-testid={testId ? `${testId}-listbox` : undefined}>
                 {renderOptions()}
               </div>
-              {flatOptions.length === 0 && <p role="status" className="px-3 py-2 text-sm text-text-secondary">{noResultsLabel}</p>}
+              {flatOptions.every(option => option.alwaysVisible) && <p role="status" className="px-3 py-2 text-sm text-text-secondary">{noResultsLabel}</p>}
             </>
           ) : renderOptions()}
         </div>,

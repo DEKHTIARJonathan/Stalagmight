@@ -23,7 +23,7 @@ interface Row extends Shot { sectionId: number }
 
 /** Live survey data. Raw database inspection remains a separate read-only view. */
 export function ProjectDataTable({ sections }: { sections: Section[] }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const precision = useDecimalPrecision();
   const blocked = useEditingBlocked();
   const store = useProjectStore();
@@ -114,7 +114,12 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
   const openCreate = (row: Row | 'empty') => {
     setName(''); setSurveyor(''); setDate(''); setColor('#4ecdc4'); setDirection('in'); setError(null); setCreateFor(row);
   };
-  const options = useMemo(() => [{ value: 'new', label: t('dataWorkspace.createSection') }, ...sections.map(section => ({ value: String(section.id), label: section.name ?? t('sections.defaultName', { id: section.id }) }))], [sections, t]);
+  const options = useMemo(() => {
+    const collator = new Intl.Collator(i18n?.resolvedLanguage, { sensitivity: 'base', numeric: true });
+    const existing = sections.map(section => ({ value: String(section.id), label: section.name ?? t('sections.defaultName', { id: section.id }) }));
+    existing.sort((a, b) => collator.compare(a.label, b.label) || Number(a.value) - Number(b.value));
+    return [{ value: 'new', label: t('dataWorkspace.createSection'), tone: 'success' as const, alwaysVisible: true }, ...existing];
+  }, [sections, t, i18n?.resolvedLanguage]);
   const columns: GridColumn<Row>[] = useMemo(() => {
     const positions = new Map<string, number>(sections.flatMap(section => section.shots.map((shot, index) => [`${section.id}:${shot.id}`, index] as const)));
     const cache = new Map<string, ReturnType<typeof buildShotColumns>>();
@@ -144,7 +149,7 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
     const columns: GridColumn<Row>[] = [
       { key: 'section', header: t('dataWorkspace.section'), width: 200, getValue: row => row.sectionId < 0 ? '' : row.sectionId,
         editable: !blocked && !busy, parse: () => undefined, noInlineEdit: true, activate: row => root.current?.querySelector<HTMLButtonElement>(`[data-testid="data-section-${row.id}"]`)?.click(),
-        render: row => <Select variant="cell" fitContent dropdownRightMargin={100} value={String(row.sectionId)} options={options} disabled={blocked || busy || (row.id >= 0 && store.isShotFrozen(row.sectionId, positions.get(`${row.sectionId}:${row.id}`) ?? -1))} aria-label={t('dataWorkspace.section')} data-testid={`data-section-${row.id}`}
+        render: row => <Select variant="cell" fitContent dropdownRightMargin={100} searchLabel={t('dataWorkspace.searchSections')} noResultsLabel={t('dataWorkspace.noSections')} value={String(row.sectionId)} options={options} disabled={blocked || busy || (row.id >= 0 && store.isShotFrozen(row.sectionId, positions.get(`${row.sectionId}:${row.id}`) ?? -1))} aria-label={t('dataWorkspace.section')} data-testid={`data-section-${row.id}`}
           onChange={value => { if (value === 'new') openCreate(row); else if (row.id < 0) { chooseDraftSection(Number(value)); void mutate(commitDraft); } else { void mutate(() => transfer(row, Number(value))); } }} /> },
       ...forRow(sample).map((column): GridColumn<Row> => ({ ...column,
         isEditable: (row, index) => !busy && !blocked && (forRow(row).find(c => c.key === column.key)?.isEditable?.(row, index) ?? column.editable ?? false),

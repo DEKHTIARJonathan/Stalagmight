@@ -121,3 +121,9 @@ it('orders Warning, Shot ID, Section and puts section creation before existing s
   expect(mocks.grid.columns.map((column: any) => column.key)).not.toContain('temperature');
   expect(screen.getByTestId('data-section-100000').querySelectorAll('option')[1]?.value).toBe('new');
 });
+
+it('sorts section names alphabetically while keeping creation first', () => {
+  render(<ProjectDataTable sections={sections.map((section, index) => ({ ...section, name: index === 0 ? 'Zulu' : 'alpha' }))} />);
+  const options = screen.getByTestId('data-section-100000').querySelectorAll('option');
+  expect(Array.from(options).map(option => option.textContent)).toEqual(['Choose', 'dataWorkspace.createSection', 'alpha', 'Zulu']);
+});
