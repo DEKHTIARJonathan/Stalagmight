@@ -784,6 +784,60 @@ fn added_sections_are_reported_for_orphan_placement() {
     assert_eq!(project.count_unanchored_sections(&anchored.section_ids), 1);
 }
 
+/// The leg both sides of the overlap test below share: distinct bearings and
+/// lengths so the matcher has a real shape to align.
+const OVERLAP_LEG: [(f64, f64); 4] = [(45.0, 10.0), (90.0, 8.0), (135.0, 6.0), (180.0, 4.0)];
+
+fn overlap_leg(prefix: &str) -> Vec<ShotData> {
+    OVERLAP_LEG
+        .iter()
+        .enumerate()
+        .map(|(i, &(azimuth, length))| shot(&format!("{prefix}-{i}"), azimuth, length, 2.0))
+        .collect()
+}
+
+/// #674 end to end: a datum-less `.stalx` that re-surveys a passage of the
+/// open, anchored project is added through the real command, and the
+/// suggester - asked exactly as the frontend asks, with the add's returned ids
+/// and the live config - offers a placement of the added section onto the
+/// host. Before the fix it returned nothing: its targets came from the add
+/// alone, and a datum-less add has no anchored section to offer.
+#[test]
+fn a_datum_less_add_overlapping_the_host_gets_a_placement_suggestion() {
+    let temp = TempDir::new().unwrap();
+    let mut host = Project::new("Host".to_string(), None);
+    let h0 = host.add_section(section("H0", overlap_leg("h0"))).id;
+    host.store_zero_datum_without_repositioning(
+        StationRef::new(h0, 0),
+        GpsCoordinates::new(TARGET_FRAME.0, TARGET_FRAME.1, 0.0).unwrap(),
+    )
+    .unwrap();
+    let host_path = save_to(temp.path(), "host.stalx", &host);
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(host_path).success, "open the host");
+    let mut source = Project::new("Resurvey".to_string(), None);
+    source.add_section(section("R0", overlap_leg("r0")));
+    let source_path = save_to(temp.path(), "resurvey.stalx", &source);
+
+    let result = add(&state, &source_path);
+    assert!(result.success, "add failed: {:?}", result.error);
+    assert_eq!(result.section_ids.len(), 1);
+    let added = result.section_ids[0];
+    let project = state.get_project_state().unwrap();
+    let host_id = project.sections[0].id;
+    let suggestions = project.suggest_orphan_placements(
+        &result.section_ids,
+        &state.get_config().placement_suggestion,
+    );
+
+    assert!(
+        suggestions
+            .iter()
+            .any(|s| s.orphan_section_id == added && s.target_section_id == host_id),
+        "the added section must be offered a placement onto the host: {suggestions:?}"
+    );
+}
+
 /// A georeferenced source lands at its GPS position in the open project's
 /// frame, rigidly, and nothing that was already there moves.
 #[test]
