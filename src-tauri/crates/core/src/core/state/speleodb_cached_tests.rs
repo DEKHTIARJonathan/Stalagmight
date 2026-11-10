@@ -1107,7 +1107,7 @@ fn a_purge_with_the_server_down_probes_once_and_reports_every_lock_unchecked() {
         assert_eq!(report.removed, 3, "{report:?}");
         assert!(report.failed.is_empty(), "{report:?}");
         assert!(state.speleodb_cached_projects_in(temp.path()).is_empty());
-        let mut unchecked = report.locks_unchecked.clone();
+        let mut unchecked = report.locks_unchecked;
         unchecked.sort();
         assert_eq!(
             unchecked,
