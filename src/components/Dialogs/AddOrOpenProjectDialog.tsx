@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -26,6 +26,9 @@ export default function AddOrOpenProjectDialog() {
   const projectName = useProjectStore((s) => s.project?.name);
   const editingBlocked = useEditingBlocked();
   const [adding, setAdding] = useState(false);
+  // State is read through the render closure, so two clicks dispatched in one JS
+  // task both see `adding === false`; the ref is set synchronously and is the guard.
+  const addingRef = useRef(false);
   const [addError, setAddError] = useState<string | null>(null);
 
   const path = dialogData.path as string | undefined;
@@ -48,7 +51,8 @@ export default function AddOrOpenProjectDialog() {
   // and the add copies and loads a whole project. `runAddProjectFile` closes or
   // replaces this dialog on success, so still being here means it did not land.
   const handleAdd = async () => {
-    if (adding || isEditingBlockedNow()) return;
+    if (addingRef.current || isEditingBlockedNow()) return;
+    addingRef.current = true;
     setAdding(true);
     setAddError(null);
     const result = await runAddProjectFile(path);
@@ -58,6 +62,7 @@ export default function AddOrOpenProjectDialog() {
       closeDialog();
       return;
     }
+    addingRef.current = false;
     setAdding(false);
     setAddError(result.error ?? t('editGate.commandFailed'));
   };

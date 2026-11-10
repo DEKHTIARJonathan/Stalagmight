@@ -75,6 +75,17 @@ describe('AddOrOpenProjectDialog', () => {
     expect(screen.getByTestId('add-or-open-project-add')).not.toHaveAttribute('data-autofocus');
   });
 
+  it('two clicks in the same task start the add once', () => {
+    vi.mocked(runAddProjectFile).mockReturnValue(new Promise(() => {}));
+    render(<AddOrOpenProjectDialog />);
+    const add = screen.getByTestId('add-or-open-project-add');
+    act(() => {
+      add.click();
+      add.click();
+    });
+    expect(runAddProjectFile).toHaveBeenCalledTimes(1);
+  });
+
   it('names the open project on the Add choice', () => {
     render(<AddOrOpenProjectDialog />);
     expect(screen.getByTestId('add-or-open-project-add').textContent).toContain('My Cave');
