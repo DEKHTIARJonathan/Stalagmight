@@ -179,6 +179,7 @@ impl AppState {
                     let prev_updates = SectionUpdates {
                         name: updates.name.as_ref().map(|_| section.name.clone()),
                         surveyor: updates.surveyor.as_ref().map(|_| section.surveyor.clone()),
+                        explorer: updates.explorer.as_ref().map(|_| section.explorer.clone()),
                         date: updates.date.as_ref().map(|_| section.date),
                         color: updates.color.as_ref().map(|_| section.color.clone()),
                         direction: updates.direction.map(|_| section.direction),

@@ -53,6 +53,10 @@ pub struct Section {
     pub name: Option<String>,
     /// Surveyor who collected this data
     pub surveyor: Option<String>,
+    /// Explorer recorded independently from the surveyor.
+    #[serde(default)]
+    #[ts(optional, type = "string | null")]
+    pub explorer: Option<String>,
     /// Date of the survey
     #[ts(type = "string | null")]
     pub date: Option<NaiveDate>,
@@ -139,6 +143,8 @@ pub struct Section {
 /// mirroring how `restore_shot`'s `uuid: None` is its own legacy fallback.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SectionIdentity {
+    #[serde(default)]
+    pub explorer: Option<String>,
     /// The shots' persistent UUIDs, in shot order. An entry per shot, `None`
     /// where the shot genuinely had none (a pre-v6 file loaded with a NULL uuid
     /// column). SHORTER than the section's shots - empty, for a legacy entry -
@@ -164,6 +170,7 @@ impl SectionIdentity {
     /// The identity `section` carries right now.
     pub fn of(section: &Section) -> Self {
         Self {
+            explorer: section.explorer.clone(),
             shot_uuids: section.shots.iter().map(|shot| shot.uuid.clone()).collect(),
             reverse_parity: section.reverse_parity,
             gauge_shot_uuid: section.gauge_shot_uuid.clone(),
@@ -230,6 +237,13 @@ pub struct SectionUpdates {
     )]
     #[ts(optional)]
     pub surveyor: Option<Option<String>>,
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[ts(optional)]
+    pub explorer: Option<Option<String>>,
     #[serde(
         default,
         deserialize_with = "double_option",
@@ -439,6 +453,7 @@ impl Section {
             id,
             name: data.name,
             surveyor: data.surveyor,
+            explorer: None,
             date: data.date,
             color: data.color,
             direction: data.direction.unwrap_or_default(),
@@ -537,6 +552,7 @@ impl Section {
         for (shot, uuid) in section.shots.iter_mut().zip(identity.shot_uuids.iter()) {
             shot.uuid.clone_from(uuid);
         }
+        section.explorer.clone_from(&identity.explorer);
         section.reverse_parity = identity.reverse_parity;
         section
             .gauge_shot_uuid
@@ -652,6 +668,9 @@ impl Section {
     pub fn apply_updates(&mut self, updates: &SectionUpdates) {
         if let Some(v) = &updates.name {
             self.name.clone_from(v);
+        }
+        if let Some(v) = &updates.explorer {
+            self.explorer.clone_from(v);
         }
         if let Some(v) = &updates.surveyor {
             self.surveyor.clone_from(v);
@@ -1131,6 +1150,7 @@ mod tests {
         section.apply_updates(&SectionUpdates {
             name: Some(Some("Updated".to_string())),
             surveyor: Some(Some("Jane".to_string())),
+            explorer: None,
             date: Some(Some(new_date)),
             color: Some("#abc123".to_string()),
             direction: Some(SurveyDirection::Out),

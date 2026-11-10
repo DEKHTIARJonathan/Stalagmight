@@ -85,6 +85,7 @@ pub(super) fn append_project(
         let resolved = source.azimuth_reference_for(section);
         if let Some(copied) = target.get_section_mut(new_section_id) {
             copied.azimuth_reference = Some(resolved);
+            copied.explorer.clone_from(&section.explorer);
             // Nor can it carry where the section's least-squares gauge sits
             // (#24): `Section::new` resets the reverse parity and both gauge
             // anchors, which would pin a datum-less component to a different

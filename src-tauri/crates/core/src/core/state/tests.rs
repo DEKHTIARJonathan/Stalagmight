@@ -8504,6 +8504,7 @@ fn test_execute_update_section_metadata_command() {
         updates: SectionUpdates {
             name: Some(Some("Updated Name".to_string())),
             surveyor: Some(Some("Carol".to_string())),
+            explorer: None,
             date: Some(Some(updated_date)),
             color: Some("#0000ff".to_string()),
             direction: Some(SurveyDirection::Out),

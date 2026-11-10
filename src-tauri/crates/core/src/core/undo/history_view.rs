@@ -489,6 +489,17 @@ fn derive_preview_data(
                         });
                     }
                 }
+                if let Some(new_explorer_opt) = &updates.explorer {
+                    let new_explorer = new_explorer_opt.as_deref().unwrap_or("");
+                    let old_explorer = prev.get("explorer").and_then(|v| v.as_str()).unwrap_or("");
+                    if old_explorer != new_explorer {
+                        changes.push(FieldChange {
+                            field: "Explorer".to_string(),
+                            old_value: old_explorer.to_string(),
+                            new_value: new_explorer.to_string(),
+                        });
+                    }
+                }
                 if let Some(new_date_opt) = &updates.date {
                     let new_date = new_date_opt
                         .as_ref()
@@ -1611,6 +1622,7 @@ mod tests {
                 updates: SectionUpdates {
                     name: Some(Some("New".to_string())),
                     surveyor: Some(Some("Alice".to_string())),
+                    explorer: None,
                     date: Some(None),
                     color: Some("#0000ff".to_string()),
                     direction: Some(SurveyDirection::Out),

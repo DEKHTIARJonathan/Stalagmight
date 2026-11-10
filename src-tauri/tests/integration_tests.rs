@@ -726,6 +726,7 @@ fn test_section_metadata_update() {
 
     let updates = SectionUpdates {
         name: Some(Some("Updated Name".to_string())),
+        explorer: None,
         surveyor: Some(Some("New Surveyor".to_string())),
         color: Some("#ff0000".to_string()),
         date: None,

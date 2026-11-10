@@ -124,6 +124,7 @@ impl AppState {
 
             // Capture metadata from original section (surveyor, date, color, direction -- NOT comment)
             let surveyor = section.surveyor.clone();
+            let explorer = section.explorer.clone();
             let date = section.date;
             let color = section.color.clone();
             let direction = section.direction;
@@ -208,6 +209,7 @@ impl AppState {
             let new_id = section_b.id;
             if let Some(section_b) = project.get_section_mut(new_id) {
                 section_b.azimuth_reference = azimuth_reference;
+                section_b.explorer = explorer;
             }
 
             // Set section B offset
@@ -405,6 +407,7 @@ impl AppState {
                 .map(|s| s.id)
                 .collect();
             let surveyor = section.surveyor.clone();
+            let explorer = section.explorer.clone();
             let date = section.date;
             let color = section.color.clone();
             let direction = section.direction;
@@ -497,6 +500,7 @@ impl AppState {
             let new_id = section_b.id;
             if let Some(section_b) = project.get_section_mut(new_id) {
                 section_b.azimuth_reference = azimuth_reference;
+                section_b.explorer = explorer;
             }
             project.set_section_offset(new_id, (section_ox + bx, section_oy + by));
 

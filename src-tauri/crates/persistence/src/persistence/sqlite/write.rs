@@ -358,6 +358,21 @@ impl Database {
             params![serde_json::to_string(&shot_numbering)?],
         )?;
 
+        let explorers: std::collections::BTreeMap<_, _> = project
+            .sections
+            .iter()
+            .filter_map(|section| {
+                section
+                    .explorer
+                    .as_ref()
+                    .map(|explorer| (section.id, explorer))
+            })
+            .collect();
+        tx.execute(
+            "INSERT OR REPLACE INTO project_settings (key, value) VALUES ('section_explorers', ?1)",
+            params![serde_json::to_string(&explorers)?],
+        )?;
+
         // Per-project validation thresholds (#57) travel in the .stalx.
         tx.execute(
             "INSERT OR REPLACE INTO project_settings (key, value) VALUES ('validation', ?1)",

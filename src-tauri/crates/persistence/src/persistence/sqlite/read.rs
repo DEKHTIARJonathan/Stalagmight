@@ -755,6 +755,24 @@ impl Database {
             // re-solves offsets from scratch anyway (`redrive_offsets_after_load`).
             realign_fixpoint: None,
         };
+        let explorers_json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'section_explorers'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        let explorers: std::collections::BTreeMap<u32, String> = explorers_json
+            .map(|json| serde_json::from_str(&json))
+            .transpose()?
+            .unwrap_or_default();
+        for (section_id, explorer) in explorers {
+            if let Some(section) = project.get_section_mut(section_id) {
+                section.explorer = Some(explorer);
+            }
+        }
         project.ensure_shot_numbers().map_err(anyhow::Error::msg)?;
         Ok(project)
     }

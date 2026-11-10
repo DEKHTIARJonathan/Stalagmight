@@ -219,3 +219,11 @@ mod tests_support;
 pub use app_state::AppState;
 pub use command_import::VirtualShotMode;
 pub use speleodb_cached::{SpeleoCacheOwnership, SpeleoCachedProject, SpeleoPurgeReport};
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "explorer persistence and undo regression assertions"
+)]
+mod section_explorer_tests;
