@@ -251,8 +251,10 @@ fn canonical_merge_output(merged: &Project, result: &CommandResult) -> String {
 /// recorded on the merge loop as it stood BEFORE #674 extracted it into the
 /// shared append. If this fires, merge output changed: diff the printed
 /// canonical form against the previous one, and only re-pin if the change is
-/// intended.
-const MERGE_PARITY_DIGEST: u64 = 5_702_134_043_317_961_963;
+/// intended. Re-pinned once when #676 added `station_names` to the project
+/// (an empty list in this canonical form); master's pre-extraction merge was
+/// run against the new value and produced it.
+const MERGE_PARITY_DIGEST: u64 = 9_039_697_118_154_861_914;
 
 /// #674 parity: "Merge projects" must produce exactly what it produced before
 /// its per-source loop became the append that "Add .stalx" shares. Rich on
@@ -498,12 +500,19 @@ fn add_undo_and_redo_survive_save_and_reload() {
 #[test]
 fn read_only_gate_refuses_an_add_before_reading_the_file() {
     let temp = TempDir::new().unwrap();
-    let (state, _) = open_target(temp.path(), true);
+    // A SpeleoDB project opened without its lock is the read-only state the
+    // backend gate enforces; a local project is always editable.
+    let target = save_to(temp.path(), "remote.stalx", &source_bravo());
+    Database::open_existing(&target)
+        .unwrap()
+        .save_speleo_link(Some(&linked("Remote Cave")))
+        .unwrap();
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(target).success, "open the linked target");
     let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
     let before = canonical_snapshot(&state, false);
     let depth = undo_depth(&state);
 
-    state.set_edit_enabled(false);
     let refused = add(&state, &alpha);
     assert!(!refused.success);
     assert!(
