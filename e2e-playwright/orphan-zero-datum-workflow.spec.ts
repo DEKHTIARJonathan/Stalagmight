@@ -202,6 +202,8 @@ test.describe('Orphan + Zero Datum Workflow', () => {
     const dialog = await openRepeatScenario(page);
 
     // Merge at orphan stn 1 = Mainline stn 2: the repeat is now one shot long.
+    // INJECTION (tried): `computeOverlapPairs` pairing the whole overlap again
+    // reds this at the row-count check (row 1 still listed).
     // Picked and confirmed as a unit: one run under heavy load (load average
     // ~50) ended on a different option, so the row checks below saw no rows.
     await expect(async () => {
