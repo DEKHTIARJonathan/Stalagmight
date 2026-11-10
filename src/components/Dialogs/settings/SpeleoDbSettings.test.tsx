@@ -78,6 +78,17 @@ it('keeps typed and pasted server endpoints lowercase with keyboard corrections 
 
   fireEvent.change(endpoint, { target: { value: 'Https://' } });
   expect(endpoint).toHaveValue('https://');
+  // #675: a paste with whitespace / a zero-width space around it lands clean.
+  fireEvent.change(endpoint, { target: { value: ' https://www.speleodb.org\u200B\n' } });
+  expect(endpoint).toHaveValue('https://www.speleodb.org');
+  expect(onChange).toHaveBeenLastCalledWith({
+    speleodb: { ...defaultConfig.speleodb, endpoint: 'https://www.speleodb.org' },
+  });
+  fireEvent.change(endpoint, { target: { value: '\u200B \uFEFF' } });
+  expect(endpoint).toHaveValue('');
+  expect(onChange).toHaveBeenLastCalledWith({
+    speleodb: { ...defaultConfig.speleodb, endpoint: null },
+  });
   fireEvent.change(endpoint, { target: { value: 'HTTPS://WWW.SPELEODB.ORG/API/' } });
   expect(endpoint).toHaveValue('https://www.speleodb.org/api/');
   expect(onChange).toHaveBeenLastCalledWith({
