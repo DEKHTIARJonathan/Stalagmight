@@ -5369,6 +5369,69 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] merge_projects called with:', args);
             return { success: true, section_ids: [] };
 
+          case 'add_project_file': {
+            console.log('[Mock IPC] add_project_file called with:', args);
+            const win = window as unknown as Record<string, unknown>;
+            const existing = win.__MOCK_ADD_PROJECT_FILE_CALLS__ as unknown[] | undefined;
+            const calls = Array.isArray(existing) ? existing : [];
+            calls.push(args ?? null);
+            win.__MOCK_ADD_PROJECT_FILE_CALLS__ = calls;
+            if (!currentProject) {
+              return { success: false, warnings: [], error: 'No project is open', section_ids: [] };
+            }
+            const addedPath = (args?.path as string | undefined) ?? '';
+            const addedFileName = addedPath.split('/').pop() ?? addedPath;
+            sectionCounter++;
+            const addedSection = {
+              id: sectionCounter,
+              name: `Added ${sectionCounter}`,
+              surveyor: 'Test Surveyor',
+              date: new Date().toISOString().split('T')[0],
+              color: '#3b82f6',
+              direction: 'in',
+              shots: [
+                {
+                  id: mockShotId(sectionCounter, 0),
+                  azimuth_in: 0,
+                  azimuth_out: 0,
+                  length: 5,
+                  depth_in: 0,
+                  depth_out: 0,
+                  pitch_in: null,
+                  pitch_out: null,
+                  left: null,
+                  right: null,
+                  up: null,
+                  down: null,
+                  comment: null,
+                  kind: 'Normal',
+                  marker_index: null,
+                  temperature: null,
+                },
+              ],
+            };
+            currentProject.sections.push(addedSection);
+            return {
+              success: true,
+              warnings: [],
+              error: null,
+              section_ids: [addedSection.id],
+              section_id: addedSection.id,
+              import_receipt: {
+                source_format: 'Stalagmight project',
+                file_name: addedFileName,
+                sections_found: 1,
+                sections_imported: 1,
+                shot_count: 1,
+                closures_requested: 0,
+                closures_created: 0,
+                unit_conversion: null,
+                warnings: [],
+                info: [],
+              },
+            };
+          }
+
           case 'set_shot_kind': {
             console.log('[Mock IPC] set_shot_kind called with:', args);
             const sectionId = (args?.sectionId ?? args?.section_id) as number;
