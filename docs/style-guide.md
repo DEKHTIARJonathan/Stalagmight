@@ -26,7 +26,7 @@ This guide captures the current UI conventions and design tokens for Stalagmight
 ## Buttons
 - `Button` variants (`src/components/common/Button.tsx`); use only these:
   - `primary`: the single main action in a view or dialog, in the theme's accent.
-  - `secondary`: default action style.
+  - `secondary`: default action style. Its fill is the panel mixed 8% toward the text colour (`bg-button-secondary`, 14% on hover), so it reads as a button on the panel in every theme.
   - `ghost`: low-emphasis actions in dense UI or toolbars.
   - `danger`: destructive actions (delete, discard).
 - Do not give a `Button` a colour, shadow or fixed height of its own through `className`, and do not add a variant for one feature: a view's buttons look the same as every other panel's and dialog's. Width and margins (`w-full`, `mt-2`) are layout and are fine.

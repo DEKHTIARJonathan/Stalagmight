@@ -744,3 +744,49 @@ describe('warning tab text contrast', () => {
     });
   }
 });
+
+/**
+ * The `secondary` Button fill (`bg-button-secondary` in tailwind.config.js) is the
+ * panel mixed a little toward the text colour, so the button stands apart from the
+ * panel it sits on, and its label must still read: AA (4.5:1) at rest and on hover
+ * in every theme whose text colour reaches AA on its plain panel. Solarized light's
+ * text colour does not (4.39:1 on the panel, already on master; follow-up #671), so
+ * that theme alone is held to 3.5:1 until its text colour is fixed.
+ */
+describe('secondary button fill', () => {
+  const twSource = fs.readFileSync(path.resolve(__dirname, '../../../tailwind.config.js'), 'utf8');
+  const rule = (name: string) => new RegExp(
+    `'${name}':\\s*'color-mix\\(in srgb, var\\(--cc-panel\\) (\\d+)%, var\\(--cc-text-primary\\)\\)'`,
+  ).exec(twSource);
+  const fill = rule('button-secondary');
+  const hover = rule('button-secondary-hover');
+
+  it('is the panel mixed toward the text colour, with a stronger hover', () => {
+    expect(fill, "tailwind.config.js 'button-secondary'").not.toBeNull();
+    expect(hover, "tailwind.config.js 'button-secondary-hover'").not.toBeNull();
+    expect(Number(hover?.[1])).toBeLessThan(Number(fill?.[1]));
+  });
+
+  /** CSS color-mix(in srgb, panel p%, text): straight interpolation of the encoded channels. */
+  const mixed = (panel: string, text: string, share: number) => {
+    const ch = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+    const [p, t] = [ch(panel), ch(text)];
+    return `#${p.map((v, i) => Math.round(v * share + t[i]! * (1 - share)).toString(16).padStart(2, '0')).join('')}`;
+  };
+
+  for (const theme of ALL_THEME_NAMES) {
+    it(`${theme}: the fill stands apart from the panel and its label reads`, () => {
+      const tokens = themeTokens[theme] as Record<string, string>;
+      const panel = tokens['--cc-panel']!;
+      const text = tokens['--cc-text-primary']!;
+      const floor = contrast(text, panel) >= 4.5 ? 4.5 : 3.5;
+      if (theme !== 'solarized_light') expect(floor, `${theme} text on its panel`).toBe(4.5);
+      for (const share of [Number(fill?.[1]) / 100, Number(hover?.[1]) / 100]) {
+        const bg = mixed(panel, text, share);
+        expect(contrast(bg, panel), `${theme}: ${bg} vs panel ${panel}`).toBeGreaterThan(1.08);
+        const label = contrast(text, bg);
+        expect(label, `${theme}: label ${text} on ${bg} is ${label.toFixed(2)}:1`).toBeGreaterThanOrEqual(floor);
+      }
+    });
+  }
+});

@@ -23,7 +23,7 @@ const TINTABLE_ICON_VARIANTS: ReadonlySet<ButtonVariant> = new Set(['secondary',
 
 const variantStyles: Record<ButtonVariant, string> = {
   primary: 'bg-accent text-accent-on hover:bg-accent-90',
-  secondary: 'bg-panel border border-border text-text-primary hover:bg-border',
+  secondary: 'bg-button-secondary border border-border text-text-primary hover:bg-button-secondary-hover',
   ghost: 'text-text-primary hover:bg-panel',
   danger: 'bg-error text-accent-on hover:bg-error-90',
 };

@@ -386,12 +386,22 @@ for (const theme of Object.keys(themeTokens)) {
         weight: style.fontWeight, size: style.fontSize, shadow: style.boxShadow, height: node.getBoundingClientRect().height };
     }));
     // Editing with nothing to save: no primary, so every action is the standard
-    // secondary - the panel colour, primary text, the md padding and radius.
+    // secondary - its own fill (the panel mixed toward the text colour, so it is
+    // not the panel), primary text, the md padding and radius.
     expect(styles.filter((s) => s.primary).map((s) => s.id)).toEqual([]);
     const panel = await tokenRgb(page, '--cc-panel');
     const text = await tokenRgb(page, '--cc-text-primary');
+    const fill = await page.evaluate(() => {
+      const probe = document.createElement('div');
+      probe.className = 'bg-button-secondary';
+      document.body.appendChild(probe);
+      const value = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return value;
+    });
+    expect(fill).not.toBe(panel);
     for (const style of styles) {
-      expect(style, style.id!).toMatchObject({ background: panel, color: text, padding: '6px 12px', radius: '4px', weight: '500', size: '14px', shadow: 'none' });
+      expect(style, style.id!).toMatchObject({ background: fill, color: text, padding: '6px 12px', radius: '4px', weight: '500', size: '14px', shadow: 'none' });
       expect(style.height).toBe(styles[0]!.height);
     }
     await expect(page.getByTestId('speleodb-workspace-open-web').locator('svg')).toBeVisible();

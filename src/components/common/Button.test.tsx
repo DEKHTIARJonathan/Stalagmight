@@ -74,4 +74,12 @@ describe('Button (component-tier harness smoke)', () => {
     expect(iconSpan('b-danger')?.getAttribute('style')).toBeNull();
     expect(iconSpan('b-plain')?.getAttribute('style')).toBeNull();
   });
+
+  it('fills the secondary variant with its own colour, not the panel it sits on', () => {
+    render(<Button data-testid="b">Reload</Button>);
+    const cls = screen.getByTestId('b').className;
+    expect(cls).toContain('bg-button-secondary');
+    expect(cls).toContain('hover:bg-button-secondary-hover');
+    expect(cls).not.toMatch(/(^|\s)bg-panel(\s|$)/);
+  });
 });
