@@ -771,7 +771,7 @@ pub fn get_revisions(
                     id: v.id,
                     parent_ids: v.parent_ids,
                     author_email: v.author_email,
-                    authored_date: Some(v.authored_date),
+                    authored_date: Some(v.authored_date.to_rfc3339()),
                     message: Some(v.message),
                 })
                 .collect(),
