@@ -96,9 +96,11 @@ takes it over:
   instead of saying "your changes", and its non-destructive answer is "Open it
   read-only": the copy loads without downloading anything and without taking the
   lock, and a toast says whose changes they are. The user can look at them and save
-  a copy of the project. Cancel, or take the server copy after a confirmation, work
-  as before (taking the server copy discards the other account's changes and
-  records the signed-in account).
+  a copy of the project. Cancel, or Discard their changes after a confirmation, work
+  as before (the discard takes the server copy, which deletes the other account's
+  changes and records the signed-in account). Like every dialog, the prompt says
+  in its body what each answer does, and Cancel / Discard (danger) / Open (primary)
+  sit on one footer line.
 - An offline open of such a copy opens it read-only too, with the same toast.
 - Start Editing (and with it Resume editing and the held-lock prompt's resume)
   refuses an open cache copy whose owner record names another account while it
