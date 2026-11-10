@@ -1239,11 +1239,11 @@ fn a_pending_kind_classification_in_the_source_is_finished_by_the_add() {
 /// the modification time it bumped. Through the append's error (a real file)
 /// and the post-append integrity guard (in memory, with a closure so the
 /// closure-id allocator moves too).
-/// INJECTION (tried): dropping the allocator restore from `roll_back` refuses
-/// the exact-fit add (the failed one spent two section ids) and fails the
-/// allocator assertion on the integrity path (the closure id stays spent);
-/// dropping the `modified_at` restore fails the allocator assertion on the
-/// timestamp the removal bumped.
+/// INJECTION (tried): dropping each restore from `roll_back` in turn fails an
+/// allocator assertion - `next_section_id` on the append-error path (two
+/// section ids spent, which would also refuse the exact fit), `next_closure_id`
+/// on the integrity path (one closure id spent), `modified_at` on the
+/// append-error path (bumped by the removal).
 #[test]
 fn a_refused_add_spends_no_ids_and_keeps_the_modification_time() {
     let temp = TempDir::new().unwrap();
