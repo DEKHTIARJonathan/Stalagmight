@@ -128,8 +128,11 @@ it('keeps typed and pasted server endpoints lowercase with keyboard corrections 
     speleodb: { ...defaultConfig.speleodb, endpoint: 'https://www.speleodb.org/api/' },
   });
 
+  // The standard reset icon every settings row uses, not a text button.
   const reset = screen.getByTestId('setting-speleodb-endpoint-reset');
-  expect(reset).toHaveTextContent('Reset');
+  expect(reset).toHaveTextContent(/^$/);
+  expect(reset).toHaveAttribute('title', 'Reset to default');
+  expect(reset.querySelector('svg')).not.toBeNull();
   fireEvent.click(reset);
   expect(endpoint).toHaveValue(defaultConfig.speleodb.endpoint ?? '');
   expect(reset).toBeDisabled();
@@ -147,6 +150,7 @@ it('disconnects immediately and keeps Settings open with the endpoint disabled w
   render(<SpeleoDbSettings config={defaultConfig} onChange={onChange} changedFields={new Set()} onValidationError={vi.fn()} panelIdBase="immediate" />);
   expect(screen.getByTestId('input-speleodb-endpoint')).toBeDisabled();
   expect(screen.getByTestId('setting-speleodb-endpoint-reset')).toBeDisabled();
+  expect(screen.getByTestId('setting-speleodb-endpoint-reset')).toHaveAttribute('title', 'Reset to default');
   await act(async () => fireEvent.click(screen.getByTestId('speleodb-settings-logout')));
   expect(apply).toHaveBeenCalledOnce();
   expect(useSpeleoStore.getState().pendingAuth).toEqual({ kind: 'logout' });

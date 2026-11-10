@@ -265,7 +265,6 @@ export function SpeleoDbSettings({
           helpText={session?.loggedIn ? t('settings.speleodb.endpoint.disconnectFirst') : t('settings.speleodb.endpoint.help')}
           isChanged={isFieldChanged(changedFields, 'speleodb.endpoint')}
           onReset={() => onChange({ speleodb: { ...speleo, endpoint: defaultConfig.speleodb.endpoint } })}
-          resetLabel={t('common.actions.reset')}
           isDefault={connectionLocked || speleo.endpoint === defaultConfig.speleodb.endpoint}
           data-testid="setting-speleodb-endpoint"
         >
@@ -292,7 +291,6 @@ export function SpeleoDbSettings({
               helpText={t('settings.speleodb.insecureHttp.help')}
               isChanged={isFieldChanged(changedFields, 'speleodb.insecure_http')}
               onReset={() => onChange({ speleodb: { ...speleo, insecure_http: defaultConfig.speleodb.insecure_http } })}
-              resetLabel={t('common.actions.reset')}
               isDefault={connectionLocked || speleo.insecure_http === defaultConfig.speleodb.insecure_http}
               data-testid="setting-speleodb-insecure-http"
             >
