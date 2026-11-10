@@ -14,6 +14,7 @@ import { useProject } from '../../hooks/useProject';
 import { useProjectStore } from '../../store/projectStore';
 import type { SpeleoLinkState } from '../../store/speleoStore';
 import { Button } from '../common/Button';
+import { MENU_ICON_COLORS } from '../common/menuColors';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { RefreshGlyph } from '../common/SpeleoBadgedIcon';
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, ExternalLinkIcon, LockIcon, PencilIcon, SaveIcon, SignInIcon } from '../common/icons';
@@ -22,6 +23,23 @@ import { SpeleoWorkspaceHeader } from './SpeleoWorkspaceHeader';
 const areas = [['history', 'Revision History']] as const;
 /** Icon size for the workspace's action buttons. */
 const ICON = 16;
+
+/**
+ * Icon colour of each workspace action, matched to the menus' item for the same
+ * kind of action (`MENU_ICON_COLORS`): Save is the menus' Save, taking or
+ * resuming editing is Import (it brings work in), opening something on the
+ * SpeleoDB website is Project Details, reloading the project is Open, closing it
+ * is Close, and stepping down to read-only is the neutral grey. The one primary
+ * button keeps its own icon colour (see `Button`'s `iconColor`).
+ */
+export const WORKSPACE_ICON_COLORS = {
+  save: MENU_ICON_COLORS.save,
+  resume: MENU_ICON_COLORS.import,
+  readOnly: MENU_ICON_COLORS.close,
+  reload: MENU_ICON_COLORS.open,
+  close: MENU_ICON_COLORS.close,
+  web: MENU_ICON_COLORS.projectDetails,
+} as const;
 
 /**
  * Which everyday action is the view's one `primary` button (every other action
@@ -118,22 +136,27 @@ export function SpeleoWorkspace() {
       <div className="shrink-0 grid gap-2" data-testid="speleodb-workspace-everyday">
         <Button variant={primary === 'save' ? 'primary' : 'secondary'} onClick={() => void dispatchProjectSave()} disabled={busy}
           title={busy ? why.busy : undefined}
-          icon={<SaveIcon size={ICON} />} data-testid="speleodb-workspace-upload">Save Changes</Button>
+          icon={<SaveIcon size={ICON} />} iconColor={WORKSPACE_ICON_COLORS.save}
+          data-testid="speleodb-workspace-upload">Save Changes</Button>
         <Button variant={primary === 'editing' ? 'primary' : 'secondary'}
           onClick={() => editing ? void releaseOpenProjectLock() : canResume ? void startEditing() : useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })}
           disabled={editingDisabled}
           title={!editingDisabled ? undefined : busy ? why.busy : why.editing}
           icon={editing ? <LockIcon size={ICON} /> : signedIn ? <PencilIcon size={ICON} /> : <SignInIcon size={ICON} />}
+          iconColor={editing ? WORKSPACE_ICON_COLORS.readOnly : WORKSPACE_ICON_COLORS.resume}
           data-testid="speleodb-workspace-editing">
           {editing ? 'Switch to Read Only Mode' : signedIn ? 'Resume editing' : 'Connect to resume editing'}
         </Button>
         <Button onClick={() => void update()} disabled={reloadDisabled}
           title={!reloadDisabled ? undefined : why.reload ?? why.busy}
-          icon={<RefreshGlyph size={ICON} />} data-testid="speleodb-workspace-latest">Reload Project</Button>
+          icon={<RefreshGlyph size={ICON} />} iconColor={WORKSPACE_ICON_COLORS.reload}
+          data-testid="speleodb-workspace-latest">Reload Project</Button>
         <Button onClick={() => void handleCloseProject()} disabled={busy} title={busy ? why.busy : undefined}
-          icon={<CloseIcon size={ICON} />} data-testid="speleodb-workspace-close">Close Project</Button>
+          icon={<CloseIcon size={ICON} />} iconColor={WORKSPACE_ICON_COLORS.close}
+          data-testid="speleodb-workspace-close">Close Project</Button>
         <Button onClick={web.open} disabled={!web.url} title={why.web}
-          icon={<ExternalLinkIcon size={ICON} />} data-testid="speleodb-workspace-open-web">Open on SpeleoDB</Button>
+          icon={<ExternalLinkIcon size={ICON} />} iconColor={WORKSPACE_ICON_COLORS.web}
+          data-testid="speleodb-workspace-open-web">Open on SpeleoDB</Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto" data-testid="speleodb-workspace-sections">
       {areas.map(([id, label]) => (

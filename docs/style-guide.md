@@ -35,7 +35,7 @@ This guide captures the current UI conventions and design tokens for Stalagmight
 - A button that opens the browser carries `ExternalLinkIcon` as its `icon`.
 - A disabled button says why in its tooltip (`title`).
 - Labels and confirmations explain the action independently of colour.
-- Use `icon` on `Button` for leading icons.
+- Use `icon` on `Button` for leading icons. When the same kind of action appears in the menus, give its icon the menus' colour with `iconColor` and `MENU_ICON_COLORS` (`src/components/common/menuColors.ts`), so an action wears one colour everywhere: the SpeleoDB tab's Save Changes is the menus' Save, Resume editing is Import, opening a page on the SpeleoDB website is Project Details, Reload Project is Open, Close Project is Close, and Switch to Read Only Mode is the neutral grey. `Button` applies the tint on `secondary` and `ghost` only; a filled `primary` or `danger` button keeps its own text colour on the icon.
 - Use `IconButton` for icon-only actions; always include `aria-label` and, when helpful, `tooltip`.
 
 ## Dialogs
@@ -47,7 +47,7 @@ This guide captures the current UI conventions and design tokens for Stalagmight
 ## Icons
 - Use SVG icons from `src/components/common/icons.tsx`.
 - Default size is 16px; use 14px in dense toolbars and 20px+ for empty states or emphasis.
-- Icons inherit color via `currentColor` and should follow surrounding text color utilities.
+- Icons inherit color via `currentColor` and should follow surrounding text color utilities, except where an action takes its menu colour (see Buttons).
 - Avoid emoji or text glyphs for icons to keep the system replaceable.
 
 ## Panels and Layout

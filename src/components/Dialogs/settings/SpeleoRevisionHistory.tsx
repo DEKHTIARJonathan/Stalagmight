@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../../common/Button';
 import { DownloadIcon, ExternalLinkIcon, EyeIcon, UndoIcon } from '../../common/icons';
+import { MENU_ICON_COLORS } from '../../common/menuColors';
 import { useUIStore } from '../../../store/uiStore';
 import {
   useSpeleoStore,
@@ -133,6 +134,7 @@ export function SpeleoRevisionHistory() {
     <div data-testid="speleodb-revisions">
       <Button
         icon={<ExternalLinkIcon size={16} />}
+        iconColor={MENU_ICON_COLORS.projectDetails}
         disabled={web.url === null}
         title={web.url === null ? t('speleodb.web.unavailable') : undefined}
         onClick={web.open}
