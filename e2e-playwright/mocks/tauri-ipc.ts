@@ -5377,10 +5377,20 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             calls.push(args ?? null);
             win.__MOCK_ADD_PROJECT_FILE_CALLS__ = calls;
             if (!currentProject) {
-              return { success: false, warnings: [], error: 'No project is open', section_ids: [] };
+              return { success: false, warnings: [], error: 'No project is open to add the file to', section_ids: [] };
             }
             const addedPath = (args?.path as string | undefined) ?? '';
             const addedFileName = addedPath.split('/').pop() ?? addedPath;
+            // Mirrors `execute`'s guard_mutation, as set_surface_elevation does:
+            // `projectIsRemote` is the mock's read-only proxy.
+            if (projectIsRemote) {
+              return {
+                success: false,
+                warnings: [],
+                error: `EDIT_DISABLED: Add '${addedFileName}' to project is disabled: this SpeleoDB project is open read-only. Acquire the lock to edit.`,
+                section_ids: [],
+              };
+            }
             sectionCounter++;
             const addedSection = {
               id: sectionCounter,
@@ -5416,9 +5426,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               warnings: [],
               error: null,
               section_ids: [addedSection.id],
-              section_id: addedSection.id,
+              // Shape of `add_receipt` (crates/core/src/core/state/project_add.rs).
               import_receipt: {
-                source_format: 'Stalagmight project',
+                source_format: 'Stalagmight',
                 file_name: addedFileName,
                 sections_found: 1,
                 sections_imported: 1,
@@ -5428,6 +5438,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 unit_conversion: null,
                 warnings: [],
                 info: [],
+                zero_datum_created: null,
               },
             };
           }
