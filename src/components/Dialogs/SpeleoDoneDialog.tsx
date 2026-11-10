@@ -15,6 +15,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 import { SpeleoProgressOverlay } from './SpeleoProgressOverlay';
+import { SpeleoUploadErrorsNotice, countUploadErrors } from './SpeleoUploadErrorsNotice';
 import { CommitMessageLimit } from './CommitMessageLimit';
 import { commitMessageTooLong } from '../../utils/commitMessage';
 import { toastLateUploadOutcome } from '../../utils/lateUploadOutcome';
@@ -83,6 +84,13 @@ export default function SpeleoDoneDialog() {
   const unpushed = useSpeleoStore((s) => s.link?.hasUnpushedEdits);
   const unsaved = useProjectStore((s) => s.isDirty);
   const needsMessage = mode === 'push' || unpushed || unsaved;
+  // Errors in the survey go to every collaborator once uploaded: an upload that
+  // carries changes waits until the user fixes them or accepts uploading them as
+  // they are. A Done that only releases the lock uploads nothing, so it never asks.
+  const errorCount = useProjectStore((s) => countUploadErrors(s.warnings));
+  const [errorsAccepted, setErrorsAccepted] = useState(false);
+  const showErrors = uploadAllowed && needsMessage && errorCount > 0;
+  const errorsBlock = showErrors && !errorsAccepted;
   // sdk#2: a description SpeleoDB cannot store is never sent (the backend refuses it too).
   const messageTooLong = commitMessageTooLong(message);
   // Closed by the user while the upload runs (allowed once the 120-second notice
@@ -94,6 +102,15 @@ export default function SpeleoDoneDialog() {
     if (uploading) walkedAway.current = true;
     else setUploadContinuation(null);
     closeDialog();
+  };
+
+  // "Resolve now": no upload. The typed message waits for the next upload, and a
+  // Save and Close becomes a plain Save, since the project stays open for the fix.
+  const resolveErrors = () => {
+    if (busyAny) return;
+    if (path) setUploadContinuation({ path, message, closeAfterSave: false }, owner);
+    closeDialog();
+    useUIStore.getState().openWarningsTab();
   };
 
   // frontend#6: Save opened this dialog for a project we were not editing, after
@@ -129,7 +146,7 @@ export default function SpeleoDoneDialog() {
 
   const handleConfirm = async () => {
     const text = message.trim();
-    if (!uploadOwnerStillCurrent(owner) || attempt.current || busy || !uploadAllowed || (needsMessage && !text) || messageTooLong) return;
+    if (!uploadOwnerStillCurrent(owner) || attempt.current || busy || !uploadAllowed || (needsMessage && !text) || messageTooLong || errorsBlock) return;
     attempt.current = true;
     setSubmitting(true);
     setSaveFailure(null);
@@ -241,6 +258,13 @@ export default function SpeleoDoneDialog() {
         <p className="text-sm text-text-secondary">
           {mode === 'push' ? t('speleodb.done.pushDescription') : t('speleodb.done.description')}
         </p>
+        {showErrors && <SpeleoUploadErrorsNotice
+          errorCount={errorCount}
+          accepted={errorsAccepted}
+          onAcceptedChange={setErrorsAccepted}
+          onResolve={resolveErrors}
+          disabled={busyAny}
+        />}
         <div>
           <label htmlFor="speleodb-done-message" className="block text-sm text-text-secondary mb-1">
             {t('speleodb.done.messageLabel')}
@@ -271,7 +295,8 @@ export default function SpeleoDoneDialog() {
           <Button
             variant="primary"
             onClick={() => void holdQuitDuring(handleConfirm)}
-            disabled={busyAny || !uploadAllowed || (needsMessage && !message.trim()) || messageTooLong}
+            disabled={busyAny || !uploadAllowed || (needsMessage && !message.trim()) || messageTooLong || errorsBlock}
+            title={errorsBlock && !busyAny ? t('speleodb.done.errors.confirmBlocked') : undefined}
             data-testid="speleodb-done-confirm"
           >
             {busyAny

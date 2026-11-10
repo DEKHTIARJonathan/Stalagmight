@@ -3429,7 +3429,15 @@
       "pushConfirm": "Upload & keep editing",
       "pushing": "Uploading…",
       "failedHeading": "Your changes were NOT uploaded",
-      "retryHint": "They are still only on this computer. Fix the problem, then press the button again to retry."
+      "retryHint": "They are still only on this computer. Fix the problem, then press the button again to retry.",
+      "errors": {
+        "heading_one": "This survey has {{count}} error.",
+        "heading_other": "This survey has {{count}} errors.",
+        "body": "Uploading sends the survey to SpeleoDB as it is, errors included. Fix them first, or confirm that they should be uploaded.",
+        "accept": "Upload anyway, with the errors",
+        "resolve": "Resolve now",
+        "confirmBlocked": "The survey has errors. Fix them, or tick \"Upload anyway\" to upload them as they are."
+      }
     },
     "saveLocal": {
       "signedOut": "Saved on this computer. Connect to SpeleoDB to upload it.",
