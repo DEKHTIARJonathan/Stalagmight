@@ -10,9 +10,15 @@
  * INJECTION (tried), each seen red with the fix removed:
  * - default merge back to `preferredMergeOffset` (mid-overlap, offset 1): reds
  *   "defaults the connection to the end of the repeat";
- * - filtering the pairs through the old `computeActionableIds(..., mergeImport)`
- *   trimming rule in `applyOverlapChoices`: reds "merging mid-overlap still
- *   resolves every repeated shot" (shot 1 stays Normal - the #681 bug);
+ * - `computeOverlapPairs` pairing the whole overlap whatever the merge station
+ *   (the first cut of #681): reds all four "a mid-repeat merge" cases - shots
+ *   past the merge station became Reference, cutting the section off;
+ * - `placeSuggestion(best, ..., new Map())` for the on-screen section in Accept
+ *   All (the old code): reds "Accept All applies the choices made on screen";
+ * - dropping the filter in `handleMergeChange`: reds "a row that leaves the
+ *   table forgets its choice";
+ * - dropping the `sameReading` no-op check: reds "an identical repeat writes
+ *   nothing" and "the bulk control sets every row at once";
  * - passing `replaceDisabled={false}` to the table: reds the doubly-anchored case
  *   (Use new / Average become clickable). Dropping only the `effectiveChoices`
  *   coercion stays green - the disabled controls already block the choice, so
@@ -191,18 +197,103 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     expect(updateShot).not.toHaveBeenCalled();
   });
 
-  it('merging mid-overlap still resolves every repeated shot', async () => {
+  // A mid-repeat merge station shortens the repeat: only the shots hanging off
+  // it are listed and become Reference. The shots from the merge station on to
+  // the orphan's far end are new survey and stay Normal - a Reference leg costs
+  // infinity in Plan mode, so marking them would cut the rest of the orphan off.
+  const MID_REPEAT: Array<[string, Shot[], Partial<OrphanPlacementSuggestion>, number, number[]]> = [
+    // [label, orphan shots, suggestion, the one resolved shot index, the shot ids past the merge]
+    ['Front + forward', ORPHAN, {}, 0, [101, 102, 103]],
+    [
+      'Front + reverse',
+      [shot(100, 230, 7, 5, 4), shot(101, 220, 6, 4, 3), shot(102, 300, 4, 3, 3), shot(103, 310, 4, 3, 2)],
+      { targetStationIndex: 5, direction: 'reverse' },
+      0,
+      [101, 102, 103],
+    ],
+    [
+      'Back + forward',
+      [shot(100, 90, 4, 0, 0), shot(101, 95, 4, 0, 1), shot(102, 230, 7, 5, 4), shot(103, 220, 6, 4, 3)],
+      { orphanStationIndex: 4, targetStationIndex: 3 },
+      3,
+      [100, 101, 102],
+    ],
+    [
+      'Back + reverse',
+      [shot(100, 90, 4, 0, 0), shot(101, 95, 4, 0, 3), shot(102, 40, 6, 3, 4), shot(103, 50, 7, 4, 5)],
+      { orphanStationIndex: 4, targetStationIndex: 5, direction: 'reverse' },
+      3,
+      [100, 101, 102],
+    ],
+  ];
+
+  for (const [label, orphanShots, over, resolvedIndex, pastMerge] of MID_REPEAT) {
+    it(`a mid-repeat merge resolves only the shot before it, the rest stay Normal (${label})`, async () => {
+      setup(makeProject({
+        sections: [
+          { id: 1, name: 'Orphan', shots: orphanShots, direction: 'in', color: '#4a9eff' },
+          { id: 2, name: 'Mainline', shots: MAINLINE, direction: 'in', color: '#4a9eff' },
+        ] as unknown as Project['sections'],
+      }));
+      render(<OrphanPlacementDialog suggestions={[makeSuggestion(over)]} />);
+
+      // Both repeated shots are listed by default (merged at the end of the repeat).
+      expect(screen.getAllByTestId(/^overlap-row-\d+$/)).toHaveLength(2);
+      await pickOption('merge-station-select', '1');
+      const rows = screen.getAllByTestId(/^overlap-row-\d+$/).map((row) => row.getAttribute('data-testid'));
+      expect(rows).toEqual([`overlap-row-${resolvedIndex}`]);
+
+      await userEvent.click(screen.getByTestId('overlap-set-all-use-new'));
+      await acceptAndFinish();
+
+      expect(referenceCalls()).toEqual([[1, orphanShots[resolvedIndex]!.id]]);
+      for (const id of pastMerge) {
+        expect(setShotKind).not.toHaveBeenCalledWith(1, id, 'Reference');
+      }
+    });
+  }
+
+  it('a row that leaves the table forgets its choice; a row that stays keeps it', async () => {
     setup();
     render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} />);
 
+    await pickOption('overlap-choice-0', 'average');
+    await pickOption('overlap-choice-1', 'use_new');
     await pickOption('merge-station-select', '1');
+    expect(screen.queryByTestId('overlap-row-1')).toBeNull();
+    await pickOption('merge-station-select', '2');
+
+    expect(screen.getByTestId('overlap-choice-0').textContent).toContain('Average');
+    expect(screen.getByTestId('overlap-choice-1').textContent).toContain('Keep existing');
     await acceptAndFinish();
+    expect(updateShot).not.toHaveBeenCalled();
+  });
+
+  it('Accept All applies the choices made on screen', async () => {
+    setup();
+    render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} />);
+
+    await pickOption('overlap-choice-1', 'use_new');
+    await userEvent.click(screen.getByTestId('orphan-accept-all'));
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
 
     expect(mergeStations).toHaveBeenCalledWith(
-      { section_id: 1, station_index: 1 },
-      { section_id: 2, station_index: 4 },
+      { section_id: 1, station_index: 2 },
+      { section_id: 2, station_index: 5 },
     );
+    expect(updateShot).toHaveBeenCalledTimes(1);
+    expect(updateShot).toHaveBeenCalledWith(2, 204, expect.objectContaining({ length: 7.5, azimuth_in: 52 }));
+  });
+
+  it('an identical repeat writes nothing, whatever the choice', async () => {
+    setup();
+    render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} />);
+
+    await pickOption('overlap-choice-0', 'use_new');
+    await acceptAndFinish();
+
     expect(referenceCalls()).toEqual([[1, 100], [1, 101]]);
+    expect(updateShot).not.toHaveBeenCalled();
   });
 
   it('Use new on one row copies the new reading into the EXISTING shot only for that row', async () => {
@@ -229,8 +320,8 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     expect(screen.getByTestId('overlap-set-all-average').getAttribute('aria-pressed')).toBe('true');
     await acceptAndFinish();
 
-    expect(updateShot).toHaveBeenCalledTimes(2);
-    expect(updateShot).toHaveBeenCalledWith(2, 203, expect.objectContaining({ length: 6 }));
+    // Row 0 repeats Mainline 203 exactly, so averaging it leaves nothing to write.
+    expect(updateShot).toHaveBeenCalledTimes(1);
     expect(updateShot).toHaveBeenCalledWith(2, 204, expect.objectContaining({ length: 7.25 }));
     const az = (updateShot.mock.calls.find((c) => c[1] === 204)![2] as { azimuth_in: number }).azimuth_in;
     expect(az).toBeCloseTo(51);
@@ -238,8 +329,10 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
 
   it('reverses the new reading when the two surveys run opposite ways (Back + forward)', async () => {
     // The orphan's END repeats Mainline: orphan shots 2, 3 (reversed) are
-    // Mainline shots 4, 3. Use new must write them back in Mainline's direction.
-    const back = [shot(100, 90, 4, 0, 0), shot(101, 95, 4, 0, 1), shot(102, 230, 7, 5, 4), shot(103, 220, 6, 4, 3)];
+    // Mainline shots 4, 3. Shot 3 is an exact repeat, so it only reads as one
+    // once reversed; shot 2 was re-measured (0.2 m longer, 2 deg off). Use new
+    // must write it back in Mainline's direction.
+    const back = [shot(100, 90, 4, 0, 0), shot(101, 95, 4, 0, 1), shot(102, 232, 7.2, 5, 4), shot(103, 220, 6, 4, 3)];
     setup(makeProject({
       sections: [
         { id: 1, name: 'Orphan', shots: back, direction: 'in', color: '#4a9eff' },
@@ -248,14 +341,16 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     }));
     render(<OrphanPlacementDialog suggestions={[makeSuggestion({ orphanStationIndex: 4, targetStationIndex: 3 })]} />);
 
-    expect(screen.getByTestId('overlap-row-2').getAttribute('data-differs')).toBe('false');
+    expect(screen.getByTestId('overlap-row-2').getAttribute('data-differs')).toBe('true');
     expect(screen.getByTestId('overlap-row-3').getAttribute('data-differs')).toBe('false');
     await userEvent.click(screen.getByTestId('overlap-set-all-use-new'));
     await acceptAndFinish();
 
     expect(referenceCalls()).toEqual([[1, 102], [1, 103]]);
-    expect(updateShot).toHaveBeenCalledWith(2, 204, expect.objectContaining({ azimuth_in: 50, depth_in: 4, depth_out: 5 }));
-    expect(updateShot).toHaveBeenCalledWith(2, 203, expect.objectContaining({ azimuth_in: 40, depth_in: 3, depth_out: 4 }));
+    expect(updateShot).toHaveBeenCalledTimes(1);
+    expect(updateShot).toHaveBeenCalledWith(2, 204, expect.objectContaining({
+      azimuth_in: 52, length: 7.2, depth_in: 4, depth_out: 5,
+    }));
   });
 
   it('a target anchored at both ends allows Keep existing only', async () => {

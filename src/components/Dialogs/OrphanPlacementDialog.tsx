@@ -19,6 +19,7 @@ import {
   computeOverlapPairs,
   needsDirectionReversal,
   reverseTargetShot,
+  type MergeOption,
   type OverlapParams,
 } from '../../utils/overlapHelpers';
 import { resolvedReading, type OverlapChoice } from '../../utils/overlapChoices';
@@ -290,13 +291,15 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     return hasFront && hasBack;
   }, [currentSuggestion, project]);
 
-  // Every repeated shot of the current suggestion, existing reading beside the
-  // new one oriented the same way, whichever station "Merge at" picks.
+  const mergeImportStation = selectedMergePair?.importStation ?? currentSuggestion?.orphanStationIndex ?? 0;
+
+  // The repeated shots up to the "Merge at" station, which sets how long the
+  // repeat is, existing reading beside the new one oriented the same way.
   const overlapRows = useMemo((): OverlapShotRow[] => {
     if (!currentSuggestion || !orphanSection || !targetSection) return [];
     const reverse = needsDirectionReversal(currentSuggestion.orphanStationIndex, currentSuggestion.direction);
     const rows: OverlapShotRow[] = [];
-    for (const pair of computeOverlapPairs(overlapParamsOf(currentSuggestion))) {
+    for (const pair of computeOverlapPairs(overlapParamsOf(currentSuggestion), mergeImportStation)) {
       const orphanShot = orphanSection.shots[pair.orphanShotIndex];
       const targetShot = targetSection.shots[pair.targetShotIndex];
       if (!orphanShot || !targetShot) continue;
@@ -309,7 +312,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
       });
     }
     return rows;
-  }, [currentSuggestion, orphanSection, targetSection]);
+  }, [currentSuggestion, orphanSection, targetSection, mergeImportStation]);
 
   // The choices that will be applied: a doubly-anchored target forces Keep
   // existing on every row, as the single overlap mode did before.
@@ -328,6 +331,17 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   const handleSetAll = useCallback((choice: OverlapChoice) => {
     setOverlapChoices(new Map(overlapRows.map((row) => [row.orphanShotIndex, choice])));
   }, [overlapRows]);
+  // A new merge station re-derives the rows. A row still listed keeps its
+  // choice; a row that leaves the table forgets it, and returns as Keep existing.
+  const handleMergeChange = useCallback((offset: number) => {
+    setSelectedMergeOffset(offset);
+    const option = mergeOptions.find((o) => o.offset === offset);
+    if (!currentSuggestion || !option) return;
+    const listed = new Set(
+      computeOverlapPairs(overlapParamsOf(currentSuggestion), option.importStation).map((p) => p.orphanShotIndex),
+    );
+    setOverlapChoices((prev) => new Map([...prev].filter(([index]) => listed.has(index))));
+  }, [currentSuggestion, mergeOptions]);
 
   // Convert orphan section to DmpSection for SectionPreview
   const orphanDmpSection = useMemo(
@@ -395,17 +409,24 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   }, [currentEndIndex, remainingEnds.length, finish]);
 
   /**
-   * Resolve every repeated shot after merging (#681). The new section's copy
-   * always becomes a Reference shot - kept, never deleted. For Use new and
-   * Average the EXISTING shot takes the resolved reading, so its stations,
-   * connections, closures and comments stay where they are. Applies to the
-   * whole repeat, whichever station the merge used. All through the undoable,
+   * Join `suggestion` at `mergePair` and resolve its repeat (#681): the repeated
+   * shots up to the merge station, the ones the table lists. Each new copy
+   * becomes a Reference shot - kept, never deleted. For Use new and Average the
+   * EXISTING shot takes the resolved reading, so its stations, connections,
+   * closures and comments stay where they are. All through the undoable,
    * edit-gated store actions.
    */
-  const applyOverlapChoices = useCallback(async (
+  const placeSuggestion = useCallback(async (
     suggestion: OrphanPlacementSuggestion,
+    mergePair: MergeOption | null,
     choices: ReadonlyMap<number, OverlapChoice>,
   ) => {
+    const mergeImport = mergePair?.importStation ?? suggestion.orphanStationIndex;
+    const mergeExisting = mergePair?.existingStation ?? suggestion.targetStationIndex;
+    await mergeStations(
+      { section_id: suggestion.orphanSectionId, station_index: mergeImport },
+      { section_id: suggestion.targetSectionId, station_index: mergeExisting },
+    );
     if (suggestion.matchedShots === 0) return;
 
     // Fresh sections from the store: the merge above may have refreshed them.
@@ -416,7 +437,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     if (!oSection || !tSection) return;
 
     const reverse = needsDirectionReversal(suggestion.orphanStationIndex, suggestion.direction);
-    for (const pair of computeOverlapPairs(overlapParamsOf(suggestion))) {
+    for (const pair of computeOverlapPairs(overlapParamsOf(suggestion), mergeImport)) {
       const orphanShot = oSection.shots[pair.orphanShotIndex];
       if (!orphanShot) continue;
 
@@ -433,21 +454,13 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
         await updateShot(suggestion.targetSectionId, targetShot.id, reading);
       }
     }
-  }, [setShotKind, updateShot]);
+  }, [mergeStations, setShotKind, updateShot]);
 
   const handleAccept = useCallback(async () => {
     if (!currentSuggestion) return;
     setProcessing(true);
     try {
-      const mergeImport = selectedMergePair?.importStation ?? currentSuggestion.orphanStationIndex;
-      const mergeExisting = selectedMergePair?.existingStation ?? currentSuggestion.targetStationIndex;
-
-      await mergeStations(
-        { section_id: currentSuggestion.orphanSectionId, station_index: mergeImport },
-        { section_id: currentSuggestion.targetSectionId, station_index: mergeExisting },
-      );
-
-      await applyOverlapChoices(currentSuggestion, effectiveChoices);
+      await placeSuggestion(currentSuggestion, selectedMergePair, effectiveChoices);
 
       setAcceptedOrphans((prev) => new Set(prev).add(currentSuggestion.orphanSectionId));
       setShowAlternatives(false);
@@ -458,7 +471,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     } finally {
       setProcessing(false);
     }
-  }, [currentSuggestion, selectedMergePair, mergeStations, applyOverlapChoices, effectiveChoices, remainingEnds.length, finish]);
+  }, [currentSuggestion, selectedMergePair, placeSuggestion, effectiveChoices, remainingEnds.length, finish]);
 
   const handleSkip = useCallback(() => {
     setSkippedCount((c) => c + 1);
@@ -472,39 +485,33 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
       for (let i = currentEndIndex; i < remainingEnds.length; i++) {
         const end = remainingEnds[i]!;
         if (processed.has(end.orphanSectionId)) continue;
-        const best = end.suggestions[0];
-        if (!best) continue;
-
-        // Default merge pair (end of the repeat) and the default choice, Keep
-        // existing, for every repeated shot of every remaining section.
-        const opts = computeMergeOptions(
-          {
-            importStationIndex: best.orphanStationIndex,
-            existingStationIndex: best.targetStationIndex,
-            matchedShots: best.matchedShots,
-            direction: best.direction,
-            isPartial: best.isPartial,
-          },
-          project?.sections.find((s) => s.id === best.orphanSectionId)?.shots.length ?? 0,
-        );
-        const pair = opts.length > 0 ? opts[opts.length - 1]! : null;
-        const mergeImport = pair?.importStation ?? best.orphanStationIndex;
-        const mergeExisting = pair?.existingStation ?? best.targetStationIndex;
-
-        await mergeStations(
-          { section_id: best.orphanSectionId, station_index: mergeImport },
-          { section_id: best.targetSectionId, station_index: mergeExisting },
-        );
-
-        await applyOverlapChoices(best, new Map());
-
+        if (i === currentEndIndex && currentSuggestion) {
+          // The section on screen: exactly what the user set up on it.
+          await placeSuggestion(currentSuggestion, selectedMergePair, effectiveChoices);
+        } else {
+          // Every other section: its best suggestion, the default merge pair
+          // (end of the repeat) and Keep existing on every repeated shot.
+          const best = end.suggestions[0];
+          if (!best) continue;
+          const opts = computeMergeOptions(
+            {
+              importStationIndex: best.orphanStationIndex,
+              existingStationIndex: best.targetStationIndex,
+              matchedShots: best.matchedShots,
+              direction: best.direction,
+              isPartial: best.isPartial,
+            },
+            project?.sections.find((s) => s.id === best.orphanSectionId)?.shots.length ?? 0,
+          );
+          await placeSuggestion(best, opts[opts.length - 1] ?? null, new Map());
+        }
         processed.add(end.orphanSectionId);
       }
       await finish();
     } finally {
       setProcessing(false);
     }
-  }, [currentEndIndex, remainingEnds, mergeStations, applyOverlapChoices, project, finish]);
+  }, [currentEndIndex, remainingEnds, currentSuggestion, selectedMergePair, effectiveChoices, placeSuggestion, project, finish]);
 
   const handleAlternativeClick = useCallback((altIndex: number) => {
     if (!currentEnd) return;
@@ -627,7 +634,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                 </label>
                 <Select
                   value={String(selectedMergeOffset)}
-                  onChange={(v) => setSelectedMergeOffset(Number(v))}
+                  onChange={(v) => handleMergeChange(Number(v))}
                   options={mergeOptions.map((opt) => ({
                     value: String(opt.offset),
                     label: t('dialogs.orphanPlacement.mergeOption', {

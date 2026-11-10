@@ -113,10 +113,9 @@ export function computeOverlapIds(
  * Compute the subset of overlap IDs that are "actionable" - shots up to
  * (but not past) the merge station.
  *
- * This is the DMP wizard's TRIMMING rule: it deletes these shots from the
- * not-yet-committed import, and deleting past the merge station would cut the
- * section off. The orphan-placement dialog trims nothing, so it uses
- * `computeOverlapPairs` instead (#681).
+ * The DMP wizard trims these shots from the not-yet-committed import; the
+ * orphan-placement dialog resolves the same shots through `computeOverlapPairs`
+ * (#681). Either way, acting past the merge station would cut the section off.
  *
  * Front: shots 0..mergeImportStation-1
  * Back:  shots mergeImportStation..(importStationIndex-1)
@@ -182,15 +181,17 @@ export interface OverlapPair {
 }
 
 /**
- * Every repeated shot of a placement, paired with the existing shot it repeats,
- * in new-section shot order (#681).
+ * The repeated shots a placement resolves, each paired with the existing shot it
+ * repeats, in new-section shot order (#681).
  *
- * Deliberately independent of the merge station: a repeated shot on the far side
- * of the chosen station is still a duplicate, drawn over the existing one and
- * counted twice in the survey length, so it needs a decision too.
+ * The "Merge at" station decides how long the repeat is: only the shots on the
+ * dangling side of it count (Front: before it, Back: after it). Shots past it
+ * are new survey carrying the section on, and must stay Normal - a Reference leg
+ * costs infinity in Plan mode by default, so marking them would cut the rest of
+ * the section off. The dialog's default, the end of the repeat, takes it all.
  */
-export function computeOverlapPairs(params: OverlapParams): OverlapPair[] {
-  return [...computeOverlapIds(params.importStationIndex, params.matchedShots)]
+export function computeOverlapPairs(params: OverlapParams, mergeImportStation: number): OverlapPair[] {
+  return [...computeActionableIds(params.importStationIndex, params.matchedShots, mergeImportStation)]
     .map((orphanShotIndex) => ({
       orphanShotIndex,
       targetShotIndex: computeTargetShotIndex(orphanShotIndex, params),
