@@ -35,7 +35,7 @@ pub mod models;
 pub mod sync;
 // [Track A] #187 http/https transport policy (automatic http exceptions).
 pub(crate) mod tls;
-pub use tls::validate_endpoint;
+pub use tls::{clean_endpoint_input, validate_endpoint};
 
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
 pub use contract::{EndpointRefusal, SpeleoDbAction, TransportCause};
@@ -111,7 +111,10 @@ pub enum SpeleoDbError {
     // bad port). Decided without DNS. Non-retryable by construction - the policy
     // errors before the SDK client exists, so `SdkClient::call` never loops on
     // it. `refusal` says which rule refused it, for the frontend's translated line.
-    #[error("{} Rejected endpoint: {endpoint}", .refusal.reason())]
+    // The endpoint is printed with `{:?}` so it arrives quoted and escaped (#675):
+    // a character the user cannot see shows up in the message instead of making
+    // a correct-looking address look rejected.
+    #[error("{} Rejected endpoint: {endpoint:?}", .refusal.reason())]
     InsecureEndpoint {
         endpoint: String,
         refusal: EndpointRefusal,

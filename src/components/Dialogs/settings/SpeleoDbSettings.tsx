@@ -13,6 +13,7 @@ import {
   isFieldChanged,
 } from './types';
 import { defaultConfig } from '../../../types/config';
+import { cleanEndpointInput } from '../../../utils/speleoEndpoint';
 import { useSpeleoStore, type PendingLogin } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
@@ -113,9 +114,13 @@ export function SpeleoDbSettings({
     }
   };
 
-  // Endpoint preferences are saved on Connect or Close.
-  const handleEndpointChange = (v: string) =>
-    onChange({ speleodb: { ...speleo, endpoint: v.length > 0 ? v.toLowerCase() : null } });
+  // Endpoint preferences are saved on Connect or Close. Pasted input is
+  // cleaned of the invisible characters around it (#675) so the field shows
+  // exactly what will be saved; the backend cleans again before validating.
+  const handleEndpointChange = (v: string) => {
+    const cleaned = cleanEndpointInput(v);
+    onChange({ speleodb: { ...speleo, endpoint: cleaned.length > 0 ? cleaned.toLowerCase() : null } });
+  };
 
 
   return (

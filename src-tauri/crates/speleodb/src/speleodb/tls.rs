@@ -60,6 +60,38 @@ use http::Uri;
 
 use super::{EndpointRefusal, SpeleoDbError, TransportCause};
 
+/// Characters that copy-paste carries around an address without the user seeing
+/// them: zero-width space/joiners, word joiner, BOM, soft hyphen and the bidi
+/// marks/embeddings/isolates. None of them is Unicode `White_Space`, so
+/// `str::trim` keeps them.
+fn is_invisible_format(c: char) -> bool {
+    matches!(
+        c,
+        '\u{00AD}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'
+            | '\u{2066}'..='\u{2069}'
+            | '\u{FEFF}'
+    )
+}
+
+/// Clean an endpoint as the user entered it (typed or pasted, #675): strip
+/// leading and trailing whitespace and invisible format characters. `None` when
+/// nothing is left. Interior characters are kept, so a genuinely malformed
+/// address still fails [`validate_endpoint`] - this only removes what the user
+/// cannot see and did not mean. Every place a configured endpoint enters the app
+/// (startup load, settings save, settings reload, login override,
+/// `DEV_SPELEODB_URL`) runs it before validating, and the cleaned value is what
+/// gets stored. An endpoint read from a project file's SpeleoDB link is only
+/// ever compared, through [`super::auth::normalize_endpoint`], which applies the
+/// same cleaning. [`validate_endpoint`] itself stays strict: it is the transport
+/// boundary and does not clean its input.
+pub fn clean_endpoint_input(input: &str) -> Option<String> {
+    let cleaned = input.trim_matches(|c: char| c.is_whitespace() || is_invisible_format(c));
+    (!cleaned.is_empty()).then(|| cleaned.to_owned())
+}
+
 /// `true` for the automatic plain-HTTP exceptions (see the module docs). Pure:
 /// the host is compared as written, never resolved. The ONE definition of the
 /// set: [`PLAIN_HTTP_RULE`] describes it, and changes with it.
@@ -231,8 +263,8 @@ mod tests {
     use std::sync::atomic::AtomicBool;
 
     use super::{
-        enforce_with, honoured_insecure_http, latch_once, validate_endpoint, validate_endpoint_in,
-        INSECURE_HTTP_HONOURED,
+        clean_endpoint_input, enforce_with, honoured_insecure_http, latch_once, validate_endpoint,
+        validate_endpoint_in, INSECURE_HTTP_HONOURED,
     };
     use crate::speleodb::{EndpointRefusal, SpeleoDbError, TransportCause};
 
@@ -497,6 +529,86 @@ mod tests {
         let message = err.to_string();
         assert!(message.contains("HTTPS is required"), "{message}");
         assert!(message.contains("http://10.0.0.1:8000"), "{message}");
+    }
+
+    #[test]
+    fn clean_strips_only_what_the_user_cannot_see_at_the_ends() {
+        for (input, expected) in [
+            ("https://www.speleodb.org", Some("https://www.speleodb.org")),
+            (
+                "  https://www.speleodb.org \r\n",
+                Some("https://www.speleodb.org"),
+            ),
+            (
+                "\u{00A0}https://www.speleodb.org\u{3000}",
+                Some("https://www.speleodb.org"),
+            ),
+            (
+                "\u{200B}\u{FEFF}https://www.speleodb.org\u{2060}",
+                Some("https://www.speleodb.org"),
+            ),
+            (
+                "\u{200E}https://www.speleodb.org\u{202C}\u{00AD}",
+                Some("https://www.speleodb.org"),
+            ),
+            (
+                "\u{0085}https://www.speleodb.org\u{0085}",
+                Some("https://www.speleodb.org"),
+            ),
+            // Interior characters are the user's; validation decides about them.
+            (
+                "https://www.speleo db.org",
+                Some("https://www.speleo db.org"),
+            ),
+            (
+                "https://www.speleo\u{200B}db.org",
+                Some("https://www.speleo\u{200B}db.org"),
+            ),
+            ("", None),
+            (" \t\n\u{200B}\u{FEFF} ", None),
+        ] {
+            assert_eq!(
+                clean_endpoint_input(input).as_deref(),
+                expected,
+                "{input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_cleaned_paste_is_valid_and_an_interior_space_is_still_refused() {
+        let pasted = "\u{FEFF} https://www.speleodb.org\u{200B}\n";
+        assert_eq!(refusal(pasted, false), EndpointRefusal::InvalidAddress);
+        let cleaned = clean_endpoint_input(pasted).expect("non-empty");
+        assert!(validate_endpoint(&cleaned, false).is_ok(), "{cleaned:?}");
+        assert_eq!(
+            refusal("https://www.speleo db.org", false),
+            EndpointRefusal::InvalidAddress
+        );
+    }
+
+    #[test]
+    fn the_refusal_shows_an_invisible_character_escaped() {
+        let message = validate_endpoint("https://www.speleodb.org\u{200B}", false)
+            .expect_err("refused")
+            .to_string();
+        assert!(
+            message.ends_with("Rejected endpoint: \"https://www.speleodb.org\\u{200b}\""),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn normalize_endpoint_treats_a_pasted_spelling_as_the_same_server() {
+        // Project-file links and a config loaded before any save reach
+        // `normalize_endpoint` uncleaned; it must still see one server.
+        use crate::speleodb::auth::{account_key, normalize_endpoint};
+        let pasted = "\u{200B} https://SDB.example.com:443/ \u{FEFF}";
+        assert_eq!(normalize_endpoint(pasted), "https://sdb.example.com");
+        assert_eq!(
+            account_key(pasted, "diver@example.com"),
+            account_key("https://sdb.example.com", "diver@example.com")
+        );
     }
 
     #[test]

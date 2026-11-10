@@ -109,7 +109,11 @@ impl AppState {
     /// that changes the server or the insecure-HTTP choice must leave an address
     /// the transport policy accepts: turning the choice off under a saved
     /// `http://` hostname would otherwise save a server every call then refuses.
-    pub fn update_config(&self, config: Config) -> Result<()> {
+    pub fn update_config(&self, mut config: Config) -> Result<()> {
+        // Clean the endpoint as entered (#675): a pasted address commonly carries
+        // whitespace or zero-width characters around it. The cleaned value is
+        // what is compared, validated and stored.
+        config.speleodb.endpoint = clean_endpoint(config.speleodb.endpoint.as_deref());
         if self.speleodb_instance_changes(&config) {
             self.speleodb_check_instance_change(&config)?;
         } else if self.get_config().speleodb.insecure_http != config.speleodb.insecure_http {
@@ -349,7 +353,9 @@ impl AppState {
                 .config_write_lock
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            let new_config = Config::load()?;
+            let mut new_config = Config::load()?;
+            // A hand-edited file gets the same cleaning as a settings save (#675).
+            new_config.speleodb.endpoint = clean_endpoint(new_config.speleodb.endpoint.as_deref());
             let previous = self.get_config();
             if speleodb_identity(&previous).0 != speleodb_identity(&new_config).0 {
                 self.speleodb_check_instance_change(&new_config)?;
@@ -441,6 +447,12 @@ impl AppState {
         self.sync_undo_depth_limit();
         Locked::Done(AfterConfigWrite { release })
     }
+}
+
+/// The settings-side wrapper around [`crate::speleodb::clean_endpoint_input`]:
+/// a field that cleans to nothing is "no endpoint configured".
+pub(super) fn clean_endpoint(endpoint: Option<&str>) -> Option<String> {
+    endpoint.and_then(crate::speleodb::clean_endpoint_input)
 }
 
 #[cfg(test)]
@@ -544,6 +556,103 @@ mod tests {
             state.update_config(settings).unwrap();
             assert!(state.speleodb_session_status().unwrap().logged_in);
             assert!(Config::load().unwrap().speleodb.token.0.is_some());
+        });
+    }
+
+    /// What copy-paste actually puts around an address (#675): spaces, a tab, a
+    /// newline, a no-break space, a zero-width space and a BOM.
+    const PASTED_SPELEODB: [&str; 6] = [
+        "https://www.speleodb.org ",
+        " https://www.speleodb.org",
+        "\thttps://www.speleodb.org\n",
+        "\u{00A0}https://www.speleodb.org\u{00A0}",
+        "https://www.speleodb.org\u{200B}",
+        "\u{FEFF}https://www.speleodb.org",
+    ];
+
+    #[test]
+    fn pasted_endpoint_saves_cleaned() {
+        crate::test_helpers::with_isolated_config(|| {
+            let state = AppState::new().unwrap();
+            for pasted in PASTED_SPELEODB {
+                let mut settings = state.get_config();
+                settings.speleodb.endpoint = Some(pasted.to_owned());
+                let saved = state.update_config(settings);
+                assert!(saved.is_ok(), "{pasted:?} refused: {saved:?}");
+                assert_eq!(
+                    Config::load().unwrap().speleodb.endpoint.as_deref(),
+                    Some("https://www.speleodb.org"),
+                    "{pasted:?}"
+                );
+                assert_eq!(
+                    state.get_config().speleodb.endpoint.as_deref(),
+                    Some("https://www.speleodb.org"),
+                    "{pasted:?}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn blank_endpoint_saves_as_none_and_interior_space_is_still_refused() {
+        crate::test_helpers::with_isolated_config(|| {
+            let state = AppState::new().unwrap();
+            let mut settings = state.get_config();
+            settings.speleodb.endpoint = Some(" \u{200B} ".to_owned());
+            state.update_config(settings).unwrap();
+            assert_eq!(Config::load().unwrap().speleodb.endpoint, None);
+
+            let mut settings = state.get_config();
+            settings.speleodb.endpoint = Some("https://www.speleo db.org".to_owned());
+            let err = state.update_config(settings).unwrap_err().to_string();
+            assert!(err.contains("Not a usable SpeleoDB address"), "{err}");
+            assert_eq!(Config::load().unwrap().speleodb.endpoint, None);
+        });
+    }
+
+    #[test]
+    fn pasted_spelling_of_the_connected_server_keeps_the_session() {
+        crate::test_helpers::with_isolated_config(|| {
+            let state = signed_in_state();
+            let mut settings = state.get_config();
+            settings.speleodb.endpoint = Some("\u{200B}https://sdb.example.com/ ".to_owned());
+            state.update_config(settings).unwrap();
+            assert!(state.speleodb_session_status().unwrap().logged_in);
+            let loaded = Config::load().unwrap();
+            assert_eq!(
+                loaded.speleodb.endpoint.as_deref(),
+                Some("https://sdb.example.com/")
+            );
+            assert!(loaded.speleodb.token.0.is_some());
+        });
+    }
+
+    #[test]
+    fn reload_cleans_a_hand_edited_endpoint() {
+        crate::test_helpers::with_isolated_config(|| {
+            let state = AppState::new().unwrap();
+            let mut edited = state.get_config();
+            edited.speleodb.endpoint = Some(" https://www.speleodb.org\u{200B}".to_owned());
+            edited.save().unwrap();
+            state.reload_config().unwrap();
+            assert_eq!(
+                state.get_config().speleodb.endpoint.as_deref(),
+                Some("https://www.speleodb.org")
+            );
+        });
+    }
+
+    #[test]
+    fn startup_cleans_a_hand_edited_endpoint() {
+        crate::test_helpers::with_isolated_config(|| {
+            let mut edited = Config::default();
+            edited.speleodb.endpoint = Some("\u{FEFF}https://www.speleodb.org \u{200B}".to_owned());
+            edited.save().unwrap();
+            let state = AppState::new().unwrap();
+            assert_eq!(
+                state.get_config().speleodb.endpoint.as_deref(),
+                Some("https://www.speleodb.org")
+            );
         });
     }
 
