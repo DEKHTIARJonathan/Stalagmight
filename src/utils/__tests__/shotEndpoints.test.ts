@@ -23,10 +23,10 @@ function fixture() {
     { section_id: 2, station_index: 0 }, { section_id: 2, station_index: 1 },
   ];
   const xy = [[0, 0], [10, 0], [30, 10], [20, 10], [10, 0], [20, 10]];
-  const stations = refs.map((station_ref, index) => ({
+  const stations: Station[] = refs.map((station_ref, index) => ({
     station_ref, coordinates: { x: xy[index]![0]!, y: xy[index]![1]!, z: 0 },
-    is_zero_datum: false, gps_coordinates: null, merged_with: null, comment: null, name: null,
-  })) as Station[];
+    is_zero_datum: false, gps_coordinates: null, merged_with: [],
+  }));
   const data = surveyDataFromLegacy(sections, stations, {
     shot_from_ids: [null, 3, 1], shot_start_refs: [refs[0]!, refs[3]!, refs[4]!],
   });

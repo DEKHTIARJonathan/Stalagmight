@@ -304,6 +304,12 @@ the recorded map rather than re-deriving a frame.
   (`FEATURE_ID_STRIDE` = 100000, `src-tauri/crates/models/src/id_stride.rs`, mirrored in
   `src/utils/ids.ts`). They are therefore *not* stable identity - use `Shot::uuid` for
   anything that has to survive a save/load
+- `Shot.number` is the immutable project-wide number shown as Shot ID. It starts
+  at 1 and is persisted with a high-water mark so retired numbers are not reused.
+- `Shot.from_id` holds the origin shot's immutable number, or null for a root.
+  Explicit origins form the directed survey graph independently of metadata
+  sections. Interior graph START endpoints use separate high-bit station aliases;
+  consumers use the aligned endpoint sidecars rather than inferring row adjacency.
 
 ### Coordinate Transformation (Zero Datum)
 

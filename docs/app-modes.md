@@ -173,12 +173,17 @@ live, editable survey shots across sections. Centered Shots and Sections tabs sw
 metadata, including independent Explorer and Surveyor fields. Both editors
 include unsaved edits.
 
-Each shot has a Section dropdown. Choosing another section appends the shot to
-that section and closes the source gap using the survey deletion rules. Frozen
-shots and constrained shifts cannot be transferred. The shot UUID survives;
+Each shot has a Section dropdown. Choosing another section changes the metadata group
+while preserving the shot's origin, measurements and physical endpoints. The shot UUID survives;
 its immutable project-wide Shot ID stays the same. Create a New Section opens a metadata modal
 and assigns the section on save without entering map placement. The entire
 create-and-transfer operation is one undo unit.
+
+From ID is an editable incoming origin, expressed as another shot's permanent
+Shot ID. The picker searches all sections. Each shot has one origin or none;
+changing it replaces the old connection. Multiple shots can share an origin.
+None and -1 clear the origin, which is stored as null. A shot cannot originate
+from itself. Section membership does not constrain these connections.
 
 Data temporarily uses measured geometry, restores the prior Survey geometry
 on exit, and permits data editing and undo/redo subject to the remote write lock.
