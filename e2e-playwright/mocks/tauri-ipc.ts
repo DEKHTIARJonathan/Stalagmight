@@ -203,7 +203,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         zero_datums: unknown[];
         loop_closures: unknown[];
         section_offsets: Record<string, unknown>;
+        shot_geometry_locks?: Record<string, boolean>;
       } | null = null;
+      const getMockFrozenShots = () => (currentProject?.sections ?? []).flatMap(value => {
+        const section = value as { id: number; shots: Array<{ number?: number }> };
+        return section.shots.flatMap((shot, index) => shot.number && currentProject?.shot_geometry_locks?.[shot.number]
+          ? [{ section_id: section.id, shot_index: index }] : []);
+      });
       let projectPath: string | null = null;
       // `BinaryEnvelope::is_remote` (#270): whether the loaded `.stalx` lives in
       // the SpeleoDB cache. The frontend resolves the read-only gate from this
@@ -1610,7 +1616,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               stats: jsonResult.stats,
               warnings: jsonResult.warnings,
               display_settings: jsonResult.displaySettings,
-              frozen_shots: [],
+              frozen_shots: getMockFrozenShots(),
             };
 
             const MessagePack = (window as unknown as {
@@ -1837,7 +1843,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 loop_count: 0,
                 penetration_distance: totalLength,
               },
-              frozen_shots: [],
+              frozen_shots: getMockFrozenShots(),
             };
           }
 
@@ -4999,6 +5005,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }
             }
             return { success: true, section_ids: [] };
+          }
+
+          case 'set_shot_locked': {
+            const sections = (currentProject?.sections ?? []) as Array<{ id: number; shots: Array<{ id: number; number?: number }> }>;
+            const section = sections.find(section => section.shots.some(shot => shot.number === args?.shotNumber));
+            const shot = section?.shots.find(shot => shot.number === args?.shotNumber);
+            if (!currentProject || !section || !shot?.number || typeof args?.locked !== 'boolean') {
+              return { success: false, error: 'Invalid shot lock', warnings: [], section_ids: [] };
+            }
+            currentProject.shot_geometry_locks ??= {};
+            currentProject.shot_geometry_locks[shot.number] = args.locked;
+            return { success: true, shot_id: shot.id, section_id: section.id, error: null, warnings: [], section_ids: [] };
           }
 
           case 'set_shot_from_id': {

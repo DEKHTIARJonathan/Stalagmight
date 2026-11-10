@@ -185,6 +185,11 @@ changing it replaces the old connection. Multiple shots can share an origin.
 NONE and -1 clear the origin, which is stored as null. A shot cannot originate
 from itself. Section membership does not constrain these connections.
 
+The top-right Incl In/Out and Azimuth In/Out switches default to OFF and hide
+those individual legs; the average columns stay visible. Right-click a saved
+shot row to Lock or Unlock its geometry. The choice overrides the computed
+network lock, persists with the project, and participates in undo/redo.
+
 Data temporarily uses measured geometry, restores the prior Survey geometry
 on exit, and permits data editing and undo/redo subject to the remote write lock.
 Map tools and placement shortcuts remain inactive under the full-screen table.

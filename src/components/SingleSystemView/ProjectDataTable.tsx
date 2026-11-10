@@ -9,6 +9,7 @@ import { SpreadsheetGrid, type GridColumn } from '../common/SpreadsheetGrid';
 import { Select } from '../common/Select';
 import { ShotFromIdInput } from './ShotFromIdInput';
 import { Button } from '../common/Button';
+import { Toggle } from '../common/Toggle';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { DialogWrapper } from '../Dialogs/DialogWrapper';
 import { buildShotColumns } from './dataTableShotColumns';
@@ -41,6 +42,8 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
     }
   }, [sections, draftSection]);
   const [view, setView] = useState('shots');
+  const [showInclinationLegs, setShowInclinationLegs] = useState(false);
+  const [showAzimuthLegs, setShowAzimuthLegs] = useState(false);
   const [createFor, setCreateFor] = useState<Row | 'empty' | null>(null);
   const [name, setName] = useState('');
   const [surveyor, setSurveyor] = useState('');
@@ -131,8 +134,31 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
     existing.sort((a, b) => collator.compare(a.label, b.label) || Number(a.value) - Number(b.value));
     return [{ value: 'new', label: t('dataWorkspace.createSection'), tone: 'success' as const, alwaysVisible: true }, ...existing];
   }, [sections, t, i18n?.resolvedLanguage]);
+  const positions = useMemo(() => new Map<string, number>(sections.flatMap(section => section.shots.map((shot, index) => [`${section.id}:${shot.id}`, index] as const))), [sections]);
+  const isLocked = (row: Row) => row.id >= 0 && store.isShotFrozen(row.sectionId, positions.get(`${row.sectionId}:${row.id}`) ?? -1);
+  const lockMenuItems = ({ fromRow, toRow }: { fromRow: number; toRow: number }) => {
+    if (blocked || busy) return [];
+    const selected = rows.slice(fromRow, toRow + 1).filter(row => row.id >= 0 && row.number);
+    const setLocked = (locked: boolean) => {
+      void mutate(async () => {
+        let changed = false;
+        try {
+          for (const row of selected) {
+            if (isLocked(row) === locked) continue;
+            checkResult(await invokeIpc<CommandResult>('set_shot_locked', { shotNumber: row.number, locked }));
+            changed = true;
+          }
+        } finally {
+          if (changed) { await store.refreshProjectState(); store.markDirty(); }
+        }
+      });
+    };
+    return [
+      ...(selected.some(row => !isLocked(row)) ? [{ label: t('dataWorkspace.lockShot'), onClick: () => setLocked(true) }] : []),
+      ...(selected.some(isLocked) ? [{ label: t('dataWorkspace.unlockShot'), onClick: () => setLocked(false) }] : []),
+    ];
+  };
   const columns: GridColumn<Row>[] = useMemo(() => {
-    const positions = new Map<string, number>(sections.flatMap(section => section.shots.map((shot, index) => [`${section.id}:${shot.id}`, index] as const)));
     const cache = new Map<string, ReturnType<typeof buildShotColumns>>();
     const forRow = (row: Row) => {
       const key = `${row.sectionId}:${row.id}`;
@@ -181,8 +207,10 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
         onChange={value => { void mutate(() => setFromId(row, value)); }} />,
     });
     const leading = ['_warnings', 'shot_id', 'section', 'from_id'];
-    return [...leading.flatMap(key => columns.filter(column => column.key === key)), ...columns.filter(column => !leading.includes(column.key))];
-  }, [rows, sections, t, precision, blocked, busy, store.warnings, options, shotNumbers]);
+    return [...leading.flatMap(key => columns.filter(column => column.key === key)), ...columns.filter(column => !leading.includes(column.key))]
+      .filter(column => (showInclinationLegs || !['pitch_in', 'pitch_out'].includes(column.key))
+        && (showAzimuthLegs || !['azimuth_in', 'azimuth_out'].includes(column.key)));
+  }, [rows, positions, t, precision, blocked, busy, store.warnings, options, shotNumbers, showInclinationLegs, showAzimuthLegs]);
   const edit = async (edits: CellEdit[]) => {
     if (blocked) return;
     const originEdits = edits.filter(edit => edit.colKey === 'from_id');
@@ -271,10 +299,23 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
           className={`px-3 py-1 text-sm ${view === table ? 'bg-accent text-accent-on' : 'text-text-secondary hover:bg-accent-10'}`}
           onClick={() => setView(table)}>{table === 'shots' ? t('dataTable.viewShots') : t('dataWorkspace.sections')}</button>)}
       </div>
-      <div className="min-w-0">{error && <span role="alert" className="text-error">{error}</span>}</div>
+      <div className="min-w-0 flex flex-wrap items-center justify-end gap-x-4 gap-y-2 text-xs">
+        {view === 'shots' && <>
+          <div className="inline-flex items-center gap-2">
+            <Toggle checked={showInclinationLegs} onChange={setShowInclinationLegs} label={t('dataWorkspace.inclinationLegs')} data-testid="data-toggle-inclination-legs" />
+            <span aria-hidden="true">{showInclinationLegs ? 'ON' : 'OFF'}</span>
+          </div>
+          <div className="inline-flex items-center gap-2">
+            <Toggle checked={showAzimuthLegs} onChange={setShowAzimuthLegs} label={t('dataWorkspace.azimuthLegs')} data-testid="data-toggle-azimuth-legs" />
+            <span aria-hidden="true">{showAzimuthLegs ? 'ON' : 'OFF'}</span>
+          </div>
+        </>}
+      </div>
     </div>
+    {error && <p role="alert" className="px-2 py-1 text-xs text-error">{error}</p>}
     <div ref={root} className="flex-1 min-h-0" role="tabpanel" id={`project-data-${view}-panel`} aria-labelledby={`project-data-${view}-tab`}>
       {view === 'shots' ? <SpreadsheetGrid columns={columns} rows={rows} rowKey={row => `${row.sectionId}:${row.uuid ?? row.id}`} selectedRow={selection?.type === 'shot' ? rows.findIndex(row => row.sectionId === selection.sectionId && row.id === selection.shotId) : null} height={height} rowLabel={(_row, index) => index + 1}
+        rowClassName={row => isLocked(row) ? 'sg-row-frozen' : undefined} extraContextMenuItems={lockMenuItems}
         onEdit={(row, colKey, value) => { void mutate(() => edit([{ row, colKey, value }])); }} onBatchEdit={edits => { void mutate(() => edit(edits)); }} />
         : <SpreadsheetGrid columns={sectionColumns} rows={sections} rowKey={row => row.id} height={height} onEdit={(row, colKey, value) => { void mutate(() => editSections([{ row, colKey, value }])); }} onBatchEdit={edits => { void mutate(() => editSections(edits)); }} />}
     </div>

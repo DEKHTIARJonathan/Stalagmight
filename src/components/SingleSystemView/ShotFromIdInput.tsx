@@ -36,7 +36,6 @@ export function ShotFromIdInput({ fromId, disabled, testId, parseValue, onChange
     className={`w-full min-w-0 rounded border bg-transparent px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-accent disabled:opacity-50 ${invalid ? 'border-red-500' : 'border-transparent'}`}
     onMouseDown={event => event.stopPropagation()}
     onDoubleClick={event => event.stopPropagation()}
-    onContextMenu={event => event.stopPropagation()}
     onCopy={event => event.stopPropagation()}
     onCut={event => event.stopPropagation()}
     onPaste={event => event.stopPropagation()}
