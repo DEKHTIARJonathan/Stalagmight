@@ -754,19 +754,33 @@ pub fn suggest_all_import_placements(
     ))
 }
 
-/// Suggest placements for orphaned sections' leaf ends against newly imported sections.
-/// Orphaned sections are those in connected components (via merges) with no zero datum.
+/// Suggest placements for orphaned sections' leaf ends against datum-anchored
+/// sections. Orphaned sections are those in connected components (via merges)
+/// with no zero datum; an orphan the import touched may go onto any anchored
+/// section, a pre-existing one only onto a newly imported anchored section
+/// (see `Project::suggest_orphan_placements`).
+///
+/// Async, with the matching on a blocking thread as `add_project_file` does:
+/// an orphan from the import is matched against every anchored section of the
+/// open project, which on a large survey is too long to hold the main thread.
 #[tauri::command]
-pub fn suggest_orphan_placements(
-    state: State<'_, AppState>,
+pub async fn suggest_orphan_placements<R: tauri::Runtime>(
+    app_handle: AppHandle<R>,
     newly_imported_section_ids: Vec<u32>,
 ) -> Result<Vec<OrphanPlacementSuggestion>, String> {
-    let project = state.get_project_state().ok_or("No project open")?;
-    let config = state.get_config();
-    Ok(
-        project
-            .suggest_orphan_placements(&newly_imported_section_ids, &config.placement_suggestion),
-    )
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        let project = state.get_project_state().ok_or("No project open")?;
+        let config = state.get_config();
+        Ok(project
+            .suggest_orphan_placements(&newly_imported_section_ids, &config.placement_suggestion))
+    })
+    .await
+    .unwrap_or_else(|join_error| {
+        Err(format!(
+            "The placement suggestions did not finish: {join_error}"
+        ))
+    })
 }
 
 /// Count sections not connected to a zero datum, restricted to components

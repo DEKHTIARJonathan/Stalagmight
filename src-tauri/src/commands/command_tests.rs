@@ -1790,6 +1790,62 @@ fn test_add_project_file_reports_added_sections_and_persists_deferred_project() 
     });
 }
 
+/// #674: `suggest_orphan_placements` runs on a blocking thread; driven through
+/// the async command, a newly imported floating section that re-surveys an
+/// anchored one is offered that section as its target.
+#[test]
+fn test_suggest_orphan_placements_command_offers_the_anchored_host() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        let leg = || -> Vec<ShotData> {
+            [(45.0, 10.0), (90.0, 8.0), (135.0, 6.0), (180.0, 4.0)]
+                .iter()
+                .map(|&(azimuth, length)| ShotData {
+                    azimuth_in: azimuth,
+                    azimuth_out: azimuth,
+                    length,
+                    depth_in: 2.0,
+                    depth_out: 2.5,
+                    ..Default::default()
+                })
+                .collect()
+        };
+        let mut project = Project::new("Host".to_string(), None);
+        let host = project
+            .add_section(SectionData {
+                shots: leg(),
+                ..Default::default()
+            })
+            .id;
+        project
+            .store_zero_datum_without_repositioning(
+                StationRef::new(host, 0),
+                GpsCoordinates::new(20.5, -87.3, 0.0).unwrap(),
+            )
+            .unwrap();
+        let added = project
+            .add_section(SectionData {
+                shots: leg(),
+                ..Default::default()
+            })
+            .id;
+        state(&app).inner().set_project_for_tests(project);
+
+        let suggestions = tauri::async_runtime::block_on(import::suggest_orphan_placements(
+            app.handle().clone(),
+            vec![added],
+        ))
+        .unwrap();
+
+        assert!(
+            suggestions
+                .iter()
+                .any(|s| s.orphan_section_id == added && s.target_section_id == host),
+            "the added section must be offered the anchored host: {suggestions:?}"
+        );
+    });
+}
+
 /// #391: `import_sections`' additive provenance params (used by the mNemo DMP
 /// wizard) decorate the base receipt when passed, and leave it at its
 /// (empty-provenance) defaults when omitted - the shape every other caller
