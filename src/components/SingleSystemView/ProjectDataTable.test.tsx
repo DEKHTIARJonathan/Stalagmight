@@ -17,11 +17,11 @@ const mocks = vi.hoisted(() => ({
     refreshProjectState: vi.fn(),
     markDirty: vi.fn(),
   },
-  ui: { selection: null, setSelection: vi.fn() },
+  ui: { selection: null, setSelection: vi.fn(), dataWorkspaceDraft: null as null | { data: Record<string, unknown>; sectionId: number | null } },
 }));
 vi.mock('../../store/projectStore', () => ({ useProjectStore: () => mocks.store }));
 vi.mock('../../store/uiStore', () => ({
-  useUIStore: Object.assign((selector: any) => selector(mocks.ui), { getState: () => mocks.ui }),
+  useUIStore: Object.assign((selector: any) => selector(mocks.ui), { getState: () => mocks.ui, setState: (patch: any) => Object.assign(mocks.ui, patch) }),
 }));
 vi.mock('../../hooks/useEditingBlocked', () => ({
   useEditingBlocked: () => mocks.blocked,
@@ -52,6 +52,7 @@ const sections = [1, 2].map(id => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.blocked = false;
+  mocks.ui.dataWorkspaceDraft = null;
   for (const command of [mocks.store.setShotKind, mocks.store.executeBatch, mocks.store.createShot, mocks.store.updateSection]) {
     command.mockResolvedValue({ success: true });
   }
@@ -87,4 +88,27 @@ describe('ProjectDataTable command routing', () => {
     await act(async () => mocks.grid.onEdit(1, 'length', 30));
     expect(mocks.store.executeBatch).toHaveBeenCalledOnce();
   });
+  it('applies every section metadata edit in a multi-row paste', async () => {
+    render(<ProjectDataTable sections={sections} />);
+    fireEvent.change(screen.getByTestId('project-data-view'), { target: { value: 'sections' } });
+    await act(async () => mocks.grid.onBatchEdit([
+      { row: 0, colKey: 'name', value: '' },
+      { row: 1, colKey: 'surveyor', value: 'Survey team' },
+    ]));
+    expect(mocks.store.updateSection).toHaveBeenCalledTimes(2);
+    expect(mocks.store.updateSection).toHaveBeenNthCalledWith(1, 1, { name: null });
+    expect(mocks.store.updateSection).toHaveBeenNthCalledWith(2, 2, { surveyor: 'Survey team' });
+  });
+
+  it('preserves incomplete draft values and section across workspace remounts', async () => {
+    const first = render(<ProjectDataTable sections={sections} />);
+    await act(async () => mocks.grid.onEdit(2, 'length', 12));
+    await act(async () => fireEvent.change(screen.getByTestId('data-section--1'), { target: { value: '2' } }));
+    first.unmount();
+    render(<ProjectDataTable sections={sections} />);
+    expect(mocks.grid.rows[2].length).toBe(12);
+    expect(screen.getByTestId('data-section--1')).toHaveValue('2');
+    expect(mocks.store.createShot).not.toHaveBeenCalled();
+  });
+
 });

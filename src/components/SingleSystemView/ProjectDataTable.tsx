@@ -27,12 +27,12 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
   const precision = useDecimalPrecision();
   const blocked = useEditingBlocked();
   const store = useProjectStore();
-  const [draft, setDraft] = useState(endDraft);
+  const [draft, setDraft] = useState(() => ({ ...endDraft(), data: useUIStore.getState().dataWorkspaceDraft?.data ?? {} }));
+  const [draftSection, setDraftSection] = useState<number | null>(() => useUIStore.getState().dataWorkspaceDraft?.sectionId ?? null);
   const draftRef = useRef(draft);
-  const draftSectionRef = useRef<number | null>(null);
+  const draftSectionRef = useRef(draftSection);
   const mutationPending = useRef(false);
   const selection = useUIStore(state => state.selection);
-  const [draftSection, setDraftSection] = useState<number | null>(null);
   const [rawTables, setRawTables] = useState<string[]>([]);
   const [rawTable, setRawTable] = useState('');
   useEffect(() => {
@@ -48,6 +48,7 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
     if (draftSection !== null && !sections.some(section => section.id === draftSection)) {
       draftSectionRef.current = null;
       setDraftSection(null);
+      useUIStore.setState({ dataWorkspaceDraft: { data: draftRef.current.data, sectionId: null } });
     }
   }, [sections, draftSection]);
   const [view, setView] = useState('shots');
@@ -84,6 +85,7 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
   const writeDraft = (next: typeof draft) => {
     draftRef.current = next;
     setDraft(next);
+    useUIStore.setState({ dataWorkspaceDraft: { data: next.data, sectionId: draftSectionRef.current } });
   };
   const commitDraft = async () => {
     const data = completeDraftData(draftRef.current);
@@ -95,6 +97,7 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
   const chooseDraftSection = (sectionId: number) => {
     draftSectionRef.current = sectionId;
     setDraftSection(sectionId);
+    useUIStore.setState({ dataWorkspaceDraft: { data: draftRef.current.data, sectionId } });
   };
   const transfer = async (row: Row, target: number | null, newSection?: SectionData) => {
     const result = await invokeIpc<CommandResult>('reassign_shot', {
@@ -113,7 +116,7 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
   };
   const options = useMemo(() => [...sections.map(section => ({ value: String(section.id), label: section.name ?? t('sections.defaultName', { id: section.id }) })), { value: 'new', label: t('dataWorkspace.createSection') }], [sections, t]);
   const columns: GridColumn<Row>[] = useMemo(() => {
-    const positions = new Map(sections.flatMap(section => section.shots.map((shot, index) => [`${section.id}:${shot.id}`, index] as const)));
+    const positions = new Map<string, number>(sections.flatMap(section => section.shots.map((shot, index) => [`${section.id}:${shot.id}`, index] as const)));
     const cache = new Map<string, ReturnType<typeof buildShotColumns>>();
     const forRow = (row: Row) => {
       const key = `${row.sectionId}:${row.id}`;
@@ -180,6 +183,19 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
       setCreateFor(null);
     });
   };
+  const editSections = async (edits: CellEdit[]) => {
+    const updates = new Map<number, Record<string, unknown>>();
+    for (const { row, colKey, value } of edits) {
+      if (!sections[row] || !['name', 'surveyor', 'date', 'color', 'direction', 'quality'].includes(colKey)) continue;
+      const patch = updates.get(row) ?? {};
+      patch[colKey] = ['name', 'surveyor', 'date'].includes(colKey) && value === '' ? null : value;
+      updates.set(row, patch);
+    }
+    for (const [row, patch] of updates) {
+      const section = sections[row];
+      if (section) checkResult(await store.updateSection(section.id, patch));
+    }
+  };
   const sectionColumns: GridColumn<Section>[] = [
     { key: 'id', header: t('dataWorkspace.id'), getValue: row => row.id },
     ...(['name', 'surveyor', 'date', 'color', 'direction', 'quality'] as const).map(key => ({ key, header: key, getValue: (row: Section) => row[key], editable: !blocked && !busy, kind: key === 'quality' ? 'number' as const : 'text' as const })),
@@ -195,7 +211,7 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
     <div ref={root} className="flex-1 min-h-0">
       {view === 'raw' ? (rawTable ? <RawTableView tableName={rawTable} height={height} /> : <p>{t('dataWorkspace.saveToInspect')}</p>) : view === 'shots' ? <SpreadsheetGrid columns={columns} rows={rows} rowKey={row => `${row.sectionId}:${row.uuid ?? row.id}`} selectedRow={selection?.type === 'shot' ? rows.findIndex(row => row.sectionId === selection.sectionId && row.id === selection.shotId) : null} height={height} rowLabel={(_row, index) => index + 1}
         onEdit={(row, colKey, value) => { void mutate(() => edit([{ row, colKey, value }])); }} onBatchEdit={edits => { void mutate(() => edit(edits)); }} />
-        : <SpreadsheetGrid columns={sectionColumns} rows={sections} rowKey={row => row.id} height={height} onEdit={(index, key, value) => { const section = sections[index]; if (section) void mutate(async () => { checkResult(await store.updateSection(section.id, { [key]: value })); }); }} />}
+        : <SpreadsheetGrid columns={sectionColumns} rows={sections} rowKey={row => row.id} height={height} onEdit={(row, colKey, value) => { void mutate(() => editSections([{ row, colKey, value }])); }} onBatchEdit={edits => { void mutate(() => editSections(edits)); }} />}
     </div>
     {createFor && <DialogWrapper title={t('dataWorkspace.createSection')} onClose={() => { if (!busy) setCreateFor(null); }}>
       <SectionMetadataForm name={name} surveyor={surveyor} date={date} color={color} direction={direction} showDirection disabled={busy || blocked} onNameChange={setName} onSurveyorChange={setSurveyor} onDateChange={setDate} onColorChange={setColor} onDirectionChange={setDirection} />
