@@ -25,8 +25,9 @@ pub(super) struct AppendOutcome {
 /// Append every section of `source` to `target` with fresh ids, and carry
 /// everything that hangs off those sections: section and station offsets,
 /// station comments, zero datums, station merges, loop closures (id 0, for the
-/// caller's `assign_closure_ids`), each section's resolved north reference, the
-/// entrance elevation (first one wins) and the location.
+/// caller's `assign_closure_ids`), each section's resolved north reference and
+/// least-squares gauge (reverse parity and gauge anchors), the entrance
+/// elevation (first one wins) and the location.
 ///
 /// Cross-references are copied as TRANSITIONAL positional keys
 /// (`StationKey::positional`); the caller canonicalizes them (merge through
@@ -84,6 +85,16 @@ pub(super) fn append_project(
         let resolved = source.azimuth_reference_for(section);
         if let Some(copied) = target.get_section_mut(new_section_id) {
             copied.azimuth_reference = Some(resolved);
+            // Nor can it carry where the section's least-squares gauge sits
+            // (#24): `Section::new` resets the reverse parity and both gauge
+            // anchors, which would pin a datum-less component to a different
+            // station than the source's and translate its adjusted geometry.
+            // The anchors are shot uuids, which the copy keeps per section.
+            copied.reverse_parity = section.reverse_parity;
+            copied.gauge_shot_uuid.clone_from(&section.gauge_shot_uuid);
+            copied
+                .gauge_neighbour_uuid
+                .clone_from(&section.gauge_neighbour_uuid);
         }
 
         section_id_map.insert(old_section_id, new_section_id);

@@ -1298,3 +1298,65 @@ fn a_refused_add_spends_no_ids_and_keeps_the_modification_time() {
     assert!(fits.success, "the exact fit still fits: {:?}", fits.error);
     assert_eq!(fits.section_ids.iter().max(), Some(&MAX_SECTION_ID));
 }
+
+/// A datum-less source whose section was reversed and then extended: its
+/// least-squares gauge is pinned by the reverse parity and the gauge anchor
+/// pair, none of which `SectionData` carries. Both the add and "Merge
+/// projects" (the same append) must copy them, or the copied component is
+/// gauged on a different station and its adjusted geometry translates.
+/// INJECTION (tried): dropping the parity/anchor copy from `append_project`
+/// fails the add's assertion (parity false, anchors `None`) and the merge's
+/// (the output's save captures fresh anchors on station 0's shots instead).
+#[test]
+fn add_and_merge_keep_each_sections_gauge_parity_and_anchors() {
+    let temp = TempDir::new().unwrap();
+    let mut reversed = Project::new("Reversed".to_string(), None);
+    let r0 = reversed
+        .add_section(section(
+            "R0",
+            vec![
+                shot("r0-0", 10.0, 5.0, 2.0),
+                shot("r0-1", 40.0, 6.0, 2.5),
+                shot("r0-2", 70.0, 4.0, 3.0),
+            ],
+        ))
+        .id;
+    if let Some(s) = reversed.get_section_mut(r0) {
+        s.reverse_parity = true;
+        s.gauge_shot_uuid = Some("r0-1".to_string());
+        s.gauge_neighbour_uuid = Some("r0-0".to_string());
+    }
+    let source = save_to(temp.path(), "reversed.stalx", &reversed);
+    let gauge_of = |project: &Project, id: SectionId| {
+        let s = project.get_section(id).unwrap();
+        (
+            s.reverse_parity,
+            s.gauge_shot_uuid.clone(),
+            s.gauge_neighbour_uuid.clone(),
+        )
+    };
+    let expected = (true, Some("r0-1".to_string()), Some("r0-0".to_string()));
+
+    let (state, _) = open_target(temp.path(), true);
+    let added = add(&state, &source);
+    assert!(added.success, "{:?}", added.error);
+    let project = state.get_project_state().unwrap();
+    assert_eq!(gauge_of(&project, added.section_ids[0]), expected, "add");
+
+    let output = temp.path().join("merged.stalx");
+    let merged = AppState::new().unwrap().execute(Command::MergeProjects {
+        source_paths: vec![
+            source,
+            save_to(temp.path(), "charlie.stalx", &source_charlie()),
+        ],
+        output_path: output.clone(),
+        output_name: "Merged".to_string(),
+        archive_originals: false,
+    });
+    assert!(merged.success, "{:?}", merged.error);
+    let merged = Database::open_existing(&output)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    assert_eq!(gauge_of(&merged, merged.sections[0].id), expected, "merge");
+}
