@@ -1370,7 +1370,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   // importer declares one.
                   azimuth_reference?: unknown | null;
                   shots?: Array<{
-                    id: number; azimuth_in?: number; azimuth_out?: number;
+                    id: number; number?: number; azimuth_in?: number; azimuth_out?: number;
                     length?: number; depth_in?: number; depth_out?: number;
                     pitch_in?: number | null; pitch_out?: number | null;
                     left?: number | null; right?: number | null;
@@ -2533,7 +2533,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const rawShots = Array.isArray(sectionData.shots) ? (sectionData.shots as Array<Record<string, unknown>>) : [];
               const shots = rawShots.map((shot, index) => ({
                 id: mockShotId(sectionCounter, index),
-              number: ++shotNumberCounter,
+                number: ++shotNumberCounter,
                 azimuth_in: (shot.azimuth_in as number) ?? 0,
                 azimuth_out: (shot.azimuth_out as number) ?? 0,
                 length: (shot.length as number) ?? 0,
@@ -3611,7 +3611,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
               loopClosures.push({
                 id: nextId,
-              number: ++shotNumberCounter,
                 station_a: stationA,
                 station_b: stationB,
                 path_length: 0,
