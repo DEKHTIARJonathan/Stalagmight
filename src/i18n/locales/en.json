@@ -1645,6 +1645,7 @@
       },
       "prompt": "Does this connection look right?",
       "mergeFailed": "Could not connect {{name}}, so nothing was changed for it. {{error}}",
+      "readOnly": "Editing is disabled in this mode, so nothing was connected.",
       "accept": "Accept",
       "skip": "Skip",
       "hideAlternatives": "Hide alternatives",

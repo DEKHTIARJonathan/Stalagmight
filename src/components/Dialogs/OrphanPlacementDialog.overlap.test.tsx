@@ -32,7 +32,9 @@
  * - `Math.round(score * 100)` instead of `scorePercent`: reds "never shows a
  *   score above 100%";
  * - dropping the unresolved note, or always showing the plain matched count:
- *   each reds "a merge at the start of the repeat".
+ *   each reds "a merge at the start of the repeat";
+ * - dropping the `editingAllowed()` check from Accept, or from Accept All: each
+ *   reds "refuses to place while editing is blocked".
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
@@ -55,6 +57,7 @@ globalThis.ResizeObserver ??= class {
 import OrphanPlacementDialog from './OrphanPlacementDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import type { CommandResult, OrphanPlacementSuggestion } from '../../types/commands';
 import type { Project } from '../../types/ipc/Project';
 import type { Shot } from '../../types/ipc/Shot';
@@ -162,6 +165,10 @@ const referenceCalls = () =>
   setShotKind.mock.calls.filter((c) => c[2] === 'Reference').map((c) => [c[0], c[1]]);
 
 beforeEach(() => {
+  // A confirmed-local project in Survey mode: editing is allowed (#270 fails
+  // closed on an unknown link kind).
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
+  useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
   mergeStations = vi.fn(ok);
   updateShot = vi.fn(ok);
   setShotKind = vi.fn(ok);
@@ -515,6 +522,26 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
 
     expect(referenceCalls()).toEqual([[1, 100], [1, 101]]);
     expect(updateShot).not.toHaveBeenCalled();
+  });
+
+  it('refuses to place while editing is blocked, and writes nothing', async () => {
+    setup();
+    useUIStore.setState({ appMode: 'export' });
+    const second = makeSuggestion({ orphanSectionId: 3, orphanSectionName: 'Second', targetStationIndex: 0 });
+    render(<OrphanPlacementDialog suggestions={[makeSuggestion(), second]} />);
+
+    await userEvent.click(screen.getByTestId('orphan-accept'));
+    expect((await screen.findByTestId('orphan-place-error')).textContent).toBe(
+      'Editing is disabled in this mode, so nothing was connected.',
+    );
+    await userEvent.click(screen.getByTestId('orphan-accept-all'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mergeStations).not.toHaveBeenCalled();
+    expect(setShotKind).not.toHaveBeenCalled();
+    expect(updateShot).not.toHaveBeenCalled();
+    expect(closeDialog).not.toHaveBeenCalled();
+    expect(screen.getByTestId('wizard-progress').textContent).toBe('Section 1 of 2');
   });
 
   it('never shows a score above 100%', () => {

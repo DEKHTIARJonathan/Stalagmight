@@ -1,8 +1,10 @@
 /**
  * Applying one orphan-placement suggestion (#681): join the orphan at the merge
- * station, then resolve the shots it repeats, all through the undoable,
- * edit-gated store actions. Kept out of OrphanPlacementDialog so the dialog
- * holds the UI and this holds what Accept and Accept All do to the project.
+ * station, then resolve the shots it repeats, all through the undoable store
+ * actions. Those actions do not check the read-only mode themselves, so the
+ * caller must (the dialog does, with isEditingBlockedNow). Kept out of
+ * OrphanPlacementDialog so the dialog holds the UI and this holds what Accept
+ * and Accept All do to the project.
  */
 
 import type { CommandResult, OrphanPlacementSuggestion } from '../types/commands';

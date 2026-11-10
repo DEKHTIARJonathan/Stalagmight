@@ -8,6 +8,7 @@ import { usePreviewSize } from './usePreviewSize';
 import type { MergePreviewConfig } from './SectionPreview';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import type { OrphanPlacementSuggestion } from '../../types/commands';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 import type { Section } from '../../types/project';
@@ -331,8 +332,16 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     });
   }, [mergeStations, setShotKind, updateShot, t]);
 
+  // Read-only self-check at Accept time: the store actions placing runs carry
+  // no gate of their own, and the mode can change while the dialog is up.
+  const editingAllowed = useCallback((): boolean => {
+    if (!isEditingBlockedNow()) return true;
+    setPlaceError(t('dialogs.orphanPlacement.readOnly'));
+    return false;
+  }, [t]);
+
   const handleAccept = useCallback(async () => {
-    if (!currentSuggestion || placingRef.current) return;
+    if (!currentSuggestion || placingRef.current || !editingAllowed()) return;
     placingRef.current = true;
     setProcessing(true);
     setPlaceError(null);
@@ -349,7 +358,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
       placingRef.current = false;
       setProcessing(false);
     }
-  }, [currentSuggestion, selectedMergePair, place, effectiveChoices]);
+  }, [currentSuggestion, selectedMergePair, place, effectiveChoices, editingAllowed]);
 
   const handleSkip = useCallback(() => {
     setPlaceError(null);
@@ -358,7 +367,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   }, [advance]);
 
   const handleAcceptAll = useCallback(async () => {
-    if (placingRef.current) return;
+    if (placingRef.current || !editingAllowed()) return;
     placingRef.current = true;
     setProcessing(true);
     setPlaceError(null);
@@ -399,7 +408,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
       placingRef.current = false;
       setProcessing(false);
     }
-  }, [currentEndIndex, remainingEnds, currentSuggestion, selectedMergePair, effectiveChoices, place, project, finish]);
+  }, [currentEndIndex, remainingEnds, currentSuggestion, selectedMergePair, effectiveChoices, place, project, finish, editingAllowed]);
 
   const handleAlternativeClick = useCallback((altIndex: number) => {
     if (!currentEnd) return;

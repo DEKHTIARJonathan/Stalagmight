@@ -33,6 +33,7 @@ globalThis.ResizeObserver ??= class {
 import OrphanPlacementDialog from './OrphanPlacementDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import type { CommandResult, OrphanPlacementSuggestion } from '../../types/commands';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 
@@ -65,6 +66,10 @@ let closeDialog: ReturnType<typeof vi.fn>;
 let refreshProjectState: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  // A confirmed-local project in Survey mode: editing is allowed (#270 fails
+  // closed on an unknown link kind).
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
+  useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
   saveAfterImport = vi.fn(async () => true);
   closeDialog = vi.fn();
   refreshProjectState = vi.fn(async () => {});
