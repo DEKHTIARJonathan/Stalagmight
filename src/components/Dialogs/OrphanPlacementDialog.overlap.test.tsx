@@ -20,9 +20,15 @@
  * - dropping the `sameReading` no-op check: reds "an identical repeat writes
  *   nothing" and "the bulk control sets every row at once";
  * - passing `replaceDisabled={false}` to the table: reds the doubly-anchored case
- *   (Use new / Average become clickable). Dropping only the `effectiveChoices`
- *   coercion stays green - the disabled controls already block the choice, so
- *   that coercion is a second line of defence, not separately observable here;
+ *   (Use new / Average become clickable);
+ * - dropping the `isTargetDoublyAnchored` override in `effectiveChoices`: reds
+ *   "a target that becomes anchored at both ends after a choice";
+ * - passing `effectiveChoices` to the other sections in Accept All: reds "Accept
+ *   All gives the other sections the defaults";
+ * - marking each repeated shot Reference before checking the existing shot is
+ *   there: reds "a repeated shot the existing section no longer has";
+ * - ignoring a refused merge, in `placeSuggestion` or in Accept / Accept All:
+ *   reds both "refused merge" cases;
  * - `Math.round(score * 100)` instead of `scorePercent`: reds "never shows a
  *   score above 100%".
  */
@@ -434,6 +440,45 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     expect(closeDialog).not.toHaveBeenCalled();
     expect(screen.getByTestId('wizard-suggestion').textContent).toContain('Second');
     expect(screen.getByTestId('wizard-progress').textContent).toBe('Section 2 of 2');
+  });
+
+  it('Accept All gives the other sections the defaults, not the on-screen choices', async () => {
+    setup();
+    const second = makeSuggestion({ orphanSectionId: 3, orphanSectionName: 'Second', targetStationIndex: 0 });
+    render(<OrphanPlacementDialog suggestions={[makeSuggestion(), second]} />);
+
+    await pickOption('overlap-choice-1', 'use_new');
+    await userEvent.click(screen.getByTestId('orphan-accept-all'));
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+
+    // Second joins at the end of its repeat, Orphan stn 2 = Mainline stn 2.
+    expect(mergeStations).toHaveBeenCalledWith(
+      { section_id: 3, station_index: 2 },
+      { section_id: 2, station_index: 2 },
+    );
+    expect(referenceCalls()).toEqual([[1, 100], [1, 101], [3, 300], [3, 301]]);
+    // Only the on-screen row 1 is rewritten; Second's re-measured shot 301
+    // (row 1 too) keeps Mainline 201 as it was.
+    expect(updateShot).toHaveBeenCalledTimes(1);
+    expect(updateShot).toHaveBeenCalledWith(2, 204, expect.objectContaining({ length: 7.5 }));
+  });
+
+  it('a target that becomes anchored at both ends after a choice still keeps the existing reading', async () => {
+    setup();
+    render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} />);
+    await pickOption('overlap-choice-1', 'use_new');
+
+    const datum = (station_index: number) => ({ station_ref: { section_id: 2, station_index } });
+    act(() => {
+      useProjectStore.setState({
+        project: makeProject({ zero_datums: [datum(0), datum(5)] as unknown as Project['zero_datums'] }),
+      });
+    });
+    expect((screen.getByTestId('overlap-set-all-use-new') as HTMLButtonElement).disabled).toBe(true);
+    await acceptAndFinish();
+
+    expect(referenceCalls()).toEqual([[1, 100], [1, 101]]);
+    expect(updateShot).not.toHaveBeenCalled();
   });
 
   it('never shows a score above 100%', () => {
