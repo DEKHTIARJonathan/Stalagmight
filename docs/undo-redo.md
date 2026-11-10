@@ -446,6 +446,13 @@ history, and that step records only what the add brought - never a
   recorded section id is already taken, or if the record names a section twice
   or past `MAX_SECTION_ID` (the entry is persisted, so it is read back like any
   other input).
+- **Placement is not part of the step**: a source with a datum lands at its
+  GPS position. One without a datum stays floating, and the orphan-placement
+  dialog offers it spots on any anchored section, the open project's own
+  included (`Project::suggest_orphan_placements`). Accepting one runs
+  ordinary edits (`MergeStations`, `SetShotKind`, and with the "interpolate"
+  or "import data" overlap modes `UpdateShot` on the target's shots). Each is
+  its own undo step on top of the add, and each goes through the same gate.
 - **Privacy**: undo history rides to SpeleoDB in Full mode, so the command's
   `path` is `#[serde(skip)]`; only the sanitized file name (the history label)
   is serialized. A reloaded entry has an empty path, which nothing reads.
