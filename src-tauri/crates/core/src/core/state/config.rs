@@ -233,7 +233,7 @@ impl AppState {
 
 /// The settings-side wrapper around [`crate::speleodb::clean_endpoint_input`]:
 /// a field that cleans to nothing is "no endpoint configured".
-fn clean_endpoint(endpoint: Option<&str>) -> Option<String> {
+pub(super) fn clean_endpoint(endpoint: Option<&str>) -> Option<String> {
     endpoint.and_then(crate::speleodb::clean_endpoint_input)
 }
 
@@ -387,6 +387,20 @@ mod tests {
             edited.speleodb.endpoint = Some(" https://www.speleodb.org\u{200B}".to_owned());
             edited.save().unwrap();
             state.reload_config().unwrap();
+            assert_eq!(
+                state.get_config().speleodb.endpoint.as_deref(),
+                Some("https://www.speleodb.org")
+            );
+        });
+    }
+
+    #[test]
+    fn startup_cleans_a_hand_edited_endpoint() {
+        crate::test_helpers::with_isolated_config(|| {
+            let mut edited = Config::default();
+            edited.speleodb.endpoint = Some("\u{FEFF}https://www.speleodb.org \u{200B}".to_owned());
+            edited.save().unwrap();
+            let state = AppState::new().unwrap();
             assert_eq!(
                 state.get_config().speleodb.endpoint.as_deref(),
                 Some("https://www.speleodb.org")

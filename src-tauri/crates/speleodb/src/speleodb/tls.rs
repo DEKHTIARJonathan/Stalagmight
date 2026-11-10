@@ -21,9 +21,11 @@ fn is_invisible_format(c: char) -> bool {
 /// trailing whitespace and invisible format characters. `None` when nothing is
 /// left. Interior characters are kept, so a genuinely malformed address still
 /// fails [`validate_endpoint`] - this only removes what the user cannot see and
-/// did not mean. Every place an endpoint enters the app (settings save, settings
-/// reload, login override, `DEV_SPELEODB_URL`) runs it before validating, and
-/// the cleaned value is what gets stored.
+/// did not mean. Every place a configured endpoint enters the app (startup load,
+/// settings save, settings reload, login override, `DEV_SPELEODB_URL`) runs it
+/// before validating, and the cleaned value is what gets stored. An endpoint
+/// read from a project file's SpeleoDB link is only ever compared, through
+/// [`super::auth::normalize_endpoint`], which applies the same cleaning.
 pub fn clean_endpoint_input(input: &str) -> Option<String> {
     let cleaned = input.trim_matches(|c: char| c.is_whitespace() || is_invisible_format(c));
     (!cleaned.is_empty()).then(|| cleaned.to_owned())
@@ -105,6 +107,10 @@ mod tests {
                 "https://www.speleo\u{200B}db.org",
                 Some("https://www.speleo\u{200B}db.org"),
             ),
+            (
+                "\u{0085}https://www.speleodb.org\u{0085}",
+                Some("https://www.speleodb.org"),
+            ),
             ("", None),
             (" \t\n\u{200B}\u{FEFF} ", None),
         ] {
@@ -114,6 +120,19 @@ mod tests {
                 "{input:?}"
             );
         }
+    }
+
+    #[test]
+    fn normalize_endpoint_treats_a_pasted_spelling_as_the_same_server() {
+        // Project-file links and a config loaded before any save reach
+        // `normalize_endpoint` uncleaned; it must still see one server.
+        use crate::speleodb::auth::{account_key, normalize_endpoint};
+        let pasted = "\u{200B} https://SDB.example.com:443/ \u{FEFF}";
+        assert_eq!(normalize_endpoint(pasted), "https://sdb.example.com");
+        assert_eq!(
+            account_key(pasted, "diver@example.com"),
+            account_key("https://sdb.example.com", "diver@example.com")
+        );
     }
 
     #[test]

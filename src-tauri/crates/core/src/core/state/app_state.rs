@@ -212,7 +212,10 @@ pub struct AppState {
 impl AppState {
     /// Create a new application state
     pub fn new() -> Result<Self> {
-        let config = Config::load().unwrap_or_default();
+        let mut config = Config::load().unwrap_or_default();
+        // A hand-edited endpoint gets the same cleaning as a settings save (#675).
+        config.speleodb.endpoint =
+            super::config::clean_endpoint(config.speleodb.endpoint.as_deref());
         // Load recent projects from config
         let recent = config.general.recent_projects.clone();
         let undo_limit = config.general.undo_history_limit;
