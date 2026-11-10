@@ -69,7 +69,11 @@ management, local imports and local exports remain separate application features
 ## Cached copies on this computer
 
 Every project opened from SpeleoDB lives at
-`<cache>/speleodb/<project_id>/project.stalx`. The `.stalx` records its instance,
+`<cache>/speleodb/<project_id>/project.stalx`. The project ID must be a UUID before
+it becomes a path: opening a linked file whose ID is not one is refused, and the
+cache path itself (`speleodb_cache_path`, used by downloads, revision restores and
+the upload snapshot) refuses such an ID again for every caller, so a crafted
+`speleo_link` row cannot steer a write out of the cache. The `.stalx` records its instance,
 but not the account: the file rides to the server on every upload, so an account
 email inside it would reach every collaborator. The account is recorded beside the
 copy instead, in `owner.json`, which never leaves the machine. It is written when a

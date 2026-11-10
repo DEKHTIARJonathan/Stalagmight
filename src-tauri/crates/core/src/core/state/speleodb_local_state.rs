@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use super::AppState;
 use crate::persistence::Database;
 use crate::speleodb::models::SpeleoLocalProjectState;
+use crate::speleodb::SpeleoDbError;
 
 /// The file inside each per-project cache directory.
 pub(super) const CACHE_STALX: &str = "project.stalx";
@@ -45,6 +46,21 @@ pub(super) fn cache_root() -> Option<PathBuf> {
 /// against any root.
 pub(super) fn cache_path_in(root: &Path, project_id: &str) -> PathBuf {
     root.join(project_id).join(CACHE_STALX)
+}
+
+/// [`cache_path_in`] for an id that has not been validated yet: refused with
+/// [`SpeleoDbError::InvalidProjectId`] unless it is a plain project UUID, so the
+/// path cannot leave `root` whatever the id says (`..`, an absolute path, a
+/// separator). The id often comes from the open file's own `speleo_link` row,
+/// which a crafted `.stalx` controls; the cache path is where a pull, a revision
+/// restore and the push snapshot write, so it is validated where it is built
+/// rather than trusted to every caller.
+pub(super) fn validated_cache_path_in(
+    root: &Path,
+    project_id: &str,
+) -> Result<PathBuf, SpeleoDbError> {
+    super::speleodb::validate_project_id(project_id)?;
+    Ok(cache_path_in(root, project_id))
 }
 
 /// Whether `path` IS the cache copy for `project_id` under `root` - the canonical
