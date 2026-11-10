@@ -1640,6 +1640,7 @@
         "choiceAria": "Reading to keep for shot {{shot}}"
       },
       "prompt": "Does this connection look right?",
+      "mergeFailed": "Could not connect {{name}}, so nothing was changed for it. {{error}}",
       "accept": "Accept",
       "skip": "Skip",
       "hideAlternatives": "Hide alternatives",

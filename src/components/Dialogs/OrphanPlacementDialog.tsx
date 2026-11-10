@@ -106,6 +106,8 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   // keyed by orphan shot index. A row with no entry is Keep existing.
   const [selectedMergeOffset, setSelectedMergeOffset] = useState(0);
   const [overlapChoices, setOverlapChoices] = useState<ReadonlyMap<number, OverlapChoice>>(new Map());
+  // Why the last Accept / Accept All stopped: a merge the backend refused.
+  const [placeError, setPlaceError] = useState<string | null>(null);
 
   // Group suggestions by orphan end, sorted by score descending within each group
   const allOrphanEnds = useMemo((): OrphanEnd[] => {
@@ -373,20 +375,32 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     }
   }, [currentEndIndex, remainingEnds.length, finish]);
 
-  const place = useCallback(
-    (suggestion: OrphanPlacementSuggestion, mergePair: MergeOption | null, choices: ReadonlyMap<number, OverlapChoice>) =>
-      placeSuggestion(suggestion, mergePair, choices, {
-        mergeStations, setShotKind, updateShot, project: () => useProjectStore.getState().project,
-      }),
-    [mergeStations, setShotKind, updateShot],
-  );
+  /** Place one suggestion; the message to show if its merge was refused, else null. */
+  const place = useCallback(async (
+    suggestion: OrphanPlacementSuggestion,
+    mergePair: MergeOption | null,
+    choices: ReadonlyMap<number, OverlapChoice>,
+  ): Promise<string | null> => {
+    const merged = await placeSuggestion(suggestion, mergePair, choices, {
+      mergeStations, setShotKind, updateShot, project: () => useProjectStore.getState().project,
+    });
+    if (merged.success) return null;
+    return t('dialogs.orphanPlacement.mergeFailed', {
+      name: suggestion.orphanSectionName,
+      error: merged.error ?? t('editGate.commandFailed'),
+    });
+  }, [mergeStations, setShotKind, updateShot, t]);
 
   const handleAccept = useCallback(async () => {
     if (!currentSuggestion) return;
     setProcessing(true);
+    setPlaceError(null);
     try {
-      await place(currentSuggestion, selectedMergePair, effectiveChoices);
-
+      const error = await place(currentSuggestion, selectedMergePair, effectiveChoices);
+      if (error) {
+        setPlaceError(error);
+        return;
+      }
       setAcceptedOrphans((prev) => new Set(prev).add(currentSuggestion.orphanSectionId));
       setShowAlternatives(false);
       setSelectedSuggestionIndex(0);
@@ -399,20 +413,23 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   }, [currentSuggestion, selectedMergePair, place, effectiveChoices, remainingEnds.length, finish]);
 
   const handleSkip = useCallback(() => {
+    setPlaceError(null);
     setSkippedCount((c) => c + 1);
     advance();
   }, [advance]);
 
   const handleAcceptAll = useCallback(async () => {
     setProcessing(true);
+    setPlaceError(null);
     try {
-      const processed = new Set<number>();
+      const placed = new Set<number>();
       for (let i = currentEndIndex; i < remainingEnds.length; i++) {
         const end = remainingEnds[i]!;
-        if (processed.has(end.orphanSectionId)) continue;
+        if (placed.has(end.orphanSectionId)) continue;
+        let error: string | null;
         if (i === currentEndIndex && currentSuggestion) {
           // The section on screen: exactly what the user set up on it.
-          await place(currentSuggestion, selectedMergePair, effectiveChoices);
+          error = await place(currentSuggestion, selectedMergePair, effectiveChoices);
         } else {
           // Every other section: its best suggestion, the default merge pair
           // (end of the repeat) and Keep existing on every repeated shot.
@@ -420,9 +437,21 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
           if (!best) continue;
           const shotCount = project?.sections.find((s) => s.id === best.orphanSectionId)?.shots.length ?? 0;
           const opts = mergeOptionsOf(best, shotCount);
-          await place(best, opts[opts.length - 1] ?? null, new Map());
+          error = await place(best, opts[opts.length - 1] ?? null, new Map());
         }
-        processed.add(end.orphanSectionId);
+        if (error) {
+          // Stop on the section whose merge was refused, on screen with the
+          // error; the sections joined before it count as placed.
+          setPlaceError(error);
+          if (placed.size > 0) {
+            setAcceptedOrphans((prev) => new Set([...prev, ...placed]));
+            setCurrentEndIndex(remainingEnds.filter((e) => !placed.has(e.orphanSectionId)).indexOf(end));
+            setShowAlternatives(false);
+            setSelectedSuggestionIndex(0);
+          }
+          return;
+        }
+        placed.add(end.orphanSectionId);
       }
       await finish();
     } finally {
@@ -581,6 +610,10 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
             <p className="text-sm text-text-secondary">
               {t('dialogs.orphanPlacement.prompt')}
             </p>
+
+            {placeError && (
+              <p role="alert" className="text-sm text-error" data-testid="orphan-place-error">{placeError}</p>
+            )}
 
             {/* Accept / Skip buttons */}
             <div className="flex gap-2">

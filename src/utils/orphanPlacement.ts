@@ -5,7 +5,7 @@
  * holds the UI and this holds what Accept and Accept All do to the project.
  */
 
-import type { OrphanPlacementSuggestion } from '../types/commands';
+import type { CommandResult, OrphanPlacementSuggestion } from '../types/commands';
 import type { Project } from '../types/ipc/Project';
 import type { ProjectStore } from '../store/projectStore';
 import { computeMergeOptions, type MergeOption, type OverlapParams } from './overlapHelpers';
@@ -52,26 +52,29 @@ export interface PlacementActions {
  * a Reference shot - kept, never deleted. For Use new and Average the EXISTING
  * shot takes the resolved reading, so its stations, connections, closures and
  * comments stay where they are.
+ *
+ * Returns the merge's result. A refused merge writes nothing else: no shot is
+ * marked or rewritten, and the caller must not count the orphan as placed.
  */
 export async function placeSuggestion(
   suggestion: OrphanPlacementSuggestion,
   mergePair: MergeOption | null,
   choices: ReadonlyMap<number, OverlapChoice>,
   actions: PlacementActions,
-): Promise<void> {
+): Promise<CommandResult> {
   const mergeImport = mergePair?.importStation ?? suggestion.orphanStationIndex;
   const mergeExisting = mergePair?.existingStation ?? suggestion.targetStationIndex;
-  await actions.mergeStations(
+  const merged = await actions.mergeStations(
     { section_id: suggestion.orphanSectionId, station_index: mergeImport },
     { section_id: suggestion.targetSectionId, station_index: mergeExisting },
   );
-  if (suggestion.matchedShots === 0) return;
+  if (!merged.success || suggestion.matchedShots === 0) return merged;
 
   // Fresh sections: the merge above refreshed the project.
   const proj = actions.project();
   const oSection = proj?.sections.find((s) => s.id === suggestion.orphanSectionId);
   const tSection = proj?.sections.find((s) => s.id === suggestion.targetSectionId);
-  if (!oSection || !tSection) return;
+  if (!oSection || !tSection) return merged;
 
   const params = overlapParamsOf(suggestion);
   for (const repeat of repeatedShots(params, mergeImport, oSection.shots, tSection.shots)) {
@@ -82,4 +85,5 @@ export async function placeSuggestion(
       await actions.updateShot(suggestion.targetSectionId, repeat.targetShot.id, reading);
     }
   }
+  return merged;
 }

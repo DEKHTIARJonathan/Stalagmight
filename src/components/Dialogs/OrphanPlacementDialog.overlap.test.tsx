@@ -27,7 +27,7 @@
  *   score above 100%".
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('./SectionPreview', () => ({ default: () => null }));
@@ -46,6 +46,7 @@ import type { Project } from '../../types/ipc/Project';
 import type { Shot } from '../../types/ipc/Shot';
 
 const ok = async (): Promise<CommandResult> => ({ success: true } as CommandResult);
+const refused = { success: false, error: 'Merge refused' } as CommandResult;
 
 function shot(id: number, azimuth: number, length: number, depthIn: number, depthOut: number): Shot {
   return {
@@ -83,11 +84,20 @@ const ORPHAN = [
   shot(103, 95, 4, 5, 6),
 ];
 
+// A second orphan, "Second" (section 3): its first two shots repeat Mainline
+// shots 1 and 2 (indices 0, 1), the second one re-measured 0.5 m longer.
+const SECOND = [
+  shot(300, 10, 5, 0, 1),
+  shot(301, 20, 5.5, 1, 2),
+  shot(302, 70, 3, 2, 2),
+];
+
+const section = (id: number, name: string, shots: Shot[]) =>
+  ({ id, name, shots, direction: 'in', color: '#4a9eff' }) as unknown as Project['sections'][number];
+
 function makeProject(over: Partial<Project> = {}): Project {
-  const section = (id: number, name: string, shots: Shot[]) =>
-    ({ id, name, shots, direction: 'in', color: '#4a9eff' }) as unknown as Project['sections'][number];
   return {
-    sections: [section(1, 'Orphan', ORPHAN), section(2, 'Mainline', MAINLINE)],
+    sections: [section(1, 'Orphan', ORPHAN), section(2, 'Mainline', MAINLINE), section(3, 'Second', SECOND)],
     station_merges: [],
     zero_datums: [],
     loop_closures: [],
@@ -387,6 +397,43 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
     await acceptAndFinish();
 
     expect(referenceCalls()).toEqual([[1, 100]]);
+  });
+
+  it('a refused merge writes nothing else and leaves the section to place', async () => {
+    mergeStations.mockResolvedValueOnce(refused);
+    setup();
+    render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} />);
+
+    await pickOption('overlap-choice-1', 'use_new');
+    await userEvent.click(screen.getByTestId('orphan-accept'));
+
+    const alert = await screen.findByTestId('orphan-place-error');
+    expect(alert.textContent).toContain('Could not connect Orphan');
+    expect(alert.textContent).toContain('Merge refused');
+    expect(setShotKind).not.toHaveBeenCalled();
+    expect(updateShot).not.toHaveBeenCalled();
+    expect(closeDialog).not.toHaveBeenCalled();
+
+    // Still on screen, choices intact: a second Accept places it.
+    await acceptAndFinish();
+    expect(mergeStations).toHaveBeenCalledTimes(2);
+    expect(updateShot).toHaveBeenCalledWith(2, 204, expect.objectContaining({ length: 7.5 }));
+  });
+
+  it('Accept All stops on a refused merge, with that section on screen', async () => {
+    mergeStations.mockImplementation(async (a: { section_id: number }) => (a.section_id === 3 ? refused : ok()));
+    setup();
+    const second = makeSuggestion({ orphanSectionId: 3, orphanSectionName: 'Second', targetStationIndex: 0 });
+    render(<OrphanPlacementDialog suggestions={[makeSuggestion(), second]} />);
+
+    await userEvent.click(screen.getByTestId('orphan-accept-all'));
+
+    const alert = await screen.findByTestId('orphan-place-error');
+    expect(alert.textContent).toContain('Could not connect Second');
+    expect(referenceCalls()).toEqual([[1, 100], [1, 101]]);
+    expect(closeDialog).not.toHaveBeenCalled();
+    expect(screen.getByTestId('wizard-suggestion').textContent).toContain('Second');
+    expect(screen.getByTestId('wizard-progress').textContent).toBe('Section 2 of 2');
   });
 
   it('never shows a score above 100%', () => {
