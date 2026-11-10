@@ -88,7 +88,7 @@ fn conversion_saves_unsaved_survey_uploads_once_and_requires_verified_editing_af
                         uploaded = true;
                         (
                             200,
-                            json!({"project":project,"hexsha":SHA,"files":["project.stalx"],"geojson_status":"skipped","message":"Saved","browser_url":null}),
+                            json!({"project":project,"hexsha":SHA,"files":["project.stalx"],"message":"Saved","browser_url":null}),
                         )
                     }
                 } else if route.contains("/revisions/") {
