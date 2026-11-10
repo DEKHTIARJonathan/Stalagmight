@@ -84,7 +84,12 @@ export default function AddOrOpenProjectDialog() {
           </p>
         )}
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
-          <Button onClick={handleCancel} disabled={adding} data-testid="add-or-open-project-cancel">
+          <Button
+            onClick={handleCancel}
+            disabled={adding}
+            data-autofocus
+            data-testid="add-or-open-project-cancel"
+          >
             {t('common.actions.cancel')}
           </Button>
           <Button onClick={handleOpen} disabled={adding} data-testid="add-or-open-project-open">

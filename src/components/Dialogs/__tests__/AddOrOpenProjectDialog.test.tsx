@@ -69,6 +69,12 @@ describe('AddOrOpenProjectDialog', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  it('puts initial focus on Cancel, never on the Add button', () => {
+    render(<AddOrOpenProjectDialog />);
+    expect(screen.getByTestId('add-or-open-project-cancel')).toHaveAttribute('data-autofocus');
+    expect(screen.getByTestId('add-or-open-project-add')).not.toHaveAttribute('data-autofocus');
+  });
+
   it('names the open project on the Add choice', () => {
     render(<AddOrOpenProjectDialog />);
     expect(screen.getByTestId('add-or-open-project-add').textContent).toContain('My Cave');
