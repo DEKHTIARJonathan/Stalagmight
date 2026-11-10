@@ -15,12 +15,22 @@
   3. A close, project switch or app-driven quit whose lock release fails or is
      uncertain no longer closes silently. An in-app "Couldn't hand back the lock"
      dialog offers Retry / Close and keep the lock / Cancel.
-  4. The workspace buttons follow #668's layout, with token-based colours that
-     meet WCAG AA in every theme, one filled button per state, and a neutral
-     Close.
+  4. The SpeleoDB workspace keeps #668's actions and "Revision History" naming,
+     but its buttons are the app's ordinary buttons (standard size and variants,
+     one primary per state). The colour-by-action variants were tried and
+     rejected by the owner, so they are gone, along with the yellow `highlight`
+     variant: Home's "Open project" is a standard primary button.
+- After the owner's UI review: every SpeleoDB dialog keeps all of its buttons in
+  the footer row, like the rest of the app; un-uploaded changes are shown by a
+  yellow tab icon and label only (no "!" badge); the in-project menu no longer
+  has a SpeleoDB row; Settings uses the standard reset icon.
 - The pre-PR review findings are fixed: the owner checks on the fast-forward open
   and on purging, removing and discarding cached copies; Quit now; the download
-  deadline; the redaction of server values in error detail.
+  deadline and its ceiling; the redaction of server values in error detail; the
+  quit gate counting every command the backend exit waits for; the backend guard
+  on restart-to-update.
+- The yellow `highlight` variant and the "Yellow is overloaded" follow-up below
+  are therefore obsolete.
 - The fuzzer-found bugs F1-F3 are in #669. The remaining follow-ups and the
   undecided items are in #671. The upstream SpeleoDB reports are drafted
   separately.
