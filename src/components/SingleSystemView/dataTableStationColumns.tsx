@@ -15,6 +15,7 @@ import type { GridColumn } from '../common/SpreadsheetGrid/types';
 import { ChevronDownIcon, DotIcon, LinkIcon } from '../common/icons';
 import { formatFixed } from '../../i18n/format';
 import { xyToGps } from '../../utils/coordinates';
+import { displayStationName } from '../../utils/formatters';
 import type { GpsCoordinates } from '../../types/project';
 
 export interface StationColumnContext {
@@ -74,7 +75,7 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
       header: t('dataTable.stationColumns.name'),
       width: 64,
       kind: 'text',
-      getValue: (r) => r.name ?? '',
+      getValue: (r) => displayStationName(r.name),
     },
     coordCol('_x', t('dataTable.stationColumns.x'), precision.coordinates),
     coordCol('_y', t('dataTable.stationColumns.y'), precision.coordinates),

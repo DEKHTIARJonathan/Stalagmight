@@ -1150,15 +1150,14 @@ test.describe('Detail Panel Links', () => {
       await expect(page.getByTestId(`station-${mainSectionId}-1-link`)).toContainText(`${mainSectionId}:1 · 8`);
 
       await selectStation(page, mainSectionId, 1);
-      const detail = page.getByTestId('station-detail');
-      await expect(detail).toContainText('Name:');
-      await expect(detail).toContainText('8');
+      await expect(page.getByTestId('station-detail-name')).toHaveText('Name:8');
       // The merge partner is named too: this is where two sections' numbers meet.
       await expect(page.getByTestId(`station-${sideSectionId}-0-link`)).toContainText(`${sideSectionId}:0 · 0`);
 
       // A station without a name has no Name row.
       await selectStation(page, mainSectionId, 2);
-      await expect(page.getByTestId('station-detail')).not.toContainText('Name:');
+      await expect(page.getByTestId('station-detail')).toBeVisible();
+      await expect(page.getByTestId('station-detail-name')).toHaveCount(0);
     });
   });
 

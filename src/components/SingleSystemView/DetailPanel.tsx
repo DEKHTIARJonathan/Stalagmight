@@ -16,7 +16,7 @@ import { EntityBlob } from '../common/EntityBlob';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import type { Station, Shot, Section, Project, ProjectStats as ProjectStatsType, ClosureRef, LoopClosure } from '../../types/project';
 import type { ProjectWarning } from '../../types/commands';
-import { formatShotId, formatStationId, formatStationIdWithName } from '../../utils/formatters';
+import { displayStationName, formatShotId, formatStationId, formatStationIdWithName } from '../../utils/formatters';
 import { findStation } from '../../utils/findStation';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { formatFixed, formatPercent, formatNumber, formatDate } from '../../i18n/format';
@@ -768,7 +768,9 @@ function StationDetail({ station }: { station: Station }) {
             label={t('detailPanel.labels.id')}
             value={formatStationId(sectionId, stationPosition)}
           />
-          {station.name && <DetailRow label={t('detailPanel.labels.name')} value={station.name} />}
+          {station.name && (
+            <DetailRow label={t('detailPanel.labels.name')} value={displayStationName(station.name)} testId="station-detail-name" />
+          )}
           <DetailRow label={t('detailPanel.labels.section')} value={section?.name ?? t('sections.defaultName', { id: sectionId })} />
           <DetailRow label={t('detailPanel.labels.x')} value={`${formatFixed(displayStation.coordinates.x, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
           <DetailRow label={t('detailPanel.labels.y')} value={`${formatFixed(displayStation.coordinates.y, undefined, precision.coordinates)} ${t('common.units.meters')}`} />
@@ -1724,9 +1726,9 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
+function DetailRow({ label, value, testId }: { label: string; value: React.ReactNode; testId?: string }) {
   return (
-    <div className="flex justify-between text-sm">
+    <div className="flex justify-between text-sm" data-testid={testId}>
       <span className="text-text-secondary">{label}:</span>
       <span>{value}</span>
     </div>
