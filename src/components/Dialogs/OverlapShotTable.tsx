@@ -36,7 +36,10 @@ interface OverlapShotTableProps {
   replaceDisabled: boolean;
 }
 
-const cell = 'px-1 py-0.5 text-right whitespace-nowrap';
+// No `whitespace-nowrap`: in a narrow dialog, or with WebKit's minimum font size
+// enlarging the text at a small UI scale, headers and the depth range wrap
+// rather than push the table past its column (#681).
+const cell = 'px-1 py-0.5 text-right';
 
 /** Kebab-case ids for the set-all buttons, as the test tooling expects. */
 const SET_ALL_TESTID: Record<OverlapChoice, string> = {
@@ -137,7 +140,6 @@ export default function OverlapShotTable({
             <th className={`${cell} font-medium`}>{t('dialogs.orphanPlacement.repeat.columns.azimuth')}</th>
             <th className={`${cell} font-medium`}>{t('dialogs.orphanPlacement.repeat.columns.inclination')}</th>
             <th className={`${cell} font-medium`}>{t('dialogs.orphanPlacement.repeat.columns.depth', { unit: depthUnit })}</th>
-            <th className="px-1 py-1 text-left font-medium">{t('dialogs.orphanPlacement.repeat.columns.choice')}</th>
           </tr>
         </thead>
         {rows.map((row) => {
@@ -152,39 +154,46 @@ export default function OverlapShotTable({
               data-differs={differs ? 'true' : 'false'}
             >
               <tr>
-                <td className="px-1 pt-1 whitespace-nowrap text-text-secondary">
+                <td className="px-1 pt-1 text-text-secondary">
                   {t('dialogs.orphanPlacement.repeat.existing', { shot: row.existingLabel })}
                 </td>
                 {reading(row.existing)}
-                <td rowSpan={3} className="px-1 py-1 align-middle">
-                  <Select
-                    value={choiceOf(row)}
-                    onChange={(v) => onChoiceChange(row.orphanShotIndex, v as OverlapChoice)}
-                    options={OVERLAP_CHOICES.map((choice) => ({
-                      value: choice,
-                      label: choiceLabel(choice),
-                      disabled: isDisabled(choice),
-                    }))}
-                    size="sm"
-                    aria-label={t('dialogs.orphanPlacement.repeat.choiceAria', { shot: row.existingLabel })}
-                    data-testid={`overlap-choice-${row.orphanShotIndex}`}
-                  />
-                </td>
               </tr>
               <tr>
-                <td className="px-1 whitespace-nowrap text-text-secondary">
+                <td className="px-1 text-text-secondary">
                   {t('dialogs.orphanPlacement.repeat.new', { shot: row.newLabel })}
                 </td>
                 {reading(row.incoming)}
               </tr>
               <tr className="text-text-tertiary">
-                <td className="px-1 pb-1">{t('dialogs.orphanPlacement.repeat.diff')}</td>
+                <td className="px-1">{t('dialogs.orphanPlacement.repeat.diff')}</td>
                 <td className={`${cell} ${flag(over.length)}`}>{length(diff.length)}</td>
                 <td className={`${cell} ${flag(over.azimuth)}`}>{azimuth(diff.azimuth)}</td>
                 <td className={`${cell} ${flag(over.inclination)}`}>
                   {inclination(diff.inclination)}
                 </td>
                 <td className={`${cell} ${flag(over.depth)}`}>{depth(diff.depth)}</td>
+              </tr>
+              {/* The choice on its own line, not a last column: as a column it
+                  was the first thing pushed out of sight in a narrow dialog. */}
+              <tr>
+                <td colSpan={5} className="px-1 pt-1 pb-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-text-secondary">{t('dialogs.orphanPlacement.repeat.choiceLabel')}</span>
+                    <Select
+                      value={choiceOf(row)}
+                      onChange={(v) => onChoiceChange(row.orphanShotIndex, v as OverlapChoice)}
+                      options={OVERLAP_CHOICES.map((choice) => ({
+                        value: choice,
+                        label: choiceLabel(choice),
+                        disabled: isDisabled(choice),
+                      }))}
+                      size="sm"
+                      aria-label={t('dialogs.orphanPlacement.repeat.choiceAria', { shot: row.existingLabel })}
+                      data-testid={`overlap-choice-${row.orphanShotIndex}`}
+                    />
+                  </div>
+                </td>
               </tr>
             </tbody>
           );

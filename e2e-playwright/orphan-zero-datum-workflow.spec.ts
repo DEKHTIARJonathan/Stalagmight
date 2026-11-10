@@ -114,8 +114,8 @@ test.describe('Orphan + Zero Datum Workflow', () => {
   });
 
   /** Mainline 3 shots; the orphan re-surveys Mainline shots 2-3, then carries on (#681). */
-  async function openRepeatScenario(page: Page) {
-    await page.setViewportSize({ width: 1024, height: 640 });
+  async function openRepeatScenario(page: Page, viewport = { width: 1024, height: 640 }) {
+    await page.setViewportSize(viewport);
     await createProject(page, 'Orphan Repeat Scenario');
 
     await createSectionViaStore(page, {
@@ -196,6 +196,24 @@ test.describe('Orphan + Zero Datum Workflow', () => {
     // Keep existing on row 0, Use new on row 1 - written into the EXISTING shot.
     expect(mainline.shots.map((s) => s.length)).toEqual([10, 8, 6.5]);
     expect(mainline.shots.map((s) => s.kind)).toEqual(['Normal', 'Normal', 'Normal']);
+  });
+
+  test('every row\'s choice is fully in view at the 800 px window minimum (#681)', async ({ page }) => {
+    // The choice used to be the table's last column, behind horizontal scroll
+    // in any window narrower than ~880 px. 800x888 is the narrowest window; the
+    // max UI scale caps the CSS viewport at 800 px wide too (uiScale.ts).
+    await openRepeatScenario(page, { width: 800, height: 888 });
+    const details = page.getByTestId('wizard-suggestion');
+    await expect(page.getByTestId('overlap-row-1')).toBeVisible();
+
+    const overflow = await details.evaluate((el) => el.scrollWidth - el.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(0);
+    const column = (await details.boundingBox())!;
+    for (const index of [0, 1]) {
+      const select = (await page.getByTestId(`overlap-choice-${index}`).boundingBox())!;
+      expect(select.x).toBeGreaterThanOrEqual(column.x);
+      expect(select.x + select.width).toBeLessThanOrEqual(column.x + column.width);
+    }
   });
 
   test('a mid-repeat merge resolves only the shot before it; the rest stays Normal (#681)', async ({ page }) => {

@@ -1631,12 +1631,12 @@
           "length": "Length ({{unit}})",
           "azimuth": "Azimuth (°)",
           "inclination": "Incl. (°)",
-          "depth": "Depth ({{unit}})",
-          "choice": "Reading"
+          "depth": "Depth ({{unit}})"
         },
         "existing": "Existing {{shot}}",
         "new": "New {{shot}}",
         "diff": "Difference",
+        "choiceLabel": "Reading to keep:",
         "choiceAria": "Reading to keep for shot {{shot}}"
       },
       "prompt": "Does this connection look right?",

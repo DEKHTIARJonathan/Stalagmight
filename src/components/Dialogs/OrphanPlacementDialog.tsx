@@ -4,6 +4,7 @@ import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import SectionPreview from './SectionPreview';
+import { usePreviewSize } from './usePreviewSize';
 import type { MergePreviewConfig } from './SectionPreview';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -108,6 +109,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   const [overlapChoices, setOverlapChoices] = useState<ReadonlyMap<number, OverlapChoice>>(new Map());
   // Why the last Accept / Accept All stopped: a merge the backend refused.
   const [placeError, setPlaceError] = useState<string | null>(null);
+  const [previewRef, previewSize] = usePreviewSize(340, 200);
 
   // Group suggestions by orphan end, sorted by score descending within each group
   const allOrphanEnds = useMemo((): OrphanEnd[] => {
@@ -434,22 +436,28 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
       {isFinished ? null : (
         /* Side-by-side layout */
         <div className="flex-1 flex min-h-0 overflow-hidden relative">
-          {/* Left column: SectionPreview */}
+          {/* Left column: SectionPreview. 40% of the dialog, not a fixed 380 px,
+              so the details column keeps room for the repeat table at the
+              800 px window minimum (#681). */}
           <div
-            className="shrink-0 flex flex-col items-center justify-center p-4 border-r border-border"
-            style={{ width: 380 }}
+            ref={previewRef}
+            className="shrink-0 w-[40%] flex flex-col items-center justify-center p-4 border-r border-border"
           >
             {orphanDmpSection && (
               <SectionPreview
                 section={orphanDmpSection}
                 color={orphanSection?.color ?? '#4a9eff'}
-                size={340}
+                size={previewSize.width}
+                height={previewSize.height}
                 mergePreview={mergePreviewConfig}
                 focusStationIndex={currentSuggestion?.orphanStationIndex ?? null}
               />
             )}
             {!orphanDmpSection && (
-              <div className="w-[340px] h-[340px] border border-border rounded flex items-center justify-center text-text-secondary text-sm">
+              <div
+                className="border border-border rounded flex items-center justify-center text-text-secondary text-sm"
+                style={{ width: previewSize.width, height: previewSize.height }}
+              >
                 {t('dialogs.orphanPlacement.sectionNotFound')}
               </div>
             )}

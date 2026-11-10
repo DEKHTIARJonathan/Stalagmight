@@ -23,6 +23,12 @@ vi.mock('../../utils/telemetry', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../utils/telemetry')>()),
   trackDialogComplete: vi.fn(),
 }));
+// jsdom has no ResizeObserver; usePreviewSize sizes the preview with one.
+globalThis.ResizeObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+} as unknown as typeof ResizeObserver;
 
 import OrphanPlacementDialog from './OrphanPlacementDialog';
 import { useProjectStore } from '../../store/projectStore';
