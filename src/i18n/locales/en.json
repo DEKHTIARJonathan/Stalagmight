@@ -1607,12 +1607,6 @@
         "medium": "Medium",
         "low": "Low"
       },
-      "overlapModes": {
-        "interpolate": "Interpolate (average)",
-        "import_data": "Use orphan data",
-        "existing_data": "Use target data",
-        "keep_both": "Keep both (mark as reference)"
-      },
       "sectionNotFound": "Section not found",
       "suggestedConnection": "Suggested Connection",
       "station": "stn {{index}}",
@@ -1621,7 +1615,30 @@
       "score": "{{percent}}% score",
       "mergeAt": "Merge at",
       "mergeOption": "stn {{importStation}} → {{targetName}} stn {{existingStation}}",
-      "overlap": "Overlap",
+      "repeat": {
+        "heading_one": "{{count}} repeated shot",
+        "heading_other": "{{count}} repeated shots",
+        "setAll": "Set all:",
+        "hint": "The new copy of each repeated shot is kept as a Reference shot. Choose which reading the existing shot keeps.",
+        "anchored": "The existing survey is tied down at both ends, so its readings stay as they are. The new copies are kept as Reference shots.",
+        "choices": {
+          "keep_existing": "Keep existing",
+          "use_new": "Use new",
+          "average": "Average"
+        },
+        "columns": {
+          "shot": "Shot",
+          "length": "Length ({{unit}})",
+          "azimuth": "Azimuth (°)",
+          "inclination": "Incl. (°)",
+          "depth": "Depth ({{unit}})",
+          "choice": "Keep"
+        },
+        "existing": "Existing {{shot}}",
+        "new": "New {{shot}}",
+        "diff": "Difference",
+        "choiceAria": "Reading to keep for shot {{shot}}"
+      },
       "prompt": "Does this connection look right?",
       "accept": "Accept",
       "skip": "Skip",

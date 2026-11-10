@@ -11,18 +11,18 @@ import type { OrphanPlacementSuggestion } from '../../types/commands';
 import type { ImportReceipt } from '../../types/ipc/ImportReceipt';
 import type { Section } from '../../types/project';
 import type { DmpSection } from '../../types/ipc/DmpSection';
-import type { OverlapMode } from '../../types/ipc/OverlapMode';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { presentImportReceipt } from '../../utils/saveFeedback';
+import { formatShotId } from '../../utils/formatters';
 import {
   computeMergeOptions,
-  computeActionableIds,
-  computeTargetShotIndex,
+  computeOverlapPairs,
   needsDirectionReversal,
   reverseTargetShot,
-  interpolateShots,
-  type TargetShotLike,
+  type OverlapParams,
 } from '../../utils/overlapHelpers';
+import { resolvedReading, type OverlapChoice } from '../../utils/overlapChoices';
+import OverlapShotTable, { type OverlapShotRow } from './OverlapShotTable';
 
 interface OrphanPlacementDialogProps {
   suggestions: OrphanPlacementSuggestion[];
@@ -46,6 +46,25 @@ const confidenceColors: Record<string, string> = {
 
 const directionLabel = (direction: string) =>
   direction === 'forward' ? '\u2192' : '\u2190';
+
+/**
+ * A suggestion's score as a whole percent, capped at 100. The matcher boosts a
+ * station with matching survey on both sides by up to 1.18x (placement_suggest.rs
+ * `station_context_multiplier`), which ranks it but is not a percentage. Capped
+ * for display only, so ranking and confidence are untouched (#681).
+ */
+const scorePercent = (score: number): number => Math.round(Math.min(score, 1) * 100);
+
+/** The overlap geometry of a suggestion, as the overlap helpers take it. */
+function overlapParamsOf(s: OrphanPlacementSuggestion): OverlapParams {
+  return {
+    importStationIndex: s.orphanStationIndex,
+    matchedShots: s.matchedShots,
+    existingMatchedShots: s.existingMatchedShots,
+    existingStationIndex: s.targetStationIndex,
+    direction: s.direction,
+  };
+}
 
 /** Convert a project Section to DmpSection format for SectionPreview. */
 function sectionToDmpSection(section: Section): DmpSection {
@@ -89,12 +108,6 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     },
     [t],
   );
-  const overlapModeLabels: Record<OverlapMode, string> = {
-    interpolate: t('dialogs.orphanPlacement.overlapModes.interpolate'),
-    import_data: t('dialogs.orphanPlacement.overlapModes.import_data'),
-    existing_data: t('dialogs.orphanPlacement.overlapModes.existing_data'),
-    keep_both: t('dialogs.orphanPlacement.overlapModes.keep_both'),
-  };
   const { mergeStations, updateShot, setShotKind, refreshProjectState, project } = useProjectStore();
   const { closeDialog, setView, triggerFitToBounds, openDialog, showToast } = useUIStore();
 
@@ -105,9 +118,10 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   const [showAlternatives, setShowAlternatives] = useState(false);
   // Track which suggestion index within the current group is selected
   const [selectedSuggestionIndex, setSelectedSuggestionIndex] = useState(0);
-  // Merge station pair and overlap mode
+  // Merge station pair, and the per-shot choice for repeated shots (#681),
+  // keyed by orphan shot index. A row with no entry is Keep existing.
   const [selectedMergeOffset, setSelectedMergeOffset] = useState(0);
-  const [overlapMode, setOverlapMode] = useState<OverlapMode>('existing_data');
+  const [overlapChoices, setOverlapChoices] = useState<ReadonlyMap<number, OverlapChoice>>(new Map());
 
   // Group suggestions by orphan end, sorted by score descending within each group
   const allOrphanEnds = useMemo((): OrphanEnd[] => {
@@ -183,14 +197,16 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     return mergeOptions.find((o) => o.offset === selectedMergeOffset) ?? mergeOptions[mergeOptions.length - 1]!;
   }, [mergeOptions, selectedMergeOffset]);
 
-  // Reset merge offset to last option (deepest overlap) when suggestion changes
+  // Default the merge to the last option: the END of the repeat, the last
+  // station both surveys share (#681). The matcher's `preferredMergeOffset` is
+  // deliberately not used here - it favours a station with matching survey on
+  // both sides, i.e. the middle of any repeat of two shots or more. Every choice
+  // also resets to Keep existing for the new suggestion.
   useEffect(() => {
     if (mergeOptions.length > 0) {
-      const preferred = currentSuggestion?.preferredMergeOffset != null
-        ? mergeOptions.find((o) => o.offset === currentSuggestion.preferredMergeOffset)
-        : null;
-      setSelectedMergeOffset((preferred ?? mergeOptions[mergeOptions.length - 1]!).offset);
+      setSelectedMergeOffset(mergeOptions[mergeOptions.length - 1]!.offset);
     }
+    setOverlapChoices(new Map());
   }, [currentSuggestion, mergeOptions]);
 
   // Check if the target section's overlap region is doubly-anchored
@@ -274,12 +290,44 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     return hasFront && hasBack;
   }, [currentSuggestion, project]);
 
-  // Auto-switch to 'existing_data' when doubly-anchored disables the current mode
-  useEffect(() => {
-    if (isTargetDoublyAnchored && (overlapMode === 'interpolate' || overlapMode === 'import_data')) {
-      setOverlapMode('existing_data');
+  // Every repeated shot of the current suggestion, existing reading beside the
+  // new one oriented the same way, whichever station "Merge at" picks.
+  const overlapRows = useMemo((): OverlapShotRow[] => {
+    if (!currentSuggestion || !orphanSection || !targetSection) return [];
+    const reverse = needsDirectionReversal(currentSuggestion.orphanStationIndex, currentSuggestion.direction);
+    const rows: OverlapShotRow[] = [];
+    for (const pair of computeOverlapPairs(overlapParamsOf(currentSuggestion))) {
+      const orphanShot = orphanSection.shots[pair.orphanShotIndex];
+      const targetShot = targetSection.shots[pair.targetShotIndex];
+      if (!orphanShot || !targetShot) continue;
+      rows.push({
+        orphanShotIndex: pair.orphanShotIndex,
+        existingLabel: formatShotId(targetSection.id, pair.targetShotIndex + 1),
+        newLabel: formatShotId(orphanSection.id, pair.orphanShotIndex + 1),
+        existing: targetShot,
+        incoming: reverse ? reverseTargetShot(orphanShot) : orphanShot,
+      });
     }
-  }, [isTargetDoublyAnchored, overlapMode]);
+    return rows;
+  }, [currentSuggestion, orphanSection, targetSection]);
+
+  // The choices that will be applied: a doubly-anchored target forces Keep
+  // existing on every row, as the single overlap mode did before.
+  const effectiveChoices = useMemo((): ReadonlyMap<number, OverlapChoice> => {
+    const map = new Map<number, OverlapChoice>();
+    for (const row of overlapRows) {
+      const chosen = overlapChoices.get(row.orphanShotIndex) ?? 'keep_existing';
+      map.set(row.orphanShotIndex, isTargetDoublyAnchored ? 'keep_existing' : chosen);
+    }
+    return map;
+  }, [overlapRows, overlapChoices, isTargetDoublyAnchored]);
+
+  const handleChoiceChange = useCallback((orphanShotIndex: number, choice: OverlapChoice) => {
+    setOverlapChoices((prev) => new Map(prev).set(orphanShotIndex, choice));
+  }, []);
+  const handleSetAll = useCallback((choice: OverlapChoice) => {
+    setOverlapChoices(new Map(overlapRows.map((row) => [row.orphanShotIndex, choice])));
+  }, [overlapRows]);
 
   // Convert orphan section to DmpSection for SectionPreview
   const orphanDmpSection = useMemo(
@@ -346,89 +394,43 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     }
   }, [currentEndIndex, remainingEnds.length, finish]);
 
-  /** Apply overlap treatment after merging stations. */
-  const applyOverlapTreatment = useCallback(async (
+  /**
+   * Resolve every repeated shot after merging (#681). The new section's copy
+   * always becomes a Reference shot - kept, never deleted. For Use new and
+   * Average the EXISTING shot takes the resolved reading, so its stations,
+   * connections, closures and comments stay where they are. Applies to the
+   * whole repeat, whichever station the merge used. All through the undoable,
+   * edit-gated store actions.
+   */
+  const applyOverlapChoices = useCallback(async (
     suggestion: OrphanPlacementSuggestion,
-    mergePair: { importStation: number; existingStation: number },
-    mode: OverlapMode,
+    choices: ReadonlyMap<number, OverlapChoice>,
   ) => {
     if (suggestion.matchedShots === 0) return;
 
-    const actionableIds = computeActionableIds(
-      suggestion.orphanStationIndex,
-      suggestion.matchedShots,
-      mergePair.importStation,
-    );
-    if (actionableIds.size === 0) return;
-
-    // Get fresh sections from project store
+    // Fresh sections from the store: the merge above may have refreshed them.
     const proj = useProjectStore.getState().project;
     if (!proj) return;
     const oSection = proj.sections.find((s) => s.id === suggestion.orphanSectionId);
     const tSection = proj.sections.find((s) => s.id === suggestion.targetSectionId);
     if (!oSection || !tSection) return;
 
-    const shouldReverse = needsDirectionReversal(suggestion.orphanStationIndex, suggestion.direction);
-    const overlapParams = {
-      importStationIndex: suggestion.orphanStationIndex,
-      matchedShots: suggestion.matchedShots,
-      existingMatchedShots: suggestion.existingMatchedShots,
-      existingStationIndex: suggestion.targetStationIndex,
-      direction: suggestion.direction,
-    };
-
-    for (const overlapId of actionableIds) {
-      const orphanShot = oSection.shots[overlapId];
+    const reverse = needsDirectionReversal(suggestion.orphanStationIndex, suggestion.direction);
+    for (const pair of computeOverlapPairs(overlapParamsOf(suggestion))) {
+      const orphanShot = oSection.shots[pair.orphanShotIndex];
       if (!orphanShot) continue;
 
-      // Mark the orphan overlap shot as a Reference in every mode: it is a
-      // duplicate of the target's geometry, not a leg anyone swims (#27).
       await setShotKind(suggestion.orphanSectionId, orphanShot.id, 'Reference');
 
-      // For interpolate and import_data, also update the target shot
-      if (mode === 'interpolate' || mode === 'import_data') {
-        const targetShotIdx = computeTargetShotIndex(overlapId, overlapParams);
-        const targetShot = tSection.shots[targetShotIdx];
-        if (!targetShot) continue;
-
-        const orphanAsTarget: TargetShotLike = shouldReverse
-          ? reverseTargetShot(orphanShot)
-          : orphanShot;
-
-        if (mode === 'interpolate') {
-          const interp = interpolateShots(
-            { ...targetShot, comment: targetShot.comment ?? null, kind: targetShot.kind },
-            orphanAsTarget,
-          );
-          await updateShot(suggestion.targetSectionId, targetShot.id, {
-            azimuth_in: interp.azimuth_in,
-            azimuth_out: interp.azimuth_out,
-            length: interp.length,
-            depth_in: interp.depth_in,
-            depth_out: interp.depth_out,
-            pitch_in: interp.pitch_in,
-            pitch_out: interp.pitch_out,
-            left: interp.left,
-            right: interp.right,
-            up: interp.up,
-            down: interp.down,
-          });
-        } else {
-          // import_data: use orphan's values on the target
-          await updateShot(suggestion.targetSectionId, targetShot.id, {
-            azimuth_in: orphanAsTarget.azimuth_in,
-            azimuth_out: orphanAsTarget.azimuth_out,
-            length: orphanAsTarget.length,
-            depth_in: orphanAsTarget.depth_in,
-            depth_out: orphanAsTarget.depth_out,
-            pitch_in: orphanAsTarget.pitch_in,
-            pitch_out: orphanAsTarget.pitch_out,
-            left: orphanAsTarget.left,
-            right: orphanAsTarget.right,
-            up: orphanAsTarget.up,
-            down: orphanAsTarget.down,
-          });
-        }
+      const targetShot = tSection.shots[pair.targetShotIndex];
+      if (!targetShot) continue;
+      const reading = resolvedReading(
+        choices.get(pair.orphanShotIndex) ?? 'keep_existing',
+        targetShot,
+        reverse ? reverseTargetShot(orphanShot) : orphanShot,
+      );
+      if (reading) {
+        await updateShot(suggestion.targetSectionId, targetShot.id, reading);
       }
     }
   }, [setShotKind, updateShot]);
@@ -445,12 +447,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
         { section_id: currentSuggestion.targetSectionId, station_index: mergeExisting },
       );
 
-      // Apply overlap treatment
-      await applyOverlapTreatment(
-        currentSuggestion,
-        { importStation: mergeImport, existingStation: mergeExisting },
-        overlapMode,
-      );
+      await applyOverlapChoices(currentSuggestion, effectiveChoices);
 
       setAcceptedOrphans((prev) => new Set(prev).add(currentSuggestion.orphanSectionId));
       setShowAlternatives(false);
@@ -461,7 +458,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     } finally {
       setProcessing(false);
     }
-  }, [currentSuggestion, selectedMergePair, mergeStations, applyOverlapTreatment, overlapMode, remainingEnds.length, finish]);
+  }, [currentSuggestion, selectedMergePair, mergeStations, applyOverlapChoices, effectiveChoices, remainingEnds.length, finish]);
 
   const handleSkip = useCallback(() => {
     setSkippedCount((c) => c + 1);
@@ -478,7 +475,8 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
         const best = end.suggestions[0];
         if (!best) continue;
 
-        // Use default merge pair (deepest overlap) for accept-all
+        // Default merge pair (end of the repeat) and the default choice, Keep
+        // existing, for every repeated shot of every remaining section.
         const opts = computeMergeOptions(
           {
             importStationIndex: best.orphanStationIndex,
@@ -498,11 +496,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
           { section_id: best.targetSectionId, station_index: mergeExisting },
         );
 
-        await applyOverlapTreatment(
-          best,
-          { importStation: mergeImport, existingStation: mergeExisting },
-          overlapMode,
-        );
+        await applyOverlapChoices(best, new Map());
 
         processed.add(end.orphanSectionId);
       }
@@ -510,7 +504,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     } finally {
       setProcessing(false);
     }
-  }, [currentEndIndex, remainingEnds, mergeStations, applyOverlapTreatment, overlapMode, project, finish]);
+  }, [currentEndIndex, remainingEnds, mergeStations, applyOverlapChoices, project, finish]);
 
   const handleAlternativeClick = useCallback((altIndex: number) => {
     if (!currentEnd) return;
@@ -620,7 +614,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
               </span>
               <span className="text-xs text-text-tertiary">
                 {t('dialogs.orphanPlacement.score', {
-                  percent: Math.round(currentSuggestion!.score * 100),
+                  percent: scorePercent(currentSuggestion!.score),
                 })}
               </span>
             </div>
@@ -648,25 +642,15 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
               </div>
             )}
 
-            {/* Overlap mode picker */}
-            {currentSuggestion && currentSuggestion.matchedShots > 0 && (
-              <div className="flex items-center gap-2" data-testid="overlap-mode-picker">
-                <label className="text-xs text-text-secondary whitespace-nowrap">
-                  {t('dialogs.orphanPlacement.overlap')}
-                </label>
-                <Select
-                  value={overlapMode}
-                  onChange={(v) => setOverlapMode(v as OverlapMode)}
-                  options={[
-                    { value: 'interpolate', label: overlapModeLabels.interpolate, disabled: isTargetDoublyAnchored },
-                    { value: 'import_data', label: overlapModeLabels.import_data, disabled: isTargetDoublyAnchored },
-                    { value: 'existing_data', label: overlapModeLabels.existing_data },
-                    { value: 'keep_both', label: overlapModeLabels.keep_both },
-                  ]}
-                  size="sm"
-                  data-testid="overlap-mode-select"
-                />
-              </div>
+            {/* Per-shot decisions for repeated survey (#681) */}
+            {overlapRows.length > 0 && (
+              <OverlapShotTable
+                rows={overlapRows}
+                choices={effectiveChoices}
+                onChoiceChange={handleChoiceChange}
+                onSetAll={handleSetAll}
+                replaceDisabled={isTargetDoublyAnchored}
+              />
             )}
 
             {/* Prompt */}
@@ -731,7 +715,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                           {t('dialogs.orphanPlacement.alternativeSummary', {
                             count: alt.matchedShots,
                             direction: directionLabel(alt.direction),
-                            percent: Math.round(alt.score * 100),
+                            percent: scorePercent(alt.score),
                           })}
                         </span>
                       </button>

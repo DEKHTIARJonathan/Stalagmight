@@ -1,0 +1,187 @@
+import { useTranslation } from 'react-i18next';
+import { Button } from '../common/Button';
+import { Select } from '../common/Select';
+import { useProjectStore } from '../../store/projectStore';
+import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { defaultConfig } from '../../types/config';
+import { formatFixed } from '../../i18n/format';
+import { convertLength } from '../../utils/formatStats';
+import type { TargetShotLike } from '../../utils/overlapHelpers';
+import {
+  OVERLAP_CHOICES,
+  REPEAT_DIFF_TOLERANCE,
+  exceedsRepeatTolerance,
+  readingDiff,
+  shotAzimuth,
+  shotInclination,
+  type OverlapChoice,
+} from '../../utils/overlapChoices';
+
+/** One repeated shot: the existing reading and the new one, oriented alike. */
+export interface OverlapShotRow {
+  orphanShotIndex: number;
+  existingLabel: string;
+  newLabel: string;
+  existing: TargetShotLike;
+  incoming: TargetShotLike;
+}
+
+interface OverlapShotTableProps {
+  rows: OverlapShotRow[];
+  /** The effective choice per row, keyed by `orphanShotIndex`. */
+  choices: ReadonlyMap<number, OverlapChoice>;
+  onChoiceChange: (orphanShotIndex: number, choice: OverlapChoice) => void;
+  onSetAll: (choice: OverlapChoice) => void;
+  /** The existing survey is anchored at both ends: only Keep existing is allowed. */
+  replaceDisabled: boolean;
+}
+
+const cell = 'px-1 py-0.5 text-right whitespace-nowrap';
+
+/**
+ * The per-shot decision table for repeated survey (#681): one row per repeated
+ * shot, existing over new with their difference, and the reading to keep.
+ *
+ * A plain table rather than `SpreadsheetGrid`: it holds at most a handful of
+ * read-only comparisons, and the grid's editing model would only get in the way.
+ */
+export default function OverlapShotTable({
+  rows,
+  choices,
+  onChoiceChange,
+  onSetAll,
+  replaceDisabled,
+}: OverlapShotTableProps) {
+  const { t } = useTranslation();
+  const units = useProjectStore((s) => s.config?.units) ?? defaultConfig.units;
+  const precision = useDecimalPrecision();
+
+  const lengthUnit = units.length === 'feet' ? t('common.units.feet') : t('common.units.meters');
+  const depthUnit = units.depth === 'feet' ? t('common.units.feet') : t('common.units.meters');
+  const length = (m: number) => formatFixed(convertLength(m, units.length), undefined, precision.length);
+  const depth = (m: number) => formatFixed(convertLength(m, units.depth), undefined, precision.depth);
+  const azimuth = (deg: number) => formatFixed(deg, undefined, precision.azimuth);
+  const inclination = (deg: number | null) =>
+    deg == null ? '--' : formatFixed(deg, undefined, precision.inclination);
+
+  const choiceLabel = (choice: OverlapChoice): string => {
+    switch (choice) {
+      case 'keep_existing': return t('dialogs.orphanPlacement.repeat.choices.keep_existing');
+      case 'use_new': return t('dialogs.orphanPlacement.repeat.choices.use_new');
+      case 'average': return t('dialogs.orphanPlacement.repeat.choices.average');
+    }
+  };
+  const isDisabled = (choice: OverlapChoice) => replaceDisabled && choice !== 'keep_existing';
+
+  const choiceOf = (row: OverlapShotRow): OverlapChoice => choices.get(row.orphanShotIndex) ?? 'keep_existing';
+  const firstChoice = rows[0] ? choiceOf(rows[0]) : null;
+  const sharedChoice = rows.every((row) => choiceOf(row) === firstChoice) ? firstChoice : null;
+
+  const reading = (shot: TargetShotLike) => (
+    <>
+      <td className={cell}>{length(shot.length)}</td>
+      <td className={cell}>{azimuth(shotAzimuth(shot))}</td>
+      <td className={cell}>{inclination(shotInclination(shot))}</td>
+      <td className={cell}>{depth(shot.depth_in)} &rarr; {depth(shot.depth_out)}</td>
+    </>
+  );
+  const flag = (over: boolean) => (over ? 'text-warning-text font-medium' : '');
+
+  return (
+    <div className="space-y-2" data-testid="overlap-shot-section">
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <span className="text-xs font-medium text-text-secondary">
+          {t('dialogs.orphanPlacement.repeat.heading', { count: rows.length })}
+        </span>
+        <div
+          className="flex items-center gap-1"
+          role="group"
+          aria-label={t('dialogs.orphanPlacement.repeat.setAll')}
+        >
+          <span className="text-xs text-text-tertiary">{t('dialogs.orphanPlacement.repeat.setAll')}</span>
+          {OVERLAP_CHOICES.map((choice) => (
+            <Button
+              key={choice}
+              size="sm"
+              variant="ghost"
+              className={`border ${sharedChoice === choice ? 'border-accent bg-accent-20' : 'border-border'}`}
+              aria-pressed={sharedChoice === choice}
+              disabled={isDisabled(choice)}
+              onClick={() => onSetAll(choice)}
+              data-testid={`overlap-set-all-${choice}`}
+            >
+              {choiceLabel(choice)}
+            </Button>
+          ))}
+        </div>
+      </div>
+
+      <p className="text-xs text-text-tertiary">
+        {replaceDisabled
+          ? t('dialogs.orphanPlacement.repeat.anchored')
+          : t('dialogs.orphanPlacement.repeat.hint')}
+      </p>
+
+      <table className="w-full text-xs tabular-nums border-collapse" data-testid="overlap-shot-table">
+        <thead>
+          <tr className="text-text-tertiary border-b border-border">
+            <th className="px-1 py-1 text-left font-medium">{t('dialogs.orphanPlacement.repeat.columns.shot')}</th>
+            <th className={`${cell} font-medium`}>{t('dialogs.orphanPlacement.repeat.columns.length', { unit: lengthUnit })}</th>
+            <th className={`${cell} font-medium`}>{t('dialogs.orphanPlacement.repeat.columns.azimuth')}</th>
+            <th className={`${cell} font-medium`}>{t('dialogs.orphanPlacement.repeat.columns.inclination')}</th>
+            <th className={`${cell} font-medium`}>{t('dialogs.orphanPlacement.repeat.columns.depth', { unit: depthUnit })}</th>
+            <th className="px-1 py-1 text-left font-medium">{t('dialogs.orphanPlacement.repeat.columns.choice')}</th>
+          </tr>
+        </thead>
+        {rows.map((row) => {
+          const diff = readingDiff(row.existing, row.incoming);
+          const differs = exceedsRepeatTolerance(diff);
+          return (
+            <tbody
+              key={row.orphanShotIndex}
+              className={`border-b border-border ${differs ? 'bg-warning-10' : ''}`}
+              data-testid={`overlap-row-${row.orphanShotIndex}`}
+              data-differs={differs ? 'true' : 'false'}
+            >
+              <tr>
+                <td className="px-1 pt-1 whitespace-nowrap text-text-secondary">
+                  {t('dialogs.orphanPlacement.repeat.existing', { shot: row.existingLabel })}
+                </td>
+                {reading(row.existing)}
+                <td rowSpan={3} className="px-1 py-1 align-middle">
+                  <Select
+                    value={choiceOf(row)}
+                    onChange={(v) => onChoiceChange(row.orphanShotIndex, v as OverlapChoice)}
+                    options={OVERLAP_CHOICES.map((choice) => ({
+                      value: choice,
+                      label: choiceLabel(choice),
+                      disabled: isDisabled(choice),
+                    }))}
+                    size="sm"
+                    aria-label={t('dialogs.orphanPlacement.repeat.choiceAria', { shot: row.existingLabel })}
+                    data-testid={`overlap-choice-${row.orphanShotIndex}`}
+                  />
+                </td>
+              </tr>
+              <tr>
+                <td className="px-1 whitespace-nowrap text-text-secondary">
+                  {t('dialogs.orphanPlacement.repeat.new', { shot: row.newLabel })}
+                </td>
+                {reading(row.incoming)}
+              </tr>
+              <tr className="text-text-tertiary">
+                <td className="px-1 pb-1">{t('dialogs.orphanPlacement.repeat.diff')}</td>
+                <td className={`${cell} ${flag(diff.length > REPEAT_DIFF_TOLERANCE.length)}`}>{length(diff.length)}</td>
+                <td className={`${cell} ${flag(diff.azimuth > REPEAT_DIFF_TOLERANCE.azimuth)}`}>{azimuth(diff.azimuth)}</td>
+                <td className={`${cell} ${flag(diff.inclination != null && diff.inclination > REPEAT_DIFF_TOLERANCE.inclination)}`}>
+                  {inclination(diff.inclination)}
+                </td>
+                <td className={`${cell} ${flag(diff.depth > REPEAT_DIFF_TOLERANCE.depth)}`}>{depth(diff.depth)}</td>
+              </tr>
+            </tbody>
+          );
+        })}
+      </table>
+    </div>
+  );
+}
