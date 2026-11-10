@@ -1612,6 +1612,8 @@
       "station": "stn {{index}}",
       "matchedShots_one": "{{count}} shot matched {{direction}}",
       "matchedShots_other": "{{count}} shots matched {{direction}}",
+      "matchedShotsResolved_one": "{{count}} shot matched {{direction}}, {{resolved}} resolved at this merge station",
+      "matchedShotsResolved_other": "{{count}} shots matched {{direction}}, {{resolved}} resolved at this merge station",
       "score": "{{percent}}% score",
       "mergeAt": "Merge at",
       "mergeOption": "stn {{importStation}} → {{targetName}} stn {{existingStation}}",
@@ -1636,6 +1638,8 @@
         "existing": "Existing {{shot}}",
         "new": "New {{shot}}",
         "diff": "Difference",
+        "unresolved_one": "Merging at this station keeps the repeated shot as normal survey, so it is counted twice. Merge at the end of the repeat to resolve it.",
+        "unresolved_other": "Merging at this station keeps the {{count}} repeated shots as normal survey, so they are counted twice. Merge at the end of the repeat to resolve them.",
         "choiceLabel": "Reading to keep:",
         "choiceAria": "Reading to keep for shot {{shot}}"
       },

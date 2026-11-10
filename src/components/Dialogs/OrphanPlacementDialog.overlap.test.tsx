@@ -30,7 +30,9 @@
  * - ignoring a refused merge, in `placeSuggestion` or in Accept / Accept All:
  *   reds both "refused merge" cases;
  * - `Math.round(score * 100)` instead of `scorePercent`: reds "never shows a
- *   score above 100%".
+ *   score above 100%";
+ * - dropping the unresolved note, or always showing the plain matched count:
+ *   each reds "a merge at the start of the repeat".
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
@@ -274,6 +276,34 @@ describe('OrphanPlacementDialog - repeated shots table (#681)', () => {
       }
     });
   }
+
+  it('a merge at the start of the repeat says the repeat stays normal survey', async () => {
+    setup();
+    render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} />);
+
+    expect(screen.getByTestId('orphan-matched-shots').textContent).toBe('2 shots matched \u2192');
+    expect(screen.queryByTestId('overlap-unresolved-note')).toBeNull();
+
+    await pickOption('merge-station-select', '1');
+    expect(screen.getByTestId('orphan-matched-shots').textContent)
+      .toBe('2 shots matched \u2192, 1 resolved at this merge station');
+    expect(screen.queryByTestId('overlap-unresolved-note')).toBeNull();
+
+    await pickOption('merge-station-select', '0');
+    expect(screen.queryByTestId('overlap-shot-section')).toBeNull();
+    expect(screen.getByTestId('orphan-matched-shots').textContent)
+      .toBe('2 shots matched \u2192, 0 resolved at this merge station');
+    expect(screen.getByTestId('overlap-unresolved-note').textContent).toContain(
+      'keeps the 2 repeated shots as normal survey',
+    );
+
+    await acceptAndFinish();
+    expect(mergeStations).toHaveBeenCalledWith(
+      { section_id: 1, station_index: 0 },
+      { section_id: 2, station_index: 3 },
+    );
+    expect(referenceCalls()).toEqual([]);
+  });
 
   it('a row that leaves the table forgets its choice; a row that stays keeps it', async () => {
     setup();

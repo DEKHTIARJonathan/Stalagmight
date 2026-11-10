@@ -507,11 +507,19 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
               >
                 {confidenceLabel(currentSuggestion!.confidence)}
               </span>
-              <span className="text-xs text-text-secondary">
-                {t('dialogs.orphanPlacement.matchedShots', {
-                  count: currentSuggestion!.matchedShots,
-                  direction: directionLabel(currentSuggestion!.direction),
-                })}
+              <span className="text-xs text-text-secondary" data-testid="orphan-matched-shots">
+                {/* The matcher's count, and how much of it this merge station
+                    resolves when that is not all of it. */}
+                {overlapRows.length < currentSuggestion!.matchedShots
+                  ? t('dialogs.orphanPlacement.matchedShotsResolved', {
+                    count: currentSuggestion!.matchedShots,
+                    resolved: overlapRows.length,
+                    direction: directionLabel(currentSuggestion!.direction),
+                  })
+                  : t('dialogs.orphanPlacement.matchedShots', {
+                    count: currentSuggestion!.matchedShots,
+                    direction: directionLabel(currentSuggestion!.direction),
+                  })}
               </span>
               <span className="text-xs text-text-tertiary">
                 {t('dialogs.orphanPlacement.score', {
@@ -541,6 +549,13 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
                   data-testid="merge-station-select"
                 />
               </div>
+            )}
+
+            {/* A merge at the start of the repeat resolves none of it (#681). */}
+            {overlapRows.length === 0 && currentSuggestion!.matchedShots > 0 && (
+              <p className="text-xs text-warning-text" data-testid="overlap-unresolved-note">
+                {t('dialogs.orphanPlacement.repeat.unresolved', { count: currentSuggestion!.matchedShots })}
+              </p>
             )}
 
             {/* Per-shot decisions for repeated survey (#681) */}
