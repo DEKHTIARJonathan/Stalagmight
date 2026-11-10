@@ -38,3 +38,20 @@ pub(crate) fn get_raw_table_impl(
         .read_raw_table(&table, limit, offset)
         .map_err(|e| e.to_string())
 }
+
+/// Move a shot between survey sections without writing raw SQL.
+#[tauri::command]
+pub fn reassign_shot(
+    state: State<AppState>,
+    source_section_id: crate::models::SectionId,
+    shot_id: crate::models::ShotId,
+    destination_section_id: Option<crate::models::SectionId>,
+    new_section: Option<crate::models::SectionData>,
+) -> crate::core::CommandResult {
+    state.reassign_shot(
+        source_section_id,
+        shot_id,
+        destination_section_id,
+        new_section,
+    )
+}

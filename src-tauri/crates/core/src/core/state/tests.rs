@@ -4416,6 +4416,10 @@ fn test_delete_shot_rejects_frozen_shot() {
         result.error
     );
 
+    let transfer = state.reassign_shot(sec_a, target_shot_id, Some(sec_b), None);
+    assert!(!transfer.success);
+    assert!(transfer.error.as_deref().unwrap_or("").contains("frozen"));
+
     // The shot still exists - nothing was removed.
     let after = state.get_project_state().unwrap();
     let shots_after = after
@@ -23655,6 +23659,7 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "execute_split_shot_at_distance",
     "execute_create_and_merge",
     "execute_import_sections",
+    "reassign_shot",
     // by-path / metadata methods (gated only when path == the OPEN project)
     "set_project_name_for_path",
     // warning resolve/unresolve (#197): gated because resolved_warnings proliferates
@@ -23856,6 +23861,14 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                 Vec::new(),
                 VirtualShotMode::Auto,
             ),
+        );
+    }
+
+    {
+        let (state, sid, shid, _temp) = remote_fixture();
+        assert_disabled(
+            "reassign_shot",
+            &state.reassign_shot(sid, shid, Some(sid), None),
         );
     }
 

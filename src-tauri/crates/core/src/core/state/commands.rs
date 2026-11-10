@@ -1,3 +1,4 @@
+mod reassign;
 use super::AppState;
 #[cfg(test)]
 use crate::core::CommentHolder;

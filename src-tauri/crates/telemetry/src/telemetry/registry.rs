@@ -508,6 +508,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.update_gas_config",
     "command.get_raw_table_names",
     "command.get_raw_table",
+    "command.reassign_shot",
     // Ruler tool: along-cave-line distance + path shots between two endpoints (#26).
     "command.get_along_line_distance",
     // Per-project settings: validation thresholds stored in the .stalx (#57).

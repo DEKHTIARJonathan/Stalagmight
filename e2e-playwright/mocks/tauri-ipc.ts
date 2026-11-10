@@ -4965,6 +4965,32 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true, section_ids: [] };
           }
 
+          case 'reassign_shot': {
+            const fail = (error: string) => ({ success: false, error, warnings: [], section_ids: [] });
+            if (!currentProject) return fail('No project open');
+            const sections = currentProject.sections as Array<{ id: number; shots: Array<{ id: number } & Record<string, unknown>> } & Record<string, unknown>>;
+            const source = sections.find(section => section.id === args?.sourceSectionId);
+            const index = source?.shots.findIndex(shot => shot.id === args?.shotId) ?? -1;
+            if (!source || index < 0) return fail('Source shot not found');
+            const data = args?.newSection as Record<string, unknown> | null | undefined;
+            const destinationId = args?.destinationSectionId as number | null | undefined;
+            if ((destinationId != null) === (data != null)) return fail('Choose an existing or new section');
+            let destination = sections.find(section => section.id === destinationId);
+            if (data) {
+              sectionCounter = Math.max(sectionCounter, ...sections.map(section => section.id)) + 1;
+              destination = { ...data, id: sectionCounter, shots: [] };
+              currentProject.sections.push(destination);
+            }
+            if (!destination) return fail('Destination section not found');
+            const shot = source.shots[index]!;
+            if (destination !== source) {
+              source.shots.splice(index, 1);
+              shot.id = Math.max(mockShotId(destination.id, 0) - 1, ...destination.shots.map(existing => existing.id)) + 1;
+              destination.shots.push(shot);
+            }
+            return { success: true, section_id: destination.id, shot_id: shot.id, warnings: [], error: null, section_ids: [] };
+          }
+
           case 'delete_shot': {
             console.log('[Mock IPC] delete_shot called with:', args);
             // #310: a plain no-op response left every station index unchanged, so nothing
