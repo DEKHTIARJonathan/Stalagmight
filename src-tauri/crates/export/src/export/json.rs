@@ -47,6 +47,8 @@ pub struct JsonSection {
 #[derive(Debug, Serialize)]
 pub struct JsonShot {
     pub id: u32,
+    pub number: Option<u32>,
+    pub from_id: Option<u32>,
     pub length: f64,
     pub azimuth_in: f64,
     pub azimuth_out: f64,
@@ -81,6 +83,8 @@ impl JsonExport {
                         .iter()
                         .map(|shot| JsonShot {
                             id: shot.id,
+                            number: shot.number,
+                            from_id: shot.from_id,
                             length: shot.length,
                             azimuth_in: shot.azimuth_in,
                             azimuth_out: shot.azimuth_out,

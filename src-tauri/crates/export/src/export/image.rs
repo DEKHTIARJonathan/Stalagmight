@@ -363,6 +363,14 @@ impl Default for ExportImageOptions {
     }
 }
 
+fn shot_start_ref(project: &Project, section_id: u32, index: usize) -> StationRef {
+    if project.shot_graph.explicit {
+        Project::shot_start_ref(section_id, index)
+    } else {
+        StationRef::new(section_id, index as u32)
+    }
+}
+
 /// Top-level entry point. Dispatches on `format`. Renders from the measured
 /// station coordinates; use [`export_image_with_stations`] to render from a
 /// caller-supplied set (e.g. the closure-adjusted solve).
@@ -568,7 +576,7 @@ pub fn generate_svg_string_with_stations(
             if shot.kind.is_virtual() {
                 continue;
             }
-            let from = StationRef::new(section.id, i as u32);
+            let from = shot_start_ref(project, section.id, i);
             let to = StationRef::new(section.id, (i + 1) as u32);
             if let Some(s) = station_by_ref.get(&from) {
                 extend(
@@ -692,7 +700,7 @@ pub fn generate_svg_string_with_stations(
     let mut has_non_ref_shot: HashSet<usize> = HashSet::new();
     for section in &project.sections {
         for (i, shot) in section.shots.iter().enumerate() {
-            let from = StationRef::new(section.id, i as u32);
+            let from = shot_start_ref(project, section.id, i);
             let to = StationRef::new(section.id, (i + 1) as u32);
             let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) else {
                 continue;
@@ -761,7 +769,7 @@ pub fn generate_svg_string_with_stations(
             if !shot.kind.is_virtual() {
                 continue;
             }
-            let from = StationRef::new(section.id, i as u32);
+            let from = shot_start_ref(project, section.id, i);
             let to = StationRef::new(section.id, (i + 1) as u32);
             let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) else {
                 continue;
@@ -781,7 +789,7 @@ pub fn generate_svg_string_with_stations(
             if !shot.kind.is_virtual() {
                 continue;
             }
-            let from = StationRef::new(section.id, i as u32);
+            let from = shot_start_ref(project, section.id, i);
             let to = StationRef::new(section.id, (i + 1) as u32);
             let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) else {
                 continue;
@@ -897,7 +905,7 @@ pub fn generate_svg_string_with_stations(
             if !shot.kind.is_virtual() {
                 continue;
             }
-            let from = StationRef::new(section.id, i as u32);
+            let from = shot_start_ref(project, section.id, i);
             let to = StationRef::new(section.id, (i + 1) as u32);
             let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) else {
                 continue;
@@ -1373,7 +1381,7 @@ pub fn generate_svg_string_with_stations(
                 if shot.kind.is_virtual() {
                     continue;
                 }
-                let from = StationRef::new(section.id, i as u32);
+                let from = shot_start_ref(project, section.id, i);
                 let to = StationRef::new(section.id, (i + 1) as u32);
                 let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to))
                 else {
@@ -1502,7 +1510,7 @@ pub fn generate_svg_string_with_stations(
                     continue;
                 }
                 for sr in [
-                    StationRef::new(section.id, i as u32),
+                    shot_start_ref(project, section.id, i),
                     StationRef::new(section.id, (i + 1) as u32),
                 ] {
                     // Average only the points we actually resolved, so a missing
@@ -1602,7 +1610,7 @@ pub fn generate_svg_string_with_stations(
                 if shot.kind.is_virtual() {
                     continue;
                 }
-                let from_ref = StationRef::new(section.id, i as u32);
+                let from_ref = shot_start_ref(project, section.id, i);
                 let to_ref = StationRef::new(section.id, (i + 1) as u32);
                 let (Some(from), Some(to)) =
                     (station_by_ref.get(&from_ref), station_by_ref.get(&to_ref))
@@ -1657,7 +1665,7 @@ pub fn generate_svg_string_with_stations(
                 let Some(text) = shot.comment.clone() else {
                     continue;
                 };
-                let from_ref = StationRef::new(section.id, i as u32);
+                let from_ref = shot_start_ref(project, section.id, i);
                 let to_ref = StationRef::new(section.id, (i + 1) as u32);
                 let (Some(from), Some(to)) =
                     (station_by_ref.get(&from_ref), station_by_ref.get(&to_ref))
@@ -1795,7 +1803,7 @@ fn label_open_space_angle(
             if shot.kind.is_virtual() {
                 continue;
             }
-            let from_ref = StationRef::new(section.id, i as u32);
+            let from_ref = shot_start_ref(project, section.id, i);
             let to_ref = StationRef::new(section.id, (i + 1) as u32);
             let (Some(&fi), Some(&ti)) = (station_index.get(&from_ref), station_index.get(&to_ref))
             else {

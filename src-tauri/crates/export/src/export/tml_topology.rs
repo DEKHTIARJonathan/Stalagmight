@@ -180,3 +180,45 @@ pub(super) fn build_parent_map(
 
     map
 }
+
+/// Physical graph projections retain each shot's incoming direction. Use the
+/// original origin relation instead of rooting an undirected merge forest by ID.
+pub(super) fn build_origin_parent_map(project: &Project) -> HashMap<SectionId, ParentLink> {
+    let numbers: HashMap<_, _> = project
+        .sections
+        .iter()
+        .filter_map(|section| {
+            section
+                .shots
+                .first()?
+                .number
+                .map(|number| (number, section.id))
+        })
+        .collect();
+    let mut map = HashMap::new();
+    for section in &project.sections {
+        let Some(parent) = section
+            .shots
+            .first()
+            .and_then(|shot| shot.from_id)
+            .and_then(|number| numbers.get(&number))
+            .copied()
+        else {
+            continue;
+        };
+        let start = StationRef::new(section.id, 0);
+        let end = StationRef::new(parent, 1);
+        // The projection moves a cycle's cut edge into loop closures. Keeping
+        // that edge out of the parent forest lets Ariane represent the cycle.
+        if project.are_stations_merged(start, end) {
+            map.insert(
+                section.id,
+                ParentLink {
+                    parent_station: end,
+                    child_station_index: 0,
+                },
+            );
+        }
+    }
+    map
+}

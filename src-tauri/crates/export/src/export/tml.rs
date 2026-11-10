@@ -30,7 +30,8 @@ use crate::models::{normalize_azimuth, Project, SectionId, Shot, StationRef};
 use super::atomic_write::write_atomic;
 use super::tml_azimuth::AzimuthExport;
 use super::tml_topology::{
-    build_parent_map, choose_default_root_section_id, section_datum, station_depth,
+    build_origin_parent_map, build_parent_map, choose_default_root_section_id, section_datum,
+    station_depth,
 };
 
 // ============================================================================
@@ -300,6 +301,11 @@ fn write_output(path: &Path, xml: &[u8]) -> Result<()> {
 // ============================================================================
 
 fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<(Vec<u8>, Vec<String>)> {
+    let explicit_origins = project.shot_graph.explicit;
+    let physical = project
+        .physical_shot_graph_for_export()
+        .map_err(anyhow::Error::msg)?;
+    let project = &physical;
     let azimuth_export = AzimuthExport::decide(project);
     // The two azimuth compromises are decisions the FILE carries and the
     // project does not, so they are stated rather than done quietly (#438):
@@ -317,7 +323,7 @@ fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<(Vec<u
         notes.push(code.to_string());
     }
     let (shots, unwritten_datums) =
-        build_export_shots_with_report(project, profile, azimuth_export);
+        build_export_shots_with_report(project, profile, azimuth_export, explicit_origins);
     // Same contract as the azimuth notes above (#438): a fact the FILE carries
     // and the project does not must reach the user, not just the log. The
     // detailed warn lives in the GPS pass; this is its UI-facing code.
@@ -704,7 +710,7 @@ fn build_export_shots(
     profile: TmlProfile,
     azimuth_export: AzimuthExport,
 ) -> Vec<ExportShot> {
-    build_export_shots_with_report(project, profile, azimuth_export).0
+    build_export_shots_with_report(project, profile, azimuth_export, false).0
 }
 
 /// Returns the shots plus how many of the project's GPS anchors ended up on no
@@ -713,6 +719,7 @@ fn build_export_shots_with_report(
     project: &Project,
     profile: TmlProfile,
     azimuth_export: AzimuthExport,
+    explicit_origins: bool,
 ) -> (Vec<ExportShot>, usize) {
     if project.sections.is_empty() {
         return (Vec::new(), 0);
@@ -729,13 +736,25 @@ fn build_export_shots_with_report(
     // laid out against a different anchor - every station displaced by the whole
     // inter-datum vector, silently, in the file the user hands to someone else.
     let frame_datum = project.frame_datum();
-    let root_section_id = frame_datum
-        .map(|d| d.station_ref.section_id)
-        .filter(|sid| project.sections.iter().any(|s| s.id == *sid))
+    let origin_parents = explicit_origins.then(|| build_origin_parent_map(project));
+    let root_section_id = origin_parents
+        .as_ref()
+        .and_then(|parents| {
+            project
+                .sections
+                .iter()
+                .find(|section| !parents.contains_key(&section.id))
+                .map(|section| section.id)
+        })
+        .or_else(|| {
+            frame_datum
+                .map(|d| d.station_ref.section_id)
+                .filter(|sid| project.sections.iter().any(|s| s.id == *sid))
+        })
         .unwrap_or_else(|| choose_default_root_section_id(project));
 
     // Build rooted parent links from station merges.
-    let parent_map = build_parent_map(project, root_section_id);
+    let parent_map = origin_parents.unwrap_or_else(|| build_parent_map(project, root_section_id));
     let primary_datum = frame_datum;
 
     let mut next_id: i64 = 0;
@@ -1501,20 +1520,47 @@ fn build_export_shots_with_report(
         .map(|s| (s.id, s.depth))
         .collect();
     let mut closure_shots = Vec::new();
-    for closure in &project.loop_closures {
+    let mut closure_links: Vec<_> = project
+        .loop_closures
+        .iter()
+        .map(|closure| (closure.id, &closure.station_a, &closure.station_b))
+        .collect();
+    if explicit_origins {
+        // Extra rigid ties must survive without reversing an incoming origin.
+        // Ariane represents these non-parent edges as closure connectors.
+        for merge in &project.station_merges {
+            let pair = (
+                project.resolve_key(&merge.station_a),
+                project.resolve_key(&merge.station_b),
+            );
+            let represented = match pair {
+                (Some(a), Some(b)) => [(a, b), (b, a)].iter().any(|(child, parent)| {
+                    parent_map.get(&child.section_id).is_some_and(|link| {
+                        link.child_station_index == child.station_index
+                            && link.parent_station == *parent
+                    })
+                }),
+                _ => false,
+            };
+            if !represented {
+                closure_links.push((0, &merge.station_a, &merge.station_b));
+            }
+        }
+    }
+    for (source_closure_id, station_a, station_b) in closure_links {
         let (Some(a_ref), Some(b_ref)) = (
-            project.resolve_key(&closure.station_a),
-            project.resolve_key(&closure.station_b),
+            project.resolve_key(station_a),
+            project.resolve_key(station_b),
         ) else {
             tracing::warn!(
-                closure_id = closure.id,
+                closure_id = source_closure_id,
                 "Skipping closure export: an endpoint anchor no longer resolves"
             );
             continue;
         };
         let Some(&from_id) = station_to_ariane.get(&(a_ref.section_id, a_ref.station_index)) else {
             tracing::warn!(
-                closure_id = closure.id,
+                closure_id = source_closure_id,
                 from_section_id = a_ref.section_id,
                 from_station_index = a_ref.station_index,
                 to_section_id = b_ref.section_id,
@@ -1526,7 +1572,7 @@ fn build_export_shots_with_report(
 
         let Some(&to_id) = station_to_ariane.get(&(b_ref.section_id, b_ref.station_index)) else {
             tracing::warn!(
-                closure_id = closure.id,
+                closure_id = source_closure_id,
                 from_section_id = a_ref.section_id,
                 from_station_index = a_ref.station_index,
                 to_section_id = b_ref.section_id,
@@ -1538,7 +1584,7 @@ fn build_export_shots_with_report(
 
         if from_id == to_id {
             tracing::warn!(
-                closure_id = closure.id,
+                closure_id = source_closure_id,
                 section_id = a_ref.section_id,
                 station_index = a_ref.station_index,
                 "Skipping closure export: closure endpoints collapse to the same Ariane node"
@@ -1552,14 +1598,14 @@ fn build_export_shots_with_report(
         let section_name = project
             .sections
             .iter()
-            .find(|s| s.id == closure.station_a.section_id)
+            .find(|s| s.id == station_a.section_id)
             .and_then(|s| s.name.clone())
-            .unwrap_or_else(|| format!("Section {}", closure.station_a.section_id));
+            .unwrap_or_else(|| format!("Section {}", station_a.section_id));
 
         let color = project
             .sections
             .iter()
-            .find(|s| s.id == closure.station_a.section_id)
+            .find(|s| s.id == station_a.section_id)
             .map(|s| color_to_ariane(&s.color))
             .unwrap_or_else(|| "0x4ecdc4ff".to_string());
 
@@ -2404,6 +2450,63 @@ mod tests {
             ..Default::default()
         });
         project
+    }
+
+    #[test]
+    fn explicit_origins_export_physical_graph_instead_of_metadata_order() {
+        let mut project = simple_project();
+        project.add_section(SectionData {
+            name: Some("Other group".into()),
+            shots: vec![ShotData {
+                length: 30.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        project.initialize_shot_graph().unwrap();
+        project.sections[0].shots[1].from_id = Some(3);
+        project.shot_graph.explicit = true;
+        project.initialize_shot_graph().unwrap();
+        let file = NamedTempFile::with_suffix(".tmlu").unwrap();
+        export_tml(&project, file.path()).unwrap();
+        let parsed = crate::parsers::tml::parse_tml(file.path()).unwrap();
+        let shots: Vec<_> = parsed
+            .sections
+            .iter()
+            .flat_map(|section| &section.shots)
+            .collect();
+        let child = shots
+            .iter()
+            .find(|shot| (shot.length - 8.0).abs() < 0.01)
+            .unwrap();
+        let origin = shots
+            .iter()
+            .find(|shot| (shot.length - 30.0).abs() < 0.01)
+            .unwrap();
+        assert_eq!(
+            child.from_id, origin.id,
+            "export must use the replaced cross-group origin"
+        );
+        assert_eq!(
+            project.sections[0].shots.len(),
+            2,
+            "export must preserve metadata groups"
+        );
+
+        let station_a = project.key_for_ref(StationRef::new(0, 1)).unwrap();
+        let station_b = project.key_for_ref(StationRef::new(1, 1)).unwrap();
+        project.station_merges.push(StationMerge {
+            station_a,
+            station_b,
+            merged_at: project.created_at,
+        });
+        export_tml(&project, file.path()).unwrap();
+        let tied = crate::parsers::tml::parse_tml(file.path()).unwrap();
+        assert_eq!(
+            tied.closures.len(),
+            1,
+            "non-origin rigid ties must survive as closures"
+        );
     }
 
     /// Every entry in `dir`, sorted, so a stray export temp shows up by name.

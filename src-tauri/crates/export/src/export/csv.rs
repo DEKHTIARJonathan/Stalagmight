@@ -16,7 +16,7 @@ fn write_csv(project: &Project, file: &mut impl Write) -> Result<()> {
     // Write header
     writeln!(
         file,
-        "section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment"
+        "section_id,section_name,shot_id,from_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment"
     )?;
 
     // Write shots
@@ -26,10 +26,11 @@ fn write_csv(project: &Project, file: &mut impl Write) -> Result<()> {
         for shot in &section.shots {
             writeln!(
                 file,
-                "{},{},{},{:.2},{:.1},{:.1},{:.2},{:.2},{},{},{},{},{},{}",
+                "{},{},{},{},{:.2},{:.1},{:.1},{:.2},{:.2},{},{},{},{},{},{}",
                 section.id,
                 escape_csv(section_name),
-                shot.id,
+                shot.number.unwrap_or(shot.id),
+                shot.from_id.map(|id| id.to_string()).unwrap_or_default(),
                 shot.length,
                 shot.azimuth_in,
                 shot.azimuth_out,
