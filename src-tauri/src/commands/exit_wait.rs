@@ -18,10 +18,12 @@
 //!    in flight and no forced quit armed, it PREVENTS the exit, waits for it off
 //!    the main thread, runs the bounded release, and then exits.
 //!
-//! Only the transfers the frontend gate itself waits on hold the exit: the IPC
-//! commands that upload, acquire, download, release or change the account, and
+//! Only the transfers the frontend gate itself waits on hold the exit: exactly
+//! the IPC commands it counts as `exclusive` (`src/utils/speleoNetworkCommands.ts`)
+//! - the ones that upload, acquire, download, release or change the account, and
 //! the exit / sign-out actions (`close_project`, the cached-copy discard). Each
-//! registers with [`user_transfer`] for its whole run. Backend-internal work the
+//! registers with [`user_transfer`] for its whole run, and a test here pins the
+//! two sets equal, both ways, across every command module. Backend-internal work the
 //! user never sees (the background lock re-verify, the stranded-claim cleanup, a
 //! detached release from a project switch) never keeps a windowless process
 //! alive: the exit keeps the old bounded behaviour for it - the release waits at
@@ -347,69 +349,214 @@ mod tests {
         }
     }
 
-    /// The commands that register a user transfer are exactly the SpeleoDB calls
-    /// the frontend gate counts as exclusive (`speleoNetworkCommands.ts`), plus the
-    /// exit / sign-out actions; no read ever holds the exit.
+    /// One top-level `fn` item found in a module's source.
+    struct FnSource {
+        file: String,
+        name: String,
+        /// Its 0-based lines, signature to closing brace.
+        lines: std::ops::RangeInclusive<usize>,
+        body: String,
+    }
+
+    /// The `fn` item that starts at line `start` of `lines` (the line holding
+    /// `fn `), up to the first closing brace at column 0.
+    fn fn_at(file: &str, lines: &[&str], start: usize) -> FnSource {
+        let end = (start..lines.len())
+            .find(|&j| lines[j] == "}")
+            .unwrap_or_else(|| panic!("{file}:{}: a fn body that never ends", start + 1));
+        let line = lines[start];
+        let after_fn = &line[line.find("fn ").expect("a fn line") + 3..];
+        FnSource {
+            file: file.to_owned(),
+            name: after_fn
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect(),
+            lines: start..=end,
+            body: lines[start..=end].join("\n"),
+        }
+    }
+
+    /// Every `#[tauri::command]` in `src` (commands are top-level items).
+    fn commands_in(file: &str, src: &str) -> Vec<FnSource> {
+        let lines: Vec<&str> = src.lines().collect();
+        let mut found = Vec::new();
+        let mut i = 0;
+        while i < lines.len() {
+            if !lines[i].trim_start().starts_with("#[tauri::command") {
+                i += 1;
+                continue;
+            }
+            let start = (i + 1..lines.len())
+                .find(|&j| lines[j].contains("fn "))
+                .unwrap_or_else(|| panic!("{file}:{}: a command without a fn", i + 1));
+            let command = fn_at(file, &lines, start);
+            i = command.lines.end() + 1;
+            found.push(command);
+        }
+        found
+    }
+
+    /// Every `.rs` file under `dir`, recursively, as (path, source). Read at test
+    /// time, so a module added later is scanned without anyone listing it here.
+    fn rust_sources(dir: &std::path::Path) -> Vec<(std::path::PathBuf, String)> {
+        let mut found = Vec::new();
+        let mut pending = vec![dir.to_path_buf()];
+        while let Some(dir) = pending.pop() {
+            for entry in std::fs::read_dir(&dir).expect("a readable source directory") {
+                let path = entry.expect("a directory entry").path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let src = std::fs::read_to_string(&path).expect("a readable module");
+                    found.push((path, src));
+                }
+            }
+        }
+        found.sort();
+        found
+    }
+
+    /// The `exclusive` and the `read` rows of the frontend gate's table
+    /// (`speleoNetworkCommands.ts`).
+    fn frontend_kinds() -> (Vec<String>, Vec<String>) {
+        let table = include_str!("../../../src/utils/speleoNetworkCommands.ts");
+        let (mut exclusive, mut read) = (Vec::new(), Vec::new());
+        for line in table.lines() {
+            let Some((name, kind)) = line.trim().split_once(':') else {
+                continue;
+            };
+            let identifier = !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+            match kind.trim() {
+                "'exclusive'," if identifier => exclusive.push(name.to_owned()),
+                "'read'," if identifier => read.push(name.to_owned()),
+                _ => {}
+            }
+        }
+        (exclusive, read)
+    }
+
+    /// The commands whose backend holds the app's exit are EXACTLY the ones the
+    /// frontend's quit gate counts as `exclusive` (`speleoNetworkCommands.ts`),
+    /// both ways, across every command module; no read ever holds the exit.
+    ///
+    /// A command the backend holds but the frontend does not count lets a quit
+    /// destroy the window while the process lives on, windowless, until it ends:
+    /// the gap `close_project` and the sign-out discard had, because this test
+    /// used to read the SpeleoDB modules only. The reverse makes a quit wait for
+    /// work the backend would not wait for.
     #[test]
     fn exactly_the_frontend_gates_transfers_hold_the_exit() {
-        let table = include_str!("../../../src/utils/speleoNetworkCommands.ts");
-        // The SpeleoDB commands live in these two modules: the network ones, and
-        // the cached copies on this machine (which the gate counts as exclusive).
-        let speleodb = concat!(
-            include_str!("speleodb.rs"),
-            include_str!("speleodb_cache.rs")
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let commands_dir = root.join("commands");
+        let sources = rust_sources(&root);
+        let mut commands = Vec::new();
+        let mut run_transfer = None;
+        for (path, src) in &sources {
+            if path.parent() != Some(commands_dir.as_path()) {
+                continue;
+            }
+            let file = path.file_name().and_then(|n| n.to_str()).expect("UTF-8");
+            commands.extend(commands_in(file, src));
+            let lines: Vec<&str> = src.lines().collect();
+            if let Some(start) = lines
+                .iter()
+                .position(|l| l.starts_with("async fn run_transfer<"))
+            {
+                run_transfer = Some(fn_at(file, &lines, start));
+            }
+        }
+        assert!(
+            commands.len() > 100,
+            "every command module was scanned ({} commands)",
+            commands.len()
         );
-        let project = include_str!("project.rs");
-        let item = |src: &'static str, head: &str| -> &'static str {
-            let start = src
-                .find(head)
-                .unwrap_or_else(|| panic!("{head} is defined"));
-            let rest = &src[start..];
-            &rest[..rest.find("\n}\n").expect("body ends")]
-        };
-        let body = |src: &'static str, name: &str| item(src, &format!("pub async fn {name}("));
-        // Every registration in these modules is a named binding: a `let _ =` there
-        // would read as holding the exit and hold nothing.
-        for src in [speleodb, project] {
-            for line in src.lines().filter(|l| l.contains("user_transfer(")) {
+        let run_transfer = run_transfer.expect("run_transfer is defined");
+        // `run_transfer` itself holds the guard for the whole run.
+        assert!(
+            holds_a_transfer(&run_transfer.body),
+            "run_transfer must keep its transfer registered"
+        );
+
+        // Every registration anywhere in the app crate is a named binding (a
+        // `let _ =` would read as holding the exit and hold nothing), inside a
+        // command or `run_transfer` - so no helper can hold the exit for a command
+        // this scan does not attribute it to.
+        for (path, src) in &sources {
+            if path.ends_with("commands/exit_wait.rs") {
+                continue;
+            }
+            let file = path.file_name().and_then(|n| n.to_str()).expect("UTF-8");
+            let in_commands = path.parent() == Some(commands_dir.as_path());
+            for (index, line) in src.lines().enumerate() {
+                let code = line.trim_start();
+                let registers = code.contains("user_transfer(");
+                if code.starts_with("//") || !(registers || code.contains("run_transfer(")) {
+                    continue;
+                }
+                if registers {
+                    assert!(
+                        binds_the_transfer(line),
+                        "{file}: the transfer guard is dropped at once: {line}"
+                    );
+                }
+                let inside = |f: &FnSource| f.file == file && f.lines.contains(&index);
                 assert!(
-                    binds_the_transfer(line),
-                    "the transfer guard is dropped at once: {line}"
+                    in_commands && (inside(&run_transfer) || commands.iter().any(inside)),
+                    "{file}:{}: an exit-holding transfer outside an IPC command: {line}",
+                    index + 1
                 );
             }
         }
-        // `run_transfer` itself holds the guard for the whole run.
+
+        let holds = |c: &FnSource| c.body.contains("run_transfer(") || holds_a_transfer(&c.body);
+        let (exclusive, read) = frontend_kinds();
         assert!(
-            holds_a_transfer(item(speleodb, "async fn run_transfer<")),
-            "run_transfer must keep its transfer registered"
+            exclusive.len() + read.len() > 20,
+            "the frontend table was read ({} rows)",
+            exclusive.len() + read.len()
         );
-        let mut checked = 0;
-        for line in table.lines() {
-            let line = line.trim();
-            let Some((name, kind)) = line.split_once(':') else {
-                continue;
-            };
-            if !name.starts_with("speleodb_") || name.contains(' ') {
-                continue;
-            }
-            let command = body(speleodb, name);
-            let holds = command.contains("run_transfer(") || holds_a_transfer(command);
-            match kind.trim() {
-                "'exclusive'," => assert!(holds, "{name} is exclusive: it must hold the exit"),
-                "'read'," => assert!(!holds, "{name} is a read: it must never hold the exit"),
-                _ => continue,
-            }
-            checked += 1;
-        }
-        assert!(
-            checked > 10,
-            "the frontend table was read ({checked} commands)"
-        );
-        for name in ["close_project", "speleodb_discard_cached_copy"] {
-            assert!(
-                holds_a_transfer(body(project, name)),
-                "{name} is an exit / sign-out action: it must hold the exit"
+        let command = |name: &str| {
+            let named: Vec<&FnSource> = commands.iter().filter(|c| c.name == name).collect();
+            assert_eq!(
+                named.len(),
+                1,
+                "{name}: exactly one IPC command by this name"
             );
+            named[0]
+        };
+        // Frontend -> backend.
+        for name in &exclusive {
+            assert!(
+                holds(command(name)),
+                "{name} is exclusive at the quit gate: its backend must hold the exit"
+            );
+        }
+        for name in &read {
+            assert!(
+                !holds(command(name)),
+                "{name} is a read: it must never hold the exit"
+            );
+        }
+        // Backend -> frontend, whatever module the command lives in.
+        let held: Vec<&str> = commands
+            .iter()
+            .filter(|c| holds(c))
+            .map(|c| c.name.as_str())
+            .collect();
+        for name in &held {
+            assert!(
+                exclusive.iter().any(|e| e == name),
+                "{name} holds the backend's exit: the frontend's quit gate must count it \
+                 (an `exclusive` row in speleoNetworkCommands.ts)"
+            );
+        }
+        // The exit / sign-out actions in project.rs are among them.
+        for name in ["close_project", "speleodb_discard_cached_copy"] {
+            assert!(held.contains(&name), "{name} holds the exit");
         }
     }
 }

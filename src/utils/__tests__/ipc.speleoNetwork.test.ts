@@ -74,6 +74,14 @@ describe('speleoNetworkKind', () => {
     }
   });
 
+  it('counts the exit / sign-out actions the backend exit waits for as exclusive', () => {
+    // `close_project` releases (or keeps, or discards) the open project's lock and
+    // the sign-out's discard removes a cached copy; the backend holds the app's exit
+    // for both (`exit_wait.rs`), so the quit gate must count them too.
+    expect(speleoNetworkKind('close_project', { releaseLock: false, discardLocal: false })).toBe('exclusive');
+    expect(speleoNetworkKind('speleodb_discard_cached_copy', { projectId: 'x', discardUnpushed: true })).toBe('exclusive');
+  });
+
   it('classifies server reads as read', () => {
     for (const command of [
       'speleodb_list_projects', 'speleodb_link_status', 'speleodb_get_revisions',

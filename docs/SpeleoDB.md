@@ -571,7 +571,8 @@ window close, and the close listener's first gate (`utils/quitAfterWork`) runs
 before any question:
 
 - With nothing in flight the quit goes on as before.
-- With an exclusive SpeleoDB call, a hand-off verb, an exit-prompt answer or a
+- With an exclusive SpeleoDB call (a project close and the sign-out's discard of a
+  cached copy included), a hand-off verb, an exit-prompt answer or a
   "Couldn't hand back the lock" Retry in flight, the window stays. An info toast says the save or upload is in progress
   and that Stalagmight will close when it finishes, and the waiting prompt
   (`QuitWaitDialog`, layered over the upload progress) shows a spinner with Keep
@@ -593,9 +594,13 @@ before any question:
 
 The backend exit hook (`commands/exit_wait.rs`, from `RunEvent::ExitRequested`) is
 the backstop for a user-visible transfer still running when the exit arrives anyway.
-Only the transfers the frontend gate waits on can hold it: every IPC command the
-gate counts as `exclusive` (`speleoNetworkCommands.ts`; they run through
-`run_transfer`) plus `close_project` and the cached-copy discard. While one runs and
+Only the transfers the frontend gate waits on can hold it, and the two sets are the
+same: every IPC command the gate counts as `exclusive` (`speleoNetworkCommands.ts`;
+the SpeleoDB ones run through `run_transfer`), including `close_project` and the
+cached-copy discard, whoever calls them. A test in `exit_wait.rs` scans every
+command module and fails when a command holds the exit without an `exclusive` row,
+or the reverse, so a quit can never destroy the window while the process stays
+alive for a command the gate did not count. While one runs and
 no forced exit is armed (10-second arm), the hook prevents the exit, waits for it on
 a background thread, runs the bounded lock release (5 s) and then exits.
 Backend-internal work the user never sees (the background lock re-verify, the
