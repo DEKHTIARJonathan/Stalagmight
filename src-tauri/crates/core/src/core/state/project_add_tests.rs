@@ -919,3 +919,56 @@ fn a_non_regular_or_oversized_source_is_refused() {
         assert_eq!(undo_depth(&state), depth);
     }
 }
+
+/// The file reader builds datum GPS without validation and reads offsets as
+/// stored, so a hostile source can carry an infinite or out-of-range datum or a
+/// non-finite offset. The add refuses it up front, naming the problem, with the
+/// open project unchanged. (`9e999` is how SQL spells an infinite REAL.)
+/// INJECTION (tried): skipping `refuse_non_finite_placement` fails every case
+/// on its message - the two datum cases are then refused late, by the append's
+/// own datum store, with no word of the damage; the station-offset case is
+/// ADDED, carrying the infinity into the open project.
+#[test]
+fn a_source_with_non_finite_or_invalid_placement_is_refused() {
+    let temp = TempDir::new().unwrap();
+    let (state, _) = open_target(temp.path(), true);
+    let before = canonical_snapshot(&state, false);
+    let depth = undo_depth(&state);
+
+    for (file, sql, expected) in [
+        (
+            "infinite-datum.stalx",
+            "UPDATE zero_datums SET latitude = 9e999",
+            "a zero datum has invalid GPS coordinates (Latitude must be finite",
+        ),
+        (
+            "polar-datum.stalx",
+            "UPDATE zero_datums SET latitude = 95.0",
+            "a zero datum has invalid GPS coordinates (Latitude must be in [-90, 90]",
+        ),
+        (
+            "infinite-offset.stalx",
+            "UPDATE station_offsets SET offset_x = 9e999",
+            "a station offset is not a finite number",
+        ),
+    ] {
+        let path = save_to(temp.path(), file, &source_alpha());
+        let changed = rusqlite::Connection::open(&path)
+            .unwrap()
+            .execute(sql, [])
+            .unwrap();
+        assert_eq!(changed, 1, "{file}: the corruption landed");
+
+        let refused = add(&state, &path);
+        assert!(!refused.success, "{file} must be refused");
+        assert!(
+            refused.error.as_deref().is_some_and(|e| e
+                .starts_with(&format!("'{file}' was not added: "))
+                && e.contains(expected)),
+            "{file}: {:?}",
+            refused.error
+        );
+        assert_same_project(&state, &before, false, file);
+        assert_eq!(undo_depth(&state), depth, "{file} pushed nothing");
+    }
+}

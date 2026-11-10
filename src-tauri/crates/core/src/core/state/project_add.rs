@@ -67,6 +67,7 @@ fn load_add_source(path: &Path, label: &str) -> Result<AddSource, String> {
     // ever decides one receipt line.
     let link = db.load_speleo_link().ok().flatten();
     drop(db);
+    refuse_non_finite_placement(&project, label)?;
 
     // What an open does to a freshly read project, in the same order
     // (`do_load_project_full`): every shot gets a uuid (the identity ignores
@@ -80,6 +81,44 @@ fn load_add_source(path: &Path, label: &str) -> Result<AddSource, String> {
         ignores,
         link,
     })
+}
+
+/// Refuse a source whose placement data cannot be trusted: the file reader
+/// builds zero-datum GPS without `GpsCoordinates::new`'s validation, and reads
+/// offsets as stored. A NaN or infinite value would pass every tolerance
+/// comparison downstream (NaN is never greater than a tolerance) and be written
+/// into the open project as section offsets; an out-of-range datum would place
+/// the copy somewhere meaningless. Checked on the raw read, before anything
+/// derives from it.
+fn refuse_non_finite_placement(project: &Project, label: &str) -> Result<(), String> {
+    let refuse = |what: String| {
+        Err(format!(
+            "'{label}' was not added: {what}. The file is damaged or was written by \
+             another tool. No changes were made."
+        ))
+    };
+    for datum in &project.zero_datums {
+        let gps = &datum.gps;
+        if let Err(e) = GpsCoordinates::validate(gps.latitude, gps.longitude, gps.depth_reference)
+        {
+            return refuse(format!("a zero datum has invalid GPS coordinates ({e})"));
+        }
+    }
+    if project
+        .section_offsets
+        .values()
+        .any(|(x, y)| !x.is_finite() || !y.is_finite())
+    {
+        return refuse("a section offset is not a finite number".to_string());
+    }
+    if project
+        .station_offsets
+        .values()
+        .any(|(x, y, z)| !x.is_finite() || !y.is_finite() || !z.is_finite())
+    {
+        return refuse("a station offset is not a finite number".to_string());
+    }
+    Ok(())
 }
 
 /// The largest `.stalx` an add reads: the ceiling a SpeleoDB download of a
@@ -155,6 +194,15 @@ fn place_by_datum(
     };
     let (target_x, target_y) = frame_before.map_or((0.0, 0.0), |frame| gps_to_local(&gps, &frame));
     let (dx, dy) = (target_x - current.x, target_y - current.y);
+    // Non-finite is refused at the read; this keeps a NaN (which passes the dust
+    // test below) from ever reaching an offset should another route produce one.
+    if !dx.is_finite() || !dy.is_finite() {
+        tracing::warn!(
+            purpose = "place an added source by its datum",
+            "Datum placement is not finite; leaving the copy where it is"
+        );
+        return;
+    }
     if dx.abs() <= Project::OFFSET_DUST_M && dy.abs() <= Project::OFFSET_DUST_M {
         return;
     }
