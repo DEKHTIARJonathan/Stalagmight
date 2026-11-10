@@ -208,6 +208,7 @@ fn apply_save_heals(project: &mut Project) {
     // redrive_offsets_after_load; non-destructive, unlike dropping a dangling
     // ref, so unlike those it is safe to auto-heal on save rather than block.)
     project.ensure_unique_shot_uuids();
+    let _ = project.ensure_shot_numbers();
 
     // Capture the least-squares gauge pair for any section that lacks one (#24), now that
     // every shot is guaranteed a UUID. Recording the station the section is ALREADY using

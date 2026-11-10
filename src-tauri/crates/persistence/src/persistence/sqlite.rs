@@ -677,3 +677,10 @@ mod station_names_tests;
     clippy::panic
 )]
 mod tests;
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "number persistence regression assertions"
+)]
+mod shot_numbers_tests;

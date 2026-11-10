@@ -1,5 +1,7 @@
+mod shot_numbers;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+pub use shot_numbers::ShotNumbering;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -231,6 +233,10 @@ pub struct DeleteShotRangeImpact {
 /// A complete cave survey project
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Project {
+    /// Immutable user-facing shot number allocator, including retired identities.
+    #[serde(default)]
+    #[ts(skip)]
+    pub shot_numbering: ShotNumbering,
     /// Project name (typically cave system name)
     pub name: String,
     /// Optional location description
@@ -668,6 +674,7 @@ impl Project {
     pub fn new(name: String, location: Option<String>) -> Self {
         let now = Utc::now();
         Self {
+            shot_numbering: ShotNumbering::default(),
             name,
             location,
             created_at: now,
@@ -733,7 +740,23 @@ impl Project {
 
     /// Add a new section to the project
     pub fn add_section(&mut self, data: SectionData) -> &Section {
-        let section = Section::new(self.next_section_id, data);
+        self.add_section_with_numbers(data, &HashMap::new())
+    }
+
+    /// Structural moves preserve existing numbers; imports use `add_section`.
+    pub fn add_section_with_numbers(
+        &mut self,
+        data: SectionData,
+        numbers: &HashMap<String, u32>,
+    ) -> &Section {
+        let mut section = Section::new(self.next_section_id, data);
+        for shot in &mut section.shots {
+            shot.number = shot
+                .uuid
+                .as_ref()
+                .and_then(|uuid| numbers.get(uuid).copied())
+                .or_else(|| self.allocate_shot_number().ok());
+        }
         self.next_section_id += 1;
         let new_idx = self.sections.len();
         self.section_index_cache.insert(section.id, new_idx);
@@ -754,6 +777,7 @@ impl Project {
             }
         }
         self.sections.push(section);
+        let _ = self.ensure_shot_numbers();
         self.touch();
         &self.sections[new_idx]
     }

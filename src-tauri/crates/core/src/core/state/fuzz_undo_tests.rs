@@ -932,10 +932,13 @@ const TOLERANCE_REL: f64 = 1e-12;
 /// * the id allocators - monotonic counters, and an ASYMMETRY rather than a bug:
 ///   a snapshot-pair undo restores them verbatim while a targeted undo only ever
 ///   raises them, so comparing them would fire on every mixed history.
+/// * `shot_numbering` reserves retired UUIDs and its high watermark across undo;
+///   live `Shot.number` values remain compared and have dedicated allocator tests.
 fn drop_key(path: &str) -> bool {
     matches!(
         path,
         "modified_at"
+            | "shot_numbering"
             | "file_path"
             | "next_section_id"
             | "next_closure_id"

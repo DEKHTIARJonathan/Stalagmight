@@ -15,6 +15,9 @@ impl AppState {
             return CommandResult::failure("No project open".to_string());
         };
 
+        if !project.has_shot_number_capacity(data.shots.len()) {
+            return CommandResult::failure("Project has exhausted its shot numbers".into());
+        }
         let max_shots = FEATURE_ID_STRIDE.saturating_sub(1) as usize;
         if data.shots.len() > max_shots {
             return CommandResult::failure(format!(

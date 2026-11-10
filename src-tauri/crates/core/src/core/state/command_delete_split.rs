@@ -132,6 +132,11 @@ impl AppState {
             // (#438) - `SectionData` cannot carry it, so it is copied explicitly
             // below, exactly like the metadata above.
             let azimuth_reference = section.azimuth_reference;
+            let shot_numbers: std::collections::HashMap<String, u32> = section
+                .shots
+                .iter()
+                .filter_map(|shot| Some((shot.uuid.clone()?, shot.number?)))
+                .collect();
             let resolved_reference = project.azimuth_reference_for_id(section_id);
 
             // Stable-identity remap snapshot: resolve every stored cross-reference
@@ -199,7 +204,7 @@ impl AppState {
                 shots: shots_after,
             };
 
-            let section_b = project.add_section(section_b_data);
+            let section_b = project.add_section_with_numbers(section_b_data, &shot_numbers);
             let new_id = section_b.id;
             if let Some(section_b) = project.get_section_mut(new_id) {
                 section_b.azimuth_reference = azimuth_reference;
@@ -406,6 +411,11 @@ impl AppState {
             let quality = section.quality;
             // Same survey, same north reference (#438); see the single-shot path.
             let azimuth_reference = section.azimuth_reference;
+            let shot_numbers: std::collections::HashMap<String, u32> = section
+                .shots
+                .iter()
+                .filter_map(|shot| Some((shot.uuid.clone()?, shot.number?)))
+                .collect();
 
             // Frozen-geometry guard (mirrors delete_shot).
             for &sid in &range_shot_ids {
@@ -483,7 +493,7 @@ impl AppState {
                 quality,
                 shots: shots_after,
             };
-            let section_b = project.add_section(section_b_data);
+            let section_b = project.add_section_with_numbers(section_b_data, &shot_numbers);
             let new_id = section_b.id;
             if let Some(section_b) = project.get_section_mut(new_id) {
                 section_b.azimuth_reference = azimuth_reference;

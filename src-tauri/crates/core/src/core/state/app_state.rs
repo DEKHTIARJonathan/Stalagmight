@@ -658,12 +658,13 @@ impl AppState {
     /// Capture a JSON snapshot of the current project for undo.
     /// Returns the serialized JSON, or a `CommandResult` failure if unavailable.
     pub(super) fn capture_project_snapshot(&self) -> Result<String, CommandResult> {
-        let Ok(guard) = self.project.lock() else {
+        let Ok(mut guard) = self.project.lock() else {
             return Err(CommandResult::failure("Failed to lock project".to_string()));
         };
-        let Some(p) = guard.as_ref() else {
+        let Some(p) = guard.as_mut() else {
             return Err(CommandResult::failure("No project open".to_string()));
         };
+        p.ensure_shot_numbers().map_err(CommandResult::failure)?;
         Self::serialize_project_snapshot(p)
             .map_err(|e| CommandResult::failure(format!("Failed to serialize project: {e}")))
     }
@@ -714,6 +715,14 @@ impl AppState {
     /// Returns false and leaves `slot` untouched if the snapshot can't be parsed.
     #[must_use]
     pub(super) fn restore_snapshot_into(slot: &mut Option<Project>, snapshot: &str) -> bool {
+        Self::restore_snapshot_with_numbering(slot, snapshot, true)
+    }
+
+    fn restore_snapshot_with_numbering(
+        slot: &mut Option<Project>,
+        snapshot: &str,
+        preserve_allocations: bool,
+    ) -> bool {
         // A snapshot persisted by a build predating the per-project `validation`
         // field (#57) has no "validation" key, so serde (the field is
         // #[serde(default)]) fills ValidationConfig::default() - silently changing
@@ -790,6 +799,19 @@ impl AppState {
                     if let Some(surface_elevation) = current_surface_elevation {
                         restored.surface_elevation = Some(surface_elevation);
                     }
+                }
+                if let Some(current) = slot.as_ref().filter(|_| preserve_allocations) {
+                    restored.shot_numbering.next = restored
+                        .shot_numbering
+                        .next
+                        .max(current.shot_numbering.next);
+                    restored
+                        .shot_numbering
+                        .identities
+                        .extend(current.shot_numbering.identities.clone());
+                }
+                if restored.ensure_shot_numbers().is_err() {
+                    return false;
                 }
                 restored.file_path = current_file_path;
                 restored.rebuild_section_index();
@@ -876,7 +898,7 @@ impl AppState {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
-        if Self::restore_snapshot_into(&mut proj, snapshot) {
+        if Self::restore_snapshot_with_numbering(&mut proj, snapshot, false) {
             tracing::info!(
                 purpose = "restore project after failed command",
                 "Successfully rolled back to pre-mutation snapshot"

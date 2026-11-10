@@ -9,7 +9,12 @@ use super::AppState;
 impl AppState {
     /// Get the current project state for the frontend
     pub fn get_project_state(&self) -> Option<Project> {
-        self.project.lock().ok().and_then(|p| p.clone())
+        self.project.lock().ok().and_then(|mut p| {
+            p.as_mut().and_then(|project| {
+                project.ensure_shot_numbers().ok()?;
+                Some(project.clone())
+            })
+        })
     }
 
     /// Get recent projects list.

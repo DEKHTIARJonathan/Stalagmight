@@ -79,10 +79,19 @@ impl AppState {
                 return Err("Destination section is full".into());
             }
             let (shot, _) = project.remove_shot_with_rewire(source, shot_id)?;
+            let number = shot.number;
             let added = project
-                .add_shot(target, shot.to_shot_data())
+                .add_shot_with_number(target, shot.to_shot_data(), number)
                 .ok_or("Cannot append shot")?;
-            Ok((target, added.id))
+            let id = added.id;
+            if let Some(moved) = project
+                .get_section_mut(target)
+                .and_then(|section| section.get_shot_mut(id))
+            {
+                moved.number = number;
+            }
+            project.ensure_shot_numbers()?;
+            Ok((target, id))
         })();
         let (target, new_id) = match result {
             Ok(ids) => ids,
@@ -369,5 +378,195 @@ mod tests {
                 .uuid,
             shot.uuid
         );
+    }
+    fn numbers(state: &AppState, id: SectionId) -> Vec<u32> {
+        state
+            .get_project_state()
+            .unwrap()
+            .get_section(id)
+            .unwrap()
+            .shots
+            .iter()
+            .map(|shot| shot.number.unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn user_numbers_are_project_wide_and_survive_transfer() {
+        let state = state();
+        let source = section(&state, &[10.0, 20.0]);
+        let destination = section(&state, &[30.0]);
+        assert_eq!(numbers(&state, source), vec![1, 2]);
+        assert_eq!(numbers(&state, destination), vec![3]);
+        let shot = state
+            .get_project_state()
+            .unwrap()
+            .get_section(source)
+            .unwrap()
+            .shots[0]
+            .clone();
+        assert!(
+            state
+                .reassign_shot(source, shot.id, Some(destination), None)
+                .success
+        );
+        assert_eq!(numbers(&state, source), vec![2]);
+        assert_eq!(numbers(&state, destination), vec![3, 1]);
+        assert_eq!(state.get_project_state().unwrap().shot_numbering.next, 4);
+        assert!(state.undo().success);
+        assert_eq!(numbers(&state, source), vec![1, 2]);
+        assert!(state.redo().success);
+        assert_eq!(numbers(&state, destination), vec![3, 1]);
+    }
+
+    #[test]
+    fn numbers_are_not_reused_after_undo_or_save_reopen() {
+        let state = state();
+        let source = section(&state, &[10.0]);
+        let create = |state: &AppState| {
+            state.execute(Command::CreateShot {
+                section_id: source,
+                shot: ShotData {
+                    length: 10.0,
+                    ..ShotData::default()
+                },
+                after_shot_id: None,
+                before_shot_id: None,
+            })
+        };
+        assert!(create(&state).success);
+        assert_eq!(numbers(&state, source), vec![1, 2]);
+        assert!(state.undo().success);
+        assert!(state.redo().success);
+        assert_eq!(numbers(&state, source), vec![1, 2]);
+        assert!(state.undo().success);
+        assert!(create(&state).success);
+        assert_eq!(numbers(&state, source), vec![1, 3]);
+        let temp = tempfile::TempDir::new().unwrap();
+        let path = temp.path().join("numbered.stalx");
+        assert!(state.save_project(Some(path.clone())).success);
+        let reopened = AppState::new().unwrap();
+        assert!(reopened.open_project(path).success);
+        assert_eq!(numbers(&reopened, source), vec![1, 3]);
+        assert!(create(&reopened).success);
+        assert_eq!(numbers(&reopened, source), vec![1, 3, 4]);
+    }
+
+    #[test]
+    fn exhausted_number_space_refuses_new_shots_and_sections() {
+        let state = state();
+        let source = section(&state, &[10.0]);
+        state
+            .project
+            .lock()
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .shot_numbering
+            .next = u64::from(u32::MAX) + 1;
+        let before = state.capture_project_snapshot().unwrap();
+        let result = state.execute(Command::CreateShot {
+            section_id: source,
+            shot: ShotData {
+                length: 10.0,
+                ..ShotData::default()
+            },
+            after_shot_id: None,
+            before_shot_id: None,
+        });
+        assert!(!result.success);
+        let result = state.execute(Command::CreateSection {
+            name: None,
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".into(),
+            direction: None,
+            shots: vec![ShotData {
+                length: 10.0,
+                ..ShotData::default()
+            }],
+        });
+        assert!(!result.success);
+        assert_eq!(state.capture_project_snapshot().unwrap(), before);
+    }
+    #[test]
+    fn whole_project_undo_keeps_the_live_allocation_highwater() {
+        let state = state();
+        let source = section(&state, &[10.0]);
+        let destination = section(&state, &[20.0]);
+        let id = state
+            .get_project_state()
+            .unwrap()
+            .get_section(source)
+            .unwrap()
+            .shots[0]
+            .id;
+        assert!(
+            state
+                .reassign_shot(source, id, Some(destination), None)
+                .success
+        );
+        assert!(
+            state
+                .execute(Command::CreateShot {
+                    section_id: destination,
+                    shot: ShotData {
+                        length: 10.0,
+                        ..ShotData::default()
+                    },
+                    after_shot_id: None,
+                    before_shot_id: None,
+                })
+                .success
+        );
+        assert_eq!(numbers(&state, destination), vec![2, 1, 3]);
+        assert!(state.undo().success);
+        assert!(state.undo().success);
+        assert!(
+            state
+                .execute(Command::CreateShot {
+                    section_id: source,
+                    shot: ShotData {
+                        length: 10.0,
+                        ..ShotData::default()
+                    },
+                    after_shot_id: None,
+                    before_shot_id: None,
+                })
+                .success
+        );
+        assert_eq!(numbers(&state, source), vec![1, 4]);
+    }
+    #[test]
+    fn failed_batch_restores_allocator_byte_for_byte() {
+        let state = state();
+        section(&state, &[10.0]);
+        let before = state.capture_project_snapshot().unwrap();
+        let result = state.execute(Command::Batch {
+            commands: vec![
+                Command::CreateSection {
+                    name: None,
+                    surveyor: None,
+                    date: None,
+                    color: "#4ecdc4".into(),
+                    direction: None,
+                    shots: vec![ShotData {
+                        length: 10.0,
+                        ..ShotData::default()
+                    }],
+                },
+                Command::UpdateShot {
+                    section_id: 999,
+                    shot_id: 999,
+                    updates: crate::models::ShotUpdates {
+                        length: Some(20.0),
+                        ..Default::default()
+                    },
+                },
+            ],
+        });
+        assert!(!result.success);
+        assert_eq!(state.capture_project_snapshot().unwrap(), before);
+        assert_eq!(state.get_project_state().unwrap().shot_numbering.next, 2);
     }
 }

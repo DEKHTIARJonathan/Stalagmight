@@ -5015,6 +5015,13 @@ fn test_split_shot_at_distance_rejects_frozen_shot() {
 
 #[test]
 fn test_split_shot_at_distance_undo_redo_round_trip() {
+    // Retired user numbers are intentionally reserved after undo. Compare all
+    // live shot numbers while excluding only the non-undoable allocator ledger.
+    let survey_json = |project: &Project| {
+        let mut value = serde_json::to_value(project).unwrap();
+        value.as_object_mut().unwrap().remove("shot_numbering");
+        value.to_string()
+    };
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "Split Undo".to_string(),
@@ -5036,7 +5043,7 @@ fn test_split_shot_at_distance_undo_redo_round_trip() {
 
     let before_json = {
         let proj = state.get_project_state().unwrap();
-        serde_json::to_string(&proj).unwrap()
+        survey_json(&proj)
     };
     let shot_id = {
         let proj = state.get_project_state().unwrap();
@@ -5048,7 +5055,7 @@ fn test_split_shot_at_distance_undo_redo_round_trip() {
     let split_json = {
         let proj = state.get_project_state().unwrap();
         assert_eq!(proj.get_section(section_id).unwrap().shots.len(), 4);
-        serde_json::to_string(&proj).unwrap()
+        survey_json(&proj)
     };
 
     let undo_result = state.undo();
@@ -5061,7 +5068,7 @@ fn test_split_shot_at_distance_undo_redo_round_trip() {
         "undo restores the original single shot"
     );
     assert_eq!(
-        serde_json::to_string(&after_undo).unwrap(),
+        survey_json(&after_undo),
         before_json,
         "undo must restore the exact pre-split project"
     );
@@ -5070,7 +5077,7 @@ fn test_split_shot_at_distance_undo_redo_round_trip() {
     assert!(redo_result.success, "{:?}", redo_result.error);
     let after_redo = state.get_project_state().unwrap();
     assert_eq!(
-        serde_json::to_string(&after_redo).unwrap(),
+        survey_json(&after_redo),
         split_json,
         "redo must re-split identically"
     );

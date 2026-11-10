@@ -143,12 +143,28 @@ impl Project {
 
     /// Add a shot to a section
     pub fn add_shot(&mut self, section_id: SectionId, data: ShotData) -> Option<&Shot> {
+        self.add_shot_with_number(section_id, data, None)
+    }
+
+    /// Transfer an existing physical shot without consuming a new user number.
+    pub fn add_shot_with_number(
+        &mut self,
+        section_id: SectionId,
+        data: ShotData,
+        number: Option<u32>,
+    ) -> Option<&Shot> {
+        if number.is_none() && !self.has_shot_number_capacity(1) {
+            return None;
+        }
+        let number = number.or_else(|| self.allocate_shot_number().ok());
         let section = self.get_section_mut(section_id)?;
         if section.shots.len() >= Self::max_shots_per_section() {
             return None;
         }
         let shot = section.add_shot(data);
         let shot_id = shot.id;
+        section.get_shot_mut(shot_id)?.number = number;
+        self.ensure_shot_numbers().ok()?;
         self.touch();
         self.get_section(section_id)?.get_shot(shot_id)
     }
@@ -302,6 +318,9 @@ impl Project {
         forced_id: Option<ShotId>,
         forced_uuid: Option<String>,
     ) -> Option<&Shot> {
+        if forced_uuid.is_none() && !self.has_shot_number_capacity(1) {
+            return None;
+        }
         // Look up position before mutable borrow
         let section = self.get_section(section_id)?;
         let pos = section.shots.iter().position(|s| s.id == after_shot_id)?;
@@ -312,10 +331,16 @@ impl Project {
         // all stations after the insertion point. In the section's own frame
         // (#438), matching the walk this compensates.
         let (dx, dy) = Self::shot_displacement(&data, self.azimuth_reference_for_id(section_id));
+        let number = if forced_uuid.is_none() {
+            Some(self.allocate_shot_number().ok()?)
+        } else {
+            None
+        };
         let section = self.get_section_mut(section_id)?;
         let shot =
             section.insert_shot_after_with_id(after_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
+        section.get_shot_mut(shot_id)?.number = number;
         // Station keys are position-independent: no ref-shifting on insert (the
         // junction the new shot extends from keeps its anchor; shots beyond keep
         // theirs). The new shot's displacement still shifts stations > pos+1 in
@@ -332,6 +357,7 @@ impl Project {
         }
         self.cascade_connection_offsets(&[section_id]);
         self.debug_assert_merge_alignment("insert_shot_after");
+        self.ensure_shot_numbers().ok()?;
         self.touch();
         self.get_section(section_id)?.get_shot(shot_id)
     }
@@ -347,6 +373,9 @@ impl Project {
         forced_id: Option<ShotId>,
         forced_uuid: Option<String>,
     ) -> Option<&Shot> {
+        if forced_uuid.is_none() && !self.has_shot_number_capacity(1) {
+            return None;
+        }
         // Look up position before mutable borrow
         let section = self.get_section(section_id)?;
         let pos = section.shots.iter().position(|s| s.id == before_shot_id)?;
@@ -370,10 +399,16 @@ impl Project {
         // every existing station shifts up by one; keep them in place by
         // back-shifting the offset.
         let (dx, dy) = Self::shot_displacement(&data, self.azimuth_reference_for_id(section_id));
+        let number = if forced_uuid.is_none() {
+            Some(self.allocate_shot_number().ok()?)
+        } else {
+            None
+        };
         let section = self.get_section_mut(section_id)?;
         let shot =
             section.insert_shot_before_with_id(before_shot_id, data, forced_id, forced_uuid)?;
         let shot_id = shot.id;
+        section.get_shot_mut(shot_id)?.number = number;
         // Prepend is the one insert that shifts identity: the old section-start
         // station is now *after* the new first shot, so re-anchor any ref on this
         // section that was `SectionStart` to `AfterShot(new_shot)`. Every other
@@ -395,6 +430,7 @@ impl Project {
         }
         self.cascade_connection_offsets(&[section_id]);
         self.debug_assert_merge_alignment("insert_shot_before");
+        self.ensure_shot_numbers().ok()?;
         self.touch();
         self.get_section(section_id)?.get_shot(shot_id)
     }
@@ -557,6 +593,7 @@ impl Project {
         let section = self.get_section_mut(section_id)?;
         let shot = section.get_shot_mut(shot_id)?;
         shot.apply_updates(updates);
+        self.ensure_shot_numbers().ok()?;
         self.touch();
         self.get_section(section_id)?.get_shot(shot_id)
     }
@@ -1657,6 +1694,7 @@ impl Project {
         let section = self.get_section_mut(section_id)?;
         let shot = section.get_shot_mut(shot_id)?;
         shot.kind = kind;
+        self.ensure_shot_numbers().ok()?;
         self.touch();
         self.get_section(section_id)?.get_shot(shot_id)
     }

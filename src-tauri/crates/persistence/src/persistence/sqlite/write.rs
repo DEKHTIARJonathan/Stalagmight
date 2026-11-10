@@ -73,6 +73,7 @@ impl Database {
             ],
         )?;
 
+        let mut shot_numbering = project.shot_numbering.clone();
         // Save sections and shots
         for section in &project.sections {
             tx.execute(
@@ -119,6 +120,17 @@ impl Database {
                     .uuid
                     .clone()
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                let number = if let Some(number) = shot.number {
+                    number
+                } else {
+                    let number = u32::try_from(shot_numbering.next.max(1))?;
+                    shot_numbering.next = u64::from(number) + 1;
+                    number
+                };
+                shot_numbering.next = shot_numbering.next.max(u64::from(number) + 1);
+                shot_numbering
+                    .identities
+                    .insert(format!("{}:{uuid}", section.id), number);
                 tx.execute(
                     r"INSERT INTO shots (
                         section_id, sequence_order,
@@ -340,6 +352,11 @@ impl Database {
                 params![hash],
             )?;
         }
+
+        tx.execute(
+            "INSERT OR REPLACE INTO project_settings (key, value) VALUES ('shot_numbering', ?1)",
+            params![serde_json::to_string(&shot_numbering)?],
+        )?;
 
         // Per-project validation thresholds (#57) travel in the .stalx.
         tx.execute(

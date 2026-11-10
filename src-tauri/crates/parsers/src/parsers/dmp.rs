@@ -2244,6 +2244,7 @@ mod tests {
             .filter(|s| s.shot_type == DmpShotType::Standard)
             .enumerate()
             .map(|(i, s)| Shot {
+                number: None,
                 id: i as u32,
                 azimuth_in: s.heading_in,
                 azimuth_out: s.heading_out,
@@ -2469,6 +2470,7 @@ mod tests {
             .filter(|s| s.shot_type == DmpShotType::Standard)
             .enumerate()
             .map(|(i, s)| Shot {
+                number: None,
                 id: i as u32,
                 azimuth_in: s.heading_in,
                 azimuth_out: s.heading_out,

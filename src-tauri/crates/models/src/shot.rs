@@ -225,6 +225,10 @@ pub struct Shot {
     /// save/load: station cross-references anchor to it
     /// (`StationKey::AfterShot`), and the Ariane export emits it as `<UUID>`.
     pub id: ShotId,
+    /// Immutable project-wide user-facing number, allocated from one.
+    #[serde(default)]
+    #[ts(optional)]
+    pub number: Option<u32>,
     /// Persistent v4 UUID minted at shot creation, stable across saves
     /// and reloads.  Emitted into the TML on export so Ariane 26+ can
     /// round-trip shot identity without depending on the lossy
@@ -628,6 +632,7 @@ impl Shot {
     pub fn with_uuid(id: ShotId, data: ShotData, uuid: Option<String>) -> Self {
         Self {
             id,
+            number: None,
             uuid: data.uuid.or(uuid),
             azimuth_in: data.azimuth_in,
             azimuth_out: data.azimuth_out,

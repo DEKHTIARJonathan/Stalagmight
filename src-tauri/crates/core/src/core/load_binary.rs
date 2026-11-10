@@ -106,6 +106,8 @@ pub struct LoadProjectFullBinaryResult {
     pub project_header: ProjectHeaderBinary,
 
     pub shot_count: u32,
+    /// Immutable user-facing numbers aligned with the packed shot arrays.
+    pub shot_numbers: Vec<u32>,
     /// Per-shot f32 fields in fixed order - see SHOT_FLOAT_FIELDS comment.
     /// Order: azimuth_in, azimuth_out, length, depth_in, depth_out,
     ///        pitch_in, pitch_out, left, right, up, down, temperature.
@@ -206,13 +208,15 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
     let start = std::time::Instant::now();
     let LoadProjectFullResult {
         loading_id,
-        project,
+        mut project,
         stations,
         stats,
         warnings,
         display_settings,
         is_remote,
     } = result;
+
+    project.ensure_shot_numbers().map_err(anyhow::Error::msg)?;
 
     // Compute the frozen shots while the whole project is still in scope (its
     // fields are moved into project_header below). The binary envelope used to
@@ -226,6 +230,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
     let mut shots_uints = Vec::with_capacity(shot_count * SHOT_UINT_STRIDE);
     let mut shots_flags = Vec::with_capacity(shot_count);
     let mut shot_comments: Vec<(u32, String)> = Vec::new();
+    let mut shot_numbers = Vec::with_capacity(shot_count);
     let mut sections_meta: Vec<SectionHeaderBinary> = Vec::with_capacity(project.sections.len());
 
     let mut shot_cursor: u32 = 0;
@@ -233,6 +238,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         let shot_offset = shot_cursor;
         let shot_count = section.shots.len() as u32;
         for shot in &section.shots {
+            shot_numbers.push(shot.number.unwrap_or_default());
             // Floats (f32): azimuth_in, azimuth_out, length, depth_in, depth_out,
             //               pitch_in, pitch_out, left, right, up, down, temperature.
             //
@@ -414,6 +420,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         is_remote,
         project_header,
         shot_count: shot_count as u32,
+        shot_numbers,
         shots_floats: ByteBuf::from(shots_floats),
         shots_uints: ByteBuf::from(shots_uints),
         shots_flags: ByteBuf::from(shots_flags),
@@ -532,6 +539,7 @@ mod tests {
 
     fn shot(id: u32, azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> Shot {
         Shot {
+            number: None,
             id,
             uuid: None,
             azimuth_in: azimuth,
@@ -625,6 +633,7 @@ mod tests {
         let mut project = new_project("t");
         let mut sec = new_section(1, "S", "#abcdef");
         sec.shots.push(Shot {
+            number: None,
             id: 1,
             uuid: None,
             azimuth_in: 0.0,

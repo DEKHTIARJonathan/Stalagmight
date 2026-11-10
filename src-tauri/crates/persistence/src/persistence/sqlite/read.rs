@@ -454,6 +454,7 @@ impl Database {
                     Ok((
                         section_id,
                         Shot {
+                            number: None,
                             // Saturating, like `models::shot_display_position`:
                             // the section id comes off disk, and a file naming
                             // a section id >= u32::MAX / FEATURE_ID_STRIDE
@@ -712,7 +713,21 @@ impl Database {
                 }
             }
         }
-        Ok(Project {
+        let shot_numbering_json: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'shot_numbering'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None);
+        let shot_numbering = shot_numbering_json
+            .map(|json| serde_json::from_str(&json))
+            .transpose()?
+            .unwrap_or_default();
+        let mut project = Project {
+            shot_numbering,
             name,
             location,
             created_at,
@@ -739,7 +754,9 @@ impl Database {
             // Nothing loaded from disk is a proven solver fixpoint; the load path
             // re-solves offsets from scratch anyway (`redrive_offsets_after_load`).
             realign_fixpoint: None,
-        })
+        };
+        project.ensure_shot_numbers().map_err(anyhow::Error::msg)?;
+        Ok(project)
     }
 
     /// Load loop closures from database
