@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatShotId, formatStationId } from '../formatters';
+import { formatShotId, formatStationId, formatStationIdWithName } from '../formatters';
 
 describe('formatShotId', () => {
   it('formats section and shot position', () => {
@@ -44,5 +44,21 @@ describe('formatStationId', () => {
 
   it('handles zero values', () => {
     expect(formatStationId(0, 0)).toBe('0:0');
+  });
+});
+
+describe('formatStationIdWithName', () => {
+  it('appends the name beside the positional id', () => {
+    expect(formatStationIdWithName(5, 3, '17')).toBe('5:3 · 17');
+  });
+
+  it('is the plain id for a station without a name', () => {
+    expect(formatStationIdWithName(5, 3)).toBe('5:3');
+    expect(formatStationIdWithName(5, 3, null)).toBe('5:3');
+    expect(formatStationIdWithName(5, 3, '')).toBe('5:3');
+  });
+
+  it('keeps a name of 0 (an mNemo section start)', () => {
+    expect(formatStationIdWithName(2, 0, '0')).toBe('2:0 · 0');
   });
 });

@@ -31,3 +31,21 @@ export function formatShotId(sectionId: number, shotPosition: number): string {
 export function formatStationId(sectionId: number, stationIndex: number): string {
   return `${sectionId}:${stationIndex}`;
 }
+
+/**
+ * A station ID with its name, when it has one (e.g. the mNemo station number
+ * a DMP import recorded). The name is not unique - mNemo restarts at 0 in
+ * every section - so it is shown beside the positional ID, never instead of it.
+ *
+ * @example
+ * formatStationIdWithName(5, 3, '17') // returns "5:3 · 17"
+ * formatStationIdWithName(5, 3)       // returns "5:3"
+ */
+export function formatStationIdWithName(
+  sectionId: number,
+  stationIndex: number,
+  name?: string | null,
+): string {
+  const id = formatStationId(sectionId, stationIndex);
+  return name ? `${id} · ${name}` : id;
+}

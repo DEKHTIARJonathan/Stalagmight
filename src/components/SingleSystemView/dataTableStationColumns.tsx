@@ -3,7 +3,8 @@
  *
  * Mirrors the previous EditableTable columns (order, widths, formatting) as
  * SpreadsheetGrid column configs. Stations are derived from shots, so X/Y/Depth
- * are read-only; only the comment is editable (and never in the read-only
+ * are read-only, and so is the name (an imported mNemo station number, for
+ * now); only the comment is editable (and never in the read-only
  * closure-adjusted geometry mode). The index pill moved to the row gutter. The
  * GPS (zero-datum) cell is a click target that opens the Edit Station dialog.
  */
@@ -67,6 +68,14 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
   });
 
   return [
+    {
+      // Next to the gutter's positional S:I pill: both identify the station.
+      key: 'name',
+      header: t('dataTable.stationColumns.name'),
+      width: 64,
+      kind: 'text',
+      getValue: (r) => r.name ?? '',
+    },
     coordCol('_x', t('dataTable.stationColumns.x'), precision.coordinates),
     coordCol('_y', t('dataTable.stationColumns.y'), precision.coordinates),
     gpsCol('_lat', t('dataTable.stationColumns.lat')),

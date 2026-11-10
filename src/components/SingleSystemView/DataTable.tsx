@@ -78,6 +78,7 @@ const HEADER_HIDE_GROUPS: Record<string, { nameKey: string; keys: string[] }> = 
  *  hide - no angle modes). X/Y toggle together as "Coordinates (m)", lat/long
  *  as the GPS pair. The index pill lives in the gutter, so it never hides. */
 const STATION_MENU_COLS: { keys: string[]; nameKey: string }[] = [
+  { keys: ['name'], nameKey: 'name' },
   { keys: ['_x', '_y'], nameKey: 'coordsMeters' },
   { keys: ['_lat', '_long'], nameKey: 'coordsGps' },
   { keys: ['_depth'], nameKey: 'depth' },

@@ -1823,6 +1823,7 @@
     "stationCount": "{{countFormatted}} stations",
     "stationColumns": {
       "index": "Stn",
+      "name": "Name",
       "x": "X",
       "y": "Y",
       "depth": "Depth",
@@ -1833,6 +1834,7 @@
       "comment": "Comment"
     },
     "stationColumnsMenu": {
+      "name": "Name",
       "coordsMeters": "Coordinates (m)",
       "coordsGps": "Coordinates (GPS)",
       "depth": "Depth",
@@ -1950,6 +1952,7 @@
     },
     "labels": {
       "id": "ID",
+      "name": "Name",
       "section": "Section",
       "x": "X",
       "y": "Y",

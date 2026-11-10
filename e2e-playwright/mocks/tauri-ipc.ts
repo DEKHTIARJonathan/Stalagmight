@@ -639,6 +639,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // threaded back in from here or an edit would vanish on the next refresh.
       const mockStationComments: Record<string, string> = {};
 
+      // Station names (the mNemo numbers a DMP import sends as `station_names`),
+      // keyed "sectionId:stationIndex" and threaded into get_project_state's
+      // derived stations like the comments above. Filled by import_sections;
+      // tests can also seed one through __MOCK_SET_STATION_NAME__. The mock
+      // never reverses an imported section, so the indexes are used as sent.
+      const mockStationNames: Record<string, string> = {};
+      (window as unknown as Record<string, unknown>).__MOCK_SET_STATION_NAME__ = (
+        sectionId: number,
+        stationIndex: number,
+        name: string | null,
+      ) => {
+        const key = `${sectionId}:${stationIndex}`;
+        if (name === null) delete mockStationNames[key];
+        else mockStationNames[key] = name;
+      };
+
       // Track last export_image call for test assertions
       let lastExportImageArgs: Record<string, unknown> | null = null;
 
@@ -1381,6 +1397,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 merged_with?: unknown[];
                 closures_with?: unknown[];
                 comment?: string | null;
+                name?: string | null;
               }>;
               stats: Record<string, unknown>;
               warnings: unknown[];
@@ -1737,6 +1754,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   });
 
                   const storedComment = mockStationComments[`${section.id}:${i}`];
+                  const storedName = mockStationNames[`${section.id}:${i}`];
                   mockStations.push({
                     station_ref: stationRef,
                     coordinates: { x: i * 10, y: 0, z: 0 },
@@ -1745,6 +1763,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     merged_with: mergedWith,
                     ...(closuresWith.length > 0 ? { closures_with: closuresWith } : {}),
                     ...(storedComment !== undefined ? { comment: storedComment } : {}),
+                    ...(storedName !== undefined ? { name: storedName } : {}),
                   });
                 }
               }
@@ -2526,6 +2545,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 shots,
               };
               currentProject?.sections.push(section);
+              const stationNames = Array.isArray(sectionData.station_names)
+                ? (sectionData.station_names as Array<[number, string]>)
+                : [];
+              for (const [stationIndex, name] of stationNames) {
+                if (stationIndex <= shots.length) mockStationNames[`${section.id}:${stationIndex}`] = name;
+              }
               return section;
             });
             const sectionIds = importedSections.map((section) => section.id as number);
