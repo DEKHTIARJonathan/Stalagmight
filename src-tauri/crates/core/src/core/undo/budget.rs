@@ -71,6 +71,7 @@ impl UndoStack {
                 let shots: usize = content.sections.iter().map(|s| s.shots.len()).sum();
                 let refs = content.station_offsets.len()
                     + content.station_comments.len()
+                    + content.station_names.len()
                     + content.zero_datums.len()
                     + content.station_merges.len()
                     + content.loop_closures.len()

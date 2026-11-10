@@ -63,6 +63,9 @@ pub struct AddedContent {
     pub station_offsets: Vec<(StationKey, (f64, f64, f64))>,
     #[serde(default)]
     pub station_comments: Vec<(StationKey, String)>,
+    /// Station names (#676), keyed like the comments.
+    #[serde(default)]
+    pub station_names: Vec<(StationKey, String)>,
     #[serde(default)]
     pub zero_datums: Vec<ZeroDatum>,
     #[serde(default)]
@@ -175,13 +178,8 @@ impl AddedContent {
             .map(|(key, offset)| (key.clone(), *offset))
             .collect();
         station_offsets.sort_by_key(|(key, _)| (key.section_id, key.to_string()));
-        let mut station_comments: Vec<_> = project
-            .station_comments
-            .iter()
-            .filter(|(key, _)| ids.contains(&key.section_id))
-            .map(|(key, comment)| (key.clone(), comment.clone()))
-            .collect();
-        station_comments.sort_by_key(|(key, _)| (key.section_id, key.to_string()));
+        let station_comments = station_texts_in(&project.station_comments, ids);
+        let station_names = station_texts_in(&project.station_names, ids);
         let touches = |a: &StationKey, b: &StationKey| {
             ids.contains(&a.section_id) || ids.contains(&b.section_id)
         };
@@ -195,6 +193,7 @@ impl AddedContent {
             section_offsets,
             station_offsets,
             station_comments,
+            station_names,
             zero_datums: project
                 .zero_datums
                 .iter()
@@ -229,6 +228,7 @@ impl AddedContent {
         self.section_offsets = live.section_offsets;
         self.station_offsets = live.station_offsets;
         self.station_comments = live.station_comments;
+        self.station_names = live.station_names;
         self.zero_datums = live.zero_datums;
         self.station_merges = live.station_merges;
         self.loop_closures = live.loop_closures;
@@ -254,6 +254,9 @@ impl AddedContent {
             .retain(|key, _| !ids.contains(&key.section_id));
         project
             .station_comments
+            .retain(|key, _| !ids.contains(&key.section_id));
+        project
+            .station_names
             .retain(|key, _| !ids.contains(&key.section_id));
         project
             .zero_datums
@@ -306,6 +309,9 @@ impl AddedContent {
                 .station_comments
                 .insert(key.clone(), comment.clone());
         }
+        for (key, name) in &self.station_names {
+            project.station_names.insert(key.clone(), name.clone());
+        }
         project.zero_datums.extend(self.zero_datums.iter().cloned());
         for merge in &self.station_merges {
             project.record_station_merge(merge.clone());
@@ -336,6 +342,21 @@ impl AddedContent {
         project.touch();
         Ok(())
     }
+}
+
+/// The `(key, text)` entries of a station-keyed text map (comments, names) on
+/// `ids`, sorted so the persisted payload is stable.
+fn station_texts_in(
+    map: &HashMap<StationKey, String>,
+    ids: &HashSet<SectionId>,
+) -> Vec<(StationKey, String)> {
+    let mut entries: Vec<_> = map
+        .iter()
+        .filter(|(key, _)| ids.contains(&key.section_id))
+        .map(|(key, text)| (key.clone(), text.clone()))
+        .collect();
+    entries.sort_by_key(|(key, _)| (key.section_id, key.to_string()));
+    entries
 }
 
 /// `Some` writes through the dust-zero gate, `None` means "no key".

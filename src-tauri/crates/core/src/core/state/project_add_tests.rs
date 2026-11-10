@@ -130,6 +130,16 @@ fn source_alpha() -> Project {
     p
 }
 
+/// Source A plus a station name (#676). Separate from [`source_alpha`] so the
+/// merge parity digest above stays pinned to the pre-extraction loop's input.
+fn source_alpha_named() -> Project {
+    let mut p = source_alpha();
+    let a0 = p.sections[0].id;
+    p.station_names
+        .insert(StationRef::new(a0, 1).into(), "Gate".to_string());
+    p
+}
+
 /// Source B: a second datum, a cross-section closure, a DISAGREEING entrance
 /// elevation (the first source's must win, with a warning) and a new location.
 fn source_bravo() -> Project {
@@ -383,12 +393,13 @@ fn receipt_warnings(result: &CommandResult) -> Vec<String> {
 /// INJECTION (tried): dropping the `location` restore from
 /// `AddedContent::remove_from` fails the exactness assertion below on
 /// `location` ("Mexico, Yucatan" vs "Mexico"); dropping the `station_merges`
-/// retain fails it on the dangling merge.
+/// retain fails it on the dangling merge; dropping the `station_names` retain
+/// fails it on the name left on a removed section.
 #[test]
 fn add_then_undo_restores_the_project_exactly_and_keeps_older_history() {
     let temp = TempDir::new().unwrap();
     let (state, _) = open_target(temp.path(), true);
-    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha_named());
     let before = canonical_snapshot(&state, false);
     let depth = undo_depth(&state);
 
@@ -416,6 +427,7 @@ fn add_then_undo_restores_the_project_exactly_and_keeps_older_history() {
         assert_eq!(content.station_merges.len(), 1);
         assert_eq!(content.loop_closures.len(), 1);
         assert_eq!(content.station_comments.len(), 2);
+        assert_eq!(content.station_names.len(), 1);
         assert!(
             content.baseline.is_none(),
             "the stub baseline never persists"
@@ -437,12 +449,14 @@ fn add_then_undo_restores_the_project_exactly_and_keeps_older_history() {
 }
 
 /// INJECTION (tried): letting the redo fall through to the catch-all, which
-/// re-runs the add, mints fresh section and closure ids and fails below.
+/// re-runs the add, mints fresh section and closure ids and fails below;
+/// dropping the `station_names` reinstall in `install_into` fails it on the
+/// missing name.
 #[test]
 fn redo_of_an_add_reproduces_the_same_ids() {
     let temp = TempDir::new().unwrap();
     let (state, _) = open_target(temp.path(), true);
-    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha_named());
 
     let result = add(&state, &alpha);
     assert!(result.success);
@@ -480,12 +494,13 @@ fn redo_of_an_add_reproduces_the_same_ids() {
 fn add_undo_and_redo_survive_save_and_reload() {
     let temp = TempDir::new().unwrap();
     let (state, path) = open_target(temp.path(), true);
-    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha_named());
     let before = canonical_snapshot(&state, true);
 
     assert!(add(&state, &alpha).success);
     save(&state);
     let after = canonical_snapshot(&state, true);
+    assert!(after.contains("\"Gate\""), "the station name was added");
     // The source is gone: neither undo nor redo may need it.
     std::fs::remove_file(&alpha).unwrap();
 
