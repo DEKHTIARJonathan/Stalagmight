@@ -52,11 +52,17 @@ it('lays the choices out like every other dialog: Cancel, the discard, then the 
   expect(screen.getByTestId('speleodb-unpushed-local-take-remote')).toHaveClass('bg-error');
   expect(screen.getByTestId('speleodb-unpushed-local-open-local')).toHaveClass('bg-accent');
   const hint = screen.getByTestId('speleodb-unpushed-local-open-hint');
+  // What each answer does is said once, in the body, by the buttons' own names.
   expect(hint).toHaveTextContent('"Open my local copy" opens the copy on this computer');
-  expect(hint).toHaveTextContent('Cancel to preserve your unsynced changes');
+  expect(hint).toHaveTextContent('"Discard my changes" deletes them and opens the version on SpeleoDB');
+  expect(hint).toHaveTextContent('Cancel leaves them as they are');
+  // Short labels, so the row fits on one line of the dialog.
+  expect(screen.getByTestId('speleodb-unpushed-local-take-remote')).toHaveTextContent(/^Discard my changes$/);
+  expect(screen.getByTestId('speleodb-unpushed-local-open-local')).toHaveTextContent(/^Open my local copy$/);
   // Arming the discard adds its warning to the body; the row stays as it was.
   await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
   expect(screen.getByTestId('speleodb-unpushed-local-discard-warning')).toBeVisible();
+  expect(screen.getByTestId('speleodb-unpushed-local-take-remote')).toHaveTextContent(/^Yes, discard my changes$/);
   expectButtonsOnlyInFooter(FOOTER_ORDER);
 });
 
@@ -157,7 +163,7 @@ describe("another account's un-uploaded work", () => {
     expect(screen.getByTestId('speleodb-unpushed-local-open-hint'))
       .toHaveTextContent('without taking the editing lock');
     expect(screen.getByTestId('speleodb-unpushed-local-take-remote'))
-      .toHaveTextContent("discard someone@example.com's changes");
+      .toHaveTextContent(/^Discard their changes$/);
     await userEvent.click(openButton);
     expect(openLocal).toHaveBeenCalledWith({ id: 'synthetic', name: 'Synthetic cave' }, THEIRS);
   });
@@ -167,6 +173,16 @@ describe("another account's un-uploaded work", () => {
     expectButtonsOnlyInFooter(FOOTER_ORDER);
     const hint = screen.getByTestId('speleodb-unpushed-local-open-hint');
     expect(hint).toHaveTextContent('"Open it read-only" opens the copy');
-    expect(hint).toHaveTextContent("Cancel to leave someone@example.com's changes as they are");
+    expect(hint).toHaveTextContent("only someone@example.com can edit and upload them");
+    expect(hint).toHaveTextContent('"Discard their changes" deletes them');
+    expect(hint).toHaveTextContent('Cancel leaves them as they are');
+  });
+
+  it('the armed discard names whose changes are lost, in a label that still fits the row', async () => {
+    render(<SpeleoUnpushedLocalDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+    expect(screen.getByTestId('speleodb-unpushed-local-take-remote')).toHaveTextContent(/^Yes, discard their changes$/);
+    expect(screen.getByTestId('speleodb-unpushed-local-discard-warning')).toHaveTextContent('permanently deletes');
+    expectButtonsOnlyInFooter(FOOTER_ORDER);
   });
 });

@@ -3464,18 +3464,18 @@
       "copySaved": "Saved an unlinked copy to {{path}}. You are still working on the SpeleoDB-managed project."
     },
     "unpushedLocal": {
-      "cancelHint": "Cancel to preserve your unsynced changes, or confirm replacing them with the server version.",
+      "choices": "\"Open my local copy\" opens the copy on this computer as it is, without downloading anything. You can then upload your changes, and Stalagmight will tell you if SpeleoDB has a newer version. \"Discard my changes\" deletes them and opens the version on SpeleoDB instead. Cancel leaves them as they are.",
       "title": "Changes on this computer are not on SpeleoDB",
       "message": "\"{{name}}\" has already been opened on this computer, and that local copy has changes SpeleoDB has never seen. Replacing the local copy would delete them, so your local changes have been left intact.",
       "lastEdited": "Local copy last edited: {{when}}",
       "lastEditedUnknown": "We could not tell when the local copy was last edited.",
-      "takeRemote": "Take the server copy & discard my changes",
-      "discardWarning": "Taking the server copy permanently deletes the changes made to \"{{name}}\" on this computer. They are not on SpeleoDB, so there is no other copy and this cannot be undone.",
+      "takeRemote": "Discard my changes",
+      "discardWarning": "Discarding permanently deletes the changes made to \"{{name}}\" on this computer. They are not on SpeleoDB, so there is no other copy and this cannot be undone.",
       "takeRemoteConfirm": "Yes, discard my changes",
       "messageOtherAccount": "\"{{name}}\" has already been opened on this computer by {{owner}}, and that local copy holds changes {{owner}} made that SpeleoDB has never seen. They are {{owner}}'s work, not yours, so they have been left intact.",
-      "cancelHintOtherAccount": "Cancel to leave {{owner}}'s changes as they are, or confirm replacing them with the server version.",
-      "takeRemoteOtherAccount": "Take the server copy & discard {{owner}}'s changes",
-      "takeRemoteConfirmOtherAccount": "Yes, discard {{owner}}'s changes"
+      "choicesOtherAccount": "\"Open it read-only\" opens the copy on this computer as it is, without downloading anything and without taking the editing lock. You can look at {{owner}}'s changes and save a copy of the project, but only {{owner}} can edit and upload them. \"Discard their changes\" deletes them and opens the version on SpeleoDB instead. Cancel leaves them as they are.",
+      "takeRemoteOtherAccount": "Discard their changes",
+      "takeRemoteConfirmOtherAccount": "Yes, discard their changes"
     },
     "transport": {
       "refused": "Could not connect to SpeleoDB at {{endpoint}}. Check your network connection, the server address, and whether the server is running.",
@@ -3805,9 +3805,7 @@
     },
     "unpushedLocal": {
       "openLocal": "Open my local copy",
-      "openLocalHint": "\"Open my local copy\" opens the copy on this computer as it is, without downloading anything. You can then upload your changes, and Stalagmight will tell you if SpeleoDB has a newer version.",
-      "openReadOnly": "Open it read-only",
-      "openReadOnlyHint": "\"Open it read-only\" opens the copy on this computer as it is, without downloading anything and without taking the editing lock. You can look at {{owner}}'s changes and save a copy of the project, but only {{owner}} can edit and upload them."
+      "openReadOnly": "Open it read-only"
     },
     "readOnly": {
       "lockedByKeepsChanges": "{{email}} is editing this project right now, so it is open read-only. Your changes are kept on this computer, and you can upload them once {{email}} has finished.",

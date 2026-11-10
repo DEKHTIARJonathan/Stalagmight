@@ -120,7 +120,8 @@ export default function SpeleoUnpushedLocalDialog() {
       // surface its error had: `setError` landed on an unmounted component and a
       // failed discard-my-edits open produced no message anywhere.
       onClose={busy ? () => {} : dismiss}
-      size="md"
+      // Wide enough for the three answers on one footer line, armed or not.
+      size="lg"
       data-testid="speleodb-unpushed-local-dialog"
     >
       <div className="space-y-4">
@@ -135,12 +136,8 @@ export default function SpeleoUnpushedLocalDialog() {
         {/* What each answer does, said once in the body (the app's dialog layout). */}
         <p className="text-sm text-text-secondary" data-testid="speleodb-unpushed-local-open-hint">
           {owner
-            ? t('speleoExitPrompt.unpushedLocal.openReadOnlyHint', { owner })
-            : t('speleoExitPrompt.unpushedLocal.openLocalHint')}
-          {' '}
-          {owner
-            ? t('speleodb.unpushedLocal.cancelHintOtherAccount', { owner })
-            : t('speleodb.unpushedLocal.cancelHint')}
+            ? t('speleodb.unpushedLocal.choicesOtherAccount', { owner })
+            : t('speleodb.unpushedLocal.choices')}
         </p>
 
         {discardArmed && (
@@ -182,7 +179,7 @@ export default function SpeleoUnpushedLocalDialog() {
             {owner
               ? t(discardArmed
                 ? 'speleodb.unpushedLocal.takeRemoteConfirmOtherAccount'
-                : 'speleodb.unpushedLocal.takeRemoteOtherAccount', { owner })
+                : 'speleodb.unpushedLocal.takeRemoteOtherAccount')
               : t(discardArmed ? 'speleodb.unpushedLocal.takeRemoteConfirm' : 'speleodb.unpushedLocal.takeRemote')}
           </Button>
           <Button variant="primary" data-primary-action="" onClick={() => void handleOpenLocal()} disabled={busy}
