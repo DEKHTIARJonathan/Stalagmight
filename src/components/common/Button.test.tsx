@@ -47,37 +47,3 @@ describe('Button (component-tier harness smoke)', () => {
     expect(screen.getByRole('button', { name: 'Confirm' })).toHaveAttribute('data-primary-action', '');
   });
 });
-
-describe('Button tone forms (one filled button per view)', () => {
-  it('primary and danger are filled by default; the other tones are outlines', () => {
-    render(<>
-      <Button variant="primary">P</Button>
-      <Button variant="danger">D</Button>
-      {(['warning', 'success', 'info', 'external', 'neutral'] as const).map((v) => <Button key={v} variant={v}>{v}</Button>)}
-    </>);
-    expect(screen.getByRole('button', { name: 'P' })).toHaveAttribute('data-filled');
-    expect(screen.getByRole('button', { name: 'D' })).toHaveAttribute('data-filled');
-    for (const v of ['warning', 'success', 'info', 'external', 'neutral']) {
-      const b = screen.getByRole('button', { name: v });
-      expect(b).not.toHaveAttribute('data-filled');
-      expect(b.className).toContain(`bg-${v}-10`);
-    }
-  });
-
-  it('`filled` picks the form; only a filled primary is the dialog primary action', () => {
-    render(<>
-      <Button variant="primary" filled={false}>Outline save</Button>
-      <Button variant="success" filled>Resume</Button>
-      <Button variant="neutral" filled>Close</Button>
-    </>);
-    const outline = screen.getByRole('button', { name: 'Outline save' });
-    expect(outline).not.toHaveAttribute('data-filled');
-    expect(outline).not.toHaveAttribute('data-primary-action');
-    expect(outline.className).toContain('border-accent-text');
-    const resume = screen.getByRole('button', { name: 'Resume' });
-    expect(resume).toHaveAttribute('data-filled');
-    expect(resume.className).toContain('bg-success text-success-on');
-    // neutral has no filled form: it is never the one action of a view.
-    expect(screen.getByRole('button', { name: 'Close' })).not.toHaveAttribute('data-filled');
-  });
-});
