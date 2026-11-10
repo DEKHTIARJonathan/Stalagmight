@@ -17,6 +17,7 @@
  * Pure and worker-friendly: the two `Uint8Array`s structured-clone cheaply and
  * are aligned to the same global indices `buildSurveyFeatures` iterates.
  */
+import { shotStationGlobals } from '../../../utils/shotEndpoints';
 import type { SectionMetadata, SurveyData } from '../../../types/survey-data';
 import type { ProjectWarning } from '../../../types/commands';
 
@@ -92,8 +93,7 @@ export function computeIssueSeverity(
     for (let i = 0; i < sec.shotCount; i++) {
       const sev = shotSeverity[sec.shotOffset + i]!;
       if (sev === SEV_CLEAR) continue;
-      const fromG = inner.get(i);
-      const toG = inner.get(i + 1);
+      const [fromG, toG] = shotStationGlobals(data, sec, i, stationLookup);
       if (fromG !== undefined && sev > stationSeverity[fromG]!) stationSeverity[fromG] = sev;
       if (toG !== undefined && sev > stationSeverity[toG]!) stationSeverity[toG] = sev;
     }

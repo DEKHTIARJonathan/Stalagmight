@@ -1,6 +1,7 @@
 import type { ExpressionSpecification } from 'maplibre-gl';
 import type { DistanceField } from '../types/project';
 import type { SurveyData } from '../types/survey-data';
+import { shotStartRef } from './shotEndpoints';
 import { encodeFeatureId } from './ids';
 
 /**
@@ -93,7 +94,7 @@ export function overlayApplyAction(
  * (~75k objects / ~1.3 GB for 92.stalx). The SoA path stays typed-array-only.
  */
 export function buildDistanceFeatureState(
-  data: Pick<SurveyData, 'sections' | 'shotIds'>,
+  data: Pick<SurveyData, 'sections' | 'shotIds' | 'shotStartSectionIds' | 'shotStartIndices'>,
   field: DistanceField,
 ): DistanceFeatureState {
   // station ref → distance (null = unreachable)
@@ -105,6 +106,10 @@ export function buildDistanceFeatureState(
 
   const stations = new Map<number, number>();
   const shots = new Map<number, number>();
+  for (let i = 0; i < field.station_refs.length; i++) {
+    const ref = field.station_refs[i]!;
+    stations.set(encodeFeatureId(ref.section_id, ref.station_index), field.distances[i] ?? UNREACHABLE_DIST);
+  }
 
   for (const section of data.sections) {
     const n = section.shotCount;
@@ -116,7 +121,8 @@ export function buildDistanceFeatureState(
     // Shots: connect station i → i+1; key by the shot's stable id (from SoA).
     for (let i = 0; i < n; i++) {
       const shotId = data.shotIds[section.shotOffset + i]!;
-      const from = byRef.get(`${section.id}:${i}`);
+      const start = shotStartRef(data, section, i);
+      const from = byRef.get(`${start.section_id}:${start.station_index}`);
       const to = byRef.get(`${section.id}:${i + 1}`);
       const value = from == null || to == null ? UNREACHABLE_DIST : (from + to) / 2;
       shots.set(encodeFeatureId(section.id, shotId), value);

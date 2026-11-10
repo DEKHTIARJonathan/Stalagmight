@@ -23,6 +23,7 @@
  * contributes only when both endpoint stations (`stationIndex` i and i+1) exist.
  * That keeps the custom layer's shot set identical to the stock shots layer.
  */
+import { shotStationGlobals } from '../../../../utils/shotEndpoints';
 import type { GpsOrigin } from '../../../../types/config';
 import {
   type SurveyData,
@@ -240,8 +241,7 @@ export function computeStationAllReference(
     if (!inner) continue;
     for (let i = 0; i < section.shotCount; i++) {
       const shotGlobalIdx = section.shotOffset + i;
-      const fromGlobal = inner.get(i);
-      const toGlobal = inner.get(i + 1);
+      const [fromGlobal, toGlobal] = shotStationGlobals(data, section, i, lookup);
       // Only VALID shots (both endpoints present) count, matching the stock
       // build's `stationsWithNonReferenceShot` (features.ts) and the set of
       // shots the line buffers actually draw.
@@ -294,7 +294,8 @@ export function countValidShots(
     if (!inner) continue;
     for (let i = 0; i < section.shotCount; i++) {
       if (exShots?.has(section.shotOffset + i)) continue;
-      if (inner.get(i) !== undefined && inner.get(i + 1) !== undefined) count++;
+      const [from, to] = shotStationGlobals(data, section, i, lookup);
+      if (from !== undefined && to !== undefined) count++;
     }
   }
   return count;
@@ -365,8 +366,7 @@ function emitLineSection(
   for (let i = 0; i < section.shotCount; i++) {
     const shotGlobalIdx = section.shotOffset + i;
     if (exShots?.has(shotGlobalIdx)) continue;
-    const fromGlobal = inner.get(i);
-    const toGlobal = inner.get(i + 1);
+    const [fromGlobal, toGlobal] = shotStationGlobals(data, section, i, lookup);
     if (fromGlobal === undefined || toGlobal === undefined) continue;
     // Per-endpoint colors (depth gradient) win; else the flat segment color at
     // both ends. Both endpoint colors are replicated on every vertex so the
@@ -522,8 +522,7 @@ export function recomputeLineColors(
     const inner = lookup.get(section.id);
     if (!inner) continue;
     for (let i = 0; i < section.shotCount; i++) {
-      const fromGlobal = inner.get(i);
-      const toGlobal = inner.get(i + 1);
+      const [fromGlobal, toGlobal] = shotStationGlobals(data, section, i, lookup);
       if (fromGlobal === undefined || toGlobal === undefined) continue;
       const shotGlobalIdx = section.shotOffset + i;
       const ends = colorForShotEndpoints?.(shotGlobalIdx, section.id);
@@ -604,7 +603,8 @@ export function computeLineDim(
     for (let i = 0; i < section.shotCount; i++) {
       const shotGlobalIdx = section.shotOffset + i;
       if (exShots?.has(shotGlobalIdx)) continue;
-      if (inner.get(i) === undefined || inner.get(i + 1) === undefined) continue;
+      const [from, to] = shotStationGlobals(data, section, i, lookup);
+      if (from === undefined || to === undefined) continue;
       const isDim = flagValue(dimForShot(shotGlobalIdx, section.id));
       const base = seg * 4;
       for (let c = 0; c < 4; c++) dim[base + c] = isDim;
@@ -797,8 +797,7 @@ export function recomputeSectionAllReference(
     seen.add(global);
   };
   for (let i = 0; i < section.shotCount; i++) {
-    const fromGlobal = inner.get(i);
-    const toGlobal = inner.get(i + 1);
+    const [fromGlobal, toGlobal] = shotStationGlobals(data, section, i, lookup);
     if (fromGlobal === undefined || toGlobal === undefined) continue;
     const kind = shotKindFromFlags(data.shotFlags[section.shotOffset + i]!);
     const bit = kind === 'Jump' ? 1 : kind === 'Reference' ? 2 : 0;

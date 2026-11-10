@@ -70,7 +70,8 @@ import {
 import { metersToMapCoords } from '../../utils/coordinates';
 import { getErrorColor } from '../../utils/colors';
 import { trackNav } from '../../utils/telemetry';
-import { FEATURE_ID_STRIDE, sectionIdFromKey } from '../../utils/ids';
+import { shotStartRef } from '../../utils/shotEndpoints';
+import { decodeStationFeatureId, encodeFeatureId, sectionIdFromKey } from '../../utils/ids';
 import { MEASURE_TINT } from '../../utils/measurePath';
 import { watchDevicePixelRatio } from '../../utils/dprWatcher';
 import { attachLongPressTouch } from '../../utils/longPressTouch';
@@ -1408,7 +1409,7 @@ export default class SurveyLayer {
     if (!id) return null;
     const [sectionId, index] = id.split(':').map(Number);
     if (isNaN(sectionId!) || isNaN(index!)) return null;
-    return sectionId! * FEATURE_ID_STRIDE + index!;
+    return encodeFeatureId(sectionId!, index!);
   }
 
   /** Point/arrow cursor for whatever is hovered RIGHT NOW, suppressed for anchored
@@ -1443,7 +1444,7 @@ export default class SurveyLayer {
     const useArrowFallback = this.activeTool === 'move_station' || this.activeTool === 'move_shot';
     if (showPointer && useArrowFallback && hoveredId) {
       const [secStr, idxStr] = hoveredId.split(':');
-      const featureId = Number(secStr) * FEATURE_ID_STRIDE + Number(idxStr);
+      const featureId = encodeFeatureId(Number(secStr), Number(idxStr));
       const immovable = this.hoveredStationId
         ? this.isStationImmovable(featureId)
         : this.isShotImmovable(featureId);
@@ -1859,8 +1860,7 @@ export default class SurveyLayer {
     const points: MeasurePoint[] = [];
     if (this.measuredPathStationIds && this.stationsVisible) {
       for (const fid of this.measuredPathStationIds) {
-        const sectionId = Math.floor(fid / FEATURE_ID_STRIDE);
-        const stationIndex = fid - sectionId * FEATURE_ID_STRIDE;
+        const { sectionId, stationIndex } = decodeStationFeatureId(fid);
         const ref = { section_id: sectionId, station_index: stationIndex };
         // Match the interact-overlay guard: a station hidden because every
         // kind touching it is hidden must not surface.
@@ -2490,8 +2490,7 @@ export default class SurveyLayer {
       // Build station key strings matching closure feature "sectionId:stationIndex" format
       const immovableKeyStrings: string[] = [];
       for (const fid of immovableStationIds) {
-        const sectionId = Math.floor(fid / FEATURE_ID_STRIDE);
-        const stationIndex = fid % FEATURE_ID_STRIDE;
+        const { sectionId, stationIndex } = decodeStationFeatureId(fid);
         immovableKeyStrings.push(`${sectionId}:${stationIndex}`);
       }
 
@@ -2884,8 +2883,8 @@ export default class SurveyLayer {
       const { shots: sectionShots } = this.geoIndex.sectionGeometry(secId);
 
       for (const shot of sectionShots) {
-        // Shot `index` joins station `index` to `index + 1`.
-        const fromKey = `${secId}:${shot.index}`;
+        const from = shotStartRef(this.cachedSurveyData, section, shot.index);
+        const fromKey = `${from.section_id}:${from.station_index}`;
         const toKey = `${secId}:${shot.index + 1}`;
         const fromIsMoving = movingRefKeys.has(fromKey);
         const toIsMoving = movingRefKeys.has(toKey);

@@ -84,6 +84,11 @@ export interface SurveyData {
   shotIds: Uint32Array;
   /** Immutable project-wide survey number, distinct from the internal feature ID. */
   shotNumbers?: Uint32Array;
+  /** Permanent origin shot number; zero represents no origin. */
+  shotFromIds?: Uint32Array;
+  /** Graph START endpoint aliases, aligned with the flat shot arrays. */
+  shotStartSectionIds?: Uint32Array;
+  shotStartIndices?: Uint32Array;
   /** Section id per global shot index. Redundant with the section
    *  metadata's shotOffset+shotCount but lets a consumer go from
    *  shot index → section id without a binary search.
@@ -213,6 +218,7 @@ export function getShot(data: SurveyData, globalIndex: number): Shot {
   }
   return {
     id: data.shotIds[globalIndex]!,
+    ...(data.shotFromIds ? { from_id: data.shotFromIds[globalIndex] || null } : {}),
     ...(data.shotNumbers?.[globalIndex] ? { number: data.shotNumbers[globalIndex] } : {}),
     azimuth_in: data.shotAzimuthIn[globalIndex]!,
     azimuth_out: data.shotAzimuthOut[globalIndex]!,
@@ -408,9 +414,15 @@ export function lazyStationArray(data: SurveyData): Station[] {
  * the wire bytes without going through legacy objects (faster, but
  * specific to that input shape).
  */
+export interface ShotTopologySidecars {
+  shot_start_refs?: StationRef[];
+  shot_from_ids?: Array<number | null>;
+}
+
 export function surveyDataFromLegacy(
   sections: import('./ipc/Section').Section[],
   stations: import('./ipc/Station').Station[],
+  topology?: ShotTopologySidecars,
 ): SurveyData {
   const totalShots = sections.reduce((s, sec) => s + sec.shots.length, 0);
   const data: SurveyData = {
@@ -446,6 +458,17 @@ export function surveyDataFromLegacy(
     stationNames: new Map(),
   };
 
+  if (topology?.shot_start_refs) {
+    if (topology.shot_start_refs.length !== totalShots) throw new Error('shot_start_refs length mismatch');
+    data.shotStartSectionIds = Uint32Array.from(topology.shot_start_refs, ref => ref.section_id);
+    data.shotStartIndices = Uint32Array.from(topology.shot_start_refs, ref => ref.station_index);
+  }
+  const fromIds = new Uint32Array(totalShots);
+  let hasFromIds = topology?.shot_from_ids !== undefined;
+  if (topology?.shot_from_ids) {
+    if (topology.shot_from_ids.length !== totalShots) throw new Error('shot_from_ids length mismatch');
+    fromIds.set(topology.shot_from_ids.map(number => number ?? 0));
+  }
   const nullToNaN = (v: number | null | undefined): number => (v == null ? NaN : v);
 
   let cursor = 0;
@@ -463,7 +486,11 @@ export function surveyDataFromLegacy(
       shotOffset: cursor,
       shotCount: section.shots.length,
     });
+    let previousNumber = 0;
     for (const shot of section.shots) {
+      if (shot.from_id !== undefined) hasFromIds = true;
+      if (!topology?.shot_from_ids) fromIds[cursor] = shot.from_id === undefined ? previousNumber : shot.from_id ?? 0;
+      previousNumber = shot.number ?? 0;
       data.shotIds[cursor] = shot.id;
       data.shotNumbers![cursor] = shot.number ?? 0;
       data.shotSectionIds[cursor] = section.id;
@@ -485,6 +512,8 @@ export function surveyDataFromLegacy(
       cursor++;
     }
   }
+
+  if (hasFromIds) data.shotFromIds = fromIds;
 
   stations.forEach((s, i) => {
     data.stationSectionIds[i] = s.station_ref.section_id;

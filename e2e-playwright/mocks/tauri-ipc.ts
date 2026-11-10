@@ -1317,6 +1317,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               loadingId,
               project: currentProject,
               stations: mockStations,
+              shot_start_refs: (currentProject?.sections ?? []).flatMap(section => {
+                const group = section as { id: number; shots: unknown[] };
+                return group.shots.map((_, index) => ({ section_id: group.id, station_index: index }));
+              }),
+              shot_from_ids: (currentProject?.sections ?? []).flatMap(section => (section as { shots: Array<{ from_id?: number | null }> }).shots.map(shot => shot.from_id ?? null)),
               stats: {
                 section_count: currentProject.sections.length,
                 shot_count: shotCount,
@@ -1370,7 +1375,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   // importer declares one.
                   azimuth_reference?: unknown | null;
                   shots?: Array<{
-                    id: number; number?: number; azimuth_in?: number; azimuth_out?: number;
+                    id: number; number?: number; from_id?: number | null; azimuth_in?: number; azimuth_out?: number;
                     length?: number; depth_in?: number; depth_out?: number;
                     pitch_in?: number | null; pitch_out?: number | null;
                     left?: number | null; right?: number | null;
@@ -1421,6 +1426,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const sectionsMeta: Array<Record<string, unknown>> = [];
             const shotComments: Array<[number, string]> = [];
             const shotNumbers: number[] = [];
+            const shotFromIds: Array<number | null> = [];
+            const shotStartRefs: Array<{ section_id: number; station_index: number }> = [];
             let shotCursor = 0;
 
             for (const section of jsonResult.project.sections) {
@@ -1458,6 +1465,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 if (!shot.number) shot.number = ++shotNumberCounter;
                 shotNumberCounter = Math.max(shotNumberCounter, shot.number);
                 shotNumbers.push(shot.number);
+                if (shot.from_id === undefined) shot.from_id = shotCursor === shot_offset ? null : shotNumbers[shotCursor - 1] ?? null;
+                shotFromIds.push(shot.from_id);
+                shotStartRefs.push({ section_id: section.id, station_index: shotCursor - shot_offset });
                 if (shot.comment) shotComments.push([shotCursor, shot.comment]);
                 shotCursor++;
               }
@@ -1520,7 +1530,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // the header no longer carries a `collab` field; 4 to 5 for the
               // #438 north references (a project-level default plus one per
               // section header).
-              version: 6,
+              version: 7,
               loading_id: jsonResult.loadingId,
               // Added to the envelope at v3 alongside the ShotKind bits
               // (`load_binary.rs`): the decoder reads it unvalidated, so omitting
@@ -1586,6 +1596,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               shots_flags: shotsFlags,
               shot_comments: shotComments,
               shot_numbers: shotNumbers,
+              shot_from_ids: shotFromIds,
+              shot_start_refs: shotStartRefs,
               station_count: totalStations,
               stations_floats: stationsFloats,
               stations_uints: stationsUints,
@@ -1661,9 +1673,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'get_project':
           case 'get_project_state': {
             for (const section of currentProject?.sections ?? []) {
-              for (const shot of (section as { shots?: Array<{ number?: number }> }).shots ?? []) {
+              let previous: number | null = null;
+              for (const shot of (section as { shots?: Array<{ number?: number; from_id?: number | null }> }).shots ?? []) {
                 if (shot.number) shotNumberCounter = Math.max(shotNumberCounter, shot.number);
                 else shot.number = ++shotNumberCounter;
+                if (shot.from_id === undefined) shot.from_id = previous;
+                previous = shot.number;
               }
             }
             // Generate mock stations from sections with merged_with data
@@ -2473,6 +2488,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const shots = rawShots.map((shot, index) => ({
               id: mockShotId(sectionCounter, index),
               number: ++shotNumberCounter,
+              ...(Object.prototype.hasOwnProperty.call(shot, 'from_id') ? { from_id: shot.from_id } : {}),
               // #310: a deterministic, stable uuid per shot - the neighbour-pair anchors above
               // key off this, exactly as the real backend keys off `Shot.uuid`.
               uuid: `mock-shot-uuid-${mockShotId(sectionCounter, index)}`,
@@ -4985,6 +5001,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true, section_ids: [] };
           }
 
+          case 'set_shot_from_id': {
+            const shots = (currentProject?.sections ?? []).flatMap(section => (section as { shots: Array<{ number: number; from_id?: number | null }> }).shots);
+            const source = shots.find(shot => shot.number === args?.shotNumber);
+            const fromId = args?.fromId === -1 ? null : args?.fromId as number | null;
+            if (!source || (fromId !== null && !shots.some(shot => shot.number === fromId)) || fromId === source.number) {
+              return { success: false, error: 'Invalid shot origin', warnings: [], section_ids: [] };
+            }
+            source.from_id = fromId;
+            return { success: true, shot_id: args?.shotNumber, error: null, warnings: [], section_ids: [] };
+          }
+
           case 'reassign_shot': {
             const fail = (error: string) => ({ success: false, error, warnings: [], section_ids: [] });
             if (!currentProject) return fail('No project open');
@@ -5316,6 +5343,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const newShot = {
               id: nextId,
               number: ++shotNumberCounter,
+              ...(Object.prototype.hasOwnProperty.call(shotData, 'from_id') ? { from_id: shotData.from_id } : {}),
               azimuth_in: (shotData.azimuth_in as number) ?? 0,
               azimuth_out: (shotData.azimuth_out as number) ?? 0,
               length: (shotData.length as number) ?? 0,

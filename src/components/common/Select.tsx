@@ -48,6 +48,8 @@ interface SelectProps {
   searchLabel?: string;
   /** Text shown when search matches no options. */
   noResultsLabel?: string;
+  /** Optional external search for large, lazily supplied option sets. */
+  onQueryChange?: (query: string) => void;
   /** Placeholder text when no value selected */
   placeholder?: string;
   /** Whether the select is disabled */
@@ -167,6 +169,7 @@ export function Select({
   options,
   searchLabel,
   noResultsLabel,
+  onQueryChange,
   placeholder = 'Select...',
   disabled = false,
   className = '',
@@ -378,8 +381,9 @@ export function Select({
       setTriggerRect({ left: rect.left, width: rect.width, top: rect.top, bottom: rect.bottom });
     }
     setQuery('');
+    onQueryChange?.('');
     setIsOpen(true);
-  }, []);
+  }, [onQueryChange]);
 
   // Keyboard navigation handler
   const handleKeyDown = useCallback((event: React.KeyboardEvent) => {
@@ -677,7 +681,7 @@ export function Select({
                   data-testid={testId ? `${testId}-search` : undefined}
                   placeholder={searchLabel}
                   value={query}
-                  onChange={(event) => setQuery(event.target.value)}
+                  onChange={(event) => { setQuery(event.target.value); onQueryChange?.(event.target.value); }}
                   onKeyDown={(event) => {
                     // Keep text editing keys (including spaces and Home/End) in the input.
                     if (['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(event.key)) {

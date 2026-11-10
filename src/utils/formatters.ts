@@ -29,7 +29,14 @@ export function formatShotId(sectionId: number, shotPosition: number): string {
  * formatStationId(1, 3) // returns "1:3"
  */
 export function formatStationId(sectionId: number, stationIndex: number): string {
-  return `${sectionId}:${stationIndex}`;
+  return `${sectionId}:${formatStationIndex(stationIndex)}`;
+}
+
+/** Interior shot starts use an opaque high-bit alias on the wire. */
+export function formatStationIndex(stationIndex: number): string {
+  return stationIndex >= 0x80000000 && stationIndex <= 0xffffffff
+    ? `Start ${stationIndex - 0x80000000 + 1}`
+    : String(stationIndex);
 }
 
 /**

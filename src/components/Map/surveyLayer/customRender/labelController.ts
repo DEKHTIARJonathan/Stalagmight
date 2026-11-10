@@ -50,7 +50,7 @@ import type { GpsOrigin, DecimalPrecision } from '../../../../types/config';
 import type { SurveyData } from '../../../../types/survey-data';
 import type { MapThemeColors } from '../../../../utils/themeColors';
 import { debugLog } from '../../../../utils/debugLog';
-import { FEATURE_ID_STRIDE } from '../../../../utils/ids';
+import { encodeFeatureId } from '../../../../utils/ids';
 import { commentColorForKey } from '../displayColor';
 import { lngLatToMercator } from '../mercatorCoords';
 import { computeMercatorAnchor } from './mercator';
@@ -653,18 +653,18 @@ export class SurveyLabelController {
           anchored ||
           (desc.shotId !== undefined &&
             ((immovableShotFeatureIds.size > 0 &&
-              immovableShotFeatureIds.has(sid * FEATURE_ID_STRIDE + desc.shotId)) ||
+              immovableShotFeatureIds.has(encodeFeatureId(sid, desc.shotId))) ||
               (gasDimShotFeatureIds.size > 0 &&
-                gasDimShotFeatureIds.has(sid * FEATURE_ID_STRIDE + desc.shotId))))
+                gasDimShotFeatureIds.has(encodeFeatureId(sid, desc.shotId)))))
         );
       case LABEL_KIND.STATION_LABEL:
         return (
           anchored ||
           (desc.stationIndex !== undefined &&
             ((immovableStationFeatureIds.size > 0 &&
-              immovableStationFeatureIds.has(sid * FEATURE_ID_STRIDE + desc.stationIndex)) ||
+              immovableStationFeatureIds.has(encodeFeatureId(sid, desc.stationIndex))) ||
               (gasDimStationFeatureIds.size > 0 &&
-                gasDimStationFeatureIds.has(sid * FEATURE_ID_STRIDE + desc.stationIndex))))
+                gasDimStationFeatureIds.has(encodeFeatureId(sid, desc.stationIndex)))))
         );
       case LABEL_KIND.SECTION_NAME:
         return anchored;

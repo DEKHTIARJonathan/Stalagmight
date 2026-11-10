@@ -24,6 +24,7 @@
  * layers apply (`isReference` shots / `allShotsReference` stations), so
  * hidden reference legs stay non-interactive.
  */
+import { shotStartRef, shotStationGlobals } from '../../../utils/shotEndpoints';
 import type { GpsOrigin } from '../../../types/config';
 import type { StationRef } from '../../../types/project';
 import {
@@ -273,10 +274,12 @@ export class SurveyGeometryIndex {
       };
       for (let i = 0; i < section.shotCount; i++) {
         const shotGlobalIdx = section.shotOffset + i;
-        if (lookup.get(i) === undefined || lookup.get(i + 1) === undefined) continue;
+        const [fromGlobal, toGlobal] = shotStationGlobals(this.data, section, i, this.stationLookup);
+        if (fromGlobal === undefined || toGlobal === undefined) continue;
         const kind = shotKindFromFlags(this.data.shotFlags[shotGlobalIdx]!);
         const bit = kind === 'Jump' ? 1 : kind === 'Reference' ? 2 : 0;
-        touch(i, bit);
+        const from = shotStartRef(this.data, section, i);
+        if (from.section_id === sectionId) touch(from.station_index, bit);
         touch(i + 1, bit);
       }
     }
@@ -355,8 +358,7 @@ export class SurveyGeometryIndex {
       for (let i = 0; i < section.shotCount; i++) {
         const shotGlobalIdx = section.shotOffset + i;
         if (!isKindVisible(this.data.shotFlags[shotGlobalIdx]!, opts.visibleKinds)) continue;
-        const fromGlobal = lookup.get(i);
-        const toGlobal = lookup.get(i + 1);
+        const [fromGlobal, toGlobal] = shotStationGlobals(this.data, section, i, this.stationLookup);
         if (fromGlobal === undefined || toGlobal === undefined) continue;
         const from = this.stationLngLat(fromGlobal);
         const to = this.stationLngLat(toGlobal);
@@ -463,8 +465,7 @@ export class SurveyGeometryIndex {
     for (let i = 0; i < section.shotCount; i++) {
       const shotGlobalIdx = section.shotOffset + i;
       if (this.data.shotIds[shotGlobalIdx] !== shotId) continue;
-      const fromGlobal = lookup.get(i);
-      const toGlobal = lookup.get(i + 1);
+      const [fromGlobal, toGlobal] = shotStationGlobals(this.data, section, i, this.stationLookup);
       if (fromGlobal === undefined || toGlobal === undefined) return null;
       return {
         from: this.stationLngLat(fromGlobal),
@@ -507,8 +508,7 @@ export class SurveyGeometryIndex {
         const gi = section.shotOffset + i;
         if (!fids.has(encodeFeatureId(section.id, this.data.shotIds[gi]!))) continue;
         if (!isKindVisible(this.data.shotFlags[gi]!, visibleKinds)) continue;
-        const fromGlobal = lookup.get(i);
-        const toGlobal = lookup.get(i + 1);
+        const [fromGlobal, toGlobal] = shotStationGlobals(this.data, section, i, this.stationLookup);
         if (fromGlobal === undefined || toGlobal === undefined) continue;
         out.push({ from: this.stationLngLat(fromGlobal), to: this.stationLngLat(toGlobal) });
       }
@@ -559,8 +559,7 @@ export class SurveyGeometryIndex {
       for (let i = 0; i < section.shotCount; i++) {
         const gi = section.shotOffset + i;
         if (!isKindVisible(this.data.shotFlags[gi]!, visibleKinds)) continue;
-        const fromGlobal = lookup.get(i);
-        const toGlobal = lookup.get(i + 1);
+        const [fromGlobal, toGlobal] = shotStationGlobals(this.data, section, i, this.stationLookup);
         if (fromGlobal === undefined || toGlobal === undefined) continue;
         shots.push({
           sectionId: section.id,
@@ -626,8 +625,7 @@ export class SurveyGeometryIndex {
     }> = [];
     for (let i = 0; i < section.shotCount; i++) {
       const gi = section.shotOffset + i;
-      const fromGlobal = lookup.get(i);
-      const toGlobal = lookup.get(i + 1);
+      const [fromGlobal, toGlobal] = shotStationGlobals(this.data, section, i, this.stationLookup);
       if (fromGlobal === undefined || toGlobal === undefined) continue;
       shots.push({
         index: i,

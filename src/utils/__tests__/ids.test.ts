@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { encodeFeatureId, sectionIdFromKey, FEATURE_ID_STRIDE } from '../ids';
+import { encodeFeatureId, decodeStationFeatureId, sectionIdFromKey, FEATURE_ID_STRIDE } from '../ids';
 
 describe('sectionIdFromKey', () => {
   it('reads the section id out of a feature key', () => {
@@ -32,5 +32,20 @@ describe('sectionIdFromKey', () => {
     expect(sectionIdFromKey('abc:1')).toBeNaN();
     expect(sectionIdFromKey('')).toBeNaN();
     expect(new Set([0, 1]).has(sectionIdFromKey('abc:1'))).toBe(false);
+  });
+});
+
+
+describe('detached endpoint feature identities', () => {
+  it('round-trips high-bit START refs without colliding with legacy station keys', () => {
+    const start = encodeFeatureId(1, 0x80000001);
+    expect(start).not.toBe(encodeFeatureId(21475, 83649));
+    expect(decodeStationFeatureId(start)).toEqual({ sectionId: 1, stationIndex: 0x80000001 });
+    expect(decodeStationFeatureId(encodeFeatureId(1, 2))).toEqual({ sectionId: 1, stationIndex: 2 });
+  });
+  it('keeps the largest valid section and full u32 alias exactly representable', () => {
+    const fid = encodeFeatureId(42948, 0xffffffff);
+    expect(Number.isSafeInteger(fid)).toBe(true);
+    expect(decodeStationFeatureId(fid)).toEqual({ sectionId: 42948, stationIndex: 0xffffffff });
   });
 });

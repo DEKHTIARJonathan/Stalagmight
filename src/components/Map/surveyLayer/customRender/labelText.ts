@@ -1,3 +1,4 @@
+import { formatStationIndex } from '../../../../utils/formatters';
 /**
  * The single source of truth for label TEXT + label COLOR (#customRender labels,
  * Phase 1).
@@ -38,7 +39,7 @@ export function formatShotLabel(
 
 /** Station-label text: the station's index, as the stock builder emits it. */
 export function formatStationLabel(stationIndex: number): string {
-  return String(stationIndex);
+  return formatStationIndex(stationIndex);
 }
 
 /** Section-name text. `name` is nullable (a section may be unnamed); the stock

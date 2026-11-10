@@ -1,6 +1,9 @@
 // Shared stride for encoding section-scoped IDs into globally unique IDs.
 // Keep in sync with the backend FEATURE_ID_STRIDE.
 export const FEATURE_ID_STRIDE = 100000;
+// High-bit endpoint aliases cannot share the legacy section-scoped key space.
+const WIDE_FEATURE_ID_BASE = 2 ** 48;
+const WIDE_FEATURE_ID_STRIDE = 2 ** 32;
 
 /**
  * Encode a section-scoped id (a shot id or a station index) into the globally
@@ -9,7 +12,20 @@ export const FEATURE_ID_STRIDE = 100000;
  * id-keyed lookup against those features, so the two never drift.
  */
 export function encodeFeatureId(sectionId: number, scopedId: number): number {
-  return sectionId * FEATURE_ID_STRIDE + scopedId;
+  return scopedId >= 0x80000000
+    ? WIDE_FEATURE_ID_BASE + sectionId * WIDE_FEATURE_ID_STRIDE + scopedId
+    : sectionId * FEATURE_ID_STRIDE + scopedId;
+}
+
+/** Decode an opaque station feature key, including detached START endpoints. */
+export function decodeStationFeatureId(fid: number): { sectionId: number; stationIndex: number } {
+  if (fid >= WIDE_FEATURE_ID_BASE) {
+    const value = fid - WIDE_FEATURE_ID_BASE;
+    const sectionId = Math.floor(value / WIDE_FEATURE_ID_STRIDE);
+    return { sectionId, stationIndex: value - sectionId * WIDE_FEATURE_ID_STRIDE };
+  }
+  const sectionId = Math.floor(fid / FEATURE_ID_STRIDE);
+  return { sectionId, stationIndex: fid - sectionId * FEATURE_ID_STRIDE };
 }
 
 /**

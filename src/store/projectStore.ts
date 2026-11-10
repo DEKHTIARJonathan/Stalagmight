@@ -1505,7 +1505,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Build the SoA layout alongside the legacy shapes for the
         // duration of the Phase-A migration. After Phase A.6 this is
         // the only shape stored; project loses .sections[i].shots.
-        const surveyData = surveyDataFromLegacy(state.project.sections, state.stations);
+        const surveyData = surveyDataFromLegacy(state.project.sections, state.stations, state);
         set({
           project: state.project,
           projectTreeGeneration: nextProjectTreeGeneration(),

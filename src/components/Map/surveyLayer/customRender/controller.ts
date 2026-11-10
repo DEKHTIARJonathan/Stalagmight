@@ -26,7 +26,7 @@ import type { GpsOrigin } from '../../../../types/config';
 import type { SurveyData } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
 import { debugLog } from '../../../../utils/debugLog';
-import { FEATURE_ID_STRIDE } from '../../../../utils/ids';
+import { encodeFeatureId } from '../../../../utils/ids';
 import { gasBeyondReachFeatureIds, type GasReachFeatureState } from '../../../../utils/gasReach';
 import type { DisplayColorContext } from '../displayColor';
 import { lngLatToMercator } from '../mercatorCoords';
@@ -586,7 +586,7 @@ export class SurveyCustomController {
     return {
       dimForStation: (g: number): number => {
         const sid = surveyData.stationSectionIds[g]!;
-        const fid = sid * FEATURE_ID_STRIDE + surveyData.stationIndices[g]!;
+        const fid = encodeFeatureId(sid, surveyData.stationIndices[g]!);
         if (
           anchoredSectionIds.has(sid) ||
           (immovableStationFeatureIds.size > 0 && immovableStationFeatureIds.has(fid))
@@ -597,7 +597,7 @@ export class SurveyCustomController {
         return gasDim || planIdleDim ? GAS_DIM_LEVEL : 0;
       },
       dimForShot: (globalShotIdx: number, sectionId: number): number => {
-        const fid = sectionId * FEATURE_ID_STRIDE + surveyData.shotIds[globalShotIdx]!;
+        const fid = encodeFeatureId(sectionId, surveyData.shotIds[globalShotIdx]!);
         if (
           anchoredSectionIds.has(sectionId) ||
           (immovableShotFeatureIds.size > 0 && immovableShotFeatureIds.has(fid))

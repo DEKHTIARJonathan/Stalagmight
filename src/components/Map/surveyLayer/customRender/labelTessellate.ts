@@ -27,6 +27,7 @@
  */
 import type { GpsOrigin, DecimalPrecision } from '../../../../types/config';
 import { type SurveyData, shotKindFromFlags } from '../../../../types/survey-data';
+import { shotStationGlobals } from '../../../../utils/shotEndpoints';
 import { metersToMapCoords } from '../../../../utils/coordinates';
 import { lngLatToMercator } from '../mercatorCoords';
 import { packCssColor, type Rgba8 } from './colorPack';
@@ -215,8 +216,7 @@ export function buildLabelDescriptors(
     if (!inner) continue;
     for (let i = 0; i < section.shotCount; i++) {
       const shotGlobalIdx = section.shotOffset + i;
-      const fromG = inner.get(i);
-      const toG = inner.get(i + 1);
+      const [fromG, toG] = shotStationGlobals(data, section, i, lookup);
       if (fromG === undefined || toG === undefined) continue;
       const shotKind = shotKindFromFlags(data.shotFlags[shotGlobalIdx]!);
       // Carry WHICH virtual kind, not just "virtual": the two hide independently

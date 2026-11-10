@@ -78,7 +78,7 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
  * find the key absent rather than misalign - the bump is a deliberate fence, not
  * a decode requirement, and it keeps this constant honest about the shape.
  */
-const EXPECTED_VERSION = 6;
+const EXPECTED_VERSION = 7;
 /** f32 fields per shot. Mirror of SHOT_FLOAT_FIELDS in Rust. */
 const SHOT_FLOAT_FIELDS = 12;
 /** u32 fields per shot. Mirror of SHOT_UINT_FIELDS in Rust. */
@@ -99,6 +99,8 @@ export interface BinaryEnvelope {
   project_header: ProjectHeaderBinary;
   shot_count: number;
   shot_numbers?: number[];
+  shot_from_ids?: Array<number | null>;
+  shot_start_refs?: StationRef[];
   shots_floats: Uint8Array;
   shots_uints: Uint8Array;
   shots_flags: Uint8Array;
@@ -219,7 +221,7 @@ export async function loadProjectFullBinary(path: string): Promise<LoadProjectFu
   const tDecodeDone = performance.now();
   recordPerfTiming('msgpack decode', tDecodeDone - tDecodeStart);
 
-  if (envelope.version !== EXPECTED_VERSION) {
+  if (envelope.version !== EXPECTED_VERSION && envelope.version !== 6) {
     throw new Error(
       `load_project_full_binary version mismatch: expected ${EXPECTED_VERSION}, got ${envelope.version}. ` +
       `Rebuild backend or frontend so the binary wire format matches.`
@@ -262,6 +264,9 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     throw new Error('shot_numbers length mismatch');
   }
 
+  if (env.shot_from_ids && env.shot_from_ids.length !== env.shot_count) throw new Error('shot_from_ids length mismatch');
+  if (env.shot_start_refs && env.shot_start_refs.length !== env.shot_count) throw new Error('shot_start_refs length mismatch');
+
   // Index shot comments by global shot index for O(1) lookup.
   const shotCommentByIdx = new Map<number, string>();
   for (const [idx, c] of env.shot_comments) shotCommentByIdx.set(idx, c);
@@ -292,6 +297,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
         const markerRaw = shotsU32[uBase + 2]!;
         shots[j] = {
           id: shot_id,
+          ...(env.shot_from_ids ? { from_id: env.shot_from_ids[globalIdx] ?? null } : {}),
           ...(env.shot_numbers ? { number: env.shot_numbers[globalIdx] } : {}),
           azimuth_in: shotsF32[fBase]!,
           azimuth_out: shotsF32[fBase + 1]!,
@@ -584,6 +590,11 @@ function buildSurveyData(
     sections,
     shotCount: N,
     shotIds,
+    ...(env.shot_from_ids ? { shotFromIds: Uint32Array.from(env.shot_from_ids, number => number ?? 0) } : {}),
+    ...(env.shot_start_refs ? {
+      shotStartSectionIds: Uint32Array.from(env.shot_start_refs, ref => ref.section_id),
+      shotStartIndices: Uint32Array.from(env.shot_start_refs, ref => ref.station_index),
+    } : {}),
     ...(env.shot_numbers ? { shotNumbers: Uint32Array.from(env.shot_numbers) } : {}),
     shotSectionIds,
     shotAzimuthIn,

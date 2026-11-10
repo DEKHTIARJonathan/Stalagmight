@@ -83,3 +83,8 @@ describe('displayStationName', () => {
     expect(displayStationName(null)).toBe('');
   });
 });
+
+
+it('labels independent start endpoints without exposing high-bit wire aliases', () => {
+  expect(formatStationId(2, 0x80000001)).toBe('2:Start 2');
+});

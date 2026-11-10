@@ -192,3 +192,32 @@ it('preserves independent Explorer and Surveyor metadata through binary load', (
   expect(result.surveyData.sections[0]!.explorer).toBe('Explorer team');
   expect(surveyDataFromLegacy(result.project.sections, result.stations).sections[0]!.explorer).toBe('Explorer team');
 });
+
+
+describe('explicit incoming origins in binary sidecars', () => {
+  it('preserves null roots, global origins and independent START references', () => {
+    const envelope = makeEnvelope(9, [0, 1]);
+    envelope.version = 7;
+    envelope.shot_numbers = [7, 12];
+    envelope.shot_from_ids = [null, 304];
+    envelope.shot_start_refs = [
+      { section_id: 9, station_index: 0 },
+      { section_id: 9, station_index: 0x80000001 },
+    ];
+    const result = buildResult(envelope, 0);
+    expect(result.project.sections[0]!.shots.map(shot => shot.from_id)).toEqual([null, 304]);
+    expect(getShot(result.surveyData, 0).from_id).toBeNull();
+    expect(getShot(result.surveyData, 1).from_id).toBe(304);
+    expect(Array.from(result.surveyData.shotStartIndices!)).toEqual([0, 0x80000001]);
+    expect(Array.from(result.surveyData.shotStartSectionIds!)).toEqual([9, 9]);
+  });
+
+  it('rejects truncated graph sidecars', () => {
+    const envelope = makeEnvelope(9, [0, 1]);
+    envelope.shot_from_ids = [null];
+    expect(() => buildResult(envelope, 0)).toThrow('shot_from_ids length mismatch');
+    envelope.shot_from_ids = [null, 7];
+    envelope.shot_start_refs = [];
+    expect(() => buildResult(envelope, 0)).toThrow('shot_start_refs length mismatch');
+  });
+});

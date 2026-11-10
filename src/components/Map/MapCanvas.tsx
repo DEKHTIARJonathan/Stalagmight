@@ -60,7 +60,7 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { MapTopLeftOverlay } from './MapTopLeftOverlay';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { useNetworkStore } from '../../store/networkStore';
-import { FEATURE_ID_STRIDE } from '../../utils/ids';
+import { encodeFeatureId } from '../../utils/ids';
 import { debugLog } from '../../utils/debugLog';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 
@@ -667,7 +667,7 @@ function MapCanvas() {
     const stationIds = new Set<number>();
     for (const key of immovableStationKeys) {
       const [sec, idx] = key.split(':');
-      stationIds.add(Number(sec) * FEATURE_ID_STRIDE + Number(idx));
+      stationIds.add(encodeFeatureId(Number(sec), Number(idx)));
     }
     const shotIds = new Set<number>();
     if (activeTool === 'move_shot') {
@@ -676,7 +676,7 @@ function MapCanvas() {
           const fromKey = `${section.id}:${i}`;
           const toKey = `${section.id}:${i + 1}`;
           if (immovableStationKeys.has(fromKey) || immovableStationKeys.has(toKey)) {
-            shotIds.add(section.id * FEATURE_ID_STRIDE + section.shots[i]!.id);
+            shotIds.add(encodeFeatureId(section.id, section.shots[i]!.id));
           }
         }
       }

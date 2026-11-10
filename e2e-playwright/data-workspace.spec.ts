@@ -166,3 +166,36 @@ test('Section menu highlights creation, sorts names and filters with text', asyn
   await page.keyboard.press('Escape');
   await expect(list).not.toBeVisible();
 });
+
+
+test('From ID replaces a global incoming origin and None or -1 clears it', async ({ page }) => {
+  await setupMockedPage(page);
+  await createProject(page, 'Synthetic directed origins');
+  const measurement = { length: 10, azimuth_in: 90, azimuth_out: 90, depth_in: 0, depth_out: 1 };
+  await seedProjectWithSections(page, [
+    { name: 'First group', shots: [measurement, measurement] },
+    { name: 'Other group', shots: [measurement] },
+  ]);
+  await page.getByTestId('mode-data').click();
+  const origin = page.getByTestId('data-from-id-100001');
+  await expect(origin).toContainText('1 - First group');
+  await origin.click();
+  const search = page.getByRole('combobox', { name: 'Search shots by ID or section name', exact: true });
+  await search.fill('3');
+  await page.getByRole('option', { name: '3 - Other group', exact: true }).click();
+  await expect(origin).toContainText('3 - Other group');
+  await expect.poll(() => page.evaluate(() => (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].shots[1].from_id)).toBe(3);
+  await expect(page.getByTestId('grid-cell-1-shot_id')).toHaveText('2');
+  await expect(page.getByTestId('data-section-100001')).toContainText('First group');
+  // Multiple shots may originate from the same parent, independent of metadata groups.
+  const first = page.getByTestId('data-from-id-100000');
+  await first.click();
+  await search.fill('3');
+  await page.getByRole('option', { name: '3 - Other group', exact: true }).click();
+  await expect(first).toContainText('3 - Other group');
+  await origin.click();
+  await search.fill('-1');
+  await page.getByRole('option', { name: 'None', exact: true }).click();
+  await expect(origin).toContainText('None');
+  await expect.poll(() => page.evaluate(() => (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].shots[1].from_id)).toBeNull();
+});

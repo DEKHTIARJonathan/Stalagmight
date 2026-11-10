@@ -6,7 +6,8 @@ import { nextShotKind } from '../../utils/shotKind';
 import { isEditingBlockedNow, useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { SpreadsheetGrid, type GridColumn } from '../common/SpreadsheetGrid';
-import { Select } from '../common/Select';
+import { Select, type SelectOption } from '../common/Select';
+import { ShotFromIdPicker } from './ShotFromIdPicker';
 import { Button } from '../common/Button';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { DialogWrapper } from '../Dialogs/DialogWrapper';
@@ -18,7 +19,7 @@ import type { Section, Shot, SectionData } from '../../types/project';
 import type { CommandResult } from '../../types/commands';
 import type { CellEdit } from '../common/SpreadsheetGrid/types';
 
-interface Row extends Shot { sectionId: number }
+interface Row extends Shot { sectionId: number; from_id?: number | null }
 
 /** Live, editable survey shots and section metadata. */
 export function ProjectDataTable({ sections }: { sections: Section[] }) {
@@ -79,7 +80,7 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
     const data = completeDraftData(draftRef.current);
     const sectionId = draftSectionRef.current;
     if (!data || sectionId === null) return;
-    checkResult(await store.createShot(sectionId, data));
+    checkResult(await store.createShot(sectionId, { ...data, from_id: draftRef.current.data.from_id ?? null }));
     writeDraft(endDraft());
   };
   const chooseDraftSection = (sectionId: number) => {
@@ -99,6 +100,25 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
       useUIStore.getState().setSelection({ type: 'shot', sectionId: result.section_id, shotId: result.shot_id });
     }
   };
+  const setFromId = async (row: Row, fromId: number | null) => {
+    if (row.id < 0) {
+      writeDraft({ ...draftRef.current, data: { ...draftRef.current.data, from_id: fromId } });
+      await commitDraft();
+      return;
+    }
+    if (row.from_id === fromId) return;
+    if (!row.number) throw new Error(t('dataWorkspace.missingShotNumber'));
+    checkResult(await invokeIpc<CommandResult>('set_shot_from_id', { shotNumber: row.number, fromId }));
+    await store.refreshProjectState();
+    store.markDirty();
+  };
+  const originChoices = useMemo(() => {
+    const choices: SelectOption[] = sections.flatMap(section => section.shots.flatMap(shot => shot.number ? [{
+      value: String(shot.number), label: `${shot.number} - ${section.name ?? t('sections.defaultName', { id: section.id })}`,
+    }] : []));
+    choices.sort((a, b) => Number(a.value) - Number(b.value));
+    return { choices, byId: new Map(choices.map(option => [option.value, option])) };
+  }, [sections, t]);
   const openCreate = (row: Row | 'empty') => {
     setName(''); setSurveyor(''); setDate(''); setColor('#4ecdc4'); setDirection('in'); setError(null); setCreateFor(row);
   };
@@ -145,11 +165,35 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
         ...(column.render ? { render: (row, index) => forRow(row).find(c => c.key === column.key)?.render?.(row, index) } : {}),
       })),
     ];
-    const leading = ['_warnings', 'shot_id', 'section'];
+    columns.push({
+      key: 'from_id', header: t('dataWorkspace.fromId'), width: 140, editable: !blocked && !busy,
+      isEditable: row => !blocked && !busy && (row.id < 0 || (!!row.number && !store.isShotFrozen(row.sectionId, positions.get(`${row.sectionId}:${row.id}`) ?? -1))),
+      noInlineEdit: true, parse: () => undefined,
+      getValue: row => row.from_id ?? null,
+      format: value => value === null ? t('dataWorkspace.noOrigin') : String(value),
+      activate: row => root.current?.querySelector<HTMLButtonElement>(`[data-testid="data-from-id-${row.id}"]`)?.click(),
+      render: row => <ShotFromIdPicker shotNumber={row.number} fromId={row.id < 0 ? draftRef.current.data.from_id ?? null : row.from_id ?? null}
+        choices={originChoices.choices} byId={originChoices.byId} testId={`data-from-id-${row.id}`}
+        disabled={blocked || busy || (row.id >= 0 && (!row.number || store.isShotFrozen(row.sectionId, positions.get(`${row.sectionId}:${row.id}`) ?? -1)))}
+        onChange={value => { void mutate(() => setFromId(row, value)); }} />,
+    });
+    const leading = ['_warnings', 'shot_id', 'section', 'from_id'];
     return [...leading.flatMap(key => columns.filter(column => column.key === key)), ...columns.filter(column => !leading.includes(column.key))];
-  }, [rows, sections, t, precision, blocked, busy, store.warnings, options]);
+  }, [rows, sections, t, precision, blocked, busy, store.warnings, options, originChoices]);
   const edit = async (edits: CellEdit[]) => {
     if (blocked) return;
+    const originEdits = edits.filter(edit => edit.colKey === 'from_id');
+    if (originEdits.length) {
+      if (edits.length !== 1) throw new Error(t('dataWorkspace.singleOriginEdit'));
+      const row = rows[originEdits[0]!.row];
+      const value = originEdits[0]!.value;
+      const token = String(value ?? '').trim();
+      const cleared = token === '' || token === '-1' || token.toLocaleLowerCase() === 'none';
+      const fromId = cleared ? null : Number(token);
+      if (fromId !== null && (!Number.isInteger(fromId) || fromId <= 0)) throw new Error(t('dataWorkspace.invalidOrigin'));
+      if (row) await setFromId(row, fromId);
+      return;
+    }
     const groups = new Map<number, CellEdit[]>();
     for (const item of edits) groups.set(item.row, [...(groups.get(item.row) ?? []), item]);
     const draftEdits = edits.filter(item => (rows[item.row]?.id ?? 0) < 0);

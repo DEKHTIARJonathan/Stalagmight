@@ -5,6 +5,7 @@ import type { Section } from '../../types/project';
 const mocks = vi.hoisted(() => ({
   grid: null as any,
   blocked: false,
+  ipc: vi.fn(),
   store: {
     isDirty: false,
     warnings: [],
@@ -29,7 +30,7 @@ vi.mock('../../hooks/useEditingBlocked', () => ({
 }));
 vi.mock('../../hooks/useDecimalPrecision', () => ({ useDecimalPrecision: () => ({ length: 2, azimuth: 2, depth: 2, inclination: 2 }) }));
 vi.mock('react-i18next', async importOriginal => ({ ...(await importOriginal<typeof import('react-i18next')>()), useTranslation: () => ({ t: (key: string) => key }) }));
-vi.mock('../../utils/ipc', () => ({ invokeIpc: vi.fn(async () => []), getErrorMessage: (error: unknown) => String(error) }));
+vi.mock('../../utils/ipc', () => ({ invokeIpc: mocks.ipc, getErrorMessage: (error: unknown) => String(error) }));
 vi.mock('../common/Select', () => ({ Select: (props: any) => <select data-testid={props['data-testid']} value={props.value} disabled={props.disabled} onChange={event => props.onChange(event.target.value)}>
   <option value="">Choose</option>{props.options.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
 </select> }));
@@ -51,6 +52,7 @@ const sections = [1, 2].map(id => ({
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.blocked = false;
+  mocks.ipc.mockResolvedValue({ success: true, warnings: [], section_ids: [], error: null });
   mocks.ui.dataWorkspaceDraft = null;
   for (const command of [mocks.store.setShotKind, mocks.store.executeBatch, mocks.store.createShot, mocks.store.updateSection]) {
     command.mockResolvedValue({ success: true });
@@ -138,4 +140,14 @@ it('edits Explorer independently and presents a hex color with a picker without 
   expect(color).toHaveAttribute('type', 'color');
   await act(async () => fireEvent.change(color, { target: { value: '#abcdef' } }));
   expect(mocks.store.updateSection).toHaveBeenCalledWith(1, { color: '#abcdef' });
+});
+
+
+it('clears an incoming origin through the atomic global shot-number command', async () => {
+  const numbered = sections.map((section, index) => ({ ...section, shots: section.shots.map(shot => ({ ...shot, number: index + 1, from_id: index === 0 ? null : 1 })) }));
+  render(<ProjectDataTable sections={numbered} />);
+  await act(async () => fireEvent.change(screen.getByTestId('data-from-id-200000'), { target: { value: '-1' } }));
+  expect(mocks.ipc).toHaveBeenCalledWith('set_shot_from_id', { shotNumber: 2, fromId: null });
+  expect(mocks.store.refreshProjectState).toHaveBeenCalledOnce();
+  expect(mocks.store.markDirty).toHaveBeenCalledOnce();
 });
