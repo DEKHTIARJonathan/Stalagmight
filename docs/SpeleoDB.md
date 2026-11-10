@@ -37,7 +37,10 @@ permission, missing remote project, TLS and invalid-download errors do not fall
 back to the cache (but see the no-session rules below). An `http://` endpoint the
 transport policy allows (see Authentication and transport) falls back exactly as an
 `https://` endpoint does; one it refuses is refused before any request, without
-DNS. If a successful download would
+DNS. Known gap (F1, #669): a DNS, refused or reset failure of the request itself
+(the SDK's send) is currently classified as an unknown transport error, which does
+not fall back, so today only a timeout - or an `http://` host that the transport
+policy finds does not resolve - opens the cached copy. If a successful download would
 overwrite unsynced edits, the user can cancel or explicitly confirm replacing
 them; the prompt offers no online local-copy shortcut.
 
@@ -69,7 +72,11 @@ management, local imports and local exports remain separate application features
 ## Cached copies on this computer
 
 Every project opened from SpeleoDB lives at
-`<cache>/speleodb/<project_id>/project.stalx`. The `.stalx` records its instance,
+`<cache>/speleodb/<project_id>/project.stalx`. The project ID must be a UUID before
+it becomes a path: opening a linked file whose ID is not one is refused, and the
+cache path itself (`speleodb_cache_path`, used by downloads, revision restores and
+the upload snapshot) refuses such an ID again for every caller, so a crafted
+`speleo_link` row cannot steer a write out of the cache. The `.stalx` records its instance,
 but not the account: the file rides to the server on every upload, so an account
 email inside it would reach every collaborator. The account is recorded beside the
 copy instead, in `owner.json`, which never leaves the machine. It is written when a
@@ -294,7 +301,9 @@ literals in `192.168.0.0/16`, on any valid port. HTTP to anything else (hostname
 public addresses, the other private ranges, IPv6 literals, localhost aliases or
 subdomains) is refused before any request, as are a missing or unknown scheme, a
 missing host, user info and an invalid port. The check runs before every client
-call, on sign-in and when Settings saves a new server. A refused endpoint crosses IPC
+call, on sign-in and when Settings saves a new server or a new insecure-HTTP choice
+(development builds), so turning that choice off under a saved `http://` hostname is
+refused rather than saved. A refused endpoint crosses IPC
 with a typed `endpoint_refusal` (`PlainHttp`, or `InvalidAddress` for an unusable
 address), and the UI shows a translated line that names the server and says what to
 change instead of the backend's English rule. The exception set is defined once
@@ -319,9 +328,13 @@ Metadata requests use 30 seconds and lock probes five seconds with no retries.
 Downloads have a 30-second connection limit, a 120-second read inactivity limit
 and a size-aware total deadline: 120 seconds plus the bytes received at 4 KiB/s
 (the SDK's stream does not expose the reply's length, so a download of N bytes ends
-within 120 s + N / 4 KiB/s, and the 512 MiB native limit bounds every download). A
-server trickling bytes inside the read limit is stopped as a timeout instead of
-holding the transfer, and a quit waiting for it, for ever. Buffered multipart uploads have a size-aware total
+within 120 s + N / 4 KiB/s), capped by an absolute ceiling: the deadline of the
+largest file SpeleoDB accepts (24,657,920 bytes, see Native file transfer) at 4 KiB/s, 6,140 s or about
+1 h 42 min (`DOWNLOAD_CEILING`). Every project the server can store still fits at
+the minimum rate; without the cap, a server paying out just above 4 KiB/s could
+hold a download for some 36 hours within the 512 MiB native limit. A server
+trickling bytes inside the read limit is stopped as a timeout instead of holding
+the transfer, and a quit waiting for it, for ever. Buffered multipart uploads have a size-aware total
 budget of 120 seconds plus transfer time at 16 KiB/s. Response-read timeouts are not
 upload-progress timeouts. JSON responses are capped at 10 MiB. Production settings
 do not read the live-test environment variables.
@@ -334,7 +347,10 @@ handshake or certificate failure is classified as TLS from the typed `rustls`
 error. A 2xx body that does not match the SDK contract (for example a new server
 enum value) is a parse error: it keeps the SDK decoder detail, with every
 response value redacted (serde's quoted strings and its backticked numbers,
-variants and field names) and the length capped, is logged with the endpoint
+variants and field names; a backticked value is printed verbatim and may itself
+hold a backtick or `, expected`, so its span runs to the last backtick before the
+message's final `, expected`, and anything after a span that never closes is
+dropped) and the length capped, is logged with the endpoint
 kind, and is counted as its own `parse-error` traffic outcome (docs/telemetry.md).
 
 Revision times arrive as New York wall time with no zone (`YYYY/MM/DD HH:MM`).
@@ -573,10 +589,13 @@ Quitting never cuts a SpeleoDB upload, acquire, download or release that is stil
 running, so a slow connection does not lose work (lock#6, frontend#4). Menu Quit,
 Ctrl+Q, the window X, an OS window close and restart-to-update all request a
 window close, and the close listener's first gate (`utils/quitAfterWork`) runs
-before any question:
+before any question. On macOS the native app-menu Quit / Cmd+Q may end the app
+without a close request (#640, unverified); then only the backend exit hook below
+holds the exit for a transfer, with no prompt. For the routes that request a close:
 
 - With nothing in flight the quit goes on as before.
-- With an exclusive SpeleoDB call, a hand-off verb, an exit-prompt answer or a
+- With an exclusive SpeleoDB call (a project close and the sign-out's discard of a
+  cached copy included), a hand-off verb, an exit-prompt answer or a
   "Couldn't hand back the lock" Retry in flight, the window stays. An info toast says the save or upload is in progress
   and that Stalagmight will close when it finishes, and the waiting prompt
   (`QuitWaitDialog`, layered over the upload progress) shows a spinner with Keep
@@ -598,17 +617,26 @@ before any question:
 
 The backend exit hook (`commands/exit_wait.rs`, from `RunEvent::ExitRequested`) is
 the backstop for a user-visible transfer still running when the exit arrives anyway.
-Only the transfers the frontend gate waits on can hold it: every IPC command the
-gate counts as `exclusive` (`speleoNetworkCommands.ts`; they run through
-`run_transfer`) plus `close_project` and the cached-copy discard. While one runs and
+Only the transfers the frontend gate waits on can hold it, and the two sets are the
+same: every IPC command the gate counts as `exclusive` (`speleoNetworkCommands.ts`;
+the SpeleoDB ones run through `run_transfer`), including `close_project` and the
+cached-copy discard, whoever calls them. A test in `exit_wait.rs` scans every
+command module and fails when a command holds the exit without an `exclusive` row,
+or the reverse, so a quit can never destroy the window while the process stays
+alive for a command the gate did not count. While one runs and
 no forced exit is armed (10-second arm), the hook prevents the exit, waits for it on
 a background thread, runs the bounded lock release (5 s) and then exits.
 Backend-internal work the user never sees (the background lock re-verify, the
 stranded-claim cleanup, a detached release from a project switch) never keeps a
 process alive without a window: the exit keeps the bounded behaviour for it, the
 release waiting at most 5 s behind it before the app exits. Tauri cannot prevent an
-`app.restart()`; the update restart only runs after the frontend gate has let the
-quit through.
+`app.restart()`, so the install command guards the update restart itself
+(`install_app_update_and_restart`, async, off the main thread): while a user-visible
+transfer is in flight and no forced exit is armed it refuses with a typed
+`transfer_in_flight` error, checked before its bounded lock release and again right
+before the install. Nothing is installed and the download is kept: the update banner
+stays on Restart and a toast says a SpeleoDB transfer is still running. The frontend
+gate normally waited for the transfer already; the backend does not rely on it.
 
 ### Signing out
 

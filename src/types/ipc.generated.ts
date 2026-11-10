@@ -182,6 +182,7 @@ export * from './ipc/SpeleoDbConfig';
 export * from './ipc/AppUpdateCheck';
 export * from './ipc/AppUpdateStatus';
 export * from './ipc/AppUpdateProgress';
+export * from './ipc/AppUpdateInstallError';
 export * from './ipc/Permission';
 export * from './ipc/SpeleoProjectSummary';
 export * from './ipc/SpeleoFileAccess';

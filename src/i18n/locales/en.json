@@ -2528,7 +2528,8 @@
     "restartNow": "Restart now",
     "toasts": {
       "downloadFailed": "Could not download the update. Try again from the update banner.",
-      "installFailed": "Could not install the update. Download it again from the update banner."
+      "installFailed": "Could not install the update. Download it again from the update banner.",
+      "restartWaitsForTransfer": "Stalagmight did not restart: a SpeleoDB transfer is still running. Restart to update once it has finished."
     }
   },
   "integrityRepair": {

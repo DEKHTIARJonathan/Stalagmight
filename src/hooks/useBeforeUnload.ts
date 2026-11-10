@@ -12,6 +12,13 @@ import { useUpdateStore } from '../store/updateStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { TOAST_KEYS } from '../utils/toastKeys';
 import i18n from '../i18n';
+import type { AppUpdateInstallError } from '../types/ipc.generated';
+
+/** The install command refused because a SpeleoDB transfer is still running. */
+function isInstallRefusedForTransfer(error: unknown): boolean {
+  return typeof error === 'object' && error !== null &&
+    (error as Partial<AppUpdateInstallError>).kind === 'transfer_in_flight';
+}
 
 /**
  * Hook to show a confirmation dialog when the user tries to close the app window
@@ -251,6 +258,22 @@ export function useBeforeUnload(
               // Never returns on success - the process exits from under us.
             } catch (e) {
               console.error('[useBeforeUnload] install_app_update_and_restart failed:', e);
+              // lock#6: the backend refuses a restart that would cut a SpeleoDB
+              // transfer the user started (the gate above missed it, or it began
+              // since). Nothing was installed and the download is kept, so the
+              // banner stays on Restart; say why it did not restart.
+              if (isInstallRefusedForTransfer(e)) {
+                void useSpeleoStore.getState().refreshLinkStatus();
+                useUIStore
+                  .getState()
+                  .showToast(
+                    i18n.t('updateBanner.toasts.restartWaitsForTransfer'),
+                    TOAST_KEYS.APP_UPDATE_RESTART_WAITS_FOR_TRANSFER,
+                    'info',
+                  );
+                isClosing.current = false;
+                return;
+              }
               // The backend arm was spent by the attempt itself, so there is
               // nothing left to unarm; what has to be undone is the BANNER,
               // which is sitting on "ready" offering a restart that just

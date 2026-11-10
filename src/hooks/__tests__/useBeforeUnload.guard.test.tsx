@@ -511,4 +511,33 @@ describe('useBeforeUnload - the armed update restart (#579)', () => {
     await pressWindowX();
     expect(destroyMock).toHaveBeenCalledTimes(1);
   });
+
+  // lock#6: the backend refuses a restart while a SpeleoDB transfer the user
+  // started is still running (Tauri cannot hold a restart's exit). The download is
+  // kept, so the banner stays on Restart, and the toast says why it did not restart.
+  it('a restart the backend refused over a running transfer keeps the banner on Restart and says why', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    render(<Harness shouldBlock={false} guard={() => false} />);
+    await flush();
+    const seq = useUpdateStore.getState().beginCheck();
+    useUpdateStore.getState().setAvailable(seq, { version: '9.9.9', notesUrl: 'https://x', installsOnQuit: true });
+    useUpdateStore.getState().startDownloading('9.9.9');
+    useUpdateStore.getState().setReady('9.9.9');
+
+    await armRestart();
+    invokeIpcMock.mockRejectedValueOnce({ kind: 'transfer_in_flight', message: 'a SpeleoDB transfer is still running' });
+    await pressWindowX();
+    err.mockRestore();
+
+    expect(destroyMock).not.toHaveBeenCalled();
+    expect(showToastMock).toHaveBeenCalledTimes(1);
+    expect(showToastMock.mock.calls[0]?.[0]).toContain('SpeleoDB transfer is still running');
+    expect(showToastMock.mock.calls[0]?.[1]).toBe('app-update-restart-waits-for-transfer');
+    expect(showToastMock.mock.calls[0]?.[2]).toBe('info');
+    expect(useUpdateStore.getState().status).toBe('ready');
+
+    // Nothing is left armed or latched: the next close is an ordinary quit.
+    await pressWindowX();
+    expect(destroyMock).toHaveBeenCalledTimes(1);
+  });
 });

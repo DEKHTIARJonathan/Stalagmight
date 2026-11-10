@@ -4,10 +4,14 @@
  * A SpeleoDB upload, acquire, download or release can take minutes on a slow
  * connection, and quitting used to cut it: the window went away, the backend's
  * exit release queued behind the upload for 5 seconds and the process exited -
- * outcome unknown, the lock left held. Every quit route now comes through the
+ * outcome unknown, the lock left held. The in-app quit routes come through the
  * `useBeforeUnload` close listener (menu Quit, Ctrl+Q, the window X, an OS close
  * and the update restart all request a window close), and this is its FIRST
- * gate, ahead of every question:
+ * gate, ahead of every question. Not every route is known to: on macOS the
+ * native app-menu Quit / Cmd+Q may end the app through `ExitRequested` without
+ * a close request (#640, unverified), and then only the backend's exit hook
+ * (`commands/exit_wait.rs`) holds the exit for a transfer in flight - with no
+ * prompt and no waiting dialog. For the routes that do arrive here:
  *
  * - nothing in flight: the quit goes on as before;
  * - something in flight: the window stays, a toast says the app will close when

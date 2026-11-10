@@ -801,25 +801,90 @@ fn downloads_allow_healthy_progress_beyond_the_idle_budget_but_reject_stalls() {
 #[test]
 fn download_deadline_scales_with_the_size_and_is_bounded_by_the_native_limit() {
     let grace = TRANSFER_TIMEOUT;
-    assert_eq!(download_deadline(grace, DOWNLOAD_MIN_RATE, 0), grace);
+    let deadline = |bytes| download_deadline(grace, DOWNLOAD_MIN_RATE, DOWNLOAD_CEILING, bytes);
+    assert_eq!(deadline(0), grace);
+    assert_eq!(deadline(4 * 1024), grace + Duration::from_secs(1));
     assert_eq!(
-        download_deadline(grace, DOWNLOAD_MIN_RATE, 4 * 1024),
-        grace + Duration::from_secs(1)
-    );
-    assert_eq!(
-        download_deadline(grace, DOWNLOAD_MIN_RATE, 20 * 1024 * 1024),
+        deadline(20 * 1024 * 1024),
         grace + Duration::from_secs(5120)
     );
     // Generous: a quarter of the upload budget's rate, so never shorter than it.
-    assert!(
-        download_deadline(grace, DOWNLOAD_MIN_RATE, 20 * 1024 * 1024)
-            >= upload_timeout(20 * 1024 * 1024)
-    );
-    // The most a download can receive bounds it, Content-Length or not.
+    assert!(deadline(20 * 1024 * 1024) >= upload_timeout(20 * 1024 * 1024));
+    // Every file SpeleoDB can store still fits at the minimum rate...
     assert_eq!(
-        download_deadline(grace, DOWNLOAD_MIN_RATE, NATIVE_LIMIT),
-        grace + Duration::from_secs(NATIVE_LIMIT / DOWNLOAD_MIN_RATE)
+        deadline(SERVER_UPLOAD_LIMIT_BYTES),
+        grace + Duration::from_secs(SERVER_UPLOAD_LIMIT_BYTES / DOWNLOAD_MIN_RATE)
     );
+    assert!(deadline(SERVER_UPLOAD_LIMIT_BYTES) <= DOWNLOAD_CEILING);
+    // ...while the most a download may receive (the native limit, about 36 h at
+    // the minimum rate) is cut at the ceiling, Content-Length or not.
+    assert_eq!(deadline(NATIVE_LIMIT), DOWNLOAD_CEILING);
+    assert!(
+        DOWNLOAD_CEILING < Duration::from_hours(2),
+        "{DOWNLOAD_CEILING:?}"
+    );
+}
+
+/// A server paying out just ABOVE the minimum rate keeps moving the per-byte
+/// deadline ahead of the clock, so before the ceiling it held the download (and
+/// the app's exit waiting for it) for as long as the native size limit allowed:
+/// some 36 hours. The absolute ceiling stops it, as a timeout.
+#[test]
+fn a_download_paying_out_just_above_the_minimum_rate_is_stopped_by_the_ceiling() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let worker = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut request = [0; 4096];
+        assert!(stream.read(&mut request).unwrap() > 0, "an HTTP request");
+        // 16 KiB at 1,280 bytes a second: 25% above the 1,024 B/s minimum, so the
+        // whole body would take about 13 s and arrive intact.
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 16384\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        for _ in 0..256 {
+            std::thread::sleep(Duration::from_millis(50));
+            if stream.write_all(&[b'x'; 64]).is_err() {
+                break;
+            }
+        }
+    });
+    let c = SdkClient::new(
+        &base,
+        Some("synthetic"),
+        false,
+        Duration::ZERO,
+        Settings {
+            retries: 0,
+            download_grace: Duration::from_millis(300),
+            download_min_rate: 1024,
+            download_ceiling: Duration::from_millis(1500),
+            ..Settings::default()
+        },
+    )
+    .unwrap();
+    let started = Instant::now();
+    let result = c.download(ID, None);
+    let took = started.elapsed();
+    assert!(
+        matches!(
+            result,
+            Err(SpeleoDbError::Transport {
+                cause: TransportCause::Timeout,
+                ..
+            })
+        ),
+        "{:?}",
+        result.err()
+    );
+    assert!(
+        took < Duration::from_secs(5),
+        "stopped by the ceiling, not by the end of the body: {took:?}"
+    );
+    worker.join().unwrap();
 }
 
 /// A server that trickles a byte well inside the read timeout used to hold the
@@ -1001,6 +1066,45 @@ fn contract_mismatch_detail_is_redacted_and_bounded() {
             format!("response does not match the SpeleoDB SDK contract: {expected}"),
             "{message}"
         );
+    }
+    // serde prints a backticked value verbatim, so the value can hold a backtick
+    // or the text ", expected" itself. Closing its span at the first backtick
+    // leaked everything after it.
+    for (message, expected) in [
+        (
+            "unknown variant `a`LEAK`, expected `PRIVATE` or `PUBLIC`",
+            "unknown variant `...`, expected `...` or `...`",
+        ),
+        (
+            "unknown variant `x`, expected LEAK `y`, expected `PRIVATE` or `PUBLIC`",
+            "unknown variant `...`, expected `...` or `...`",
+        ),
+        (
+            "unknown field `a`LEAK`b`, expected one of `name`, `country` at line 1 column 7",
+            "unknown field `...`, expected one of `...`, `...` at line 1 column 7",
+        ),
+        (
+            "unknown variant `a\"LEAK`, expected `PUBLIC`",
+            "unknown variant `...`, expected `...`",
+        ),
+        (
+            "invalid type: string \"a`LEAK`, expected `b\", expected u32",
+            "invalid type: string \"...\", expected u32",
+        ),
+        // A span that never closes may run into the rest, which is dropped.
+        (
+            "invalid value: string \"LEAK, expected x",
+            "invalid value: string \"...\"",
+        ),
+        ("unknown variant `LEAK, expected x", "unknown variant `...`"),
+    ] {
+        let redacted = contract_mismatch(Some(message.into()));
+        assert_eq!(
+            redacted,
+            format!("response does not match the SpeleoDB SDK contract: {expected}"),
+            "{message}"
+        );
+        assert!(!redacted.contains("LEAK"), "{redacted}");
     }
     let long = format!(
         "unknown variant `ZZ`, expected one of {}",

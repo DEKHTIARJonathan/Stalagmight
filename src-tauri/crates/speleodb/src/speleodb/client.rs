@@ -32,14 +32,27 @@ fn upload_timeout(bytes: usize) -> Duration {
 /// (and, through the quit-after-work wait, the app's exit) for ever.
 const DOWNLOAD_MIN_RATE: u64 = 4 * 1024;
 
+/// The longest any download may run, whatever it has received: the deadline of
+/// the largest file SpeleoDB accepts ([`SERVER_UPLOAD_LIMIT_BYTES`]) at
+/// [`DOWNLOAD_MIN_RATE`], 120 + 6,020 s (about 1 h 42 min). Without it the
+/// per-byte deadline alone let a server trickling just above the minimum rate
+/// hold a download - and the app's exit waiting for it - for some 36 hours
+/// within the native size limit. Derived rather than picked: every project the
+/// server can store still downloads at the minimum rate, so only a server
+/// sending more than it could have stored, or slower than the minimum, is cut.
+/// It grows with the upload limit when the server's limit is fixed.
+const DOWNLOAD_CEILING: Duration = Duration::from_secs(
+    TRANSFER_TIMEOUT.as_secs() + SERVER_UPLOAD_LIMIT_BYTES.div_ceil(DOWNLOAD_MIN_RATE),
+);
+
 /// How long a download may have run once it has received `bytes`: `grace` plus
-/// `bytes` at `min_rate`, the shape of [`upload_timeout`]. The SDK's stream does
-/// not expose the reply's `Content-Length`, so the size is what has arrived so
-/// far: a download of N bytes must end within `grace + N / min_rate` of its start,
-/// and none can outlast the deadline at the native size limit, the most it may
-/// receive.
-fn download_deadline(grace: Duration, min_rate: u64, bytes: u64) -> Duration {
-    grace + Duration::from_millis(bytes.saturating_mul(1000) / min_rate.max(1))
+/// `bytes` at `min_rate`, the shape of [`upload_timeout`], and never more than
+/// `ceiling` ([`DOWNLOAD_CEILING`]). The SDK's stream does not expose the reply's
+/// `Content-Length`, so the size is what has arrived so far: a download of N
+/// bytes must end within `grace + N / min_rate` of its start, and none outlasts
+/// the ceiling.
+fn download_deadline(grace: Duration, min_rate: u64, ceiling: Duration, bytes: u64) -> Duration {
+    (grace + Duration::from_millis(bytes.saturating_mul(1000) / min_rate.max(1))).min(ceiling)
 }
 const JSON_LIMIT: usize = 10 * 1024 * 1024;
 pub(crate) const NATIVE_LIMIT: u64 = 512 * 1024 * 1024;
@@ -62,10 +75,11 @@ struct Settings {
     retries: u32,
     native_limit: u64,
     upload_limit: u64,
-    /// A download's total deadline ([`download_deadline`]): its grace, and the
-    /// minimum average rate after it.
+    /// A download's total deadline ([`download_deadline`]): its grace, the
+    /// minimum average rate after it, and the absolute ceiling.
     download_grace: Duration,
     download_min_rate: u64,
+    download_ceiling: Duration,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -76,6 +90,7 @@ impl Default for Settings {
             upload_limit: SERVER_UPLOAD_LIMIT_BYTES,
             download_grace: TRANSFER_TIMEOUT,
             download_min_rate: DOWNLOAD_MIN_RATE,
+            download_ceiling: DOWNLOAD_CEILING,
         }
     }
 }
@@ -186,6 +201,7 @@ impl SdkClient {
                     + download_deadline(
                         self.settings.download_grace,
                         self.settings.download_min_rate,
+                        self.settings.download_ceiling,
                         received,
                     )
             };
@@ -334,6 +350,70 @@ fn network_error(error: reqwest::Error) -> SpeleoDbError {
 /// country), which would bury the one that failed.
 const CONTRACT_DETAIL_LIMIT: usize = 240;
 
+/// Append `text` to `out` with every quoted or backticked span replaced by
+/// `"..."` / `` `...` ``. Returns whether `text` ended inside a span (the caller
+/// then drops whatever follows, since the span may run into it). Only a quoted
+/// string escapes (serde Debug-formats it); a backtick span is the value verbatim,
+/// so it closes at the next backtick - which is why the server's value is not
+/// scanned with this (see [`redact_server_values`]).
+fn redact_spans(text: &str, out: &mut String) -> bool {
+    let mut chars = text.chars();
+    // The delimiter of the response value being skipped, while inside one.
+    let mut open: Option<char> = None;
+    while let Some(c) = chars.next() {
+        match (open, c) {
+            (None, '"' | '`') => {
+                open = Some(c);
+                out.push(c);
+                out.push_str("...");
+                out.push(c);
+            }
+            (Some(delimiter), c) if c == delimiter => open = None,
+            (Some('"'), '\\') => {
+                chars.next();
+            }
+            (Some(_), _) => {}
+            (None, c) => out.push(c),
+        }
+    }
+    open.is_some()
+}
+
+/// A serde decoder message with the server's value redacted.
+///
+/// serde puts at most one value from the reply in a message, ahead of what the
+/// schema wanted: `` unknown variant `X`, expected `A` or `B` ``,
+/// `` invalid type: string "X", expected u32 ``. A backticked value is printed
+/// verbatim, so it can itself hold a backtick or the text `, expected`: closing
+/// its span at the first backtick leaked the rest (`` `a`LEAK` ``). So the value
+/// part is everything before the LAST `, expected` (the schema's side never
+/// holds one), and a backtick span there runs from its first backtick to its
+/// last. A quoted value is escaped, so its span ends where the quotes say. The
+/// schema's side is redacted span by span as before. Whatever follows a span
+/// that never closes is dropped.
+fn redact_server_values(detail: &str) -> String {
+    let (value, expected) = detail
+        .rfind(", expected")
+        .map_or((detail, ""), |at| detail.split_at(at));
+    let mut out = String::with_capacity(detail.len());
+    let first = value.find(['"', '`']);
+    let open = match first {
+        Some(first) if value[first..].starts_with('`') => {
+            out.push_str(&value[..first]);
+            out.push_str("`...`");
+            match value.rfind('`').filter(|&last| last > first) {
+                Some(last) => redact_spans(&value[last + 1..], &mut out),
+                None => true,
+            }
+        }
+        _ => redact_spans(value, &mut out),
+    };
+    if !open {
+        redact_spans(expected, &mut out);
+    }
+    out
+}
+
 /// The [`SpeleoDbError::Parse`] text for a 2xx reply the SDK could not decode.
 ///
 /// Keeps the SDK's decoder detail (what kind of mismatch, and where) so the log
@@ -347,32 +427,12 @@ fn contract_mismatch(detail: Option<String>) -> String {
     let Some(detail) = detail else {
         return MISMATCH.into();
     };
-    let mut redacted = String::with_capacity(detail.len());
-    let mut chars = detail.chars();
-    // The delimiter of the response value being skipped, while inside one.
-    let mut open: Option<char> = None;
-    while let Some(c) = chars.next() {
-        match (open, c) {
-            (None, '"' | '`') => {
-                open = Some(c);
-                redacted.push(c);
-                redacted.push_str("...");
-                redacted.push(c);
-            }
-            (Some(delimiter), c) if c == delimiter => open = None,
-            // Only a quoted string escapes (it is Debug-formatted); a backtick span
-            // is the value verbatim.
-            (Some('"'), '\\') => {
-                chars.next();
-            }
-            (Some(_), _) => {}
-            (None, c) => redacted.push(c),
-        }
-    }
-    let detail = redacted
+    let detail = detail
         .trim()
         .trim_start_matches("failed to deserialize 2xx response body:")
         .trim();
+    let redacted = redact_server_values(detail);
+    let detail = redacted.trim();
     if detail.is_empty() {
         return MISMATCH.into();
     }

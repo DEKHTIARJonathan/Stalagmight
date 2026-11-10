@@ -837,12 +837,20 @@ impl AppState {
     /// Where a pulled `.stalx` is cached: `<cache>/speleodb/<project_id>/project.stalx`.
     /// The layout itself lives in `speleodb_local_state`, which also walks it to
     /// report per-project local state without opening anything read-write.
+    ///
+    /// Refuses an id that is not a project UUID ([`SpeleoDbError::InvalidProjectId`])
+    /// before anything else, for every caller: the pull, the revision restore and
+    /// the push snapshot all write under this path, and the push takes the id from
+    /// the open file's `speleo_link` row. That row is validated on the way in today
+    /// (the load refuses a linked file whose id is not a UUID, `speleodb_foreign`,
+    /// and every verb reads the link through `speleodb_session_snapshot` /
+    /// `speleodb_validated_link`); this keeps the path safe if a caller ever skips
+    /// that.
     pub(super) fn speleodb_cache_path(&self, project_id: &str) -> Result<PathBuf, SpeleoDbError> {
+        validate_project_id(project_id)?;
         let root = super::speleodb_local_state::cache_root()
             .ok_or_else(|| SpeleoDbError::Io("no app cache directory available".to_owned()))?;
-        Ok(super::speleodb_local_state::cache_path_in(
-            &root, project_id,
-        ))
+        super::speleodb_local_state::validated_cache_path_in(&root, project_id)
     }
 
     pub fn speleodb_start_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
@@ -5276,6 +5284,105 @@ mod tests {
                     Err(SpeleoDbError::InvalidProjectId)
                 ),
                 "expected {bad:?} to be rejected"
+            );
+        }
+    }
+
+    /// The ids a crafted `.stalx` could carry in its `speleo_link` row to steer a
+    /// cache write out of the cache.
+    const CRAFTED_IDS: [&str; 6] = [
+        "../../x",
+        "..",
+        "/tmp/stalagmight-escape",
+        "a/b",
+        "",
+        "11111111-1111-1111-1111-111111111111/../../x",
+    ];
+
+    /// The cache path validates its own id, for every caller (the pull, the
+    /// revision restore, the push snapshot): it can never name a file outside the
+    /// cache root, whatever the id says.
+    #[test]
+    fn the_cache_path_refuses_an_id_that_is_not_a_project_uuid() {
+        use crate::core::state::speleodb_local_state::{cache_path_in, validated_cache_path_in};
+        let state = AppState::new().expect("state");
+        let temp = TempDir::new().expect("temp");
+        let root = temp.path().join("speleodb");
+        for bad in CRAFTED_IDS {
+            assert!(
+                matches!(
+                    state.speleodb_cache_path(bad),
+                    Err(SpeleoDbError::InvalidProjectId)
+                ),
+                "{bad:?}"
+            );
+            assert!(
+                matches!(
+                    validated_cache_path_in(&root, bad),
+                    Err(SpeleoDbError::InvalidProjectId)
+                ),
+                "{bad:?}"
+            );
+        }
+        let id = "11111111-1111-1111-1111-111111111111";
+        let path = validated_cache_path_in(&root, id).expect("a project UUID");
+        assert_eq!(path, cache_path_in(&root, id));
+        assert!(path.starts_with(&root));
+    }
+
+    /// The push snapshot is written beside the cache path built from the OPEN
+    /// file's link id. A crafted id is refused before that path exists, even when
+    /// it reached the open project some way other than the load (which refuses it,
+    /// see `speleodb_foreign`).
+    #[test]
+    fn the_push_snapshot_path_refuses_a_crafted_link_id() {
+        let temp = TempDir::new().expect("temp");
+        for bad in CRAFTED_IDS {
+            let path = temp.path().join(format!("crafted-{}.stalx", bad.len()));
+            let mut db = Database::open(&path).expect("open db");
+            db.save_project(&Project::new("Crafted".to_owned(), None))
+                .expect("save project");
+            let link = SpeleoLink {
+                endpoint: "https://sdb.invalid".to_owned(),
+                project_id: bad.to_owned(),
+                project_name: "Crafted".to_owned(),
+                base_commit_sha: Some("abc123".to_owned()),
+                has_unpushed_edits: true,
+                last_edit_at: None,
+                last_verify_at: None,
+                undo_mode: None,
+            };
+            db.save_speleo_link(Some(&link)).expect("save link");
+            let state = AppState::new().expect("state");
+            state.set_project_for_tests(Project::new("Crafted".to_owned(), None));
+            state.set_database_for_tests(db);
+            let generation = state.speleodb_session_generation();
+
+            // The verbs read the link through the validated snapshot first...
+            let done = state
+                .speleodb_done_acknowledged(Some("synthetic".to_owned()), false)
+                .expect_err("Done refuses a crafted link id");
+            assert_eq!(
+                done.message,
+                local_dto(SpeleoDbError::InvalidProjectId).message,
+                "{bad:?}"
+            );
+            // ...and the upload itself refuses it where it builds the snapshot path.
+            let upload = state
+                .speleodb_upload(
+                    "https://sdb.invalid",
+                    "tok",
+                    false,
+                    &link,
+                    None,
+                    false,
+                    generation,
+                )
+                .expect_err("the upload refuses a crafted link id");
+            assert_eq!(
+                upload.message,
+                local_dto(SpeleoDbError::InvalidProjectId).message,
+                "{bad:?}"
             );
         }
     }

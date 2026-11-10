@@ -1,5 +1,5 @@
 import { test, expect, type Page } from './fixtures/coverage';
-import { createProject, setupMockedPage, waitForNoPendingQuit } from './helpers/app';
+import { createProject, openAppMenu, setupMockedPage, waitForNoPendingQuit } from './helpers/app';
 import { openSpeleoTab } from './helpers/speleoWorkspace';
 import type { useSpeleoStore } from '../src/store/speleoStore';
 
@@ -169,4 +169,38 @@ test('window X during the Publishing overlay waits for the publish, then closes'
   await page.evaluate(() => (window as unknown as { __finishPublish: () => void }).__finishPublish());
   await expect(page.getByTestId('speleodb-publish-progress')).toHaveCount(0);
   await expect.poll(async () => (await teardown(page)).close).toBe(1);
+});
+
+// The backend's exit waits for a project close (it can be handing the lock back)
+// as for any other transfer, so the quit gate must too: before, the window was
+// destroyed while the process lived on, windowless, until the close finished.
+test('window X while Close Project is still handing the lock back waits for it, then closes', async ({ page }) => {
+  await setupMockedPage(page);
+  await createProject(page, 'Synthetic quit during close');
+  await page.evaluate(() => {
+    const w = window as unknown as QuitWindow & { __finishClose: () => void };
+    const closing = new Promise((resolve) => {
+      w.__finishClose = () => resolve({ success: true, warnings: [], section_ids: [], lock_release: 'released' });
+    });
+    const overrides: Record<string, unknown> = {};
+    Object.defineProperty(overrides, 'close_project', { get: () => closing });
+    w.__MOCK_IPC_OVERRIDES__ = overrides;
+  });
+  await openAppMenu(page);
+  await page.getByTestId('back-button').click();
+  await expect.poll(() => page.evaluate(() =>
+    ((window as unknown as { __MOCK_EXIT_CALLS__?: Array<{ cmd: string }> }).__MOCK_EXIT_CALLS__ ?? [])
+      .filter((c) => c.cmd === 'close_project').length)).toBe(1);
+
+  await deliverCloseRequested(page);
+  await expect(page.getByTestId('toast').filter({ hasText: 'will close when it finishes' })).toBeVisible();
+  await expect(page.getByTestId('quit-wait-dialog')).toBeVisible();
+  expect(await teardown(page)).toEqual({ destroy: 0, close: 0 });
+
+  await page.evaluate(() => (window as unknown as { __finishClose: () => void }).__finishClose());
+  await expect(page.getByTestId('global-view')).toBeVisible();
+  // Re-issued once the close has settled; nothing is open any more, so it closes.
+  await expect.poll(async () => (await teardown(page)).close).toBe(1);
+  await deliverCloseRequested(page);
+  await expect.poll(async () => (await teardown(page)).destroy).toBe(1);
 });

@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use ts_rs::TS;
 
-use stalagmight_lib::commands::app_update::{AppUpdateCheck, AppUpdateProgress, AppUpdateStatus};
+use stalagmight_lib::commands::app_update::{
+    AppUpdateCheck, AppUpdateInstallError, AppUpdateProgress, AppUpdateStatus,
+};
 use stalagmight_lib::commands::cache::{CacheStats, ProviderStats, TileFetchStatsResponse};
 use stalagmight_lib::commands::export::DiveProfileRequest;
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
@@ -391,6 +393,7 @@ fn main() {
     export::<AppUpdateCheck>(&out_dir);
     export::<AppUpdateStatus>(&out_dir);
     export::<AppUpdateProgress>(&out_dir);
+    export::<AppUpdateInstallError>(&out_dir);
     // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
@@ -632,6 +635,7 @@ fn main() {
         "AppUpdateCheck",
         "AppUpdateStatus",
         "AppUpdateProgress",
+        "AppUpdateInstallError",
         "Permission",
         "SpeleoProjectSummary",
         "SpeleoFileAccess",

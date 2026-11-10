@@ -8,10 +8,18 @@
  *   endpoint or account must not change while one runs, so the UI disables the
  *   conflicting controls while any of them is in flight.
  *
+ * `exclusive` is also exactly the set of commands the backend's exit waits for
+ * (`commands/exit_wait.rs`): the quit gate (`utils/quitAfterWork`) counts these
+ * as work in flight, and a command that held the backend's exit without being
+ * counted here let a quit destroy the window while the process lived on
+ * windowless until it finished. A Rust test there pins the two sets equal, both
+ * ways.
+ *
  * Commands missing from this table are purely local (`speleodb_session`,
- * `speleodb_local_project_states`, `speleodb_remove_link_at`) and are not
- * counted. `invokeIpc` consults this table for every call, so the busy
- * indicator and the UI gating cover every caller without each one opting in.
+ * `speleodb_local_project_states`, `speleodb_remove_link_at`), never hold the
+ * exit, and are not counted. `invokeIpc` consults this table for every call, so
+ * the busy indicator, the UI gating and the quit gate cover every caller without
+ * each one opting in.
  */
 export type SpeleoNetworkKind = 'read' | 'exclusive';
 
@@ -45,6 +53,12 @@ const KINDS: Readonly<Record<string, SpeleoNetworkKind>> = {
   // the project afterwards, when the server says the account holds it.
   speleodb_remove_cached_copy: 'exclusive',
   speleodb_purge_cached_copies: 'exclusive',
+  // Not SpeleoDB calls of their own, but the backend's exit waits for both, so the
+  // quit gate counts them: closing a project hands its lock back first (or keeps
+  // it, or discards the copy, per the exit prompt's answer), and sign-out's
+  // Discard removes a cached copy before the account goes.
+  close_project: 'exclusive',
+  speleodb_discard_cached_copy: 'exclusive',
 };
 
 /** The network kind of one IPC call, or `null` when it never reaches SpeleoDB. */
