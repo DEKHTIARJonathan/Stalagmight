@@ -43,6 +43,10 @@ fn set_explorer(state: &AppState, section_id: SectionId, explorer: Option<&str>)
     assert!(result.success, "{:?}", result.error);
 }
 
+#[expect(
+    clippy::unwrap_in_result,
+    reason = "missing project or section must fail rather than masquerade as an unset explorer"
+)]
 fn explorer(state: &AppState, section_id: SectionId) -> Option<String> {
     state
         .get_project_state()
