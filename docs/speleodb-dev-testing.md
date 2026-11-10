@@ -141,8 +141,9 @@ UI regression coverage must include:
 - Closing, switching or quitting while holding the editing lock over work SpeleoDB
   has not seen (unsaved, or saved but not uploaded) raises the exit prompt:
   Upload, Keep the lock, Discard (confirmed) or Cancel. A clean project releases
-  its lock silently. Signing out offers Upload, Keep my changes on this computer
-  (the copy is kept, the lock handed back) or Discard for the same work.
+  its lock silently. Signing out offers Upload and disconnect, Keep on this
+  computer (the copy is kept, the lock handed back) or Discard (confirmed) for the
+  open project's work; other copies with changes are always kept on this computer.
 - Quitting while an upload, acquire, download or exit-prompt action is in flight
   waits for it with a toast and a waiting prompt (Keep Stalagmight open / Quit
   now behind a warning), then quits.

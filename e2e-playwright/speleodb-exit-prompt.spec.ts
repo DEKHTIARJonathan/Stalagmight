@@ -7,9 +7,9 @@ import { setIpcOverrides } from './helpers/ipcOverrides';
  * Synthetic projects only.
  *
  * Holding the write lock over work SpeleoDB has not seen, every way out of the
- * project asks ONE in-app question - Upload changes / Keep the lock / Discard
- * changes (second confirm) / Cancel - and carries the answer out before the exit
- * continues. The backend calls each answer makes are read back from
+ * project asks ONE in-app question - Cancel / Discard (second confirm) / Keep the
+ * lock / Upload, all in the dialog's footer row - and carries the answer out
+ * before the exit continues. The backend calls each answer makes are read back from
  * `__MOCK_EXIT_CALLS__` (mocks/tauri-ipc.ts).
  */
 
@@ -94,6 +94,14 @@ test.describe('SpeleoDB exit prompt - close', () => {
     const dialog = page.getByTestId('speleodb-exit-dialog');
     await expect(dialog).toBeVisible();
     await expect(page.getByTestId('speleodb-exit-body')).toContainText('close the project');
+    // The app's dialog layout: every button in the one footer row, Cancel first and
+    // the primary last, with what each does said once in the body.
+    await expect(page.getByTestId('speleodb-exit-footer').getByRole('button')).toHaveText(['Cancel', 'Discard', 'Keep the lock', 'Upload']);
+    await expect(dialog.getByRole('button')).toHaveCount(5); // the four, and the header's X
+    await expect(page.getByTestId('speleodb-exit-choices')).toContainText('Keep the lock leaves them on this computer');
+    const row = await page.getByTestId('speleodb-exit-footer').getByRole('button').evaluateAll(
+      (buttons) => buttons.map((b) => Math.round(b.getBoundingClientRect().top)));
+    expect(new Set(row).size, 'all four buttons on one line').toBe(1);
     await page.getByTestId('speleodb-exit-cancel').click();
     await expect(dialog).toBeHidden();
     await expect(page.getByTestId('single-system-view')).toBeVisible();
@@ -309,13 +317,18 @@ test.describe('Sign-out never strands a lock or un-uploaded work', () => {
     const dialog = page.getByTestId('speleodb-signout-dialog');
     await expect(dialog).toBeVisible();
     await expect(page.getByTestId('speleodb-signout-releasable')).toContainText('Synthetic b');
-    await expect(page.getByTestId('speleodb-signout-go')).toBeDisabled();
+    // Every answer is in the one footer row, Cancel first and the primary last.
+    await expect(page.getByTestId('speleodb-signout-footer').getByRole('button')).toHaveText(
+      ['Cancel', 'Discard', 'Keep on this computer', 'Upload and disconnect']);
+    const row = await page.getByTestId('speleodb-signout-footer').getByRole('button').evaluateAll(
+      (buttons) => buttons.map((b) => Math.round(b.getBoundingClientRect().top)));
+    expect(new Set(row).size, 'all four buttons on one line').toBe(1);
     await page.getByTestId('speleodb-signout-open-upload').click();
+    await expect(page.getByTestId('speleodb-signout-footer').getByRole('button')).toHaveText(['Back', 'Upload and disconnect']);
     await page.getByTestId('speleodb-signout-message').fill('Synthetic before sign-out');
     await page.getByTestId('speleodb-signout-open-upload-confirm').click();
-    await expect(page.getByTestId('speleodb-signout-open-uploaded')).toBeVisible();
-    await page.getByTestId('speleodb-signout-go').click();
     await expect.poll(() => authResult(page)).toEqual({ ok: true });
+    await expect(dialog).toHaveCount(0);
     const log = await calls(page);
     const order = log.map((c) => c.cmd).filter((c) => ['speleodb_done', 'speleodb_release_lock', 'speleodb_logout'].includes(c));
     expect(order).toEqual(['speleodb_done', 'speleodb_release_lock', 'speleodb_logout']);
@@ -323,7 +336,7 @@ test.describe('Sign-out never strands a lock or un-uploaded work', () => {
   });
 
   // Decision 10: with the upload impossible, the edits are never discard-only.
-  test('open project with changes: Keep my changes on this computer hands the lock back and keeps the copy', async ({ page }) => {
+  test('open project with changes: Keep on this computer hands the lock back and keeps the copy', async ({ page }) => {
     await seedLockedWithChanges(page);
     await setIpcOverrides(page, {
       speleodb_list_projects: [summary('synthetic-open', ME)],
@@ -332,8 +345,6 @@ test.describe('Sign-out never strands a lock or un-uploaded work', () => {
     await startAuthChange(page, { kind: 'logout' });
     await expect(page.getByTestId('speleodb-signout-dialog')).toBeVisible();
     await page.getByTestId('speleodb-signout-open-keep').click();
-    await expect(page.getByTestId('speleodb-signout-open-kept')).toBeVisible();
-    await page.getByTestId('speleodb-signout-go').click();
     await expect.poll(() => authResult(page)).toEqual({ ok: true });
     const log = await calls(page);
     const order = log.map((c) => c.cmd)
@@ -344,7 +355,7 @@ test.describe('Sign-out never strands a lock or un-uploaded work', () => {
     await expect(page.getByTestId('single-system-view')).toBeVisible();
   });
 
-  test('another cached project with changes: Discard (confirmed) removes it and releases its lock', async ({ page }) => {
+  test('another cached project with changes is kept on this computer, named only; its lock is handed back', async ({ page }) => {
     await seedLockedWithChanges(page);
     await page.evaluate(() => {
       const s = (window as unknown as { __E2E_TEST__: { speleoStore: { setState: (s: unknown) => void } } }).__E2E_TEST__.speleoStore;
@@ -355,34 +366,38 @@ test.describe('Sign-out never strands a lock or un-uploaded work', () => {
       speleodb_local_project_states: { x: localState(true) },
     });
     await startAuthChange(page, { kind: 'logout' });
-    await page.getByTestId('speleodb-signout-row-x-discard').click();
-    await expect(page.getByTestId('speleodb-signout-row-x-discard-body')).toContainText('lost forever');
-    await page.getByTestId('speleodb-signout-row-x-discard-confirm').click();
-    await expect(page.getByTestId('speleodb-signout-row-x-discarded')).toBeVisible();
+    const kept = page.getByTestId('speleodb-signout-unuploaded');
+    await expect(kept).toContainText('open and upload them after you connect again');
+    await expect(page.getByTestId('speleodb-signout-row-x')).toHaveText('Synthetic x');
+    await expect(kept.getByRole('button')).toHaveCount(0);
+    await expect(page.getByTestId('speleodb-signout-footer').getByRole('button')).toHaveText(['Cancel', 'Disconnect']);
     await page.getByTestId('speleodb-signout-go').click();
     await expect.poll(() => authResult(page)).toEqual({ ok: true });
-    // The confirmed step carries the explicit consent the backend requires.
-    expect((await calls(page, 'speleodb_discard_cached_copy')).map((c) => c.args)).toEqual([{ projectId: 'x', discardUnpushed: true }]);
+    // Never discarded from the sign-out: only its lock is handed back.
+    expect(await calls(page, 'speleodb_discard_cached_copy')).toEqual([]);
     expect((await calls(page, 'speleodb_release_lock')).map((c) => c.args)).toEqual([{ projectId: 'x' }]);
   });
 
-  test('"Open to upload" cancels the sign-out', async ({ page }) => {
+  test('open project with changes: Discard (confirmed, the open project only) closes discarding it, then signs out', async ({ page }) => {
     await seedLockedWithChanges(page);
-    await page.evaluate(() => {
-      const s = (window as unknown as { __E2E_TEST__: { speleoStore: { setState: (s: unknown) => void } } }).__E2E_TEST__.speleoStore;
-      s.setState({ link: null, remoteProjectId: null });
-    });
     await setIpcOverrides(page, {
-      speleodb_list_projects: [summary('x', null)],
-      speleodb_local_project_states: { x: localState(true) },
+      speleodb_list_projects: [summary('synthetic-open', ME), summary('x', ME)],
+      speleodb_local_project_states: { 'synthetic-open': { ...localState(true), is_open: true }, x: localState(true) },
     });
     await startAuthChange(page, { kind: 'logout' });
-    await page.getByTestId('speleodb-signout-row-x-open').click();
-    await expect.poll(() => authResult(page)).toEqual({ ok: false, cancelled: true });
-    expect(await calls(page, 'speleodb_logout')).toEqual([]);
+    await page.getByTestId('speleodb-signout-open-discard').click();
+    await expect(page.getByTestId('speleodb-signout-open-discard-body')).toContainText('lost forever');
+    await expect(page.getByTestId('speleodb-signout-discard')).toContainText('Only this project is affected');
+    await expect(page.getByTestId('speleodb-signout-footer').getByRole('button')).toHaveText(['Back', 'Discard and disconnect']);
+    expect(await calls(page, 'close_project')).toEqual([]);
+    await page.getByTestId('speleodb-signout-open-discard-confirm').click();
+    await expect.poll(() => authResult(page)).toEqual({ ok: true });
+    expect((await calls(page, 'close_project')).map((c) => c.args)).toEqual([{ releaseLock: true, discardLocal: true }]);
+    expect(await calls(page, 'speleodb_discard_cached_copy')).toEqual([]);
+    expect((await calls(page, 'speleodb_release_lock')).map((c) => c.args)).toEqual([{ projectId: 'x' }]);
   });
 
-  test('a release that fails is reported; "Sign out anyway" then signs out', async ({ page }) => {
+  test('a release that fails is reported; "Disconnect anyway" then signs out', async ({ page }) => {
     await seedLockedWithChanges(page);
     await page.evaluate(() => {
       const s = (window as unknown as { __E2E_TEST__: { speleoStore: { setState: (s: unknown) => void } } }).__E2E_TEST__.speleoStore;
@@ -438,7 +453,7 @@ test.describe('Disconnect in Settings runs the sign-out flow first', () => {
     await setIpcOverrides(page, { speleodb_done: { kind: 'released' } });
   });
 
-  test('un-uploaded work: Cancel stays connected in Settings; Keep my changes then disconnects', async ({ page }) => {
+  test('un-uploaded work: Cancel stays connected in Settings; Keep on this computer then disconnects', async ({ page }) => {
     await seedLockedWithChanges(page);
     await setIpcOverrides(page, {
       // Settings asks the backend who is signed in when it opens.
@@ -457,8 +472,8 @@ test.describe('Disconnect in Settings runs the sign-out flow first', () => {
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText('Before you disconnect');
     await expect(page.getByTestId('speleodb-signout-open')).toBeVisible();
-    await expect(page.getByTestId('speleodb-signout-go')).toHaveText('Disconnect');
-    await expect(page.getByTestId('speleodb-signout-go')).toBeDisabled();
+    await expect(page.getByTestId('speleodb-signout-footer').getByRole('button')).toHaveText(
+      ['Cancel', 'Discard', 'Keep on this computer', 'Upload and disconnect']);
 
     // Cancel: still connected, Settings still open on the SpeleoDB tab.
     await page.getByTestId('speleodb-signout-cancel').click();
@@ -473,10 +488,8 @@ test.describe('Disconnect in Settings runs the sign-out flow first', () => {
     // the session ends, and Settings stays open with the Connect form.
     await page.getByTestId('speleodb-settings-logout').click();
     await expect(dialog).toBeVisible();
-    await page.getByTestId('speleodb-signout-open-keep').click();
-    await expect(page.getByTestId('speleodb-signout-open-kept')).toBeVisible();
     await setIpcOverrides(page, { speleodb_session: { logged_in: false, user_email: null, endpoint: null } });
-    await page.getByTestId('speleodb-signout-go').click();
+    await page.getByTestId('speleodb-signout-open-keep').click();
     await expect(dialog).toHaveCount(0);
     await expect.poll(async () => (await calls(page, 'speleodb_logout')).length).toBe(1);
     const order = (await calls(page)).map((c) => c.cmd)
@@ -504,8 +517,7 @@ test.describe('Disconnect in Settings runs the sign-out flow first', () => {
     await expect(page.getByTestId('speleodb-signout-releasable')).toContainText('Synthetic a');
     await page.getByTestId('speleodb-signout-go').click();
     await expect(page.getByTestId('speleodb-signout-release-failed')).toContainText('Synthetic a');
-    await expect(page.getByTestId('speleodb-signout-retry')).toHaveText('Try again');
-    await expect(page.getByTestId('speleodb-signout-anyway')).toHaveText('Disconnect anyway');
+    await expect(page.getByTestId('speleodb-signout-footer').getByRole('button')).toHaveText(['Cancel', 'Disconnect anyway', 'Try again']);
     expect(await calls(page, 'speleodb_logout')).toEqual([]);
     await page.getByTestId('speleodb-signout-anyway').click();
     await expect.poll(async () => (await calls(page, 'speleodb_logout')).length).toBe(1);

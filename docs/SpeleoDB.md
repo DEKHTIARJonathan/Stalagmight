@@ -561,7 +561,7 @@ it reaches the same question rather than exiting. Any other close failure keeps
 the project open with the "Close Project failed" error dialog and pauses editing
 until the link status is refreshed. A close after a sign-out (or a rejected token)
 does not ask: the claim belongs to an account no longer signed in, the sign-out
-flow already asked about its locks (Try again / Sign out anyway), and the claim
+flow already asked about its locks (Try again / Disconnect anyway), and the claim
 stays for the stranded-claim cleanup after that account's next sign-in. The
 bounded silent release at process exit (`RunEvent::ExitRequested`) remains only
 for the exits the app cannot intercept (an OS-forced exit, Quit now over a
@@ -647,24 +647,42 @@ Disconnect in Settings is the only way to sign out from the UI, and it never log
 directly: it first raises the sign-out dialog ("Before you disconnect") over Settings.
 Cancel there leaves the user connected, with Settings open and nothing staged.
 
-Signing out first resolves what the account still holds (`utils/speleoSignOut`): the
-open project's un-uploaded work under our lock (Upload / Keep my changes on this
-computer / Discard), other cached copies with un-uploaded work (Open to upload /
-Keep my changes on this computer / Discard), and the remaining locks, handed back
-with Try again / Disconnect anyway when a release fails. There is no keep-the-lock
-answer. Discard of a copy that is not open (`speleodb_discard_cached_copy`) carries
-the user's confirmed choice as an explicit flag (`discard_unpushed`): the backend
-refuses a copy with un-uploaded or unreadable work without it, and refuses a copy
-the signed-in account is not the owner of whatever the flag says (owner recorded as
-another account or instance; an owner-less copy from the signed-in instance counts
-as the account's, as on the home screen). "Keep my changes on this computer" is the non-destructive one when the
-upload is not possible: unsaved edits of the open project are saved first, the copy
-keeps its edits, its un-uploaded mark and its recents row, and its lock is handed
-back through the explicit per-project release (`speleodb_release_lock`). The user's
-choice is the consent: the logout's own silent release still keeps the lock over
-un-uploaded edits. After the same account's next sign-in the ordinary open takes
-over (base equals tip: the local copy opens and resumes; a divergence offers "Open my
-local copy"). Another account opening the project gets that prompt instead.
+Signing out first resolves what the account still holds (`utils/speleoSignOut`).
+The dialog is laid out like every other one in the app: the body says what is going
+on, and every button is in the one footer row, Cancel first and the primary last.
+
+- The open project's un-uploaded work under our lock: the body says it has changes
+  not on SpeleoDB yet, and the footer offers Cancel / Discard / Keep on this
+  computer / Upload and disconnect (Upload and switch account for an account
+  switch). Upload goes through the description step (Back / Upload and disconnect)
+  and runs the normal upload, which releases. Discard goes through a "lost forever"
+  step (Back / Discard and disconnect) that lists what is lost (unsaved changes,
+  changes saved on this computer but not uploaded) and applies to the open project
+  only. Upload is offered only while we hold the open project's lock.
+- Other cached copies with un-uploaded work are always kept on this computer: the
+  body names them (names only, no buttons) and says they can be opened and uploaded
+  after connecting again. Their edits and un-uploaded flag survive, and a lock held
+  on one is handed back with the others. The sign-out never discards another
+  project's work.
+- The remaining locks are listed as handed back. With nothing to answer for the open
+  project, the footer is Cancel / Disconnect.
+
+Every answer hands the locks back and then disconnects, with Try again / Disconnect
+anyway (same footer row) when a release fails. There is no keep-the-lock answer.
+The backend still guards `speleodb_discard_cached_copy` (which the sign-out no
+longer calls): it needs the explicit `discard_unpushed` consent for a copy with
+un-uploaded or unreadable work, and refuses a copy the signed-in account is not the
+owner of whatever the flag says (owner recorded as another account or instance; an
+owner-less copy from the signed-in instance counts as the account's, as on the home
+screen). Keep on this computer is the non-destructive answer when the upload is not
+possible: unsaved edits of the open project are saved first, the copy keeps its
+edits, its un-uploaded mark and its recents row, and its lock is handed back
+through the explicit per-project release (`speleodb_release_lock`). Confirming the
+dialog, which says so, is the consent: the logout's own silent release still keeps
+the lock over un-uploaded edits. After the same account's next sign-in the ordinary
+open takes over (base equals tip: the local copy opens and resumes; a divergence
+offers "Open my local copy"). Another account opening the project gets that prompt
+instead.
 
 Switch to Read Only Mode refuses unsaved or unuploaded work, including direct IPC
 calls: "Save your changes using Save Changes before switching to read-only mode."

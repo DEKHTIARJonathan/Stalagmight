@@ -7,29 +7,30 @@
  * before the token goes, {@link guardSpeleoSignOut} surveys everything the
  * account still holds:
  *
- * (a) the OPEN project, when we hold its lock over un-uploaded work: Upload (the
- *     normal upload, which releases), Keep my changes on this computer, or
- *     Discard (second "lost forever" confirm);
+ * (a) the OPEN project, when we hold its lock over un-uploaded work: Upload and
+ *     disconnect (the normal upload, which releases), Keep on this computer, or
+ *     Discard (second "lost forever" confirm, the open project only);
  * (b) every lock the account holds on the server with nothing un-uploaded behind
  *     it: handed back as part of the sign-out, no question asked;
- * (c) every OTHER cached project of the account with un-uploaded work: it cannot
- *     be uploaded without opening it, so "Open to upload" (cancels the sign-out),
- *     Keep my changes on this computer, or Discard (confirmed).
+ * (c) every OTHER cached project of the account with un-uploaded work: always
+ *     kept on this computer (the dialog names them and says they can be opened
+ *     and uploaded after connecting again); a lock held on one is handed back
+ *     with (b). The sign-out never discards another project's work.
  *
- * "Keep my changes on this computer" is the non-destructive answer when the upload
- * is not possible (decision 10: edits are never discard-only). The copy keeps its
- * edits, its un-uploaded mark and its recents row, and its lock is handed back
- * with the others through the explicit per-project release: the user's choice is
- * the consent a silent lifecycle release never has (that one still keeps the lock
- * over un-uploaded edits). After the next sign-in the ordinary open takes over:
- * the local copy opens and resumes when SpeleoDB has not moved, and a divergence
- * offers "Open my local copy".
+ * Keeping is the non-destructive answer when the upload is not possible
+ * (decision 10: edits are never discard-only). The copy keeps its edits, its
+ * un-uploaded mark and its recents row, and its lock is handed back with the
+ * others through the explicit per-project release: confirming the sign-out
+ * dialog, which says so, is the consent a silent lifecycle release never has
+ * (that one still keeps the lock over un-uploaded edits). After the next sign-in
+ * the ordinary open takes over: the local copy opens and resumes when SpeleoDB
+ * has not moved, and a divergence offers "Open my local copy".
  *
  * There is deliberately no "keep the lock" here: a lock kept across a sign-out is
  * exactly a stranded lock. Nothing to do -> sign out directly, as before. The
  * releases run last, off the main thread and time-bounded; if any fails the user
- * is told and chooses "Try again" or "Sign out anyway" (the locks then stay held
- * until they sign in again and release them).
+ * is told and chooses "Try again" or "Disconnect anyway" (the locks then stay
+ * held until they sign in again and release them).
  */
 import { create } from 'zustand';
 import { useProjectStore } from '../store/projectStore';
@@ -170,7 +171,7 @@ function openSignOutDialog(kind: SignOutKind, survey: SignOutSurvey | null): Pro
 /**
  * Run before the token is dropped. Resolves `true` when the sign-out may go
  * ahead (nothing held, or everything answered and released - or the user chose
- * "Sign out anyway"), `false` when it was cancelled.
+ * "Disconnect anyway"), `false` when it was cancelled.
  */
 export async function guardSpeleoSignOut(kind: SignOutKind): Promise<boolean> {
   if (useSpeleoStore.getState().session?.loggedIn !== true) return true;
