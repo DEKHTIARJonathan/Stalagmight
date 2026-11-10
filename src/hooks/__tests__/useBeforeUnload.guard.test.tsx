@@ -532,6 +532,7 @@ describe('useBeforeUnload - the armed update restart (#579)', () => {
     expect(destroyMock).not.toHaveBeenCalled();
     expect(showToastMock).toHaveBeenCalledTimes(1);
     expect(showToastMock.mock.calls[0]?.[0]).toContain('SpeleoDB transfer is still running');
+    expect(showToastMock.mock.calls[0]?.[1]).toBe('app-update-restart-waits-for-transfer');
     expect(showToastMock.mock.calls[0]?.[2]).toBe('info');
     expect(useUpdateStore.getState().status).toBe('ready');
 

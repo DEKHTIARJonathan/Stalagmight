@@ -127,6 +127,9 @@ export const TOAST_KEYS = {
   // the banner is on "Restart to update", where that instruction points at a
   // button that does not exist.
   APP_UPDATE_INSTALL_FAILED: 'app-update-install-failed',
+  // The backend refused the restart because a SpeleoDB transfer is still running
+  // (lock#6): nothing failed, the download is kept and Restart works again later.
+  APP_UPDATE_RESTART_WAITS_FOR_TRANSFER: 'app-update-restart-waits-for-transfer',
 
   // Debug
   DEBUG_REFRESH: 'debug-refresh',

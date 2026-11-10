@@ -268,7 +268,7 @@ export function useBeforeUnload(
                   .getState()
                   .showToast(
                     i18n.t('updateBanner.toasts.restartWaitsForTransfer'),
-                    TOAST_KEYS.APP_UPDATE_INSTALL_FAILED,
+                    TOAST_KEYS.APP_UPDATE_RESTART_WAITS_FOR_TRANSFER,
                     'info',
                   );
                 isClosing.current = false;
