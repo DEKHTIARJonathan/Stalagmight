@@ -214,7 +214,7 @@ export function SpeleoRevisionHistory() {
                       {rev.author_email || t('speleodb.revisions.unknownAuthor')}
                     </span>
                     {rev.authored_date && (
-                      <span className="text-xs text-text-tertiary">
+                      <span className="text-xs text-text-secondary">
                         · <RevisionWhen raw={rev.authored_date} id={rev.id} />
                       </span>
                     )}

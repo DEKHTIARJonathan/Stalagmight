@@ -318,4 +318,16 @@ describe('SpeleoRevisionHistory revision times (sdk#7)', () => {
     // An unplaceable value is shown as the server sent it.
     expect(screen.getByTestId('speleodb-revision-date-bbbbbbbb2222').textContent).toBe('not a date');
   });
+
+  // `text-text-tertiary` is not a configured colour (no token, no Tailwind entry),
+  // so it applied nothing and the time took whatever colour it inherited. It reads
+  // in the secondary text token, which holds WCAG AA on the panel (tokens.test.ts).
+  it('shows the time in the secondary text colour', async () => {
+    seed('read-only');
+    invokeIpcMock.mockResolvedValue(REVISIONS);
+    render(<SpeleoRevisionHistory />);
+    const when = await screen.findByTestId('speleodb-revision-date-aaaaaaaa1111');
+    expect(when.parentElement).toHaveClass('text-text-secondary');
+    expect(when.parentElement?.className).not.toMatch(/tertiary/);
+  });
 });
