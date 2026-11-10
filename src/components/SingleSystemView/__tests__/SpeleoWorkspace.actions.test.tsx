@@ -1,11 +1,13 @@
 /**
  * The SpeleoDB tab's everyday actions: a disabled one says why in its tooltip (a
  * disabled control must not be a dead end), and `speleoPrimaryAction` names the
- * one action that makes sense now, the only filled button; every other action
- * keeps its colour as an outline (docs/style-guide.md, Buttons).
+ * one action that makes sense now, the view's only `primary` button. Every
+ * button is the app's ordinary `Button`, with no size or colour of its own
+ * (docs/style-guide.md, Buttons).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import { Button } from '../../common/Button';
 
 const ipc = vi.hoisted(() => vi.fn());
 vi.mock('../../../utils/ipc', () => ({ invokeIpc: ipc, getErrorMessage: String }));
@@ -53,14 +55,14 @@ describe('speleoPrimaryAction', () => {
 });
 
 describe('SpeleoDB tab everyday actions', () => {
-  const filled = () => [save(), editing(), reload(), screen.getByTestId('speleodb-workspace-close'), web()]
-    .filter((b) => b.hasAttribute('data-filled'))
-    .map((b) => b.getAttribute('data-testid'));
-  /** An outline: the tone's border and its 10% wash, never a solid fill. */
-  const expectOutline = (b: HTMLElement) => {
-    expect(b).not.toHaveAttribute('data-filled');
-    expect(b.className).toMatch(/(^|\s)border(\s|$)/);
-    expect(b.className).toMatch(/(^|\s)bg-[a-z]+-10(\s|$)/);
+  const all = () => [save(), editing(), reload(), screen.getByTestId('speleodb-workspace-close'), web()];
+  const norm = (classes: string) => classes.split(/\s+/).filter(Boolean).join(' ');
+  /** The classes an ordinary `<Button variant={variant}>` renders with, nothing added. */
+  const standard = (variant: 'primary' | 'secondary') => {
+    const { unmount } = render(<Button variant={variant} data-testid="reference-button">Reference</Button>);
+    const classes = norm(screen.getByTestId('reference-button').className);
+    unmount();
+    return classes;
   };
 
   it.each<[string, Partial<SpeleoLinkState>, typeof SESSION | null, boolean, string[]]>([
@@ -70,37 +72,29 @@ describe('SpeleoDB tab everyday actions', () => {
     ['read-only with un-uploaded edits', { hasUnpushedEdits: true }, SESSION, false, ['speleodb-workspace-upload']],
     ['signed out', {}, null, false, ['speleodb-workspace-editing']],
     ['view-only access', { permission: 'READ_ONLY' as const }, SESSION, false, []],
-  ])('%s: fills only the action that makes sense now, every other an outline', (_label, link, session, isDirty, expected) => {
+  ])('%s: only the action that makes sense now is primary, every other an ordinary secondary', (_label, link, session, isDirty, expected) => {
+    const primary = standard('primary');
+    const secondary = standard('secondary');
     useSpeleoStore.setState({ link: { ...LINK, ...link }, session });
     useProjectStore.setState({ isDirty });
     render(<SpeleoWorkspace />);
-    expect(filled()).toEqual(expected);
-    for (const b of [save(), editing(), reload(), screen.getByTestId('speleodb-workspace-close'), web()]) {
-      if (!expected.includes(b.getAttribute('data-testid')!)) expectOutline(b);
+    expect(all().filter((b) => b.hasAttribute('data-primary-action')).map((b) => b.getAttribute('data-testid'))).toEqual(expected);
+    for (const b of all()) {
+      expect(norm(b.className), b.getAttribute('data-testid')!).toBe(expected.includes(b.getAttribute('data-testid')!) ? primary : secondary);
     }
   });
 
-  it('the filled action keeps its own colour: Save the accent, Resume editing and Connect green', () => {
-    useProjectStore.setState({ isDirty: true });
-    const { unmount } = render(<SpeleoWorkspace />);
-    expect(save().className).toContain('bg-accent ');
-    unmount();
-    useProjectStore.setState({ isDirty: false });
-    render(<SpeleoWorkspace />);
-    expect(editing().className).toContain('bg-success ');
-    expect(save().className).toContain('border-accent-text');
-  });
-
-  it('Close Project and Switch to Read Only Mode are neutral outlines, not red or amber', () => {
+  it('no button carries a size, shadow or colour of its own', () => {
     useSpeleoStore.setState({ link: { ...LINK, editState: 'editing' } });
     render(<SpeleoWorkspace />);
-    for (const b of [screen.getByTestId('speleodb-workspace-close'), editing()]) {
-      expect(b.className).toContain('border-neutral-border');
-      expect(b.className).not.toMatch(/error|warning/);
+    for (const b of all()) {
+      expect(b.className).not.toMatch(/(^|\s)(h-\d+|w-full|py-2\.5|shadow-sm|border-solid)(\s|$)/);
+      expect(b.className).not.toMatch(/success|info|external|neutral|warning|error/);
+      expect(b).not.toHaveAttribute('data-filled');
     }
     expect(editing()).toHaveTextContent('Switch to Read Only Mode');
-    expect(reload().className).toContain('text-info-text');
-    expect(web().className).toContain('text-external-text');
+    // Opens the browser: keeps its external-link glyph.
+    expect(web().querySelector('svg')).not.toBeNull();
   });
 
   it('signed out on a read-only copy: the disabled ones say why', () => {

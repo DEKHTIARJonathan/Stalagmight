@@ -8,9 +8,6 @@ import { speleoReadOnlyReason, speleoReadOnlyReasonKey } from '../../utils/spele
 import { Button } from '../common/Button';
 import { AlertTriangleIcon, LinkOffIcon } from '../common/icons';
 
-/** The SpeleoDB tab's action buttons: equal height, full width (#668). */
-export const workspaceActionClass = 'w-full h-11 px-3 py-2.5 shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
-
 /**
  * Plain-language lock state for the open project, in the same words as the
  * home-screen badges ("You are editing", "Currently being edited by X",
@@ -46,8 +43,8 @@ export function SpeleoWorkspaceHeader({ link }: { link: SpeleoLinkState }) {
       <h2 className="font-semibold break-words">{projectName}</h2>
       <p data-testid="speleodb-workspace-lock-state">{speleoLockStateLabel(link, t, session)}</p>
       <p className="text-text-secondary">{!session?.loggedIn ? 'Not connected' : link.serverError ? link.serverError.message : link.remoteState === 'unknown' ? 'Connection unavailable' : 'Connected'}</p>
-      {link.noAccess && <Button variant="warning" className={workspaceActionClass} onClick={() => useUIStore.getState().openDialog('speleodb-no-permission')} icon={<LinkOffIcon size={16} />} data-testid="speleodb-workspace-no-access">Keep a local project</Button>}
-      {link.remoteState === 'conflict' && <Button variant="warning" className={workspaceActionClass} onClick={() => useUIStore.getState().openDialog('speleodb-divergence')} icon={<AlertTriangleIcon size={16} />} data-testid="speleodb-workspace-resolve">Resolve synchronization conflict</Button>}
+      {link.noAccess && <Button onClick={() => useUIStore.getState().openDialog('speleodb-no-permission')} icon={<LinkOffIcon size={16} />} data-testid="speleodb-workspace-no-access">Keep a local project</Button>}
+      {link.remoteState === 'conflict' && <Button onClick={() => useUIStore.getState().openDialog('speleodb-divergence')} icon={<AlertTriangleIcon size={16} />} data-testid="speleodb-workspace-resolve">Resolve synchronization conflict</Button>}
       {link.hasUnpushedEdits && <p className="text-warning-text">Changes on this computer have not been uploaded.</p>}
     </div>
   );

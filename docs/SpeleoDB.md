@@ -360,15 +360,13 @@ selection or scroll. Navigation never acquires or releases a lock.
 For managed projects, the persistent header shows identity, editing access, lock owner and
 connection status. Everyday controls are Save Changes, Switch to Read Only Mode or
 Resume editing (Connect to resume editing while signed out), Reload Project, Close
-Project and Open on SpeleoDB: equal-height, full-width buttons coloured by the kind
-of action (Save Changes in the theme's accent, Resume editing and signing in green,
-Reload Project blue, browser navigation purple with an external-link icon, Switch to
-Read Only Mode and Close Project a neutral grey). Only the action that makes sense
-now is filled (`speleoPrimaryAction`): Save Changes while there are changes not yet
-uploaded, Resume editing when the account can edit, signing in while signed out,
-and none when the access is view-only or when editing with nothing to save. Every
-other button keeps its colour as an outline. Every colour is a theme token at WCAG
-AA in all themes (see docs/style-guide.md, Buttons). A disabled control says why in
+Project and Open on SpeleoDB, stacked as the app's ordinary full-width buttons (see
+docs/style-guide.md, Buttons). At most one of them is `primary`, the action that
+makes sense now (`speleoPrimaryAction`): Save Changes while there are changes not yet
+uploaded, Resume editing when the account can edit, the Connect button while signed
+out, and none when the access is view-only or when editing with nothing to save.
+Every other button is `secondary`, and the browser ones carry an external-link icon.
+A disabled control says why in
 its tooltip (signed out, no access, view-only, or another SpeleoDB operation
 running). Revision History is the only
 expandable section; its "Revision History on SpeleoDB" button opens the project's

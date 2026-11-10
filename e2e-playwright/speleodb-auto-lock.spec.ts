@@ -90,7 +90,10 @@ test('workspace contains everyday controls and Revision History without history-
   await expect(page.getByTestId('speleodb-history-forward')).toHaveCount(0);
   const webHistory = page.getByTestId('speleodb-web-revisions');
   await expect(webHistory).toHaveText('Revision History on SpeleoDB');
-  await expect(webHistory).toHaveCSS('height', '44px');
+  // An ordinary button (the workspace's own size), with the external-link glyph.
+  await expect(webHistory).toHaveCSS('padding', '6px 12px');
+  expect(Math.round((await webHistory.boundingBox())!.height))
+    .toBe(Math.round((await page.getByTestId('speleodb-workspace-latest').boundingBox())!.height));
   await expect(webHistory.locator('svg')).toBeVisible();
   await expect(page.getByTestId('speleodb-workspace-section-projects')).toHaveCount(0);
   await expect(page.getByTestId('speleodb-workspace-close')).toHaveText('Close Project');
@@ -320,7 +323,7 @@ async function tokenRgb(page: Page, token: string): Promise<string> {
 }
 
 for (const theme of Object.keys(themeTokens)) {
-  test(`workspace buttons: equal geometry, token colours, one filled per state in ${theme} theme`, async ({ page }, testInfo) => {
+  test(`workspace buttons are the app's ordinary buttons, one primary per state, in ${theme} theme`, async ({ page }, testInfo) => {
     await openRemote(page, false);
     await page.evaluate((theme) => {
       const stores = (window as unknown as TestWindow).__E2E_TEST__;
@@ -335,50 +338,33 @@ for (const theme of Object.keys(themeTokens)) {
     await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
     const buttons = controls.getByRole('button');
     await expect(buttons).toHaveCount(5);
+    await page.mouse.move(0, 0); // off the buttons: measure their rest colours, not a hover
     const styles = await buttons.evaluateAll((nodes) => nodes.map((node) => {
       const style = getComputedStyle(node);
-      const box = node.getBoundingClientRect();
-      return { id: node.getAttribute('data-testid'), filled: node.hasAttribute('data-filled'), background: style.backgroundColor,
-        border: style.borderTopColor, borderLine: `${style.borderTopWidth} ${style.borderTopStyle}`, color: style.color,
-        height: box.height, width: box.width };
+      return { id: node.getAttribute('data-testid'), primary: node.hasAttribute('data-primary-action'),
+        background: style.backgroundColor, color: style.color, padding: style.padding, radius: style.borderTopLeftRadius,
+        weight: style.fontWeight, size: style.fontSize, shadow: style.boxShadow, height: node.getBoundingClientRect().height };
     }));
+    // Editing with nothing to save: no primary, so every action is the standard
+    // secondary - the panel colour, primary text, the md padding and radius.
+    expect(styles.filter((s) => s.primary).map((s) => s.id)).toEqual([]);
+    const panel = await tokenRgb(page, '--cc-panel');
+    const text = await tokenRgb(page, '--cc-text-primary');
     for (const style of styles) {
+      expect(style, style.id!).toMatchObject({ background: panel, color: text, padding: '6px 12px', radius: '4px', weight: '500', size: '14px', shadow: 'none' });
       expect(style.height).toBe(styles[0]!.height);
-      expect(style.width).toBe(styles[0]!.width);
-      expect(style.background).not.toBe('rgba(0, 0, 0, 0)');
     }
-    // Editing with nothing to save: no filled button; each outline is its tone's token.
-    expect(styles.filter((s) => s.filled).map((s) => s.id)).toEqual([]);
-    const byId = Object.fromEntries(styles.map((s) => [s.id, s]));
-    const expectations: Array<[string, string]> = [
-      ['speleodb-workspace-upload', '--cc-accent-text'],
-      ['speleodb-workspace-editing', '--cc-neutral-text'],
-      ['speleodb-workspace-latest', '--cc-info-text'],
-      ['speleodb-workspace-close', '--cc-neutral-text'],
-      ['speleodb-workspace-open-web', '--cc-external-text'],
-    ];
-    for (const [id, token] of expectations) {
-      expect(byId[id]!.color, `${id} label`).toBe(await tokenRgb(page, token));
-      // The outline is really drawn (the global button reset sets border: none).
-      expect(byId[id]!.borderLine, `${id} border`).toBe('1px solid');
-    }
-    expect(byId['speleodb-workspace-close']!.border).toBe(await tokenRgb(page, '--cc-neutral-border'));
-    // Save, Reload and the browser link each keep their own colour; Close and the
-    // step down to read-only share the neutral look.
-    expect(new Set(['speleodb-workspace-upload', 'speleodb-workspace-latest', 'speleodb-workspace-open-web', 'speleodb-workspace-close']
-      .map((id) => byId[id]!.color)).size).toBe(4);
-    expect(byId['speleodb-workspace-editing']!.background).toBe(byId['speleodb-workspace-close']!.background);
     await expect(page.getByTestId('speleodb-workspace-open-web').locator('svg')).toBeVisible();
     await page.getByTestId('speleodb-workspace').screenshot({ path: testInfo.outputPath(`speleodb-buttons-${theme}.png`) });
-    // Read-only, able to resume: Resume editing becomes the one filled button, in the success tone.
+    // Read-only, able to resume: Resume editing becomes the one primary, in the app's primary look.
     await page.getByTestId('speleodb-workspace-editing').click();
     const resume = page.getByTestId('speleodb-workspace-editing');
     await expect(resume).toHaveText('Resume editing');
-    await expect(resume).toHaveAttribute('data-filled', '');
-    await expect(controls.locator('[data-filled]')).toHaveCount(1);
-    await page.mouse.move(0, 0); // off the button: measure its rest colours, not the hover
-    await expect.poll(() => resume.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe(await tokenRgb(page, '--cc-success'));
-    await expect.poll(() => resume.evaluate((node) => getComputedStyle(node).color)).toBe(await tokenRgb(page, '--cc-success-on'));
+    await expect(resume).toHaveAttribute('data-primary-action', '');
+    await expect(controls.locator('[data-primary-action]')).toHaveCount(1);
+    await page.mouse.move(0, 0);
+    await expect.poll(() => resume.evaluate((node) => getComputedStyle(node).backgroundColor)).toBe(await tokenRgb(page, '--cc-accent'));
+    await expect.poll(() => resume.evaluate((node) => getComputedStyle(node).color)).toBe(await tokenRgb(page, '--cc-accent-on'));
   });
 }
 

@@ -17,16 +17,15 @@ import { Button } from '../common/Button';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
 import { RefreshGlyph } from '../common/SpeleoBadgedIcon';
 import { ChevronDownIcon, ChevronRightIcon, CloseIcon, ExternalLinkIcon, LockIcon, PencilIcon, SaveIcon, SignInIcon } from '../common/icons';
-import { SpeleoWorkspaceHeader, workspaceActionClass as actionClass } from './SpeleoWorkspaceHeader';
+import { SpeleoWorkspaceHeader } from './SpeleoWorkspaceHeader';
 
 const areas = [['history', 'Revision History']] as const;
 /** Icon size for the workspace's action buttons. */
 const ICON = 16;
 
 /**
- * Which everyday action is the one filled button (style guide: one filled button
- * per state; every other action keeps its colour as an outline), from the state
- * of the open copy:
+ * Which everyday action is the view's one `primary` button (every other action
+ * is an ordinary `secondary` button), from the state of the open copy:
  * - changes not yet uploaded (unsaved edits, or saved on this computer only):
  *   Save Changes, which protects them (it uploads, or saves on this computer
  *   when it cannot, and takes the lock when it can);
@@ -117,10 +116,10 @@ export function SpeleoWorkspace() {
     <div className="h-full min-h-0 flex flex-col gap-3 p-3 text-sm" data-testid="speleodb-workspace">
       <SpeleoWorkspaceHeader link={link} />
       <div className="shrink-0 grid gap-2" data-testid="speleodb-workspace-everyday">
-        <Button variant="primary" filled={primary === 'save'} className={actionClass} onClick={() => void dispatchProjectSave()} disabled={busy}
+        <Button variant={primary === 'save' ? 'primary' : 'secondary'} onClick={() => void dispatchProjectSave()} disabled={busy}
           title={busy ? why.busy : undefined}
           icon={<SaveIcon size={ICON} />} data-testid="speleodb-workspace-upload">Save Changes</Button>
-        <Button variant={editing ? 'neutral' : 'success'} filled={primary === 'editing'} className={actionClass}
+        <Button variant={primary === 'editing' ? 'primary' : 'secondary'}
           onClick={() => editing ? void releaseOpenProjectLock() : canResume ? void startEditing() : useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })}
           disabled={editingDisabled}
           title={!editingDisabled ? undefined : busy ? why.busy : why.editing}
@@ -128,12 +127,12 @@ export function SpeleoWorkspace() {
           data-testid="speleodb-workspace-editing">
           {editing ? 'Switch to Read Only Mode' : signedIn ? 'Resume editing' : 'Connect to resume editing'}
         </Button>
-        <Button variant="info" className={actionClass} onClick={() => void update()} disabled={reloadDisabled}
+        <Button onClick={() => void update()} disabled={reloadDisabled}
           title={!reloadDisabled ? undefined : why.reload ?? why.busy}
           icon={<RefreshGlyph size={ICON} />} data-testid="speleodb-workspace-latest">Reload Project</Button>
-        <Button variant="neutral" className={actionClass} onClick={() => void handleCloseProject()} disabled={busy} title={busy ? why.busy : undefined}
+        <Button onClick={() => void handleCloseProject()} disabled={busy} title={busy ? why.busy : undefined}
           icon={<CloseIcon size={ICON} />} data-testid="speleodb-workspace-close">Close Project</Button>
-        <Button variant="external" className={actionClass} onClick={web.open} disabled={!web.url} title={why.web}
+        <Button onClick={web.open} disabled={!web.url} title={why.web}
           icon={<ExternalLinkIcon size={ICON} />} data-testid="speleodb-workspace-open-web">Open on SpeleoDB</Button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto" data-testid="speleodb-workspace-sections">

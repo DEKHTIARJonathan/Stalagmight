@@ -131,20 +131,17 @@ export function SpeleoRevisionHistory() {
 
   return (
     <div data-testid="speleodb-revisions">
-      <div className="flex justify-end">
-        <Button
-          variant="external"
-          icon={<ExternalLinkIcon size={16} />}
-          disabled={web.url === null}
-          title={web.url === null ? t('speleodb.web.unavailable') : undefined}
-          onClick={web.open}
-          className="w-full h-11 px-3 py-2.5 shadow-sm"
-          data-testid="speleodb-web-revisions"
-        >
-          {t('speleodb.web.openRevisions')}
-        </Button>
-      </div>
-      <div className="mb-2 space-y-1" data-testid="speleodb-revisions-hint">
+      <Button
+        icon={<ExternalLinkIcon size={16} />}
+        disabled={web.url === null}
+        title={web.url === null ? t('speleodb.web.unavailable') : undefined}
+        onClick={web.open}
+        className="w-full"
+        data-testid="speleodb-web-revisions"
+      >
+        {t('speleodb.web.openRevisions')}
+      </Button>
+      <div className="mt-2 mb-2 space-y-1" data-testid="speleodb-revisions-hint">
         <p className="text-xs text-text-secondary">{t('speleodb.revisions.restoreHint')}</p>
         {viewBlocked ? (
           // Says WHY View is gone and WHAT clears it, because the block is not
@@ -196,7 +193,7 @@ export function SpeleoRevisionHistory() {
                     </code>
                     {isCurrent && (
                       <span
-                        className="px-1.5 py-0.5 rounded text-xs bg-accent-20 text-accent-text"
+                        className="px-1.5 py-0.5 rounded text-xs bg-accent-20 text-accent"
                         data-testid={`speleodb-revision-current-${rev.id}`}
                       >
                         {t('speleodb.revisions.current')}
@@ -227,7 +224,7 @@ export function SpeleoRevisionHistory() {
                 </div>
                 {!isCurrent && iHoldLock && survey && (
                   <Button
-                    variant="warning"
+                    variant="secondary"
                     size="sm"
                     disabled={operationBusy}
                     onClick={() =>
@@ -247,7 +244,7 @@ export function SpeleoRevisionHistory() {
                 )}
                 {!isCurrent && !iHoldLock && !viewBlocked && (
                   <Button
-                    variant="info"
+                    variant="secondary"
                     size="sm"
                     disabled={pendingId !== null || operationBusy}
                     onClick={() => void handleView(rev)}
@@ -266,8 +263,7 @@ export function SpeleoRevisionHistory() {
                     explicit consent for replacing their un-pushed work. */}
                 {!isCurrent && !iHoldLock && canRevert && (
                   <Button
-                    variant="danger"
-                    filled={false}
+                    variant="secondary"
                     size="sm"
                     disabled={operationBusy}
                     onClick={() =>

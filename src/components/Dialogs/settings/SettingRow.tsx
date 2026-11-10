@@ -73,7 +73,7 @@ export function SettingRow({
           {onReset && (resetLabel ? (
             <Button
               type="button"
-              variant="warning"
+              variant="secondary"
               size="sm"
               onClick={onReset}
               disabled={isDefault}
