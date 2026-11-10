@@ -108,10 +108,18 @@ fn resolve_endpoint(
 /// `..`, an absolute path, or an embedded separator could otherwise redirect the
 /// cached `.stalx` write or the download URL). A parsed UUID has no separators,
 /// `..`, or absolute prefix, so it is always a safe single path component.
+///
+/// Only the canonical spelling passes: lowercase, hyphenated, the form SpeleoDB
+/// sends (and the SDK prints). `Uuid::parse_str` also takes `{braced}`,
+/// `urn:uuid:`, hyphenless and uppercase forms, each naming the same project as
+/// another cache directory, request path or link row than the canonical one: two
+/// spellings of one project would be two cache entries, and an id from IPC could
+/// name a directory the listing never showed.
 pub(super) fn validate_project_id(project_id: &str) -> Result<(), SpeleoDbError> {
-    uuid::Uuid::parse_str(project_id)
-        .map(|_| ())
-        .map_err(|_| SpeleoDbError::InvalidProjectId)
+    match uuid::Uuid::parse_str(project_id) {
+        Ok(id) if id.hyphenated().to_string() == project_id => Ok(()),
+        _ => Err(SpeleoDbError::InvalidProjectId),
+    }
 }
 
 /// #202: how long a lock stays "verified" before a lock-held edit re-verifies it.
@@ -5284,6 +5292,37 @@ mod tests {
                     Err(SpeleoDbError::InvalidProjectId)
                 ),
                 "expected {bad:?} to be rejected"
+            );
+        }
+    }
+
+    /// `Uuid::parse_str` takes four more spellings of one project than SpeleoDB
+    /// sends; each would be a different cache directory, request path or link row
+    /// for the same project. Only the canonical one passes, and that is what the
+    /// SDK prints for an id the server sends.
+    #[test]
+    fn validate_project_id_accepts_only_the_canonical_spelling() {
+        let canonical = "0f8fad5b-d9cb-469f-a165-70867728950e";
+        assert!(validate_project_id(canonical).is_ok());
+        let parsed = uuid::Uuid::parse_str(canonical).expect("a UUID");
+        assert_eq!(parsed.to_string(), canonical, "the SDK's spelling");
+        for other in [
+            "0F8FAD5B-D9CB-469F-A165-70867728950E",
+            "0f8fad5b-D9CB-469f-a165-70867728950e",
+            "{0f8fad5b-d9cb-469f-a165-70867728950e}",
+            "urn:uuid:0f8fad5b-d9cb-469f-a165-70867728950e",
+            "0f8fad5bd9cb469fa16570867728950e",
+        ] {
+            assert!(
+                uuid::Uuid::parse_str(other).is_ok(),
+                "{other:?} is a UUID spelling"
+            );
+            assert!(
+                matches!(
+                    validate_project_id(other),
+                    Err(SpeleoDbError::InvalidProjectId)
+                ),
+                "expected {other:?} to be rejected"
             );
         }
     }
