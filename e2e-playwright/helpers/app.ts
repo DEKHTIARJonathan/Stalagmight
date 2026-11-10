@@ -156,6 +156,21 @@ export async function waitForNoDialogs(page: Page): Promise<void> {
   await expect(visibleDialogs).toHaveCount(0);
 }
 
+/**
+ * Wait until the quit-after-work gate has no quit pending (no waiting prompt, no
+ * watcher, no settle step scheduled), so nothing there can still re-issue a quit.
+ * A spec asserting that NO quit happened waits for this instead of sleeping past
+ * the settle delay.
+ */
+export async function waitForNoPendingQuit(page: Page): Promise<void> {
+  await expect.poll(() => page.evaluate(() => {
+    const pending = (window as unknown as { __E2E_TEST__?: { quitAfterWorkPending?: () => boolean } })
+      .__E2E_TEST__?.quitAfterWorkPending;
+    if (!pending) throw new Error('quitAfterWorkPending is not exposed');
+    return pending();
+  })).toBe(false);
+}
+
 export async function createSectionViaStore(page: Page, section: SectionSeed): Promise<void> {
   await page.evaluate(async (data) => {
     const e2e = (window as unknown as {

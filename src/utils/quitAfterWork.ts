@@ -233,6 +233,17 @@ export async function armForcedExit(): Promise<void> {
   }
 }
 
+/**
+ * Whether a quit is still pending here: the waiting prompt is up, the in-flight
+ * work is being watched, or the settle step is scheduled. False means nothing in
+ * this module will re-issue a quit - the deterministic signal an end-to-end test
+ * waits for before asserting that no quit happened (instead of sleeping past
+ * {@link QUIT_SETTLE_MS}).
+ */
+export function quitAfterWorkPending(): boolean {
+  return useQuitWait.getState().waiting || stopWatching !== null || settleTimer !== null;
+}
+
 /** Test-only reset. */
 export function resetQuitWaitForTests(): void {
   stopWatching?.();

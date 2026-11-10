@@ -45,15 +45,29 @@ async function openRemoteProject(page: Page): Promise<void> {
 
 const panelWidth = async (page: Page) => (await page.getByTestId('sections-panel-bar').boundingBox())!.width;
 
+/**
+ * The panel width once it holds still: polled until two samples in a row agree,
+ * so a resize (if any) has landed before the width is read, with no fixed sleep.
+ */
+async function settledPanelWidth(page: Page): Promise<number> {
+  let last = Number.NaN;
+  await expect.poll(async () => {
+    const width = await panelWidth(page);
+    const settled = width === last;
+    last = width;
+    return settled;
+  }, { intervals: [100] }).toBe(true);
+  return last;
+}
+
 /** Switch Sections -> SpeleoDB -> Sections and return the panel width at each step. */
 async function widthsAcrossSwitches(page: Page): Promise<number[]> {
   const widths: number[] = [];
   for (const tab of ['sections', 'speleodb', 'sections', 'speleodb'] as const) {
     await page.getByTestId(`workspace-tab-${tab}`).click();
     await expect(page.getByTestId(`workspace-tab-${tab}`)).toHaveAttribute('aria-selected', 'true');
-    // Give a resize (if any) a chance to land before measuring.
-    await page.waitForTimeout(150);
-    widths.push(await panelWidth(page));
+    await expect(page.locator(`#workspace-panel-${tab}`)).toBeVisible();
+    widths.push(await settledPanelWidth(page));
   }
   return widths;
 }

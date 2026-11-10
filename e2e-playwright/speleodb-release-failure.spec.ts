@@ -1,5 +1,5 @@
 import { test, expect, type Page } from './fixtures/coverage';
-import { setupMockedPage, createProject, openAppMenu } from './helpers/app';
+import { setupMockedPage, createProject, openAppMenu, waitForNoPendingQuit } from './helpers/app';
 import { clearIpcOverrideKeys, setIpcOverrides } from './helpers/ipcOverrides';
 
 /**
@@ -157,7 +157,8 @@ test.describe('Quit with a failing lock release (window X)', () => {
     await expect(page.getByTestId('speleodb-release-failed-body')).toContainText('Stalagmight closes');
     await page.getByTestId('speleodb-release-failed-cancel').click();
     await expect(page.getByTestId('speleodb-release-failed-dialog')).toHaveCount(0);
-    await page.waitForTimeout(300);
+    // Cancel has been carried out and nothing in the quit gate can re-issue the quit.
+    await waitForNoPendingQuit(page);
     expect(await teardown(page)).toEqual({ destroy: 0, close: 0 });
     await expect(page.getByTestId('single-system-view')).toBeVisible();
     expect((await calls(page, 'speleodb_settle_open_lock')).map((c) => c.args)).toEqual([{ releaseLock: true }]);

@@ -1,5 +1,5 @@
 import { test, expect, type Page } from './fixtures/coverage';
-import { createProject, setupMockedPage } from './helpers/app';
+import { createProject, setupMockedPage, waitForNoPendingQuit } from './helpers/app';
 import { openSpeleoTab } from './helpers/speleoWorkspace';
 import type { useSpeleoStore } from '../src/store/speleoStore';
 
@@ -104,11 +104,13 @@ test('a quit that waited for the upload, then hits a failed lock release, asks i
   const dialog = page.getByTestId('speleodb-release-failed-dialog');
   await expect(dialog).toBeVisible();
   await expect(page.getByTestId('speleodb-release-failed-body')).toContainText('Stalagmight closes');
-  await page.waitForTimeout(300);
+  // The question is the release step's outcome, and the wait has handed over:
+  // nothing can re-issue the quit behind it.
+  await waitForNoPendingQuit(page);
   expect(await teardown(page)).toEqual({ destroy: 0, close: 1 });
   await page.getByTestId('speleodb-release-failed-cancel').click();
   await expect(dialog).toHaveCount(0);
-  await page.waitForTimeout(300);
+  await waitForNoPendingQuit(page);
   expect(await teardown(page)).toEqual({ destroy: 0, close: 1 });
   await expect(page.getByTestId('single-system-view')).toBeVisible();
 });
@@ -120,7 +122,9 @@ test('Keep Stalagmight open calls the quit off and lets the upload finish', asyn
   await expect(page.getByTestId('quit-wait-dialog')).toHaveCount(0);
   await page.evaluate(() => (window as unknown as QuitWindow).__finishUpload());
   await expect(page.getByTestId('speleodb-done-dialog')).toHaveCount(0);
-  await page.waitForTimeout(500);
+  await expect(page.getByTestId('speleodb-upload-progress')).toHaveCount(0);
+  // The upload has landed; with the quit called off, nothing watches it to quit.
+  await waitForNoPendingQuit(page);
   expect(await teardown(page)).toEqual({ destroy: 0, close: 0 });
 });
 
