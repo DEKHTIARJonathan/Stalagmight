@@ -37,7 +37,10 @@ permission, missing remote project, TLS and invalid-download errors do not fall
 back to the cache (but see the no-session rules below). An `http://` endpoint the
 transport policy allows (see Authentication and transport) falls back exactly as an
 `https://` endpoint does; one it refuses is refused before any request, without
-DNS. If a successful download would
+DNS. Known gap (F1, #669): a DNS, refused or reset failure of the request itself
+(the SDK's send) is currently classified as an unknown transport error, which does
+not fall back, so today only a timeout - or an `http://` host that the transport
+policy finds does not resolve - opens the cached copy. If a successful download would
 overwrite unsynced edits, the user can cancel or explicitly confirm replacing
 them; the prompt offers no online local-copy shortcut.
 
@@ -298,7 +301,9 @@ literals in `192.168.0.0/16`, on any valid port. HTTP to anything else (hostname
 public addresses, the other private ranges, IPv6 literals, localhost aliases or
 subdomains) is refused before any request, as are a missing or unknown scheme, a
 missing host, user info and an invalid port. The check runs before every client
-call, on sign-in and when Settings saves a new server. A refused endpoint crosses IPC
+call, on sign-in and when Settings saves a new server or a new insecure-HTTP choice
+(development builds), so turning that choice off under a saved `http://` hostname is
+refused rather than saved. A refused endpoint crosses IPC
 with a typed `endpoint_refusal` (`PlainHttp`, or `InvalidAddress` for an unusable
 address), and the UI shows a translated line that names the server and says what to
 change instead of the backend's English rule. The exception set is defined once
@@ -579,7 +584,9 @@ Quitting never cuts a SpeleoDB upload, acquire, download or release that is stil
 running, so a slow connection does not lose work (lock#6, frontend#4). Menu Quit,
 Ctrl+Q, the window X, an OS window close and restart-to-update all request a
 window close, and the close listener's first gate (`utils/quitAfterWork`) runs
-before any question:
+before any question. On macOS the native app-menu Quit / Cmd+Q may end the app
+without a close request (#640, unverified); then only the backend exit hook below
+holds the exit for a transfer, with no prompt. For the routes that request a close:
 
 - With nothing in flight the quit goes on as before.
 - With an exclusive SpeleoDB call (a project close and the sign-out's discard of a

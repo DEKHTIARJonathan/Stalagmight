@@ -14,9 +14,11 @@
 //!    progress, and quits once it is done. "Quit now" is an explicit in-app
 //!    choice behind a warning; it arms [`arm_forced_exit`].
 //! 2. This hook is the backstop for a transfer that is still running when the
-//!    exit arrives anyway (the window destroyed without the listener): with one
-//!    in flight and no forced quit armed, it PREVENTS the exit, waits for it off
-//!    the main thread, runs the bounded release, and then exits.
+//!    exit arrives anyway (the window destroyed without the listener, or a quit
+//!    route that never asks the window to close - on macOS the native app-menu
+//!    Quit / Cmd+Q may be one, #640): with one in flight and no forced quit
+//!    armed, it PREVENTS the exit, waits for it off the main thread, runs the
+//!    bounded release, and then exits.
 //!
 //! Only the transfers the frontend gate itself waits on hold the exit: exactly
 //! the IPC commands it counts as `exclusive` (`src/utils/speleoNetworkCommands.ts`),

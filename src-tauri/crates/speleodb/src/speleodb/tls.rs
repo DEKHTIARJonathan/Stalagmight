@@ -30,15 +30,24 @@
 //! caller has to remember to.
 //!
 //! [`enforce`] runs in `client::SdkClient::new`, before the SDK client exists,
-//! so a new client method physically cannot forget the check. Settings and
-//! sign-in also call [`validate_endpoint`] (the same policy, without DNS), so a
-//! refused address is reported before it is saved or used.
+//! so a new client method physically cannot forget the check. Sign-in calls
+//! [`validate_endpoint`] (the same policy, without DNS) before it uses an
+//! address, and a Settings save calls it whenever the save changes the server
+//! or the `insecure_http` choice (`AppState::update_config`), so a refused
+//! address is reported before it is saved. An address already saved is not
+//! re-checked by a save that changes neither; [`enforce`] still refuses it on
+//! every call.
 //!
 //! A hostname the override allowed over `http://` is resolved before the client
 //! dials it: a host that does not resolve is UNREACHABLE, not insecure, so
-//! [`enforce`] reports it as the same `Transport { cause: Dns }` failure an
-//! `https://` request would hit, and an offline `http://` endpoint gets the
-//! offline handling (the cached open) an `https://` one gets (sdk#6).
+//! [`enforce`] reports it as a `Transport { cause: Dns }` failure, and that typed
+//! cause gets the offline handling (the cached open, sdk#6). An `https://`
+//! request is not resolved here: its DNS failure surfaces from the SDK's send,
+//! which `client::api_error` currently classifies, like a refused or reset
+//! connection, as `TransportCause::Unknown` - and an unknown cause does not fall
+//! back to the cached copy. So today an offline `https://` endpoint falls back
+//! only on a timeout; the DNS and refused cases are the known gap F1, tracked in
+//! #669.
 //!
 //! NOTE (#187): this is a guard against accidental plaintext misconfiguration,
 //! NOT an adversarial SSRF / DNS-rebinding defense.
