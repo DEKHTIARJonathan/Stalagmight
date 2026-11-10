@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::models::{
-    LoopClosure, Project, Section, SectionId, StationKey, StationMerge, ZeroDatum,
+    LoopClosure, Project, Section, SectionId, StationKey, StationMerge, ZeroDatum, MAX_SECTION_ID,
 };
 
 /// One ignored warning the add carried over from the source file, remapped onto
@@ -285,9 +285,21 @@ impl AddedContent {
 
     /// Redo: reinstall the recorded content verbatim, appended where the add
     /// appended it. Refuses (with nothing changed) when a recorded section id is
-    /// already taken - two sections sharing an id is a corrupt project.
+    /// already taken - two sections sharing an id is a corrupt project - and
+    /// when the record itself is not one an add could have produced (a section
+    /// id past [`MAX_SECTION_ID`], or two recorded sections sharing an id): the
+    /// entry is persisted with the file, so it is read back like any other input.
     pub fn install_into(&self, project: &mut Project) -> Result<(), String> {
         let ids = self.section_ids();
+        if ids.len() != self.sections.len() {
+            return Err("Cannot redo the add: its record names a section twice".to_string());
+        }
+        if let Some(id) = ids.iter().find(|id| **id > MAX_SECTION_ID) {
+            return Err(format!(
+                "Cannot redo the add: its record names section {id}, past the largest \
+                 section id ({MAX_SECTION_ID})"
+            ));
+        }
         if let Some(taken) = project.sections.iter().find(|s| ids.contains(&s.id)) {
             return Err(format!(
                 "Cannot redo the add: section {} already exists",
@@ -296,7 +308,7 @@ impl AddedContent {
         }
         project.sections.extend(self.sections.iter().cloned());
         if let Some(max) = ids.iter().max() {
-            project.next_section_id = project.next_section_id.max(max + 1);
+            project.next_section_id = project.next_section_id.max(max.saturating_add(1));
         }
         for (id, offset) in &self.section_offsets {
             Project::write_section_offset(&mut project.section_offsets, *id, *offset);
@@ -320,7 +332,7 @@ impl AddedContent {
             .loop_closures
             .extend(self.loop_closures.iter().cloned());
         if let Some(max) = self.loop_closures.iter().map(|c| c.id).max() {
-            project.next_closure_id = project.next_closure_id.max(max + 1);
+            project.next_closure_id = project.next_closure_id.max(max.saturating_add(1));
         }
         for hash in &self.file_hashes {
             if !project.imported_file_hashes.contains(hash) {

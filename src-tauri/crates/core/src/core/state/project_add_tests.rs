@@ -9,11 +9,11 @@ use tempfile::TempDir;
 
 use super::fuzz_undo_tests::{canonical_snapshot, describe_diffs, diff_snapshots};
 use super::AppState;
-use crate::core::{Command, CommandResult, UndoData, EDIT_DISABLED_CODE};
+use crate::core::{AddedContent, Command, CommandResult, UndoData, EDIT_DISABLED_CODE};
 use crate::models::{
     gps_to_local, AzimuthReference, ClosureStrategy, CorrectionSource, GpsCoordinates, LoopClosure,
     Project, SectionData, SectionId, ShotData, SpeleoLink, StationMerge, StationRef,
-    SurveyDirection, FEATURE_ID_STRIDE,
+    SurveyDirection, FEATURE_ID_STRIDE, MAX_SECTION_ID,
 };
 use crate::persistence::{Database, ResolvedWarning};
 
@@ -750,7 +750,7 @@ fn an_add_past_the_section_id_budget_is_refused() {
     let (state, _) = open_target(temp.path(), true);
     let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
     if let Some(project) = state.project.lock().unwrap().as_mut() {
-        project.next_section_id = crate::models::MAX_SECTION_ID;
+        project.next_section_id = MAX_SECTION_ID;
     }
     let before = canonical_snapshot(&state, false);
 
@@ -986,4 +986,62 @@ fn a_source_with_non_finite_or_invalid_placement_is_refused() {
         assert_same_project(&state, &before, false, file);
         assert_eq!(undo_depth(&state), depth, "{file} pushed nothing");
     }
+}
+
+/// The add's undo entry is persisted with the file, so redo reads it back like
+/// any other input: a record no add could have produced is refused with the
+/// project unchanged, and the id allocators saturate rather than overflow.
+/// INJECTION (tried): dropping the duplicate-id check reinstalls both copies
+/// (the project-unchanged assertion fails); dropping the `MAX_SECTION_ID`
+/// check reinstalls the section past the id space (same assertion); reverting
+/// to `max + 1` on the closure id panics on overflow in this debug build.
+#[test]
+fn redo_refuses_a_record_no_add_could_have_produced() {
+    let mut project = source_bravo();
+    let unchanged = serde_json::to_value(&project).unwrap();
+    let mut one = project.sections[0].clone();
+    one.id = 100;
+
+    let mut duplicate = AddedContent::default();
+    duplicate.sections = vec![one.clone(), one.clone()];
+    let mut past_id_space = AddedContent::default();
+    let mut far = one.clone();
+    far.id = MAX_SECTION_ID + 1;
+    past_id_space.sections = vec![far];
+
+    for (what, content, expected) in [
+        ("a duplicated section", &duplicate, "names a section twice"),
+        (
+            "a section past the id space",
+            &past_id_space,
+            "past the largest section id",
+        ),
+    ] {
+        let refused = content.install_into(&mut project);
+        assert!(
+            refused.as_ref().is_err_and(|e| e.contains(expected)),
+            "{what}: {refused:?}"
+        );
+        assert_eq!(
+            serde_json::to_value(&project).unwrap(),
+            unchanged,
+            "{what}: nothing changed"
+        );
+    }
+
+    // At the edges of both id spaces: installed, allocators pinned at the top.
+    let mut edge = AddedContent::default();
+    let mut last = one;
+    last.id = MAX_SECTION_ID;
+    edge.sections = vec![last];
+    let mut top = closure(
+        StationRef::new(MAX_SECTION_ID, 0),
+        StationRef::new(MAX_SECTION_ID, 1),
+        ClosureStrategy::Batch,
+    );
+    top.id = u64::MAX;
+    edge.loop_closures = vec![top];
+    edge.install_into(&mut project).unwrap();
+    assert_eq!(project.next_section_id, MAX_SECTION_ID + 1);
+    assert_eq!(project.next_closure_id, u64::MAX);
 }
