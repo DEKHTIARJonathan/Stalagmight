@@ -86,6 +86,15 @@ describe('AddOrOpenProjectDialog', () => {
     expect(runAddProjectFile).toHaveBeenCalledTimes(1);
   });
 
+  it('ellipsizes a long project name in the Add label and keeps the full text as a tooltip', () => {
+    render(<AddOrOpenProjectDialog />);
+    const add = screen.getByTestId('add-or-open-project-add');
+    expect(screen.getByTestId('add-or-open-project-add-label')).toHaveClass('truncate');
+    expect(add).toHaveClass('max-w-full');
+    expect(add).toHaveAttribute('title', add.textContent ?? '');
+    expect(screen.getByTestId('add-or-open-project-open')).toHaveClass('whitespace-nowrap');
+  });
+
   it('names the open project on the Add choice', () => {
     render(<AddOrOpenProjectDialog />);
     expect(screen.getByTestId('add-or-open-project-add').textContent).toContain('My Cave');

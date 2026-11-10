@@ -67,11 +67,15 @@ export default function AddOrOpenProjectDialog() {
     setAddError(result.error ?? t('editGate.commandFailed'));
   };
 
+  const addLabel = adding
+    ? t('dialogs.addOrOpenProject.adding')
+    : t('dialogs.addOrOpenProject.addTo', { projectName: projectName ?? '' });
+
   return (
     <DialogWrapper
       title={t('dialogs.addOrOpenProject.title')}
       onClose={adding ? () => {} : handleCancel}
-      size="sm"
+      size="md"
       data-testid="add-or-open-project-dialog"
     >
       <div className="space-y-3">
@@ -88,7 +92,7 @@ export default function AddOrOpenProjectDialog() {
             {addError}
           </p>
         )}
-        <div className="flex justify-end gap-2 pt-2 border-t border-border">
+        <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-border">
           <Button
             onClick={handleCancel}
             disabled={adding}
@@ -97,18 +101,26 @@ export default function AddOrOpenProjectDialog() {
           >
             {t('common.actions.cancel')}
           </Button>
-          <Button onClick={handleOpen} disabled={adding} data-testid="add-or-open-project-open">
+          <Button
+            onClick={handleOpen}
+            disabled={adding}
+            className="whitespace-nowrap"
+            data-testid="add-or-open-project-open"
+          >
             {t('dialogs.addOrOpenProject.openAsProject')}
           </Button>
           <Button
             variant="primary"
             onClick={() => void handleAdd()}
             disabled={editingBlocked || adding}
+            className="min-w-0 max-w-full"
+            title={addLabel}
             data-testid="add-or-open-project-add"
           >
-            {adding
-              ? t('dialogs.addOrOpenProject.adding')
-              : t('dialogs.addOrOpenProject.addTo', { projectName: projectName ?? '' })}
+            {/* A long project name ellipsizes here; the full name is in the body and the tooltip. */}
+            <span className="truncate" data-testid="add-or-open-project-add-label">
+              {addLabel}
+            </span>
           </Button>
         </div>
       </div>
