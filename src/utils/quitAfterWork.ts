@@ -238,6 +238,20 @@ export async function armForcedExit(): Promise<void> {
 }
 
 /**
+ * Take the backend's forced-exit arm back: the window survived the close it was
+ * armed for (its destroy, or the update install, failed), so the app goes on
+ * running, and a later exit must wait for a transfer again instead of cutting
+ * it. Best-effort; the backend arm also runs out on its own after 10 seconds.
+ */
+export async function disarmForcedExit(): Promise<void> {
+  try {
+    await invokeIpc('disarm_forced_exit', undefined, { purpose: 'a forced quit whose window stayed open' });
+  } catch (error) {
+    console.error('[quit] disarm_forced_exit failed:', error);
+  }
+}
+
+/**
  * Whether a quit is still pending here: the waiting prompt is up, the in-flight
  * work is being watched, or the settle step is scheduled. False means nothing in
  * this module will re-issue a quit - the deterministic signal an end-to-end test

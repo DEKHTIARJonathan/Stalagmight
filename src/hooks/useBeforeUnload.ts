@@ -5,7 +5,13 @@ import { getCurrentWindow } from '@tauri-apps/api/window';
 import { askExitConfirm } from '../utils/exitConfirm';
 import { debugLog } from '../utils/debugLog';
 import { consumeQuitConfirmation, consumeUpdateRestartArmed, abandonUpdateRestart } from '../utils/quit';
-import { abandonForcedQuit, armForcedExit, consumeForcedQuit, deferQuitUntilWorkDone } from '../utils/quitAfterWork';
+import {
+  abandonForcedQuit,
+  armForcedExit,
+  consumeForcedQuit,
+  deferQuitUntilWorkDone,
+  disarmForcedExit,
+} from '../utils/quitAfterWork';
 import { invokeIpc } from '../utils/ipc';
 import { useUIStore } from '../store/uiStore';
 import { useUpdateStore } from '../store/updateStore';
@@ -55,6 +61,10 @@ export function useBeforeUnload(
   const unlistenRef = useRef<UnlistenFn | null>(null);
   // Track if we're in the process of closing
   const isClosing = useRef(false);
+  // A close attempt is asking its questions (unsent input, then the import /
+  // dive-plan one), which `isClosing` - set only past every guard - does not
+  // cover. See the listener.
+  const askingQuestions = useRef(false);
   // Track current blocking state for the listener callback
   const shouldBlockRef = useRef(shouldBlock);
   // Kept in a ref (not a dep) so a re-rendered guard identity never tears down
@@ -120,6 +130,21 @@ export function useBeforeUnload(
             return;
           }
 
+          // One attempt's questions at a time. A close request while an attempt
+          // is still asking (the user pressed X again) joins that attempt rather
+          // than starting another: run, its own question answered the pending
+          // one with "no" (one in-app question at a time), and the pending
+          // attempt then dropped the update restart or forced quit riding on the
+          // quit the user was about to confirm. Whatever was armed stays armed
+          // for the attempt that is asking. A pre-confirmation this request
+          // carries is dropped, so it cannot lend itself to a later attempt; the
+          // asking one still runs every guard it would have.
+          if (askingQuestions.current) {
+            consumeQuitConfirmation();
+            debugLog('[useBeforeUnload] A close attempt is still asking; this request joins it');
+            return;
+          }
+
           // Tier 0 (lock#6, frontend#4): a SpeleoDB transfer or exit answer in
           // flight is never cut by a quit. Ahead of every question, so nothing
           // is asked - or done - against a state that is about to change: the
@@ -147,53 +172,61 @@ export function useBeforeUnload(
           // dialog must not carry into it.
           if (!preConfirmed) tier1Confirmed.current = false;
 
-          // Unsent SpeleoDB input (frontend#10) next - after the tier-0 wait, so a
-          // re-issued quit asks it against the settled state, and before any tier
-          // below can upload, release or discard. Declining abandons the quit
-          // outright, like declining tier 1: an update restart or a forced quit
-          // riding on it goes too, and so does a pre-confirmed answer.
-          if (!await confirmWorkspaceDrafts()) {
-            tier1Confirmed.current = false;
-            abandonUpdateRestart();
-            abandonForcedQuit();
-            return;
-          }
-
-          // Tier 1: the in-memory states with no in-app dialog of their own (an
-          // import wizard mid-flight, a dirty dive plan). Deliberately NOT skipped
-          // by `preConfirmed` alone: a quit confirms the PROJECT, which says nothing
-          // about the dive plan the same close would drop. It is skipped only when
-          // THIS attempt already asked it - see `tier1Confirmed`. Since `quitApp`
-          // now routes menu Quit / Ctrl+Q through this same listener, that ask
-          // always happens before the tier-2 dialog acts.
-          if (shouldBlockRef.current && !tier1Confirmed.current) {
-            // Prevent multiple dialogs
-            if (isShowingDialog.current || !isMounted) return;
-            isShowingDialog.current = true;
-            let proceed = false;
-            try {
-              // In-app, not the native `confirm`: it is one of the exit prompts and
-              // must look and behave like the others (`utils/exitConfirm`).
-              proceed = await askExitConfirm({
-                title: i18n.t('speleoExitPrompt.closeApp.title'),
-                message,
-                confirmLabel: i18n.t('speleoExitPrompt.closeApp.confirm'),
-                cancelLabel: i18n.t('common.actions.cancel'),
-              });
-            } catch (e) {
-              console.error('Close confirmation error:', e);
-              proceed = false;
-            } finally {
-              isShowingDialog.current = false;
-            }
-            if (!proceed) {
-              // [#579] The user declined the exit outright, so an update
-              // restart that was riding on it is abandoned - on both sides.
+          // The questions. Latched (see above) until they are answered, and
+          // released synchronously as this block ends - before the tier-2 guard,
+          // which may re-issue the close itself.
+          askingQuestions.current = true;
+          try {
+            // Unsent SpeleoDB input (frontend#10) next - after the tier-0 wait, so a
+            // re-issued quit asks it against the settled state, and before any tier
+            // below can upload, release or discard. Declining abandons the quit
+            // outright, like declining tier 1: an update restart or a forced quit
+            // riding on it goes too, and so does a pre-confirmed answer.
+            if (!await confirmWorkspaceDrafts()) {
+              tier1Confirmed.current = false;
               abandonUpdateRestart();
               abandonForcedQuit();
               return;
             }
-            tier1Confirmed.current = true;
+
+            // Tier 1: the in-memory states with no in-app dialog of their own (an
+            // import wizard mid-flight, a dirty dive plan). Deliberately NOT skipped
+            // by `preConfirmed` alone: a quit confirms the PROJECT, which says nothing
+            // about the dive plan the same close would drop. It is skipped only when
+            // THIS attempt already asked it - see `tier1Confirmed`. Since `quitApp`
+            // now routes menu Quit / Ctrl+Q through this same listener, that ask
+            // always happens before the tier-2 dialog acts.
+            if (shouldBlockRef.current && !tier1Confirmed.current) {
+              // Prevent multiple dialogs
+              if (isShowingDialog.current || !isMounted) return;
+              isShowingDialog.current = true;
+              let proceed = false;
+              try {
+                // In-app, not the native `confirm`: it is one of the exit prompts and
+                // must look and behave like the others (`utils/exitConfirm`).
+                proceed = await askExitConfirm({
+                  title: i18n.t('speleoExitPrompt.closeApp.title'),
+                  message,
+                  confirmLabel: i18n.t('speleoExitPrompt.closeApp.confirm'),
+                  cancelLabel: i18n.t('common.actions.cancel'),
+                });
+              } catch (e) {
+                console.error('Close confirmation error:', e);
+                proceed = false;
+              } finally {
+                isShowingDialog.current = false;
+              }
+              if (!proceed) {
+                // [#579] The user declined the exit outright, so an update
+                // restart that was riding on it is abandoned - on both sides.
+                abandonUpdateRestart();
+                abandonForcedQuit();
+                return;
+              }
+              tier1Confirmed.current = true;
+            }
+          } finally {
+            askingQuestions.current = false;
           }
 
           // Tier 2: the app's own exit guards (unpushed SpeleoDB edits under our
@@ -242,7 +275,18 @@ export function useBeforeUnload(
           // operation instead of holding the exit until it finishes. Here and not
           // at the click: the backend's arm covers one hop (seconds), and the
           // questions above may have been on screen far longer.
-          if (consumeForcedQuit()) await armForcedExit();
+          const forced = consumeForcedQuit();
+          if (forced) await armForcedExit();
+
+          // The window stays after all (the install or the destroy below failed):
+          // release the latch so a later close can try again, and take the
+          // backend's forced-exit arm back - left armed, the next exit within its
+          // 10 seconds would cut a transfer the user never chose to cut, in an
+          // app that is still running.
+          const stayOpen = async (): Promise<void> => {
+            isClosing.current = false;
+            if (forced) await disarmForcedExit();
+          };
 
           // [#579] An update restart armed by `requestUpdateRestart` has now
           // passed every guard exactly like a plain quit would - swap the
@@ -271,7 +315,7 @@ export function useBeforeUnload(
                     TOAST_KEYS.APP_UPDATE_RESTART_WAITS_FOR_TRANSFER,
                     'info',
                   );
-                isClosing.current = false;
+                await stayOpen();
                 return;
               }
               // The backend arm was spent by the attempt itself, so there is
@@ -291,7 +335,7 @@ export function useBeforeUnload(
                   TOAST_KEYS.APP_UPDATE_INSTALL_FAILED,
                   'error',
                 );
-              isClosing.current = false;
+              await stayOpen();
             }
             return;
           }
@@ -306,7 +350,7 @@ export function useBeforeUnload(
           // registered whenever the close did not actually happen.
           if (!(await closeWindowNow())) {
             debugLog('[useBeforeUnload] Destroy failed - staying quittable');
-            isClosing.current = false;
+            await stayOpen();
             return;
           }
 
