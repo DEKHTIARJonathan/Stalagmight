@@ -160,6 +160,41 @@ describe('quit after in-flight work', () => {
     expect(destroyMock).toHaveBeenCalledOnce();
   });
 
+  // The second tier-0 check: work that STARTS while a question is on screen (here
+  // the import / dive-plan question) is waited for the same way, before anything
+  // one-way happens - not cut by the destroy that would otherwise follow the "yes".
+  it('work started while the tier-1 question is open is waited for after the answer', async () => {
+    cleanup();
+    listeners.length = 0;
+    render(<Harness guard={guard} shouldBlock />);
+    await flush();
+    let answer!: (yes: boolean) => void;
+    confirmMock.mockImplementationOnce(() => new Promise<boolean>((resolve) => { answer = resolve; }));
+
+    let closing!: Promise<void>;
+    act(() => { closing = closeRequested(); });
+    await act(flush);
+    expect(confirmMock).toHaveBeenCalledOnce();
+    expect(useQuitWait.getState().waiting).toBe(false);
+
+    // An upload starts while the question is still on screen...
+    const endUpload = useSpeleoNetworkStore.getState().begin('exclusive');
+    // ...and the user answers yes.
+    await act(async () => {
+      answer(true);
+      await closing;
+    });
+    expect(destroyMock).not.toHaveBeenCalled();
+    expect(useQuitWait.getState().waiting).toBe(true);
+    expect(screen.getByTestId('quit-wait-dialog')).toBeVisible();
+
+    // Once it has finished, the re-issued quit asks again and closes.
+    act(() => endUpload());
+    await settle();
+    expect(confirmMock).toHaveBeenCalledTimes(2);
+    expect(destroyMock).toHaveBeenCalledOnce();
+  });
+
   it('Keep Stalagmight open calls the quit off; the transfer carries on', async () => {
     const endUpload = useSpeleoNetworkStore.getState().begin('exclusive');
     await act(closeRequested);
