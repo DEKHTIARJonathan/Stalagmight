@@ -23,6 +23,7 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
 import { SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
+import { countUnresolvedErrors } from '../../utils/validation';
 import { warningKey, warningMessageTestId, warningOpenShotTestId, warningResolveTestId, warningUndoResolveTestId } from '../../utils/testId';
 
 /** Center/locate glyph (small ring + edge spokes), filled so it stays crisp
@@ -51,7 +52,7 @@ export default function DetailPanel() {
   const { project, stations, warnings } = useProjectStore();
 
   const unresolvedWarnings = warnings.filter((w) => !w.isResolved);
-  const errorCount = unresolvedWarnings.filter((w) => w.severity === 'error').length;
+  const errorCount = countUnresolvedErrors(warnings);
   const unresolvedCount = unresolvedWarnings.length;
 
   return (

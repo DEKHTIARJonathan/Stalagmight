@@ -2,7 +2,7 @@ import { canResumeSpeleoEditing } from '../../utils/speleoPermission';
 import { saveOpenProjectLocally } from '../../utils/saveOpenProjectLocally';
 import { TOAST_KEYS } from '../../utils/toastKeys';
 import { useProject } from '../../hooks/useProject';
-import { captureUploadOwner, getUploadContinuation, setUploadContinuation, uploadOwnerStillCurrent } from '../../utils/uploadContinuation';
+import { captureUploadOwner, getSetAsideUploadMessage, getUploadContinuation, setAsideUploadMessage, setUploadContinuation, uploadOwnerStillCurrent } from '../../utils/uploadContinuation';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useEffect, useRef, useState } from 'react';
@@ -15,7 +15,8 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 import { SpeleoProgressOverlay } from './SpeleoProgressOverlay';
-import { SpeleoUploadErrorsNotice, countUploadErrors } from './SpeleoUploadErrorsNotice';
+import { SpeleoUploadErrorsNotice } from './SpeleoUploadErrorsNotice';
+import { countUnresolvedErrors } from '../../utils/validation';
 import { CommitMessageLimit } from './CommitMessageLimit';
 import { commitMessageTooLong } from '../../utils/commitMessage';
 import { toastLateUploadOutcome } from '../../utils/lateUploadOutcome';
@@ -56,13 +57,16 @@ export default function SpeleoDoneDialog() {
   const projectGeneration = useProjectStore((s) => s.projectTreeGeneration);
   const ownerCurrent = uploadOwnerStillCurrent(owner);
   const closeAfterSave = dialogData.closeAfterSave === true;
-  const [message, setMessage] = useState(() => getUploadContinuation(path)?.message ?? '');
+  const [message, setMessage] = useState(() => getUploadContinuation(path)?.message ?? getSetAsideUploadMessage(path) ?? '');
+  // Set by "Resolve now", which hands the message over as set aside, not pending:
+  // this dialog must not mirror it back while it closes.
+  const messageSetAside = useRef(false);
   useEffect(() => {
     if (!ownerCurrent) {
       if (useUIStore.getState().activeDialog === 'speleodb-done' && useUIStore.getState().dialogData === dialogData) closeDialog();
       return;
     }
-    if (path) setUploadContinuation({ path, message, closeAfterSave }, owner);
+    if (path && !messageSetAside.current) setUploadContinuation({ path, message, closeAfterSave }, owner);
   }, [path, message, closeAfterSave, owner, ownerCurrent, sessionGeneration, projectGeneration, dialogData, closeDialog]);
   const link = useSpeleoStore((s) => s.link);
   const session = useSpeleoStore((s) => s.session);
@@ -87,8 +91,10 @@ export default function SpeleoDoneDialog() {
   // Errors in the survey go to every collaborator once uploaded: an upload that
   // carries changes waits until the user fixes them or accepts uploading them as
   // they are. A Done that only releases the lock uploads nothing, so it never asks.
-  const errorCount = useProjectStore((s) => countUploadErrors(s.warnings));
-  const [errorsAccepted, setErrorsAccepted] = useState(false);
+  const errorCount = useProjectStore((s) => countUnresolvedErrors(s.warnings));
+  // The tick accepts the errors it was given for: a different count asks again.
+  const [acceptedErrorCount, setAcceptedErrorCount] = useState(0);
+  const errorsAccepted = errorCount > 0 && acceptedErrorCount === errorCount;
   const showErrors = uploadAllowed && needsMessage && errorCount > 0;
   const errorsBlock = showErrors && !errorsAccepted;
   // sdk#2: a description SpeleoDB cannot store is never sent (the backend refuses it too).
@@ -104,12 +110,14 @@ export default function SpeleoDoneDialog() {
     closeDialog();
   };
 
-  // "Resolve now": no upload. The typed message waits for the next upload, and a
-  // Save and Close becomes a plain Save, since the project stays open for the fix.
+  // "Resolve now": no upload, and none left pending - a Save and Close does not
+  // close, since the project stays open for the fix. The typed message waits for
+  // the next upload dialog.
   const resolveErrors = () => {
     if (busyAny) return;
-    if (path) setUploadContinuation({ path, message, closeAfterSave: false }, owner);
+    messageSetAside.current = true;
     closeDialog();
+    setAsideUploadMessage(message, owner);
     useUIStore.getState().openWarningsTab();
   };
 
@@ -261,7 +269,7 @@ export default function SpeleoDoneDialog() {
         {showErrors && <SpeleoUploadErrorsNotice
           errorCount={errorCount}
           accepted={errorsAccepted}
-          onAcceptedChange={setErrorsAccepted}
+          onAcceptedChange={(accepted) => setAcceptedErrorCount(accepted ? errorCount : 0)}
           onResolve={resolveErrors}
           disabled={busyAny}
         />}

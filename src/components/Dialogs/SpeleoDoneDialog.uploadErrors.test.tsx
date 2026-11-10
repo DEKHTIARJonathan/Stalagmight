@@ -8,7 +8,7 @@
  * next upload, and opens the Warnings tab.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -18,8 +18,9 @@ vi.mock('../../utils/ipc', () => ({
 }));
 
 import SpeleoDoneDialog from './SpeleoDoneDialog';
-import { countUploadErrors } from './SpeleoUploadErrorsNotice';
-import { getUploadContinuation } from '../../utils/uploadContinuation';
+import { countUnresolvedErrors } from '../../utils/validation';
+import { getSetAsideUploadMessage, getUploadContinuation } from '../../utils/uploadContinuation';
+import { finishSpeleoSettings } from '../../utils/finishSpeleoSettings';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
@@ -71,10 +72,10 @@ beforeEach(() => {
   });
 });
 
-describe('countUploadErrors', () => {
+describe('countUnresolvedErrors', () => {
   it('counts unresolved errors only', () => {
-    expect(countUploadErrors([issue('error', 1), issue('warning', 2), issue('error', 3, true)])).toBe(1);
-    expect(countUploadErrors([])).toBe(0);
+    expect(countUnresolvedErrors([issue('error', 1), issue('warning', 2), issue('error', 3, true)])).toBe(1);
+    expect(countUnresolvedErrors([])).toBe(0);
   });
 });
 
@@ -128,12 +129,39 @@ describe('SpeleoDoneDialog - survey errors before an upload', () => {
     expect(useUIStore.getState().activeDialog).toBeNull();
     expect(uploadCalls()).toHaveLength(0);
     expect(useProjectStore.getState().saveProject).not.toHaveBeenCalled();
-    // The next Save offers the same message; the close the Save and Close asked
-    // for is dropped, because the project stays open for the fix.
-    expect(getUploadContinuation(PATH)).toMatchObject({ message: 'Fixed the sump', closeAfterSave: false });
+    // The message is set aside for the next upload dialog, but no upload is left
+    // pending: the close the Save and Close asked for is dropped too, because the
+    // project stays open for the fix.
+    expect(getUploadContinuation(PATH)).toBeNull();
+    expect(getSetAsideUploadMessage(PATH)).toBe('Fixed the sump');
     expect(useUIStore.getState().detailPanelTab).toBe('warnings');
     expect(useUIStore.getState().detailPanelOpen).toBe(true);
     expect(useUIStore.getState().appMode).toBe('survey');
+  });
+
+  it('closing Settings afterwards does not bring the upload dialog back', async () => {
+    render(<SpeleoDoneDialog />);
+    fireEvent.change(screen.getByTestId('speleodb-done-message'), { target: { value: 'Fixed the sump' } });
+    await userEvent.click(screen.getByTestId('speleodb-upload-errors-resolve'));
+
+    // SettingsDialog closes through finishSpeleoSettings, which returns to a
+    // pending upload; Resolve now must not leave one behind.
+    useUIStore.setState({ activeDialog: 'settings', dialogData: {} });
+    finishSpeleoSettings();
+    expect(useUIStore.getState().activeDialog).toBeNull();
+    expect(getSetAsideUploadMessage(PATH)).toBe('Fixed the sump');
+  });
+
+  it('a tick accepts the errors it was given for: a different count asks again', async () => {
+    render(<SpeleoDoneDialog />);
+    fireEvent.change(screen.getByTestId('speleodb-done-message'), { target: { value: 'Synthetic update' } });
+    await userEvent.click(screen.getByTestId('speleodb-upload-errors-accept'));
+    expect(confirm()).toBeEnabled();
+
+    act(() => useProjectStore.setState({ warnings: [issue('error', 1), issue('error', 2), issue('error', 4)] }));
+    expect(screen.getByTestId('speleodb-upload-errors-count')).toHaveTextContent('This survey has 3 errors.');
+    expect(screen.getByTestId('speleodb-upload-errors-accept')).not.toBeChecked();
+    expect(confirm()).toBeDisabled();
   });
 
   it('the next upload dialog starts from the message Resolve now kept', async () => {
@@ -148,6 +176,9 @@ describe('SpeleoDoneDialog - survey errors before an upload', () => {
     expect(screen.getByTestId('speleodb-done-message')).toHaveValue('Fixed the sump');
     expect(screen.queryByTestId('speleodb-upload-errors')).toBeNull();
     expect(confirm()).toBeEnabled();
+    // The open dialog owns the message again, as a normal pending upload.
+    expect(getUploadContinuation(PATH)?.message).toBe('Fixed the sump');
+    expect(getSetAsideUploadMessage(PATH)).toBeNull();
   });
 
   it('Done editing with changes to upload asks the same question', () => {

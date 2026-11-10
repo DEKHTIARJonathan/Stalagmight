@@ -1,21 +1,6 @@
 import { useTranslation } from 'react-i18next';
-import type { ProjectWarning } from '../../types/commands';
 import { Button } from '../common/Button';
 import { AlertCircleIcon } from '../common/icons';
-
-/**
- * How many validation errors the open survey has: what an upload to SpeleoDB
- * would publish as it is. Warnings are not counted (they are judgement calls the
- * user may ignore), and errors cannot be ignored, so `isResolved` only filters a
- * row the backend should never send; it stays as a guard.
- */
-export function countUploadErrors(warnings: readonly ProjectWarning[]): number {
-  let errors = 0;
-  for (const warning of warnings) {
-    if (warning.severity === 'error' && !warning.isResolved) errors += 1;
-  }
-  return errors;
-}
 
 interface SpeleoUploadErrorsNoticeProps {
   errorCount: number;

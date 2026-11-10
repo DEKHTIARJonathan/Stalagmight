@@ -3,7 +3,7 @@
  * Validates shots against configurable thresholds and returns validation issues.
  */
 
-import type { DmpShot } from '../types/commands';
+import type { DmpShot, ProjectWarning } from '../types/commands';
 import { type ValidationConfig, defaultConfig } from '../types/config';
 import i18n from '../i18n';
 import { formatFixed } from '../i18n/format';
@@ -359,6 +359,19 @@ export function validateSection(
  * @param issues Array of validation issues
  * @returns 'error' if any errors, 'warning' if only warnings, undefined if empty
  */
+/**
+ * The project's unresolved errors: what the Warnings tab badge counts in red, and
+ * what an upload to SpeleoDB would publish as it is. Errors cannot be ignored, so
+ * `isResolved` only guards against a row the backend should never send.
+ */
+export function countUnresolvedErrors(warnings: readonly ProjectWarning[]): number {
+  let errors = 0;
+  for (const warning of warnings) {
+    if (warning.severity === 'error' && !warning.isResolved) errors += 1;
+  }
+  return errors;
+}
+
 export function getHighestSeverity(issues: ValidationIssue[]): ValidationSeverity | undefined {
   if (issues.length === 0) return undefined;
   return issues.some((i) => i.severity === 'error') ? 'error' : 'warning';
