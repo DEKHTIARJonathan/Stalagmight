@@ -6,7 +6,7 @@ import {
   WIZARD_MAP_PANEL_DEFAULT_WIDTH,
 } from '../components/SingleSystemView/layoutConstants';
 import { trackAction, checkDialogCancel, trackDialogComplete, trackDisplayState, setDwellState, advanceProjectSeq, trackNav, trackPanelToggle, trackPanelMode, trackSelect, trackSelectAdd, clearProjectActionSource, isPersistSuppressed } from '../utils/telemetry';
-import type { Coordinates, DistanceField, PathShot, SectionId, ShotId, StationRef, SectionData } from '../types/project';
+import type { Coordinates, DistanceField, PathShot, SectionId, ShotId, StationRef, SectionData, ShotData } from '../types/project';
 
 export interface CommentTarget {
   type: 'station' | 'shot';
@@ -496,6 +496,7 @@ interface UIStore {
   // Data-table fullscreen mode: the table overlays the whole window below the
   // toolbar. Session-only - never persisted, so the app always starts windowed.
   dataTableFullScreen: boolean;
+  dataWorkspaceDraft: { data: Partial<ShotData>; sectionId: number | null } | null;
   /** Raw sqlite table browsed read-only while fullscreen (null = the normal
    *  Sections-backed view). Only reachable from the fullscreen toolbar. */
   rawTableSelection: string | null;
@@ -1405,6 +1406,7 @@ export const useUIStore = create<UIStore>((set) => ({
 
   // Data-table fullscreen mode (session-only, never persisted)
   dataTableFullScreen: false,
+  dataWorkspaceDraft: null,
   rawTableSelection: null,
   enterDataTableFullScreen: () => {
     const s = useUIStore.getState();
@@ -1864,6 +1866,8 @@ export const useUIStore = create<UIStore>((set) => ({
     // module var outlives the project that set it). Clearing it + forcing survey here
     // makes that restore a no-op (appMode already 'survey').
     prePlanGeometryMode = null;
+    preDataGeometryMode = null;
+    fullScreenTableSnapshot = null;
     // Same module-var-outlives-project hazard for the Plan/Export display snapshot:
     // clear it so a load doesn't later restore the previous project's survey display.
     prePlanDisplay = null;
@@ -1895,6 +1899,9 @@ export const useUIStore = create<UIStore>((set) => ({
     // silently won over the saved one).
     set((state) => ({
       appMode: APP_MODE_DEFAULT,
+      dataWorkspaceDraft: null,
+      dataTableFullScreen: false,
+      rawTableSelection: null,
       showStations: settings.showStations ?? state.showStations,
       showShots: settings.showShots ?? state.showShots,
       showShotComments: settings.showShotComments ?? state.showShotComments,

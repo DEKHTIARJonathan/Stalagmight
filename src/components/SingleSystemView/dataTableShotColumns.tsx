@@ -205,7 +205,7 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
       width: 100,
       align: 'right',
       getValue: (shot) => shot.id < 0 ? '' : shot.id,
-      ...(ctx.onPanToShot ? { render: (shot: Shot) => shot.id < 0 ? null : <span onDoubleClick={() => ctx.onPanToShot?.(shot)}>{shot.id}</span> } : {}),
+      ...(ctx.onPanToShot ? { render: (shot: Shot) => shot.id < 0 ? null : <span data-testid={`data-table-shot-id-${sectionId}-${shot.id}`} onDoubleClick={() => ctx.onPanToShot?.(shot)}>{shot.id}</span> } : {}),
     },
     numberCol('length', t('dataTable.columns.length', { unit: t('common.units.meters') }), 100, precision.length, (v) =>
       typeof v === 'number' && v <= 0 ? t('dataTable.validation.nonPositiveLength') : null,
