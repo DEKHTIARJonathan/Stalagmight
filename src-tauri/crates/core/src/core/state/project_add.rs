@@ -99,8 +99,7 @@ fn refuse_non_finite_placement(project: &Project, label: &str) -> Result<(), Str
     };
     for datum in &project.zero_datums {
         let gps = &datum.gps;
-        if let Err(e) = GpsCoordinates::validate(gps.latitude, gps.longitude, gps.depth_reference)
-        {
+        if let Err(e) = GpsCoordinates::validate(gps.latitude, gps.longitude, gps.depth_reference) {
             return refuse(format!("a zero datum has invalid GPS coordinates ({e})"));
         }
     }
@@ -230,9 +229,7 @@ fn remap_ignores(
             continue;
         };
         let shot_uuid = match row.shot_uuid.as_deref() {
-            Some(uuid) => shots
-                .id_of(row.section_id, uuid)
-                .map(|_| uuid.to_string()),
+            Some(uuid) => shots.id_of(row.section_id, uuid).map(|_| uuid.to_string()),
             None => shots
                 .uuid_of(row.section_id, row.shot_id)
                 .map(str::to_string),
@@ -291,7 +288,10 @@ impl<'a> ShotIndex<'a> {
 
     /// The uuid of the shot with `shot_id` in `section_id`, if it has one.
     fn uuid_of(&self, section_id: SectionId, shot_id: u32) -> Option<&'a str> {
-        self.uuid_by_id.get(&(section_id, shot_id)).copied().flatten()
+        self.uuid_by_id
+            .get(&(section_id, shot_id))
+            .copied()
+            .flatten()
     }
 }
 

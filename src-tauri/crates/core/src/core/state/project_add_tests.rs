@@ -877,7 +877,10 @@ fn an_add_is_refused_when_another_project_is_opened_during_the_read() {
         canonical_snapshot(&reference, false)
     };
     super::project_add::set_between_locks(move |state| {
-        assert!(state.open_project(bravo).success, "commit another project mid-add");
+        assert!(
+            state.open_project(bravo).success,
+            "commit another project mid-add"
+        );
     });
 
     let refused = add(&state, &alpha);
@@ -926,7 +929,10 @@ fn a_non_regular_or_oversized_source_is_refused() {
         let refused = add(&state, path);
         assert!(!refused.success, "{expected}");
         assert!(
-            refused.error.as_deref().is_some_and(|e| e.starts_with(expected)),
+            refused
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with(expected)),
             "{:?}",
             refused.error
         );
@@ -1063,7 +1069,10 @@ fn a_source_refused_after_the_append_is_rolled_back_exactly() {
     let temp = TempDir::new().unwrap();
     let (state, _) = open_target(temp.path(), true);
     let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha_named());
-    assert!(add(&state, &alpha).success, "an earlier add to roll back onto");
+    assert!(
+        add(&state, &alpha).success,
+        "an earlier add to roll back onto"
+    );
     let before = canonical_snapshot(&state, false);
     let depth = undo_depth(&state);
 
@@ -1076,9 +1085,10 @@ fn a_source_refused_after_the_append_is_rolled_back_exactly() {
     let two_datums = save_to(temp.path(), "two-datums.stalx", &two_datums);
     let refused = add(&state, &two_datums);
     assert!(
-        refused.error.as_deref().is_some_and(
-            |e| e.starts_with("Failed to copy zero datum from source project Bravo")
-        ),
+        refused
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("Failed to copy zero datum from source project Bravo")),
         "{:?}",
         refused.error
     );
@@ -1086,10 +1096,7 @@ fn a_source_refused_after_the_append_is_rolled_back_exactly() {
     assert_eq!(undo_depth(&state), depth, "the refused add pushed nothing");
 
     let mut infinite = Project::new("Infinite".to_string(), None);
-    infinite.add_section(section(
-        "X0",
-        vec![shot("x0-0", 10.0, f64::INFINITY, 1.0)],
-    ));
+    infinite.add_section(section("X0", vec![shot("x0-0", 10.0, f64::INFINITY, 1.0)]));
     let blocked = {
         let mut guard = state.project.lock().unwrap();
         super::project_add::append_in_memory(guard.as_mut().unwrap(), infinite)
