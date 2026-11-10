@@ -1253,6 +1253,13 @@
       "closeNotice": "Opening it will close {{projectName}}.",
       "confirm": "Open"
     },
+    "addOrOpenProject": {
+      "title": "Open or add this project?",
+      "body": "{{fileName}} can be opened as its own project, or its survey data can be added to the project that is open now. Adding is one undo step and never modifies the original file.",
+      "blockedNotice": "Adding is unavailable while editing is blocked (Plan or Export mode, the Closures Computed View, or no SpeleoDB write lock).",
+      "openAsProject": "Open as project",
+      "addTo": "Add to {{projectName}}"
+    },
     "importAsNewProject": {
       "title": "Import as new project?",
       "body": "{{fileName}} will be converted into a new Stalagmight project. Your original file is never modified.",

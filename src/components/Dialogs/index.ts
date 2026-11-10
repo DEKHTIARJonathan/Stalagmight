@@ -57,4 +57,5 @@ export { default as SpeleoManagedFileDialog } from './SpeleoManagedFileDialog';
 export { default as HeldLockResumeDialog } from './HeldLockResumeDialog';
 export { default as ImportReceiptDialog } from './ImportReceiptDialog';
 export { default as ImportAsNewProjectDialog } from './ImportAsNewProjectDialog';
+export { default as AddOrOpenProjectDialog } from './AddOrOpenProjectDialog';
 export { default as LaunchOpenConfirmDialog } from './LaunchOpenConfirmDialog';
