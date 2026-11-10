@@ -247,12 +247,8 @@ impl Default for PanelsConfig {
             data_table_azimuth_mode: "avg".to_string(),
             data_table_inclination_mode: "off".to_string(),
             data_table_station_column_order: Vec::new(),
-            data_table_station_hidden_columns: vec![
-                "_x".to_string(),
-                "_y".to_string(),
-                "_lat".to_string(),
-                "_long".to_string(),
-            ],
+            data_table_station_hidden_columns: super::panels::default_station_hidden_columns(),
+            data_table_station_columns_seen: super::panels::default_station_columns_seen(),
             data_table_station_column_widths: std::collections::BTreeMap::new(),
             new_section_column_order: Vec::new(),
             new_section_hidden_columns: vec![

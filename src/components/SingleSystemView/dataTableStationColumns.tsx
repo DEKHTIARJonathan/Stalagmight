@@ -71,6 +71,7 @@ export function buildStationColumns(ctx: StationColumnContext): GridColumn<Stati
   return [
     {
       // Next to the gutter's positional S:I pill: both identify the station.
+      // Hidden by default (STATION_DEFAULT_HIDDEN / the backend panels default).
       key: 'name',
       header: t('dataTable.stationColumns.name'),
       width: 64,

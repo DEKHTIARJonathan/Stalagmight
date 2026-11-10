@@ -136,6 +136,11 @@ test.describe('Stations grid', () => {
       await (window as any).__E2E_TEST__.projectStore.getState().refreshProjectState();
     }, sectionId);
 
+    // Hidden by default; the eye menu shows it.
+    await expect(page.getByTestId('grid-header-name')).toHaveCount(0);
+    await page.getByTestId('data-table-columns-menu').click();
+    await page.getByTestId('data-table-columns-dropdown').getByTestId('col-vis-name').check();
+    await page.keyboard.press('Escape');
     await expect(page.getByTestId('grid-header-name')).toBeVisible();
     await expect(page.getByTestId('grid-cell-0-name')).toHaveText('7');
     await expect(page.getByTestId('grid-cell-1-name')).toHaveText('8');
@@ -213,7 +218,8 @@ test.describe('Stations grid', () => {
     await expect(dropdown).toBeVisible();
 
     // Station entries, not the shots ones.
-    await expect(dropdown.getByTestId('col-vis-name')).toBeChecked();
+    // The station name starts hidden, like the coordinate pairs.
+    await expect(dropdown.getByTestId('col-vis-name')).not.toBeChecked();
     await expect(dropdown.getByTestId('col-vis-_x')).toBeVisible();
     await expect(dropdown.getByTestId('col-vis-_zeroDatum')).toBeVisible();
     await expect(dropdown.getByTestId('col-vis-length')).toHaveCount(0);

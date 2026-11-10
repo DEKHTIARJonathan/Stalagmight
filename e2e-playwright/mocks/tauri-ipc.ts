@@ -4105,7 +4105,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_azimuth_mode: 'avg',
                 data_table_inclination_mode: 'off',
                 data_table_station_column_order: [],
-                data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long'],
+                data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long', 'name'],
+                data_table_station_columns_seen: ['name'],
                 data_table_station_column_widths: {},
                 // The new-section dialog's grid layout. Present (not omitted) for
                 // the same reason as the reveal state below: get_config on a real
@@ -4547,7 +4548,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_azimuth_mode: 'avg',
                 data_table_inclination_mode: 'off',
                 data_table_station_column_order: [],
-                data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long'],
+                data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long', 'name'],
+                data_table_station_columns_seen: ['name'],
                 data_table_station_column_widths: {},
                 // The new-section dialog's grid layout. Present (not omitted) for
                 // the same reason as the reveal state below: get_config on a real

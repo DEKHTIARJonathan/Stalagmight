@@ -356,8 +356,9 @@ a deleted or added row, any edit after import - shifts the positional
   reversed import exactly like `station_comments`.
 - **After import.** Names are keyed by `StationKey`, so they follow their
   station through later inserts, deletes, splits and reverses; a merge keeps
-  both stations' own numbers. The stations grid has a read-only Name column and
-  the detail panel shows `S:I · name` on station links.
+  both stations' own numbers. The stations grid has a read-only Name column
+  (hidden by default; the eye menu shows it) and the detail panel shows
+  `S:I · name` on station links.
 
 ## Key Types
 
