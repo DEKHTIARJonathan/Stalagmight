@@ -24,13 +24,18 @@ type Step = 'choose' | 'upload' | 'discard';
  * The SpeleoDB exit prompt (see `utils/speleoExit` for when and why it is raised).
  * Three answers, each carried out here before the exit continues:
  *
- * - **Upload changes** - the normal Finish editing upload (`done`: save, upload,
+ * - **Upload** - the normal Finish editing upload (`done`: save, upload,
  *   release) with its description field and bounded progress, then close. A
  *   failure keeps the user in the project with the error on screen.
  * - **Keep the lock** - save locally, close without releasing. The next open
  *   resumes editing under the same lock with no prompt.
- * - **Discard changes** - after a second "lost forever" confirmation, the local
- *   copy is removed and the lock released, so the next open gets SpeleoDB's copy.
+ * - **Discard** - after a second "lost forever" confirmation, the local copy is
+ *   removed and the lock released, so the next open gets SpeleoDB's copy.
+ *
+ * Laid out like every other dialog in the app (`UnsavedChangesDialog`): the body
+ * says what each answer does, and every button sits in the one footer row, Cancel
+ * first and the primary last. The upload and discard steps keep the same row
+ * (Back, then the step's action).
  *
  * Cancel / Escape / X / backdrop abort the exit. None of them is available while
  * an answer is being carried out (except walking away from a slow upload).
@@ -131,29 +136,9 @@ function SpeleoExitPrompt({ request }: { request: SpeleoExitRequest }) {
               <p className="text-sm text-text-secondary" data-testid="speleodb-exit-body">
                 {t('speleoExitPrompt.body', { name: projectName, action })}
               </p>
-              <ul className="space-y-3">
-                <li className="space-y-1">
-                  <Button variant="primary" onClick={() => setStep('upload')} disabled={working}
-                    data-primary-action="" data-testid="speleodb-exit-upload">
-                    {t('speleoExitPrompt.upload')}
-                  </Button>
-                  <p className="text-xs text-text-secondary">{t('speleoExitPrompt.uploadHint')}</p>
-                </li>
-                <li className="space-y-1">
-                  <Button variant="secondary" onClick={() => void run(closeKeepingLock)} disabled={working}
-                    data-testid="speleodb-exit-keep">
-                    {working ? t('speleoExitPrompt.working') : t('speleoExitPrompt.keep')}
-                  </Button>
-                  <p className="text-xs text-text-secondary">{t('speleoExitPrompt.keepHint')}</p>
-                </li>
-                <li className="space-y-1">
-                  <Button variant="danger" onClick={() => setStep('discard')} disabled={working}
-                    data-testid="speleodb-exit-discard">
-                    {t('speleoExitPrompt.discard')}
-                  </Button>
-                  <p className="text-xs text-text-secondary">{t('speleoExitPrompt.discardHint')}</p>
-                </li>
-              </ul>
+              <p className="text-sm text-text-secondary" data-testid="speleodb-exit-choices">
+                {t('speleoExitPrompt.choices')}
+              </p>
             </>
           )}
 
@@ -175,11 +160,25 @@ function SpeleoExitPrompt({ request }: { request: SpeleoExitRequest }) {
             <p role="alert" className="text-sm text-error" data-testid="speleodb-exit-error">{error}</p>
           )}
 
-          <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-border">
+          <div className="flex flex-wrap justify-end gap-2 pt-4 border-t border-border" data-testid="speleodb-exit-footer">
             {step === 'choose' ? (
-              <Button onClick={cancel} disabled={working} data-testid="speleodb-exit-cancel">
-                {t('common.actions.cancel')}
-              </Button>
+              <>
+                <Button onClick={cancel} disabled={working} data-testid="speleodb-exit-cancel">
+                  {t('common.actions.cancel')}
+                </Button>
+                <Button variant="danger" onClick={() => setStep('discard')} disabled={working}
+                  data-testid="speleodb-exit-discard">
+                  {t('speleoExitPrompt.discard')}
+                </Button>
+                <Button onClick={() => void run(closeKeepingLock)} disabled={working}
+                  data-testid="speleodb-exit-keep">
+                  {working ? t('speleoExitPrompt.working') : t('speleoExitPrompt.keep')}
+                </Button>
+                <Button variant="primary" onClick={() => setStep('upload')} disabled={working}
+                  data-testid="speleodb-exit-upload">
+                  {t('speleoExitPrompt.upload')}
+                </Button>
+              </>
             ) : (
               <Button onClick={() => { setError(null); setStep('choose'); }} disabled={working}
                 data-testid="speleodb-exit-back">

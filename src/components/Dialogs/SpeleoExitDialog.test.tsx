@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const doneMock = vi.hoisted(() => vi.fn());
@@ -50,6 +50,23 @@ function raise(reason: 'close' | 'switch' | 'quit' = 'close') {
   return answer;
 }
 
+/**
+ * The app's dialog layout (`UnsavedChangesDialog`): every button in the one footer
+ * row, in order, and none anywhere else in the body (the header's X aside).
+ */
+function expectButtonsOnlyInFooter(expected: Array<[testId: string, label: string]>) {
+  const dialog = screen.getByTestId('speleodb-exit-dialog');
+  const footer = screen.getByTestId('speleodb-exit-footer');
+  expect(footer).toHaveClass('flex', 'flex-wrap', 'justify-end', 'gap-2', 'pt-4', 'border-t', 'border-border');
+  const inFooter = within(footer).getAllByRole('button');
+  expect(inFooter.map((b) => [b.getAttribute('data-testid'), b.textContent])).toEqual(expected);
+  const elsewhere = within(dialog).getAllByRole('button')
+    .filter((b) => !footer.contains(b) && b.getAttribute('data-testid') !== 'speleodb-exit-dialog-close');
+  expect(elsewhere).toEqual([]);
+  // The footer is the last thing in the body: nothing (no hint) sits under a button.
+  expect(footer.nextElementSibling).toBeNull();
+}
+
 describe('SpeleoExitDialog', () => {
   it('offers Upload, Keep the lock, Discard and Cancel, in plain words for the exit at hand', () => {
     void raise('quit');
@@ -60,6 +77,52 @@ describe('SpeleoExitDialog', () => {
     expect(screen.getByTestId('speleodb-exit-keep')).toBeEnabled();
     expect(screen.getByTestId('speleodb-exit-discard')).toBeEnabled();
     expect(screen.getByTestId('speleodb-exit-cancel')).toBeEnabled();
+  });
+
+  it('lays the choices out like every other dialog: one footer row, Cancel first, Upload last', () => {
+    void raise();
+    expectButtonsOnlyInFooter([
+      ['speleodb-exit-cancel', 'Cancel'],
+      ['speleodb-exit-discard', 'Discard'],
+      ['speleodb-exit-keep', 'Keep the lock'],
+      ['speleodb-exit-upload', 'Upload'],
+    ]);
+    expect(screen.getByTestId('speleodb-exit-discard')).toHaveClass('bg-error');
+    expect(screen.getByTestId('speleodb-exit-upload')).toHaveClass('bg-accent');
+    expect(screen.getByTestId('speleodb-exit-keep')).not.toHaveClass('bg-accent');
+    // What each answer does is said once, in the body, by the buttons' own names.
+    const choices = screen.getByTestId('speleodb-exit-choices');
+    expect(choices).toHaveTextContent('Upload sends them to SpeleoDB and hands the project back');
+    expect(choices).toHaveTextContent('Keep the lock leaves them on this computer');
+    expect(choices).toHaveTextContent('Discard throws them away');
+  });
+
+  it('the upload and discard steps keep their buttons in the same footer row', async () => {
+    void raise();
+    await userEvent.click(screen.getByTestId('speleodb-exit-upload'));
+    expectButtonsOnlyInFooter([
+      ['speleodb-exit-back', 'Back'],
+      ['speleodb-exit-upload-confirm', 'Upload and continue'],
+    ]);
+    await userEvent.click(screen.getByTestId('speleodb-exit-back'));
+    await userEvent.click(screen.getByTestId('speleodb-exit-discard'));
+    expectButtonsOnlyInFooter([
+      ['speleodb-exit-back', 'Back'],
+      ['speleodb-exit-discard-confirm', 'Yes, discard my changes'],
+    ]);
+    expect(screen.getByTestId('speleodb-exit-discard-confirm')).toHaveClass('bg-error');
+  });
+
+  it('while an answer is carried out, the whole row is disabled and the pressed one says so', async () => {
+    let finish!: (value: unknown) => void;
+    closeProject.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
+    void raise();
+    await userEvent.click(screen.getByTestId('speleodb-exit-keep'));
+    await waitFor(() => expect(screen.getByTestId('speleodb-exit-keep')).toHaveTextContent('Working'));
+    for (const id of ['speleodb-exit-cancel', 'speleodb-exit-discard', 'speleodb-exit-keep', 'speleodb-exit-upload']) {
+      expect(screen.getByTestId(id)).toBeDisabled();
+    }
+    await act(async () => { useProjectStore.setState({ project: null }); finish(ok); });
   });
 
   it('Upload runs the normal upload with the description, then closes and lets the exit go on', async () => {
