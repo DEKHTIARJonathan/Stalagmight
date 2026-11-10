@@ -607,8 +607,13 @@ Backend-internal work the user never sees (the background lock re-verify, the
 stranded-claim cleanup, a detached release from a project switch) never keeps a
 process alive without a window: the exit keeps the bounded behaviour for it, the
 release waiting at most 5 s behind it before the app exits. Tauri cannot prevent an
-`app.restart()`; the update restart only runs after the frontend gate has let the
-quit through.
+`app.restart()`, so the install command guards the update restart itself
+(`install_app_update_and_restart`, async, off the main thread): while a user-visible
+transfer is in flight and no forced exit is armed it refuses with a typed
+`transfer_in_flight` error, checked before its bounded lock release and again right
+before the install. Nothing is installed and the download is kept: the update banner
+stays on Restart and a toast says a SpeleoDB transfer is still running. The frontend
+gate normally waited for the transfer already; the backend does not rely on it.
 
 ### Signing out
 

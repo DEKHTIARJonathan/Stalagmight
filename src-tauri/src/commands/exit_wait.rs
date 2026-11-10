@@ -19,18 +19,24 @@
 //!    the main thread, runs the bounded release, and then exits.
 //!
 //! Only the transfers the frontend gate itself waits on hold the exit: exactly
-//! the IPC commands it counts as `exclusive` (`src/utils/speleoNetworkCommands.ts`)
-//! - the ones that upload, acquire, download, release or change the account, and
-//! the exit / sign-out actions (`close_project`, the cached-copy discard). Each
-//! registers with [`user_transfer`] for its whole run, and a test here pins the
-//! two sets equal, both ways, across every command module. Backend-internal work the
-//! user never sees (the background lock re-verify, the stranded-claim cleanup, a
-//! detached release from a project switch) never keeps a windowless process
-//! alive: the exit keeps the old bounded behaviour for it - the release waits at
-//! most [`crate::EXIT_LOCK_RELEASE_TIMEOUT`] behind it, then the app exits.
+//! the IPC commands it counts as `exclusive` (`src/utils/speleoNetworkCommands.ts`),
+//! that is the ones that upload, acquire, download, release or change the
+//! account, and the exit / sign-out actions (`close_project`, the cached-copy
+//! discard). Each registers with [`user_transfer`] for its whole run, and a test
+//! here pins the two sets equal, both ways, across every command module.
+//! Backend-internal work the user never sees (the background lock re-verify, the
+//! stranded-claim cleanup, a detached release from a project switch) never keeps
+//! a windowless process alive: the exit keeps the old bounded behaviour for it -
+//! the release waits at most [`crate::EXIT_LOCK_RELEASE_TIMEOUT`] behind it, then
+//! the app exits.
 //!
-//! The update restart (`app.restart()`) cannot be prevented by Tauri; it only
-//! ever runs after the frontend gate has let the quit through.
+//! The update restart (`app.restart()`) cannot be prevented by Tauri once it is
+//! requested, so this hook lets its exit through. The install command guards it
+//! instead (`app_update::install_app_update_and_restart`): it refuses while a
+//! user transfer is in flight unless the user armed the forced quit
+//! ([`ExitWait::restart_blocked`]), checked before its lock release and again
+//! right before the install. The frontend gate stays the first gate; this one
+//! does not rely on it.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
@@ -112,6 +118,14 @@ impl ExitWait {
 
     fn transfers_in_flight(&self) -> bool {
         *self.transfers.count() > 0
+    }
+
+    /// Whether an update restart must not go ahead now: a user-visible transfer
+    /// is in flight and the user did not choose "Quit now" over it. Tauri ignores
+    /// `prevent_exit` for a restart, so the install command asks this itself
+    /// before it releases and installs (see the module doc).
+    pub(crate) fn restart_blocked(&self) -> bool {
+        self.transfers_in_flight() && !self.forced()
     }
 
     /// Block until no user-visible transfer is running. Bounded only by the
@@ -297,6 +311,23 @@ mod tests {
                 .expect("the wait ends with the last transfer");
         });
         assert!(!wait.transfers_in_flight());
+    }
+
+    /// The update restart's own gate: Tauri ignores `prevent_exit` for a restart
+    /// (the exit step above lets it through), so the install command must refuse
+    /// a restart that would cut a transfer - unless the user chose Quit now.
+    #[test]
+    fn a_restart_is_blocked_by_a_transfer_unless_the_user_chose_quit_now() {
+        let wait = ExitWait::default();
+        assert!(!wait.restart_blocked(), "nothing in flight");
+        let upload = wait.begin_transfer();
+        assert!(wait.restart_blocked(), "an upload in flight");
+        *wait.forced_until.lock().expect("lock") = Some(Instant::now() + FORCED_EXIT_TTL);
+        assert!(!wait.restart_blocked(), "Quit now armed");
+        *wait.forced_until.lock().expect("lock") = Some(Instant::now());
+        assert!(wait.restart_blocked(), "an expired arm cuts nothing");
+        drop(upload);
+        assert!(!wait.restart_blocked(), "the upload finished");
     }
 
     #[test]
