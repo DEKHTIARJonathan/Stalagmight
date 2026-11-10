@@ -55,7 +55,10 @@ fn download_deadline(grace: Duration, min_rate: u64, ceiling: Duration, bytes: u
     (grace + Duration::from_millis(bytes.saturating_mul(1000) / min_rate.max(1))).min(ceiling)
 }
 const JSON_LIMIT: usize = 10 * 1024 * 1024;
-pub(crate) const NATIVE_LIMIT: u64 = 512 * 1024 * 1024;
+/// The largest native project file (`.stalx`) a download accepts, in bytes.
+/// Public so a local read of a `.stalx` (adding one into the open project) can
+/// hold a file to the same ceiling the app already holds a pulled one to.
+pub const NATIVE_LIMIT: u64 = 512 * 1024 * 1024;
 
 /// The largest project file SpeleoDB accepts in one upload, in bytes. A larger
 /// file is refused with a 400 only AFTER its whole body has been sent, so the

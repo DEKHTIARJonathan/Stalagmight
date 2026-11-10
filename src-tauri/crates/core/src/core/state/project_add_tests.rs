@@ -878,3 +878,42 @@ fn an_add_is_refused_when_another_project_is_opened_during_the_read() {
     assert_same_project(&state, &expected, false, "the new project is untouched");
     assert_eq!(undo_depth(&state), 0, "no undo entry was pushed");
 }
+
+/// The source is read under `command_lock`, so it must be a regular file of
+/// bounded size: a directory (or a FIFO/device) named `*.stalx` is refused
+/// from its metadata alone, and so is a file past the SpeleoDB download
+/// ceiling. The oversized file is sparse, so this costs no disk.
+/// INJECTION (tried): dropping the `is_file` check fails the directory case
+/// on its message (the read then fails as "Failed to read"); dropping the
+/// metadata length check fails the oversized case on its message (the bounded
+/// copy still refuses it, after copying the whole ceiling).
+#[test]
+fn a_non_regular_or_oversized_source_is_refused() {
+    let temp = TempDir::new().unwrap();
+    let (state, _) = open_target(temp.path(), true);
+    let before = canonical_snapshot(&state, false);
+    let depth = undo_depth(&state);
+
+    let directory = temp.path().join("folder.stalx");
+    std::fs::create_dir(&directory).unwrap();
+    let oversized = temp.path().join("huge.stalx");
+    std::fs::File::create(&oversized)
+        .unwrap()
+        .set_len(crate::speleodb::client::NATIVE_LIMIT + 1)
+        .unwrap();
+
+    for (path, expected) in [
+        (&directory, "'folder.stalx' is not a project file"),
+        (&oversized, "'huge.stalx' is larger than 512 MB"),
+    ] {
+        let refused = add(&state, path);
+        assert!(!refused.success, "{expected}");
+        assert!(
+            refused.error.as_deref().is_some_and(|e| e.starts_with(expected)),
+            "{:?}",
+            refused.error
+        );
+        assert_same_project(&state, &before, false, expected);
+        assert_eq!(undo_depth(&state), depth);
+    }
+}

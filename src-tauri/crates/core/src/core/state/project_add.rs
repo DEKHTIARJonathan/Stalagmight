@@ -52,13 +52,10 @@ struct AddSource {
 /// against its server commit - must stay exactly as it was. The source's undo
 /// history is never read.
 fn load_add_source(path: &Path, label: &str) -> Result<AddSource, String> {
-    if !path.exists() {
-        return Err(format!("File not found: {label}"));
-    }
     let dir = tempfile::tempdir()
         .map_err(|e| format!("Failed to prepare a private copy of '{label}': {e}"))?;
     let copy = dir.path().join("source.stalx");
-    std::fs::copy(path, &copy).map_err(|e| format!("Failed to read '{label}': {e}"))?;
+    copy_regular_file(path, &copy, label)?;
     let db = Database::open_existing(&copy)
         .map_err(|e| format!("Failed to open project '{label}': {e}"))?;
     let mut project = db
@@ -83,6 +80,52 @@ fn load_add_source(path: &Path, label: &str) -> Result<AddSource, String> {
         ignores,
         link,
     })
+}
+
+/// The largest `.stalx` an add reads: the ceiling a SpeleoDB download of a
+/// project file is already held to. The read runs under `command_lock`, so an
+/// unbounded one would stall every edit behind it (and fill the disk).
+const MAX_ADD_SOURCE_BYTES: u64 = crate::speleodb::client::NATIVE_LIMIT;
+
+/// Copy `path` to `dest`, refusing anything that is not a regular file of at
+/// most [`MAX_ADD_SOURCE_BYTES`]: a FIFO or a device named `*.stalx` would
+/// block or never end, and a directory cannot be a project.
+///
+/// The metadata check runs before the file is opened (opening a FIFO for
+/// reading blocks), and the copy itself is bounded too, so a file that grows
+/// or is swapped after the check still cannot exceed the ceiling.
+fn copy_regular_file(path: &Path, dest: &Path, label: &str) -> Result<(), String> {
+    let too_large = || {
+        format!(
+            "'{label}' is larger than {} MB, the largest project file that can be added",
+            MAX_ADD_SOURCE_BYTES / (1024 * 1024)
+        )
+    };
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!("File not found: {label}"));
+        }
+        Err(e) => return Err(format!("Failed to read '{label}': {e}")),
+    };
+    if !metadata.is_file() {
+        return Err(format!("'{label}' is not a project file"));
+    }
+    if metadata.len() > MAX_ADD_SOURCE_BYTES {
+        return Err(too_large());
+    }
+    let source = std::fs::File::open(path).map_err(|e| format!("Failed to read '{label}': {e}"))?;
+    let mut target =
+        std::fs::File::create(dest).map_err(|e| format!("Failed to read '{label}': {e}"))?;
+    let copied = std::io::copy(
+        &mut std::io::Read::take(source, MAX_ADD_SOURCE_BYTES + 1),
+        &mut target,
+    )
+    .map_err(|e| format!("Failed to read '{label}': {e}"))?;
+    if copied > MAX_ADD_SOURCE_BYTES {
+        return Err(too_large());
+    }
+    Ok(())
 }
 
 /// Translate the copied sections so a georeferenced source lands at its GPS
