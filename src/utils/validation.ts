@@ -7,6 +7,7 @@ import type { DmpShot, ProjectWarning } from '../types/commands';
 import { type ValidationConfig, defaultConfig } from '../types/config';
 import i18n from '../i18n';
 import { formatFixed } from '../i18n/format';
+import { warningKey } from './testId';
 
 // Re-export ValidationConfig for convenience
 export type { ValidationConfig };
@@ -354,12 +355,6 @@ export function validateSection(
 }
 
 /**
- * Get the highest severity from a list of issues.
- *
- * @param issues Array of validation issues
- * @returns 'error' if any errors, 'warning' if only warnings, undefined if empty
- */
-/**
  * The project's unresolved errors: what the Warnings tab badge counts in red, and
  * what an upload to SpeleoDB would publish as it is. Errors cannot be ignored, so
  * `isResolved` only guards against a row the backend should never send.
@@ -372,6 +367,24 @@ export function countUnresolvedErrors(warnings: readonly ProjectWarning[]): numb
   return errors;
 }
 
+/**
+ * Which unresolved errors the project has, as one string (each by its warning
+ * identity, `warningKey`): equal for the same errors, different as soon as one is
+ * fixed or another appears, even when their number stays the same.
+ */
+export function unresolvedErrorsKey(warnings: readonly ProjectWarning[]): string {
+  return warnings
+    .filter((warning) => warning.severity === 'error' && !warning.isResolved)
+    .map(warningKey)
+    .join('|');
+}
+
+/**
+ * Get the highest severity from a list of issues.
+ *
+ * @param issues Array of validation issues
+ * @returns 'error' if any errors, 'warning' if only warnings, undefined if empty
+ */
 export function getHighestSeverity(issues: ValidationIssue[]): ValidationSeverity | undefined {
   if (issues.length === 0) return undefined;
   return issues.some((i) => i.severity === 'error') ? 'error' : 'warning';

@@ -16,7 +16,7 @@ import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 import { SpeleoProgressOverlay } from './SpeleoProgressOverlay';
 import { SpeleoUploadErrorsNotice } from './SpeleoUploadErrorsNotice';
-import { countUnresolvedErrors } from '../../utils/validation';
+import { countUnresolvedErrors, unresolvedErrorsKey } from '../../utils/validation';
 import { CommitMessageLimit } from './CommitMessageLimit';
 import { commitMessageTooLong } from '../../utils/commitMessage';
 import { toastLateUploadOutcome } from '../../utils/lateUploadOutcome';
@@ -88,14 +88,16 @@ export default function SpeleoDoneDialog() {
   const unpushed = useSpeleoStore((s) => s.link?.hasUnpushedEdits);
   const unsaved = useProjectStore((s) => s.isDirty);
   const needsMessage = mode === 'push' || unpushed || unsaved;
-  // Errors in the survey go to every collaborator once uploaded: an upload that
-  // carries changes waits until the user fixes them or accepts uploading them as
-  // they are. A Done that only releases the lock uploads nothing, so it never asks.
+  // Errors in the survey go to every collaborator once uploaded: with changes to
+  // upload, the dialog waits until the user fixes them or accepts uploading them
+  // as they are. With nothing to upload (a Done, or a Save and Close, that only
+  // releases the lock) it never asks.
   const errorCount = useProjectStore((s) => countUnresolvedErrors(s.warnings));
-  // The tick accepts the errors it was given for: a different count asks again.
-  const [acceptedErrorCount, setAcceptedErrorCount] = useState(0);
-  const errorsAccepted = errorCount > 0 && acceptedErrorCount === errorCount;
-  const showErrors = uploadAllowed && needsMessage && errorCount > 0;
+  const errorsKey = useProjectStore((s) => unresolvedErrorsKey(s.warnings));
+  // The tick accepts the errors it was given for: any other set asks again.
+  const [acceptedErrorsKey, setAcceptedErrorsKey] = useState<string | null>(null);
+  const errorsAccepted = acceptedErrorsKey === errorsKey;
+  const showErrors = uploadAllowed && Boolean(unpushed || unsaved) && errorCount > 0;
   const errorsBlock = showErrors && !errorsAccepted;
   // sdk#2: a description SpeleoDB cannot store is never sent (the backend refuses it too).
   const messageTooLong = commitMessageTooLong(message);
@@ -269,7 +271,7 @@ export default function SpeleoDoneDialog() {
         {showErrors && <SpeleoUploadErrorsNotice
           errorCount={errorCount}
           accepted={errorsAccepted}
-          onAcceptedChange={(accepted) => setAcceptedErrorCount(accepted ? errorCount : 0)}
+          onAcceptedChange={(accepted) => setAcceptedErrorsKey(accepted ? errorsKey : null)}
           onResolve={resolveErrors}
           disabled={busyAny}
         />}

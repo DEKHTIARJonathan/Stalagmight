@@ -49,13 +49,17 @@ function issue(severity: 'error' | 'warning', shotId: number, isResolved = false
 }
 
 const confirm = () => screen.getByTestId('speleodb-done-confirm');
+let lifetime = 0;
 const uploadCalls = () => invokeIpcMock.mock.calls.filter(([c]) => c === 'speleodb_push' || c === 'speleodb_done');
 
 beforeEach(() => {
   invokeIpcMock.mockReset();
   invokeIpcMock.mockResolvedValue({ kind: 'pushed' });
+  // A fresh project lifetime per test: it clears the module-level pending and
+  // set-aside upload messages an earlier test left behind.
+  lifetime += 1;
   useProjectStore.setState({
-    project: { file_path: PATH, zero_datums: [{}] } as never,
+    project: { file_path: PATH, created_at: `t${lifetime}`, zero_datums: [{}] } as never,
     isDirty: false,
     warnings: [issue('error', 1), issue('error', 2), issue('warning', 3)],
     saveProject: vi.fn(async () => ({ success: true }) as never),
@@ -152,14 +156,17 @@ describe('SpeleoDoneDialog - survey errors before an upload', () => {
     expect(getSetAsideUploadMessage(PATH)).toBe('Fixed the sump');
   });
 
-  it('a tick accepts the errors it was given for: a different count asks again', async () => {
+  it.each([
+    ['another error appears', [issue('error', 1), issue('error', 2), issue('error', 4)], 3],
+    ['one error is swapped for another, the count unchanged', [issue('error', 1), issue('error', 4)], 2],
+  ])('a tick accepts the errors it was given for: asks again when %s', async (_label, next, count) => {
     render(<SpeleoDoneDialog />);
     fireEvent.change(screen.getByTestId('speleodb-done-message'), { target: { value: 'Synthetic update' } });
     await userEvent.click(screen.getByTestId('speleodb-upload-errors-accept'));
     expect(confirm()).toBeEnabled();
 
-    act(() => useProjectStore.setState({ warnings: [issue('error', 1), issue('error', 2), issue('error', 4)] }));
-    expect(screen.getByTestId('speleodb-upload-errors-count')).toHaveTextContent('This survey has 3 errors.');
+    act(() => useProjectStore.setState({ warnings: next }));
+    expect(screen.getByTestId('speleodb-upload-errors-count')).toHaveTextContent(`This survey has ${count} errors.`);
     expect(screen.getByTestId('speleodb-upload-errors-accept')).not.toBeChecked();
     expect(confirm()).toBeDisabled();
   });
@@ -194,6 +201,15 @@ describe('SpeleoDoneDialog - survey errors before an upload', () => {
     useSpeleoStore.setState({ link: { ...LINK, hasUnpushedEdits: false } });
     render(<SpeleoDoneDialog />);
     expect(screen.queryByTestId('speleodb-upload-errors')).toBeNull();
+    expect(confirm()).toBeEnabled();
+  });
+
+  it('Save and Close with nothing to upload only releases the lock, so it does not ask', () => {
+    useUIStore.setState({ dialogData: { mode: 'push', closeAfterSave: true } });
+    useSpeleoStore.setState({ link: { ...LINK, hasUnpushedEdits: false } });
+    render(<SpeleoDoneDialog />);
+    expect(screen.queryByTestId('speleodb-upload-errors')).toBeNull();
+    fireEvent.change(screen.getByTestId('speleodb-done-message'), { target: { value: 'Synthetic update' } });
     expect(confirm()).toBeEnabled();
   });
 

@@ -24,6 +24,8 @@ type TestWindow = Window & {
   };
   __MOCK_IPC_OVERRIDES__: Record<string, unknown>;
   __MOCK_SET_PROJECT_IS_REMOTE__: (remote: boolean) => void;
+  /** How many times the mocked `speleodb_push` was called. */
+  __PUSHES__?: number;
 };
 
 const SECTIONS: SectionSeed[] = [{
@@ -60,11 +62,12 @@ async function editingProjectWithErrors(page: Page): Promise<void> {
       issue(2, 'LONG_SHOT', `Shot ${section.id}:3 length 8.0m above maximum threshold 5.0m`, 'warning'),
     ];
     w.__MOCK_SET_PROJECT_IS_REMOTE__(true);
-    w.__MOCK_IPC_OVERRIDES__ = {
-      speleodb_link_status: linkStatus,
-      speleodb_push: { kind: 'pushed' },
-      get_project_warnings: warnings,
-    };
+    const overrides: Record<string, unknown> = { speleodb_link_status: linkStatus, get_project_warnings: warnings };
+    w.__PUSHES__ = 0;
+    Object.defineProperty(overrides, 'speleodb_push', {
+      get: () => { w.__PUSHES__ = (w.__PUSHES__ ?? 0) + 1; return Promise.resolve({ kind: 'pushed' }); },
+    });
+    w.__MOCK_IPC_OVERRIDES__ = overrides;
     w.__E2E_TEST__.speleoStore.setState({
       session: { loggedIn: true, userEmail: 'test@example.com', endpoint: 'https://speleodb.example' },
       projectLinkKind: 'remote', remoteProjectId: 'synthetic-errors',
@@ -81,6 +84,8 @@ async function editingProjectWithErrors(page: Page): Promise<void> {
     (window as unknown as TestWindow).__E2E_TEST__.projectStore.getState().warnings.length)).toBe(3);
 }
 
+const pushes = (page: Page) => page.evaluate(() => (window as unknown as TestWindow).__PUSHES__ ?? 0);
+
 test('the upload waits for "Upload anyway", then goes ahead', async ({ page }) => {
   await editingProjectWithErrors(page);
   await page.keyboard.press('Control+s');
@@ -96,7 +101,7 @@ test('the upload waits for "Upload anyway", then goes ahead', async ({ page }) =
   await expect(confirm).toBeEnabled();
   await confirm.click();
   await expect(dialog).toHaveCount(0);
-  expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.speleoStore.getState().link?.hasUnpushedEdits)).toBe(false);
+  expect(await pushes(page)).toBe(1);
 });
 
 test('Resolve now opens the Warnings tab and the next Save keeps the message', async ({ page }) => {
@@ -110,9 +115,8 @@ test('Resolve now opens the Warnings tab and the next Save keeps the message', a
   await expect(page.getByTestId('detail-tab-warnings')).toHaveClass(/border-accent/);
   await expect(warningMessages(page)).toHaveCount(3);
   await expect(warningMessages(page).first()).toBeVisible();
-  // Nothing went to SpeleoDB.
-  expect(await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.speleoStore.getState().link?.hasUnpushedEdits)).toBe(true);
-
   await page.keyboard.press('Control+s');
   await expect(page.getByTestId('speleodb-done-message')).toHaveValue('Fixed the sump survey');
+  // Nothing went to SpeleoDB on the way.
+  expect(await pushes(page)).toBe(0);
 });

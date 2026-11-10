@@ -14,7 +14,8 @@ let continuation: (UploadDraft & { owner: UploadOwner }) | null = null;
 // the survey's errors first. Unlike `continuation` it is not a pending upload:
 // nothing reopens the dialog for it (finishSpeleoSettings reads only the
 // continuation) and no exit prompt counts it as a draft. The next upload dialog
-// starts from it, and any continuation that dialog writes replaces it.
+// (or the push-failure banner's Retry) starts from it and takes it over by
+// writing a continuation; it lapses once nothing is left to upload.
 let setAside: { path: string; message: string; owner: UploadOwner } | null = null;
 let projectEpoch = 0;
 let subscribed = false;
@@ -85,7 +86,12 @@ export function getUploadContinuation(path: string | null | undefined) {
 }
 export function setUploadContinuation(value: UploadDraft | null, owner = captureUploadOwner()): void {
   continuation = value && value.path === owner.path && uploadOwnerStillCurrent(owner) ? { ...value, owner } : null;
-  setAside = null;
+  if (value) setAside = null;
+}
+
+/** Once the work is on SpeleoDB, a description written for it describes nothing. */
+function nothingToUpload(): boolean {
+  return !useProjectStore.getState().isDirty && !useSpeleoStore.getState().link?.hasUnpushedEdits;
 }
 
 /** "Resolve now": keep the typed description for the next upload dialog, with no upload pending. */
@@ -99,7 +105,7 @@ export function setAsideUploadMessage(message: string, owner: UploadOwner): void
 /** The description "Resolve now" set aside for this project, if it still belongs to it. */
 export function getSetAsideUploadMessage(path: string | null | undefined): string | null {
   observeProjectLifetime();
-  if (setAside && (setAside.path !== path || !uploadOwnerStillCurrent(setAside.owner))) setAside = null;
+  if (setAside && (setAside.path !== path || !uploadOwnerStillCurrent(setAside.owner) || nothingToUpload())) setAside = null;
   return setAside?.message ?? null;
 }
 

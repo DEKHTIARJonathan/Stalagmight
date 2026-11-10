@@ -531,13 +531,16 @@ The upload dialog (Save Changes, and Finish editing when it has changes to
 upload) does not upload a survey with errors (validation issues of error
 severity; warnings do not count) without a decision. It shows the number of
 errors in red, and its upload button stays disabled until the user ticks "Upload
-anyway, with the errors"; the tick holds for that number of errors only. "Resolve
-now" uploads nothing and leaves nothing pending: it closes the dialog (a Save and
-Close does not close), sets the description aside for the next upload dialog to
-start from (`setAsideUploadMessage`; unlike a pending upload it does not reopen
-the dialog when Settings closes and is not an exit-prompt draft), and opens the
-Details panel on the Warnings tab (`openWarningsTab`, leaving Plan or Export for
-Survey). The notice is hidden while the upload itself is blocked. The other
+anyway, with the errors"; the tick holds for those errors only (by warning
+identity, not by count). "Resolve now" uploads nothing and leaves nothing
+pending: it closes the dialog (a Save and Close does not close), sets the
+description aside for the next upload dialog, or the push-failure banner's Retry,
+to start from (`setAsideUploadMessage`; unlike a pending upload it does not
+reopen the dialog when Settings closes, is not an exit-prompt draft, and lapses
+once nothing is left to upload), and opens the Details panel on the Warnings tab
+(`openWarningsTab`, leaving Plan or Export for Survey). The notice is hidden while
+the upload itself is blocked, and it counts the errors the Warnings tab lists: if
+those cannot be computed (`refreshWarnings` fails) the dialog does not ask. The other
 upload surfaces do not ask yet: the exit and sign-out prompts' upload step, and
 the unwound-upload and revert confirmations when opened on their own (the
 unwound one opened from this dialog comes after its question).
