@@ -1,7 +1,7 @@
 import { useProjectStore } from '../../store/projectStore';
 import { isUnwoundNotEdited, useSpeleoStore } from '../../store/speleoStore';
 import { LockIcon, SectionsIcon } from '../common/icons';
-import { ExclamationGlyph, SpeleoBadgedIcon } from '../common/SpeleoBadgedIcon';
+import { SpeleoBadgedIcon } from '../common/SpeleoBadgedIcon';
 
 /**
  * What the SpeleoDB tab has to tell at a glance about the open project:
@@ -28,16 +28,21 @@ export function SectionsTabIcon() {
   return <SectionsIcon size={ICON_SIZE} data-testid="workspace-tab-sections-icon" />;
 }
 
-/** The SpeleoDB mark, badged with a yellow "!" (un-uploaded) or a lock (read-only). */
+/**
+ * The SpeleoDB mark, badged with a lock while read-only. Un-uploaded changes get
+ * no badge: they are not an error, so the mark simply turns yellow with the tab's
+ * text. The mark paints in `currentColor` (no tint and no colour class of its
+ * own), so it always takes the tab's colour: the warning text at full strength
+ * while the tab is selected, dimmed while it is not (see `LeftWorkspace`).
+ */
 export function SpeleoTabIcon({ state }: { state: SpeleoTabState }) {
   return (
     <span className="inline-flex" data-testid="workspace-tab-speleodb-icon" data-state={state}>
       <SpeleoBadgedIcon
         size={ICON_SIZE}
         testIdPrefix="workspace-tab-speleodb-icon"
-        badge={state === 'unuploaded' ? <ExclamationGlyph size={10} />
-          : state === 'read-only' ? <LockIcon size={10} /> : undefined}
-        badgeColor={state === 'unuploaded' ? 'text-warning-text' : 'text-text-primary'}
+        badge={state === 'read-only' ? <LockIcon size={10} /> : undefined}
+        badgeColor="text-text-primary"
       />
     </span>
   );

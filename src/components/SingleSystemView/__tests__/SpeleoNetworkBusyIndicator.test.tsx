@@ -5,6 +5,7 @@ import { SpeleoNetworkBusyIndicator } from '../SpeleoNetworkBusyIndicator';
 
 const BUSY_LABEL = 'Talking to SpeleoDB...';
 import { SpeleoBadgedIcon } from '../../common/SpeleoBadgedIcon';
+import { LockIcon } from '../../common/icons';
 import { useSpeleoNetworkStore } from '../../../store/speleoNetworkStore';
 import { useUIStore } from '../../../store/uiStore';
 
@@ -24,9 +25,9 @@ function startRead(): () => void {
   return () => act(() => end());
 }
 
-/** The tab icon as the SpeleoDB tab draws it: the mark with a bottom-right state badge. */
+/** The tab icon as the SpeleoDB tab draws it while read-only: the mark with its bottom-right lock badge. */
 const badgedIcon = (
-  <SpeleoBadgedIcon size={16} testIdPrefix="test-tab-icon" badge={<span>!</span>} badgeColor="text-warning" />
+  <SpeleoBadgedIcon size={16} testIdPrefix="test-tab-icon" badge={<LockIcon size={10} />} badgeColor="text-text-primary" />
 );
 
 describe('SpeleoNetworkBusyIndicator', () => {

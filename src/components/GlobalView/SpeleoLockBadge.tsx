@@ -149,9 +149,9 @@ const ACCENT_COLOR: Record<Exclude<RecentAccent, 'none'>, string> = {
  * The list accent bar down the leading edge of a card / row: yellow for "changes
  * only on this computer" (#270), bright neutral for "you hold the write lock", blue
  * for "someone else does". Deliberately an ACCENT and nothing more - the recents
- * list is a chooser, not a place to shout, so the "!" badge stays on the status
- * button where an action is available. Returns `undefined` (no styling at all) when
- * the entry earns no accent.
+ * list is a chooser, not a place to shout, and un-uploaded work is not an error, so
+ * nothing here (nor on the SpeleoDB tab) carries a "!". Returns `undefined` (no
+ * styling at all) when the entry earns no accent.
  *
  * On an element that also carries Tailwind's `ring-*`, use `recentCardStyle` instead
  * - see the trap documented there.

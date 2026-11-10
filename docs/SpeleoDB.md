@@ -371,11 +371,14 @@ fullscreen table, go Back to Map (or Escape) first. Plan and Export keep the
 SpeleoDB tab when Survey was showing it on entry; otherwise they show no left dock,
 and the way to the tab is back through Survey. The push-failure banner's links and
 the revision Revert flow still open the tab themselves (`openSpeleoWorkspace`),
-which leaves the fullscreen table without clearing table selection or scroll. Its icon carries the project's state as a badge: a yellow "!" for
-un-uploaded changes, a lock for read-only (see the read-only prose above for its
-tooltip). Un-uploaded changes also turn the tab's text the warning colour, dimmed
-while another tab is selected and full strength when the SpeleoDB tab is; the tab
-is otherwise selected exactly like Sections (no wash or rule of its own). Survey
+which leaves the fullscreen table without clearing table selection or scroll. Read-only
+puts a lock badge on its icon (see the read-only prose above for its tooltip).
+Un-uploaded changes are not an error, so they get no badge and no "!": the tab's
+icon and text both turn the warning colour (yellow), dimmed while another tab is
+selected and full strength when the SpeleoDB tab is; the tooltip says the changes
+are not uploaded yet. The tab is otherwise selected exactly like Sections (no wash
+or rule of its own). Home marks a copy with un-uploaded changes the same way: a
+yellow leading edge and a yellow mark, no badge. Survey
 starts on Sections; Sections and SpeleoDB use accessible tabs with arrow-key
 navigation, and returning to Survey restores its previous tab. Navigation never
 acquires or releases a lock.

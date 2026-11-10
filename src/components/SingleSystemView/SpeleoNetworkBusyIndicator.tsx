@@ -7,11 +7,11 @@ import { selectSpeleoNetworkBusy, useSpeleoNetworkStore } from '../../store/spel
  * flight (see `speleoNetworkStore`).
  *
  * Wrap the tab's icon with it: the spinner then overlays the icon's TOP-LEFT
- * corner on a panel-coloured disc, the mirror of the state badge (read-only lock,
- * un-uploaded "!") that sits on the bottom-right corner, so it never covers that
- * badge. Without an icon to wrap, it is a zero-size anchor and the spinner sits
- * just after it. Either way the spinner is absolutely positioned and adds no
- * width: the tab keeps its size and its label never moves.
+ * corner on a panel-coloured disc, the mirror of the read-only lock badge that
+ * sits on the bottom-right corner, so it never covers that badge. Without an
+ * icon to wrap, it is a zero-size anchor and the spinner sits just after it.
+ * Either way the spinner is absolutely positioned and adds no width: the tab
+ * keeps its size and its label never moves.
  *
  * The live region is mounted whether or not anything is in flight, so screen
  * readers announce the label when the spinner appears.

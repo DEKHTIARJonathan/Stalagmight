@@ -254,6 +254,44 @@ test('Settings authentication returns the Save description and close intent with
   await expect(page.getByTestId('single-system-view')).toBeVisible();
 });
 
+test('un-uploaded changes turn the tab icon and text yellow, with no "!" badge', async ({ page }) => {
+  await openRemote(page, false);
+  await page.evaluate(() => (window as unknown as TestWindow).__E2E_TEST__.projectStore.setState({ isDirty: true }));
+  const tab = page.getByTestId('workspace-tab-speleodb');
+  await expect(tab).toHaveAttribute('data-state', 'unuploaded');
+  await expect(tab.getByTestId('workspace-tab-speleodb-icon-state-badge')).toHaveCount(0);
+  /** The painted colours of the mark and the label, and the warning text colours they should be. */
+  const colours = () => tab.evaluate((el) => {
+    const probe = (cls: string) => {
+      const span = document.createElement('span');
+      span.className = cls;
+      el.appendChild(span);
+      const colour = getComputedStyle(span).color;
+      span.remove();
+      return colour;
+    };
+    const logo = el.querySelector('[data-testid="workspace-tab-speleodb-icon-logo"]')!;
+    const label = Array.from(el.querySelectorAll('span')).find((s) => s.textContent === 'SpeleoDB')!;
+    return {
+      icon: getComputedStyle(logo).backgroundColor,
+      text: getComputedStyle(label).color,
+      full: probe('text-warning-text'),
+      dim: probe('text-warning-text-dim'),
+    };
+  });
+  // Not selected: icon and text in the dimmed warning text, alike.
+  await expect(tab).toHaveAttribute('aria-selected', 'false');
+  const idle = await colours();
+  expect(idle.icon).toBe(idle.text);
+  expect(idle.text).toBe(idle.dim);
+  // Selected: both at full strength.
+  await openSpeleoTab(page);
+  const selected = await colours();
+  expect(selected.icon).toBe(selected.text);
+  expect(selected.text).toBe(selected.full);
+  expect(selected.full).not.toBe(selected.dim);
+});
+
 test('the read-only map pill offers Resume editing, which retakes the lock', async ({ page }) => {
   await openRemote(page, false);
   await openSpeleoTab(page);

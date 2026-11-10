@@ -85,7 +85,8 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
     render(<LeftWorkspace sections={<div />} />);
     expect(speleoTab()).toHaveAttribute('data-state', 'read-only');
     expect(badge()).not.toBeNull();
-    expect(badge()).not.toHaveClass('text-warning-text');
+    expect(badge()).toHaveClass('text-text-primary');
+    expect(badge()!.querySelector('svg')).not.toBeNull();
     expect(speleoTab()).toHaveAccessibleDescription(/Read-only/);
     expect(speleoTab().className).not.toContain('text-warning');
   });
@@ -111,25 +112,46 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
     expect(speleoTab()).toBeInTheDocument();
   });
 
+  /**
+   * The mark takes the tab's own text colour: it paints in `currentColor` (no tint)
+   * and nothing between it and the tab sets a text colour of its own, so the icon
+   * and the label can never disagree.
+   */
+  const expectIconInTabColour = () => {
+    const logo = screen.getByTestId('workspace-tab-speleodb-icon-logo');
+    expect(logo.style.backgroundColor).toBe('currentcolor');
+    expect(logo).not.toHaveAttribute('data-tint');
+    for (let el = logo.parentElement; el && el !== speleoTab(); el = el.parentElement) {
+      expect(el.className).not.toMatch(/\btext-(?!sm\b|xs\b)/);
+    }
+  };
+
   it.each([
     ['saved but not uploaded', () => useSpeleoStore.setState({ link: { ...link, editState: 'editing', hasUnpushedEdits: true } })],
     ['unsaved edits', () => { useSpeleoStore.setState({ link: { ...link, editState: 'editing' } }); useProjectStore.setState({ isDirty: true }); }],
-  ])('un-uploaded changes (%s) get the yellow "!" and the warning text colour', (_label, seed) => {
+  ])('un-uploaded changes (%s) turn the icon and text yellow, with no "!" badge', (_label, seed) => {
     seed();
     render(<LeftWorkspace sections={<div />} />);
     expect(speleoTab()).toHaveAttribute('data-state', 'unuploaded');
-    expect(badge()).toHaveClass('text-warning-text');
-    // Not selected (Sections is): the warning text, dimmed.
+    // Not an error: no badge on the mark at all.
+    expect(badge()).toBeNull();
+    expect(speleoTab().querySelector('svg')).toBeNull();
+    // Not selected (Sections is): the warning text, dimmed, on the label and the mark alike.
     expect(speleoTab()).toHaveClass('text-warning-text-dim');
-    expect(speleoTab()).toHaveAccessibleDescription('Changes on this computer have not been uploaded to SpeleoDB yet.');
-    expect(speleoTab()).toHaveAttribute('title', 'Changes on this computer have not been uploaded to SpeleoDB yet.');
+    expectIconInTabColour();
+    expect(speleoTab().className).not.toMatch(/text-error|text-danger|bg-error|bg-danger/);
+    // The note says what is going on, without calling it an error.
+    const note = 'Changes on this computer have not been uploaded to SpeleoDB yet.';
+    expect(speleoTab()).toHaveAccessibleDescription(note);
+    expect(speleoTab()).toHaveAttribute('title', note);
+    expect(note).not.toMatch(/error|fail|problem|warning|!/i);
   });
 
-  it('the warning wins over read-only when both apply', () => {
+  it('un-uploaded wins over read-only when both apply, still without a badge', () => {
     useSpeleoStore.setState({ link: { ...link, editState: 'read-only', hasUnpushedEdits: true } });
     render(<LeftWorkspace sections={<div />} />);
     expect(speleoTab()).toHaveAttribute('data-state', 'unuploaded');
-    expect(badge()).toHaveClass('text-warning-text');
+    expect(badge()).toBeNull();
     expect(speleoTab()).toHaveAccessibleDescription(/not been uploaded/);
   });
 
@@ -172,7 +194,9 @@ describe('Left workspace tab icons and SpeleoDB state', () => {
     expect(speleoTab()).toHaveAttribute('aria-selected', 'true');
     expect(look(speleoTab())).toEqual([...sectionsSelected, 'text-warning-text'].sort());
     expect(speleoTab().className).not.toMatch(/bg-warning|shadow|inset|text-warning-text-dim/);
-    expect(badge()).toHaveClass('text-warning-text');
+    // Full-strength yellow on the mark too, and still no badge.
+    expectIconInTabColour();
+    expect(badge()).toBeNull();
   });
 
   it.each(['selected', 'not selected'] as const)('no warning, %s: exactly the Sections tab look', (which) => {
