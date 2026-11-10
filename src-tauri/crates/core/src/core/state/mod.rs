@@ -13,6 +13,7 @@ mod config;
 mod display_settings;
 pub mod dive_plan;
 mod import_tracking;
+mod project_append;
 mod project_create;
 mod project_io;
 mod project_load;
