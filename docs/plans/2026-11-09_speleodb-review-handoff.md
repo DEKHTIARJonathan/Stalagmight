@@ -1,32 +1,30 @@
 # SpeleoDB review and fixes - handoff (2026-11-09)
 
-## Status (integrated, 2026-11-09)
+## Status (integrated, 2026-11-10)
 
-Everything below has since been merged into one branch, `speleodb/review-fixes`,
-in the suggested order. The owner's numbered decisions under "To implement" are
-implemented there, except:
-
-- decision 13's upstream report and the other "Upstream SpeleoDB reports to file"
-  (reproduced on a private instance; drafted, not yet filed);
-- decision 15, filed as #670.
-
-The two fuzzing-track bugs (F1, F2) and a third one the fuzzer found on the
-integration (F3, Save-a-copy debris overwritten) are deliberately not in this
-batch: #669. The "Follow-ups found during the fixes", the "Not yet decided" items
-and the bugs found while implementing and testing the fixes are collected in #671.
-`docs/SpeleoDB.md` describes the resulting behaviour (edit gate derived from the
-lock claim, holder-checked releases, quit-after-work, cached copies on Home,
-upload limits). The fuzzer port stays on its own test-only branch.
-
-PR #668 (SpeleoDB UX: Connect / Disconnect in Settings, automatic endpoint rules,
-workspace buttons, confirmed close) was then merged into this branch with the
-owner's reconciliation decisions: #668's endpoint rules, Settings model and
-workspace layout; this branch's backend lock model (holder-checked release, edit
-gate from the claim, release veto, exit prompt) in place of #668's close-release
-retry context; the `insecure_http` field kept. The dev-build-only insecure-HTTP
-option, the "connect" wording across the SpeleoDB screens, the "Couldn't hand back
-the lock" dialog and the token-based workspace button colours follow in later
-commits.
+- The fix branches are integrated on `speleodb/review-fixes`. The owner's
+  decisions 1-14 and 16-18 under "To implement" are implemented there (6 and 11
+  in the form the #668 reconciliation below gives them). Decision 15 is #670.
+- PR #668 (SpeleoDB UX) landed on master first. This branch was reconciled with
+  it per four owner decisions:
+  1. The insecure-HTTP option exists only in development builds. Release builds
+     use #668's automatic rule: HTTPS, with plain HTTP only to `localhost`,
+     `127.0.0.1` and `192.168.x.x` as written (no DNS lookup).
+  2. Settings uses #668's Connect / Disconnect. Disconnect runs the sign-out flow
+     first (un-uploaded work, lock hand-back).
+  3. A close, project switch or app-driven quit whose lock release fails or is
+     uncertain no longer closes silently. An in-app "Couldn't hand back the lock"
+     dialog offers Retry / Close and keep the lock / Cancel.
+  4. The workspace buttons follow #668's layout, with token-based colours that
+     meet WCAG AA in every theme, one filled button per state, and a neutral
+     Close.
+- The pre-PR review findings are fixed: the owner checks on the fast-forward open
+  and on purging, removing and discarding cached copies; Quit now; the download
+  deadline; the redaction of server values in error detail.
+- The fuzzer-found bugs F1-F3 are in #669. The remaining follow-ups and the
+  undecided items are in #671. The upstream SpeleoDB reports are drafted
+  separately.
+- `docs/SpeleoDB.md` describes the resulting behaviour.
 
 The rest of this document is the original hand-off, kept as the design record.
 
