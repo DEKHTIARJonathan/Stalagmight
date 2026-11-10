@@ -3,9 +3,11 @@
  *
  * When a placed section repeats shots the project already has, each repeated
  * shot gets one of three choices. Whatever the choice, the new section's copy
- * becomes a Reference shot (kept, never deleted, no longer counted as surveyed
- * length); the choice only decides which reading the EXISTING shot ends up
- * with, so its stations, connections, closures and comments stay where they are.
+ * becomes a Reference shot: kept, never deleted, drawn de-emphasised, and not
+ * counted as swimmable length in Plan mode (it still counts in the section's
+ * total length). The choice only decides which reading the EXISTING shot ends
+ * up with, so its stations, connections, closures and comments stay where they
+ * are.
  */
 
 import { averageAzimuth, normalizeAzimuth } from './azimuth';
