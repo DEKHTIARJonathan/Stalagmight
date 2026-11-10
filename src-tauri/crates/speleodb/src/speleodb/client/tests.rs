@@ -1067,6 +1067,45 @@ fn contract_mismatch_detail_is_redacted_and_bounded() {
             "{message}"
         );
     }
+    // serde prints a backticked value verbatim, so the value can hold a backtick
+    // or the text ", expected" itself. Closing its span at the first backtick
+    // leaked everything after it.
+    for (message, expected) in [
+        (
+            "unknown variant `a`LEAK`, expected `PRIVATE` or `PUBLIC`",
+            "unknown variant `...`, expected `...` or `...`",
+        ),
+        (
+            "unknown variant `x`, expected LEAK `y`, expected `PRIVATE` or `PUBLIC`",
+            "unknown variant `...`, expected `...` or `...`",
+        ),
+        (
+            "unknown field `a`LEAK`b`, expected one of `name`, `country` at line 1 column 7",
+            "unknown field `...`, expected one of `...`, `...` at line 1 column 7",
+        ),
+        (
+            "unknown variant `a\"LEAK`, expected `PUBLIC`",
+            "unknown variant `...`, expected `...`",
+        ),
+        (
+            "invalid type: string \"a`LEAK`, expected `b\", expected u32",
+            "invalid type: string \"...\", expected u32",
+        ),
+        // A span that never closes may run into the rest, which is dropped.
+        (
+            "invalid value: string \"LEAK, expected x",
+            "invalid value: string \"...\"",
+        ),
+        ("unknown variant `LEAK, expected x", "unknown variant `...`"),
+    ] {
+        let redacted = contract_mismatch(Some(message.into()));
+        assert_eq!(
+            redacted,
+            format!("response does not match the SpeleoDB SDK contract: {expected}"),
+            "{message}"
+        );
+        assert!(!redacted.contains("LEAK"), "{redacted}");
+    }
     let long = format!(
         "unknown variant `ZZ`, expected one of {}",
         "`AA`, ".repeat(400)

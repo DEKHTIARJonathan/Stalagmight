@@ -342,7 +342,10 @@ handshake or certificate failure is classified as TLS from the typed `rustls`
 error. A 2xx body that does not match the SDK contract (for example a new server
 enum value) is a parse error: it keeps the SDK decoder detail, with every
 response value redacted (serde's quoted strings and its backticked numbers,
-variants and field names) and the length capped, is logged with the endpoint
+variants and field names; a backticked value is printed verbatim and may itself
+hold a backtick or `, expected`, so its span runs to the last backtick before the
+message's final `, expected`, and anything after a span that never closes is
+dropped) and the length capped, is logged with the endpoint
 kind, and is counted as its own `parse-error` traffic outcome (docs/telemetry.md).
 
 Revision times arrive as New York wall time with no zone (`YYYY/MM/DD HH:MM`).
