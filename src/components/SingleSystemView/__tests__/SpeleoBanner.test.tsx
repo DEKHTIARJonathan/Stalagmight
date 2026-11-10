@@ -12,7 +12,7 @@ vi.mock('../../../utils/ipc', () => ({
 import { SpeleoBanner } from '../SpeleoBanner';
 import { SpeleoWorkspace } from '../SpeleoWorkspace';
 import { useProjectStore } from '../../../store/projectStore';
-import { getUploadContinuation, setUploadContinuation } from '../../../utils/uploadContinuation';
+import { captureUploadOwner, getSetAsideUploadMessage, getUploadContinuation, setAsideUploadMessage, setUploadContinuation } from '../../../utils/uploadContinuation';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
 import { askSpeleoExit, resetSpeleoExitPromptForTests } from '../../../utils/speleoExit';
@@ -98,6 +98,18 @@ describe('SpeleoBanner push failure (#260)', () => {
     expect(useUIStore.getState().dialogData.mode).toBe('push');
     expect(getUploadContinuation('/synthetic/remote.stalx')?.message).toBe('my message');
     expect(invokeIpcMock).not.toHaveBeenCalled();
+  });
+
+  it('Retry starts from a description set aside by Resolve now, not the failed one', async () => {
+    seedFailure('push', 'the failed description');
+    useSpeleoStore.setState({ session: { loggedIn: true, endpoint: 'https://synthetic.example', userEmail: 'user@example.com' } });
+    // The user edited the description after the failure, then chose Resolve now.
+    setAsideUploadMessage('edited after the failure', captureUploadOwner());
+    render(<SpeleoBanner />);
+    await userEvent.click(screen.getByTestId('speleo-banner-retry-push'));
+    expect(useUIStore.getState().activeDialog).toBe('speleodb-done');
+    expect(getUploadContinuation('/synthetic/remote.stalx')?.message).toBe('edited after the failure');
+    expect(getSetAsideUploadMessage('/synthetic/remote.stalx')).toBeNull();
   });
 
   it('Retry opens release confirmation with the original description after a Done failure', async () => {

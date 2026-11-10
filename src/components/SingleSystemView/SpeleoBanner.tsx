@@ -7,7 +7,7 @@ import {
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { dispatchProjectSave } from '../../utils/dispatchProjectSave';
-import { getUploadContinuation, setUploadContinuation } from '../../utils/uploadContinuation';
+import { getSetAsideUploadMessage, getUploadContinuation, setUploadContinuation } from '../../utils/uploadContinuation';
 import { useSpeleoExitPrompt } from '../../utils/speleoExit';
 import { useSpeleoSignOut } from '../../utils/speleoSignOut';
 
@@ -61,7 +61,7 @@ export function SpeleoBanner() {
     if (!path) return;
     const pending = getUploadContinuation(path);
     setUploadContinuation({
-      path, message: pending?.message ?? pushFailed.pushMessage ?? '',
+      path, message: pending?.message ?? getSetAsideUploadMessage(path) ?? pushFailed.pushMessage ?? '',
       closeAfterSave: pending?.closeAfterSave ?? false,
     });
     useUIStore.getState().openSpeleoWorkspace();
