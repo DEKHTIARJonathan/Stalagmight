@@ -22,10 +22,16 @@
 //!   holds; the next successful online open records the owner.
 //!
 //! Removal never reaches un-uploaded work without the caller's explicit consent
-//! (`discard_unpushed`), and never touches the project that is open. Signed in,
-//! Home's removal and the purge reach only the copies the listing shows, and
-//! sign-out's Discard only the session's own copies: another account's work is
-//! never removed through this account's session.
+//! (`discard_unpushed`), and never touches the project that is open (asked again
+//! under the project lock at the delete itself, so a copy opened after the check is
+//! refused rather than closed and trashed). Home's removal and the purge reach only
+//! the copies the listing shows, and sign-out's Discard only the session's own
+//! copies: another account's work is never removed through this account's
+//! session. A `.stalx` in the cache that is no longer linked to SpeleoDB (left by
+//! an unlink, and possibly edited and saved since) is the user's own file: no
+//! listing shows it and no removal reaches it, whatever the consent. Nor does a
+//! removal follow a project directory that is a symlink: it would reach whatever
+//! the link points at.
 //!
 //! Nor is it ever taken over. The fast-forward open opens un-uploaded work as it is
 //! only for the copy's recorded owner (see `speleodb_local_state`); the guarded
@@ -48,7 +54,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::speleodb_local_state::{cache_path_in, cache_root, read_cached_link, CachedLink};
+use super::speleodb_local_state::{
+    cache_path_in, cache_root, is_the_cached_copy, read_cached_link, CachedLink,
+};
 use super::AppState;
 use crate::core::{CommandResult, ValidationWarning, WarningSeverity};
 use crate::speleodb::auth::normalize_endpoint;
@@ -74,6 +82,24 @@ so it cannot be removed while you are signed in. Nothing was removed.";
 /// come from that list.
 const NOT_THIS_ACCOUNTS_REFUSAL: &str = "Only copies downloaded by the SpeleoDB account in \
 use can be discarded here. Nothing was removed.";
+
+/// Refusal text when Home's "Remove local copy" names the project open right now.
+const REMOVE_OPEN_REFUSAL: &str = "This project is open. Close it first, then remove its copy.";
+
+/// Refusal text when sign-out's Discard names the project open right now.
+const DISCARD_OPEN_REFUSAL: &str =
+    "This project is open. Close it first, then discard its changes.";
+
+/// Refusal text when the copy's `.stalx` is no longer linked to SpeleoDB (an
+/// unlink keeps the file, which may have been edited and saved since). No listing
+/// shows such a file, so reaching this means the listing was stale.
+const UNLINKED_REFUSAL: &str = "This file is no longer linked to SpeleoDB, so it is not \
+removed here: it may hold work saved since it was unlinked. Nothing was removed.";
+
+/// Refusal text when the copy's directory is not a plain directory of the cache (a
+/// symlink to another folder, say): removing the copy would reach through it.
+const NOT_A_CACHE_DIR_REFUSAL: &str = "This copy's folder links to another place, so \
+Stalagmight does not remove anything through it. Nothing was removed.";
 
 /// Which account a cached copy belongs to, relative to the signed-in session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
@@ -158,10 +184,27 @@ fn read_owner_for(copy: &Path) -> Option<CacheOwner> {
 
 /// Write the owner record through a temporary file and a rename, so a crash never
 /// leaves a half-written record (which would read as unknown anyway).
+///
+/// The temporary file is one this call creates: whatever already has its name (a
+/// leftover from a crash, or a symlink planted there) is removed first, and
+/// `create_new` then refuses anything that appears under the name in between. A
+/// plain write followed a planted symlink and wrote the record over its target.
+/// The rename replaces the `owner.json` entry itself, never what a link there
+/// points at.
 fn write_owner_for(copy: &Path, owner: &CacheOwner) -> std::io::Result<()> {
+    use std::io::Write as _;
     let path = owner_path_for(copy);
     let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, serde_json::to_vec(owner)?)?;
+    match std::fs::remove_file(&tmp) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)?;
+    file.write_all(&serde_json::to_vec(owner)?)?;
+    drop(file);
     std::fs::rename(&tmp, &path)
 }
 
@@ -214,16 +257,26 @@ pub(super) fn copy_recorded_for_other_account(
         .then_some(owner.email)
 }
 
-/// Whether `path` is laid out as the managed cache copy of `project_id`
-/// (`<root>/<project_id>/project.stalx`, whatever the root): the only place an
-/// owner record is ever written, so the only file one may speak for.
-fn is_cache_layout(path: &Path, project_id: &str) -> bool {
-    path.file_name()
-        .is_some_and(|name| name == super::speleodb_local_state::CACHE_STALX)
-        && path
-            .parent()
-            .and_then(Path::file_name)
-            .is_some_and(|dir| dir == project_id)
+/// Whether `path` IS the managed cache copy of `project_id` in the cache at `root`:
+/// the only place an owner record is ever written, so the only file one may speak
+/// for. Not just a path shaped like one (`<anything>/<project_id>/project.stalx`):
+/// that let Start Editing write `owner.json` beside any such file the user opened,
+/// anywhere on disk. The project's directory must be a real one of the cache, too.
+fn is_managed_cache_copy(root: &Path, project_id: &str, path: &Path) -> bool {
+    super::speleodb::validate_project_id(project_id).is_ok()
+        && !cache_dir_is_foreign(root, project_id)
+        && is_the_cached_copy(root, project_id, path)
+}
+
+/// Whether `root/<project_id>` is something other than a directory of the cache:
+/// a symlink (to one of the user's own folders, say), a file, or an entry that
+/// cannot be examined. Removing the copy "inside" it would reach whatever it points
+/// at. An absent directory is not foreign: there is nothing there to remove.
+fn cache_dir_is_foreign(root: &Path, project_id: &str) -> bool {
+    match std::fs::symlink_metadata(root.join(project_id)) {
+        Ok(meta) => !meta.file_type().is_dir(),
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
 }
 
 /// The endpoint the copy at `copy` links to, `None` when it cannot be read.
@@ -396,10 +449,10 @@ impl AppState {
             return CommandResult::failure(OTHER_ACCOUNTS_REMOVAL_REFUSAL.to_owned());
         }
         match self.cached_copy_removal(root, project_id, discard_unpushed) {
-            Removal::Open => CommandResult::failure(
-                "This project is open. Close it first, then remove its copy.".to_owned(),
-            ),
+            Removal::Open => CommandResult::failure(REMOVE_OPEN_REFUSAL.to_owned()),
             Removal::AtRisk => CommandResult::failure(UNPUSHED_REFUSAL.to_owned()),
+            Removal::Unlinked => CommandResult::failure(UNLINKED_REFUSAL.to_owned()),
+            Removal::NotACacheDir => CommandResult::failure(NOT_A_CACHE_DIR_REFUSAL.to_owned()),
             Removal::Allowed => {
                 tracing::info!(
                     project_id = %project_id,
@@ -407,8 +460,12 @@ impl AppState {
                     purpose = "remove a cached SpeleoDB copy (user confirmed)",
                     "speleodb: removing a cached copy"
                 );
-                let (result, lock) =
-                    self.remove_cached_copy_and_lock(root, project_id, &mut ServerReach::default());
+                let Some((result, lock)) =
+                    self.remove_cached_copy_and_lock(root, project_id, &mut ServerReach::default())
+                else {
+                    // Opened since the check above: nothing was done.
+                    return CommandResult::failure(REMOVE_OPEN_REFUSAL.to_owned());
+                };
                 match lock {
                     LockHandBack::Unknown(reason) => {
                         let mut warnings = result.warnings.clone();
@@ -434,11 +491,14 @@ impl AppState {
     /// the open one, and except those with un-uploaded (or unreadable) work unless
     /// `discard_unpushed`.
     ///
-    /// Signed in, the purge reaches exactly the copies the home screen lists: the
+    /// The purge reaches exactly the copies the home screen lists. Signed in: the
     /// account's own on its instance, and those with no owner record from that
     /// instance. Another account's copy (or another instance's) is not touched, not
     /// even with `discard_unpushed`: its un-uploaded work is not this user's to
     /// throw away, and the confirmation never named it. Signed out, every copy.
+    /// Either way, never a `.stalx` that is no longer linked to SpeleoDB (the
+    /// listing does not show one, and it may hold saved work): it is skipped, and
+    /// not reported, since the confirmation never named it either.
     pub fn speleodb_purge_cached_copies(&self, discard_unpushed: bool) -> SpeleoPurgeReport {
         cache_root()
             .map(|root| self.speleodb_purge_cached_copies_in(&root, discard_unpushed))
@@ -469,6 +529,7 @@ impl AppState {
             .map(|copy| (copy.project_id, copy.project_name))
             .collect();
         let mut other_accounts = 0_usize;
+        let mut not_listed = 0_usize;
         // One server for the whole run: once it has not answered, the remaining
         // copies' locks are reported unchecked without another probe each.
         let mut server = ServerReach::default();
@@ -483,8 +544,16 @@ impl AppState {
             match self.cached_copy_removal(root, &id, discard_unpushed) {
                 Removal::Open => report.kept_open.push(name),
                 Removal::AtRisk => report.kept_unpushed.push(name),
+                // Not on the listing the confirmation was built from (see the doc).
+                Removal::Unlinked | Removal::NotACacheDir => not_listed += 1,
                 Removal::Allowed => {
-                    let (result, lock) = self.remove_cached_copy_and_lock(root, &id, &mut server);
+                    let Some((result, lock)) =
+                        self.remove_cached_copy_and_lock(root, &id, &mut server)
+                    else {
+                        // Opened since the check: kept, with nothing done.
+                        report.kept_open.push(name);
+                        continue;
+                    };
                     if result.success {
                         report.removed += 1;
                     } else {
@@ -508,6 +577,7 @@ impl AppState {
             locks_released = report.locks_released.len(),
             locks_unchecked = report.locks_unchecked.len(),
             other_accounts,
+            not_listed,
             discard_unpushed,
             purpose = "purge the SpeleoDB cache (user confirmed)",
             "speleodb: purged cached copies"
@@ -548,16 +618,21 @@ impl AppState {
     ///   fast-forward knows whose edits it carries.
     ///
     /// A copy with no owner record keeps the unknown-owner rules, and a file that is
-    /// not the managed cache copy has no record to read.
+    /// not the managed cache copy (in the app's own cache) has no record to read or
+    /// write.
     pub(super) fn speleodb_guard_open_copy_owner(
         &self,
         endpoint: &str,
         link: &crate::models::SpeleoLink,
     ) -> Result<(), crate::speleodb::SpeleoDbError> {
-        let (Some(email), Some(path)) = (self.speleodb_my_email(), self.open_project_path()) else {
+        let (Some(email), Some(path), Some(root)) = (
+            self.speleodb_my_email(),
+            self.open_project_path(),
+            cache_root(),
+        ) else {
             return Ok(());
         };
-        if !is_cache_layout(&path, &link.project_id) {
+        if !is_managed_cache_copy(&root, &link.project_id, &path) {
             return Ok(());
         }
         let Some(owner) = copy_recorded_for_other_account((endpoint, &email), &path) else {
@@ -597,11 +672,19 @@ impl AppState {
         }
         match self.cached_copy_removal(root, project_id, discard_unpushed) {
             Removal::Allowed => None,
-            Removal::Open => {
-                Some("This project is open. Close it first, then discard its changes.".to_owned())
-            }
+            Removal::Open => Some(DISCARD_OPEN_REFUSAL.to_owned()),
             Removal::AtRisk => Some(UNPUSHED_REFUSAL.to_owned()),
+            Removal::Unlinked => Some(UNLINKED_REFUSAL.to_owned()),
+            Removal::NotACacheDir => Some(NOT_A_CACHE_DIR_REFUSAL.to_owned()),
         }
+    }
+
+    /// Sign-out's Discard, past [`Self::cached_copy_discard_refusal`]: trash the
+    /// copy's `.stalx` (see [`Self::trash_cached_copy`]), refusing a copy that was
+    /// opened since the check.
+    pub(super) fn discard_cached_copy_files(&self, root: &Path, project_id: &str) -> CommandResult {
+        self.trash_cached_copy(root, project_id)
+            .unwrap_or_else(|| CommandResult::failure(DISCARD_OPEN_REFUSAL.to_owned()))
     }
 
     /// May the copy of `project_id` be removed now?
@@ -611,12 +694,22 @@ impl AppState {
         project_id: &str,
         discard_unpushed: bool,
     ) -> Removal {
+        if cache_dir_is_foreign(root, project_id) {
+            return Removal::NotACacheDir;
+        }
         let path = cache_path_in(root, project_id);
         if self
             .open_project_path()
             .is_some_and(|open| super::project_io::same_file(&open, &path))
         {
             return Removal::Open;
+        }
+        // Unlinked, the file is the user's own project now (see the module doc).
+        // An absent file reads as `NotManaged` too, and there nothing is at risk.
+        if matches!(read_cached_link(&path), CachedLink::NotManaged)
+            && path.try_exists().unwrap_or(true)
+        {
+            return Removal::Unlinked;
         }
         if discard_unpushed {
             return Removal::Allowed;
@@ -633,19 +726,22 @@ impl AppState {
     /// the owner record goes with the copy's directory. The lock is handled only
     /// after a successful removal: until the files are gone, the lock still guards
     /// whatever they hold.
+    ///
+    /// `None`, with nothing done, when the copy turned out to be open (see
+    /// [`Self::trash_cached_copy`]).
     fn remove_cached_copy_and_lock(
         &self,
         root: &Path,
         project_id: &str,
         server: &mut ServerReach,
-    ) -> (CommandResult, LockHandBack) {
+    ) -> Option<(CommandResult, LockHandBack)> {
         let account = self.copy_account_session(&cache_path_in(root, project_id));
-        let result = self.remove_cached_copy_files(root, project_id);
+        let result = self.remove_cached_copy_files(root, project_id)?;
         if !result.success {
-            return (result, LockHandBack::NotOurs);
+            return Some((result, LockHandBack::NotOurs));
         }
         let lock = self.hand_back_removed_copy_lock(project_id, account, server);
-        (result, lock)
+        Some((result, lock))
     }
 
     /// The session's `(endpoint, token, email)` when it is the account of the copy at
@@ -726,14 +822,18 @@ impl AppState {
     ///
     /// The trash gets the file under the project's name (see [`trash_file_name`]),
     /// so a user restoring a removed copy can tell which one it is.
-    fn remove_cached_copy_files(&self, root: &Path, project_id: &str) -> CommandResult {
-        let path = cache_path_in(root, project_id);
-        let trash_name = cached_copy_trash_name(&path);
-        let result = self.delete_project_as(path, trash_name.as_deref());
+    ///
+    /// `None`, with nothing done, when the copy turned out to be open.
+    pub(super) fn remove_cached_copy_files(
+        &self,
+        root: &Path,
+        project_id: &str,
+    ) -> Option<CommandResult> {
+        let result = self.trash_cached_copy(root, project_id)?;
         if !result.success {
-            return result;
+            return Some(result);
         }
-        match std::fs::remove_dir_all(root.join(project_id)) {
+        Some(match std::fs::remove_dir_all(root.join(project_id)) {
             Ok(()) => result,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => result,
             Err(e) => {
@@ -753,7 +853,27 @@ impl AppState {
                 });
                 result.with_warnings(warnings)
             }
+        })
+    }
+
+    /// Trash the cached copy of `project_id`'s `.stalx` (under the project's name,
+    /// dropping its recents row) unless it is the open project: `None`, with
+    /// nothing done, when it is. Every removal of a copy that is not open goes
+    /// through here (Home's removal, the purge, sign-out's Discard).
+    ///
+    /// The open-project question is asked again by the delete itself, under the
+    /// same `project` lock acquisition its teardown would use
+    /// (`delete_project_unless_open`): the callers' own check
+    /// ([`Self::cached_copy_removal`]) runs earlier, and a copy opened in between
+    /// was closed and trashed. Its directory is checked again here too, right
+    /// before the delete, so a symlink put in its place since is never followed.
+    fn trash_cached_copy(&self, root: &Path, project_id: &str) -> Option<CommandResult> {
+        if cache_dir_is_foreign(root, project_id) {
+            return Some(CommandResult::failure(NOT_A_CACHE_DIR_REFUSAL.to_owned()));
         }
+        let path = cache_path_in(root, project_id);
+        let trash_name = cached_copy_trash_name(&path);
+        self.delete_project_unless_open(path, trash_name.as_deref())
     }
 }
 
@@ -856,7 +976,12 @@ fn is_format_char(c: char) -> bool {
 enum Removal {
     Allowed,
     Open,
+    /// Un-uploaded or unreadable work, and no consent to discard it.
     AtRisk,
+    /// The `.stalx` is no longer linked to SpeleoDB: never removed.
+    Unlinked,
+    /// The project's directory is a symlink (or not a directory): never followed.
+    NotACacheDir,
 }
 
 /// What happened to the server lock of a copy that was just removed.

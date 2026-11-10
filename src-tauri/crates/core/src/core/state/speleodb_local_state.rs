@@ -38,7 +38,40 @@ pub(super) const CACHE_STALX: &str = "project.stalx";
 /// `<cache>/speleodb/` - the root of the per-project pull cache, or `None` before
 /// the app dirs are resolved (unit tests, pre-`setup`).
 pub(super) fn cache_root() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(root) = TEST_CACHE_ROOT.with(|root| root.borrow().clone()) {
+        return Some(root);
+    }
     crate::app_dirs::cache_dir().map(|c| c.join("speleodb"))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// [`cache_root`]'s answer on this thread while a [`TestCacheRoot`] lives.
+    static TEST_CACHE_ROOT: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only: [`cache_root`] answers a temporary directory on this thread while
+/// this lives. Per thread, unlike `app_dirs::init_for_test` (a process-global
+/// latch), so it reaches no other test.
+#[cfg(test)]
+#[must_use = "the override ends when this is dropped"]
+pub(super) struct TestCacheRoot;
+
+#[cfg(test)]
+impl TestCacheRoot {
+    pub(super) fn set(root: &Path) -> Self {
+        TEST_CACHE_ROOT.with(|slot| *slot.borrow_mut() = Some(root.to_path_buf()));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestCacheRoot {
+    fn drop(&mut self) {
+        TEST_CACHE_ROOT.with(|slot| *slot.borrow_mut() = None);
+    }
 }
 
 /// `<root>/<project_id>/project.stalx` - the cached copy's path under a given

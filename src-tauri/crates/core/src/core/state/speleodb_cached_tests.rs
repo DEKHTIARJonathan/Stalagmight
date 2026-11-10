@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use super::speleodb_cache::LocalEditsPolicy;
 use super::speleodb_cached::SpeleoCacheOwnership;
-use super::speleodb_local_state::cache_path_in;
+use super::speleodb_local_state::{cache_path_in, TestCacheRoot};
 use super::AppState;
 use crate::models::{Project, SpeleoLink};
 use crate::persistence::Database;
@@ -847,6 +847,7 @@ fn start_editing_refuses_another_accounts_un_uploaded_work_before_any_request() 
     crate::test_helpers::with_isolated_config(|| {
         let (url, seen) = super::tests_support::lock_server(MINE, None);
         let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
         let (copy, state) = open_copy_owned_by(temp.path(), &url, "someone@example.com", true);
         let before = owner_bytes(&copy);
         let refused = state
@@ -872,6 +873,7 @@ fn start_editing_a_clean_copy_recorded_for_another_account_records_this_one() {
     crate::test_helpers::with_isolated_config(|| {
         let (url, seen) = super::tests_support::lock_server(MINE, None);
         let temp = tempfile::tempdir().expect("temp");
+        let _cache = TestCacheRoot::set(temp.path());
         let (_copy, state) = open_copy_owned_by(temp.path(), &url, "someone@example.com", false);
         // Whatever the stub's answers lead to, the acquire is attempted: a clean
         // copy holds only the server's content, nobody's work.
@@ -893,6 +895,7 @@ fn start_editing_my_own_or_an_owner_less_copy_is_not_refused() {
         for owner in [Some(ME), None] {
             let (url, seen) = super::tests_support::lock_server(MINE, None);
             let temp = tempfile::tempdir().expect("temp");
+            let _cache = TestCacheRoot::set(temp.path());
             let copy = seed(temp.path(), MINE, &url, true);
             let state = AppState::new().expect("state");
             if let Some(owner) = owner {
@@ -1152,5 +1155,229 @@ fn a_copy_that_could_not_be_removed_keeps_its_lock() {
                 .success
         );
         assert!(seen.lock().expect("log").is_empty());
+    });
+}
+
+// --- what a removal never reaches ---------------------------------------------
+
+/// What `speleodb_unlink` leaves in the cache: the `.stalx`, with its link row
+/// gone. From then on it is a plain project, which the user may have edited and
+/// saved since.
+fn unlink(path: &Path) {
+    let db = Database::open(path).expect("open db");
+    db.save_speleo_link(None).expect("unlink");
+}
+
+/// The pre-PR finding: the listing drops an unlinked `.stalx`, but the purge
+/// walked every cache directory, read the unlinked file as "known clean" and
+/// trashed it (and removed its folder), even with `discard_unpushed = false`. It
+/// now reaches exactly the copies the listing shows; Home's single removal and
+/// sign-out's Discard refuse such a file too, whatever the consent.
+#[test]
+fn an_unlinked_copy_is_never_purged_or_removed() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        let path = seed(root, MINE, SERVER, false);
+        unlink(&path);
+        let signed_in = AppState::new().expect("state");
+        sign_in(&signed_in, SERVER, ME);
+
+        for state in [signed_out(), signed_in] {
+            assert!(
+                state.speleodb_cached_projects_in(root).is_empty(),
+                "the listing never shows it"
+            );
+            for discard_unpushed in [false, true] {
+                let report = state.speleodb_purge_cached_copies_in(root, discard_unpushed);
+                assert_eq!(report.removed, 0, "{report:?}");
+                assert_eq!(
+                    report,
+                    super::speleodb_cached::SpeleoPurgeReport::default(),
+                    "nothing the confirmation never named is reported either"
+                );
+                assert!(path.exists(), "the purge leaves it");
+
+                let refused = state.speleodb_remove_cached_copy_in(root, MINE, discard_unpushed);
+                assert!(!refused.success);
+                assert!(
+                    refused
+                        .error
+                        .as_deref()
+                        .is_some_and(|e| e.contains("no longer linked")),
+                    "{:?}",
+                    refused.error
+                );
+                assert!(path.exists(), "Home's removal leaves it");
+            }
+        }
+
+        let state = AppState::new().expect("state");
+        sign_in(&state, SERVER, ME);
+        let refused = state.speleodb_discard_cached_copy_in(root, MINE, true);
+        assert!(!refused.success, "sign-out's Discard leaves it");
+        assert!(path.exists() && root.join(MINE).is_dir());
+    });
+}
+
+/// The removal checks "is it open?" before it deletes, without the project lock,
+/// and the delete used to tear down whatever was open at that path by then: a
+/// copy opened in between was closed and trashed. The delete now asks again
+/// under the project lock, and refuses instead. (The check has passed: this
+/// drives the step after it, with the copy open by then.)
+#[test]
+fn a_copy_opened_after_the_check_is_refused_not_closed_and_trashed() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let root = temp.path();
+        let path = seed(root, MINE, SERVER, false);
+        let state = signed_out();
+        assert!(state.open_project(path.clone()).success, "open the copy");
+        let still_open = || {
+            state
+                .open_project_path()
+                .is_some_and(|open| super::project_io::same_file(&open, &path))
+        };
+        let _ = super::recent_projects::take_trashed_for_tests();
+
+        assert!(
+            state.remove_cached_copy_files(root, MINE).is_none(),
+            "Home's removal and the purge refuse"
+        );
+        assert!(path.exists() && still_open(), "nothing was done");
+
+        let refused = state.discard_cached_copy_files(root, MINE);
+        assert!(!refused.success, "sign-out's Discard refuses");
+        assert_eq!(refused.session_closed, None, "the session was not closed");
+        assert!(path.exists() && still_open());
+        assert!(
+            super::recent_projects::take_trashed_for_tests().is_empty(),
+            "nothing reached the trash"
+        );
+    });
+}
+
+/// A project directory in the cache that is a symlink to one of the user's own
+/// folders made a removal trash the user's `project.stalx` through it. Every
+/// removal now refuses one; the purge's walk never followed links.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_project_directory_is_never_followed() {
+    crate::test_helpers::with_isolated_config(|| {
+        let cache = tempfile::tempdir().expect("cache");
+        let user = tempfile::tempdir().expect("user folder");
+        // The user's own file, shaped like a clean managed copy so nothing else
+        // would stop the removal.
+        let users_file = seed(user.path(), MINE, SERVER, false);
+        std::os::unix::fs::symlink(user.path().join(MINE), cache.path().join(MINE))
+            .expect("symlink");
+        let _ = super::recent_projects::take_trashed_for_tests();
+
+        let out = signed_out();
+        let refused = out.speleodb_remove_cached_copy_in(cache.path(), MINE, true);
+        assert!(!refused.success);
+        assert!(
+            refused
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("links to another place")),
+            "{:?}",
+            refused.error
+        );
+        assert_eq!(
+            out.speleodb_purge_cached_copies_in(cache.path(), true)
+                .removed,
+            0
+        );
+
+        let state = AppState::new().expect("state");
+        sign_in(&state, SERVER, ME);
+        assert!(
+            !state
+                .speleodb_discard_cached_copy_in(cache.path(), MINE, true)
+                .success
+        );
+        assert!(users_file.exists(), "the user's file is untouched");
+        assert!(
+            std::fs::symlink_metadata(cache.path().join(MINE))
+                .is_ok_and(|meta| meta.file_type().is_symlink()),
+            "the link itself is left too"
+        );
+        assert!(super::recent_projects::take_trashed_for_tests().is_empty());
+    });
+}
+
+/// The owner record went through `owner.json.tmp` with a plain write, which
+/// follows a symlink planted under that name and writes the record over its
+/// target. The temporary file is now one the write creates itself.
+#[cfg(unix)]
+#[test]
+fn the_owner_record_never_writes_through_a_planted_link() {
+    crate::test_helpers::with_isolated_config(|| {
+        let temp = tempfile::tempdir().expect("temp");
+        let elsewhere = tempfile::tempdir().expect("elsewhere");
+        let copy = seed(temp.path(), MINE, SERVER, false);
+        let victim = elsewhere.path().join("victim.txt");
+        std::fs::write(&victim, b"keep me").expect("victim");
+        let tmp = copy.with_file_name("owner.json.tmp");
+        std::os::unix::fs::symlink(&victim, &tmp).expect("planted link");
+
+        let state = AppState::new().expect("state");
+        state.speleodb_record_cache_owner(&copy, SERVER, ME, "Mine");
+
+        assert_eq!(
+            std::fs::read(&victim).expect("victim"),
+            b"keep me",
+            "the link's target is untouched"
+        );
+        let record = copy.with_file_name("owner.json");
+        assert!(
+            std::fs::symlink_metadata(&record).is_ok_and(|meta| meta.file_type().is_file()),
+            "owner.json is a plain file"
+        );
+        assert!(std::fs::symlink_metadata(&tmp).is_err(), "no temp left");
+        sign_in(&state, SERVER, ME);
+        assert_eq!(
+            ownership(&state, temp.path(), MINE),
+            Some(SpeleoCacheOwnership::Mine)
+        );
+    });
+}
+
+/// Start Editing's owner guard spoke for any open file laid out like a cache copy
+/// (`<anything>/<project_id>/project.stalx`) and wrote `owner.json` beside it.
+/// Only the copy in the app's own cache has (or gets) an owner record now.
+#[test]
+fn start_editing_writes_no_owner_record_outside_the_cache() {
+    crate::test_helpers::with_isolated_config(|| {
+        for dirty in [false, true] {
+            let (url, seen) = super::tests_support::lock_server(MINE, None);
+            let elsewhere = tempfile::tempdir().expect("elsewhere");
+            // A linked file outside the cache, opened while no cache root was
+            // known (the foreign-copy guard refuses it otherwise), with an owner
+            // record beside it naming another account.
+            let (copy, state) =
+                open_copy_owned_by(elsewhere.path(), &url, "someone@example.com", dirty);
+            let before = owner_bytes(&copy);
+            let cache = tempfile::tempdir().expect("cache");
+            let _cache = TestCacheRoot::set(cache.path());
+
+            if let Err(e) = state.speleodb_start_editing() {
+                assert!(
+                    !e.message.contains("someone@example.com"),
+                    "dirty={dirty}: the record outside the cache speaks for nothing: {}",
+                    e.message
+                );
+            }
+            assert_eq!(
+                owner_bytes(&copy),
+                before,
+                "dirty={dirty}: no owner record is written outside the cache"
+            );
+            assert!(
+                !seen.lock().expect("log").is_empty(),
+                "dirty={dirty}: not refused before the lock was asked for"
+            );
+        }
     });
 }

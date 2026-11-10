@@ -136,6 +136,36 @@ impl AppState {
         path: PathBuf,
         trash_name: Option<&str>,
     ) -> CommandResult {
+        self.delete_project_impl(path, trash_name, IfOpen::CloseIt)
+            .unwrap_or_else(|| {
+                // Unreachable: only `IfOpen::Refuse` declines to delete.
+                CommandResult::failure("The project is open. Nothing was deleted.".to_owned())
+            })
+    }
+
+    /// [`Self::delete_project_as`] for a file that must NOT be the open project: a
+    /// removal of a cached SpeleoDB copy that is not open (Home's removal, the
+    /// purge, sign-out's Discard). `None`, with nothing done at all, when `path` is
+    /// the open project after all. The question is asked under the same `project`
+    /// lock acquisition as the teardown would be, so a copy opened after the
+    /// caller's own check is refused here instead of being closed and trashed.
+    pub(super) fn delete_project_unless_open(
+        &self,
+        path: PathBuf,
+        trash_name: Option<&str>,
+    ) -> Option<CommandResult> {
+        self.delete_project_impl(path, trash_name, IfOpen::Refuse)
+    }
+
+    /// The body of [`Self::delete_project_as`] and
+    /// [`Self::delete_project_unless_open`]: `None` only when `if_open` is
+    /// [`IfOpen::Refuse`] and `path` is the open project.
+    fn delete_project_impl(
+        &self,
+        path: PathBuf,
+        trash_name: Option<&str>,
+        if_open: IfOpen,
+    ) -> Option<CommandResult> {
         // Does the FINAL component of `path` name a symlink? That one question decides
         // which notion of identity everything below uses, so it is answered once, up
         // front, while the file is still there to be stat'd.
@@ -193,7 +223,10 @@ impl AppState {
                     purpose = "delete a project",
                     "Refusing to delete: cannot determine whether the file is there"
                 );
-                return CommandResult::failure(format!("Failed to delete {}: {e}", path.display()));
+                return Some(CommandResult::failure(format!(
+                    "Failed to delete {}: {e}",
+                    path.display()
+                )));
             }
         }
 
@@ -298,6 +331,18 @@ impl AppState {
                 .as_ref()
                 .and_then(|p| p.file_path.as_deref())
                 .is_some_and(names_the_deleted_file);
+            if deleting_open_project && if_open == IfOpen::Refuse {
+                // The caller removes only a project that is NOT open, and it is
+                // now: refuse with nothing torn down, deleted or released. Asked
+                // here, under the same acquisition the teardown would use, so a
+                // project opened after the caller's own check cannot slip past it.
+                tracing::info!(
+                    path = ?path,
+                    purpose = "never close and delete a project opened since the check",
+                    "Refusing to delete: the file is the open project"
+                );
+                return None;
+            }
             let mut held_lock = None;
             if deleting_open_project {
                 // Snapshot what releasing a held SpeleoDB write lock needs, HERE,
@@ -419,8 +464,10 @@ impl AppState {
                 // over it, and the deferred release below is not reached from
                 // here either.
                 self.speleodb_restore_lock_claim(cleared_claim);
-                return CommandResult::failure(format!("Failed to delete {}: {e}", path.display()))
-                    .with_session_closed(session_closed);
+                return Some(
+                    CommandResult::failure(format!("Failed to delete {}: {e}", path.display()))
+                        .with_session_closed(session_closed),
+                );
             }
         }
 
@@ -499,9 +546,11 @@ impl AppState {
         }
 
         tracing::info!(path = ?path, "Deleted project");
-        CommandResult::success()
-            .with_warnings(warnings)
-            .with_session_closed(session_closed)
+        Some(
+            CommandResult::success()
+                .with_warnings(warnings)
+                .with_session_closed(session_closed),
+        )
     }
 
     /// Rename a project's display name on disk by path, without requiring it to
@@ -633,6 +682,15 @@ thread_local! {
 #[cfg(test)]
 pub(super) fn take_trashed_for_tests() -> Vec<PathBuf> {
     TRASHED.with(std::cell::RefCell::take)
+}
+
+/// What a delete does when the file is the open project.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum IfOpen {
+    /// Tear the session down first (the delete the user asked for by path).
+    CloseIt,
+    /// Refuse with nothing done (a removal of a copy that must not be open).
+    Refuse,
 }
 
 /// Hand `path` to `trash` under the bare file name `name`, when given: the file is

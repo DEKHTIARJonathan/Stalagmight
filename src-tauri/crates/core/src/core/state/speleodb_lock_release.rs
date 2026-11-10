@@ -852,7 +852,11 @@ impl AppState {
     /// Releases nothing itself: the copy is not open, so there is no session to
     /// end, and the sign-out releases every remaining lock of the account
     /// explicitly once the user's choices are done. Refuses the OPEN project - its
-    /// discard is the close-with-discard (`close_project`'s `discard_local`).
+    /// discard is the close-with-discard (`close_project`'s `discard_local`) - and
+    /// asks that again under the project lock at the delete itself, so a copy
+    /// opened after the check is refused rather than closed and trashed. Refuses
+    /// as well a `.stalx` no longer linked to SpeleoDB and a project directory
+    /// that is a symlink (`speleodb_cached`).
     ///
     /// The consent is checked HERE, not only in the dialog: a copy with un-uploaded
     /// (or unreadable) work is removed only when `discard_unpushed` carries the
@@ -892,9 +896,7 @@ impl AppState {
             purpose = "discard un-uploaded changes before signing out (user confirmed)",
             "speleodb: discarding a cached copy"
         );
-        let path = super::speleodb_local_state::cache_path_in(root, project_id);
-        let trash_name = super::speleodb_cached::cached_copy_trash_name(&path);
-        self.delete_project_as(path, trash_name.as_deref())
+        self.discard_cached_copy_files(root, project_id)
     }
 }
 
