@@ -1,5 +1,5 @@
-import { hasWorkspaceDrafts } from '../utils/workspaceDrafts';
 import { protectAccountTransition } from '../utils/protectAccountTransition';
+import { guardSpeleoSignOut } from '../utils/speleoSignOut';
 import { create } from 'zustand';
 import type {
   DoneResult,
@@ -67,14 +67,12 @@ export type ProjectLinkKind = 'unknown' | 'local' | 'remote';
 export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push' | 'reverify';
 
 /** A banner the shell surfaces above the toolbar (#200/#204). `push_unconfirmed`
-    is transient action feedback; `rendering_disabled`
-    (server `exclude_geojson`) and `no_anchor` (no georeferenced zero datum on
-    push/unlock) are the #200 non-blocking notices; `push_failed` (#260) is the
+    is transient action feedback; `no_anchor` (no georeferenced zero datum on
+    push/unlock) is the #200 non-blocking notice; `push_failed` (#260) is the
     durable surface for a push/unlock that threw (the toast alone auto-clears
     after 3 s, leaving a failed upload with no trace). */
 export type SpeleoBanner =
   | { kind: 'push_unconfirmed' }
-  | { kind: 'rendering_disabled' }
   | { kind: 'no_anchor' }
   | PushFailedBanner;
 
@@ -419,8 +417,23 @@ interface SpeleoStore {
   setPendingAuth: (p: PendingAuth) => void;
   clearPendingAuth: () => void;
   setAuthError: (msg: string | null) => void;
-  /** Apply the staged login/logout (A2). ok=false carries the raw error. */
-  applyPendingAuth: (endpoint: string | null) => Promise<{ ok: boolean; error?: unknown; cancelled?: boolean }>;
+  /** Apply the staged login/logout (A2). ok=false carries the raw error.
+      `endpoint` and `insecureHttp` are the connection to log in over - the values
+      on screen in Settings, which the backend saves with the session on success
+      (`insecureHttp` omitted = the saved choice; only a development build offers
+      one, and only a development build's backend honours it).
+
+      Order: the sign-out flow (when an account is signed out or replaced), then
+      the one question about what the change drops (unsent drafts, unsaved
+      edits), then `opts.beforeApply` (Settings' Connect saves its staged
+      settings there), then the account change itself. A cancelled question, or
+      `beforeApply` answering `false`, changes nothing: `{ ok: false,
+      cancelled: true }`. */
+  applyPendingAuth: (
+    endpoint: string | null,
+    insecureHttp?: boolean,
+    opts?: { beforeApply?: () => Promise<boolean> },
+  ) => Promise<{ ok: boolean; error?: unknown; cancelled?: boolean }>;
 
   // --- link/edit (action shell #204) ---
   /**
@@ -533,7 +546,7 @@ interface SpeleoStore {
    * restore off tip), so mirroring a forward edit through `markDirty` was a total no-op:
    * `unwound` survived until the next `speleodb_link_status` refresh.
    * Inside that window {@link isUnwoundNotEdited} still
-   * held, so SpeleoStatusButton, the lock menu, the `done()` guard and both exit prompts
+   * held, so the SpeleoDB status UI, the lock menu, the `done()` guard and both exit prompts
    * offered "Discard and take the latest" over work the user had just drawn.
    *
    * Undo/redo keeps `markDirty`: the backend deliberately does NOT drop the chain pointer
@@ -563,10 +576,6 @@ interface SpeleoStore {
       a successful push/release clears the whole slot anyway). No-op for other kinds,
       so it never wipes an unrelated banner. */
   clearPushFailedBanner: () => void;
-  /** #200 Enable-rendering: PATCH `exclude_geojson = false` so the server resumes
-      web-viewer GeoJSON on the NEXT push (not retroactively). Clears the
-      rendering-disabled banner and re-seeds link status. Throws on failure so the
-      banner can surface it. */
   /** [#303] Set the open project's explicit undo-history policy. LOCK-REQUIRED: the value
       lands in the `.stalx` and rides to the server on the next push, so it becomes
       every collaborator's. Throws on refusal (no lock, or a local project) so the
@@ -700,7 +709,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   clearPendingAuth: () => set({ pendingAuth: null, authError: null }),
   setAuthError: (authError) => set({ authError }),
 
-  applyPendingAuth: async (endpoint) => {
+  applyPendingAuth: async (endpoint, insecureHttp, opts = {}) => {
     const p = get().pendingAuth;
     if (!p) return { ok: true };
     const request = ++authRequestSeq;
@@ -713,8 +722,28 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     // A pasted token has no known identity until the server resolves it.
     const recovery = p.kind === 'login' && !p.useToken &&
       emailsMatch(p.email, previousEmail) && endpointsMatch(endpoint ?? previousEndpoint, previousEndpoint);
-    if (!recovery && (useProjectStore.getState().isDirty || hasWorkspaceDrafts()) &&
-        !await protectAccountTransition()) return { ok: false, cancelled: true };
+    // Signing out - or switching, which signs the previous account out - must not
+    // strand that account's locks or un-uploaded work: resolve them while its
+    // token can still upload and release (utils/speleoSignOut).
+    if (!recovery && !await guardSpeleoSignOut(p.kind === 'logout' ? 'signOut' : 'switch')) {
+      return { ok: false, cancelled: true };
+    }
+    // ONE question for what the change itself drops: unsaved edits outside a
+    // held lock (not on a recovery), and unsent SpeleoDB input written for
+    // another account (an upload description, the conversion form). A plain
+    // sign-out keeps that input for the next sign-in to decide, and the same
+    // account keeps it - so a recovery asks nothing, unless the input was
+    // written on another server.
+    if (!await protectAccountTransition({
+      unsaved: !recovery,
+      account: p.kind === 'logout'
+        ? { signedOut: true }
+        : { email: p.useToken ? null : p.email.trim(), endpoint: (endpoint ?? '').trim() || previousEndpoint || null },
+    })) return { ok: false, cancelled: true };
+    if (!current()) return { ok: false, cancelled: true };
+    // Only once every question is answered: a cancelled one must leave the
+    // caller's staged settings unsaved too.
+    if (opts.beforeApply && !await opts.beforeApply()) return { ok: false, cancelled: true };
     if (!current()) return { ok: false, cancelled: true };
     try {
       if (p.kind === 'logout') {
@@ -733,6 +762,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       } else {
         const r = await invokeIpc<SpeleoLoginResult>('speleodb_login', {
           endpoint: (endpoint ?? '').trim() || undefined,
+          ...(insecureHttp === undefined ? {} : { insecureHttp }),
           email: p.useToken ? undefined : p.email.trim() || undefined,
           password: p.useToken ? undefined : p.password || undefined,
           token: p.useToken ? p.token.trim() || undefined : undefined,
@@ -740,6 +770,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         if (!current()) return { ok: false, cancelled: true };
         set((state) => ({ pendingAuth: state.pendingAuth === p ? null : state.pendingAuth, authError: null }));
         get().setSessionFromLogin(r);
+        // The backend saved the connection this login was made over (endpoint and
+        // insecure HTTP) with the token: bring the app's copy of the settings in line.
+        await useProjectStore.getState().loadConfig();
         // #201: a fresh login is an "on login" scan point - surface any locks this
         // user left held (and prime the recents badges). `prompt: true` so it raises
         // the resume/release prompt even after the app-open scan already ran.
@@ -1078,20 +1111,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         };
       }
       const editState = s.edit_enabled ? 'editing' : 'read-only';
-      // #200: reflect the server's exclude_geojson as a persistent
-      // rendering-disabled banner. It outranks the informational `no_anchor` notice
-      // (rendering_disabled is actionable via Enable-rendering, and if both were true
-      // no_anchor would otherwise mask the only way to reach that action), so claim
-      // the slot when it is free OR held by no_anchor - but NEVER clobber transient
-      // action feedback (push_unconfirmed / push_failed). Clear it only when
-      // WE own the slot, so a routine refresh never wipes another banner.
-      const prior = state.banner;
-      let banner = prior;
-      if (s.exclude_geojson) {
-        if (!prior || prior.kind === 'no_anchor') banner = { kind: 'rendering_disabled' };
-      } else if (prior?.kind === 'rendering_disabled') {
-        banner = null;
-      }
+      // A routine status refresh never touches the banner slot: the banners are
+      // action feedback (push_unconfirmed / push_failed) and the no_anchor notice,
+      // none of which a status reply raises or resolves.
       const seeded: SpeleoLinkState = {
         editState,
         // The network fields degrade to null/unknown offline - keep the
@@ -1117,7 +1139,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // made each other's replies unusable and the fresher one was thrown away.
       seededLinks.add(seeded);
       return {
-        banner,
         projectLinkKind: 'remote' as const,
         link: seeded,
         // #218: the open remote project's id, for the in-project revision-history entry.
@@ -1406,10 +1427,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
  * the banner straight back, so the "your changes are only on this computer"
  * reminder is never lost.
  *
+ * The exit prompt and the sign-out prompt own a failure the same way, but they
+ * are overlays of their own rather than `activeDialog` entries, so the banner
+ * checks their open requests directly (`SpeleoBanner`).
+ *
  * Every entry retries through its own primary button (`Upload & release` /
- * `Upload & keep editing` / `Push & release` / `Push, release & quit` /
- * `Retry the upload`), so none needs a second retry control and none loses the
- * commit message the user typed.
+ * `Upload & keep editing` / `Retry the upload`), so none needs a second retry
+ * control and none loses the commit message the user typed.
  *
  * `speleodb-revert` earns its place for a sharper reason than the rest. Its push
  * happens inside the restore flow (`useRevertRevision` -> `done`), and the dialog
@@ -1421,8 +1445,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
  */
 export const PUSH_FAILURE_DIALOGS: readonly string[] = [
   'speleodb-done',
-  'speleodb-close',
-  'speleodb-quit',
   'speleodb-revert',
   'speleodb-unwound-push',
 ];

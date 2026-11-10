@@ -1,6 +1,5 @@
 import { useId, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '../../common/Button';
 
 interface SettingRowProps {
   /** Label text for the setting */
@@ -17,8 +16,6 @@ interface SettingRowProps {
   'data-testid'?: string;
   /** Callback to reset this setting to its default value */
   onReset?: () => void;
-  /** Visible text for a labeled reset button instead of the default icon. */
-  resetLabel?: string;
   /** Whether the setting is currently at its default value (disables reset button) */
   isDefault?: boolean;
 }
@@ -35,7 +32,6 @@ export function SettingRow({
   children,
   'data-testid': dataTestId,
   onReset,
-  resetLabel,
   isDefault = true,
 }: SettingRowProps) {
   const { t } = useTranslation();
@@ -70,19 +66,7 @@ export function SettingRow({
         {/* Control + Reset button */}
         <div className="flex items-center gap-2 flex-shrink-0" aria-labelledby={labelId}>
           {children}
-          {onReset && (resetLabel ? (
-            <Button
-              type="button"
-              variant="warning"
-              size="sm"
-              onClick={onReset}
-              disabled={isDefault}
-              title={t('settings.common.resetToDefault')}
-              data-testid={`${dataTestId ?? 'setting-row'}-reset`}
-            >
-              {resetLabel}
-            </Button>
-          ) : (
+          {onReset && (
             <button
               type="button"
               onClick={onReset}
@@ -109,7 +93,7 @@ export function SettingRow({
                 />
               </svg>
             </button>
-          ))}
+          )}
         </div>
       </div>
     </div>

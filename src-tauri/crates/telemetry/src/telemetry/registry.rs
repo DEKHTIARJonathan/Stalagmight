@@ -40,6 +40,7 @@ pub const EVENT_NAMES: &[&str] = &[
     // coverage tests skip it via REMOVED_COMMANDS.
     "command.adjust_loop_closures",
     "command.arm_app_update_restart",
+    "command.arm_forced_exit",
     "command.attempt_repair",
     "command.calculate_file_hash",
     "command.can_redo",
@@ -66,6 +67,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.delete_section",
     "command.delete_shot",
     "command.delete_shot_and_split",
+    "command.disarm_forced_exit",
     "command.discard_app_update_download",
     "command.download_app_update",
     "command.execute_batch",
@@ -154,6 +156,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.speleodb_release_current_lock",
     "command.speleodb_release_lock",
     "command.speleodb_release_lock_acquired_here",
+    "command.speleodb_settle_open_lock",
     "command.speleodb_restore_revision",
     "command.speleodb_session",
     "command.speleodb_start_editing",
@@ -163,6 +166,10 @@ pub const EVENT_NAMES: &[&str] = &[
     "command.speleodb_unwind_target",
     "command.speleodb_rewind_target",
     "command.speleodb_discard_changes",
+    "command.speleodb_discard_cached_copy",
+    "command.speleodb_cached_projects",
+    "command.speleodb_remove_cached_copy",
+    "command.speleodb_purge_cached_copies",
     "command.speleodb_update",
     "command.split_shot_at_distance",
     "command.suggest_all_import_placements",
@@ -626,20 +633,21 @@ pub const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.walls-import",
     "active-dwell.dialog.walls-import",
     // SpeleoDB per-endpoint traffic metrics (#210, F1). For each endpoint kind
-    // (`speleodb::metrics::Endpoint`) the client emits four outcome counters
-    // (`ok`/`client-error`/`server-error`/`network-error`, which sum to the call
-    // count) plus a latency histogram (`latency.<bucket>`) the backend
+    // (`speleodb::metrics::Endpoint`) the client emits five outcome counters
+    // (`ok`/`client-error`/`server-error`/`parse-error`/`network-error`, which
+    // sum to the call count) plus a latency histogram (`latency.<bucket>`) the backend
     // reconstructs p50/p95 from. NO PII: only the endpoint kind, the outcome
     // class, and a latency bucket ever leave the app - never a host, project id,
     // email, token, or file bytes. Recorded per HTTP attempt at the
-    // `client::with_retry` / `client::send_json_request` chokepoints (a retried
-    // 5xx re-hits the server, so counting per attempt is what makes a retry storm
-    // legible). `every_speleodb_endpoint_has_traffic_events` regenerates this
-    // exact set from `Endpoint::ALL` x `Outcome::ALL` x `LATENCY_BUCKETS`: add an
-    // endpoint kind and CI fails until its ten names are listed here.
+    // `client::SdkClient::call` chokepoint (a retried 5xx re-hits the server, so
+    // counting per attempt is what makes a retry storm legible).
+    // `every_speleodb_endpoint_has_traffic_events` regenerates this exact set from
+    // `Endpoint::ALL` x `Outcome::ALL` x `LATENCY_BUCKETS`: add an endpoint kind
+    // and CI fails until its eleven names are listed here.
     "speleodb-api.login.ok",
     "speleodb-api.login.client-error",
     "speleodb-api.login.server-error",
+    "speleodb-api.login.parse-error",
     "speleodb-api.login.network-error",
     "speleodb-api.login.latency.le-100",
     "speleodb-api.login.latency.le-500",
@@ -650,6 +658,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.list-projects.ok",
     "speleodb-api.list-projects.client-error",
     "speleodb-api.list-projects.server-error",
+    "speleodb-api.list-projects.parse-error",
     "speleodb-api.list-projects.network-error",
     "speleodb-api.list-projects.latency.le-100",
     "speleodb-api.list-projects.latency.le-500",
@@ -660,6 +669,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.get-project.ok",
     "speleodb-api.get-project.client-error",
     "speleodb-api.get-project.server-error",
+    "speleodb-api.get-project.parse-error",
     "speleodb-api.get-project.network-error",
     "speleodb-api.get-project.latency.le-100",
     "speleodb-api.get-project.latency.le-500",
@@ -670,6 +680,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.get-revisions.ok",
     "speleodb-api.get-revisions.client-error",
     "speleodb-api.get-revisions.server-error",
+    "speleodb-api.get-revisions.parse-error",
     "speleodb-api.get-revisions.network-error",
     "speleodb-api.get-revisions.latency.le-100",
     "speleodb-api.get-revisions.latency.le-500",
@@ -680,6 +691,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.fetch-user.ok",
     "speleodb-api.fetch-user.client-error",
     "speleodb-api.fetch-user.server-error",
+    "speleodb-api.fetch-user.parse-error",
     "speleodb-api.fetch-user.network-error",
     "speleodb-api.fetch-user.latency.le-100",
     "speleodb-api.fetch-user.latency.le-500",
@@ -690,6 +702,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.download-stalx.ok",
     "speleodb-api.download-stalx.client-error",
     "speleodb-api.download-stalx.server-error",
+    "speleodb-api.download-stalx.parse-error",
     "speleodb-api.download-stalx.network-error",
     "speleodb-api.download-stalx.latency.le-100",
     "speleodb-api.download-stalx.latency.le-500",
@@ -700,6 +713,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.upload.ok",
     "speleodb-api.upload.client-error",
     "speleodb-api.upload.server-error",
+    "speleodb-api.upload.parse-error",
     "speleodb-api.upload.network-error",
     "speleodb-api.upload.latency.le-100",
     "speleodb-api.upload.latency.le-500",
@@ -710,6 +724,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.acquire.ok",
     "speleodb-api.acquire.client-error",
     "speleodb-api.acquire.server-error",
+    "speleodb-api.acquire.parse-error",
     "speleodb-api.acquire.network-error",
     "speleodb-api.acquire.latency.le-100",
     "speleodb-api.acquire.latency.le-500",
@@ -720,6 +735,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.release.ok",
     "speleodb-api.release.client-error",
     "speleodb-api.release.server-error",
+    "speleodb-api.release.parse-error",
     "speleodb-api.release.network-error",
     "speleodb-api.release.latency.le-100",
     "speleodb-api.release.latency.le-500",
@@ -730,6 +746,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.patch-project.ok",
     "speleodb-api.patch-project.client-error",
     "speleodb-api.patch-project.server-error",
+    "speleodb-api.patch-project.parse-error",
     "speleodb-api.patch-project.network-error",
     "speleodb-api.patch-project.latency.le-100",
     "speleodb-api.patch-project.latency.le-500",
@@ -740,6 +757,7 @@ pub const EVENT_NAMES: &[&str] = &[
     "speleodb-api.create-project.ok",
     "speleodb-api.create-project.client-error",
     "speleodb-api.create-project.server-error",
+    "speleodb-api.create-project.parse-error",
     "speleodb-api.create-project.network-error",
     "speleodb-api.create-project.latency.le-100",
     "speleodb-api.create-project.latency.le-500",
@@ -1031,7 +1049,30 @@ mod tests {
         // Native SDK migration removes retired commands and picker events.
         // Removed force-edit command/dialog (5) and project settings dialog (4).
         // Retired workspace metadata mutation commands (3).
-        assert_eq!(EVENT_NAMES.len(), 653);
+        //   + 1 sign-out's discard of a cached copy that is not open (the exit
+        //       prompt work): how often a sign-out has to throw un-uploaded work
+        //       away says whether people are leaving work stranded between
+        //       sessions: command.speleodb_discard_cached_copy = 654.
+        //   The speleodb-close / speleodb-quit dialogs became one independent
+        //   overlay (like held-lock-resume); their slots are retained.
+        //   + 11 SpeleoDB traffic outcome `parse-error`, one per endpoint kind
+        //       (sdk#8): a reply that does not match the SDK contract was
+        //       counted as `ok`, hiding every contract drift = 665.
+        //   + 1 the user's explicit "Quit now" while a SpeleoDB transfer is still
+        //       running (lock#6): how often people refuse to wait says whether the
+        //       quit-after-work wait is too long to bear:
+        //       command.arm_forced_exit = 666.
+        //   + 3 cached SpeleoDB copies on the home screen: the owner-aware
+        //       listing, removing one copy, and Settings' purge:
+        //       command.speleodb_cached_projects, command.speleodb_remove_cached_copy,
+        //       command.speleodb_purge_cached_copies = 669.
+        //   + 1 a project switch or a quit hands the open project's lock back
+        //       before leaving it, and asks when that fails (never strand a lock
+        //       silently): command.speleodb_settle_open_lock = 670.
+        //   + 1 a "Quit now" whose window close failed takes its forced-exit arm
+        //       back, so the app that stays open does not cut a later transfer:
+        //       command.disarm_forced_exit = 671.
+        assert_eq!(EVENT_NAMES.len(), 671);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

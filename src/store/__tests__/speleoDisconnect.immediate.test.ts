@@ -13,7 +13,12 @@ afterEach(() => {
 
 it('clears the remote listing before disconnect cleanup finishes', async () => {
   let complete!: () => void;
-  invoke.mockImplementation(() => new Promise<void>((resolve) => { complete = resolve; }));
+  invoke.mockImplementation(async (command: string) => {
+    // The sign-out flow's survey: no held locks, nothing un-uploaded.
+    if (command === 'speleodb_list_projects') return [];
+    if (command === 'speleodb_logout') return new Promise<void>((resolve) => { complete = resolve; });
+    return null;
+  });
   useProjectStore.setState({ isDirty: false, loadConfig: vi.fn(async () => {}), loadRecentProjects: vi.fn(async () => {}) });
   useSpeleoStore.setState({
     session: { loggedIn: true, endpoint: 'https://example.com', userEmail: 'synthetic@example.com' },
@@ -22,7 +27,8 @@ it('clears the remote listing before disconnect cleanup finishes', async () => {
   });
   const before = useSpeleoStore.getState().sessionGeneration;
   const request = useSpeleoStore.getState().applyPendingAuth('https://example.com');
-  expect(invoke).toHaveBeenCalledWith('speleodb_logout');
+  // The sign-out flow runs first; the logout then starts with the listing gone.
+  await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('speleodb_logout'));
   expect(useSpeleoStore.getState().session).toBeNull();
   expect(useSpeleoStore.getState().remoteProjects).toEqual({});
   expect(useSpeleoStore.getState().sessionGeneration).toBeGreaterThan(before);

@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
-import { beforeEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SpeleoDbSettings } from './SpeleoDbSettings';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
@@ -25,10 +25,10 @@ beforeEach(() => {
   });
 });
 
-function startLogin() {
+function startLogin(config = defaultConfig) {
   render(
     <SpeleoDbSettings
-      config={defaultConfig}
+      config={config}
       onChange={onChange}
       changedFields={new Set()}
       onValidationError={vi.fn()}
@@ -42,6 +42,50 @@ it('closes the Settings instance that initiated a successful login', async () =>
   startLogin();
   await act(async () => finishLogin());
   expect(closeDialog).toHaveBeenCalledOnce();
+});
+
+describe('the insecure-HTTP option (development builds only)', () => {
+  afterEach(() => { vi.unstubAllEnvs(); });
+  const insecureConfig = { ...defaultConfig, speleodb: { ...defaultConfig.speleodb, endpoint: 'http://lab.example/', insecure_http: true } };
+
+  it('a development build shows it and connects over the on-screen connection, including its value', async () => {
+    vi.stubEnv('DEV', true);
+    startLogin(insecureConfig);
+    expect(screen.getByTestId('toggle-speleodb-insecure-http')).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByTestId('speleodb-insecure-http-warning')).toBeVisible();
+    await act(async () => finishLogin());
+    expect(useSpeleoStore.getState().applyPendingAuth).toHaveBeenCalledWith('http://lab.example/', true, expect.anything());
+  });
+
+  it('a development build stages a change of the box like any other setting', () => {
+    vi.stubEnv('DEV', true);
+    render(<SpeleoDbSettings config={defaultConfig} onChange={onChange} changedFields={new Set()} onValidationError={vi.fn()} panelIdBase="dev-toggle" />);
+    fireEvent.click(screen.getByTestId('toggle-speleodb-insecure-http'));
+    expect(onChange).toHaveBeenLastCalledWith({ speleodb: { ...defaultConfig.speleodb, insecure_http: true } });
+    // The automatic exceptions are named from their one description.
+    const panel = screen.getByTestId('settings-panel-speleodb');
+    expect(panel).toHaveTextContent('HTTPS is required except for localhost, 127.0.0.1 and 192.168.x.x addresses.');
+    expect(panel).toHaveTextContent('Development builds only.');
+    expect(panel).not.toHaveTextContent('$t(');
+  });
+
+  it('a development build locks it with the server while connected', () => {
+    vi.stubEnv('DEV', true);
+    useSpeleoStore.setState({ session: { loggedIn: true, endpoint: 'https://example.com', userEmail: 'test@example.com' }, pendingAuth: null });
+    render(<SpeleoDbSettings config={insecureConfig} onChange={onChange} changedFields={new Set()} onValidationError={vi.fn()} panelIdBase="dev-locked" />);
+    expect(screen.getByTestId('toggle-speleodb-insecure-http')).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByTestId('setting-speleodb-insecure-http-reset')).toBeDisabled();
+  });
+
+  it('a release build has no control for it and sends no choice, whatever the stored value', async () => {
+    vi.stubEnv('DEV', false);
+    startLogin(insecureConfig);
+    expect(screen.queryByTestId('setting-speleodb-insecure-http')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('toggle-speleodb-insecure-http')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-insecure-http-warning')).not.toBeInTheDocument();
+    await act(async () => finishLogin());
+    expect(useSpeleoStore.getState().applyPendingAuth).toHaveBeenCalledWith('http://lab.example/', undefined, expect.anything());
+  });
 });
 
 it.each(['error', 'settings'])('does not dismiss a replacement %s dialog after a slow login', async (activeDialog) => {
@@ -84,8 +128,11 @@ it('keeps typed and pasted server endpoints lowercase with keyboard corrections 
     speleodb: { ...defaultConfig.speleodb, endpoint: 'https://www.speleodb.org/api/' },
   });
 
+  // The standard reset icon every settings row uses, not a text button.
   const reset = screen.getByTestId('setting-speleodb-endpoint-reset');
-  expect(reset).toHaveTextContent('Reset');
+  expect(reset).toHaveTextContent(/^$/);
+  expect(reset).toHaveAttribute('title', 'Reset to default');
+  expect(reset.querySelector('svg')).not.toBeNull();
   fireEvent.click(reset);
   expect(endpoint).toHaveValue(defaultConfig.speleodb.endpoint ?? '');
   expect(reset).toBeDisabled();
@@ -103,6 +150,7 @@ it('disconnects immediately and keeps Settings open with the endpoint disabled w
   render(<SpeleoDbSettings config={defaultConfig} onChange={onChange} changedFields={new Set()} onValidationError={vi.fn()} panelIdBase="immediate" />);
   expect(screen.getByTestId('input-speleodb-endpoint')).toBeDisabled();
   expect(screen.getByTestId('setting-speleodb-endpoint-reset')).toBeDisabled();
+  expect(screen.getByTestId('setting-speleodb-endpoint-reset')).toHaveAttribute('title', 'Reset to default');
   await act(async () => fireEvent.click(screen.getByTestId('speleodb-settings-logout')));
   expect(apply).toHaveBeenCalledOnce();
   expect(useSpeleoStore.getState().pendingAuth).toEqual({ kind: 'logout' });
@@ -120,7 +168,14 @@ it('shows connection rejection in a modal and preserves Settings', async () => {
 it.each(['dialog', 'draft', 'session'] as const)('does not authenticate after a pending preference save loses its %s owner', async (owner) => {
   let finishSave!: (saved: boolean) => void;
   const saveBeforeConnect = vi.fn(() => new Promise<boolean>((resolve) => { finishSave = resolve; }));
-  const apply = vi.fn(async () => ({ ok: true }));
+  // The store runs `beforeApply` (the save) after its questions and authenticates
+  // only when it answers true.
+  let authenticated = false;
+  const apply = vi.fn(async (_endpoint: string | null, _insecure?: boolean, opts?: { beforeApply?: () => Promise<boolean> }) => {
+    if (opts?.beforeApply && !await opts.beforeApply()) return { ok: false, cancelled: true };
+    authenticated = true;
+    return { ok: true };
+  });
   useSpeleoStore.setState({ applyPendingAuth: apply });
   render(<SpeleoDbSettings config={defaultConfig} onChange={onChange} changedFields={new Set()} onValidationError={vi.fn()} panelIdBase="save-owner" saveBeforeConnect={saveBeforeConnect} />);
   fireEvent.click(screen.getByTestId('speleodb-settings-try-login'));
@@ -130,7 +185,37 @@ it.each(['dialog', 'draft', 'session'] as const)('does not authenticate after a 
     if (owner === 'session') useSpeleoStore.setState((state) => ({ sessionGeneration: state.sessionGeneration + 1 }));
     finishSave(true);
   });
-  expect(apply).not.toHaveBeenCalled();
+  expect(saveBeforeConnect).toHaveBeenCalledOnce();
+  expect(authenticated).toBe(false);
+  expect(closeDialog).not.toHaveBeenCalled();
+});
+
+it('saves the staged settings only from inside the account change, after its questions', async () => {
+  const order: string[] = [];
+  const saveBeforeConnect = vi.fn(async () => { order.push('save'); return true; });
+  const apply = vi.fn(async (_endpoint: string | null, _insecure?: boolean, opts?: { beforeApply?: () => Promise<boolean> }) => {
+    order.push('questions');
+    if (opts?.beforeApply && !await opts.beforeApply()) return { ok: false, cancelled: true };
+    order.push('login');
+    return { ok: true };
+  });
+  useSpeleoStore.setState({ applyPendingAuth: apply });
+  render(<SpeleoDbSettings config={defaultConfig} onChange={onChange} changedFields={new Set()} onValidationError={vi.fn()} panelIdBase="order" saveBeforeConnect={saveBeforeConnect} />);
+  await act(async () => fireEvent.click(screen.getByTestId('speleodb-settings-try-login')));
+  expect(order).toEqual(['questions', 'save', 'login']);
+  expect(closeDialog).toHaveBeenCalledOnce();
+});
+
+it('a cancelled sign-out flow leaves the user connected, Settings open and no logout staged', async () => {
+  const apply = vi.fn(async () => ({ ok: false, cancelled: true }));
+  useSpeleoStore.setState({ session: { loggedIn: true, endpoint: 'https://example.com', userEmail: 'test@example.com' }, pendingAuth: null, applyPendingAuth: apply });
+  render(<SpeleoDbSettings config={defaultConfig} onChange={onChange} changedFields={new Set()} onValidationError={vi.fn()} panelIdBase="cancelled" />);
+  await act(async () => fireEvent.click(screen.getByTestId('speleodb-settings-logout')));
+  expect(apply).toHaveBeenCalledOnce();
+  expect(useSpeleoStore.getState().pendingAuth).toBeNull();
+  expect(screen.getByTestId('speleodb-account-signed-in')).toBeVisible();
+  expect(screen.getByTestId('speleodb-settings-logout')).toBeEnabled();
+  expect(screen.queryByTestId('speleodb-connection-error')).not.toBeInTheDocument();
   expect(closeDialog).not.toHaveBeenCalled();
 });
 

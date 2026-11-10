@@ -12,6 +12,7 @@
 //! Lock release and file-access checks live in `speleodb_admin`.
 
 use super::speleodb::{local_dto, validate_project_id, MANAGED_PROJECT_TYPE};
+use super::speleodb_push::PushOutcome;
 use super::AppState;
 use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
@@ -19,6 +20,20 @@ use crate::speleodb::{
     SpeleoDbError, SpeleoErrorDto, SpeleoProjectMetadata, SpeleoPublishParams, SpeleoPublishResult,
     Visibility,
 };
+
+/// [sdk#3] What the publish result reports about the first upload's undo history:
+/// `Some(true)` only when that upload LANDED with the history left out to fit the
+/// server's size limit. An upload that failed or was refused reports nothing - the
+/// project stays dirty and the later Save Changes reports its own outcome.
+fn publish_undo_history_omitted(upload: &Result<PushOutcome, SpeleoErrorDto>) -> Option<bool> {
+    matches!(
+        upload,
+        Ok(PushOutcome::Confirmed {
+            undo_history_omitted: true
+        })
+    )
+    .then_some(true)
+}
 
 /// The canonical SpeleoDB wire label for a visibility ([#206]/[#207]). The server's
 /// `CustomChoiceField` accepts the enum NAME case-insensitively on input; we send the
@@ -77,10 +92,11 @@ impl AppState {
     pub fn speleodb_get_project_metadata(&self) -> Result<SpeleoProjectMetadata, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
         let project = self
             .speleodb_handle_auth(
                 Endpoint::GetProject,
-                client::get_project(&endpoint, &token, &link.project_id),
+                client::get_project(&endpoint, &token, insecure_http, &link.project_id),
             )
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
         Ok(SpeleoProjectMetadata::from_project(&project))
@@ -145,7 +161,8 @@ impl AppState {
         params: SpeleoPublishParams,
     ) -> Result<SpeleoPublishResult, SpeleoErrorDto> {
         let _lock_ops = self.speleodb_lock_ops_guard();
-        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let (endpoint, token, email) = self.speleodb_active_account().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
 
         // Guard rails BEFORE the irreversible create POST. The create is
         // non-idempotent, so any deterministic failure AFTER it would leak an empty
@@ -203,7 +220,7 @@ impl AppState {
         let created = self
             .speleodb_handle_auth(
                 Endpoint::CreateProject,
-                client::create_project_with(&endpoint, &token, &payload),
+                client::create_project_with(&endpoint, &token, insecure_http, &payload),
             )
             .map_err(|e| dto_for_error(Endpoint::CreateProject, &e))?;
 
@@ -274,8 +291,13 @@ impl AppState {
             db.save_speleo_link(Some(&link))
                 .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
             // Conversion has crossed into a managed project. Initial upload is
-            // internal; subsequent editing must acquire and reconcile the lock.
-            self.set_edit_enabled(false);
+            // internal; subsequent editing must acquire and reconcile the lock, so the
+            // gate is now the managed one, with no claim bound to it (read-only).
+            self.speleodb_set_open_gate(Some(&link));
+        }
+        // The new cached copy belongs to the account that created the project.
+        if let Some(email) = self.speleodb_my_email() {
+            self.speleodb_record_cache_owner(&dest, &endpoint, &email, &params.name);
         }
 
         // 4. Initial push (BEST-EFFORT): acquire the lock (we are the creator/ADMIN, so
@@ -291,14 +313,16 @@ impl AppState {
         //    acquire/upload failure and STILL return the cache path: the webview reloads a
         //    dirty remote project and the user completes the upload via the normal Start
         //    editing → Done (which surfaces a genuine push error, in context, if any).
+        let mut undo_history_omitted = None;
         match self.speleodb_handle_auth(
             Endpoint::Acquire,
-            client::acquire_lock(&endpoint, &token, &project_id),
+            client::acquire_lock(&endpoint, &token, insecure_http, &project_id),
         ) {
             Ok(_) => {
                 let upload = self.speleodb_upload(
                     &endpoint,
                     &token,
+                    insecure_http,
                     &link,
                     params.message.clone(),
                     // Skip the #216 name fold: the project was just created with this
@@ -306,8 +330,18 @@ impl AppState {
                     false,
                     generation,
                 );
-                // Release the lock regardless of the push outcome (best-effort).
-                self.speleodb_release_best_effort(&endpoint, &token, &project_id);
+                // Release the lock regardless of the push outcome (best-effort,
+                // holder-checked like every automatic release).
+                self.speleodb_release_best_effort(
+                    &super::speleodb_lock_release::LockReleaseParams {
+                        endpoint: endpoint.clone(),
+                        token: token.clone(),
+                        email,
+                        insecure_http,
+                        project_id: project_id.clone(),
+                    },
+                );
+                undo_history_omitted = publish_undo_history_omitted(&upload);
                 if let Err(e) = upload {
                     tracing::warn!(
                         error = ?e,
@@ -342,7 +376,7 @@ impl AppState {
             .speleodb_open_link()
             .is_ok_and(|l| l.base_commit_sha.is_none())
         {
-            match self.speleodb_server_head(&endpoint, &token, &project_id) {
+            match self.speleodb_server_head(&endpoint, &token, insecure_http, &project_id) {
                 Ok((tip, _)) if tip.is_some() => {
                     let _project = self
                         .project
@@ -366,6 +400,7 @@ impl AppState {
             project_id,
             endpoint,
             local_path: dest.to_string_lossy().into_owned(),
+            undo_history_omitted,
         })
     }
 }
@@ -373,7 +408,8 @@ impl AppState {
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::{build_create_body, visibility_label};
+    use super::{build_create_body, publish_undo_history_omitted, visibility_label};
+    use crate::core::state::speleodb_push::PushOutcome;
     use crate::speleodb::{SpeleoPublishParams, Visibility};
 
     #[test]
@@ -382,6 +418,28 @@ mod tests {
         // that so a metadata round-trip is byte-identical (#206/#207).
         assert_eq!(visibility_label(Visibility::Private), "PRIVATE");
         assert_eq!(visibility_label(Visibility::Public), "PUBLIC");
+    }
+
+    #[test]
+    fn publish_reports_an_omitted_undo_history_only_for_a_landed_upload() {
+        // sdk#3: the publish result tells the webview the first revision went up
+        // without its undo history, exactly when the upload landed that way.
+        let landed = |undo_history_omitted| {
+            publish_undo_history_omitted(&Ok(PushOutcome::Confirmed {
+                undo_history_omitted,
+            }))
+        };
+        assert_eq!(landed(true), Some(true));
+        assert_eq!(landed(false), None);
+        assert_eq!(
+            publish_undo_history_omitted(&Ok(PushOutcome::Unconfirmed)),
+            None
+        );
+        let refused = crate::speleodb::contract::dto_for_error(
+            crate::speleodb::contract::Endpoint::UploadStalx,
+            &crate::speleodb::SpeleoDbError::UploadTooLarge { size: 2, limit: 1 },
+        );
+        assert_eq!(publish_undo_history_omitted(&Err(refused)), None);
     }
 
     #[test]

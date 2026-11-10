@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 
 use ts_rs::TS;
 
-use stalagmight_lib::commands::app_update::{AppUpdateCheck, AppUpdateProgress, AppUpdateStatus};
+use stalagmight_lib::commands::app_update::{
+    AppUpdateCheck, AppUpdateInstallError, AppUpdateProgress, AppUpdateStatus,
+};
 use stalagmight_lib::commands::cache::{CacheStats, ProviderStats, TileFetchStatsResponse};
 use stalagmight_lib::commands::export::DiveProfileRequest;
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
@@ -28,13 +30,15 @@ use stalagmight_lib::config::{
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, ImportReceipt, IntegrityCheckResult, IntegrityRepairResult,
-    ReversedSection, ValidationWarning, WarningSeverity,
+    LockReleaseOutcome, ReversedSection, ValidationWarning, WarningSeverity,
 };
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
     SpeleoManagedFile,
 };
-use stalagmight_lib::core::state::VirtualShotMode;
+use stalagmight_lib::core::state::{
+    SpeleoCacheOwnership, SpeleoCachedProject, SpeleoPurgeReport, VirtualShotMode,
+};
 use stalagmight_lib::export::{ColorMode, ExportImageOptions, ImageFormat};
 use stalagmight_lib::logging::{LogsSince, RingLogEntry};
 use stalagmight_lib::models::placement_suggest::{
@@ -66,12 +70,12 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    DoneResult, Permission, PushResult, RemoteState, SpeleoAccessVerification, SpeleoDbAction,
-    SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult,
-    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectSummary, SpeleoPublishParams,
-    SpeleoPublishResult, SpeleoReleaseContext, SpeleoRevision, SpeleoRewindTarget,
-    SpeleoSessionStatus, SpeleoUnwindTarget, StartEditingResult, TransportCause,
-    UnpushedLocalEdits, UpdateResult, Visibility,
+    DoneResult, EndpointRefusal, Permission, PushResult, RemoteState, SpeleoAccessVerification,
+    SpeleoDbAction, SpeleoErrorDto, SpeleoFileAccess, SpeleoLinkStatus, SpeleoLocalProjectState,
+    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectSummary,
+    SpeleoPublishParams, SpeleoPublishResult, SpeleoReadOnlyOpen, SpeleoReleaseContext,
+    SpeleoRevision, SpeleoRewindTarget, SpeleoSessionStatus, SpeleoUnwindTarget,
+    StartEditingResult, TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_attribution::TileAttribution;
 use stalagmight_lib::tile_providers::TileProviderInfo;
@@ -163,6 +167,7 @@ fn main() {
 
     // Core command/result types
     export::<CommandResult>(&out_dir);
+    export::<LockReleaseOutcome>(&out_dir);
     export::<ReversedSection>(&out_dir);
     export::<ImportReceipt>(&out_dir);
     export::<CommentHolder>(&out_dir);
@@ -388,6 +393,7 @@ fn main() {
     export::<AppUpdateCheck>(&out_dir);
     export::<AppUpdateStatus>(&out_dir);
     export::<AppUpdateProgress>(&out_dir);
+    export::<AppUpdateInstallError>(&out_dir);
     // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
@@ -397,6 +403,12 @@ fn main() {
     export::<SpeleoReleaseContext>(&PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("bindings"));
     export::<SpeleoLoginResult>(&out_dir);
     export::<SpeleoOpenResult>(&out_dir);
+    // Why an open returned the cached copy read-only without a session.
+    export::<SpeleoReadOnlyOpen>(&out_dir);
+    // Cached SpeleoDB copies on the home screen (owner-aware) and the cache purge.
+    export::<SpeleoCacheOwnership>(&out_dir);
+    export::<SpeleoCachedProject>(&out_dir);
+    export::<SpeleoPurgeReport>(&out_dir);
     // #214 adopt-Ariane result (import + link + type-flip outcome), and what the
     // adoption's own hand-over to the server managed to do
     // #218 revision-history view: one projected commit
@@ -413,6 +425,9 @@ fn main() {
     // #270: why a transport call never reached the server, so the FE can render a
     // translated line instead of a raw OS errno.
     export::<TransportCause>(&out_dir);
+    // Why the endpoint policy refused a server address, so the FE can point at the
+    // setting to change instead of showing the backend's refusal text.
+    export::<EndpointRefusal>(&out_dir);
     // The un-pushed local work a refused re-pull would have destroyed, carried on
     // SpeleoErrorDto so the FE can offer keep-local vs take-remote-and-discard.
     // [#258] Which ambiguity the candidates describe, so the picker offers the right
@@ -438,6 +453,7 @@ fn main() {
 
     let export_list = [
         "CommandResult",
+        "LockReleaseOutcome",
         "ReversedSection",
         "ImportReceipt",
         "CommentHolder",
@@ -619,6 +635,7 @@ fn main() {
         "AppUpdateCheck",
         "AppUpdateStatus",
         "AppUpdateProgress",
+        "AppUpdateInstallError",
         "Permission",
         "SpeleoProjectSummary",
         "SpeleoFileAccess",
@@ -626,6 +643,10 @@ fn main() {
         "SpeleoReleaseContext",
         "SpeleoLoginResult",
         "SpeleoOpenResult",
+        "SpeleoReadOnlyOpen",
+        "SpeleoCacheOwnership",
+        "SpeleoCachedProject",
+        "SpeleoPurgeReport",
         "SpeleoRevision",
         "SpeleoUnwindTarget",
         "SpeleoRewindTarget",
@@ -634,6 +655,7 @@ fn main() {
         "SpeleoDbAction",
         "SpeleoErrorDto",
         "TransportCause",
+        "EndpointRefusal",
         "UnpushedLocalEdits",
         "SpeleoLinkStatus",
         "RemoteState",

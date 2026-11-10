@@ -1,4 +1,7 @@
-import { permissionAtLeast } from '../../utils/speleoPermission';
+import { canResumeSpeleoEditing } from '../../utils/speleoPermission';
+import { saveOpenProjectLocally } from '../../utils/saveOpenProjectLocally';
+import { TOAST_KEYS } from '../../utils/toastKeys';
+import { useProject } from '../../hooks/useProject';
 import { captureUploadOwner, getUploadContinuation, setUploadContinuation, uploadOwnerStillCurrent } from '../../utils/uploadContinuation';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -12,6 +15,11 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 import { SpeleoProgressOverlay } from './SpeleoProgressOverlay';
+import { CommitMessageLimit } from './CommitMessageLimit';
+import { commitMessageTooLong } from '../../utils/commitMessage';
+import { toastLateUploadOutcome } from '../../utils/lateUploadOutcome';
+// lock#6: a quit meanwhile waits for the whole save-upload-close, not just its calls.
+import { holdQuitDuring } from '../../utils/quitAfterWork';
 
 /**
  * Commit-message confirm for the action shell (#204), in two modes read off
@@ -40,6 +48,7 @@ export default function SpeleoDoneDialog() {
   const dialogData = useUIStore((s) => s.dialogData);
   const mode = dialogData.mode === 'push' ? 'push' : 'release';
   const { busy, push, done, startEditing } = useSpeleoActions();
+  const { handleCloseProject } = useProject();
   const path = useProjectStore((s) => s.project?.file_path);
   const [owner] = useState(captureUploadOwner);
   const sessionGeneration = useSpeleoStore((s) => s.sessionGeneration);
@@ -55,8 +64,10 @@ export default function SpeleoDoneDialog() {
     if (path) setUploadContinuation({ path, message, closeAfterSave }, owner);
   }, [path, message, closeAfterSave, owner, ownerCurrent, sessionGeneration, projectGeneration, dialogData, closeDialog]);
   const link = useSpeleoStore((s) => s.link);
-  const loggedIn = useSpeleoStore((s) => s.session?.loggedIn);
-  const uploadAllowed = link?.editState === 'editing' && !link.noAccess && loggedIn === true && permissionAtLeast(link.permission, 'READ_AND_WRITE');
+  const session = useSpeleoStore((s) => s.session);
+  const loggedIn = session?.loggedIn;
+  const canAcquire = canResumeSpeleoEditing(link, session) && link?.lockedByOther !== true;
+  const uploadAllowed = link?.editState === 'editing' && canResumeSpeleoEditing(link, session);
   const [submitting, setSubmitting] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadProgressExpired, setUploadProgressExpired] = useState(false);
@@ -72,11 +83,53 @@ export default function SpeleoDoneDialog() {
   const unpushed = useSpeleoStore((s) => s.link?.hasUnpushedEdits);
   const unsaved = useProjectStore((s) => s.isDirty);
   const needsMessage = mode === 'push' || unpushed || unsaved;
-  const dismiss = () => { if (!uploading) setUploadContinuation(null); closeDialog(); };
+  // sdk#2: a description SpeleoDB cannot store is never sent (the backend refuses it too).
+  const messageTooLong = commitMessageTooLong(message);
+  // Closed by the user while the upload runs (allowed once the 120-second notice
+  // shows): the result that lands later is then reported here (frontend#2). Any
+  // other way the dialog goes away (the older-version confirmation replacing it,
+  // a divergence) has its own surface for the outcome.
+  const walkedAway = useRef(false);
+  const dismiss = () => {
+    if (uploading) walkedAway.current = true;
+    else setUploadContinuation(null);
+    closeDialog();
+  };
+
+  // frontend#6: Save opened this dialog for a project we were not editing, after
+  // saving it on this computer (`dispatchProjectSave`). Take the editing lock
+  // once, so the upload can go ahead; a refusal says why on its own surface and
+  // leaves the blocked panel, with the work already safe on disk.
+  const acquireOnOpen = dialogData.acquire === true;
+  const acquireTried = useRef(false);
+  const [acquiring, setAcquiring] = useState(false);
+  useEffect(() => {
+    if (!acquireOnOpen || acquireTried.current || uploadAllowed || !canAcquire) return;
+    acquireTried.current = true;
+    setAcquiring(true);
+    void startEditing().finally(() => setAcquiring(false));
+  }, [acquireOnOpen, uploadAllowed, canAcquire, startEditing]);
+
+  // frontend#6: when upload is impossible the work still goes somewhere safe -
+  // this computer - rather than staying only discardable.
+  const saveLocally = async () => {
+    if (attempt.current) return;
+    attempt.current = true;
+    setSubmitting(true);
+    try {
+      const saved = await saveOpenProjectLocally();
+      if (!saved?.success || !uploadOwnerStillCurrent(owner)) return;
+      useUIStore.getState().showToast(t('speleodb.saveLocal.saved'), TOAST_KEYS.SPELEODB_SAVED_LOCALLY, 'warning');
+      const ui = useUIStore.getState();
+      if (ui.activeDialog !== 'speleodb-done' || ui.dialogData !== dialogData) return;
+      closeDialog();
+      if (closeAfterSave) await handleCloseProject();
+    } finally { attempt.current = false; setSubmitting(false); }
+  };
 
   const handleConfirm = async () => {
     const text = message.trim();
-    if (!uploadOwnerStillCurrent(owner) || attempt.current || busy || !uploadAllowed || (needsMessage && !text)) return;
+    if (!uploadOwnerStillCurrent(owner) || attempt.current || busy || !uploadAllowed || (needsMessage && !text) || messageTooLong) return;
     attempt.current = true;
     setSubmitting(true);
     setSaveFailure(null);
@@ -84,11 +137,30 @@ export default function SpeleoDoneDialog() {
     const path = state.project?.file_path;
     const op = state.loading.clientOpId;
     const generation = useSpeleoStore.getState().sessionGeneration;
-    const current = () => uploadOwnerStillCurrent(owner) && useProjectStore.getState().project?.file_path === path &&
+    // frontend#2: two different questions. `sessionCurrent` - is this still the
+    // project, operation and SpeleoDB session the upload was started for - gates
+    // APPLYING the upload's result, and is all `push` / `done` get as `isCurrent`.
+    // Whether THIS dialog is still on screen must not: once the 120-second notice
+    // lets the user close it, a result that lands later still updates the link,
+    // toasts and raises the failure banner. The dialog's own follow-ups (its inline
+    // messages, closing it, Save and Close) still need it open.
+    const sessionCurrent = () => uploadOwnerStillCurrent(owner) && useProjectStore.getState().project?.file_path === path &&
       useProjectStore.getState().loading.clientOpId === op &&
-      useSpeleoStore.getState().sessionGeneration === generation &&
-      useUIStore.getState().activeDialog === 'speleodb-done' &&
+      useSpeleoStore.getState().sessionGeneration === generation;
+    const dialogOpen = () => useUIStore.getState().activeDialog === 'speleodb-done' &&
       useUIStore.getState().dialogData === dialogData;
+    const current = () => sessionCurrent() && dialogOpen();
+    /** The dialog is gone: if the user walked away mid-upload, report what it would have. */
+    const settledAfterDismiss = (resolved: { kind: string } | null): boolean => {
+      if (!sessionCurrent()) return true;
+      if (dialogOpen()) return false;
+      if (walkedAway.current) {
+        if (resolved?.kind === 'pushed' || resolved?.kind === 'released') setUploadContinuation(null);
+        toastLateUploadOutcome(resolved);
+      }
+      return true;
+    };
+    walkedAway.current = false;
     try {
       if (mode === 'push') {
         let saved;
@@ -104,9 +176,9 @@ export default function SpeleoDoneDialog() {
         }
         setUploadProgressExpired(false);
         setUploading(true);
-        const resolved = closeAfterSave ? await done(text, { isCurrent: current, pendingExit: { kind: 'close', sessionGeneration: generation } }) : await push(text, { isCurrent: current });
+        const resolved = closeAfterSave ? await done(text, { isCurrent: sessionCurrent, pendingExit: { kind: 'close', sessionGeneration: generation } }) : await push(text, { isCurrent: sessionCurrent });
         setUploading(false);
-        if (!current()) return;
+        if (settledAfterDismiss(resolved)) return;
         if (resolved?.kind === 'released' && closeAfterSave) {
           const latest = useProjectStore.getState();
           if (latest.isDirty || useSpeleoStore.getState().link?.hasUnpushedEdits) {
@@ -136,9 +208,10 @@ export default function SpeleoDoneDialog() {
           setUploadProgressExpired(false);
           setUploading(true);
         }
-        const resolved = await done(text, { isCurrent: current });
+        const resolved = await done(text, { isCurrent: sessionCurrent });
         setUploading(false);
-        if (current() && resolved?.kind === 'released') closeDialog();
+        if (settledAfterDismiss(resolved)) return;
+        if (resolved?.kind === 'released') closeDialog();
       }
     } finally { attempt.current = false; setUploading(false); setSubmitting(false); }
   };
@@ -159,8 +232,11 @@ export default function SpeleoDoneDialog() {
           Upload has taken more than 120 seconds. It may still finish. Close this dialog to continue working.
         </p>}
         {!uploadAllowed && <div className="space-y-3" data-testid="speleodb-upload-blocked">
-          <p role="status">Upload requires sign-in, write permission and the editing lock. Your work remains on this computer.</p>
-          {!loggedIn ? <Button onClick={() => useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })} data-testid="speleodb-upload-sign-in">Sign in in Settings</Button> : <Button onClick={() => void startEditing()} disabled={busyAny || link?.noAccess} data-testid="speleodb-upload-resume">Resume editing</Button>}
+          <p role="status" data-testid="speleodb-upload-blocked-reason">{acquiring ? t('speleodb.saveLocal.acquiring') : t('speleodb.saveLocal.blocked')}</p>
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={() => void saveLocally()} disabled={busyAny || acquiring} data-testid="speleodb-upload-save-local">{t('speleodb.saveLocal.button')}</Button>
+            {!loggedIn ? <Button onClick={() => useUIStore.getState().openDialog('settings', { initialCategory: 'speleodb' })} data-testid="speleodb-upload-sign-in">Connect in Settings</Button> : <Button onClick={() => void startEditing()} disabled={busyAny || acquiring || link?.noAccess} data-testid="speleodb-upload-resume">Resume editing</Button>}
+          </div>
         </div>}
         <p className="text-sm text-text-secondary">
           {mode === 'push' ? t('speleodb.done.pushDescription') : t('speleodb.done.description')}
@@ -179,7 +255,9 @@ export default function SpeleoDoneDialog() {
             className="w-full px-2 py-1 bg-background border border-border rounded text-sm"
             placeholder={t('speleodb.done.messagePlaceholder')}
             data-testid="speleodb-done-message"
+            aria-describedby="speleodb-done-message-limit"
           />
+          <CommitMessageLimit message={message} id="speleodb-done-message-limit" testIdPrefix="speleodb-done-message" />
         </div>
         {/* #260: the failure of the LAST attempt, right above the button that made
             it - the shell banner is unreachable behind this dialog's scrim. The
@@ -192,8 +270,8 @@ export default function SpeleoDoneDialog() {
           </Button>
           <Button
             variant="primary"
-            onClick={() => void handleConfirm()}
-            disabled={busyAny || !uploadAllowed || (needsMessage && !message.trim())}
+            onClick={() => void holdQuitDuring(handleConfirm)}
+            disabled={busyAny || !uploadAllowed || (needsMessage && !message.trim()) || messageTooLong}
             data-testid="speleodb-done-confirm"
           >
             {busyAny

@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures/coverage';
 import { createProject, setupMockedPage } from './helpers/app';
+import { openSpeleoTab, revealSpeleoTab } from './helpers/speleoWorkspace';
 import type { useProjectStore } from '../src/store/projectStore';
 import type { useSpeleoStore } from '../src/store/speleoStore';
 
@@ -15,7 +16,9 @@ for (const viewport of [{ width: 1280, height: 800 }, { width: 540, height: 720 
     await page.setViewportSize(viewport);
     await setupMockedPage(page);
     await createProject(page, 'Synthetic team survey');
-    await page.getByTestId('speleodb-status-button').click();
+    // At 540px the side-panel squeeze can fold the left panel away: reveal it with
+    // its opener first. The wide window uses the tab itself.
+    if (viewport.width < 800) await revealSpeleoTab(page); else await openSpeleoTab(page);
     const panel = page.getByTestId('speleodb-workspace-local');
     const prompt = page.getByTestId('speleodb-workspace-conversion-prompt');
     const button = page.getByTestId('speleodb-workspace-convert');
@@ -59,7 +62,7 @@ test('local conversion publishes, fetches the server copy and opens the remote w
     Object.defineProperty(overrides, 'speleodb_link_status', { get: () => ({
       is_remote: true, project_id: 'converted', edit_enabled: editing, permission: 'ADMIN',
       has_unpushed_edits: false, unwound: false, remote_state: 'up_to_date',
-      access_denied: false, server_error: null, exclude_geojson: false, undo_mode: 'full',
+      access_denied: false, server_error: null, undo_mode: 'full',
       lock_holder: editing ? 'test@example.com' : null,
     }) });
     Object.defineProperty(overrides, 'speleodb_open_project', { get: () => {
@@ -72,7 +75,7 @@ test('local conversion publishes, fetches the server copy and opens the remote w
     w.__MOCK_IPC_OVERRIDES__ = overrides;
     w.__E2E_TEST__.speleoStore.setState({ session: { loggedIn: true, userEmail: 'test@example.com', endpoint: 'https://speleodb.example' } });
   });
-  await page.getByTestId('speleodb-status-button').click();
+  await openSpeleoTab(page);
   await page.getByTestId('speleodb-workspace-convert').click();
   await page.getByTestId('publish-to-speleodb-dialog-description').fill('A shared survey with revision history');
   await page.getByTestId('publish-to-speleodb-dialog-country').click();
@@ -80,7 +83,7 @@ test('local conversion publishes, fetches the server copy and opens the remote w
   await page.getByTestId('publish-to-speleodb-dialog-submit').click();
   await expect(page.getByTestId('publish-to-speleodb-dialog')).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => (window as unknown as ConversionWindow).__conversionCalls)).toEqual(['publish', 'download', 'acquire']);
-  await page.getByTestId('speleodb-status-button').click();
+  await openSpeleoTab(page);
   await expect(page.getByTestId('speleodb-workspace-upload')).toBeVisible();
   await expect(page.getByTestId('speleodb-workspace-convert')).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as ConversionWindow).__E2E_TEST__.speleoStore.getState().projectLinkKind)).toBe('remote');
@@ -101,7 +104,7 @@ test('publishing shows a centered app-blocking spinner until the conversion comp
       speleodb_link_status: { is_remote: true, project_id: 'pending', edit_enabled: false, has_unpushed_edits: true, permission: 'ADMIN', remote_state: 'up_to_date' },
     };
   });
-  await page.getByTestId('speleodb-status-button').click();
+  await openSpeleoTab(page);
   await page.getByTestId('speleodb-workspace-convert').click();
   await page.getByTestId('publish-to-speleodb-dialog-description').fill('Team survey');
   await page.getByTestId('publish-to-speleodb-dialog-country').click();

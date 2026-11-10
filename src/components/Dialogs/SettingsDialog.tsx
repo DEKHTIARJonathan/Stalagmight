@@ -607,7 +607,7 @@ export default function SettingsDialog() {
         const next = saved && previous ? rebaseSpeleoOwnedFields(draft, saved, previous) : draft;
         const result = await updateConfig(next);
         if (!result.success) {
-          if (ownsDialog()) setSaveError(result.error ?? 'Could not save Settings.');
+          if (ownsDialog()) setSaveError(result.error ?? t('settings.saveErrorTitle'));
           return false;
         }
       }
@@ -615,7 +615,7 @@ export default function SettingsDialog() {
     } finally {
       savingSettings.current = false;
     }
-  }, [isDirty, updateConfig]);
+  }, [isDirty, updateConfig, t]);
 
   // Save settings
   const handleSave = useCallback(async () => {
@@ -844,7 +844,7 @@ export default function SettingsDialog() {
         )}
       </DialogWrapper>
 
-      <AlertDialog open={saveError !== null} title="Cannot save Settings" onClose={() => setSaveError(null)} closeOnBackdropClick={false} data-testid="settings-save-error" actions={<Button variant="primary" onClick={() => setSaveError(null)} data-testid="settings-save-error-close">Close</Button>}><p className="text-error">{saveError}</p></AlertDialog>
+      <AlertDialog open={saveError !== null} title={t('settings.saveErrorTitle')} onClose={() => setSaveError(null)} closeOnBackdropClick={false} data-testid="settings-save-error" actions={<Button variant="primary" onClick={() => setSaveError(null)} data-testid="settings-save-error-close">{t('common.actions.close')}</Button>}><p className="text-error">{saveError}</p></AlertDialog>
       <AlertDialog
         open={showUnsavedDialog}
         title={t('dialogs.unsaved.title')}

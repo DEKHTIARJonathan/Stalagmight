@@ -201,7 +201,6 @@
     "src/components/SingleSystemView/SectionsPanel.tsx": 560,
     "src/components/SingleSystemView/SingleSystemView.tsx": 647,
     "src/components/SingleSystemView/SpeleoBanner.tsx": 170,
-    "src/components/SingleSystemView/SpeleoStatusButton.tsx": 271,
     "src/components/SingleSystemView/SpeleoStatusMenu.tsx": 120,
     "src/components/SingleSystemView/TableSelectDropdown.tsx": 55,
     "src/components/SingleSystemView/Toolbar.tsx": 720,

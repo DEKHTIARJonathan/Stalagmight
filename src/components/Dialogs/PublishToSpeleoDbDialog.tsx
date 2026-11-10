@@ -1,5 +1,6 @@
 import { publishProjectAndReopen } from '../../utils/publishProjectAndReopen';
-import { getPublishContinuation, setPublishContinuation } from '../../utils/publishContinuation';
+import { getPublishContinuation, publishFormDraft, setPublishContinuation, type PublishDraft } from '../../utils/publishContinuation';
+import { registerWorkspaceDraft } from '../../utils/workspaceDrafts';
 import { captureUploadOwner, uploadOwnerStillCurrent } from '../../utils/uploadContinuation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SpeleoProgressOverlay } from './SpeleoProgressOverlay';
@@ -10,11 +11,13 @@ import { Select } from '../common/Select';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoOperationBusy } from '../../hooks/useSpeleoOperationBusy';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 import { validateCoordinates } from '../../utils/gps';
 import { reverseGeocodeCountry } from '../../utils/reverseGeocodeCountry';
 import { COUNTRIES } from '../../data/countries';
 import { TOAST_KEYS } from '../../utils/toastKeys';
+import { holdQuitDuring } from '../../utils/quitAfterWork';
 import type {
   SpeleoPublishParams,
 } from '../../types/ipc.generated';
@@ -38,7 +41,7 @@ export default function PublishToSpeleoDbDialog() {
   const [owner] = useState(captureUploadOwner);
   const [draft] = useState(getPublishContinuation);
   const loggedIn = useSpeleoStore((s) => s.session?.loggedIn === true);
-  const busy = useSpeleoStore((s) => s.busy);
+  const busy = useSpeleoOperationBusy();
   const [description, setDescription] = useState(draft?.description ?? '');
   // Best-effort prefill from the first georeferenced zero datum, if any.
   const firstGps = useMemo(() => project?.zero_datums?.[0]?.gps ?? null, [project]);
@@ -61,6 +64,11 @@ export default function PublishToSpeleoDbDialog() {
     return () => window.clearTimeout(timer);
   }, [publishing]);
   const blocking = publishing && !progressExpired;
+  // What is typed here is unsent SpeleoDB input: every way out asks before
+  // dropping it (`utils/workspaceDrafts`). Not while it is being published.
+  const form = useRef<PublishDraft | null>(null);
+  form.current = publishing ? null : { description, country, latitude, longitude };
+  useEffect(() => registerWorkspaceDraft(publishFormDraft(owner, () => form.current)), [owner]);
 
   const latTrim = latitude.trim();
   const lonTrim = longitude.trim();
@@ -104,16 +112,24 @@ export default function PublishToSpeleoDbDialog() {
       longitude: bothCoords ? lonNum : null,
     };
     try {
-      const result = await publishProjectAndReopen(params);
-      if (result === 'stale') return;
+      // lock#6: a quit meanwhile waits for the whole publish, not just its calls.
+      const { outcome, undoHistoryOmitted } = await holdQuitDuring(() => publishProjectAndReopen(params));
+      if (outcome === 'stale') return;
       setPublishContinuation(null);
       if (ownsDialog()) closeDialog();
-      if (result === 'upload_pending') {
-        showToast(t('speleodb.publish.uploadPending'), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
-      } else if (result === 'recent_cleanup_failed') {
-        showToast(t('speleodb.publish.recentCleanupFailed'), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
-      } else if (result === 'reload_failed') {
-        showToast(t('speleodb.publish.reloadFailed'), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
+      // sdk#3: the first revision went up without its undo history to fit the server's
+      // size limit. One event, one surface: the note rides the outcome's own toast,
+      // and stands alone (as a warning) when the outcome has none.
+      const historyNote = undoHistoryOmitted ? t('speleodb.publish.withoutHistory') : null;
+      const withNote = (message: string) => (historyNote ? `${message} ${historyNote}` : message);
+      if (outcome === 'upload_pending') {
+        showToast(withNote(t('speleodb.publish.uploadPending')), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
+      } else if (outcome === 'recent_cleanup_failed') {
+        showToast(withNote(t('speleodb.publish.recentCleanupFailed')), TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
+      } else if (outcome === 'reload_failed') {
+        showToast(withNote(t('speleodb.publish.reloadFailed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
+      } else if (historyNote) {
+        showToast(historyNote, TOAST_KEYS.SPELEODB_PUBLISH, 'warning');
       }
     } catch (e) {
       showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), TOAST_KEYS.SPELEODB_PUBLISH, 'error');
@@ -164,7 +180,7 @@ export default function PublishToSpeleoDbDialog() {
         {progressExpired && publishing && <p role="alert" className="text-sm text-warning" data-testid="speleodb-publish-timeout">
           Publishing has taken more than 120 seconds. Your request may still finish. Close this dialog to continue working.
         </p>}
-        {!loggedIn && <Button onClick={signIn} data-testid="publish-to-speleodb-dialog-sign-in">Sign in in Settings</Button>}
+        {!loggedIn && <Button onClick={signIn} data-testid="publish-to-speleodb-dialog-sign-in">Connect in Settings</Button>}
 
         <div>
           <label className="block text-sm font-medium text-text-primary mb-1">

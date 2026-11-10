@@ -1,7 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { LeftWorkspace } from '../LeftWorkspace';
-import { SpeleoStatusButton } from '../SpeleoStatusButton';
 import { useProjectStore } from '../../../store/projectStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { useUIStore } from '../../../store/uiStore';
@@ -21,11 +20,11 @@ it('local SpeleoDB tab offers only conversion and opens the project creation for
   expect(screen.queryByTestId('speleodb-workspace-upload')).toBeNull();
   expect(screen.queryByTestId('speleodb-workspace-section-history')).toBeNull();
 });
-it('local SpeleoDB navigation stays accessible from Plan and Export without section editors', () => {
-  render(<><SpeleoStatusButton /><LeftWorkspace sections={<div>Sections content</div>} /></>);
+it('the local SpeleoDB tab, opened outside Survey, offers conversion without section editors', () => {
+  render(<LeftWorkspace sections={<div>Sections content</div>} />);
   for (const mode of ['plan', 'export'] as const) {
     act(() => useUIStore.getState().setAppMode(mode));
-    fireEvent.click(screen.getByTestId('speleodb-status-button'));
+    act(() => useUIStore.getState().openSpeleoWorkspace());
     expect(screen.getByRole('button', { name: 'Convert to a SpeleoDB project' })).toBeVisible();
     expect(screen.queryByRole('tab', { name: 'Sections' })).toBeNull();
   }

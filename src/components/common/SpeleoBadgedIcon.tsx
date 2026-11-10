@@ -56,8 +56,8 @@ export function SpeleoBadgedIcon({
  * Deliberately tighter than `ExternalLinkIcon`, which is drawn for a 20-unit menu
  * slot: at badge scale its thin open box and separate arrow bars collapse into
  * mush. This compresses the frame, knocks its interior out in the panel colour
- * rather than outlining it, and haloes the arrow like the other badge glyphs halo
- * its "!", so the two shapes stay legible at 9px.
+ * rather than outlining it, and haloes the arrow in the panel colour, so the two
+ * shapes stay legible at 9px.
  */
 export function ExternalLinkGlyph({ size = 9 }: { size?: number }) {
   return (
@@ -141,18 +141,8 @@ export function QuestionMarkGlyph({ size = 11 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
       {/* Filled hook (not a stroke - WebKit fattens strokes under the UI zoom), plus
-          the same dot the exclamation uses so the badge family reads consistently. */}
+          a filled dot. */}
       <path d="M5 5.4a3 3 0 015.95.6c0 1.5-1.05 2.15-1.75 2.75-.55.48-.7.95-.7 1.75H6.7c0-1.15.2-1.75.9-2.4.6-.56 1.5-1 1.5-1.95a1.35 1.35 0 00-2.7-.05z" />
-      <circle cx="8" cy="12.4" r="1.5" />
-    </svg>
-  );
-}
-
-/** Filled exclamation-mark glyph (local/remote conflict). */
-export function ExclamationGlyph({ size = 11 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      <path d="M6.6 2h2.8l-0.5 7h-1.8l-0.5-7z" />
       <circle cx="8" cy="12.4" r="1.5" />
     </svg>
   );

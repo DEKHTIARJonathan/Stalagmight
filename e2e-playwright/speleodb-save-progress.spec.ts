@@ -23,7 +23,7 @@ for (const entry of ['menu', 'Control+s', 'Meta+s']) {
         speleodb_link_status: { is_remote: true, project_id: 'shared-upload', edit_enabled: true,
           permission: 'READ_AND_WRITE', has_unpushed_edits: true, unwound: false,
           remote_state: 'up_to_date', lock_holder: 'test@example.com', access_denied: false,
-          server_error: null, exclude_geojson: false, undo_mode: 'full' },
+          server_error: null, undo_mode: 'full' },
       };
       Object.defineProperty(overrides, 'speleodb_push', { get: () => { w.__uploadCalls += 1; return pending; } });
       w.__MOCK_IPC_OVERRIDES__ = overrides;

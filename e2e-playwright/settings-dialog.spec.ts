@@ -834,7 +834,10 @@ test('SpeleoDB Close saves the endpoint without connecting and replaces Save and
   await page.getByTestId('global-speleodb-button').click();
   await expect(page.getByTestId('settings-save-button')).toHaveCount(0);
   await expect(page.getByTestId('settings-cancel-button')).toHaveCount(0);
-  await expect(page.getByTestId('toggle-speleodb-insecure-http')).toHaveCount(0);
+  // The insecure-HTTP option exists only in a development build (the dev server
+  // locally, a production build in CI).
+  const devBuild = await page.evaluate(() => (window as unknown as { __E2E_TEST__: { devBuild?: boolean } }).__E2E_TEST__.devBuild === true);
+  await expect(page.getByTestId('toggle-speleodb-insecure-http')).toHaveCount(devBuild ? 1 : 0);
   await page.getByTestId('input-speleodb-endpoint').fill('HTTP://192.168.1.25:8000');
   await page.getByTestId('settings-close-button').click();
   await expect(page.getByTestId('settings-dialog')).not.toBeVisible();

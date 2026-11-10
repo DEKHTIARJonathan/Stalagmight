@@ -9,6 +9,12 @@ import {
 import { useProjectStore } from '../projectStore';
 import type { SpeleoLinkStatus } from '../../types/ipc.generated';
 
+// The sign-out guard (uploads / discards / hands back locks before a sign-out) has
+// its own suite; here it only has to say "go ahead", or "cancelled" where a case
+// asks it to.
+const guardSignOutMock = vi.hoisted(() => vi.fn(async (_kind: string) => true));
+vi.mock('../../utils/speleoSignOut', () => ({ guardSpeleoSignOut: guardSignOutMock }));
+
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,
@@ -34,7 +40,6 @@ const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   remote_state: 'up_to_date',
   access_denied: false,
   server_error: null,
-  exclude_geojson: false,
   // [#303] The hybrid undo stack's policy pair: Full, from the global default.
   undo_mode: 'full',
 
@@ -180,6 +185,26 @@ describe('speleoStore', () => {
         recent.mockRestore();
         config.mockRestore();
       }
+    });
+
+    it('a sign-out the guard cancels never reaches the backend logout', async () => {
+      useSpeleoStore.getState().setSessionFromLogin({ user_email: 'u@x', endpoint: 'https://x/' });
+      useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
+      invokeIpcMock.mockReset();
+      guardSignOutMock.mockResolvedValueOnce(false);
+      expect(await useSpeleoStore.getState().applyPendingAuth('https://x/')).toEqual({ ok: false, cancelled: true });
+      expect(guardSignOutMock).toHaveBeenCalledWith('signOut');
+      expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_logout');
+      expect(useSpeleoStore.getState().session?.userEmail).toBe('u@x');
+    });
+
+    it('logging in as SOMEONE ELSE signs the previous account out through the guard first', async () => {
+      useSpeleoStore.getState().setSessionFromLogin({ user_email: 'u@x', endpoint: 'https://x/' });
+      useSpeleoStore.getState().setPendingAuth({ kind: 'login', email: 'other@x', password: 'pw', token: '', useToken: false } as never);
+      guardSignOutMock.mockResolvedValueOnce(false);
+      expect(await useSpeleoStore.getState().applyPendingAuth('https://x/')).toEqual({ ok: false, cancelled: true });
+      expect(guardSignOutMock).toHaveBeenCalledWith('switch');
+      expect(invokeIpcMock.mock.calls.map((c) => c[0])).not.toContain('speleodb_login');
     });
 
     it('applyPendingAuth clears the session even when the logout command rejects', async () => {
@@ -666,21 +691,18 @@ describe('speleoStore', () => {
   });
 
   describe('#200 banners', () => {
-    it('seedFromStatus raises the rendering-disabled banner when exclude_geojson is set', () => {
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
-      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'rendering_disabled' });
-    });
-
-    it('seedFromStatus clears its own rendering-disabled banner once the flag is off', () => {
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: false }));
+    it('a status refresh never raises a banner of its own', () => {
+      useSpeleoStore.getState().seedFromStatus(status());
       expect(useSpeleoStore.getState().banner).toBeNull();
     });
 
-    it('a rendering-disabled refresh never clobbers transient push_unconfirmed feedback', () => {
-      useSpeleoStore.setState({ banner: { kind: 'push_unconfirmed' } });
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
-      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'push_unconfirmed' });
+    it.each([
+      { kind: 'push_unconfirmed' as const },
+      { kind: 'no_anchor' as const },
+    ])('a status refresh keeps the $kind banner', (banner) => {
+      useSpeleoStore.setState({ banner });
+      useSpeleoStore.getState().seedFromStatus(status());
+      expect(useSpeleoStore.getState().banner).toEqual(banner);
     });
 
     it('raiseNoAnchorBanner only claims a free banner slot', () => {
@@ -692,20 +714,12 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().banner).toEqual({ kind: 'push_unconfirmed' });
     });
 
-    it('rendering_disabled preempts a no_anchor banner (so Enable-rendering is reachable)', () => {
-      // Both conditions true: no_anchor holds the slot, then a refresh sees
-      // exclude_geojson. rendering_disabled must take over - otherwise its
-      // Enable-rendering action (gated on the banner kind) is unreachable.
-      useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: true }));
-      expect(useSpeleoStore.getState().banner).toEqual({ kind: 'rendering_disabled' });
-    });
-
-    it('a no_anchor notice is never clobbered by a refresh when rendering is enabled', () => {
-      // exclude_geojson off: a no_anchor notice must survive routine refreshes (only a
-      // rendering_disabled banner that WE own is cleared when the flag goes off).
-      useSpeleoStore.setState({ banner: { kind: 'no_anchor' } });
-      useSpeleoStore.getState().seedFromStatus(status({ exclude_geojson: false }));
+    it('the no_anchor notice survives the refreshes that follow it', () => {
+      // The retired rendering-disabled banner used to claim this slot from
+      // no_anchor on every refresh; nothing may mask the notice now.
+      useSpeleoStore.getState().seedFromStatus(status());
+      useSpeleoStore.getState().raiseNoAnchorBanner();
+      useSpeleoStore.getState().seedFromStatus(status());
       expect(useSpeleoStore.getState().banner).toEqual({ kind: 'no_anchor' });
     });
 
@@ -1025,12 +1039,16 @@ describe('speleoStore', () => {
   describe('PUSH_FAILURE_DIALOGS', () => {
     it.each([
       'speleodb-done',
-      'speleodb-close',
-      'speleodb-quit',
       'speleodb-revert',
       'speleodb-unwound-push',
     ])('covers %s', (id) => {
       expect(PUSH_FAILURE_DIALOGS).toContain(id);
+    });
+
+    // No dialog opens these ids any more: the close and quit questions are the
+    // exit prompt's overlay, which the banner checks directly.
+    it('lists no dead dialog ids', () => {
+      expect(PUSH_FAILURE_DIALOGS).toEqual(['speleodb-done', 'speleodb-revert', 'speleodb-unwound-push']);
     });
   });
 });
@@ -1053,6 +1071,34 @@ describe('successful sign-in refresh', () => {
       expect(useSpeleoStore.getState().remoteProjects).toEqual({ p1: 'New cave' });
     });
     expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_list_projects');
+  });
+
+  it.each([true, false])('logs in over the given insecure-HTTP choice (%s) and reloads the saved settings', async (insecureHttp) => {
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_login') return { user_email: 'me@x', endpoint: 'http://lab.example/' };
+      if (cmd === 'get_config') return null;
+      return null;
+    });
+    useSpeleoStore.getState().setPendingAuth({
+      kind: 'login', email: '', password: '', token: '<your_token_here>', useToken: true,
+    });
+    expect(await useSpeleoStore.getState().applyPendingAuth('http://lab.example/', insecureHttp)).toEqual({ ok: true });
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_login', expect.objectContaining({
+      endpoint: 'http://lab.example/', insecureHttp,
+    }));
+    // The backend saved that connection with the session; the app's copy follows.
+    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'get_config')).toBe(true);
+  });
+
+  it('leaves the insecure-HTTP choice to the saved one when none is given', async () => {
+    invokeIpcMock.mockImplementation(async (cmd: string) =>
+      cmd === 'speleodb_login' ? { user_email: 'me@x', endpoint: 'https://x/' } : null);
+    useSpeleoStore.getState().setPendingAuth({
+      kind: 'login', email: '', password: '', token: '<your_token_here>', useToken: true,
+    });
+    await useSpeleoStore.getState().applyPendingAuth('https://x/');
+    const login = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_login');
+    expect(login?.[1]).not.toHaveProperty('insecureHttp');
   });
 });
 

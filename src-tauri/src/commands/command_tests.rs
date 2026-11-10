@@ -46,7 +46,7 @@ fn with_config_lock<T>(f: impl FnOnce() -> T) -> T {
 fn with_restored_config<T>(app: &tauri::App<MockRuntime>, f: impl FnOnce() -> T) -> T {
     let original = config::get_config(state(app));
     let result = f();
-    config::update_config(state(app), original).expect("restore config");
+    config::update_config_impl(state(app).inner(), original).expect("restore config");
     result
 }
 
@@ -616,7 +616,7 @@ fn test_column_name_lists_are_bounded_on_both_write_paths() {
             cfg.panels.new_section_hidden_columns = hostile_hidden();
             cfg.panels.edit_section_column_order = hostile_order();
             cfg.panels.edit_section_hidden_columns = hostile_hidden();
-            config::update_config(state(&app), cfg).expect("update config");
+            config::update_config_impl(state(&app).inner(), cfg).expect("update config");
 
             let panels = config::get_config(state(&app)).panels;
             assert_bounded(&panels.data_table_shot_column_order, "shot_column_order");
@@ -683,7 +683,7 @@ fn test_update_config_repairs_invalid_angle_modes() {
             let mut cfg = config::get_config(state(&app));
             cfg.panels.data_table_azimuth_mode = "sideways".to_string();
             cfg.panels.data_table_inclination_mode = String::new();
-            config::update_config(state(&app), cfg).expect("update config");
+            config::update_config_impl(state(&app).inner(), cfg).expect("update config");
 
             let panels = config::get_config(state(&app)).panels;
             assert_eq!(
@@ -700,7 +700,7 @@ fn test_update_config_repairs_invalid_angle_modes() {
             let mut cfg = config::get_config(state(&app));
             cfg.panels.data_table_azimuth_mode = "inout".to_string();
             cfg.panels.data_table_inclination_mode = "avg".to_string();
-            config::update_config(state(&app), cfg).expect("update config");
+            config::update_config_impl(state(&app).inner(), cfg).expect("update config");
 
             let panels = config::get_config(state(&app)).panels;
             assert_eq!(panels.data_table_azimuth_mode, "inout");
@@ -790,7 +790,7 @@ fn test_update_config_caps_general_collections() {
             cfg.general.recent_projects = (0..100_000)
                 .map(|i| PathBuf::from(format!("/caves/{i}.stalx")))
                 .collect();
-            config::update_config(state(&app), cfg).expect("update config");
+            config::update_config_impl(state(&app).inner(), cfg).expect("update config");
 
             let general = config::get_config(state(&app)).general;
             assert!(
@@ -823,7 +823,7 @@ fn test_update_config_roundtrip_auto_save() {
         with_restored_config(&app, || {
             let mut cfg = config::get_config(state(&app));
             cfg.general.auto_save = false;
-            config::update_config(state(&app), cfg).expect("update config");
+            config::update_config_impl(state(&app).inner(), cfg).expect("update config");
             let updated = config::get_config(state(&app));
             assert!(!updated.general.auto_save);
         });
@@ -837,7 +837,7 @@ fn test_update_config_roundtrip_recent_projects() {
         with_restored_config(&app, || {
             let mut cfg = config::get_config(state(&app));
             cfg.general.recent_projects = vec![PathBuf::from("/tmp/example.stalx")];
-            config::update_config(state(&app), cfg).expect("update config");
+            config::update_config_impl(state(&app).inner(), cfg).expect("update config");
             let updated = config::get_config(state(&app));
             assert_eq!(updated.general.recent_projects.len(), 1);
             assert!(updated
@@ -1317,7 +1317,10 @@ fn test_get_project_state_depth_stats_match_station_z() {
 fn test_close_project_clears_state() {
     let app = app_with_state();
     create_project(&app);
-    assert_success(&project::close_project(state(&app), None));
+    assert_success(&project::close_project_impl(
+        state(&app).inner(),
+        project::CloseLock::Release,
+    ));
     assert!(project::get_project_state(state(&app)).is_none());
 }
 
@@ -1402,7 +1405,10 @@ fn test_project_lifecycle_persists_undo_and_state() {
         // Wait for background undo persistence thread to complete
         std::thread::sleep(std::time::Duration::from_millis(200));
 
-        assert_success(&project::close_project(state(&app), None));
+        assert_success(&project::close_project_impl(
+            state(&app).inner(),
+            project::CloseLock::Release,
+        ));
         let open_result = open_project(state(&app), saved_path);
         assert_success(&open_result);
 
@@ -1587,7 +1593,7 @@ fn test_open_project_updates_recent_projects_order_and_truncates() {
             let mut cfg = config::get_config(state(&app));
             cfg.general.recent_projects_max = 2;
             cfg.general.recent_projects = Vec::new();
-            config::update_config(state(&app), cfg).expect("update config");
+            config::update_config_impl(state(&app).inner(), cfg).expect("update config");
 
             let dir = TempDir::new().unwrap();
             let path_a = dir.path().join("a.stalx");
@@ -2367,7 +2373,7 @@ fn test_delete_project_removes_file_and_recent() {
             let saved_path = save_project_to_temp(&app, &dir);
             assert!(saved_path.exists(), "precondition: .stalx written to disk");
 
-            let result = project::delete_project(state(&app), saved_path.clone());
+            let result = project::delete_project_impl(state(&app).inner(), saved_path.clone());
             assert_success(&result);
             assert!(
                 !saved_path.exists(),
@@ -2388,7 +2394,7 @@ fn test_delete_project_tolerates_missing_file() {
             // should still succeed (there is simply nothing to remove).
             let dir = TempDir::new().unwrap();
             let missing = dir.path().join("never-saved.stalx");
-            let result = project::delete_project(state(&app), missing.clone());
+            let result = project::delete_project_impl(state(&app).inner(), missing.clone());
             assert_success(&result);
             assert!(!missing.exists());
         });
@@ -2417,7 +2423,7 @@ fn test_delete_project_leaves_a_same_stem_tml_alone() {
             let tml = saved_path.with_extension("tml");
             fs::write(&tml, b"not ours").unwrap();
 
-            let result = project::delete_project(state(&app), saved_path.clone());
+            let result = project::delete_project_impl(state(&app).inner(), saved_path.clone());
 
             assert!(result.success, "the .stalx delete succeeded");
             assert!(!saved_path.exists(), "project .stalx should be trashed");
@@ -2492,7 +2498,7 @@ fn test_delete_project_partial_failure_still_prunes_recents() {
         "precondition: the config root is genuinely unwritable"
     );
 
-    let result = project::delete_project(state(&app), saved_path.clone());
+    let result = project::delete_project_impl(state(&app).inner(), saved_path.clone());
 
     // Restore permissions BEFORE the assertions: a panicking assert would otherwise
     // unwind past this and leave TempDir unable to clean up.
@@ -2575,7 +2581,7 @@ fn test_delete_project_of_open_project_tears_down_the_session() {
                 "precondition: the redo stack is non-empty"
             );
 
-            let result = project::delete_project(state(&app), saved_path.clone());
+            let result = project::delete_project_impl(state(&app).inner(), saved_path.clone());
 
             assert_success(&result);
             assert!(!saved_path.exists(), "project .stalx should be trashed");
@@ -2661,7 +2667,7 @@ fn test_delete_project_tears_down_before_removing_the_file() {
             perms.set_mode(0o555);
             fs::set_permissions(dir.path(), perms).unwrap();
 
-            let result = project::delete_project(state(&app), saved_path.clone());
+            let result = project::delete_project_impl(state(&app).inner(), saved_path.clone());
 
             // Restore permissions BEFORE the assertions: a panicking assert would
             // otherwise unwind past this and leave TempDir unable to clean up.
@@ -2737,7 +2743,10 @@ fn test_delete_project_reports_whether_it_closed_the_session() {
             // A project that is NOT open: save it, then close the session.
             create_project(&app);
             let other_path = save_project_to_temp(&app, &dir);
-            assert_success(&project::close_project(state(&app), None));
+            assert_success(&project::close_project_impl(
+                state(&app).inner(),
+                project::CloseLock::Release,
+            ));
 
             // ...and the one that IS open, in its own directory so the two saves
             // don't collide on `project.stalx`.
@@ -2746,7 +2755,7 @@ fn test_delete_project_reports_whether_it_closed_the_session() {
             let open_path = save_project_to_temp(&app, &open_dir);
             create_section_with_shots(&app, vec![shot_data(1.0)]);
 
-            let other = project::delete_project(state(&app), other_path.clone());
+            let other = project::delete_project_impl(state(&app).inner(), other_path.clone());
             assert_success(&other);
             assert!(!other_path.exists(), "the unrelated .stalx was deleted");
             assert_eq!(
@@ -2766,7 +2775,7 @@ fn test_delete_project_reports_whether_it_closed_the_session() {
                 "the open project's undo stack must survive an unrelated delete"
             );
 
-            let own = project::delete_project(state(&app), open_path.clone());
+            let own = project::delete_project_impl(state(&app).inner(), open_path.clone());
             assert_success(&own);
             assert_eq!(
                 own.session_closed,
@@ -2818,7 +2827,7 @@ fn test_delete_project_matches_an_alias_of_the_open_path() {
                 "precondition: the alias is not literally the open project's path"
             );
 
-            let result = project::delete_project(state(&app), alias);
+            let result = project::delete_project_impl(state(&app).inner(), alias);
 
             assert_success(&result);
             assert_eq!(
@@ -2889,7 +2898,10 @@ fn test_delete_project_by_an_alias_prunes_the_recents_entry() {
             create_project(&app);
             let dir = TempDir::new().unwrap();
             let saved_path = save_project_to_temp(&app, &dir);
-            assert_success(&project::close_project(state(&app), None));
+            assert_success(&project::close_project_impl(
+                state(&app).inner(),
+                project::CloseLock::Release,
+            ));
 
             // An unrelated bystander, in its own directory so the two saves don't
             // collide on `project.stalx`. Left OPEN as well.
@@ -2913,7 +2925,7 @@ fn test_delete_project_by_an_alias_prunes_the_recents_entry() {
                 "precondition: the alias is not literally the stored recents path"
             );
 
-            let result = project::delete_project(state(&app), alias);
+            let result = project::delete_project_impl(state(&app).inner(), alias);
 
             assert_success(&result);
             assert!(!saved_path.exists(), "the aliased .stalx should be trashed");
@@ -2971,7 +2983,7 @@ fn test_delete_project_unlinks_a_dangling_symlink() {
                 "precondition: but there IS an entry at that path to unlink"
             );
 
-            let result = project::delete_project(state(&app), link.clone());
+            let result = project::delete_project_impl(state(&app).inner(), link.clone());
 
             assert_success(&result);
             assert!(
@@ -3028,7 +3040,7 @@ fn test_delete_project_of_a_symlink_to_the_open_project_spares_the_referent() {
                  vacuous"
             );
 
-            let result = project::delete_project(state(&app), link.clone());
+            let result = project::delete_project_impl(state(&app).inner(), link.clone());
 
             assert_success(&result);
             assert!(
@@ -3100,7 +3112,10 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
             create_project(&app);
             let dir = TempDir::new().unwrap();
             let real_path = save_project_to_temp(&app, &dir);
-            assert_success(&project::close_project(state(&app), None));
+            assert_success(&project::close_project_impl(
+                state(&app).inner(),
+                project::CloseLock::Release,
+            ));
 
             let link = dir.path().join("link.stalx");
             std::os::unix::fs::symlink(&real_path, &link).unwrap();
@@ -3125,7 +3140,7 @@ fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session()
                  {recents_before:?}"
             );
 
-            let result = project::delete_project(state(&app), link.clone());
+            let result = project::delete_project_impl(state(&app).inner(), link.clone());
 
             assert_success(&result);
             assert!(
@@ -3223,7 +3238,7 @@ fn test_delete_project_through_a_symlinked_parent_dir_matches_by_identity() {
                  stat as an ordinary file, or this test is exercising the other rule"
             );
 
-            let result = project::delete_project(state(&app), through_link);
+            let result = project::delete_project_impl(state(&app).inner(), through_link);
 
             assert_success(&result);
             assert!(
@@ -5560,13 +5575,12 @@ fn test_update_config_persists_and_reload_restores() {
             let mut cfg = config::get_config(state(&app));
             let original_auto_save = cfg.general.auto_save;
             cfg.general.auto_save = !original_auto_save;
-            config::update_config(state(&app), cfg).expect("update config");
+            config::update_config_impl(state(&app).inner(), cfg).expect("update config");
 
             let updated = config::get_config(state(&app));
             assert_eq!(updated.general.auto_save, !original_auto_save);
 
-            let (reloaded, auth_changed) =
-                config::reload_config(state(&app)).expect("reload config");
+            let (reloaded, auth_changed) = state(&app).reload_config().expect("reload config");
             assert!(
                 !auth_changed,
                 "ordinary preference reload preserves the session"
@@ -5583,10 +5597,9 @@ fn test_reload_config_syncs_undo_history_limit() {
         with_restored_config(&app, || {
             let mut cfg = config::get_config(state(&app));
             cfg.general.undo_history_limit = 42;
-            config::update_config(state(&app), cfg).expect("update config");
+            config::update_config_impl(state(&app).inner(), cfg).expect("update config");
 
-            let (reloaded, auth_changed) =
-                config::reload_config(state(&app)).expect("reload config");
+            let (reloaded, auth_changed) = state(&app).reload_config().expect("reload config");
             assert!(
                 !auth_changed,
                 "ordinary preference reload preserves the session"

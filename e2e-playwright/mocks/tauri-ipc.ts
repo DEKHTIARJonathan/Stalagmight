@@ -940,6 +940,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         };
       };
 
+      const EXIT_RECORDED_COMMANDS = new Set([
+        'close_project', 'save_project', 'speleodb_done', 'speleodb_release_lock',
+        // A project switch / quit settles the open project's lock first.
+        'speleodb_settle_open_lock',
+        'speleodb_discard_cached_copy', 'speleodb_logout', 'speleodb_login',
+        'install_app_update_and_restart',
+        // Home's remove-copy prompt and Settings' purge: specs assert the consent
+        // flag each one carried.
+        'speleodb_remove_cached_copy', 'speleodb_purge_cached_copies', 'speleodb_open_project',
+      ]);
+
       return function mockCommand(
         cmd: string,
         args?: Record<string, unknown>
@@ -947,6 +958,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         // Skip logging for push_frontend_log to avoid infinite loop with console capture
         if (cmd !== 'push_frontend_log') {
           console.log(`[Mock IPC] Command: ${cmd}`, args);
+        }
+
+        // The exit-prompt / sign-out specs assert WHICH of these ran, with what, and in
+        // what order - recorded before the override map so an overridden reply (an
+        // upload that "fails", a release that throws) is still on the record.
+        if (EXIT_RECORDED_COMMANDS.has(cmd)) {
+          const win = window as unknown as Record<string, unknown>;
+          const log = (win.__MOCK_EXIT_CALLS__ as Array<{ cmd: string; args: unknown }> | undefined) ?? [];
+          log.push({ cmd, args: args ?? null });
+          win.__MOCK_EXIT_CALLS__ = log;
         }
 
         const overrideMap = (window as unknown as Record<string, unknown>).__MOCK_IPC_OVERRIDES__ as
@@ -1592,6 +1613,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             projectPath = null;
             return { success: true, section_ids: [] };
           }
+
+          // A project switch / quit hands the open project's lock back first. Nothing
+          // is held in a mocked run, so nothing is released (no `lock_release`); specs
+          // that drive a failed release override this reply.
+          case 'speleodb_settle_open_lock':
+            return { success: true, warnings: [], error: null, section_ids: [] };
 
           case 'cancel_loading': {
             // Idempotent - does nothing but shouldn't error
@@ -4131,6 +4158,33 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 preset: 'default',
                 overrides: {},
               },
+              // The real get_config always sends these sections (Rust Config::default,
+              // mirrored in src/types/ipc/defaultConfig.ts). Without them, Settings
+              // fills them in on the first edit and reports them as changed.
+              import: {
+                overlap_mode: 'import_data',
+              },
+              placement_suggestion: {
+                azimuth_sigma: 18.0,
+                length_sigma: 0.8,
+                depth_sigma: 0.35,
+                azimuth_weight: 0.35,
+                length_weight: 0.25,
+                depth_in_weight: 0.2,
+                depth_out_weight: 0.2,
+                min_shot_score: 0.15,
+                min_aggregate_score: 0.45,
+                max_reference_shots: 5,
+                max_suggestions: 10,
+                min_partial_ratio: 0.15,
+                short_shot_threshold: 0.5,
+                single_shot_penalty: 0.6,
+                max_azimuth_error_full: 25.0,
+                max_azimuth_error_partial: 35.0,
+                max_depth_error: 0.3,
+                max_length_error_fraction: 0.03,
+                max_length_error_floor: 0.4,
+              },
               // SpeleoDB config block: the real get_config always returns this
               // (Rust SpeleoDbConfig::default); Settings reads it directly.
               speleodb: {
@@ -5550,6 +5604,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'check_for_app_update':
             return { status: { kind: 'up_to_date' }, current_version: '0.5.0', installs_on_quit: true };
 
+          case 'arm_forced_exit':
+            // The explicit "Quit now" past a running SpeleoDB transfer: the
+            // backend half (cut instead of wait) is covered in Rust.
+            (window as unknown as { __forcedExitArmed?: number }).__forcedExitArmed =
+              ((window as unknown as { __forcedExitArmed?: number }).__forcedExitArmed ?? 0) + 1;
+            return null;
+          case 'disarm_forced_exit':
+            // A "Quit now" whose window destroy failed takes the arm back; the
+            // backend half is covered in Rust.
+            (window as unknown as { __forcedExitDisarmed?: number }).__forcedExitDisarmed =
+              ((window as unknown as { __forcedExitDisarmed?: number }).__forcedExitDisarmed ?? 0) + 1;
+            return null;
           case 'arm_app_update_restart':
           case 'unarm_app_update_restart':
             // The backend's one-shot install consent. Succeeds here so a spec
@@ -5598,7 +5664,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               remote_state: 'unknown',
               access_denied: false,
               server_error: null,
-              exclude_geojson: false,
               // [#303] Dirty ONLY because a chain step walked this copy back to an older
               // revision - the user has edited nothing. Every consumer composes it with
               // has_unpushed_edits (`isUnwoundNotEdited`), and it is what makes the close
@@ -5649,6 +5714,28 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // state, not about the download it does on the way.
           case 'speleodb_discard_changes':
             return { kind: 'editing' };
+          // Sign-out's discard of a cached copy that is not open. Specs assert the
+          // invocation (via __MOCK_EXIT_CALLS__). Like the backend, it refuses
+          // without the explicit consent flag (the mock's copies all hold
+          // un-uploaded work: that is why the sign-out asks about them).
+          case 'speleodb_discard_cached_copy':
+            if (args?.discardUnpushed !== true) {
+              return {
+                success: false,
+                warnings: [],
+                error: 'This copy has changes that were never uploaded to SpeleoDB, or its state could not be read. Nothing was removed.',
+                section_ids: [],
+              };
+            }
+            return { success: true, warnings: [], error: null, section_ids: [] };
+          // Cached SpeleoDB copies on the home screen. Nothing is cached in a mocked
+          // run; specs that need copies (owner-classified) override the listing.
+          case 'speleodb_cached_projects':
+            return [];
+          case 'speleodb_remove_cached_copy':
+            return { success: true, warnings: [], error: null, section_ids: [] };
+          case 'speleodb_purge_cached_copies':
+            return { removed: 0, kept_unpushed: [], kept_open: [], failed: [], locks_released: [], locks_unchecked: [] };
           case 'speleodb_get_project_metadata':
             return { name: 'Mock Cave', description: '', country: 'US', visibility: 'PRIVATE', latitude: null, longitude: null, exclude_geojson: false };
           case 'speleodb_publish':

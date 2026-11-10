@@ -87,7 +87,7 @@ struct RewindCandidate {
     target: SpeleoRewindTarget,
     endpoint: String,
     token: String,
-
+    insecure_http: bool,
     project_id: String,
 }
 
@@ -407,8 +407,9 @@ impl AppState {
             return Ok(None);
         }
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
         let (_, commits) = self
-            .speleodb_server_head(&endpoint, &token, &link.project_id)
+            .speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
 
         let unwound_from = self.speleodb_unwound_from();
@@ -434,8 +435,9 @@ impl AppState {
     fn speleodb_rewind_candidate(&self) -> Result<Option<RewindCandidate>, SpeleoErrorDto> {
         let link = self.speleodb_validated_link()?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
         let (_, commits) = self
-            .speleodb_server_head(&endpoint, &token, &link.project_id)
+            .speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
         Ok(sync::rewind_target(
             self.speleodb_unwound_from().as_deref(),
@@ -446,7 +448,7 @@ impl AppState {
             target: SpeleoRewindTarget { hexsha, is_latest },
             endpoint,
             token,
-
+            insecure_http,
             project_id: link.project_id,
         }))
     }
@@ -476,6 +478,7 @@ impl AppState {
                 client::download_stalx_at_hash(
                     &candidate.endpoint,
                     &candidate.token,
+                    candidate.insecure_http,
                     &candidate.project_id,
                     &candidate.target.hexsha,
                 ),
@@ -507,8 +510,9 @@ impl AppState {
     ) -> Result<Vec<SpeleoRevision>, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
         let (_, commits) = self
-            .speleodb_server_head(&endpoint, &token, &project_id)
+            .speleodb_server_head(&endpoint, &token, insecure_http, &project_id)
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
         // Display ordering + the creation-commit filter live in `sync` so they are
         // unit-tested offline, and so it is obvious they touch ONLY this view: every
@@ -533,7 +537,11 @@ impl AppState {
         validate_project_id(&project_id).map_err(local_dto)?;
         validate_hexsha(&hexsha).map_err(local_dto)?;
 
-        let open_link = self.speleodb_open_link().map_err(local_dto)?;
+        // Bound to the project open NOW, re-checked inside the commit that installs
+        // the revision: the download below can outlive a switch to another project,
+        // and the swap must then leave that project alone (`speleodb_revision_swap`).
+        let binding = self.speleodb_swap_binding().map_err(local_dto)?;
+        let open_link = &binding.link;
         if open_link.project_id != project_id {
             return Err(local_dto(SpeleoDbError::NoRemoteProject));
         }
@@ -549,16 +557,23 @@ impl AppState {
             )));
         }
         if keep_undo_history {
-            self.speleodb_guard_unwind(&open_link, discard_unpushed, chain_forward)?;
+            self.speleodb_guard_unwind(open_link, discard_unpushed, chain_forward)?;
             self.speleodb_verify_chain_target(&hexsha, chain_forward)?;
         }
 
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
 
         let native = self
             .speleodb_handle_auth(
                 Endpoint::DownloadStalx,
-                client::download_stalx_at_hash(&endpoint, &token, &project_id, &hexsha),
+                client::download_stalx_at_hash(
+                    &endpoint,
+                    &token,
+                    insecure_http,
+                    &project_id,
+                    &hexsha,
+                ),
             )
             .map_err(|e| dto_for_error(Endpoint::DownloadStalx, &e))?;
 
@@ -581,7 +596,7 @@ impl AppState {
         };
 
         let server_tip = if restore {
-            match client::get_revisions(&endpoint, &token, &project_id) {
+            match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
                 Ok(history) => sync::tip_of(&history.commits)
                     .map(str::to_owned)
                     .or_else(|| open_link.base_commit_sha.clone()),
@@ -611,46 +626,45 @@ impl AppState {
             last_verify_at: None,
             undo_mode: None,
         };
-        self.install_linked_download(
+
+        let local_path = dest.to_string_lossy().into_owned();
+        // Replace the cache file and reopen it in ONE commit, and only while the
+        // bound project is still the open one. A Restore keeps its edit session
+        // through that same commit (`restore` asks to carry it): the claim bound to
+        // the generation the swap was bound to moves to the new one, provenance and
+        // all, and nothing else can (`speleodb_edit_gate`). A View carries nothing,
+        // so it lands read-only whatever was open before.
+        self.speleodb_swap_in_revision(
             native.path(),
             &dest,
             link,
-            policy,
+            (
+                policy,
+                if keep_undo_history {
+                    InheritedUndo::Keep
+                } else {
+                    InheritedUndo::Drop
+                },
+            ),
+            binding,
+            restore,
+        )?;
+        self.while_swapped_in_project_is_open(&dest, &project_id, || {
             if keep_undo_history {
-                InheritedUndo::Keep
+                self.speleodb_set_unwound_from(Some(&hexsha));
+                self.speleodb_stamp_inherited_watermark();
             } else {
-                InheritedUndo::Drop
-            },
-        )
-        .map_err(local_dto)?;
-
-        let local_path = dest.to_string_lossy().into_owned();
-        let had_lock_record = self.speleodb_lock_acquired_here(&project_id);
-        self.close_project();
-        self.do_load_project_full(dest).map_err(|e| {
-            local_dto(SpeleoDbError::Io(format!(
-                "reload after restore failed: {e}"
-            )))
-        })?;
-        if restore {
-            self.set_edit_enabled(true);
-            if had_lock_record {
-                self.speleodb_note_lock_acquired(Some(&project_id));
+                self.speleodb_set_unwound_from(None);
+                self.speleodb_set_inherited_through(None);
             }
-        }
-
-        if keep_undo_history {
-            self.speleodb_set_unwound_from(Some(&hexsha));
-            self.speleodb_stamp_inherited_watermark();
-        } else {
-            self.speleodb_set_unwound_from(None);
-            self.speleodb_set_inherited_through(None);
-        }
+        });
 
         Ok(SpeleoOpenResult {
             local_path,
             offline: None,
             has_unpushed_edits: None,
+            read_only: None,
+            other_owner: None,
         })
     }
 }
@@ -679,7 +693,7 @@ mod tests {
         let mut db = Database::open(&path).expect("open fixture .stalx");
         db.save_project(&Project::new("Linked".to_owned(), None))
             .expect("save fixture project");
-        db.save_speleo_link(Some(&SpeleoLink {
+        let link = SpeleoLink {
             endpoint: "https://example.invalid".to_owned(),
             project_id: FIXTURE_PROJECT_ID.to_owned(),
             project_name: "Linked".to_owned(),
@@ -688,10 +702,13 @@ mod tests {
             last_edit_at: None,
             last_verify_at: None,
             undo_mode,
-        }))
-        .expect("stamp the fixture link");
+        };
+        db.save_speleo_link(Some(&link))
+            .expect("stamp the fixture link");
 
         let state = AppState::new().expect("construct AppState");
+        // Installed without an open; the fixture setter derives the edit gate from
+        // the link the way an open would (read-only until a claim is bound).
         state.set_database_for_tests(db);
         (state, temp)
     }
@@ -963,7 +980,7 @@ mod tests {
             .find("if keep_undo_history && chain_forward")
             .expect("the forward restore must re-check the downloaded child policy");
         let replace = restore
-            .find(".install_linked_download(")
+            .find(".speleodb_swap_in_revision(")
             .expect("the restore replaces the working copy");
         assert!(
             policy < replace,
@@ -1165,7 +1182,7 @@ mod tests {
             .map(|(_, rest)| rest)
             .expect("the swap verb is in this file");
         let reload = restore
-            .find("self.do_load_project_full(")
+            .find("self.speleodb_swap_in_revision(")
             .expect("the swap reloads in place");
         let record = restore
             .find("self.speleodb_set_unwound_from(Some(&hexsha));")
@@ -1183,40 +1200,29 @@ mod tests {
     }
 
     #[test]
-    fn restore_hands_the_acquisition_record_back_across_its_reload() {
+    fn restore_carries_its_edit_session_through_the_swap_and_mints_nothing() {
+        // data#3: the edit gate is the claim bound to the session, so a Restore
+        // keeps editing by asking the swap's commit to CARRY the binding (the
+        // `restore` argument), which moves an existing claim - provenance and all -
+        // and cannot create one. The old shape re-recorded the acquisition record
+        // after the reload from a capture taken before it; that is gone, and with
+        // it any way for a Restore to mint a claim it did not have.
         let restore = prod_source()
             .split_once("fn speleodb_restore_revision")
             .map(|(_, rest)| rest)
             .and_then(|rest| rest.split("\n    /// ").next())
             .expect("speleodb_restore_revision body precedes the next item's doc");
         assert!(
-            restore.contains("let had_lock_record = self.speleodb_lock_acquired_here("),
-            "Restore must capture the acquisition record before its reload"
+            !restore.contains("speleodb_note_lock_acquired"),
+            "a Restore must not record a claim of its own"
         );
         assert!(
-            restore.contains("self.speleodb_note_lock_acquired(Some(&project_id));"),
-            "and hand it back afterwards - reopening the gate alone leaves a lock we \
-             still hold with no provenance for the push we are about to make"
-        );
-        let capture = restore
-            .find("let had_lock_record")
-            .expect("capture present (asserted above)");
-        let reload = restore
-            .find("self.do_load_project_full(")
-            .expect("the in-place reload is what shuts the gate");
-        let restore_back = restore
-            .find("self.speleodb_note_lock_acquired(Some(&project_id));")
-            .expect("re-record present (asserted above)");
-        assert!(
-            capture < reload && reload < restore_back,
-            "capture BEFORE the reload (it is the last point the pre-reload truth \
-             exists) and re-record AFTER it (a record written before the reload is \
-             what the refresh in that window drops)"
+            restore.contains("            restore,\n        )?;"),
+            "the swap carries the edit session exactly when this is a Restore"
         );
         assert!(
-            restore.contains("if had_lock_record {"),
-            "and gate the hand-back on the captured record - re-recording \
-             unconditionally would MINT provenance for an inherited lock"
+            restore.contains("if restore && !self.edit_enabled()"),
+            "and a Restore is refused without an edit session to carry"
         );
     }
 

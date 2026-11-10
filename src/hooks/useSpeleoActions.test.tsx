@@ -949,3 +949,21 @@ it('manual refresh waits for fresh lock and permission status even when the revi
   });
   expect(useSpeleoStore.getState().busy).toBe(false);
 });
+
+describe('useSpeleoActions - Take remote ends the edit session (data#3)', () => {
+  it('reopens the server version without taking the lock back', async () => {
+    const loadProject = vi.fn(async () => ({ success: true }));
+    useProjectStore.setState({ isDirty: false, loadProject, refreshProjectState: vi.fn(async () => {}), checkProjectIntegrity: vi.fn(async () => []) });
+    useSpeleoStore.setState({ link: { hasUnpushedEdits: true } as never, refreshLinkStatus: vi.fn(async () => {}) });
+    invokeIpcMock.mockImplementation(async (cmd) => (cmd === 'speleodb_take_remote' ? '/remote.stalx' : null));
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.takeRemote();
+    });
+
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_take_remote');
+    expect(loadProject).toHaveBeenCalledWith('/remote.stalx', { acquireLock: false });
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_start_editing');
+  });
+});

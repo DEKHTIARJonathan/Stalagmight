@@ -96,7 +96,7 @@ describe('closeProject resets the Export-mode options', () => {
       const result = await useProjectStore.getState().closeProject();
       expect(result.success).toBe(false);
       expect(result.error).toContain('Synthetic connection failure');
-      expect(invokeIpcMock).toHaveBeenCalledWith('close_project', { releaseLock: true }, expect.anything());
+      expect(invokeIpcMock).toHaveBeenCalledWith('close_project', { releaseLock: true, discardLocal: false }, expect.anything());
       expect(useProjectStore.getState().project).toBe(project);
       expect(useProjectStore.getState().isClosing).toBe(false);
       expect(useExportStore.getState().dataFormat).toBe('tml');

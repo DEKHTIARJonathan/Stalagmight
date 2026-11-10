@@ -31,6 +31,10 @@ export const TOAST_KEYS = {
 
   // Global view
   SPELEODB_OPEN_REMOTE_ERROR: 'speleodb-open-remote-error',
+  /** A cached SpeleoDB copy opened read-only because there is no usable session. */
+  SPELEODB_READ_ONLY_OPEN: 'speleodb-read-only-open',
+  /** The outcome of removing a downloaded SpeleoDB copy from the home screen. */
+  SPELEODB_CACHED_COPY: 'speleodb-cached-copy',
   RENAME: 'rename',
 
   // Data table
@@ -72,7 +76,6 @@ export const TOAST_KEYS = {
 
   // SpeleoDB
   SPELEODB_UNLINKED_COPY: 'speleodb-unlinked-copy',
-  SPELEODB_ENABLE_RENDERING_ERROR: 'speleodb-enable-rendering-error',
   SPELEODB_PROJECT_DIALOG_STALE: 'speleodb-project-dialog-stale',
   SPELEODB_RELEASE_ONE_ERROR: 'speleodb-release-one-error',
   SPELEODB_CONTINUE_EDITING_ERROR: 'speleodb-continue-editing-error',
@@ -94,6 +97,10 @@ export const TOAST_KEYS = {
   SPELEODB_NOT_EDITING: 'speleodb-not-editing',
   SPELEODB_RELEASED: 'speleodb-released',
   SPELEODB_TOOK_REMOTE: 'speleodb-took-remote',
+  SPELEODB_LATE_UPLOAD: 'speleodb-late-upload',
+  SPELEODB_SAVED_LOCALLY: 'speleodb-saved-locally',
+  /** A quit waits for an in-flight SpeleoDB transfer, then closes (lock#6). */
+  QUIT_AFTER_WORK: 'quit-after-work',
 
   // Dialogs
   NEW_SECTION_PASTE_CAP: 'new-section-paste-cap',
@@ -120,6 +127,9 @@ export const TOAST_KEYS = {
   // the banner is on "Restart to update", where that instruction points at a
   // button that does not exist.
   APP_UPDATE_INSTALL_FAILED: 'app-update-install-failed',
+  // The backend refused the restart because a SpeleoDB transfer is still running
+  // (lock#6): nothing failed, the download is kept and Restart works again later.
+  APP_UPDATE_RESTART_WAITS_FOR_TRANSFER: 'app-update-restart-waits-for-transfer',
 
   // Debug
   DEBUG_REFRESH: 'debug-refresh',

@@ -111,7 +111,7 @@ impl Server {
 fn both_authentication_paths_use_the_sdk_contract() {
     let s = Server::json(json!({"token":"test-token","user":"test@example.com"}));
     assert_eq!(
-        login(&s.base, "test@example.com", "test-password").unwrap(),
+        login(&s.base, false, "test@example.com", "test-password").unwrap(),
         "test-token"
     );
     let requests = s.finish();
@@ -123,7 +123,7 @@ fn both_authentication_paths_use_the_sdk_contract() {
     );
     let s = Server::json(user_json());
     assert_eq!(
-        fetch_user_email(&s.base, "test-token").unwrap(),
+        fetch_user_email(&s.base, "test-token", false).unwrap(),
         "test@example.com"
     );
     let r = s.finish();
@@ -152,7 +152,7 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
     .collect();
     projects.insert(2, project_json());
     let s = Server::json(json!(projects));
-    let listed = list_projects(&s.base, "t").unwrap();
+    let listed = list_projects(&s.base, "t", false).unwrap();
     assert_eq!(listed.len(), 1);
     let summary = super::super::models::SpeleoProjectSummary::from_project(listed[0].clone());
     assert_eq!(
@@ -168,9 +168,9 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
     for probe in [false, true] {
         let s = Server::json(p.clone());
         let result = if probe {
-            get_project_probe(&s.base, "t", ID)
+            get_project_probe(&s.base, "t", false, ID)
         } else {
-            get_project(&s.base, "t", ID)
+            get_project(&s.base, "t", false, ID)
         }
         .unwrap();
         assert_eq!(
@@ -185,6 +185,7 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
     create_project_with(
         &s.base,
         "t",
+        false,
         &json!({"name":"Synthetic","description":"Test","country":"US","type":"STALAGMIGHT"})
             .to_string(),
     )
@@ -194,6 +195,7 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
     patch_project(
         &s.base,
         "t",
+        false,
         ID,
         r#"{"name":"Renamed","latitude":null,"longitude":null}"#,
     )
@@ -207,9 +209,9 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
     for (acquire, route) in [(true, "acquire"), (false, "release")] {
         let s = Server::json(project_json());
         if acquire {
-            acquire_lock(&s.base, "t", ID)
+            acquire_lock(&s.base, "t", false, ID)
         } else {
-            release_lock(&s.base, "t", ID)
+            release_lock(&s.base, "t", false, ID)
         }
         .unwrap();
         assert!(s.finish()[0].starts_with(&format!("POST /api/v2/projects/{ID}/{route}/ ")));
@@ -220,15 +222,18 @@ fn project_operations_preserve_permissions_locks_and_patch_nulls() {
 fn revisions_and_native_file_routes_are_exact() {
     let commit = json!({"id":SHA,"parent_ids":[],"author_email":"test@example.com","author_name":"Test","authored_date":"2026/01/01 00:00","dt_since":"now","message":"Test","formats":[],"tree":[],"url":null});
     let s = Server::json(json!({"project":project_json(),"commits":[commit]}));
-    assert_eq!(get_revisions(&s.base, "t", ID).unwrap().commits[0].id, SHA);
+    assert_eq!(
+        get_revisions(&s.base, "t", false, ID).unwrap().commits[0].id,
+        SHA
+    );
     assert!(s.finish()[0].starts_with(&format!("GET /api/v2/projects/{ID}/revisions/ ")));
     let bytes = b"SQLite format 3\0synthetic bytes";
     for revision in [None, Some(SHA)] {
         let s = Server::replies(vec![(200, bytes.to_vec())]);
         let native = if let Some(sha) = revision {
-            download_stalx_at_hash(&s.base, "t", ID, sha)
+            download_stalx_at_hash(&s.base, "t", false, ID, sha)
         } else {
-            download_stalx(&s.base, "t", ID)
+            download_stalx(&s.base, "t", false, ID)
         }
         .unwrap();
         assert_eq!(std::fs::read(native.path()).unwrap(), bytes);
@@ -246,7 +251,7 @@ fn revisions_and_native_file_routes_are_exact() {
         json!({"project":project_json(),"hexsha":SHA,"files":["project.stalx"],"message":"Saved","browser_url":null}),
     );
     assert_eq!(
-        upload_stalx(&s.base, "t", ID, f.path(), "My commit")
+        upload_stalx(&s.base, "t", false, ID, f.path(), "My commit")
             .unwrap()
             .latest_commit
             .unwrap()
@@ -262,23 +267,83 @@ fn revisions_and_native_file_routes_are_exact() {
 }
 
 #[test]
+fn upload_refuses_a_description_the_server_cannot_store_before_sending_anything() {
+    // sdk#2: SpeleoDB would commit it to git and then fail to store it, breaking
+    // every later upload. Refused before the file is read or a request is made:
+    // the path does not exist and nothing listens on the endpoint.
+    let long = format!("{}\n{}", "a".repeat(500), "b".repeat(499));
+    let missing = Path::new("/nonexistent/synthetic.stalx");
+    let err = upload_stalx("http://127.0.0.1:9", "t", true, ID, missing, &long).unwrap_err();
+    assert!(
+        matches!(&err, SpeleoDbError::Parse(m) if m.contains("too long") && m.contains("1001")),
+        "{err:?}"
+    );
+    let err = upload_stalx("http://127.0.0.1:9", "t", true, ID, missing, " \n ").unwrap_err();
+    assert!(
+        matches!(&err, SpeleoDbError::Parse(m) if m.contains("empty")),
+        "{err:?}"
+    );
+}
+
+#[test]
 fn status_errors_and_malformed_success_remain_distinct() {
     for status in [304, 400, 401, 403, 404, 409, 429, 500] {
         let s = Server::replies(vec![(status, br#"{"detail":"Test failure"}"#.to_vec())]);
-        let err = release_lock(&s.base, "t", ID).unwrap_err();
+        let err = release_lock(&s.base, "t", false, ID).unwrap_err();
         assert!(matches!(err,SpeleoDbError::Status {status:s,..} if s==status));
         assert_eq!(s.finish().len(), 1, "mutations must never retry");
     }
     let s = Server::json(json!({"unexpected":"sensitive response text"}));
-    let err = get_project(&s.base, "t", ID).unwrap_err();
+    let err = get_project(&s.base, "t", false, ID).unwrap_err();
     assert!(matches!(err, SpeleoDbError::Parse(_)));
     assert!(!err.to_string().contains("sensitive"));
     assert_eq!(s.finish().len(), 1);
     for status in [400, 401] {
         let s = Server::replies(vec![(status, b"{}".to_vec())]);
-        assert!(login(&s.base, "bad@example.com", "bad").is_err());
+        assert!(login(&s.base, false, "bad@example.com", "bad").is_err());
         assert_eq!(s.finish().len(), 1);
     }
+}
+
+/// An error reply's message is the server's text, and the reply may be as long
+/// as the JSON limit: uncapped, a 10 MiB `detail` reached the log, the error
+/// dialogs, Home's removal warning and the purge report. It is cut at the source,
+/// to the same bound as a contract mismatch's detail, whichever field it came from.
+#[test]
+fn an_error_replys_message_is_bounded_whatever_field_it_comes_from() {
+    let long = "\u{e9}".repeat(CONTRACT_DETAIL_LIMIT * 40);
+    let cut = format!("{}...", "\u{e9}".repeat(CONTRACT_DETAIL_LIMIT));
+    for body in [
+        json!({"detail": long}),
+        json!({"error": long}),
+        json!({"errors": {"non_field_errors": [long]}}),
+        json!({"errors": {"name": long}}),
+    ] {
+        let raw = serde_json::to_vec(&body).expect("json");
+        assert_eq!(
+            parse_error_message(&raw).as_deref(),
+            Some(cut.as_str()),
+            "{body}"
+        );
+    }
+    // A short message is kept as it is.
+    assert_eq!(
+        parse_error_message(br#"{"detail":"Test failure"}"#).as_deref(),
+        Some("Test failure")
+    );
+
+    // End to end: the status error a removal's lock release reports.
+    let s = Server::replies(vec![(
+        409,
+        serde_json::to_vec(&json!({ "detail": long })).expect("json"),
+    )]);
+    let err = release_lock(&s.base, "t", false, ID).unwrap_err();
+    s.finish();
+    assert!(
+        matches!(&err, SpeleoDbError::Status { status: 409, message } if *message == cut),
+        "{err:?}"
+    );
+    assert!(err.to_string().chars().count() < CONTRACT_DETAIL_LIMIT + 100);
 }
 
 #[test]
@@ -287,12 +352,13 @@ fn reads_retry_transient_failures_and_native_streams_enforce_a_limit() {
         (503, b"{}".to_vec()),
         (200, user_json().to_string().into_bytes()),
     ]);
-    assert!(fetch_user_email(&s.base, "t").is_ok());
+    assert!(fetch_user_email(&s.base, "t", false).is_ok());
     assert_eq!(s.finish().len(), 2);
     let s = Server::replies(vec![(200, vec![0; 1024])]);
     let c = SdkClient::new(
         &s.base,
         Some("t"),
+        false,
         READ_TIMEOUT,
         Settings {
             native_limit: 10,
@@ -534,17 +600,18 @@ fn live_used_api_calls_with_email_and_token() {
     let [base, provided_token, email, password] = inputs;
     eprintln!("live SpeleoDB API tests executing EMAIL and TOKEN authentication paths");
     let _settings = TestSettings::install(live_settings(&value));
-    let login_token = login(&base, &email, &password).expect("EMAIL authentication");
-    assert!(fetch_user_email(&base, &login_token)
+    let login_token = login(&base, false, &email, &password).expect("EMAIL authentication");
+    assert!(fetch_user_email(&base, &login_token, false)
         .expect("EMAIL profile")
         .eq_ignore_ascii_case(&email));
-    assert!(fetch_user_email(&base, &provided_token)
+    assert!(fetch_user_email(&base, &provided_token, false)
         .expect("TOKEN profile")
         .eq_ignore_ascii_case(&email));
     for (label, token) in [("EMAIL", login_token), ("TOKEN", provided_token)] {
         let created = create_project_with(
             &base,
             &token,
+            false,
             &json!({
                 "name": format!("Stalagmight SDK test {}", uuid::Uuid::new_v4()),
                 "description": "Synthetic native-file API test; deleted after execution",
@@ -565,16 +632,19 @@ fn live_used_api_calls_with_email_and_token() {
         } = run_test_project(
             || {
                 (|| -> Result<(), SpeleoDbError> {
-                    assert!(list_projects(&base, &token)?.iter().any(|p| p.id == *id));
-                    get_project(&base, &token, id)?;
-                    get_project_probe(&base, &token, id)?;
+                    assert!(list_projects(&base, &token, false)?
+                        .iter()
+                        .any(|p| p.id == *id));
+                    get_project(&base, &token, false, id)?;
+                    get_project_probe(&base, &token, false, id)?;
                     patch_project(
                         &base,
                         &token,
+                        false,
                         id,
                         r#"{"description":"Native SQLite round trip"}"#,
                     )?;
-                    acquire_lock(&base, &token, id)?;
+                    acquire_lock(&base, &token, false, id)?;
                     let dir = tempfile::tempdir().unwrap();
                     let path = dir.path().join("project.stalx");
                     {
@@ -588,16 +658,17 @@ fn live_used_api_calls_with_email_and_token() {
                     }
                     let first_bytes = std::fs::read(&path).unwrap();
                     eprintln!("{label}: uploading first native file");
-                    let first = upload_stalx(&base, &token, id, &path, "First synthetic revision")?
-                        .latest_commit
-                        .expect("first SHA")
-                        .id;
+                    let first =
+                        upload_stalx(&base, &token, false, id, &path, "First synthetic revision")?
+                            .latest_commit
+                            .expect("first SHA")
+                            .id;
                     assert_eq!(
-                        std::fs::read(download_stalx(&base, &token, id)?.path()).unwrap(),
+                        std::fs::read(download_stalx(&base, &token, false, id)?.path()).unwrap(),
                         first_bytes
                     );
                     assert!(matches!(
-                        upload_stalx(&base, &token, id, &path, "No changes"),
+                        upload_stalx(&base, &token, false, id, &path, "No changes"),
                         Err(SpeleoDbError::Status { status: 304, .. })
                     ));
                     {
@@ -611,26 +682,28 @@ fn live_used_api_calls_with_email_and_token() {
                     }
                     eprintln!("{label}: uploading second native file");
                     let second =
-                        upload_stalx(&base, &token, id, &path, "Second synthetic revision")?
+                        upload_stalx(&base, &token, false, id, &path, "Second synthetic revision")?
                             .latest_commit
                             .expect("second SHA")
                             .id;
                     assert_ne!(first, second);
-                    let history = get_revisions(&base, &token, id)?;
+                    let history = get_revisions(&base, &token, false, id)?;
                     assert!(history.commits.iter().any(|c| c.id == first));
                     assert!(history.commits.iter().any(|c| c.id == second));
                     assert_eq!(
-                        std::fs::read(download_stalx_at_hash(&base, &token, id, &first)?.path())
-                            .unwrap(),
+                        std::fs::read(
+                            download_stalx_at_hash(&base, &token, false, id, &first)?.path()
+                        )
+                        .unwrap(),
                         first_bytes
                     );
                     Ok(())
                 })()
             },
             // Only IDs returned by this invocation may be deleted, after every outcome.
-            || release_lock(&base, &token, id).map(|_| ()),
+            || release_lock(&base, &token, false, id).map(|_| ()),
             || {
-                client(&base, Some(&token), READ_TIMEOUT).and_then(|c| {
+                client(&base, Some(&token), false, READ_TIMEOUT).and_then(|c| {
                     runtime()?
                         .block_on(c.http.v2_projects_destroy(id, None, None::<&str>))
                         .map(|_| ())
@@ -658,13 +731,16 @@ fn profile_accepts_unset_country_but_rejects_other_invalid_profiles() {
     let mut profile = user_json();
     profile["country"] = json!("");
     let s = Server::json(profile.clone());
-    assert_eq!(fetch_user_email(&s.base, "t").unwrap(), "test@example.com");
+    assert_eq!(
+        fetch_user_email(&s.base, "t", false).unwrap(),
+        "test@example.com"
+    );
     assert_eq!(s.finish().len(), 1);
     for country in ["invalid", ""] {
         profile["country"] = json!(country);
         profile["email"] = json!("");
         let s = Server::json(profile.clone());
-        assert!(fetch_user_email(&s.base, "t").is_err());
+        assert!(fetch_user_email(&s.base, "t", false).is_err());
         assert_eq!(s.finish().len(), 1);
     }
 }
@@ -678,7 +754,7 @@ fn list_only_projection_tolerates_unknown_enums_without_granting_permissions() {
     let mut unknown_type = project_json();
     unknown_type["type"] = json!("FUTURE_TYPE");
     let s = Server::json(json!([project_json(), future.clone(), unknown_type]));
-    let rows = list_projects(&s.base, "t").unwrap();
+    let rows = list_projects(&s.base, "t", false).unwrap();
     assert_eq!(rows.len(), 2);
     assert_eq!(rows[0].permission, Some(Permission::Admin));
     assert_eq!(rows[1].permission, None);
@@ -689,12 +765,12 @@ fn list_only_projection_tolerates_unknown_enums_without_granting_permissions() {
         json!([{"id":"invalid", "name":"Bad ID", "type":"STALAGMIGHT"}]),
     ] {
         let s = Server::json(invalid);
-        assert!(list_projects(&s.base, "t").is_err());
+        assert!(list_projects(&s.base, "t", false).is_err());
         s.finish();
     }
     let s = Server::json(future);
     assert!(
-        get_project(&s.base, "t", ID).is_err(),
+        get_project(&s.base, "t", false, ID).is_err(),
         "detail and mutations stay strict"
     );
     s.finish();
@@ -735,6 +811,7 @@ fn downloads_allow_healthy_progress_beyond_the_idle_budget_but_reject_stalls() {
         let c = SdkClient::new(
             &base,
             Some("synthetic"),
+            false,
             Duration::ZERO,
             Settings {
                 timeout: Some(Duration::from_millis(400)),
@@ -763,6 +840,155 @@ fn downloads_allow_healthy_progress_beyond_the_idle_budget_but_reject_stalls() {
 }
 
 #[test]
+fn download_deadline_scales_with_the_size_and_is_bounded_by_the_native_limit() {
+    let grace = TRANSFER_TIMEOUT;
+    let deadline = |bytes| download_deadline(grace, DOWNLOAD_MIN_RATE, DOWNLOAD_CEILING, bytes);
+    assert_eq!(deadline(0), grace);
+    assert_eq!(deadline(4 * 1024), grace + Duration::from_secs(1));
+    assert_eq!(
+        deadline(20 * 1024 * 1024),
+        grace + Duration::from_secs(5120)
+    );
+    // Generous: a quarter of the upload budget's rate, so never shorter than it.
+    assert!(deadline(20 * 1024 * 1024) >= upload_timeout(20 * 1024 * 1024));
+    // Every file SpeleoDB can store still fits at the minimum rate...
+    assert_eq!(
+        deadline(SERVER_UPLOAD_LIMIT_BYTES),
+        grace + Duration::from_secs(SERVER_UPLOAD_LIMIT_BYTES / DOWNLOAD_MIN_RATE)
+    );
+    assert!(deadline(SERVER_UPLOAD_LIMIT_BYTES) <= DOWNLOAD_CEILING);
+    // ...while the most a download may receive (the native limit, about 36 h at
+    // the minimum rate) is cut at the ceiling, Content-Length or not.
+    assert_eq!(deadline(NATIVE_LIMIT), DOWNLOAD_CEILING);
+    assert!(
+        DOWNLOAD_CEILING < Duration::from_hours(2),
+        "{DOWNLOAD_CEILING:?}"
+    );
+}
+
+/// A server paying out just ABOVE the minimum rate keeps moving the per-byte
+/// deadline ahead of the clock, so before the ceiling it held the download (and
+/// the app's exit waiting for it) for as long as the native size limit allowed:
+/// some 36 hours. The absolute ceiling stops it, as a timeout.
+#[test]
+fn a_download_paying_out_just_above_the_minimum_rate_is_stopped_by_the_ceiling() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let worker = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut request = [0; 4096];
+        assert!(stream.read(&mut request).unwrap() > 0, "an HTTP request");
+        // 16 KiB at 1,280 bytes a second: 25% above the 1,024 B/s minimum, so the
+        // whole body would take about 13 s and arrive intact.
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 16384\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        for _ in 0..256 {
+            std::thread::sleep(Duration::from_millis(50));
+            if stream.write_all(&[b'x'; 64]).is_err() {
+                break;
+            }
+        }
+    });
+    let c = SdkClient::new(
+        &base,
+        Some("synthetic"),
+        false,
+        Duration::ZERO,
+        Settings {
+            retries: 0,
+            download_grace: Duration::from_millis(300),
+            download_min_rate: 1024,
+            download_ceiling: Duration::from_millis(1500),
+            ..Settings::default()
+        },
+    )
+    .unwrap();
+    let started = Instant::now();
+    let result = c.download(ID, None);
+    let took = started.elapsed();
+    assert!(
+        matches!(
+            result,
+            Err(SpeleoDbError::Transport {
+                cause: TransportCause::Timeout,
+                ..
+            })
+        ),
+        "{:?}",
+        result.err()
+    );
+    assert!(
+        took < Duration::from_secs(5),
+        "stopped by the ceiling, not by the end of the body: {took:?}"
+    );
+    worker.join().unwrap();
+}
+
+/// A server that trickles a byte well inside the read timeout used to hold the
+/// download (and the app's exit waiting for it) for ever: only a read timeout
+/// applied. The total deadline stops it, as a timeout.
+#[test]
+fn a_download_trickling_below_the_minimum_rate_is_stopped_by_its_total_deadline() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let worker = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut request = [0; 4096];
+        assert!(stream.read(&mut request).unwrap() > 0, "an HTTP request");
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: 1048576\r\nConnection: close\r\n\r\n")
+            .unwrap();
+        // 20 bytes a second, each well inside the read timeout.
+        let until = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(50));
+            if stream.write_all(b"x").is_err() {
+                break;
+            }
+        }
+    });
+    let c = SdkClient::new(
+        &base,
+        Some("synthetic"),
+        false,
+        Duration::ZERO,
+        Settings {
+            retries: 0,
+            download_grace: Duration::from_millis(300),
+            download_min_rate: 1024,
+            ..Settings::default()
+        },
+    )
+    .unwrap();
+    let started = Instant::now();
+    let result = c.download(ID, None);
+    let took = started.elapsed();
+    assert!(
+        matches!(
+            result,
+            Err(SpeleoDbError::Transport {
+                cause: TransportCause::Timeout,
+                ..
+            })
+        ),
+        "{:?}",
+        result.err()
+    );
+    assert!(
+        took < Duration::from_secs(5),
+        "stopped by the total deadline, not the 120 s read timeout: {took:?}"
+    );
+    worker.join().unwrap();
+}
+
+#[test]
 fn dns_failure_keeps_its_typed_cause_for_offline_open() {
     struct OfflineDns;
     impl reqwest::dns::Resolve for OfflineDns {
@@ -788,4 +1014,245 @@ fn dns_failure_keeps_its_typed_cause_for_offline_open() {
             ..
         }
     ));
+}
+
+#[test]
+fn a_contract_mismatch_keeps_the_sdk_decoder_detail_without_response_text() {
+    // sdk#8: a 2xx the SDK cannot decode used to collapse to one fixed string, so
+    // a new server enum value was invisible in logs and diagnostics. The decoder
+    // detail now survives - naming the field / value that failed - while any
+    // quoted response string is redacted.
+    let mut unknown_country = project_json();
+    unknown_country["country"] = json!("ZZ");
+    let s = Server::json(unknown_country);
+    let err = acquire_lock(&s.base, "t", false, ID).unwrap_err();
+    assert_eq!(s.finish().len(), 1);
+    assert!(
+        matches!(&err, SpeleoDbError::Parse(_)),
+        "a contract mismatch is a Parse error, got {err:?}"
+    );
+    let detail = err.to_string();
+    assert!(
+        detail.contains("response does not match the SpeleoDB SDK contract: "),
+        "{detail}"
+    );
+    // The kind of mismatch survives; the server's value does not.
+    assert!(detail.contains("unknown variant `...`"), "{detail}");
+    assert!(!detail.contains("ZZ"), "{detail}");
+    assert!(
+        detail.chars().count() <= 340,
+        "the accepted-values list is capped: {detail}"
+    );
+
+    let mut wrong_type = project_json();
+    wrong_type["commit_count"] = json!("sensitive response text");
+    let s = Server::json(wrong_type);
+    let err = acquire_lock(&s.base, "t", false, ID).unwrap_err();
+    s.finish();
+    assert!(
+        matches!(&err, SpeleoDbError::Parse(_)),
+        "a contract mismatch is a Parse error, got {err:?}"
+    );
+    let detail = err.to_string();
+    assert!(detail.contains("invalid type: string \"...\""), "{detail}");
+    assert!(!detail.contains("sensitive"), "{detail}");
+
+    // serde prints a number in backticks, not quotes: a coordinate where a string
+    // belongs must not reach the log or the error either.
+    let mut number_for_text = project_json();
+    number_for_text["name"] = json!(20.48);
+    let s = Server::json(number_for_text);
+    let err = acquire_lock(&s.base, "t", false, ID).unwrap_err();
+    s.finish();
+    let detail = err.to_string();
+    assert!(detail.contains("floating point `...`"), "{detail}");
+    assert!(!detail.contains("20.48"), "{detail}");
+}
+
+#[test]
+fn contract_mismatch_detail_is_redacted_and_bounded() {
+    assert_eq!(
+        contract_mismatch(None),
+        "response does not match the SpeleoDB SDK contract"
+    );
+    assert_eq!(
+        contract_mismatch(Some(
+            r#"failed to deserialize 2xx response body: invalid value: string "a \"quoted\" name", expected x at line 1 column 9"#
+                .into()
+        )),
+        r#"response does not match the SpeleoDB SDK contract: invalid value: string "...", expected x at line 1 column 9"#
+    );
+    // serde's backtick spans carry server values too: numbers, unknown variants
+    // and unknown field names. Backslashes in them are verbatim, not escapes.
+    for (message, expected) in [
+        (
+            "failed to deserialize 2xx response body: invalid type: floating point `20.48`, expected a string at line 1 column 42",
+            "invalid type: floating point `...`, expected a string at line 1 column 42",
+        ),
+        (
+            "invalid value: integer `-87`, expected u32",
+            "invalid value: integer `...`, expected u32",
+        ),
+        (
+            "unknown variant `Synthetic\\`, expected `PRIVATE` or `PUBLIC`",
+            "unknown variant `...`, expected `...` or `...`",
+        ),
+        (
+            "unknown field `coords`, then a string \"Cave \\\"A\\\"\"",
+            "unknown field `...`, then a string \"...\"",
+        ),
+    ] {
+        assert_eq!(
+            contract_mismatch(Some(message.into())),
+            format!("response does not match the SpeleoDB SDK contract: {expected}"),
+            "{message}"
+        );
+    }
+    // serde prints a backticked value verbatim, so the value can hold a backtick
+    // or the text ", expected" itself. Closing its span at the first backtick
+    // leaked everything after it.
+    for (message, expected) in [
+        (
+            "unknown variant `a`LEAK`, expected `PRIVATE` or `PUBLIC`",
+            "unknown variant `...`, expected `...` or `...`",
+        ),
+        (
+            "unknown variant `x`, expected LEAK `y`, expected `PRIVATE` or `PUBLIC`",
+            "unknown variant `...`, expected `...` or `...`",
+        ),
+        (
+            "unknown field `a`LEAK`b`, expected one of `name`, `country` at line 1 column 7",
+            "unknown field `...`, expected one of `...`, `...` at line 1 column 7",
+        ),
+        (
+            "unknown variant `a\"LEAK`, expected `PUBLIC`",
+            "unknown variant `...`, expected `...`",
+        ),
+        (
+            "invalid type: string \"a`LEAK`, expected `b\", expected u32",
+            "invalid type: string \"...\", expected u32",
+        ),
+        // A span that never closes may run into the rest, which is dropped.
+        (
+            "invalid value: string \"LEAK, expected x",
+            "invalid value: string \"...\"",
+        ),
+        ("unknown variant `LEAK, expected x", "unknown variant `...`"),
+    ] {
+        let redacted = contract_mismatch(Some(message.into()));
+        assert_eq!(
+            redacted,
+            format!("response does not match the SpeleoDB SDK contract: {expected}"),
+            "{message}"
+        );
+        assert!(!redacted.contains("LEAK"), "{redacted}");
+    }
+    let long = format!(
+        "unknown variant `ZZ`, expected one of {}",
+        "`AA`, ".repeat(400)
+    );
+    let capped = contract_mismatch(Some(long));
+    assert!(capped.ends_with("..."));
+    assert!(capped.chars().count() < 320, "{capped}");
+}
+
+#[test]
+fn a_parse_failure_is_its_own_metrics_outcome() {
+    // sdk#8: Parse used to count as `ok`, so contract drift never showed in the
+    // traffic metrics.
+    use super::super::metrics::Outcome;
+    let ok: Result<(), SpeleoDbError> = Ok(());
+    assert_eq!(attempt_outcome(&ok), Outcome::Ok);
+    let parse: Result<(), _> = Err(SpeleoDbError::Parse("drift".into()));
+    assert_eq!(attempt_outcome(&parse), Outcome::ParseError);
+    let status: Result<(), _> = Err(SpeleoDbError::Status {
+        status: 404,
+        message: "gone".into(),
+    });
+    assert_eq!(attempt_outcome(&status), Outcome::ClientError);
+    let transport: Result<(), _> = Err(SpeleoDbError::Transport {
+        cause: TransportCause::Tls,
+        detail: "handshake".into(),
+    });
+    assert_eq!(attempt_outcome(&transport), Outcome::NetworkError);
+}
+
+#[test]
+fn a_tls_handshake_failure_is_classified_as_tls() {
+    // sdk#8: TransportCause::Tls was never produced, so a certificate or
+    // handshake failure read as "could not reach the server". An https request
+    // to a peer that answers in plaintext fails inside rustls.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
+    let base = format!("https://{}", listener.local_addr().expect("address"));
+    let worker = std::thread::spawn(move || {
+        if let Ok((mut stream, _)) = listener.accept() {
+            let _ = stream.write_all(
+                b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            let _ = stream.flush();
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    });
+    // Acquire never retries, so exactly one connection is made.
+    let err = acquire_lock(&base, "t", false, ID).unwrap_err();
+    worker.join().expect("server");
+    assert!(
+        matches!(
+            err,
+            SpeleoDbError::Transport {
+                cause: TransportCause::Tls,
+                ..
+            }
+        ),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn an_upload_over_the_server_limit_is_refused_before_any_request() {
+    // sdk#3: the server reads the whole body before refusing an oversized file,
+    // so the client refuses it first - no connection, no body. The limit is
+    // lowered for the test; the production value is the server's 24,657,920.
+    assert_eq!(SERVER_UPLOAD_LIMIT_BYTES, 24_657_920);
+    let _settings = TestSettings::install(Settings {
+        upload_limit: 16,
+        ..Settings::default()
+    });
+    let f = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(f.path(), b"SQLite format 3\0over the limit").unwrap();
+    let s = Server::replies(Vec::new());
+    let err = upload_stalx(&s.base, "t", false, ID, f.path(), "Too large").unwrap_err();
+    assert!(
+        matches!(
+            err,
+            SpeleoDbError::UploadTooLarge {
+                size: 30,
+                limit: 16
+            }
+        ),
+        "got {err:?}"
+    );
+    assert!(s.finish().is_empty(), "nothing may reach the server");
+
+    // At the limit the upload proceeds.
+    std::fs::write(f.path(), b"SQLite format 3\0").unwrap();
+    let s = Server::json(
+        json!({"project":project_json(),"hexsha":SHA,"files":["project.stalx"],"geojson_status":"skipped","message":"Saved","browser_url":null}),
+    );
+    upload_stalx(&s.base, "t", false, ID, f.path(), "Fits").unwrap();
+    assert_eq!(s.finish().len(), 1);
+}
+
+#[test]
+fn a_profile_contract_mismatch_also_keeps_the_decoder_detail() {
+    // The profile read has its own 2xx fallback (an unset country is accepted);
+    // any other mismatch there now carries the SDK detail too.
+    let mut user = user_json();
+    user["country"] = json!("ZZ");
+    let s = Server::json(user);
+    let err = fetch_user_email(&s.base, "t", false).unwrap_err();
+    s.finish();
+    assert!(matches!(&err, SpeleoDbError::Parse(_)), "got {err:?}");
+    assert!(err.to_string().contains("unknown variant `...`"), "{err}");
+    assert!(!err.to_string().contains("ZZ"), "{err}");
 }

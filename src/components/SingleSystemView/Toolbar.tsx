@@ -12,15 +12,12 @@ import {
 } from '../common/icons';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
-import { holdsWriteLock } from '../../utils/quit';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { ToolGlyph, toolAccentVar } from '../common/toolIcons';
 import type { CSSProperties } from 'react';
 import DisplayMenu from './DisplayMenu';
 import { ModeCarousel } from './ModeCarousel';
 import TableSelectDropdown from './TableSelectDropdown';
-import { SpeleoStatusButton } from './SpeleoStatusButton';
-import { useSpeleoStore } from '../../store/speleoStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
 import { TOOL_GROUPS, isNavigationTool, type ToolGroupDef } from '../../utils/toolGroups';
@@ -298,14 +295,6 @@ export default function Toolbar({
   // because both clusters own absolutely-positioned popovers that a clipping
   // context would cut off. Reclaiming that width needs a stage that REMOVES tool
   // controls (folding them into a menu), not one that resizes them.
-  // SpeleoDB navigation is available for both local and remote projects.
-  // #270: the status button grows by a "!" badge when the project has changes only
-  // on this computer and no lock protecting them, so that flip changes the left
-  // cluster's width and must re-run the fit below, exactly like the button
-  // appearing at all.
-  const speleoUnpushedBadge = useSpeleoStore(
-    (s) => s.link?.hasUnpushedEdits === true && !holdsWriteLock(s.link),
-  );
   const CONDENSE_MAX = 5;
   const [condense, setCondense] = useState(0);
   const condenseRef = useRef(0);
@@ -350,7 +339,6 @@ export default function Toolbar({
     // constant-width chevron slot, so their availability no longer changes the
     // left cluster width and must not kick off a reset -> re-fit on every edit.
     editingBlocked,
-    speleoUnpushedBadge,
     // The navigate group appearing/disappearing changes the right cluster's
     // natural width (#409), so its toggle must re-run the fit from scratch.
     showNavigationTools,
@@ -436,9 +424,6 @@ export default function Toolbar({
           compact={tight}
           aria-label={t('singleView.menu.aria')}
         />
-        {/* SpeleoDB status button (#204/T2c) - right of the hamburger; hidden for
-            local projects. One click drives the single-writer hand-off. */}
-        <SpeleoStatusButton />
         {/* Import and Undo/Redo are survey-only (#243): Plan/Export are read-only
             workspaces, so the mutating file/history controls are HIDDEN there (not
             merely disabled) - undoing under the read-only map would mutate the survey

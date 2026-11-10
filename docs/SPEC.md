@@ -81,7 +81,9 @@ verification; ordinary upload keeps the lock. Clean projects do not upload empty
 revisions. Autosave and autosave retry remain local-only. Save and Close continues
 only after confirmed upload and release, with no newer unuploaded changes. Other
 exits automatically release without upload, protecting unsaved survey and form
-drafts with Discard changes / Cancel. Dirtiness is independent of validity.
+drafts with Discard changes / Cancel. A release that fails or is uncertain never
+leaves silently: Close, project switches and Quit stay put and ask "Couldn't hand
+back the lock" (Retry / Close and keep the lock / Cancel). Dirtiness is independent of validity.
 Switch to read-only refuses unsaved or unuploaded changes, with Save Changes guidance.
 Reload requires explicit Discard changes / Cancel for pending work, preserves mode,
 and never acquires a lock. Historical checkouts return to the live server version.
@@ -1708,7 +1710,7 @@ The sidebar displays 12 settings categories, with a visual separator before the 
 | Export | Default image format (PNG/SVG/PDF), default DPI, default layer includes (satellite, grid, labels) |
 | Shortcuts | Searchable shortcut editor with categories (Tools, Edit, View, Panels), primary/secondary binding slots, conflict detection, reserved shortcuts display |
 | Cache | Tile cache statistics, clear cache button, cache enable toggle, max size, TTL days |
-| SpeleoDB | Account sign-in, API endpoint, token authentication, automatic transport policy, startup and manual refresh |
+| SpeleoDB | Account Connect / Disconnect, API endpoint, token authentication, automatic transport policy, startup and manual refresh, "Purge all cached files" (keeps copies with un-uploaded changes unless their deletion is confirmed twice) |
 | Advanced | Debug settings (hitboxes, hit detection logging), logging level/max size, placement suggestion heuristic constants, panel dimensions, reload config from disk |
 
 ### 10.3 Navigation
@@ -2660,7 +2662,9 @@ unsaved-changes prompt offers only Cancel (red) and Discard Changes (blue).
 HTTPS is required except for HTTP to the exact host `localhost`, the exact IPv4
 address `127.0.0.1`, or valid IPv4 addresses in `192.168.0.0/16`. Valid ports are
 allowed. For HTTP, other private ranges, IPv6, localhost aliases/subdomains, public hosts,
-missing schemes and malformed addresses are rejected. No DNS-based exception or
-insecure-HTTP override exists. Invalid endpoints produce an error modal when
-connecting or saving; existing legacy override fields are ignored and omitted
-from subsequent saves. Certificate verification and redirect restrictions remain.
+missing schemes and malformed addresses are rejected, without any DNS lookup. An
+endpoint the policy refuses produces an error dialog when connecting, or when saving
+a new server. `insecure_http` lifts only the HTTP rule (never certificate
+verification); it stays in the file so existing configurations load, Settings has
+no control for it, and its development-build-only handling is being finalised by a
+follow-up commit. Certificate verification and redirect restrictions remain.

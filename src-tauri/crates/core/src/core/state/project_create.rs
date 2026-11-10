@@ -160,9 +160,8 @@ impl AppState {
         self.clear_display_settings_cache();
         self.invalidate_adjusted_cache();
         // [Track B] (#191) A freshly-created local project is always editable;
-        // reset the gate so a previously-open read-only remote project's disabled
-        // flag can't leak in.
-        self.set_edit_enabled(true);
+        // the gate goes back to unmanaged (see `speleodb_edit_gate`).
+        self.speleodb_set_open_gate(None);
         self.set_history_discarded(false);
 
         CommandResult::success()
@@ -524,8 +523,8 @@ impl AppState {
             .clear();
 
         // [Track B] (#191) A freshly-created local project is always editable;
-        // reset the gate so a prior read-only remote project can't leak in.
-        self.set_edit_enabled(true);
+        // the gate goes back to unmanaged (see `speleodb_edit_gate`).
+        self.speleodb_set_open_gate(None);
         self.set_history_discarded(false);
 
         // Track whether the initial save is still pending: a deferred new project

@@ -87,8 +87,9 @@ blocked through `useEditingBlocked()` / `isEditingBlockedNow()`
 (`src/hooks/useEditingBlocked.ts`) and nothing else - `pnpm lint:readonly-gates` bans the
 raw composition, because writing it inline as `useA() || useB()` short-circuits the second
 store hook and violates the Rules of Hooks. Note the asymmetry: the map-read-only term has
-no backend backstop - a local project keeps `edit_enabled` true in Rust whatever mode the
-UI is in - so a missed gate is a real bug, not a cosmetic one.
+no backend backstop - a local project is always editable in Rust whatever mode the UI is
+in (the backend gate, `edit_enabled()`, is derived from the SpeleoDB lock claim and only
+ever closes a SpeleoDB project) - so a missed gate is a real bug, not a cosmetic one.
 -> [app-modes.md](app-modes.md)
 
 **Gas and dive planning.** `Project::compute_gas_reach_field`
