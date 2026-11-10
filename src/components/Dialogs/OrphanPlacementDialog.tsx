@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
@@ -110,6 +110,13 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   // Why the last Accept / Accept All stopped: a merge the backend refused.
   const [placeError, setPlaceError] = useState<string | null>(null);
   const [previewRef, previewSize] = usePreviewSize(340, 200);
+  // Set while finish() runs or once it closed the dialog, so its several callers
+  // (the auto-close effect, Skip on the last section, Accept All, Skip All, the
+  // X) save, toast and report completion once.
+  const finishingRef = useRef(false);
+  // Set while Accept / Accept All place: a second click in the same task lands
+  // before the re-render that disables the buttons.
+  const placingRef = useRef(false);
 
   // Group suggestions by orphan end, sorted by score descending within each group
   const allOrphanEnds = useMemo((): OrphanEnd[] => {
@@ -254,11 +261,15 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   }, [targetSection, currentSuggestion, selectedMergePair]);
 
   const finish = useCallback(async () => {
+    if (finishingRef.current) return;
+    finishingRef.current = true;
     await refreshProjectState();
     // Persist after orphan placement (#92): import + orphan-merge changes are
     // otherwise held in memory only. On a failed save an error/permission dialog
-    // is shown; leave it visible rather than dismissing it via closeDialog.
+    // is shown; leave it visible rather than dismissing it via closeDialog, and
+    // let the X or Skip All try again.
     if (!(await useProjectStore.getState().saveAfterImport())) {
+      finishingRef.current = false;
       return;
     }
     // The import flow ends here on this branch (it never reaches
@@ -284,7 +295,9 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
     }
   }, [refreshProjectState, closeDialog, setView, triggerFitToBounds, receipt, openDialog, showToast]);
 
-  // Auto-close when all suggestions have been processed
+  // Auto-close when all suggestions have been processed. This is the one owner
+  // of finishing after Accept: accepting the last section empties
+  // `remainingEnds`, which lands here.
   useEffect(() => {
     if (isFinished) {
       finish();
@@ -319,7 +332,8 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   }, [mergeStations, setShotKind, updateShot, t]);
 
   const handleAccept = useCallback(async () => {
-    if (!currentSuggestion) return;
+    if (!currentSuggestion || placingRef.current) return;
+    placingRef.current = true;
     setProcessing(true);
     setPlaceError(null);
     try {
@@ -331,13 +345,11 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
       setAcceptedOrphans((prev) => new Set(prev).add(currentSuggestion.orphanSectionId));
       setShowAlternatives(false);
       setSelectedSuggestionIndex(0);
-      if (remainingEnds.length <= 1) {
-        await finish();
-      }
     } finally {
+      placingRef.current = false;
       setProcessing(false);
     }
-  }, [currentSuggestion, selectedMergePair, place, effectiveChoices, remainingEnds.length, finish]);
+  }, [currentSuggestion, selectedMergePair, place, effectiveChoices]);
 
   const handleSkip = useCallback(() => {
     setPlaceError(null);
@@ -346,6 +358,8 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
   }, [advance]);
 
   const handleAcceptAll = useCallback(async () => {
+    if (placingRef.current) return;
+    placingRef.current = true;
     setProcessing(true);
     setPlaceError(null);
     try {
@@ -382,6 +396,7 @@ export default function OrphanPlacementDialog({ suggestions, receipt }: OrphanPl
       }
       await finish();
     } finally {
+      placingRef.current = false;
       setProcessing(false);
     }
   }, [currentEndIndex, remainingEnds, currentSuggestion, selectedMergePair, effectiveChoices, place, project, finish]);
