@@ -180,3 +180,15 @@ describe('immutable shot number binary sidecar', () => {
     expect(() => buildResult(envelope, 0)).toThrow('shot_numbers length mismatch');
   });
 });
+
+
+it('preserves independent Explorer and Surveyor metadata through binary load', () => {
+  const envelope = makeEnvelope(9, [0]);
+  envelope.project_header.sections[0]!.explorer = 'Explorer team';
+  envelope.project_header.sections[0]!.surveyor = 'Survey team';
+  const result = buildResult(envelope, 0);
+  expect(result.project.sections[0]!.explorer).toBe('Explorer team');
+  expect(result.project.sections[0]!.surveyor).toBe('Survey team');
+  expect(result.surveyData.sections[0]!.explorer).toBe('Explorer team');
+  expect(surveyDataFromLegacy(result.project.sections, result.stations).sections[0]!.explorer).toBe('Explorer team');
+});

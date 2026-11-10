@@ -30,7 +30,6 @@ vi.mock('../../hooks/useEditingBlocked', () => ({
 vi.mock('../../hooks/useDecimalPrecision', () => ({ useDecimalPrecision: () => ({ length: 2, azimuth: 2, depth: 2, inclination: 2 }) }));
 vi.mock('react-i18next', async importOriginal => ({ ...(await importOriginal<typeof import('react-i18next')>()), useTranslation: () => ({ t: (key: string) => key }) }));
 vi.mock('../../utils/ipc', () => ({ invokeIpc: vi.fn(async () => []), getErrorMessage: (error: unknown) => String(error) }));
-vi.mock('./RawTableView', () => ({ default: () => null }));
 vi.mock('../common/Select', () => ({ Select: (props: any) => <select data-testid={props['data-testid']} value={props.value} disabled={props.disabled} onChange={event => props.onChange(event.target.value)}>
   <option value="">Choose</option>{props.options.map((option: any) => <option key={option.value} value={option.value}>{option.label}</option>)}
 </select> }));
@@ -90,7 +89,7 @@ describe('ProjectDataTable command routing', () => {
   });
   it('applies every section metadata edit in a multi-row paste', async () => {
     render(<ProjectDataTable sections={sections} />);
-    fireEvent.change(screen.getByTestId('project-data-view'), { target: { value: 'sections' } });
+    fireEvent.click(screen.getByTestId('project-data-view-sections'));
     await act(async () => mocks.grid.onBatchEdit([
       { row: 0, colKey: 'name', value: '' },
       { row: 1, colKey: 'surveyor', value: 'Survey team' },
@@ -126,4 +125,17 @@ it('sorts section names alphabetically while keeping creation first', () => {
   render(<ProjectDataTable sections={sections.map((section, index) => ({ ...section, name: index === 0 ? 'Zulu' : 'alpha' }))} />);
   const options = screen.getByTestId('data-section-100000').querySelectorAll('option');
   expect(Array.from(options).map(option => option.textContent)).toEqual(['Choose', 'dataWorkspace.createSection', 'alpha', 'Zulu']);
+});
+
+
+it('edits Explorer independently and presents a hex color with a picker without section IDs', async () => {
+  render(<ProjectDataTable sections={sections.map(section => ({ ...section, color: '#112233' }))} />);
+  fireEvent.click(screen.getByTestId('project-data-view-sections'));
+  expect(mocks.grid.columns.map((column: any) => column.key)).toEqual(['name', 'explorer', 'surveyor', 'date', 'color', 'direction', 'quality']);
+  await act(async () => mocks.grid.onEdit(0, 'explorer', 'Explorer team'));
+  expect(mocks.store.updateSection).toHaveBeenCalledWith(1, { explorer: 'Explorer team' });
+  const color = screen.getByTestId('data-section-color-1');
+  expect(color).toHaveAttribute('type', 'color');
+  await act(async () => fireEvent.change(color, { target: { value: '#abcdef' } }));
+  expect(mocks.store.updateSection).toHaveBeenCalledWith(1, { color: '#abcdef' });
 });

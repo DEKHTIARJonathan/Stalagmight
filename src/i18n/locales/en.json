@@ -2928,6 +2928,13 @@
   "dataWorkspace": {
     "createSection": "Create a New Section",
     "searchSections": "Search sections",
+    "tableSelector": "Data table",
+    "chooseColor": "Choose color for {{name}}",
+    "invalidColor": "Enter a color as #RRGGBB.",
+    "sectionColumns": {
+      "name": "Name", "explorer": "Explorer", "surveyor": "Surveyor", "date": "Date",
+      "color": "Color", "direction": "Direction", "quality": "Quality"
+    },
     "noSections": "No sections match your search.",
     "section": "Section",
     "sections": "Sections",

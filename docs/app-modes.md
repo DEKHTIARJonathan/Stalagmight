@@ -169,9 +169,9 @@ then exposes the managed-project workspace.
 ## DATA workspace
 
 The header order is Survey, Data, Plan, Export. Data fills the workspace with
-live, editable survey shots across sections. Its table selector also offers
-section metadata and a read-only database inspector. The inspector shows the
-last saved state; the survey editors include unsaved edits.
+live, editable survey shots across sections. Centered Shots and Sections tabs switch between the shot editor and section
+metadata, including independent Explorer and Surveyor fields. Both editors
+include unsaved edits.
 
 Each shot has a Section dropdown. Choosing another section appends the shot to
 that section and closes the source gap using the survey deletion rules. Frozen

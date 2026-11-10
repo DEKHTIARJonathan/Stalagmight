@@ -11,7 +11,6 @@ import { Button } from '../common/Button';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
 import { DialogWrapper } from '../Dialogs/DialogWrapper';
 import { buildShotColumns } from './dataTableShotColumns';
-import RawTableView from './RawTableView';
 import { endDraft, materializeDraft, completeDraftData } from './dataTableDrafts';
 import { buildShotUpdates } from './dataTableEdits';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
@@ -21,7 +20,7 @@ import type { CellEdit } from '../common/SpreadsheetGrid/types';
 
 interface Row extends Shot { sectionId: number }
 
-/** Live survey data. Raw database inspection remains a separate read-only view. */
+/** Live, editable survey shots and section metadata. */
 export function ProjectDataTable({ sections }: { sections: Section[] }) {
   const { t, i18n } = useTranslation();
   const precision = useDecimalPrecision();
@@ -33,17 +32,6 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
   const draftSectionRef = useRef(draftSection);
   const mutationPending = useRef(false);
   const selection = useUIStore(state => state.selection);
-  const [rawTables, setRawTables] = useState<string[]>([]);
-  const [rawTable, setRawTable] = useState('');
-  useEffect(() => {
-    let cancelled = false;
-    void invokeIpc<string[]>('get_raw_table_names').then(names => {
-      if (cancelled || !Array.isArray(names)) return;
-      setRawTables(names);
-      setRawTable(current => names.includes(current) ? current : names.includes('shots') ? 'shots' : names[0] ?? '');
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [store.isDirty]);
   useEffect(() => {
     if (draftSection !== null && !sections.some(section => section.id === draftSection)) {
       draftSectionRef.current = null;
@@ -192,9 +180,10 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
   const editSections = async (edits: CellEdit[]) => {
     const updates = new Map<number, Record<string, unknown>>();
     for (const { row, colKey, value } of edits) {
-      if (!sections[row] || !['name', 'surveyor', 'date', 'color', 'direction', 'quality'].includes(colKey)) continue;
+      if (!sections[row] || !['name', 'explorer', 'surveyor', 'date', 'color', 'direction', 'quality'].includes(colKey)) continue;
       const patch = updates.get(row) ?? {};
-      patch[colKey] = ['name', 'surveyor', 'date'].includes(colKey) && value === '' ? null : value;
+      if (colKey === 'color' && (typeof value !== 'string' || !/^#[0-9a-f]{6}$/i.test(value))) throw new Error(t('dataWorkspace.invalidColor'));
+      patch[colKey] = ['name', 'explorer', 'surveyor', 'date'].includes(colKey) && value === '' ? null : value;
       updates.set(row, patch);
     }
     for (const [row, patch] of updates) {
@@ -203,19 +192,42 @@ export function ProjectDataTable({ sections }: { sections: Section[] }) {
     }
   };
   const sectionColumns: GridColumn<Section>[] = [
-    { key: 'id', header: t('dataWorkspace.id'), getValue: row => row.id },
-    ...(['name', 'surveyor', 'date', 'color', 'direction', 'quality'] as const).map(key => ({ key, header: key, getValue: (row: Section) => row[key], editable: !blocked && !busy, kind: key === 'quality' ? 'number' as const : 'text' as const })),
+    ...(['name', 'explorer', 'surveyor', 'date'] as const).map(key => ({ key, header: t(`dataWorkspace.sectionColumns.${key}`), getValue: (row: Section) => row[key] ?? '', editable: !blocked && !busy, kind: 'text' as const })),
+    {
+      key: 'color', header: t('dataWorkspace.sectionColumns.color'), width: 130,
+      getValue: section => section.color, editable: !blocked && !busy, noInlineEdit: true,
+      activate: section => root.current?.querySelector<HTMLInputElement>(`[data-testid="data-section-color-${section.id}"]`)?.click(),
+      render: section => <label className="relative flex min-w-0 items-center gap-2 cursor-pointer focus-within:ring-1 focus-within:ring-accent">
+        <span className="h-4 w-4 shrink-0 rounded border border-border" style={{ backgroundColor: section.color }} aria-hidden="true" />
+        <span className="font-mono uppercase">{section.color}</span>
+        <input type="color" value={section.color} disabled={blocked || busy} aria-label={t('dataWorkspace.chooseColor', { name: section.name ?? t('sections.defaultName', { id: section.id }) })} data-testid={`data-section-color-${section.id}`}
+          className="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
+          onChange={event => { const value = event.target.value; void mutate(() => editSections([{ row: sections.findIndex(row => row.id === section.id), colKey: 'color', value }])); }} />
+      </label>,
+    },
+    ...(['direction', 'quality'] as const).map(key => ({ key, header: t(`dataWorkspace.sectionColumns.${key}`), getValue: (row: Section) => row[key], editable: !blocked && !busy, kind: key === 'quality' ? 'number' as const : 'text' as const })),
   ];
   return <div className="h-full" data-testid="data-table" data-fullscreen="true"><div className="h-full flex flex-col bg-panel" data-testid="project-data-table">
-    <div className="flex items-center gap-3 p-2 border-b border-border">
-      <Select value={view} onChange={setView} options={[{ value: 'shots', label: t('dataTable.viewShots') }, { value: 'sections', label: t('dataWorkspace.sections') }, { value: 'raw', label: t('dataWorkspace.inspector') }]} data-testid="project-data-view" />
-      <Button size="sm" disabled={blocked || busy} onClick={() => openCreate('empty')} data-testid="data-create-section">{t('dataWorkspace.createSection')}</Button>
-      {view === 'raw' && store.isDirty && <span data-testid="data-table-raw-dirty-hint">{t('dataTable.rawData.asOfLastSave')}</span>}
-      {view === 'raw' && <Select data-testid="data-raw-table" value={rawTable} onChange={setRawTable} options={rawTables.map(value => ({ value, label: value }))} />}
-      {error && <span role="alert" className="text-error">{error}</span>}
+    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 p-2 border-b border-border">
+      <div className="min-w-0">
+        <Button size="sm" disabled={blocked || busy} onClick={() => openCreate('empty')} data-testid="data-create-section">{t('dataWorkspace.createSection')}</Button>
+      </div>
+      <div role="tablist" aria-label={t('dataWorkspace.tableSelector')} className="flex overflow-hidden rounded border border-border" data-testid="project-data-view"
+        onKeyDown={event => {
+          if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+          event.preventDefault();
+          const next = event.key === 'Home' ? 'shots' : event.key === 'End' ? 'sections' : view === 'shots' ? 'sections' : 'shots';
+          setView(next);
+          document.getElementById(`project-data-${next}-tab`)?.focus();
+        }}>
+        {(['shots', 'sections'] as const).map(table => <button key={table} type="button" role="tab" aria-selected={view === table} tabIndex={view === table ? 0 : -1} aria-controls={`project-data-${table}-panel`} id={`project-data-${table}-tab`} data-testid={`project-data-view-${table}`}
+          className={`px-3 py-1 text-sm ${view === table ? 'bg-accent text-accent-on' : 'text-text-secondary hover:bg-accent-10'}`}
+          onClick={() => setView(table)}>{table === 'shots' ? t('dataTable.viewShots') : t('dataWorkspace.sections')}</button>)}
+      </div>
+      <div className="min-w-0">{error && <span role="alert" className="text-error">{error}</span>}</div>
     </div>
-    <div ref={root} className="flex-1 min-h-0">
-      {view === 'raw' ? (rawTable ? <RawTableView tableName={rawTable} height={height} /> : <p>{t('dataWorkspace.saveToInspect')}</p>) : view === 'shots' ? <SpreadsheetGrid columns={columns} rows={rows} rowKey={row => `${row.sectionId}:${row.uuid ?? row.id}`} selectedRow={selection?.type === 'shot' ? rows.findIndex(row => row.sectionId === selection.sectionId && row.id === selection.shotId) : null} height={height} rowLabel={(_row, index) => index + 1}
+    <div ref={root} className="flex-1 min-h-0" role="tabpanel" id={`project-data-${view}-panel`} aria-labelledby={`project-data-${view}-tab`}>
+      {view === 'shots' ? <SpreadsheetGrid columns={columns} rows={rows} rowKey={row => `${row.sectionId}:${row.uuid ?? row.id}`} selectedRow={selection?.type === 'shot' ? rows.findIndex(row => row.sectionId === selection.sectionId && row.id === selection.shotId) : null} height={height} rowLabel={(_row, index) => index + 1}
         onEdit={(row, colKey, value) => { void mutate(() => edit([{ row, colKey, value }])); }} onBatchEdit={edits => { void mutate(() => edit(edits)); }} />
         : <SpreadsheetGrid columns={sectionColumns} rows={sections} rowKey={row => row.id} height={height} onEdit={(row, colKey, value) => { void mutate(() => editSections([{ row, colKey, value }])); }} onBatchEdit={edits => { void mutate(() => editSections(edits)); }} />}
     </div>

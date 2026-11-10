@@ -150,6 +150,7 @@ interface SectionHeaderBinary {
   id: number;
   name: string | null;
   surveyor: string | null;
+  explorer?: string | null;
   date: string | null;
   color: string;
   direction: SurveyDirection;
@@ -319,6 +320,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
       id: sh.id,
       name: sh.name,
       surveyor: sh.surveyor,
+      explorer: sh.explorer ?? null,
       date: sh.date,
       color: sh.color,
       direction: sh.direction,
@@ -547,6 +549,7 @@ function buildSurveyData(
     id: sh.id,
     name: sh.name,
     surveyor: sh.surveyor,
+    explorer: sh.explorer ?? null,
     date: sh.date,
     color: sh.color,
     direction: sh.direction,

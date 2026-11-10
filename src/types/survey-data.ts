@@ -45,6 +45,7 @@ export interface SectionMetadata {
   id: number;
   name: string | null;
   surveyor: string | null;
+  explorer?: string | null;
   /** ISO 8601 date string (matches IPC), or null. */
   date: string | null;
   color: string;
@@ -453,6 +454,7 @@ export function surveyDataFromLegacy(
       id: section.id,
       name: section.name,
       surveyor: section.surveyor,
+      explorer: section.explorer ?? null,
       date: section.date,
       color: section.color,
       direction: section.direction,

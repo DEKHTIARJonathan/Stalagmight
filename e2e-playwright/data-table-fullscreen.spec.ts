@@ -1,4 +1,4 @@
-import { test, expect, type Page, type Locator } from './fixtures/coverage';
+import { test, expect, type Page } from './fixtures/coverage';
 import {
   setupMockedPage,
   createProject,
@@ -69,27 +69,6 @@ async function fillCell(page: Page, row: number, colKey: string, value: string):
   await page.keyboard.press('Enter');
   await expect(editor).toHaveCount(0);
 }
-
-/** Open the fullscreen-toolbar table picker and return its portaled listbox. */
-async function openTablePicker(page: Page): Promise<Locator> {
-  const trigger = page.getByTestId('project-data-view');
-  await trigger.click();
-  const listboxId = await trigger.getAttribute('aria-controls');
-  expect(listboxId).toBeTruthy();
-  const listbox = page.locator(`[id="${listboxId}"]`);
-  await expect(listbox).toBeVisible();
-  return listbox;
-}
-
-/** Pick a view in the fullscreen toolbar picker ('Sections' | 'Raw data'). */
-async function pickView(page: Page, optionName: string): Promise<void> {
-  const listbox = await openTablePicker(page);
-  await listbox.getByRole('option', { name: optionName }).click();
-  await expect(listbox).not.toBeVisible();
-}
-
-/** Pick a raw table via the sub-header menu next to the table-name pill. */
-
 
 test.describe('Data table fullscreen mode', () => {
   test.beforeEach(async ({ page }) => {
@@ -234,22 +213,26 @@ test.describe('Data table fullscreen mode', () => {
     await expect.poll(() => getActiveTool(page)).toBe('merge');
   });
 
-  test('database inspection stays read-only and shows saved state', async ({ page }) => {
+  test('centered table tabs edit section metadata and color without internal IDs or inspector', async ({ page }) => {
     await enterFullScreen(page);
-    await page.keyboard.press('Control+s');
-    await pickView(page, 'Database inspection');
-    await expect(page.getByTestId('raw-table-view')).toBeVisible();
-    await expect(page.getByTestId('grid-cell-0-length')).toHaveText('10');
-    await page.getByTestId('grid-cell-0-length').dblclick();
-    await expect(page.getByTestId('grid-cell-editor')).toHaveCount(0);
-    await page.getByTestId('data-raw-table').click();
-    await page.getByRole('option', { name: 'undo_stack', exact: true }).click();
-    await expect(page.getByTestId('grid-cell-0-command_json')).toHaveText('<blob 1.2 KB>');
-    await pickView(page, 'Shots');
-    await fillCell(page, 0, 'length', '42');
-    await pickView(page, 'Database inspection');
-    await expect(page.getByTestId('data-table-raw-dirty-hint')).toBeVisible();
-    await page.keyboard.press('Control+s');
-    await expect(page.getByTestId('data-table-raw-dirty-hint')).toHaveCount(0);
+    const tabs = page.getByTestId('project-data-view');
+    const bounds = await tabs.boundingBox();
+    expect(Math.abs(bounds!.x + bounds!.width / 2 - page.viewportSize()!.width / 2)).toBeLessThanOrEqual(1);
+    await page.getByTestId('project-data-view-sections').click();
+    await expect(page.getByTestId('grid-cell-0-id')).toHaveCount(0);
+    await expect(page.getByTestId('grid-cell-0-explorer')).toBeVisible();
+    await expect(page.getByTestId('grid-cell-0-surveyor')).toBeVisible();
+    await fillCell(page, 0, 'explorer', 'Synthetic explorer');
+    await expect(page.getByTestId('grid-cell-0-explorer')).toHaveText('Synthetic explorer');
+    const color = page.getByTestId('data-section-color-1');
+    await expect(color).toHaveAttribute('type', 'color');
+    await color.evaluate((element: HTMLInputElement) => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(element, '#123456');
+      element.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await expect(page.getByTestId('grid-cell-0-color')).toContainText('#123456');
+    await expect(page.getByText('Database inspection (read-only)', { exact: true })).toHaveCount(0);
+    await page.getByTestId('project-data-view-shots').click();
+    await expect(page.getByTestId('grid-cell-0-length')).toBeVisible();
   });
 });

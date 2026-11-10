@@ -1364,7 +1364,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 created_at?: string; modified_at?: string; file_path?: string | null;
                 next_section_id?: number; next_closure_id?: number;
                 sections: Array<{
-                  id: number; name?: string | null; surveyor?: string | null;
+                  id: number; name?: string | null; surveyor?: string | null; explorer?: string | null;
                   date?: string | null; color?: string; direction?: string; quality?: number;
                   // The section's north reference (#438); undefined until an
                   // importer declares one.
@@ -1465,6 +1465,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 id: section.id,
                 name: section.name ?? null,
                 surveyor: section.surveyor ?? null,
+                explorer: section.explorer ?? null,
                 date: section.date ?? null,
                 color: section.color ?? '#888888',
                 direction: section.direction ?? 'Forward',
