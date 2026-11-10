@@ -49,6 +49,7 @@ describe('cleanEndpointInput', () => {
       ['\u00A0https://www.speleodb.org\u3000', 'https://www.speleodb.org'],
       ['\u200B\uFEFFhttps://www.speleodb.org\u2060', 'https://www.speleodb.org'],
       ['\u200Ehttps://www.speleodb.org\u202C\u00AD', 'https://www.speleodb.org'],
+      ['\u0085https://www.speleodb.org\u0085', 'https://www.speleodb.org'],
       ['https://www.speleo db.org', 'https://www.speleo db.org'],
       ['https://www.speleo\u200Bdb.org', 'https://www.speleo\u200Bdb.org'],
       [' \t\n\u200B\uFEFF ', ''],
@@ -56,6 +57,14 @@ describe('cleanEndpointInput', () => {
     for (const [input, expected] of cases) {
       expect(cleanEndpointInput(input), JSON.stringify(input)).toBe(expected);
     }
+  });
+
+  it('stays linear on a long interior run (a hostile .stalx endpoint)', () => {
+    const hostile = 'https://a' + ' '.repeat(200_000) + 'b';
+    const started = performance.now();
+    expect(cleanEndpointInput(hostile)).toBe(hostile);
+    expect(endpointsMatch(hostile, 'https://a')).toBe(false);
+    expect(performance.now() - started).toBeLessThan(500);
   });
 
   it('treats a pasted spelling as the same server', () => {
