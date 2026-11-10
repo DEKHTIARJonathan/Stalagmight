@@ -2,9 +2,14 @@
 //! the stations they were given for, mirror with a reversed import exactly like
 //! station comments, and undo/redo of the import takes them away and back.
 
+use tempfile::TempDir;
+
 use super::{AppState, VirtualShotMode};
 use crate::core::Command;
-use crate::models::{ImportPlacement, ImportSectionConfig, Project, ShotData, StationRef};
+use crate::models::{
+    ImportPlacement, ImportSectionConfig, Project, SectionData, ShotData, StationRef,
+};
+use crate::persistence::Database;
 
 fn shot(azimuth: f64, length: f64) -> ShotData {
     ShotData {
@@ -136,4 +141,67 @@ fn a_name_past_the_last_station_is_dropped_either_way() {
         assert_eq!(project.station_names.len(), 1, "reverse={reverse}");
         assert!(!project.station_names.values().any(|n| n == "nowhere"));
     }
+}
+
+/// Merging projects remaps every section id; each source's names must land on
+/// the same station of its section's NEW id, in the merged file.
+#[test]
+fn merged_projects_keep_each_station_name_on_its_station() {
+    let dir = TempDir::new().unwrap();
+    let mut sources = Vec::new();
+    for (label, count) in [("A", 2u32), ("B", 3)] {
+        let mut project = Project::new(label.to_string(), None);
+        let id = project
+            .add_section(SectionData {
+                name: Some(format!("Section {label}")),
+                color: "#4ecdc4".to_string(),
+                shots: (0..count).map(|i| shot(f64::from(i) * 40.0, 5.0)).collect(),
+                ..Default::default()
+            })
+            .id;
+        project.ensure_shot_uuids();
+        // Distinct per source, so a name landing in the wrong section shows.
+        for index in 0..=count {
+            let key = project.key_for_ref(StationRef::new(id, index)).unwrap();
+            project.station_names.insert(key, format!("{label}{index}"));
+        }
+        let path = dir.path().join(format!("{label}.stalx"));
+        Database::open(&path)
+            .unwrap()
+            .save_project(&project)
+            .unwrap();
+        sources.push(path);
+    }
+
+    let output = dir.path().join("merged.stalx");
+    let state = AppState::new().unwrap();
+    let result = state.execute(Command::MergeProjects {
+        source_paths: sources,
+        output_path: output.clone(),
+        output_name: "Merged".to_string(),
+        archive_originals: false,
+    });
+    assert!(result.success, "merge failed: {:?}", result.error);
+
+    let merged = Database::open_existing(&output)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    for (label, count) in [("A", 2u32), ("B", 3)] {
+        let section = merged
+            .sections
+            .iter()
+            .find(|s| s.name.as_deref() == Some(&format!("Section {label}")))
+            .unwrap();
+        for index in 0..=count {
+            assert_eq!(
+                merged
+                    .station_name_for_ref(StationRef::new(section.id, index))
+                    .map(String::as_str),
+                Some(format!("{label}{index}").as_str()),
+                "{label}:{index}"
+            );
+        }
+    }
+    assert_eq!(merged.station_names.len(), 3 + 4);
 }
