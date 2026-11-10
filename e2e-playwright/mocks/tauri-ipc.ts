@@ -1455,7 +1455,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // Binary wire v3: bits 0-1 carry the ShotKind discriminant (#27).
                 shotsFlags[shotCursor] =
                   shot.kind === 'Jump' ? 1 : shot.kind === 'Reference' ? 2 : 0;
-                shotNumbers.push(Number(shot.number ?? ++shotNumberCounter));
+                if (!shot.number) shot.number = ++shotNumberCounter;
+                shotNumberCounter = Math.max(shotNumberCounter, shot.number);
+                shotNumbers.push(shot.number);
                 if (shot.comment) shotComments.push([shotCursor, shot.comment]);
                 shotCursor++;
               }
