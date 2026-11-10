@@ -188,7 +188,7 @@ pub fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
 ///   the typed [`TransportCause`] on `transport` (#270) so the FE can render a
 ///   translated "could not reach <endpoint>" line instead of the raw errno.
 /// - `NotAuthenticated` → `ReLogin` (no usable token).
-/// - `InsecureEndpoint` and every other local error → `Fatal`, `status: None`.
+/// - `InsecureEndpoint`, `InvalidEndpoint` and every other local error → `Fatal`, `status: None`.
 pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto {
     // Only a Transport error carries a cause; every other arm leaves it None,
     // which is what makes `transport` a sound discriminant on the FE side.
@@ -255,6 +255,7 @@ pub fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto 
         | SpeleoDbError::InvalidProjectId
         | SpeleoDbError::InvalidRevision
         | SpeleoDbError::InsecureEndpoint { .. }
+        | SpeleoDbError::InvalidEndpoint { .. }
         | SpeleoDbError::NoRemoteProject => (SpeleoDbAction::Fatal, None, err.to_string()),
     };
     SpeleoErrorDto {

@@ -32,7 +32,7 @@ pub mod models;
 pub mod sync;
 // [Track A] #187 http/https private-network TLS policy (pure classify_addr + enforce).
 pub(crate) mod tls;
-pub use tls::validate_endpoint;
+pub use tls::{clean_endpoint_input, validate_endpoint};
 
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
 pub use contract::{SpeleoDbAction, TransportCause};
@@ -99,8 +99,17 @@ pub enum SpeleoDbError {
     // policy (public `http://`, a missing/unknown scheme, or an unresolvable
     // host). Non-retryable by construction - `tls::enforce` errors before any
     // request attempt, so `with_retry` never loops on it.
-    #[error("HTTPS is required. HTTP is allowed only on localhost, 127.0.0.1 or 192.168.x.x. Rejected endpoint: {endpoint}")]
+    // The endpoint is printed with `{:?}` so it arrives quoted and escaped: a
+    // character the user cannot see (a stray space, a zero-width space) shows up
+    // in the message instead of making a correct-looking address look rejected.
+    #[error("HTTPS is required. HTTP is allowed only on localhost, 127.0.0.1 or 192.168.x.x. Rejected endpoint: {endpoint:?}")]
     InsecureEndpoint { endpoint: String },
+    /// The endpoint is not an absolute `scheme://host` URL (unparseable, no
+    /// scheme, no host, or carrying `user@` credentials). Kept apart from
+    /// [`SpeleoDbError::InsecureEndpoint`] so a malformed address is never
+    /// reported as an HTTPS problem.
+    #[error("{endpoint:?} is not a valid server address. Enter the full address, for example https://www.speleodb.org")]
+    InvalidEndpoint { endpoint: String },
     /// [P1] No open remote SpeleoDB project to act on (start editing / done /
     /// update require one). Fails closed (Fatal).
     #[error("no open SpeleoDB project")]

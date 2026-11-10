@@ -94,12 +94,13 @@ fn resolve_endpoint(
     env_endpoint: Option<&str>,
     config_endpoint: Option<&str>,
 ) -> Option<String> {
+    // Same cleaning as a settings save (#675), so the override and
+    // `DEV_SPELEODB_URL` accept a pasted value too; a value that cleans to
+    // nothing falls through to the next source.
     [override_endpoint, env_endpoint, config_endpoint]
         .into_iter()
         .flatten()
-        .map(str::trim)
-        .find(|e| !e.is_empty())
-        .map(str::to_owned)
+        .find_map(crate::speleodb::clean_endpoint_input)
 }
 
 /// Reject any `project_id` that is not a plain SpeleoDB project UUID before it is
@@ -5253,6 +5254,20 @@ mod tests {
                 "expected {bad:?} to be rejected"
             );
         }
+    }
+
+    #[test]
+    fn resolve_endpoint_cleans_pasted_values() {
+        // #675: invisible characters around a pasted override or env value are
+        // stripped, and one that cleans to nothing falls through.
+        assert_eq!(
+            resolve_endpoint(Some("\u{200B} https://override/ \u{FEFF}"), None, None),
+            Some("https://override/".to_owned())
+        );
+        assert_eq!(
+            resolve_endpoint(Some("\u{200B}"), Some("\u{00A0}https://env\u{00A0}"), None),
+            Some("https://env".to_owned())
+        );
     }
 
     #[test]
