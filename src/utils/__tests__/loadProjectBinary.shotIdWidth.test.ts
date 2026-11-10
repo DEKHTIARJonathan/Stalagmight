@@ -15,6 +15,7 @@
 import { describe, it, expect } from 'vitest';
 
 import { buildResult, type BinaryEnvelope } from '../loadProjectBinary';
+import { getShot, surveyDataFromLegacy } from '../../types/survey-data';
 
 const SHOT_FLOAT_FIELDS = 12;
 const SHOT_UINT_FIELDS = 3;
@@ -159,4 +160,23 @@ describe('loadProjectBinary keeps u32 shot ids exact (#555)', () => {
       }
     });
   }
+});
+
+
+describe('immutable shot number binary sidecar', () => {
+  it('preserves independent numbers through lazy and SoA materialization', () => {
+    const envelope = makeEnvelope(9, [0, 1]);
+    envelope.shot_numbers = [7, 12];
+    const result = buildResult(envelope, 0);
+    expect(result.project.sections[0]!.shots.map(shot => shot.number)).toEqual([7, 12]);
+    expect(getShot(result.surveyData, 0).number).toBe(7);
+    expect(getShot(result.surveyData, 1).number).toBe(12);
+    const refreshed = surveyDataFromLegacy(result.project.sections, result.stations);
+    expect(getShot(refreshed, 0).number).toBe(7);
+  });
+  it('rejects a truncated sidecar rather than losing shot identity', () => {
+    const envelope = makeEnvelope(9, [0, 1]);
+    envelope.shot_numbers = [7];
+    expect(() => buildResult(envelope, 0)).toThrow('shot_numbers length mismatch');
+  });
 });

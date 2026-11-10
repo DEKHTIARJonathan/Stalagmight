@@ -98,6 +98,7 @@ export interface BinaryEnvelope {
   is_remote: boolean;
   project_header: ProjectHeaderBinary;
   shot_count: number;
+  shot_numbers?: number[];
   shots_floats: Uint8Array;
   shots_uints: Uint8Array;
   shots_flags: Uint8Array;
@@ -256,6 +257,10 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     throw new Error(`shots_flags length mismatch: ${shotsFlags.length} vs ${env.shot_count}`);
   }
 
+  if (env.shot_numbers && env.shot_numbers.length !== env.shot_count) {
+    throw new Error('shot_numbers length mismatch');
+  }
+
   // Index shot comments by global shot index for O(1) lookup.
   const shotCommentByIdx = new Map<number, string>();
   for (const [idx, c] of env.shot_comments) shotCommentByIdx.set(idx, c);
@@ -286,6 +291,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
         const markerRaw = shotsU32[uBase + 2]!;
         shots[j] = {
           id: shot_id,
+          ...(env.shot_numbers ? { number: env.shot_numbers[globalIdx] } : {}),
           azimuth_in: shotsF32[fBase]!,
           azimuth_out: shotsF32[fBase + 1]!,
           length: shotsF32[fBase + 2]!,
@@ -575,6 +581,7 @@ function buildSurveyData(
     sections,
     shotCount: N,
     shotIds,
+    shotNumbers: env.shot_numbers ? Uint32Array.from(env.shot_numbers) : undefined,
     shotSectionIds,
     shotAzimuthIn,
     shotAzimuthOut,

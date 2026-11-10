@@ -216,6 +216,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       let windowDestroyCount = 0;
       let windowCloseCount = 0;
       let sectionCounter = 0;
+      let shotNumberCounter = 0;
       // Shot ids are section-encoded, exactly as the backend allocates them:
       // `Section::new` seeds `next_shot_id = section.id * FEATURE_ID_STRIDE` and
       // increments from there (src-tauri/src/models/section.rs). Keeping the mock
@@ -1047,6 +1048,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const saveDirectoryArg = (args?.saveDirectory as string | undefined) ?? undefined;
             const now = new Date().toISOString();
             sectionCounter = 0;
+            shotNumberCounter = 0;
             const sanitizedName = name.replace(/[^a-zA-Z0-9]/g, '_');
             const resolvedPath = savePathArg
               ?? (saveDirectoryArg
@@ -1095,6 +1097,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             projectPath = (args?.path as string) ?? null;
             const now = new Date().toISOString();
             sectionCounter = 0;
+            shotNumberCounter = 0;
 
             // Generate a consistent loadingId for this load operation
             const loadingId = Date.now();
@@ -1417,6 +1420,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const shotsUintsView = new DataView(shotsUints.buffer);
             const sectionsMeta: Array<Record<string, unknown>> = [];
             const shotComments: Array<[number, string]> = [];
+            const shotNumbers: number[] = [];
             let shotCursor = 0;
 
             for (const section of jsonResult.project.sections) {
@@ -1451,6 +1455,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // Binary wire v3: bits 0-1 carry the ShotKind discriminant (#27).
                 shotsFlags[shotCursor] =
                   shot.kind === 'Jump' ? 1 : shot.kind === 'Reference' ? 2 : 0;
+                shotNumbers.push(Number(shot.number ?? ++shotNumberCounter));
                 if (shot.comment) shotComments.push([shotCursor, shot.comment]);
                 shotCursor++;
               }
@@ -1577,6 +1582,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               shots_uints: shotsUints,
               shots_flags: shotsFlags,
               shot_comments: shotComments,
+              shot_numbers: shotNumbers,
               station_count: totalStations,
               stations_floats: stationsFloats,
               stations_uints: stationsUints,
@@ -1651,6 +1657,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'get_project':
           case 'get_project_state': {
+            for (const section of currentProject?.sections ?? []) {
+              for (const shot of (section as { shots?: Array<{ number?: number }> }).shots ?? []) {
+                if (shot.number) shotNumberCounter = Math.max(shotNumberCounter, shot.number);
+                else shot.number = ++shotNumberCounter;
+              }
+            }
             // Generate mock stations from sections with merged_with data
             const mockStations: Array<{
               station_ref: { section_id: number; station_index: number };
@@ -2457,6 +2469,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const rawShots = Array.isArray(args?.shots) ? (args?.shots as Array<Record<string, unknown>>) : [];
             const shots = rawShots.map((shot, index) => ({
               id: mockShotId(sectionCounter, index),
+              number: ++shotNumberCounter,
               // #310: a deterministic, stable uuid per shot - the neighbour-pair anchors above
               // key off this, exactly as the real backend keys off `Shot.uuid`.
               uuid: `mock-shot-uuid-${mockShotId(sectionCounter, index)}`,
@@ -2500,6 +2513,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (!currentProject) {
               const now = new Date().toISOString();
               sectionCounter = 0;
+              shotNumberCounter = 0;
               currentProject = {
                 id: 1,
                 name: 'Imported Project',
@@ -2519,6 +2533,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const rawShots = Array.isArray(sectionData.shots) ? (sectionData.shots as Array<Record<string, unknown>>) : [];
               const shots = rawShots.map((shot, index) => ({
                 id: mockShotId(sectionCounter, index),
+              number: ++shotNumberCounter,
                 azimuth_in: (shot.azimuth_in as number) ?? 0,
                 azimuth_out: (shot.azimuth_out as number) ?? 0,
                 length: (shot.length as number) ?? 0,
@@ -2649,6 +2664,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (!currentProject) {
               const now = new Date().toISOString();
               sectionCounter = 0;
+              shotNumberCounter = 0;
               currentProject = {
                 id: 1,
                 name: 'Imported Project',
@@ -2848,6 +2864,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (!currentProject) {
               const now = new Date().toISOString();
               sectionCounter = 0;
+              shotNumberCounter = 0;
               currentProject = {
                 id: 1,
                 name: 'Imported Project',
@@ -3594,6 +3611,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
               loopClosures.push({
                 id: nextId,
+              number: ++shotNumberCounter,
                 station_a: stationA,
                 station_b: stationB,
                 path_length: 0,
@@ -5295,6 +5313,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ) + 1;
             const newShot = {
               id: nextId,
+              number: ++shotNumberCounter,
               azimuth_in: (shotData.azimuth_in as number) ?? 0,
               azimuth_out: (shotData.azimuth_out as number) ?? 0,
               length: (shotData.length as number) ?? 0,
@@ -5380,6 +5399,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const headShot = {
               ...target,
               id: nextId,
+              number: ++shotNumberCounter,
               length: distance,
               depth_out: midDepth,
               comment: null,

@@ -81,6 +81,8 @@ export interface SurveyData {
    *  materializer, `ProjectWarning.shotId`, the map's feature ids - stayed
    *  unsigned, so the two sides silently stopped matching. */
   shotIds: Uint32Array;
+  /** Immutable project-wide survey number, distinct from the internal feature ID. */
+  shotNumbers?: Uint32Array;
   /** Section id per global shot index. Redundant with the section
    *  metadata's shotOffset+shotCount but lets a consumer go from
    *  shot index → section id without a binary search.
@@ -210,6 +212,7 @@ export function getShot(data: SurveyData, globalIndex: number): Shot {
   }
   return {
     id: data.shotIds[globalIndex]!,
+    ...(data.shotNumbers?.[globalIndex] ? { number: data.shotNumbers[globalIndex] } : {}),
     azimuth_in: data.shotAzimuthIn[globalIndex]!,
     azimuth_out: data.shotAzimuthOut[globalIndex]!,
     length: data.shotLength[globalIndex]!,
@@ -413,6 +416,7 @@ export function surveyDataFromLegacy(
     sections: [],
     shotCount: totalShots,
     shotIds: new Uint32Array(totalShots),
+    shotNumbers: new Uint32Array(totalShots),
     shotSectionIds: new Uint32Array(totalShots),
     shotAzimuthIn: new Float32Array(totalShots),
     shotAzimuthOut: new Float32Array(totalShots),
@@ -459,6 +463,7 @@ export function surveyDataFromLegacy(
     });
     for (const shot of section.shots) {
       data.shotIds[cursor] = shot.id;
+      data.shotNumbers![cursor] = shot.number ?? 0;
       data.shotSectionIds[cursor] = section.id;
       data.shotAzimuthIn[cursor] = shot.azimuth_in;
       data.shotAzimuthOut[cursor] = shot.azimuth_out;

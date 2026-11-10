@@ -22,7 +22,7 @@ test('DATA edits live shots and returns to Survey', async ({ page }) => {
   await expect(table).toHaveCount(0);
   await page.keyboard.press('Control+3');
   const shotId = await page.evaluate(() => (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].shots[0].id as number);
-  await expect(page.getByTestId('grid-cell-0-shot_id')).toHaveText(String(shotId));
+  await expect(page.getByTestId('grid-cell-0-shot_id')).toHaveText('1');
   await expect(page.getByTestId(`shot-row-1-${shotId}`)).toHaveText('1');
   await page.getByTestId('data-table-columns-menu').click();
   await expect(page.getByTestId('col-vis-section_id')).toHaveCount(0);
@@ -60,4 +60,34 @@ test('DATA section dropdown moves a shot and creates a destination on save', asy
   await page.getByTestId('data-save-section').click();
   await expect(page.getByTestId('section-name-input')).toHaveCount(0);
   await expect(page.locator('[data-testid^="data-section-"]').first()).toContainText('Created destination');
+});
+
+
+test('Shot IDs start at one across sections and remain unchanged after a transfer', async ({ page }) => {
+  await setupMockedPage(page);
+  await createProject(page, 'Synthetic shot numbering');
+  const measurement = { length: 10, azimuth_in: 90, azimuth_out: 90, depth_in: 0, depth_out: 1 };
+  await seedProjectWithSections(page, [
+    { name: 'First section', shots: [measurement, measurement] },
+    { name: 'Second section', shots: [measurement] },
+  ]);
+  await page.getByTestId('mode-data').click();
+  await expect(page.getByTestId('mode-data')).toHaveText('Data');
+  for (let row = 0; row < 3; row++) {
+    await expect(page.getByTestId(`grid-cell-${row}-shot_id`)).toHaveText(String(row + 1));
+  }
+  await page.locator('[data-testid^="data-section-"]').first().click();
+  await page.getByRole('option', { name: 'Second section', exact: true }).click();
+  for (const [row, number] of [2, 3, 1].entries()) {
+    await expect(page.getByTestId(`grid-cell-${row}-shot_id`)).toHaveText(String(number));
+  }
+  await page.evaluate(async data => {
+    const store = (window as any).__E2E_TEST__.projectStore.getState();
+    const section = store.project.sections[0];
+    await store.deleteShot(section.id, section.shots[0].id);
+    await store.createShot(section.id, data);
+  }, measurement);
+  await expect(page.getByTestId('grid-cell-0-shot_id')).toHaveText('4');
+  await expect(page.getByTestId('grid-cell-1-shot_id')).toHaveText('3');
+  await expect(page.getByTestId('grid-cell-2-shot_id')).toHaveText('1');
 });

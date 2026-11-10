@@ -176,12 +176,12 @@ last saved state; the survey editors include unsaved edits.
 Each shot has a Section dropdown. Choosing another section appends the shot to
 that section and closes the source gap using the survey deletion rules. Frozen
 shots and constrained shifts cannot be transferred. The shot UUID survives;
-the numeric app shot ID may change. Create a New Section opens a metadata modal
+its immutable project-wide Shot ID stays the same. Create a New Section opens a metadata modal
 and assigns the section on save without entering map placement. The entire
 create-and-transfer operation is one undo unit.
 
 Data temporarily uses measured geometry, restores the prior Survey geometry
 on exit, and permits data editing and undo/redo subject to the remote write lock.
 Map tools and placement shortcuts remain inactive under the full-screen table.
-Survey's bottom shots table uses numeric app shot IDs and numbered row gutters;
+Survey's bottom shots table uses immutable project-wide shot numbers starting at 1 and numbered row gutters;
 Section ID is no longer a selectable column.
