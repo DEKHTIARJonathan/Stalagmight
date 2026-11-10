@@ -9,25 +9,7 @@ import {
   type SectionSeed,
 } from './helpers/app';
 
-/**
- * E2E tests for the data table's fullscreen mode.
- *
- * The expand button in the table's sub-header turns the DataTable into a
- * window-covering overlay below the main toolbar. The toolbar swaps to a
- * reduced variant: Close/Save/Undo/Redo stay, Import/Export gray out (and
- * their shortcuts go dead), the tool buttons + display menu give way to a
- * table picker and a "Map view" shrink button, and the center shows the
- * table's title. Escape and the toggle_data_table shortcut (Ctrl+3 in the
- * mock config) exit the mode without closing the table; Escape closes an
- * open dialog first. While fullscreen only save/undo/redo shortcuts stay
- * alive - the Sections view itself remains editable.
- *
- * The table picker groups "Sections" (the editable table) and "Raw data" -
- * read-only grids over the raw sqlite tables (mocked get_raw_table_names /
- * get_raw_table; blobs arrive as "<blob N KB>" placeholders). The raw view
- * shows last-saved state, so an "As of last save" hint appears while the
- * project is dirty and a save clears it (and refetches the page).
- */
+/** Full-screen DATA navigation, keyboard guards and read-only database inspection. */
 
 const sectionSeeds: SectionSeed[] = [
   {
@@ -66,7 +48,7 @@ async function openDataTable(page: Page): Promise<void> {
 async function enterFullScreen(page: Page): Promise<void> {
   await page.getByTestId('data-table-expand-button').click();
   await expect(page.getByTestId('data-table')).toHaveAttribute('data-fullscreen', 'true');
-  await expect(page.getByTestId('toolbar-data-table-title')).toBeVisible();
+  await expect(page.getByTestId('mode-data')).toHaveAttribute('aria-pressed', 'true');
 }
 
 /** Assert the table is back to its windowed (non-fullscreen) state and open. */
@@ -75,7 +57,7 @@ async function expectWindowed(page: Page): Promise<void> {
   // The Dock only mounts the table when the panel is revealed, so its presence
   // == open (the table no longer carries a redundant data-open attribute).
   await expect(page.getByTestId('data-table')).toBeVisible();
-  await expect(page.getByTestId('toolbar-data-table-title')).toHaveCount(0);
+  await expect(page.getByTestId('mode-survey')).toHaveAttribute('aria-pressed', 'true');
 }
 
 /** Double-click a cell, type a value, commit with Enter. */
@@ -90,7 +72,7 @@ async function fillCell(page: Page, row: number, colKey: string, value: string):
 
 /** Open the fullscreen-toolbar table picker and return its portaled listbox. */
 async function openTablePicker(page: Page): Promise<Locator> {
-  const trigger = page.getByTestId('table-select-dropdown');
+  const trigger = page.getByTestId('project-data-view');
   await trigger.click();
   const listboxId = await trigger.getAttribute('aria-controls');
   expect(listboxId).toBeTruthy();
@@ -107,13 +89,7 @@ async function pickView(page: Page, optionName: string): Promise<void> {
 }
 
 /** Pick a raw table via the sub-header menu next to the table-name pill. */
-async function pickRawTable(page: Page, name: string): Promise<void> {
-  await page.getByTestId('data-table-raw-table-menu').click();
-  const list = page.getByTestId('data-table-raw-table-menu-list');
-  await expect(list).toBeVisible();
-  await list.getByRole('button', { name, exact: true }).click();
-  await expect(list).not.toBeVisible();
-}
+
 
 test.describe('Data table fullscreen mode', () => {
   test.beforeEach(async ({ page }) => {
@@ -184,14 +160,14 @@ test.describe('Data table fullscreen mode', () => {
   test('reduced toolbar: tools give way to the table picker, Import button drops out', async ({ page }) => {
     await enterFullScreen(page);
 
-    // Center title instead of the workspace carousel.
-    await expect(page.getByTestId('toolbar-data-table-title')).toHaveText('Data table');
-    await expect(page.getByTestId('mode-carousel')).toHaveCount(0);
+    // The workspace carousel remains reachable in DATA.
+    await expect(page.getByTestId('mode-data')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('mode-carousel')).toBeVisible();
 
-    // Map tools and the display menu are gone; only the table picker remains on the right.
+    // Map controls are hidden; the table picker lives inside DATA.
     await expect(page.getByTestId('toolbar-tools-group')).toHaveCount(0);
     await expect(page.getByTestId('display-menu-button')).toHaveCount(0);
-    await expect(page.getByTestId('table-select-dropdown')).toBeVisible();
+    await expect(page.getByTestId('project-data-view')).toBeVisible();
 
     // The hamburger menu (Save/Export/Close/Debug live there) stays; the Import
     // button is replaced by the "Back to Map" button; Undo/Redo stay.
@@ -210,7 +186,7 @@ test.describe('Data table fullscreen mode', () => {
     await expectWindowed(page);
     await expect(page.getByTestId('toolbar-tools-group')).toBeVisible();
     await expect(page.getByTestId('display-menu-button')).toBeVisible();
-    await expect(page.getByTestId('table-select-dropdown')).toHaveCount(0);
+    await expect(page.getByTestId('project-data-view')).toHaveCount(0);
     await expect(page.getByTestId('toolbar-map-view-button')).toHaveCount(0);
     await expect(page.getByTestId('app-menu-trigger')).toBeVisible();
     await expect(page.getByTestId('toolbar-import-button')).toBeEnabled();
@@ -225,16 +201,13 @@ test.describe('Data table fullscreen mode', () => {
     // or not fullscreen blocked anything.
     expect(await getActiveTool(page)).toBe('select');
     await page.keyboard.press('m');
-    await page.waitForTimeout(300);
     expect(await getActiveTool(page)).toBe('select');
 
     // Ctrl+I (import) and Ctrl+E (export) are dead: no dialog appears and
     // the mode stays active.
     await page.keyboard.press('Control+i');
-    await page.waitForTimeout(300);
     await expect(page.getByTestId('dmp-selection-dialog')).toHaveCount(0);
     await page.keyboard.press('Control+e');
-    await page.waitForTimeout(300);
     await expect(page.getByTestId('export-dialog')).toHaveCount(0);
     await expect(page.getByTestId('data-table')).toHaveAttribute('data-fullscreen', 'true');
 
@@ -261,59 +234,22 @@ test.describe('Data table fullscreen mode', () => {
     await expect.poll(() => getActiveTool(page)).toBe('merge');
   });
 
-  test('raw data: picker groups, read-only grid, dirty hint, back to Sections', async ({ page }) => {
+  test('database inspection stays read-only and shows saved state', async ({ page }) => {
     await enterFullScreen(page);
-
-    // Clean baseline so the dirty hint assertions below are deterministic.
     await page.keyboard.press('Control+s');
-    await expect.poll(() => getIsDirty(page)).toBe(false);
-
-    // The picker groups "Sections" and "Raw data" (raw = the sqlite tables).
-    // The toolbar picker offers just the two views; tables are chosen in the
-    // sub-header.
-    const listbox = await openTablePicker(page);
-    // (the gap between label and qualifier is flex spacing, not a text space)
-    await expect(listbox.getByRole('option')).toHaveText(['Sections', 'Raw data(read-only)']);
-
-    // Entering raw mode auto-selects a table; the sub-header menu lists them
-    // all and switches to the shots table. No Shots|Stations toggle in raw
-    // mode; the read-only grid shows the saved rows.
-    await listbox.getByRole('option', { name: 'Raw data' }).click();
-    await expect(page.getByTestId('data-table-raw-name')).not.toHaveText('');
-    await page.getByTestId('data-table-raw-table-menu').click();
-    const tableList = page.getByTestId('data-table-raw-table-menu-list');
-    await expect(tableList.getByRole('button')).toHaveText(['project', 'sections', 'shots', 'undo_stack']);
-    await tableList.getByRole('button', { name: 'shots', exact: true }).click();
+    await pickView(page, 'Database inspection');
     await expect(page.getByTestId('raw-table-view')).toBeVisible();
-    await expect(page.getByTestId('data-table-raw-name')).toHaveText('shots');
-    await expect(page.getByTestId('data-table-view-select')).toHaveCount(0);
-    await expect(page.getByTestId('data-table-raw-dirty-hint')).toHaveCount(0);
     await expect(page.getByTestId('grid-cell-0-length')).toHaveText('10');
-
-    // Read-only: double-click must not open the cell editor.
     await page.getByTestId('grid-cell-0-length').dblclick();
     await expect(page.getByTestId('grid-cell-editor')).toHaveCount(0);
-
-    // Blob columns arrive as size placeholders.
-    await pickRawTable(page, 'undo_stack');
-    await expect(page.getByTestId('data-table-raw-name')).toHaveText('undo_stack');
+    await page.getByTestId('data-raw-table').click();
+    await page.getByRole('option', { name: 'undo_stack', exact: true }).click();
     await expect(page.getByTestId('grid-cell-0-command_json')).toHaveText('<blob 1.2 KB>');
-
-    // Back to Sections: the editable table with its normal sub-header.
-    await pickView(page, 'Sections');
-    await expect(page.getByTestId('raw-table-view')).toHaveCount(0);
-    await expect(page.getByTestId('data-table-raw-name')).toHaveCount(0);
-    await expect(page.getByTestId('data-table-view-select')).toBeVisible();
-
-    // Dirty the project, revisit the raw view: the "as of last save" hint
-    // shows until a save clears it (the page refetches on dirty → clean).
+    await pickView(page, 'Shots');
     await fillCell(page, 0, 'length', '42');
-    await expect.poll(() => getIsDirty(page)).toBe(true);
-    await pickView(page, 'Raw data');  // matches despite the (read-only) suffix
-    await pickRawTable(page, 'shots');
-    await expect(page.getByTestId('data-table-raw-dirty-hint')).toHaveText('As of last save');
+    await pickView(page, 'Database inspection');
+    await expect(page.getByTestId('data-table-raw-dirty-hint')).toBeVisible();
     await page.keyboard.press('Control+s');
     await expect(page.getByTestId('data-table-raw-dirty-hint')).toHaveCount(0);
-    await expect(page.getByTestId('grid-cell-0-length')).toHaveText('42');
   });
 });

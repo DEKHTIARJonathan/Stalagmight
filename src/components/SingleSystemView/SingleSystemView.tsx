@@ -23,6 +23,7 @@ import { ExportPanel } from './ExportPanel';
 import ExportPreview from '../Dialogs/ExportPreview';
 import { useExportStore } from '../../store/exportStore';
 import DataTable from './DataTable';
+import { ProjectDataTable } from './ProjectDataTable';
 import MapCanvas from '../Map/MapCanvas';
 import {
   PANEL_SIZE_BOUNDS,
@@ -688,7 +689,7 @@ export default function SingleSystemView() {
   );
   const dataInner = useMemo(
     () =>
-      appMode === 'plan' ? (
+      appMode === 'data' ? <ProjectDataTable sections={sections ?? []} /> : appMode === 'plan' ? (
         gasOriginChosen ? (
           <div className="h-full">
             <ErrorBoundary panelName="Plan Tables">

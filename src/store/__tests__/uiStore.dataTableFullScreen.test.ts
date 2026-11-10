@@ -15,6 +15,7 @@ describe('uiStore data-table fullscreen', () => {
   beforeEach(() => {
     useUIStore.setState({
       view: 'single',
+      appMode: 'survey',
       dataTableFullScreen: false,
       rawTableSelection: null,
       dataTableOpen: false,
@@ -137,5 +138,28 @@ describe('uiStore data-table fullscreen', () => {
       expect(s.dataTableOpen).toBe(false);
       expect(s.dataTableMode).toBe('hover');
     });
+  });
+});
+
+
+describe('DATA workspace', () => {
+  it('restores adjusted Survey geometry after editing measured data', () => {
+    useUIStore.setState({ appMode: 'survey', geometryMode: 'closureAdjusted', dataTableFullScreen: false });
+    useUIStore.getState().setAppMode('data');
+    expect(useUIStore.getState().appMode).toBe('data');
+    expect(useUIStore.getState().geometryMode).toBe('measured');
+    useUIStore.getState().setAppMode('survey');
+    expect(useUIStore.getState().geometryMode).toBe('closureAdjusted');
+  });
+  it('can leave DATA for Plan and return without losing the workspace', () => {
+    useUIStore.setState({ appMode: 'survey', dataTableFullScreen: false });
+    useUIStore.getState().setAppMode('data');
+    useUIStore.getState().setAppMode('plan');
+    expect(useUIStore.getState().appMode).toBe('plan');
+    expect(useUIStore.getState().dataTableFullScreen).toBe(false);
+    useUIStore.getState().setAppMode('data');
+    expect(useUIStore.getState().appMode).toBe('data');
+    expect(useUIStore.getState().geometryMode).toBe('measured');
+    useUIStore.getState().setAppMode('survey');
   });
 });

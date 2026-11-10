@@ -617,14 +617,14 @@ export function useKeyboardShortcuts() {
         // shortcuts do too.
         case 'undo':
           event.preventDefault();
-          if (useUIStore.getState().appMode !== 'survey') break;
+          if (!['survey', 'data'].includes(useUIStore.getState().appMode)) break;
           undo();
           maybeShowToast(action);
           break;
 
         case 'redo':
           event.preventDefault();
-          if (useUIStore.getState().appMode !== 'survey') break;
+          if (!['survey', 'data'].includes(useUIStore.getState().appMode)) break;
           redo();
           maybeShowToast(action);
           break;

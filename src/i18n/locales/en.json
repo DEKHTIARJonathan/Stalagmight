@@ -2925,7 +2925,19 @@
       }
     }
   },
+  "dataWorkspace": {
+    "createSection": "Create a New Section",
+    "section": "Section",
+    "sections": "Sections",
+    "markerIndex": "Marker index",
+    "temperature": "Temperature",
+    "integerRequired": "Enter a nonnegative integer",
+    "id": "ID",
+    "inspector": "Database inspection (read-only)",
+    "saveToInspect": "Save the project to inspect database tables."
+  },
   "modeCarousel": {
+    "data": "DATA",
     "aria": "Workspace mode",
     "survey": "Survey",
     "plan": "Plan",

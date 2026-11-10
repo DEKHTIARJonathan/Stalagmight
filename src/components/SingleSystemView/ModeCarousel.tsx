@@ -3,18 +3,19 @@ import { useUIStore, type AppMode } from '../../store/uiStore';
 import { ExportIcon, MapIcon, SlidersIcon, type IconProps } from '../common/icons';
 import type { ComponentType } from 'react';
 
-const MODES: readonly AppMode[] = ['survey', 'plan', 'export'];
+const MODES: readonly AppMode[] = ['survey', 'data', 'plan', 'export'];
 
 /** Icon stand-ins for the mode labels in the compact (icon-only) variant. */
 const MODE_ICONS: Record<AppMode, ComponentType<IconProps>> = {
   survey: MapIcon,
+  data: SlidersIcon,
   plan: SlidersIcon,
   export: ExportIcon,
 };
 
 /**
  * Top-middle workspace switcher (#38, the workspace-mode reframe). Selects the top-level mode
- * for an open project: Survey (the editable survey workspace), Plan (the gas planner
+ * for an open project: Survey (the survey map), Data (the full-screen editor), Plan (the gas planner
  * over a read-only closure map), or Export (read-only closure map + export stub).
  * Lives in the Toolbar's center slot - the active *tool* is already shown by the
  * highlighted toolbar button, so the center is free for the mode switch.

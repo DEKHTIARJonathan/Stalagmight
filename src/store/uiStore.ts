@@ -50,7 +50,7 @@ export type GeometryMode = 'measured' | 'closureAdjusted';
  * Plan/Export force the read-only closure-adjusted map; only Survey edits. Runtime
  * only (never persisted) and meaningful only in single-project view.
  */
-export type AppMode = 'survey' | 'plan' | 'export';
+export type AppMode = 'survey' | 'data' | 'plan' | 'export';
 export const APP_MODE_DEFAULT: AppMode = 'survey';
 
 /** Geometry mode used before any saved preference exists (first run). */
@@ -66,7 +66,7 @@ export const GEOMETRY_MODE_DEFAULT: GeometryMode = 'measured';
  * gate sites can't drift.
  */
 export function isMapReadOnly(state: Pick<UIStore, 'geometryMode' | 'appMode'>): boolean {
-  return state.geometryMode === 'closureAdjusted' || state.appMode !== 'survey';
+  return state.geometryMode === 'closureAdjusted' || (state.appMode !== 'survey' && state.appMode !== 'data');
 }
 
 export function showsClosureAdjustedNotice(args: {
@@ -914,6 +914,7 @@ let prePlanDocks:
  * open+pinned; without this, exiting would strand a hover-mode or closed table
  * as pinned-open.
  */
+let preDataGeometryMode: GeometryMode | null = null;
 let fullScreenTableSnapshot:
   | { dataTableOpen: boolean; dataTableMode: PanelMode }
   | null = null;
@@ -1424,7 +1425,8 @@ export const useUIStore = create<UIStore>((set) => ({
           ? { dataTableOpen: focusLayoutSnapshot.dataTableOpen, dataTableMode: focusLayoutSnapshot.dataTableMode }
           : { dataTableOpen: s.dataTableOpen, dataTableMode: s.dataTableMode };
     }
-    set({ dataTableFullScreen: true, dataTableOpen: true, dataTableMode: 'pin' });
+    if (!s.dataTableFullScreen) preDataGeometryMode = s.geometryMode;
+    set({ geometryMode: 'measured', appMode: 'data', dataTableFullScreen: true, dataTableOpen: true, dataTableMode: 'pin' });
   },
   exitDataTableFullScreen: () => {
     if (!useUIStore.getState().dataTableFullScreen) return;
@@ -1443,7 +1445,9 @@ export const useUIStore = create<UIStore>((set) => ({
       : (snap ?? {});
     // Leaving fullscreen also leaves the raw-data view: the picker that could
     // switch back to Sections only exists in the fullscreen toolbar.
-    set({ dataTableFullScreen: false, rawTableSelection: null, ...restored });
+    const geometryMode = preDataGeometryMode ?? GEOMETRY_MODE_DEFAULT;
+    preDataGeometryMode = null;
+    set({ geometryMode, appMode: 'survey', dataTableFullScreen: false, rawTableSelection: null, ...restored });
   },
   setRawTableSelection: (rawTableSelection) => set({ rawTableSelection }),
 
@@ -1672,6 +1676,17 @@ export const useUIStore = create<UIStore>((set) => ({
   setAppMode: (mode) => {
     const s = useUIStore.getState();
     if (s.appMode === mode) return;
+    if (mode === 'data') {
+      if (s.appMode !== 'survey') s.setAppMode('survey');
+      useUIStore.getState().enterDataTableFullScreen();
+      set({ appMode: 'data' });
+      return;
+    }
+    if (s.appMode === 'data') {
+      s.exitDataTableFullScreen();
+      if (mode !== 'survey') useUIStore.getState().setAppMode(mode);
+      return;
+    }
     if (s.appMode === 'survey' && mode !== 'survey') {
       set({ speleoOutsideSurvey: s.leftWorkspace === 'speleodb' && s.leftWorkspaceVisible, leftWorkspace: 'speleodb' });
     }

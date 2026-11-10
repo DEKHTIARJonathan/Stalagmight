@@ -17,7 +17,7 @@ import { ToolGlyph, toolAccentVar } from '../common/toolIcons';
 import type { CSSProperties } from 'react';
 import DisplayMenu from './DisplayMenu';
 import { ModeCarousel } from './ModeCarousel';
-import TableSelectDropdown from './TableSelectDropdown';
+
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import UndoHistoryDropdown from './UndoHistoryDropdown';
 import { TOOL_GROUPS, isNavigationTool, type ToolGroupDef } from '../../utils/toolGroups';
@@ -432,7 +432,7 @@ export default function Toolbar({
             sub-state (entering Plan/Export force-exits it via setAppMode ->
             exitDataTableFullScreen, and only a survey-mounted control sets it), so the
             "Back to Map" button lives inside this same gate, swapped in for Import. */}
-        {appMode === 'survey' && (
+        {(appMode === 'survey' || appMode === 'data') && (
           <>
             {dataTableFullScreen ? (
               <Button
@@ -523,45 +523,15 @@ export default function Toolbar({
         )}
       </div>
 
-      {/* Center - the Survey/Plan/Export workspace carousel (#38, the workspace-mode reframe).
-          The active map *tool* is already shown by the highlighted toolbar button on
-          the right, so the center is free for the mode switch. Fullscreen table mode
-          (a survey sub-state) shows the table's title instead. */}
-      {dataTableFullScreen ? (
-        /* Centered in the free gap between the side clusters (see the measure
-           effect), so it never overlaps them - or, at the final stage, laid out
-           between them by flexbox. */
-        <div
-          ref={centerRef}
-          className={`${centerCls} font-medium truncate`}
-          style={centerStyle}
-          data-testid="toolbar-data-table-title"
-        >
-          {t('dataTable.title')}
-        </div>
-      ) : (
-        /* Centered in the free gap between the side clusters (see the measure
-           effect): it sits in the empty space instead of window-centered, so a wide
-           right cluster can't overlap "Export". The gap center is independent of the
-           carousel's own width, so cycling modes never drifts it. At the final stage
-           it joins the flex flow instead, where overlap cannot happen at all. */
-        <div
-          ref={centerRef}
-          className={centerCls}
-          style={centerStyle}
-        >
-          <ModeCarousel disabled={placementModeActive} compact={centerInFlow} />
-        </div>
-      )}
+      {/* Workspace navigation remains available while the full-screen table is open. */}
+      <div ref={centerRef} className={centerCls} style={centerStyle}>
+        <ModeCarousel disabled={placementModeActive} compact={centerInFlow} />
+      </div>
 
       {/* Right section - tools and display menu; while the table is fullscreen,
           just the table picker (the "Back to Map" button lives on the left). */}
       <div ref={rightRef} className={`flex items-center gap-2 ${clusterCls}`}>
-        {dataTableFullScreen ? (
-          /* The "Back to Map" shrink button now lives on the left (in place of
-             the project-close button); only the table picker stays on the right. */
-          <TableSelectDropdown />
-        ) : (
+        {!dataTableFullScreen && (
           <>
             <div
               className={`flex items-center gap-1 transition-opacity ${placementModeActive ? 'opacity-45 grayscale' : ''}`}

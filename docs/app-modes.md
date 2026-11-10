@@ -1,6 +1,6 @@
 # Workspace modes and the read-only contract
 
-An open project is in exactly one of three workspace modes - `survey`, `plan`,
+An open project is in exactly one of four workspace modes - `survey`, `data`, `plan`,
 `export` - held in `uiStore.appMode` and switched by the `ModeCarousel`.
 [SPEC.md 6.1](SPEC.md#61-workspace-modes) describes what each one is for; this page is the contract
 the code has to keep, because getting it wrong is silent: a mutation leaks into
@@ -11,17 +11,17 @@ were only planning a dive on.
 
 Every row is a render-time `appMode` branch in `SingleSystemView.tsx`,
 `Toolbar.tsx`, or (for the Display menu's own contents) `DisplayMenu.tsx`. The
-map itself is the same map in all three.
+map itself stays mounted across all four. Data covers it with the full-screen editor.
 
-| | Survey | Plan | Export |
-|---|---|---|---|
-| Sections tab | shown | hidden | hidden |
-| SpeleoDB workspace | available | on request or already visible | on request or already visible |
-| Right dock | `DetailPanel` | `GasPlanPanel` | `ExportPanel` |
-| Bottom dock | `DataTable` | `PlanTablesPanel` | not rendered |
-| Toolbar tools | `TOOLBAR_ITEMS` | `READ_ONLY_TOOLBAR_ITEMS` | `READ_ONLY_TOOLBAR_ITEMS` |
-| Display menu | full | no Color, no Geometry group | hidden |
-| Map area | - | - | `ExportPreview` overlay for the image export type |
+| | Survey | Data | Plan | Export |
+|---|---|---|---|---|
+| Sections tab | shown | covered | hidden | hidden |
+| SpeleoDB workspace | available | covered | on request or already visible | on request or already visible |
+| Right dock | `DetailPanel` | covered | `GasPlanPanel` | `ExportPanel` |
+| Bottom dock | `DataTable` | full-screen `ProjectDataTable` | `PlanTablesPanel` | not rendered |
+| Toolbar tools | `TOOLBAR_ITEMS` | hidden | `READ_ONLY_TOOLBAR_ITEMS` | `READ_ONLY_TOOLBAR_ITEMS` |
+| Display menu | full | hidden | no Color, no Geometry group | hidden |
+| Map area | survey map | covered by table | planning map | `ExportPreview` overlay for image exports |
 
 `READ_ONLY_TOOLBAR_ITEMS` is `TOOLBAR_ITEMS` filtered through `isMutatingTool`
 (dangling separators collapsed), so mutating tools are **hidden, not disabled**
@@ -37,7 +37,8 @@ composable: each pass re-tidies the dividers the previous one stranded.
 ## The contract
 
 The predicate is `isMapReadOnly` in `src/store/uiStore.ts`:
-`geometryMode === 'closureAdjusted' || appMode !== 'survey'`.
+`geometryMode === 'closureAdjusted' || (appMode !== 'survey' && appMode !== 'data')`.
+Data permits editing measured survey data while its full-screen layout hides map controls.
 
 Both terms are load-bearing, and the second is the one that keeps being
 forgotten. Entering Plan or Export forces `geometryMode: 'closureAdjusted'` -
@@ -164,3 +165,23 @@ elevation gates, while linked names remain immutable. Account and connection for
 exist only in application Settings. Local project editors expose only the centered conversion prompt in their SpeleoDB tab.
 The creation form saves, uploads and opens a fresh remote copy; successful conversion
 then exposes the managed-project workspace.
+
+## DATA workspace
+
+The header order is Survey, Data, Plan, Export. Data fills the workspace with
+live, editable survey shots across sections. Its table selector also offers
+section metadata and a read-only database inspector. The inspector shows the
+last saved state; the survey editors include unsaved edits.
+
+Each shot has a Section dropdown. Choosing another section appends the shot to
+that section and closes the source gap using the survey deletion rules. Frozen
+shots and constrained shifts cannot be transferred. The shot UUID survives;
+the numeric app shot ID may change. Create a New Section opens a metadata modal
+and assigns the section on save without entering map placement. The entire
+create-and-transfer operation is one undo unit.
+
+Data temporarily uses measured geometry, restores the prior Survey geometry
+on exit, and permits data editing and undo/redo subject to the remote write lock.
+Map tools and placement shortcuts remain inactive under the full-screen table.
+Survey's bottom shots table uses numeric app shot IDs and numbered row gutters;
+Section ID is no longer a selectable column.
