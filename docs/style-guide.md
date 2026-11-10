@@ -32,7 +32,7 @@ This guide captures the current UI conventions and design tokens for Stalagmight
   - `highlight`: the main action of a panel that has no `primary`, in the theme's warning yellow with `text-warning-on` (the per-theme dark text that reads at WCAG AA on it). Example: Open project in the home screen's project details. Yellow also marks un-uploaded SpeleoDB changes, so keep it to one such button per view.
 - Do not give a `Button` a colour, shadow or fixed height of its own through `className`, and do not add a variant for one feature: a view's buttons look the same as every other panel's and dialog's. Width and margins (`w-full`, `mt-2`) are layout and are fine.
 - At most one `primary` per view, and only when one action is clearly the one to take now. A view may have none. The SpeleoDB tab picks it with `speleoPrimaryAction`: Save Changes while there are changes not yet uploaded, Resume editing when the account can edit, the Connect button while signed out, none when the access is view-only or when editing with nothing to save. Every other action there is `secondary`.
-- Side panels stack their actions as full-width buttons at the standard size (the home screen's project details, the shot details, the SpeleoDB tab).
+- Side panels stack their actions as full-width buttons (the home screen's project details, the shot details, the SpeleoDB tab), at the size the panel uses for all of them.
 - A button that opens the browser carries `ExternalLinkIcon` as its `icon`.
 - A disabled button says why in its tooltip (`title`).
 - Labels and confirmations explain the action independently of colour.
