@@ -717,6 +717,28 @@ fn an_add_is_refused_with_nothing_changed() {
     }
 }
 
+/// The section-id budget (#555) is checked before a single section is copied.
+/// INJECTION (not tried): without the check, `Section::new`'s unchecked
+/// `id * FEATURE_ID_STRIDE` panics in debug on the second copied section.
+#[test]
+fn an_add_past_the_section_id_budget_is_refused() {
+    let temp = TempDir::new().unwrap();
+    let (state, _) = open_target(temp.path(), true);
+    let alpha = save_to(temp.path(), "alpha.stalx", &source_alpha());
+    if let Some(project) = state.project.lock().unwrap().as_mut() {
+        project.next_section_id = crate::models::MAX_SECTION_ID;
+    }
+    let before = canonical_snapshot(&state, false);
+
+    let refused = add(&state, &alpha);
+    assert!(!refused.success);
+    assert!(refused
+        .error
+        .as_deref()
+        .is_some_and(|e| e.starts_with("Add refused")));
+    assert_same_project(&state, &before, false, "nothing was appended");
+}
+
 /// The orphan-placement signal is `CommandResult::section_ids` holding exactly
 /// the added sections; the dialog's own queries then find the unanchored ones.
 #[test]

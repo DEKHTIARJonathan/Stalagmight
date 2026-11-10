@@ -17,6 +17,7 @@ use crate::core::command::{sanitize_display_text, ImportReceipt, MAX_FILE_NAME_L
 use crate::core::{AddedContent, CarriedIgnore, CommandResult};
 use crate::models::{
     gps_to_local, warning_is_ignorable, GpsCoordinates, Project, SectionId, SpeleoLink,
+    FEATURE_ID_STRIDE, MAX_SECTIONS_IN_ID_SPACE, MAX_SECTION_ID,
 };
 use crate::persistence::{Database, ResolvedWarning};
 
@@ -244,6 +245,20 @@ impl AppState {
     /// The copy and everything that settles it. On any failure the project is
     /// returned to exactly what it was, by the same removal the undo runs.
     fn append_into_open(project: &mut Project, source: &AddSource) -> Result<AppendReport, String> {
+        // Section-id budget (#555), before a single section is appended: shot
+        // ids encode as `section_id * FEATURE_ID_STRIDE + position` in 32 bits,
+        // and `Section::new` computes that unchecked.
+        let incoming = source.project.sections.len();
+        let spent = project.next_section_id as usize;
+        if incoming.saturating_add(spent) > MAX_SECTIONS_IN_ID_SPACE {
+            return Err(format!(
+                "Add refused: the file holds {incoming} sections and this project has \
+                 already used {spent} section ids, past the limit of \
+                 {MAX_SECTIONS_IN_ID_SPACE} for one project. Shot ids encode as \
+                 section_id * {FEATURE_ID_STRIDE} + position in 32 bits, so section ids \
+                 past {MAX_SECTION_ID} cannot hold shots. No changes were made."
+            ));
+        }
         let identity = stalx_identity(&source.project);
         let duplicate = if identity == stalx_identity(project) {
             Some("is a copy of the open project")
