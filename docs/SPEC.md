@@ -2324,10 +2324,12 @@ code:
 
 `station_names` holds per-station names in the same positional shape as
 `station_comments`. It was added at v18 WITHOUT a schema version bump, on
-purpose: OpenSpeleo's `stalagmight_lib`, which SpeleoDB uses to turn an
-uploaded `.stalx` into a map, refuses any file not at exactly the version it
-knows and reads only the tables it knows, so a new table is invisible to it
-while a bump would lock it out. The cost is that a build without the table drops
+purpose: SpeleoDB turns an uploaded `.stalx` into a map with OpenSpeleo's
+Python package `stalagmight_lib` (pytool_stalagmight_lib, through
+`openspeleo_lib`; not the app's Rust lib crate of the same name). It refuses any
+file not at exactly v18 and reads only the tables it knows, so a new table is
+invisible to it while a bump would lock it out (verified version and details in
+`persistence/sqlite/station_texts.rs`). The cost is that a build without the table drops
 the names on its next save. A v18 file from before the table takes the version
 fast path, so the read side treats a missing table as empty and `save_project`
 creates it inside its transaction; `station_names_tests.rs` in
@@ -2383,7 +2385,8 @@ pub struct DmpShot {
 
 The file carries no station numbers: mNemo numbers a section's start 0 and the
 end of its N-th shot N, so the importer derives each station's number from the
-shot's position and records it as the station's name; see
+shot's position (counting only the shots it imports - an assumption not yet
+checked against a device) and records it as the station's name; see
 [dmp-import.md](dmp-import.md#station-names).
 
 ### 17.3 Export Formats

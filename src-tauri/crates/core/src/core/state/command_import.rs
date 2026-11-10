@@ -893,15 +893,15 @@ impl AppState {
                         // and these indices were collected against the file's
                         // original order - the same rewrite the wizard applies to
                         // `placement` (src/utils/reversePlacement.ts). Doing it
-                        // backend-side keeps the one importer that actually
-                        // populates `station_comments` (TML) correct the day its
-                        // wizard gains the toggle, instead of relying on a prose
-                        // contract every future importer has to re-derive.
+                        // backend-side keeps every importer correct whether or not
+                        // its wizard offers the toggle - TML sends comments, the
+                        // DMP wizard (which has the toggle) sends names - instead
+                        // of relying on a prose contract each has to re-derive.
                         // `checked_sub`, not `saturating_sub`: an index past the
                         // last station has no mirror, and saturating it would
-                        // park the comment on station 0 - a station it was never
-                        // about. Un-reversed the same index simply fails
-                        // `key_for_ref` below and the comment is dropped, so
+                        // park the comment or name on station 0 - a station it
+                        // was never about. Un-reversed the same index simply
+                        // fails `key_for_ref` below and the entry is dropped, so
                         // skipping here keeps the two paths honest.
                         let index = if config.reverse {
                             match shot_count.checked_sub(*station_index) {

@@ -333,12 +333,14 @@ a deleted or added row, any edit after import - shifts the positional
 `S:I` station IDs, so the import records each station's mNemo number as its
 **name** (`Project.station_names`).
 
-- **Counting.** Only the shots the importer keeps advance the number: those
-  `isImportableDmpShot` passes (Standard, not 1 m). `mnemoStationNumber` in
-  `src/hooks/useImportState.ts` is the one place the rule lives, and
-  `convertToEditableShots` stores the result on each row as `mnemoStation` (the
-  number of the row's END station). This matches the station numbers the wizard
-  itself shows before any edits.
+- **Counting.** ASSUMED, not yet confirmed against a device: only the shots the
+  importer keeps advance the number - those `isImportableDmpShot` passes
+  (Standard, not 1 m). It matches the station numbers the wizard itself shows
+  before any edits. `mnemoStationNumber` in `src/hooks/useImportState.ts` is the
+  one place the rule lives (with the filter it runs after), so if a device
+  counts other shots too, that is what changes. `convertToEditableShots` stores
+  the result on each row as `mnemoStation` (the number of the row's END
+  station).
 - **Through the wizard.** Every edit spreads the row, so the number survives
   interpolation, data replacement and Reference marking. A row the user adds
   has none.

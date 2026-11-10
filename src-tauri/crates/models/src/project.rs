@@ -286,7 +286,8 @@ pub struct Project {
     /// Not unique - mNemo numbers restart at 0 in every section - so it is
     /// always shown next to the positional `S:I` id, never instead of it.
     /// Stored in its own `station_names` table so readers that know only the
-    /// v18 tables (OpenSpeleo's `stalagmight_lib`) are unaffected.
+    /// v18 tables (OpenSpeleo's Python `stalagmight_lib`, which SpeleoDB maps
+    /// with - see `station_texts` in the persistence crate) are unaffected.
     #[serde(
         default,
         serialize_with = "serialize_station_texts",

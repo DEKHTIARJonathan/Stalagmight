@@ -7,13 +7,21 @@
 //! skipped), read back as transitional positional keys that the load re-anchor
 //! pass canonicalizes. One enum keeps the SQL for both in one place.
 //!
-//! `station_names` was added WITHOUT a schema version bump, on purpose: readers
-//! outside the app (OpenSpeleo's `stalagmight_lib`, which SpeleoDB uses to draw
-//! maps) refuse any file whose version is not exactly the one they know, and
-//! read only the tables they know by explicit column lists. A new table is
-//! invisible to them; a bump would lock them out. The price is that a build
-//! without this table drops the names on its next save - every save rebuilds
-//! the file from `init_schema`.
+//! `station_names` was added WITHOUT a schema version bump, on purpose. SpeleoDB
+//! turns an uploaded `.stalx` into a map through `openspeleo_lib`, which reads it
+//! with OpenSpeleo's PYTHON package `stalagmight_lib`
+//! (github.com/OpenSpeleo/pytool_stalagmight_lib - not this repo's Rust lib crate
+//! of the same name). Verified at pytool_stalagmight_lib @ 23049eabca21
+//! (2026-11-09), `stalagmight_lib/parser.py`: `_read` refuses any
+//! `PRAGMA user_version != 18` and `_read_project` any `project.schema_version`
+//! other than 18, and it reads only `project`, `sections`, `shots`,
+//! `station_comments`, `project_settings`, `zero_datums` and `station_merges`,
+//! each by an explicit column list. A new table is invisible to it; a bump would
+//! lock it out. (The in-repo `stalx-reader` is not the constraint: its supported
+//! version is this crate's `SCHEMA_VERSION`, so it moves with any bump - though an
+//! older build of it refuses a newer file too.) The price is that a build
+//! without this table drops the names on its next save - every save rebuilds the
+//! file from `init_schema`.
 
 /// One of the per-station text tables.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

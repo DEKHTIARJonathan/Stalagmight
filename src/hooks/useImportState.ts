@@ -129,8 +129,10 @@ export function isImportableDmpShot(shot: DmpShot): boolean {
  * The mNemo station number at the END of the importable shot at `index` (its
  * position among the shots `isImportableDmpShot` keeps). mNemo numbers a
  * section's start 0 and the end of its N-th shot N, so this is `index + 1`.
- * The one place the numbering rule lives: if a device turns out to count other
- * shot kinds too, this and the filter it is applied after are what change.
+ * ASSUMED, not confirmed against a device: that only the shots the importer
+ * keeps advance the device's counter. This is the one place the rule lives: if a
+ * device turns out to count other shot kinds too (1 m shots, CsA/CsB), this and
+ * the filter it is applied after are what change.
  */
 export function mnemoStationNumber(index: number): number {
   return index + 1;
