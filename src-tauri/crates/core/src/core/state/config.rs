@@ -329,9 +329,8 @@ mod tests {
             for pasted in PASTED_SPELEODB {
                 let mut settings = state.get_config();
                 settings.speleodb.endpoint = Some(pasted.to_owned());
-                state
-                    .update_config(settings)
-                    .unwrap_or_else(|e| panic!("{pasted:?} refused: {e}"));
+                let saved = state.update_config(settings);
+                assert!(saved.is_ok(), "{pasted:?} refused: {saved:?}");
                 assert_eq!(
                     Config::load().unwrap().speleodb.endpoint.as_deref(),
                     Some("https://www.speleodb.org"),

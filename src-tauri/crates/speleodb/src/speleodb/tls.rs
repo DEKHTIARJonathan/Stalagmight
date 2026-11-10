@@ -68,6 +68,10 @@ pub fn validate_endpoint(endpoint: &str) -> Result<(), SpeleoDbError> {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test assertions on known-rejected endpoints"
+)]
 mod tests {
     use super::{clean_endpoint_input, validate_endpoint};
     use crate::speleodb::SpeleoDbError;
@@ -76,17 +80,39 @@ mod tests {
     fn clean_strips_only_what_the_user_cannot_see_at_the_ends() {
         for (input, expected) in [
             ("https://www.speleodb.org", Some("https://www.speleodb.org")),
-            ("  https://www.speleodb.org \r\n", Some("https://www.speleodb.org")),
-            ("\u{00A0}https://www.speleodb.org\u{3000}", Some("https://www.speleodb.org")),
-            ("\u{200B}\u{FEFF}https://www.speleodb.org\u{2060}", Some("https://www.speleodb.org")),
-            ("\u{200E}https://www.speleodb.org\u{202C}\u{00AD}", Some("https://www.speleodb.org")),
+            (
+                "  https://www.speleodb.org \r\n",
+                Some("https://www.speleodb.org"),
+            ),
+            (
+                "\u{00A0}https://www.speleodb.org\u{3000}",
+                Some("https://www.speleodb.org"),
+            ),
+            (
+                "\u{200B}\u{FEFF}https://www.speleodb.org\u{2060}",
+                Some("https://www.speleodb.org"),
+            ),
+            (
+                "\u{200E}https://www.speleodb.org\u{202C}\u{00AD}",
+                Some("https://www.speleodb.org"),
+            ),
             // Interior characters are the user's; validation decides about them.
-            ("https://www.speleo db.org", Some("https://www.speleo db.org")),
-            ("https://www.speleo\u{200B}db.org", Some("https://www.speleo\u{200B}db.org")),
+            (
+                "https://www.speleo db.org",
+                Some("https://www.speleo db.org"),
+            ),
+            (
+                "https://www.speleo\u{200B}db.org",
+                Some("https://www.speleo\u{200B}db.org"),
+            ),
             ("", None),
             (" \t\n\u{200B}\u{FEFF} ", None),
         ] {
-            assert_eq!(clean_endpoint_input(input).as_deref(), expected, "{input:?}");
+            assert_eq!(
+                clean_endpoint_input(input).as_deref(),
+                expected,
+                "{input:?}"
+            );
         }
     }
 
@@ -102,13 +128,19 @@ mod tests {
             "",
         ] {
             assert!(
-                matches!(validate_endpoint(endpoint), Err(SpeleoDbError::InvalidEndpoint { .. })),
+                matches!(
+                    validate_endpoint(endpoint),
+                    Err(SpeleoDbError::InvalidEndpoint { .. })
+                ),
                 "{endpoint:?}"
             );
         }
         for endpoint in ["http://example.com", "http://10.0.0.1", "ftp://localhost"] {
             assert!(
-                matches!(validate_endpoint(endpoint), Err(SpeleoDbError::InsecureEndpoint { .. })),
+                matches!(
+                    validate_endpoint(endpoint),
+                    Err(SpeleoDbError::InsecureEndpoint { .. })
+                ),
                 "{endpoint:?}"
             );
         }
@@ -119,9 +151,17 @@ mod tests {
         let msg = validate_endpoint("https://www.speleodb.org\u{200B}")
             .unwrap_err()
             .to_string();
-        assert!(msg.starts_with("\"https://www.speleodb.org\\u{200b}\""), "{msg}");
-        let msg = validate_endpoint("http://example.com").unwrap_err().to_string();
-        assert!(msg.ends_with("Rejected endpoint: \"http://example.com\""), "{msg}");
+        assert!(
+            msg.starts_with("\"https://www.speleodb.org\\u{200b}\""),
+            "{msg}"
+        );
+        let msg = validate_endpoint("http://example.com")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            msg.ends_with("Rejected endpoint: \"http://example.com\""),
+            "{msg}"
+        );
     }
     #[test]
     fn allowed_patterns() {
