@@ -160,7 +160,6 @@ fn dump(db: &Database, table: &str, skip: &[&str]) -> Vec<Vec<String>> {
         .unwrap();
     let keep: Vec<usize> = stmt
         .column_names()
-        .into_iter()
         .enumerate()
         .filter(|(_, name)| !skip.contains(name))
         .map(|(i, _)| i)

@@ -7977,6 +7977,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0), test_shot_data(6.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     };
@@ -8007,6 +8008,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
         quality: 1.0,
         shots: vec![test_shot_data(3.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     };
@@ -8118,6 +8120,7 @@ fn doubly_anchored_guard_reports_receipt_warning_and_skips_the_shot() {
         quality: 1.0,
         shots: vec![test_shot_data(1.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     };
@@ -8182,6 +8185,7 @@ fn zero_datum_import_placement_sets_receipt_zero_datum_created() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::ZeroDatum {
             coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
             station_index: 0,
@@ -8228,6 +8232,7 @@ fn multiple_zero_datum_placements_name_the_first_and_count_the_rest() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::ZeroDatum {
             coordinates: GpsCoordinates::new(10.0, 20.0, 0.0).unwrap(),
             station_index,
@@ -8274,6 +8279,7 @@ fn import_with_no_zero_datum_placement_leaves_receipt_field_none() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     };
@@ -17943,6 +17949,7 @@ fn test_execute_import_sections_origin_placement() {
             quality: 1.0,
             shots: vec![test_shot_data(5.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
         },
@@ -17957,6 +17964,7 @@ fn test_execute_import_sections_origin_placement() {
             quality: 1.0,
             shots: vec![test_shot_data(3.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
         },
@@ -18013,6 +18021,7 @@ fn test_execute_import_sections_unresolvable_closure_is_skipped_on_receipt() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     }];
@@ -18080,6 +18089,7 @@ fn imported_shot_kinds_survive_an_undo_redo_round_trip() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0), virtual_shot, test_shot_data(6.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         reverse: false,
         azimuth_reference: None,
@@ -18135,6 +18145,7 @@ fn importing_a_second_file_leaves_existing_shot_kinds_alone() {
         quality: 1.0,
         shots,
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         reverse: false,
         azimuth_reference: None,
@@ -18229,6 +18240,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     };
@@ -18257,6 +18269,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
         quality: 1.0,
         shots: vec![test_shot_data(3.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     };
@@ -18319,6 +18332,7 @@ fn test_execute_import_sections_from_importing_placement() {
             quality: 1.0,
             shots: vec![test_shot_data(5.0), test_shot_data(3.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
         },
@@ -18333,6 +18347,7 @@ fn test_execute_import_sections_from_importing_placement() {
             quality: 1.0,
             shots: vec![test_shot_data(4.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::FromImporting {
                 import_station: 0,
                 target_section_index: 0,
@@ -18389,6 +18404,7 @@ fn test_execute_import_sections_from_existing_placement() {
         quality: 1.0,
         shots: vec![test_shot_data(4.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::FromExisting {
             import_station: 0,
             existing_station: StationRef::new(existing_id, 2),
@@ -18432,6 +18448,7 @@ fn test_execute_import_sections_manual_with_offset() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Manual {
             align_station_index: 0,
             offset: Some(Coordinates {
@@ -18488,6 +18505,7 @@ fn test_execute_import_sections_zero_datum_placement() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::ZeroDatum {
             coordinates: gps,
             station_index: 0,
@@ -18545,6 +18563,7 @@ fn test_execute_import_sections_zero_datum_placement_at_non_origin_station() {
         quality: 1.0,
         shots: vec![imported_shot.clone()],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::ZeroDatum {
             coordinates: gps,
             station_index: 1,
@@ -18614,6 +18633,7 @@ fn test_execute_import_sections_rollback_on_failure() {
             quality: 1.0,
             shots: vec![test_shot_data(5.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
         },
@@ -18628,6 +18648,7 @@ fn test_execute_import_sections_rollback_on_failure() {
             quality: 1.0,
             shots: vec![test_shot_data(3.0)],
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::FromExisting {
                 import_station: 0,
                 existing_station: StationRef::new(9999, 0), // nonexistent
@@ -18694,6 +18715,7 @@ fn test_execute_import_sections_no_project() {
         quality: 1.0,
         shots: vec![test_shot_data(5.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::Origin,
         azimuth_reference: None,
     }];
@@ -18741,6 +18763,7 @@ fn test_execute_import_sections_manual_snap_placement() {
         quality: 1.0,
         shots: vec![test_shot_data(4.0)],
         station_comments: Vec::new(),
+        station_names: Vec::new(),
         placement: ImportPlacement::ManualSnap {
             align_station_index: 0,
             snapped_to_station: StationRef::new(existing_id, 1),
@@ -19919,6 +19942,7 @@ fn kb5_import_overlap_interpolation_integration() {
             quality: 1.0,
             shots: shots_002.clone(),
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::Origin,
             azimuth_reference: None,
         }],
@@ -20033,6 +20057,7 @@ fn kb5_import_overlap_interpolation_integration() {
             quality: 1.0,
             shots: shots_001_treated,
             station_comments: Vec::new(),
+            station_names: Vec::new(),
             placement: ImportPlacement::FromExisting {
                 import_station: 105,
                 existing_station: StationRef::new(section_002_id, 182),
@@ -23810,6 +23835,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                     quality: 1.0,
                     shots: vec![test_shot_data(3.0)],
                     station_comments: Vec::new(),
+                    station_names: Vec::new(),
                     placement: ImportPlacement::Origin,
                     azimuth_reference: None,
                 }],
