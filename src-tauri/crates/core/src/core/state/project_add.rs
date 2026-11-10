@@ -188,8 +188,13 @@ impl AppState {
             .map(|n| sanitize_display_text(&n.to_string_lossy(), MAX_FILE_NAME_LEN))
             .unwrap_or_default();
 
-        // The refusals that need no file read come first.
-        let open_path = {
+        // The refusals that need no file read come first. The slot generation is
+        // read under the same guard: a project load does not take
+        // `command_lock`, so a different project can be committed while the
+        // file is read below, and every slot commit bumps the generation (local
+        // projects included - see `bump_speleodb_session` and the bump-site
+        // tripwire in `speleodb_session`).
+        let (open_path, slot_generation) = {
             let guard = self
                 .project
                 .lock()
@@ -197,7 +202,10 @@ impl AppState {
             let Some(project) = guard.as_ref() else {
                 return CommandResult::failure("No project is open to add the file to".to_string());
             };
-            project.file_path.clone()
+            (
+                project.file_path.clone(),
+                self.speleodb_session_generation(),
+            )
         };
         if open_path
             .as_deref()
@@ -212,6 +220,7 @@ impl AppState {
             Ok(source) => source,
             Err(e) => return CommandResult::failure(e),
         };
+        between_locks(self);
 
         let mut guard = self
             .project
@@ -220,6 +229,18 @@ impl AppState {
         let Some(project) = guard.as_mut() else {
             return CommandResult::failure("No project is open to add the file to".to_string());
         };
+        // The project the add was started against left the slot during the read.
+        // Appending into its successor would pair it with the undo baseline
+        // `execute` captured from the first one, so that undo would delete the
+        // successor's own sections. Nothing has been changed yet. (A SpeleoDB
+        // sign-in or sign-out in the window bumps the generation too; refusing
+        // then is conservative, and the user simply adds again.)
+        if self.speleodb_session_generation() != slot_generation {
+            return CommandResult::failure(format!(
+                "The open project changed while '{label}' was being read, so it was not \
+                 added. No changes were made."
+            ));
+        }
         let report = match Self::append_into_open(project, &source) {
             Ok(report) => report,
             Err(e) => return CommandResult::failure(e),
@@ -518,4 +539,36 @@ impl AppState {
         }
         found
     }
+}
+
+/// The window between the add's two `project` locks, where the source file is
+/// read. A no-op outside tests.
+#[cfg(not(test))]
+fn between_locks(_state: &AppState) {}
+
+/// Test-only: run the hook a test installed with [`set_between_locks`], once.
+/// Per thread, so it reaches no other test. Defined below every production
+/// item on purpose: the slot-commit tripwire in `speleodb_session` reads each
+/// file only up to its first test gate.
+#[cfg(test)]
+fn between_locks(state: &AppState) {
+    let hook = BETWEEN_LOCKS.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook(state);
+    }
+}
+
+#[cfg(test)]
+type BetweenLocksHook = Box<dyn FnOnce(&AppState)>;
+
+#[cfg(test)]
+thread_local! {
+    static BETWEEN_LOCKS: std::cell::RefCell<Option<BetweenLocksHook>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Test-only: run `hook` inside the next add's file-read window on this thread.
+#[cfg(test)]
+pub(super) fn set_between_locks(hook: impl FnOnce(&AppState) + 'static) {
+    BETWEEN_LOCKS.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
 }
