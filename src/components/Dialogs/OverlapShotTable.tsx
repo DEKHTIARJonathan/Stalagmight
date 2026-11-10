@@ -9,9 +9,9 @@ import { convertLength } from '../../utils/formatStats';
 import type { TargetShotLike } from '../../utils/overlapHelpers';
 import {
   OVERLAP_CHOICES,
-  REPEAT_DIFF_TOLERANCE,
   exceedsRepeatTolerance,
   readingDiff,
+  repeatDiffFlags,
   shotAzimuth,
   shotInclination,
   type OverlapChoice,
@@ -143,6 +143,7 @@ export default function OverlapShotTable({
         {rows.map((row) => {
           const diff = readingDiff(row.existing, row.incoming);
           const differs = exceedsRepeatTolerance(diff);
+          const over = repeatDiffFlags(diff);
           return (
             <tbody
               key={row.orphanShotIndex}
@@ -178,12 +179,12 @@ export default function OverlapShotTable({
               </tr>
               <tr className="text-text-tertiary">
                 <td className="px-1 pb-1">{t('dialogs.orphanPlacement.repeat.diff')}</td>
-                <td className={`${cell} ${flag(diff.length > REPEAT_DIFF_TOLERANCE.length)}`}>{length(diff.length)}</td>
-                <td className={`${cell} ${flag(diff.azimuth > REPEAT_DIFF_TOLERANCE.azimuth)}`}>{azimuth(diff.azimuth)}</td>
-                <td className={`${cell} ${flag(diff.inclination != null && diff.inclination > REPEAT_DIFF_TOLERANCE.inclination)}`}>
+                <td className={`${cell} ${flag(over.length)}`}>{length(diff.length)}</td>
+                <td className={`${cell} ${flag(over.azimuth)}`}>{azimuth(diff.azimuth)}</td>
+                <td className={`${cell} ${flag(over.inclination)}`}>
                   {inclination(diff.inclination)}
                 </td>
-                <td className={`${cell} ${flag(diff.depth > REPEAT_DIFF_TOLERANCE.depth)}`}>{depth(diff.depth)}</td>
+                <td className={`${cell} ${flag(over.depth)}`}>{depth(diff.depth)}</td>
               </tr>
             </tbody>
           );

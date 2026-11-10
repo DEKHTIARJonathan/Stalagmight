@@ -86,33 +86,98 @@ export function readingDiff(existing: TargetShotLike, incoming: TargetShotLike):
   };
 }
 
+/**
+ * Slack on every tolerance comparison: readings are stored in binary floats, so
+ * 1.1 - 1.0 lands just above 0.1 and 4.3 - 4.2 just below it. A difference of
+ * exactly the tolerance must classify the same whatever the absolute values.
+ */
+const FLOAT_SLACK = 1e-9;
+
+/** Which measurements differ by more than `REPEAT_DIFF_TOLERANCE`. */
+export function repeatDiffFlags(diff: ReadingDiff): Record<keyof ReadingDiff, boolean> {
+  const over = (value: number, tolerance: number) => value > tolerance + FLOAT_SLACK;
+  return {
+    length: over(diff.length, REPEAT_DIFF_TOLERANCE.length),
+    azimuth: over(diff.azimuth, REPEAT_DIFF_TOLERANCE.azimuth),
+    inclination: diff.inclination != null && over(diff.inclination, REPEAT_DIFF_TOLERANCE.inclination),
+    depth: over(diff.depth, REPEAT_DIFF_TOLERANCE.depth),
+  };
+}
+
 /** Whether any measurement differs by more than `REPEAT_DIFF_TOLERANCE`. */
 export function exceedsRepeatTolerance(diff: ReadingDiff): boolean {
+  const flags = repeatDiffFlags(diff);
+  return flags.length || flags.azimuth || flags.inclination || flags.depth;
+}
+
+/**
+ * Whether two readings are the same within float noise. Azimuths compare round
+ * the circle, so 0 and 360 match; nullable fields must both be null or both close.
+ */
+function sameReading(a: TargetShotLike, b: TargetShotLike): boolean {
+  const close = (x: number, y: number) => Math.abs(x - y) <= FLOAT_SLACK;
+  const closeAzimuth = (x: number, y: number) => close(normalizeAzimuth(x - y + 180), 180);
+  const closeNullable = (x: number | null, y: number | null) =>
+    x == null || y == null ? x === y : close(x, y);
   return (
-    diff.length > REPEAT_DIFF_TOLERANCE.length ||
-    diff.azimuth > REPEAT_DIFF_TOLERANCE.azimuth ||
-    (diff.inclination != null && diff.inclination > REPEAT_DIFF_TOLERANCE.inclination) ||
-    diff.depth > REPEAT_DIFF_TOLERANCE.depth
+    closeAzimuth(a.azimuth_in, b.azimuth_in) &&
+    closeAzimuth(a.azimuth_out, b.azimuth_out) &&
+    close(a.length, b.length) &&
+    close(a.depth_in, b.depth_in) &&
+    close(a.depth_out, b.depth_out) &&
+    closeNullable(a.pitch_in, b.pitch_in) &&
+    closeNullable(a.pitch_out, b.pitch_out) &&
+    closeNullable(a.left, b.left) &&
+    closeNullable(a.right, b.right) &&
+    closeNullable(a.up, b.up) &&
+    closeNullable(a.down, b.down)
   );
 }
 
 /**
- * The reading the existing shot should take for `choice`, or null when it keeps
- * its own. `incoming` must already be oriented the way the existing shot runs.
+ * The new reading for Use new. A field the new shot does not have keeps the
+ * existing value: `updateShot` reads `null` as CLEAR, so passing the gap through
+ * would erase the existing shot's pitch or LRUD.
+ */
+function newReadingOver(existing: TargetShotLike, incoming: TargetShotLike): TargetShotLike {
+  return {
+    ...toReading(incoming),
+    pitch_in: incoming.pitch_in ?? existing.pitch_in,
+    pitch_out: incoming.pitch_out ?? existing.pitch_out,
+    left: incoming.left ?? existing.left,
+    right: incoming.right ?? existing.right,
+    up: incoming.up ?? existing.up,
+    down: incoming.down ?? existing.down,
+  };
+}
+
+/**
+ * The reading the existing shot should take for `choice`, or null when there
+ * is nothing to write: Keep existing, or a result equal to the existing reading
+ * (so an identical repeat pushes no undo entry). `incoming` must already be
+ * oriented the way the existing shot runs.
+ *
+ * Neither choice ever clears a value: Use new keeps the existing value where the
+ * new shot has none, and Average (`avgNullable`) takes whichever reading has
+ * the field when only one does.
  */
 export function resolvedReading(
   choice: OverlapChoice,
   existing: TargetShotLike,
   incoming: TargetShotLike,
 ): TargetShotLike | null {
+  let reading: TargetShotLike;
   switch (choice) {
     case 'keep_existing':
       return null;
     case 'use_new':
-      return toReading(incoming);
+      reading = newReadingOver(existing, incoming);
+      break;
     case 'average':
-      return toReading(
+      reading = toReading(
         interpolateShots({ ...toReading(existing), id: 0, comment: null, kind: 'Normal' }, incoming),
       );
+      break;
   }
+  return sameReading(reading, existing) ? null : reading;
 }
