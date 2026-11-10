@@ -64,6 +64,10 @@ interface SelectProps {
    * the grid, and the host must give the trigger a full-height/full-width box to fill.
    */
   variant?: SelectVariant;
+  /** Size the menu to its longest option, clamped to the viewport. */
+  fitContent?: boolean;
+  /** Space reserved between the menu and the right viewport edge. */
+  dropdownRightMargin?: number;
   /** Highlights the trigger border to flag an uncommitted/staged value (e.g. arm-then-confirm pickers). */
   pending?: boolean;
   /** Test ID for E2E tests */
@@ -177,6 +181,8 @@ export function Select({
   className = '',
   size = 'md',
   variant = 'default',
+  fitContent = false,
+  dropdownRightMargin = 8,
   pending = false,
   'data-testid': testId,
   'aria-label': ariaLabel,
@@ -258,8 +264,8 @@ export function Select({
   });
 
   // Position calculation with flicker prevention via useLayoutEffect.
-  // The hidden render pass already has correct width/left from triggerRect state,
-  // so the measured height accounts for text wrapping at the final width.
+  // The hidden pass measures content-fit menus within the viewport cap.
+  // Other menus retain their trigger width for accurate height measurement.
   useLayoutEffect(() => {
     if (!isOpen || !triggerRect) {
       setDropdownPosition(null);
@@ -269,7 +275,11 @@ export function Select({
     const dropdownEl = dropdownRef.current;
     if (!dropdownEl) return;
 
-    const dropdownHeight = dropdownEl.getBoundingClientRect().height;
+    const dropdownBounds = dropdownEl.getBoundingClientRect();
+    const dropdownHeight = dropdownBounds.height;
+    const availableWidth = Math.max(1, window.innerWidth - dropdownRightMargin - 8);
+    const width = fitContent ? Math.min(availableWidth, dropdownBounds.width) : triggerRect.width;
+    const left = fitContent ? Math.max(8, Math.min(triggerRect.left, window.innerWidth - dropdownRightMargin - width)) : triggerRect.left;
 
     let top = triggerRect.bottom;
 
@@ -283,10 +293,10 @@ export function Select({
 
     setDropdownPosition({
       top,
-      left: triggerRect.left,
-      width: triggerRect.width,
+      left,
+      width,
     });
-  }, [isOpen, triggerRect]);
+  }, [isOpen, triggerRect, fitContent, dropdownRightMargin, options]);
 
   // Reset highlighted index only on open/close transitions - NOT on every
   // re-render while the dropdown is open.  Parent re-renders (e.g. from hover
@@ -372,6 +382,7 @@ export function Select({
       // BEFORE reading its rect so the portal is positioned where the trigger ends up.
       scrollAncestorRef.current = nearestScrollableAncestor(trigger);
       trigger.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+      trigger.focus({ preventScroll: true });
       const rect = trigger.getBoundingClientRect();
       setTriggerRect({ left: rect.left, width: rect.width, top: rect.top, bottom: rect.bottom });
     }
@@ -544,9 +555,9 @@ export function Select({
             }
           }}
         >
-          <span className="inline-flex items-center gap-1.5">
+          <span className={`inline-flex items-center gap-1.5 ${fitContent ? 'max-w-full whitespace-nowrap' : ''}`}>
             {option.icon}
-            {option.label}
+            {fitContent ? <span className="truncate" title={option.label}>{option.label}</span> : option.label}
             {option.labelSuffix}
           </span>
         </div>
@@ -575,8 +586,8 @@ export function Select({
   };
 
   // Dropdown style: position:fixed, invisible until position is computed.
-  // The hidden pass uses triggerRect width/left so the dropdown renders at the
-  // correct width for accurate height measurement (avoids shrink-to-fit mismatch).
+  // Content-fit menus start at a safe inset while measuring so opening cannot
+  // scroll the page horizontally; their final position aligns with the trigger.
   const dropdownStyle: React.CSSProperties = dropdownPosition
     ? {
         position: 'fixed',
@@ -589,15 +600,16 @@ export function Select({
     : {
         position: 'fixed',
         top: 0,
-        left: triggerRect?.left ?? 0,
-        width: triggerRect?.width ?? 'auto',
+        left: fitContent ? 8 : triggerRect?.left ?? 0,
+        width: fitContent ? 'max-content' : triggerRect?.width ?? 'auto',
+        ...(fitContent ? { minWidth: Math.min(triggerRect?.width ?? 0, Math.max(1, window.innerWidth - dropdownRightMargin - 8)), maxWidth: Math.max(1, window.innerWidth - dropdownRightMargin - 8) } : {}),
         zIndex: 9999,
         visibility: 'hidden',
         pointerEvents: 'none',
       };
 
   return (
-    <div className={`relative ${className}`} data-testid={testId ? `${testId}-root` : undefined} data-dropdown-open={isOpen || undefined}>
+    <div className={`relative ${fitContent ? 'min-w-0 w-full' : ''} ${className}`} data-testid={testId ? `${testId}-root` : undefined} data-dropdown-open={isOpen || undefined}>
       {/* Trigger button */}
       <button
         ref={triggerRef}
@@ -605,7 +617,7 @@ export function Select({
         role="combobox"
         data-testid={testId}
         data-dropdown-open={isOpen || undefined}
-        className={triggerClass}
+        className={`${triggerClass} ${fitContent ? 'min-w-0 overflow-hidden' : ''}`}
         onClick={() => {
           if (disabled) return;
           if (isOpen) {
@@ -625,11 +637,11 @@ export function Select({
         aria-owns={isOpen ? listboxId : undefined}
         aria-activedescendant={isOpen && highlightedIndex >= 0 ? getOptionId(highlightedIndex) : undefined}
       >
-        <span className={selectedLabel ? 'text-text-primary' : 'text-text-secondary'}>
+        <span title={fitContent ? selectedLabel ?? undefined : undefined} className={`${selectedLabel ? 'text-text-primary' : 'text-text-secondary'} ${fitContent ? 'min-w-0 truncate' : ''}`}>
           {selectedLabel || placeholder}
         </span>
         <svg
-          className={`w-4 h-4 text-text-secondary transition-transform ${isOpen ? 'rotate-180' : ''}`}
+          className={`w-4 h-4 shrink-0 text-text-secondary transition-transform ${isOpen ? 'rotate-180' : ''}`}
           fill="currentColor"
           viewBox="0 0 24 24"
           aria-hidden="true"

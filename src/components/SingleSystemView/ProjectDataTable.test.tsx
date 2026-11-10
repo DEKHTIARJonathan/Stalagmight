@@ -112,3 +112,12 @@ describe('ProjectDataTable command routing', () => {
   });
 
 });
+
+
+it('orders Warning, Shot ID, Section and puts section creation before existing sections', () => {
+  render(<ProjectDataTable sections={sections} />);
+  expect(mocks.grid.columns.slice(0, 3).map((column: any) => column.key)).toEqual(['_warnings', 'shot_id', 'section']);
+  expect(mocks.grid.columns.map((column: any) => column.key)).not.toContain('marker_index');
+  expect(mocks.grid.columns.map((column: any) => column.key)).not.toContain('temperature');
+  expect(screen.getByTestId('data-section-100000').querySelectorAll('option')[1]?.value).toBe('new');
+});

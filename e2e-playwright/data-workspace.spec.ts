@@ -91,3 +91,47 @@ test('Shot IDs start at one across sections and remain unchanged after a transfe
   await expect(page.getByTestId('grid-cell-1-shot_id')).toHaveText('3');
   await expect(page.getByTestId('grid-cell-2-shot_id')).toHaveText('1');
 });
+
+test('Data columns and Section menu follow the requested layout and viewport margin', async ({ page }) => {
+  await setupMockedPage(page);
+  await createProject(page, 'Synthetic dropdown sizing');
+  const longName = 'A sufficiently long section name that needs a wider dropdown';
+  await seedProjectWithSections(page, [{ name: longName, shots: [
+    { length: 10, azimuth_in: 90, azimuth_out: 90, depth_in: 0, depth_out: 1 },
+  ] }]);
+  await page.getByTestId('mode-data').click();
+  const table = page.getByTestId('project-data-table');
+  const keys = await table.locator('[data-testid^="grid-cell-0-"]').evaluateAll(cells => cells.map(cell => cell.getAttribute('data-testid')));
+  expect(keys.slice(0, 3)).toEqual(['grid-cell-0-_warnings', 'grid-cell-0-shot_id', 'grid-cell-0-section']);
+  await expect(table.getByTestId('grid-cell-0-marker_index')).toHaveCount(0);
+  await expect(table.getByTestId('grid-cell-0-temperature')).toHaveCount(0);
+  const picker = table.getByRole('combobox', { name: 'Section', exact: true }).first();
+  await picker.click();
+  const list = page.getByRole('listbox');
+  await expect(list.getByRole('option').first()).toHaveText('Create a New Section');
+  const popup = await list.boundingBox();
+  const trigger = await picker.boundingBox();
+  expect(popup!.width).toBeGreaterThan(trigger!.width);
+  expect(popup!.x + popup!.width).toBeLessThanOrEqual(page.viewportSize()!.width - 100);
+  const label = list.getByRole('option', { name: longName, exact: true }).locator('span').last();
+  expect(await label.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.keyboard.press('Escape');
+  await expect(list).not.toBeVisible();
+  await page.evaluate(async () => {
+    const store = (window as any).__E2E_TEST__.projectStore.getState();
+    await store.updateSection(store.project.sections[0].id, { name: 'Very long section '.repeat(100) });
+  });
+  await picker.click();
+  const capped = await page.getByRole('listbox').boundingBox();
+  expect(capped!.x).toBeGreaterThanOrEqual(8);
+  expect(capped!.x + capped!.width).toBeLessThanOrEqual(page.viewportSize()!.width - 100);
+  await expect(page.getByRole('listbox').getByRole('option').nth(1).locator('span').last()).toHaveCSS('white-space', 'nowrap');
+  expect(await page.getByRole('listbox').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.keyboard.press('Escape');
+  await page.setViewportSize({ width: 640, height: 720 });
+  await picker.click();
+  const narrow = await page.getByRole('listbox').boundingBox();
+  expect(narrow!.x).toBeGreaterThanOrEqual(8);
+  expect(narrow!.x + narrow!.width).toBeLessThanOrEqual(540);
+
+});
