@@ -307,6 +307,46 @@ mod tests {
         assert!(!wait.forced());
     }
 
+    /// Whether this source line keeps a user transfer registered for the rest of
+    /// its scope: a NAMED binding (`let _transfer = ...user_transfer(&app);`). A
+    /// `let _ =` (typed or not) or a bare call drops the guard on the spot, so the
+    /// command would hold nothing while its text still mentions the call.
+    fn binds_the_transfer(line: &str) -> bool {
+        line.contains("user_transfer(&app)")
+            && line
+                .trim_start()
+                .strip_prefix("let ")
+                .and_then(|rest| rest.split_once('='))
+                .map(|(pattern, _)| {
+                    let pattern = pattern.split(':').next().unwrap_or_default().trim();
+                    pattern.strip_prefix("mut ").unwrap_or(pattern).trim()
+                })
+                .is_some_and(|name| !name.is_empty() && name != "_")
+    }
+
+    /// [`binds_the_transfer`] for any line of `src`.
+    fn holds_a_transfer(src: &str) -> bool {
+        src.lines().any(binds_the_transfer)
+    }
+
+    #[test]
+    fn only_a_named_binding_keeps_the_transfer_registered() {
+        assert!(binds_the_transfer(
+            "    let _transfer = super::exit_wait::user_transfer(&app);"
+        ));
+        assert!(binds_the_transfer(
+            "    let mut guard: Option<UserTransfer> = user_transfer(&app);"
+        ));
+        for dropped in [
+            "    let _ = super::exit_wait::user_transfer(&app);",
+            "    let _: Option<UserTransfer> = super::exit_wait::user_transfer(&app);",
+            "    super::exit_wait::user_transfer(&app);",
+            "    drop(super::exit_wait::user_transfer(&app));",
+        ] {
+            assert!(!binds_the_transfer(dropped), "{dropped}");
+        }
+    }
+
     /// The commands that register a user transfer are exactly the SpeleoDB calls
     /// the frontend gate counts as exclusive (`speleoNetworkCommands.ts`), plus the
     /// exit / sign-out actions; no read ever holds the exit.
@@ -320,13 +360,29 @@ mod tests {
             include_str!("speleodb_cache.rs")
         );
         let project = include_str!("project.rs");
-        let body = |src: &'static str, name: &str| -> &'static str {
+        let item = |src: &'static str, head: &str| -> &'static str {
             let start = src
-                .find(&format!("pub async fn {name}("))
-                .unwrap_or_else(|| panic!("command {name} is defined"));
+                .find(head)
+                .unwrap_or_else(|| panic!("{head} is defined"));
             let rest = &src[start..];
-            &rest[..rest.find("\n}\n").expect("command body ends")]
+            &rest[..rest.find("\n}\n").expect("body ends")]
         };
+        let body = |src: &'static str, name: &str| item(src, &format!("pub async fn {name}("));
+        // Every registration in these modules is a named binding: a `let _ =` there
+        // would read as holding the exit and hold nothing.
+        for src in [speleodb, project] {
+            for line in src.lines().filter(|l| l.contains("user_transfer(")) {
+                assert!(
+                    binds_the_transfer(line),
+                    "the transfer guard is dropped at once: {line}"
+                );
+            }
+        }
+        // `run_transfer` itself holds the guard for the whole run.
+        assert!(
+            holds_a_transfer(item(speleodb, "async fn run_transfer<")),
+            "run_transfer must keep its transfer registered"
+        );
         let mut checked = 0;
         for line in table.lines() {
             let line = line.trim();
@@ -337,8 +393,7 @@ mod tests {
                 continue;
             }
             let command = body(speleodb, name);
-            let holds =
-                command.contains("run_transfer(") || command.contains("user_transfer(&app)");
+            let holds = command.contains("run_transfer(") || holds_a_transfer(command);
             match kind.trim() {
                 "'exclusive'," => assert!(holds, "{name} is exclusive: it must hold the exit"),
                 "'read'," => assert!(!holds, "{name} is a read: it must never hold the exit"),
@@ -352,7 +407,7 @@ mod tests {
         );
         for name in ["close_project", "speleodb_discard_cached_copy"] {
             assert!(
-                body(project, name).contains("user_transfer(&app)"),
+                holds_a_transfer(body(project, name)),
                 "{name} is an exit / sign-out action: it must hold the exit"
             );
         }
